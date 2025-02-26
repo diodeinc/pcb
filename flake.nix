@@ -76,31 +76,6 @@
       };
     };
 
-    mkKinparse = pkgs: pkgs.python3.pkgs.buildPythonPackage rec {
-      pname = "kinparse";
-      version = "4410797";
-      format = "setuptools";
-      
-      src = pkgs.fetchFromGitHub {
-        owner = "LK";
-        repo = "kinparse";
-        rev = "4410797b9bc521cb0ba677b2ea791ba3b7eeb103";
-        sha256 = "0ynn2i3qb5vbgx57rvap6sln10pb01741d5fxsmlbld1jsmlsjh0";
-      };
-
-      propagatedBuildInputs = with pkgs.python3.pkgs; [
-        pyparsing
-      ];
-
-      doCheck = false;
-
-      meta = with pkgs.lib; {
-        description = "KiCad netlist parser";
-        homepage = "https://github.com/LK/kinparse";
-        license = licenses.mit;
-      };
-    };
-
     mkEseries = pkgs: pkgs.python3.pkgs.buildPythonPackage rec {
       pname = "eseries";
       version = "1.2.1";
@@ -257,7 +232,7 @@
     mkKicadPython = pkgs: 
     let
       kikit = pkgs.kikit;
-      kinparse = mkKinparse pkgs;
+      kinparse = pkgs.kinparse;
     in
     pkgs.python3.withPackages (ps: [ kikit kinparse ]);
 
