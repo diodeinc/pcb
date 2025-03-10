@@ -344,6 +344,15 @@
         sed -i "s|Exec=pcbnew|Exec=env -u XDG_CONFIG_HOME ${kicadWithScripting}/bin/pcbnew|g" $out/share/applications/org.kicad.pcbnew.desktop
         ${pkgs.shared-mime-info}/bin/update-mime-database $out/share/mime
 
+        # Create the plugin directory structure
+        mkdir -p $out/lib/kicad/plugins/diode
+
+        # Extract the KiCad plugin from the pcb binary directly to our plugin directory
+        mkdir -p $out/.diode
+        DIODE_CONFIG_PATH=$out/.diode $out/bin/pcb.real self install no-all kicad_plugin --kicad-plugin-dir $out/lib/kicad/plugins/diode
+        mv $out/lib/kicad/plugins/diode/diode_kicad.py $out/lib/kicad/plugins/diode/__init__.py
+        rm -rf $out/.diode
+
         # We need to pipe the KiCad PYTHONPATH through to our script to get `pcbnew`
         # (sorry)
         KICAD_PYTHON_PATH=$(grep "export PYTHONPATH=" ${kicadWithScripting}/bin/pcbnew | sed 's/export PYTHONPATH=//' | sed "s/'//g")
@@ -356,6 +365,7 @@
           --set KICAD_CLI "${kicadWithScripting}/bin/kicad-cli" \
           --set XDG_DATA_DIRS "$out/share:$XDG_DATA_DIRS" \
           --set XDG_CONFIG_HOME "$out/config" \
+          --set KICAD9_3RD_PARTY "$out/lib/kicad/" \
           --prefix PATH : "${openCmd}/bin:${jre}/bin"
 
         # Configure KiCad files to open with our KiCad installation
