@@ -2,6 +2,16 @@
 name = "pcb"
 version = "0.2.0-dev"
 edition = "2021"
+repository = "https://github.com/diodeinc/pcb"
+description = "next-gen tooling for pcb design"
+homepage = "https://github.com/diodeinc/pcb"
+authors = ["Diode Computers, Inc. <founders@diode.computer>"]
+
+[package.metadata.wix]
+upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"
+path-guid = "019D9AC1-AFB6-4D44-9FE5-F7BCA676A7DF"
+license = false
+eula = false
 
 [[bin]]
 name = "pcb"
