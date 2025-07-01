@@ -18,8 +18,8 @@ use starlark::{
     syntax::{AstModule, Dialect},
     typing::TypeMap,
     values::{
-        Heap, Value, ValueLike,
         dict::{AllocDict, DictRef},
+        Heap, Value, ValueLike,
     },
 };
 
@@ -44,7 +44,7 @@ fn default_file_provider() -> Arc<dyn crate::FileProvider> {
 use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
-    module::{FrozenModuleValue, ModuleLoader, module_globals},
+    module::{module_globals, FrozenModuleValue, ModuleLoader},
 };
 
 pub(crate) trait DeepCopyToHeap {

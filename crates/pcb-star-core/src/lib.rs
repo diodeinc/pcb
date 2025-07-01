@@ -285,7 +285,7 @@ pub trait FileProvider: Send + Sync {
 
     /// Canonicalize a path (make it absolute)
     fn canonicalize(&self, path: &std::path::Path)
-    -> Result<std::path::PathBuf, FileProviderError>;
+        -> Result<std::path::PathBuf, FileProviderError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

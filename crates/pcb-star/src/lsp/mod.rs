@@ -1,18 +1,18 @@
 pub mod signature;
 
-use pcb_star_core::{CompoundLoadResolver, EvalContext, InputMap, LoadResolver};
-use pcb_star_core::{DefaultFileProvider, FileProvider, WorkspaceLoadResolver};
 use lsp_server::ResponseError;
 use lsp_types::{
     request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use starlark::docs::DocModule;
+use pcb_star_core::{CompoundLoadResolver, EvalContext, InputMap, LoadResolver};
+use pcb_star_core::{DefaultFileProvider, FileProvider, WorkspaceLoadResolver};
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use starlark::docs::DocModule;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

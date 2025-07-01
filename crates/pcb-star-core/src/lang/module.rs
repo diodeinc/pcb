@@ -17,16 +17,16 @@ use starlark::{
     eval::{Arguments, Evaluator},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
-        float::StarlarkFloat, list::ListRef, starlark_value,
+        float::StarlarkFloat, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult,
+        NoSerialize, StarlarkValue, Trace, Value, ValueLike,
     },
 };
 
-use crate::Diagnostic;
 use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::input::{InputMap, convert_from_starlark};
+use crate::lang::input::{convert_from_starlark, InputMap};
+use crate::Diagnostic;
 use starlark::values::dict::DictRef;
 
 use super::net::NetValue;

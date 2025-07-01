@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Args;
+use log::debug;
 use pcb_star::EvalSeverity;
 use pcb_ui::prelude::*;
-use log::debug;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,9 +18,7 @@ pub struct BuildArgs {
 
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
-pub fn evaluate_star_file(
-    path: &Path,
-) -> (pcb_star::WithDiagnostics<pcb_sch::Schematic>, bool) {
+pub fn evaluate_star_file(path: &Path) -> (pcb_star::WithDiagnostics<pcb_sch::Schematic>, bool) {
     debug!("Compiling Starlark file: {}", path.display());
 
     // Evaluate the design

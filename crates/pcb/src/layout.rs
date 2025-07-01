@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
+use inquire::Select;
 use pcb_layout::{process_layout, LayoutError};
 use pcb_ui::prelude::*;
-use inquire::Select;
 use std::path::PathBuf;
 
 use crate::build::collect_star_files;

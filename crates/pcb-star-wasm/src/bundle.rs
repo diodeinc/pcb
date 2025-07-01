@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use log::warn;
 use pcb_star_core::bundle::{Bundle, BundleManifest};
 use pcb_star_core::InMemoryFileProvider;
-use log::warn;
 
 /// A loaded bundle that can be evaluated multiple times with different inputs
 pub struct LoadedBundle {
