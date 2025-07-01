@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use pcb_layout::utils;
 use inquire::Select;
+use pcb_layout::utils;
 use std::path::{Path, PathBuf};
 
 use crate::build::{collect_star_files, evaluate_star_file};
@@ -27,9 +27,7 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
         let layout_files: Vec<_> = std::fs::read_dir(&cwd)?
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_file() && path.extension().map_or(false, |ext| ext == "kicad_pcb")
-            })
+            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "kicad_pcb"))
             .collect();
 
         if layout_files.is_empty() {

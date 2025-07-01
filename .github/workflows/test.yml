@@ -1,0 +1,95 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    name: Build and Test (${{ matrix.config.name }})
+    runs-on: ${{ matrix.config.runs-on }}
+    container: ${{ matrix.config.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: Windows
+            runs-on: windows-latest
+          - name: macOS
+            runs-on: macos-latest
+          - name: macOS 14
+            runs-on: macos-14
+          - name: Ubuntu
+            runs-on: ubuntu-latest
+            container: kicad/kicad:9.0
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Cache KiCad (macOS)
+        if: contains(matrix.config.name, 'macOS')
+        id: cache-kicad-mac
+        uses: actions/cache@v4
+        with:
+          path: /Applications/KiCad
+          key: ${{ runner.os }}-kicad-9.0.0
+
+      - name: Install KiCad (macOS)
+        if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
+        run: |
+          brew update && brew install --cask kicad && brew upgrade --cask kicad
+
+      - name: Cache KiCad (Windows)
+        if: matrix.config.name == 'Windows'
+        id: cache-kicad-windows
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\KiCad
+          key: ${{ runner.os }}-kicad-9.0
+
+      - name: Install KiCad (Windows)
+        if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
+        run: |
+          choco install kicad --version 9.0.0 -y
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build All (Workspace)
+        run: cargo build --verbose --workspace
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Test All (Workspace)
+        env:
+          RUST_LOG: debug
+          RUST_BACKTRACE: full
+        run: cargo test --verbose --workspace

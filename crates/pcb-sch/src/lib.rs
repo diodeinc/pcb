@@ -344,7 +344,6 @@ impl Schematic {
             .instances
             .iter_mut()
             .filter(|(_, inst)| inst.kind == InstanceKind::Component)
-            .map(|(ref_key, inst)| (ref_key, inst))
             .collect();
 
         // Sort by hierarchical name (dot-separated instance path) for deterministic ordering
