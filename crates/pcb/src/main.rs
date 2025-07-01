@@ -37,9 +37,29 @@ enum Commands {
     External(Vec<OsString>),
 }
 
-fn main() -> anyhow::Result<()> {
-    // Initialize logger
-    env_logger::init();
+fn main() {
+    // Run the actual main function and capture any errors
+    if let Err(e) = run() {
+        // Log error to stderr
+        eprintln!("Error: {:?}", e);
+        
+        // Send error to telemetry (only in release builds)
+        pcb_telem::capture_error(&e);
+        
+        // Exit with error code
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    // Initialize logger with telemetry support
+    pcb_telem::setup_logger()?;
+    
+    // Initialize telemetry (only active in release builds)
+    // For now we use default auth data - in the future this could be loaded from a config file
+    if let Err(e) = pcb_telem::init_telemetry(None) {
+        log::debug!("Failed to initialize telemetry: {}", e);
+    }
 
     let cli = Cli::parse();
 

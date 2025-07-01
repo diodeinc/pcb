@@ -21,6 +21,7 @@ pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
 pcb-sexpr = { path = "crates/pcb-sexpr" }
 pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
+pcb-telem = { path = "crates/pcb-telem" }
 
 anyhow = "1.0"
 ariadne = { version = "0.5", features = ["auto-color"] }

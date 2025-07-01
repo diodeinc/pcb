@@ -13,12 +13,13 @@ log = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 
-# Telemetry dependencies - only included in release builds
-[target.'cfg(not(debug_assertions))'.dependencies]
-sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"] }
-posthog-rs = "0.2"
-gethostname = "0.5"
+# Telemetry dependencies - always included but only used in release builds
+sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"], optional = true }
+posthog-rs = { version = "0.2", optional = true }
+gethostname = { version = "0.5", optional = true }
 
 [features]
-default = []
+default = ["telemetry"]
+telemetry = ["sentry", "posthog-rs", "gethostname"]
