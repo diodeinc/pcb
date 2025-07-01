@@ -36,6 +36,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Install Dependencies (Ubuntu)
+        if: matrix.config.name == 'Ubuntu'
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential pkg-config libssl-dev
+
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
         id: cache-kicad-mac
