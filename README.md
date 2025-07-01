@@ -50,7 +50,7 @@ cd pcb
 
 ### Requirements
 
-- Rust nightly toolchain (required for dependencies)
+- Rust nightly toolchain (required for edition2024 cargo feature used by dependencies)
 - KiCad (for generating and editing layouts)
 
 ## Quick Start
@@ -59,8 +59,8 @@ cd pcb
 
 Create a file called `blinky.star`:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # Load standard library
 load("@github/diodeinc/stdlib:main/properties.star", "Layout")
 
@@ -125,8 +125,8 @@ pcb open blinky.star
 
 Components are the building blocks of your design. They define physical parts with pins, footprints, and properties:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 Component(
     name = "U1",
     type = "microcontroller",
@@ -149,8 +149,8 @@ Component(
 
 Nets represent electrical connections between component pins:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # Create named nets
 power_5v = Net("5V")
 ground = Net("GND")
@@ -163,8 +163,8 @@ data_bus = Net("SPI_MOSI")
 
 Interfaces define reusable connection patterns:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # Define a power interface
 PowerInterface = interface(
     vcc = Net,
@@ -184,8 +184,8 @@ SPIInterface = interface(
 
 Modules enable hierarchical design and reusability. A module is a `.star` file that defines configuration parameters and IO interfaces:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # power_supply.star
 # Configuration parameters
 input_voltage = config("input_voltage", float, default = 12.0)
@@ -220,8 +220,8 @@ PowerSupply(
 
 The `config()` function defines configuration parameters at the module level:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # sensor_module.star
 # Required configuration
 i2c_address = config("i2c_address", int)
@@ -242,8 +242,8 @@ package_type = config("package", Package, convert = Package)
 
 The `io()` function defines input/output interfaces at the module level:
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # uart_bridge.star
 # Define IO interfaces
 uart_in = io("uart_in", UARTInterface)
@@ -427,8 +427,8 @@ Zener is built as a modular Rust workspace with specialized crates:
 
 ### Simple LED Circuit
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 load("@github/diodeinc/stdlib:main/properties.star", "Layout")
 
 Resistor = Module("@github/diodeinc/stdlib:main/generics/Resistor.star")
@@ -471,8 +471,8 @@ Layout("layout", "layout/")
 
 ### Module with Configuration
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 # voltage_regulator.star
 input_voltage = config("input_voltage", float)
 output_voltage = config("output_voltage", float, default = 3.3)
@@ -529,8 +529,8 @@ VoltageRegulator(
 
 ### Complex System with Multiple Modules
 
+<!-- test:readme_examples -->
 ```python
-# test:readme_examples
 load("@github/diodeinc/stdlib:main/properties.star", "Layout")
 load("@github/diodeinc/stdlib:main/interfaces.star", "PowerInterface", "SPIInterface", "I2CInterface")
 
@@ -582,13 +582,19 @@ Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ### Testing README Examples
 
-All code examples in this README that are marked with `# test:readme_examples` are automatically tested. To run these tests:
+All code examples in this README that are marked with `<!-- test:readme_examples -->` are automatically tested. To run these tests:
 
 ```bash
 cargo test -p pcb-star test_readme_examples
 ```
 
-Note: The project requires Rust nightly toolchain due to dependencies. Make sure to install it using `rustup install nightly` and set it as default with `rustup default nightly` or use `rustup override set nightly` in the project directory.
+Note: The project requires Rust nightly toolchain due to the edition2024 cargo feature used by dependencies. The repository includes a `rust-toolchain.toml` file that will automatically select the correct toolchain.
+
+Examples that depend on external modules (e.g., `@github/diodeinc/stdlib`) require network access and proper module resolution configuration. By default, these examples are skipped in tests. To attempt testing them, use:
+
+```bash
+PCB_TEST_EXTERNAL_DEPS=1 cargo test -p pcb-star test_readme_examples
+```
 
 ## Acknowledgments
 
