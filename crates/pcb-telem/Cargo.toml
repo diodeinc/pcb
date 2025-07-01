@@ -1,0 +1,24 @@
+[package]
+name = "pcb-telem"
+version = "0.2.0-dev"
+edition = "2021"
+repository = "https://github.com/diodeinc/pcb"
+description = "Telemetry support for PCB tools with Sentry and PostHog integration"
+homepage = "https://github.com/diodeinc/pcb"
+authors = ["Diode Computers, Inc. <founders@diode.computer>"]
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Telemetry dependencies - only included in release builds
+[target.'cfg(not(debug_assertions))'.dependencies]
+sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"] }
+posthog-rs = "0.2"
+gethostname = "0.5"
+
+[features]
+default = []
