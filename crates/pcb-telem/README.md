@@ -12,18 +12,14 @@ Telemetry support for PCB tools with Sentry and PostHog integration.
 ## Usage
 
 ```rust
-use pcb_telem::{init_telemetry, setup_logger, capture_error, AuthData};
+use pcb_telem::{init_telemetry, setup_logger, capture_error};
 
 fn main() -> Result<()> {
     // Setup logger with Sentry integration
     setup_logger()?;
     
-    // Initialize telemetry (optional auth data)
-    let auth = AuthData {
-        local_id: "user-id".to_string(),
-        email: Some("user@example.com".to_string()),
-    };
-    init_telemetry(Some(auth))?;
+    // Initialize telemetry
+    init_telemetry()?;
     
     // Your application code here
     if let Err(e) = run_app() {

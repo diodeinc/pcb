@@ -3,7 +3,7 @@
 //! This crate provides telemetry functionality that is only active in release builds.
 //! Users can opt-out of telemetry by setting the PCB_TELEMETRY environment variable to "off".
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
@@ -31,20 +31,11 @@ pub fn is_telemetry_enabled() -> bool {
         .unwrap_or(true)
 }
 
-/// User authentication data structure
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AuthData {
-    pub local_id: String,
-    pub email: Option<String>,
-}
-
-impl Default for AuthData {
-    fn default() -> Self {
-        Self {
-            local_id: uuid::Uuid::new_v4().to_string(),
-            email: None,
-        }
-    }
+/// Gets or creates a persistent anonymous user ID
+fn get_anonymous_id() -> String {
+    // For now, generate a new ID each time. In the future, this could be persisted
+    // in a config file in the user's home directory
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Global telemetry state
@@ -62,12 +53,12 @@ struct TelemetryState {
     initialized: bool,
 }
 
-/// Initializes telemetry with the given authentication data
+/// Initializes telemetry
 ///
 /// This function should be called once at the start of the application.
 /// In debug builds, this is a no-op. In release builds, it initializes
 /// Sentry and sends an initial PostHog event.
-pub fn init_telemetry(auth_data: Option<AuthData>) -> Result<()> {
+pub fn init_telemetry() -> Result<()> {
     if !is_telemetry_enabled() {
         log::debug!("Telemetry is disabled via PCB_TELEMETRY environment variable");
         return Ok(());
@@ -81,8 +72,6 @@ pub fn init_telemetry(auth_data: Option<AuthData>) -> Result<()> {
 
     #[cfg(all(feature = "telemetry", not(debug_assertions)))]
     {
-        let auth_data = auth_data.unwrap_or_default();
-        
         // Initialize Sentry
         let guard = sentry::init((
             SENTRY_DSN,
@@ -92,11 +81,11 @@ pub fn init_telemetry(auth_data: Option<AuthData>) -> Result<()> {
             },
         ));
         
-        // Configure Sentry scope with user info
-        configure_sentry(&auth_data)?;
+        // Configure Sentry scope
+        configure_sentry()?;
         
         // Send initial PostHog event
-        track_invocation(&auth_data)?;
+        track_invocation()?;
         
         state._guard = Some(guard);
     }
@@ -105,19 +94,17 @@ pub fn init_telemetry(auth_data: Option<AuthData>) -> Result<()> {
     Ok(())
 }
 
-/// Configures Sentry scope with user and command information
+/// Configures Sentry scope with command information
 #[cfg(all(feature = "telemetry", not(debug_assertions)))]
-fn configure_sentry(auth: &AuthData) -> Result<()> {
+fn configure_sentry() -> Result<()> {
     sentry::configure_scope(|scope| {
         scope.set_tag(
             "command",
             format!("{:?}", std::env::args().collect::<Vec<String>>().join(" ")),
         );
         scope.set_tag("path", std::env::current_dir().unwrap().to_string_lossy());
-        scope.set_tag("email", auth.email.as_deref().unwrap_or("(none)"));
         scope.set_user(Some(sentry::User {
-            id: Some(auth.local_id.clone()),
-            email: auth.email.clone(),
+            id: Some(get_anonymous_id()),
             ..Default::default()
         }));
     });
@@ -126,11 +113,11 @@ fn configure_sentry(auth: &AuthData) -> Result<()> {
 
 /// Tracks a command invocation in PostHog
 #[cfg(all(feature = "telemetry", not(debug_assertions)))]
-fn track_invocation(auth: &AuthData) -> Result<()> {
+fn track_invocation() -> Result<()> {
+    let anonymous_id = get_anonymous_id();
     let client = posthog_rs::client(POSTHOG_KEY);
-    let mut event = Event::new("invocation", &auth.local_id);
+    let mut event = Event::new("invocation", &anonymous_id);
     
-    event.insert_prop("email", auth.email.as_deref().unwrap_or("(none)"))?;
     event.insert_prop(
         "command",
         std::env::args().collect::<Vec<String>>().join(" "),
@@ -196,9 +183,9 @@ pub fn track_event(event_name: &str, properties: Option<serde_json::Value>) -> R
         return Ok(());
     }
     
-    let auth_data = AuthData::default(); // You might want to load this from storage
+    let anonymous_id = get_anonymous_id();
     let client = posthog_rs::client(POSTHOG_KEY);
-    let mut event = Event::new(event_name, &auth_data.local_id);
+    let mut event = Event::new(event_name, &anonymous_id);
     
     if let Some(props) = properties {
         if let Some(obj) = props.as_object() {

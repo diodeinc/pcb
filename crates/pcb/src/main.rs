@@ -56,8 +56,7 @@ fn run() -> anyhow::Result<()> {
     pcb_telem::setup_logger()?;
     
     // Initialize telemetry (only active in release builds)
-    // For now we use default auth data - in the future this could be loaded from a config file
-    if let Err(e) = pcb_telem::init_telemetry(None) {
+    if let Err(e) = pcb_telem::init_telemetry() {
         log::debug!("Failed to initialize telemetry: {}", e);
     }
 
