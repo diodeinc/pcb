@@ -1,0 +1,43 @@
+---
+source: projects/cli/crates/diode_star/tests/module_loading_remote.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "capacitor")
+      (footprint "C0402:C0402")
+      (libsource (lib "lib") (part "capacitor") (description "unknown"))
+      (sheetpath (names "C1.C") (tstamps "1ef4a3b7-81ec-5a47-8b7f-9f08c2fe108b"))
+      (tstamps "1ef4a3b7-81ec-5a47-8b7f-9f08c2fe108b")
+      (property (name "Reference") (value "U1"))
+      (property (name "package") (value "Package(\"0402\")"))
+      (property (name "symbol_path") (value "None"))
+      (property (name "value") (value "0.00001"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "P1") (type "stereo"))
+        (pin (num "2") (name "P2") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "P1")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+    (net (code "2") (name "P2")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+    )
+  )
+)

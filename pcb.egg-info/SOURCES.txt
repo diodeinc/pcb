@@ -1,8 +1,0 @@
-README.md
-pyproject.toml
-cli/__main__.py
-pcb.egg-info/PKG-INFO
-pcb.egg-info/SOURCES.txt
-pcb.egg-info/dependency_links.txt
-pcb.egg-info/entry_points.txt
-pcb.egg-info/top_level.txt

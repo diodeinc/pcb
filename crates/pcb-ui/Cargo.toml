@@ -1,0 +1,17 @@
+[package]
+name = "pcb-ui"
+version = "0.1.0"
+edition = "2021"
+description = "Consistent UI components for Diode PCB tools"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+indicatif = { workspace = true }
+colored = { workspace = true }
+once_cell = { workspace = true }
+terminal_size = { workspace = true }
+unicode-width = { workspace = true }
+crossterm = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "pcb-sexpr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

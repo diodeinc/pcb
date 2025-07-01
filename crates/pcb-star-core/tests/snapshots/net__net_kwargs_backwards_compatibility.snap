@@ -1,0 +1,83 @@
+---
+source: projects/cli/crates/diode_star_core/tests/net.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.star",
+    children: [
+        FrozenValue(
+            Component {
+                name: "test_comp",
+                type: "generic",
+                footprint: "TEST:FOOTPRINT",
+                prefix: "U",
+                pins: {
+                    "P1": FrozenValue(
+                        "1",
+                    ),
+                    "P2": FrozenValue(
+                        "2",
+                    ),
+                    "P3": FrozenValue(
+                        "3",
+                    ),
+                },
+                connections: {
+                    "P1": FrozenValue(
+                        Net {
+                            name: "OLD",
+                            id: "<ID>",
+                            properties: {
+                                "properties": FrozenValue(
+                                    DictGen(
+                                        FrozenDictData {
+                                            content: {
+                                                FrozenValue(
+                                                    "key",
+                                                ): FrozenValue(
+                                                    "value",
+                                                ),
+                                            },
+                                        },
+                                    ),
+                                ),
+                            },
+                        },
+                    ),
+                    "P2": FrozenValue(
+                        Net {
+                            name: "MIXED",
+                            id: "<ID>",
+                            properties: {
+                                "baz": FrozenValue(
+                                    42,
+                                ),
+                                "foo": FrozenValue(
+                                    "bar",
+                                ),
+                            },
+                        },
+                    ),
+                    "P3": FrozenValue(
+                        Net {
+                            name: "KWARGS_ONLY",
+                            id: "<ID>",
+                            properties: {
+                                "type": FrozenValue(
+                                    "signal",
+                                ),
+                            },
+                        },
+                    ),
+                },
+                properties: {
+                    "symbol_path": FrozenValue(
+                        NoneType,
+                    ),
+                },
+            },
+        ),
+    ],
+}
+[]

@@ -1,0 +1,13 @@
+[package]
+name = "pcb-eda"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+sexp = { workspace = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+insta = { workspace = true }
+tempfile = { workspace = true }

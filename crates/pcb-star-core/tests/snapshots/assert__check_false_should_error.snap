@@ -1,0 +1,5 @@
+---
+source: projects/cli/crates/diode_star_core/tests/assert.rs
+expression: output
+---
+Error: test.star:3:1-34 failing condition

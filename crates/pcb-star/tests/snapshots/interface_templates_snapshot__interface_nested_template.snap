@@ -1,0 +1,49 @@
+---
+source: projects/cli/crates/diode_star/tests/interface_templates_snapshot.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "usb_connector")
+      (footprint "USB:TYPE-C")
+      (libsource (lib "lib") (part "usb_connector") (description "unknown"))
+      (sheetpath (names "J1") (tstamps "b41f0e40-6e2d-5762-aae6-ebde6de0375a"))
+      (tstamps "b41f0e40-6e2d-5762-aae6-ebde6de0375a")
+      (property (name "Reference") (value "U1"))
+      (property (name "symbol_path") (value "None"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "VBUS") (type "stereo"))
+        (pin (num "2") (name "D+") (type "stereo"))
+        (pin (num "3") (name "D-") (type "stereo"))
+        (pin (num "4") (name "GND") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "PORT1_D+")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+    )
+    (net (code "2") (name "PORT1_D-")
+      (node (ref "U1") (pin "3") (pintype "stereo"))
+    )
+    (net (code "3") (name "PORT1_POWER_GND")
+      (node (ref "U1") (pin "4") (pintype "stereo"))
+    )
+    (net (code "4") (name "PORT1_POWER_VCC")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+  )
+)

@@ -1,0 +1,9 @@
+---
+source: crates/diode-star-core/tests/file.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.star",
+}
+[]

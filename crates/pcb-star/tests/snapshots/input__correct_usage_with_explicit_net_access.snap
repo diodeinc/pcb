@@ -1,0 +1,41 @@
+---
+source: projects/cli/crates/diode_star/tests/input.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "?")
+      (footprint "test_footprint:test_footprint")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "test_comp") (tstamps "12cb098b-bab7-5f52-8c70-58c8f9863fe7"))
+      (tstamps "12cb098b-bab7-5f52-8c70-58c8f9863fe7")
+      (property (name "Reference") (value "U1"))
+      (property (name "symbol_path") (value "None"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "in") (type "stereo"))
+        (pin (num "2") (name "out") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "sig_SIGNAL")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+    (net (code "2") (name "test_comp.out")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+    )
+  )
+)

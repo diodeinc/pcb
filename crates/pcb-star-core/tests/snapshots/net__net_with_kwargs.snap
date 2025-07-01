@@ -1,0 +1,151 @@
+---
+source: projects/cli/crates/diode_star_core/tests/net.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.star",
+    children: [
+        FrozenValue(
+            Component {
+                name: "resistor",
+                type: "resistor",
+                footprint: "SMD:0805",
+                prefix: "U",
+                pins: {
+                    "P1": FrozenValue(
+                        "1",
+                    ),
+                    "P2": FrozenValue(
+                        "2",
+                    ),
+                },
+                connections: {
+                    "P1": FrozenValue(
+                        Net {
+                            name: "VCC",
+                            id: "<ID>",
+                            properties: {
+                                "type": FrozenValue(
+                                    "power",
+                                ),
+                                "voltage": FrozenValue(
+                                    "3.3V",
+                                ),
+                            },
+                        },
+                    ),
+                    "P2": FrozenValue(
+                        Net {
+                            name: "GND",
+                            id: "<ID>",
+                            properties: {
+                                "protection": FrozenValue(
+                                    "esd",
+                                ),
+                                "type": FrozenValue(
+                                    "ground",
+                                ),
+                            },
+                        },
+                    ),
+                },
+                properties: {
+                    "symbol_path": FrozenValue(
+                        NoneType,
+                    ),
+                },
+            },
+        ),
+        FrozenValue(
+            Component {
+                name: "data_buffer",
+                type: "buffer",
+                footprint: "SOT:23",
+                prefix: "U",
+                pins: {
+                    "IN": FrozenValue(
+                        "1",
+                    ),
+                    "OUT": FrozenValue(
+                        "2",
+                    ),
+                },
+                connections: {
+                    "IN": FrozenValue(
+                        Net {
+                            name: "DATA",
+                            id: "<ID>",
+                            properties: {
+                                "impedance": FrozenValue(
+                                    50,
+                                ),
+                                "speed": FrozenValue(
+                                    "high",
+                                ),
+                            },
+                        },
+                    ),
+                    "OUT": FrozenValue(
+                        Net {
+                            name: "SIGNAL",
+                            id: "<ID>",
+                            properties: {
+                                "current_limit": FrozenValue(
+                                    100,
+                                ),
+                                "dict_prop": FrozenValue(
+                                    DictGen(
+                                        FrozenDictData {
+                                            content: {
+                                                FrozenValue(
+                                                    "nested",
+                                                ): FrozenValue(
+                                                    "value",
+                                                ),
+                                            },
+                                        },
+                                    ),
+                                ),
+                                "list_prop": FrozenValue(
+                                    ListGen(
+                                        FrozenList {
+                                            content: [
+                                                FrozenValue(
+                                                    1,
+                                                ),
+                                                FrozenValue(
+                                                    2,
+                                                ),
+                                                FrozenValue(
+                                                    3,
+                                                ),
+                                            ],
+                                        },
+                                    ),
+                                ),
+                                "notes": FrozenValue(
+                                    "Main signal line",
+                                ),
+                                "protected": FrozenValue(
+                                    StarlarkBool(
+                                        true,
+                                    ),
+                                ),
+                                "voltage": FrozenValue(
+                                    "5.0",
+                                ),
+                            },
+                        },
+                    ),
+                },
+                properties: {
+                    "symbol_path": FrozenValue(
+                        NoneType,
+                    ),
+                },
+            },
+        ),
+    ],
+}
+[]

@@ -1,0 +1,16 @@
+[package]
+name = "pcb-kicad"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+dirs = { workspace = true }
+tempfile = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+typify = { workspace = true }
+chrono = { workspace = true }
+regress = { workspace = true }
+log = { workspace = true }
+pcb-command-runner = { workspace = true }

@@ -1,0 +1,10 @@
+Amperes = enum("A")
+Volts = enum("V")
+Ohms = enum("Ohms")
+Farads = enum("F")
+Henries = enum("H")
+Hertz = enum("Hz")
+Seconds = enum("s")
+
+Capacitance = record(value=float, unit=field(Farads, Farads("F")), tolerance=field(float, 0.1))
+Resistance = record(value=float, unit=field(Ohms, Ohms("Ohms")), tolerance=field(float, 0.1))

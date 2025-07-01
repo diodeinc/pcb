@@ -1,0 +1,8 @@
+---
+source: projects/cli/crates/diode_star/tests/load_diagnostics.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.star:3:6-21 Error loading module `./level1.star`
+Error: [TEMP_DIR]level1.star:3:6-21 Error loading module `./level2.star`
+Error: [TEMP_DIR]level2.star:3:6-21 Error loading module `./level3.star`
+Error: [TEMP_DIR]level3.star:3:1-19 Variable `undefined_variable` not found

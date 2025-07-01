@@ -1,0 +1,5 @@
+---
+source: crates/diode_star/tests/input.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.star:9:1-17:2 Pin 'in' must be connected to a Net, got InterfaceValue

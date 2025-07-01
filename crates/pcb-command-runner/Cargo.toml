@@ -1,0 +1,12 @@
+[package]
+name = "pcb-command-runner"
+version = "0.1.0"
+edition = "2021"
+description = "A utility for running commands with output capture"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+os_pipe = { workspace = true }
+tempfile = { workspace = true }

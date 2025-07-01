@@ -1,0 +1,15 @@
+[package]
+name = "pcb-sch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+pathdiff = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+log = { workspace = true }
+pcb-sexpr = { workspace = true }

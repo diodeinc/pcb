@@ -1,0 +1,20 @@
+---
+source: projects/cli/crates/diode_star_core/tests/input.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "top.star",
+    children: [
+        FrozenValue(
+            Module {
+                name: "test",
+                source: "/Module.star",
+                properties: {
+                    "converted_value": "FrozenValue(StarlarkFloat(10.0))",
+                },
+            },
+        ),
+    ],
+}
+[]

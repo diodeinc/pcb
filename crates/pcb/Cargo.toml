@@ -1,0 +1,23 @@
+[package]
+name = "pcb"
+version = "0.2.0-dev"
+edition = "2021"
+
+[[bin]]
+name = "pcb"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+pcb-star = { workspace = true }
+pcb-sch = { workspace = true }
+pcb-layout = { workspace = true }
+log = { workspace = true }
+ariadne = { workspace = true }
+env_logger = { workspace = true }
+colored = { workspace = true }
+pcb-kicad = { workspace = true }
+open = { workspace = true }
+inquire = { workspace = true }
+pcb-ui = { workspace = true } 

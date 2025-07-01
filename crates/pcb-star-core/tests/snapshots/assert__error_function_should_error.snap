@@ -1,0 +1,5 @@
+---
+source: projects/cli/crates/diode_star_core/tests/assert.rs
+expression: output
+---
+Error: test.star:2:1-14 boom

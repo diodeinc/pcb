@@ -1,0 +1,5 @@
+---
+source: crates/diode_star/tests/assert.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.star:2:1-14 boom

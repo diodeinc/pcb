@@ -1,0 +1,44 @@
+---
+source: projects/cli/crates/diode_star_core/tests/input.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "top.star",
+    children: [
+        FrozenValue(
+            Module {
+                name: "U1",
+                source: "/Module.star",
+                children: [
+                    FrozenValue(
+                        Component {
+                            name: "comp0",
+                            footprint: "TEST:0402",
+                            prefix: "U",
+                            pins: {
+                                "V": FrozenValue(
+                                    "1",
+                                ),
+                            },
+                            connections: {
+                                "V": FrozenValue(
+                                    Net {
+                                        name: "VCC",
+                                        id: "<ID>",
+                                    },
+                                ),
+                            },
+                            properties: {
+                                "symbol_path": FrozenValue(
+                                    NoneType,
+                                ),
+                            },
+                        },
+                    ),
+                ],
+            },
+        ),
+    ],
+}
+[]

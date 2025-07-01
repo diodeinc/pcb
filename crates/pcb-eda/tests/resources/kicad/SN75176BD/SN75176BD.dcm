@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP SN75176BD
+D SN75176BDG4, Line Transceiver Differential, 5V, 8-Pin SOIC
+K
+F http://www.ti.com/lit/ds/symlink/sn75176b.pdf
+$ENDCMP
+#
+#End Doc Library

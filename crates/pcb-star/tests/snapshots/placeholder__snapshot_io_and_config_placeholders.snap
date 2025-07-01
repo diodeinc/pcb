@@ -1,0 +1,37 @@
+---
+source: projects/cli/crates/diode_star/tests/placeholder.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "?")
+      (footprint "TEST:0402")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "sub.comp0") (tstamps "c36451f5-9361-5aad-8949-5d9502853fc5"))
+      (tstamps "c36451f5-9361-5aad-8949-5d9502853fc5")
+      (property (name "Reference") (value "U1"))
+      (property (name "symbol_path") (value "None"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "V") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "VCC")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+  )
+)

@@ -1,0 +1,34 @@
+[package]
+authors = [
+    "Damien Martin-Guillerez <dmarting@google.com>",
+    "Facebook",
+]
+categories = ["parser-implementations", "development-tools"]
+description = "LSP bindings for starlark"
+documentation = "https://docs.rs/starlark"
+edition = "2021"
+keywords = ["starlark", "skylark", "language", "interpreter"]
+license = "Apache-2.0"
+name = "pcb-starlark-lsp"
+repository = "https://github.com/facebook/starlark-rust"
+version = "0.13.0"
+
+[dependencies]
+anyhow = { workspace = true }
+derivative = { workspace = true }
+dupe = { workspace = true }
+derive_more = { workspace = true }
+itertools = { workspace = true }
+lsp-server = { workspace = true }
+lsp-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+starlark = { workspace = true }
+starlark_syntax = { workspace = true }
+
+[dev-dependencies]
+maplit = { workspace = true }
+regex = { workspace = true }
+textwrap = { workspace = true }

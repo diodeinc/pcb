@@ -1,0 +1,53 @@
+---
+source: projects/cli/crates/diode_star/tests/interface_templates_snapshot.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "asic")
+      (footprint "QFN:48")
+      (libsource (lib "lib") (part "asic") (description "unknown"))
+      (sheetpath (names "IC1") (tstamps "86322d06-d6e3-5efb-8630-3ca232293349"))
+      (tstamps "86322d06-d6e3-5efb-8630-3ca232293349")
+      (property (name "Reference") (value "U1"))
+      (property (name "symbol_path") (value "None"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "VDD") (type "stereo"))
+        (pin (num "2") (name "VSS") (type "stereo"))
+        (pin (num "3") (name "SIG") (type "stereo"))
+        (pin (num "4") (name "EN") (type "stereo"))
+        (pin (num "5") (name "RST") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "CHIP_CONTROL_EN")
+      (node (ref "U1") (pin "4") (pintype "stereo"))
+    )
+    (net (code "2") (name "CHIP_CONTROL_RST")
+      (node (ref "U1") (pin "5") (pintype "stereo"))
+    )
+    (net (code "3") (name "CHIP_SIGNAL")
+      (node (ref "U1") (pin "3") (pintype "stereo"))
+    )
+    (net (code "4") (name "CHIP_VDD")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+    (net (code "5") (name "CHIP_VSS")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+    )
+  )
+)

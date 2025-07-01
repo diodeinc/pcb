@@ -1,0 +1,118 @@
+---
+source: projects/cli/crates/diode_star_core/tests/test.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.star",
+    children: [
+        FrozenValue(
+            Component {
+                name: "M123",
+                mpn: "NB3N551DG",
+                footprint: "SMD:0805",
+                prefix: "U",
+                pins: {
+                    "GND": FrozenValue(
+                        "6",
+                    ),
+                    "ICLK": FrozenValue(
+                        "1",
+                    ),
+                    "OE": FrozenValue(
+                        "8",
+                    ),
+                    "Q1": FrozenValue(
+                        "2",
+                    ),
+                    "Q2": FrozenValue(
+                        "3",
+                    ),
+                    "Q3": FrozenValue(
+                        "4",
+                    ),
+                    "Q4": FrozenValue(
+                        "5",
+                    ),
+                    "VDD": FrozenValue(
+                        "7",
+                    ),
+                },
+                connections: {
+                    "GND": FrozenValue(
+                        Net {
+                            name: "GND",
+                            id: "<ID>",
+                        },
+                    ),
+                    "ICLK": FrozenValue(
+                        Net {
+                            name: "ICLK",
+                            id: "<ID>",
+                        },
+                    ),
+                    "OE": FrozenValue(
+                        Net {
+                            name: "OE",
+                            id: "<ID>",
+                        },
+                    ),
+                    "Q1": FrozenValue(
+                        Net {
+                            name: "Q1",
+                            id: "<ID>",
+                        },
+                    ),
+                    "Q2": FrozenValue(
+                        Net {
+                            name: "Q2",
+                            id: "<ID>",
+                        },
+                    ),
+                    "Q3": FrozenValue(
+                        Net {
+                            name: "Q3",
+                            id: "<ID>",
+                        },
+                    ),
+                    "Q4": FrozenValue(
+                        Net {
+                            name: "Q4",
+                            id: "<ID>",
+                        },
+                    ),
+                    "VDD": FrozenValue(
+                        Net {
+                            name: "VDD",
+                            id: "<ID>",
+                        },
+                    ),
+                },
+                properties: {
+                    "Datasheet": FrozenValue(
+                        "https://lcsc.com/product-detail/Logic-ICs_ON_NB3N551DG_NB3N551DG_C146731.html",
+                    ),
+                    "Description": FrozenValue(
+                        "",
+                    ),
+                    "Footprint": FrozenValue(
+                        "C146731:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL",
+                    ),
+                    "LCSC Part": FrozenValue(
+                        "C146731",
+                    ),
+                    "Reference": FrozenValue(
+                        "U",
+                    ),
+                    "Value": FrozenValue(
+                        "NB3N551DG",
+                    ),
+                    "symbol_path": FrozenValue(
+                        "/C146731.kicad_sym",
+                    ),
+                },
+            },
+        ),
+    ],
+}
+[]

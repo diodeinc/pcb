@@ -1,0 +1,5 @@
+---
+source: projects/cli/crates/diode_star_core/tests/component.rs
+expression: output
+---
+Error: Module.star:5:1-13:2 Pin 'in' must be connected to a Net, got InterfaceValue

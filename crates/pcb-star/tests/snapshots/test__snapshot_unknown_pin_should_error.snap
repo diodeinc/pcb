@@ -1,0 +1,5 @@
+---
+source: crates/diode_star/tests/test.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test_unknown.star:5:1-19:2 Unknown pin name 'INVALID'

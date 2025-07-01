@@ -1,0 +1,87 @@
+[workspace]
+members = [
+    "crates/*",
+]
+resolver = "2"
+
+[workspace.dependencies]
+starlark = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
+starlark_map = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
+starlark_derive = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
+starlark_syntax = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
+allocative = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
+
+pcb-command-runner = { path = "crates/pcb-command-runner" }
+pcb-eda = { path = "crates/pcb-eda" }
+pcb-layout = { path = "crates/pcb-layout" }
+pcb-sch = { path = "crates/pcb-sch" }
+pcb-star = { path = "crates/pcb-star" }
+pcb-star-core = { path = "crates/pcb-star-core", default-features = true }
+pcb-ui = { path = "crates/pcb-ui" }
+pcb-kicad = { path = "crates/pcb-kicad" }
+pcb-sexpr = { path = "crates/pcb-sexpr" }
+pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
+
+anyhow = "1.0"
+ariadne = { version = "0.5", features = ["auto-color"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+colored = "2"
+derive_more = { version = "1.0.0", features = ["full"] }
+dirs = "6"
+dupe = "0.9.1"
+env_logger = "0.11"
+indicatif = "0.17.8"
+inquire = "0.7"
+itertools = "0.13.0"
+log = "0.4"
+once_cell = "1.21.3"
+open = "5"
+regex = "1.11.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10.1"
+thiserror = "1.0"
+toml = "0.8"
+uuid = { version = "1.4", features = ["v4", "v5"] }
+walkdir = "2.3"
+insta = { version = "1.39", features = ["yaml", "filters", "json"] }
+argfile = "0.1.0"
+assert_cmd = "2.0"
+assert_fs = "1.0"
+base64 = "0.22"
+console_error_panic_hook = "0.1"
+console_log = "1.0.0"
+crossterm = "0.28.1"
+debugserver-types = "0.5.0"
+derivative = "2.2"
+display_container = "0.9.0"
+either = "1.8"
+getrandom = "0.2"
+globset = "0.4.13"
+js-sys = "0.3"
+lazy_static = "1.4"
+lsp-server = "0.7.2"
+lsp-types = "0.94.1"
+maplit = "1.0.2"
+md5 = "0.7"
+os_pipe = "1.1.4"
+paste = "1.0"
+pathdiff = "0.2"
+regress = "0.10.2"
+reqwest = { version = "0.12.19", features = ["blocking", "json"] }
+serde-wasm-bindgen = "0.6"
+serde_yaml = "0.9"
+serial_test = "3.0"
+sexp = "1.1.4"
+strip-ansi-escapes = "0.2"
+tar = "0.4"
+terminal_size = "0.4.0"
+textwrap = "0.11"
+typify = "0.3.0"
+unicode-width = "0.2.0"
+wasm-bindgen = "0.2.95"
+wasm-bindgen-test = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+flate2 = "1.0.34"

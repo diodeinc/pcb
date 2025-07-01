@@ -1,0 +1,41 @@
+---
+source: projects/cli/crates/diode_star/tests/test.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "capacitor")
+      (footprint "SMD:0805")
+      (libsource (lib "lib") (part "capacitor") (description "unknown"))
+      (sheetpath (names "Test.MyComponent.capacitor") (tstamps "71dc92e1-05f7-5aa9-9ffa-4b281f38f62d"))
+      (tstamps "71dc92e1-05f7-5aa9-9ffa-4b281f38f62d")
+      (property (name "Reference") (value "U1"))
+      (property (name "symbol_path") (value "None"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "P1") (type "stereo"))
+        (pin (num "2") (name "P2") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "INTERFACE_P1")
+      (node (ref "U1") (pin "1") (pintype "stereo"))
+    )
+    (net (code "2") (name "INTERFACE_P2")
+      (node (ref "U1") (pin "2") (pintype "stereo"))
+    )
+  )
+)

@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP PCM2903CDB
+D Stereo USB1.1 CODEC with line-out and S/PDIF I/O, Self-powered (HID Interface)
+K
+F http://www.ti.com/lit/gpn/pcm2903c
+$ENDCMP
+#
+#End Doc Library

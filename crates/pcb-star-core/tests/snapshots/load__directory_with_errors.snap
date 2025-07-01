@@ -1,0 +1,6 @@
+---
+source: projects/cli/crates/diode_star_core/tests/load.rs
+expression: output
+---
+Error: test.star:3:6-15 Error loading module `modules/BadModule.star`
+Error: /modules/BadModule.star:3:1-41 File not found: /modules/does_not_exist.star

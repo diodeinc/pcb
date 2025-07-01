@@ -1,0 +1,18 @@
+---
+source: projects/cli/crates/diode_star/tests/input.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+  )
+  (libparts
+  )
+  (nets
+  )
+)
+Error: [TEMP_DIR]parent.star:8:1-36 Error instantiating `child`
+Error: [TEMP_DIR]child.star:2:10-27 Type mismatch: expected Net, received Interface

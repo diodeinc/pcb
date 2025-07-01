@@ -1,0 +1,23 @@
+[package]
+name = "pcb-layout"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+pcb-sch = { workspace = true }
+pcb-kicad = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+assert_fs = { workspace = true }
+assert_cmd = { workspace = true }
+insta = { workspace = true }
+serial_test = { workspace = true }
+paste = { workspace = true }
+walkdir = { workspace = true }
+zip = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+pcb-star = { workspace = true }

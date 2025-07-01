@@ -1,0 +1,6 @@
+---
+source: projects/cli/crates/diode_star_core/tests/load.rs
+expression: output
+---
+Error: test.star:3:6-15 Error loading module `modules/Broken.star`
+Error: /modules/Broken.star:3:1-19 Variable `undefined_variable` not found

@@ -1,0 +1,5 @@
+---
+source: crates/diode-star-core/tests/file.rs
+expression: output
+---
+Error: test.star:3:1-24 Failed to resolve file path 'nonexistent.txt': File not found: /nonexistent.txt

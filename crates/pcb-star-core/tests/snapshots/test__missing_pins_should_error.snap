@@ -1,0 +1,5 @@
+---
+source: projects/cli/crates/diode_star_core/tests/test.rs
+expression: output
+---
+Error: test_missing.star:5:1-12:2 Unconnected pin(s): GND, OE, Q2, Q3, Q4, VDD
