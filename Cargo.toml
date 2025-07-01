@@ -87,6 +87,10 @@ wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 flate2 = "1.0.34"
+gethostname = "0.5"
+machine-uid = "0.5"
+posthog-rs = "0.2"
+sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"] }
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -17,10 +17,10 @@ uuid = { workspace = true }
 pretty_env_logger = { workspace = true }
 
 # Telemetry dependencies - always included but only used in release builds
-sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"], optional = true }
-posthog-rs = { version = "0.2", optional = true }
-gethostname = { version = "0.5", optional = true }
-machine-uid = { version = "0.5", optional = true }
+sentry = { workspace = true, optional = true }
+posthog-rs = { workspace = true, optional = true }
+gethostname = { workspace = true, optional = true }
+machine-uid = { workspace = true, optional = true }
 
 [features]
 default = ["telemetry"]
