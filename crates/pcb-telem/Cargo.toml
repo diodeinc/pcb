@@ -14,6 +14,7 @@ once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+pretty_env_logger = { workspace = true }
 
 # Telemetry dependencies - always included but only used in release builds
 sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"], optional = true }

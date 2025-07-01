@@ -32,6 +32,7 @@ derive_more = { version = "1.0.0", features = ["full"] }
 dirs = "6"
 dupe = "0.9.1"
 env_logger = "0.11"
+pretty_env_logger = "0.5"
 indicatif = "0.17.8"
 inquire = "0.7"
 itertools = "0.13.0"

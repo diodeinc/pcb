@@ -5,6 +5,8 @@
 
 use anyhow::Result;
 use once_cell::sync::Lazy;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
 #[cfg(all(feature = "telemetry", not(debug_assertions)))]
@@ -56,9 +58,6 @@ fn generate_anonymous_id() -> String {
                 // Hash the machine ID to ensure it's anonymous
                 // We hash it so the raw machine ID is never sent to telemetry servers
                 // This provides consistent IDs per machine while maintaining privacy
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                
                 let mut hasher = DefaultHasher::new();
                 id.hash(&mut hasher);
                 format!("{:x}", hasher.finish())
@@ -177,28 +176,34 @@ fn track_invocation() -> Result<()> {
 /// as breadcrumbs. The actual log level is controlled by the RUST_LOG
 /// environment variable, defaulting to "warn".
 pub fn setup_logger() -> Result<()> {
-    // Build env logger with default level set to warn
-    let mut log_builder = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("warn")
-    );
-    
     #[cfg(all(feature = "telemetry", not(debug_assertions)))]
     if is_telemetry_enabled() {
+        let mut log_builder = pretty_env_logger::formatted_builder();
+        log_builder.parse_filters(&::std::env::var("RUST_LOG").unwrap_or("warn".to_string()));
+
         let sentry_logger = sentry::integrations::log::SentryLogger::with_dest(log_builder.build())
             .filter(|md| match md.level() {
                 log::Level::Error => sentry::integrations::log::LogFilter::Event,
                 _ => sentry::integrations::log::LogFilter::Breadcrumb,
             });
-        
+
         // Set the global logger
         log::set_boxed_logger(Box::new(sentry_logger))?;
         log::set_max_level(log::LevelFilter::Debug);
     } else {
-        log_builder.init();
+        // Just use pretty_env_logger without Sentry
+        pretty_env_logger::formatted_builder()
+            .parse_filters(&::std::env::var("RUST_LOG").unwrap_or("warn".to_string()))
+            .init();
     }
     
     #[cfg(debug_assertions)]
-    log_builder.init();
+    {
+        // In debug builds, just use pretty_env_logger
+        pretty_env_logger::formatted_builder()
+            .parse_filters(&::std::env::var("RUST_LOG").unwrap_or("warn".to_string()))
+            .init();
+    }
     
     Ok(())
 }
