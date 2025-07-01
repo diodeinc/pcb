@@ -473,9 +473,9 @@ mod tests {
             + (r1_bbox.position.y - r2_bbox.position.y).powi(2))
         .sqrt();
 
-        println!("R1-C1 distance: {}", r1_c1_dist);
-        println!("R2-C2 distance: {}", r2_c2_dist);
-        println!("R1-R2 distance: {}", r1_r2_dist);
+        println!("R1-C1 distance: {r1_c1_dist}");
+        println!("R2-C2 distance: {r2_c2_dist}");
+        println!("R1-R2 distance: {r1_r2_dist}");
 
         // Components in different modules should be further apart
         assert!(r1_r2_dist > r1_c1_dist);
@@ -488,7 +488,7 @@ mod tests {
 
         // Add many components of similar size
         for i in 1..=10 {
-            layout.set_component_size(format!("R{}", i), Size::new(10.0, 5.0));
+            layout.set_component_size(format!("R{i}"), Size::new(10.0, 5.0));
         }
 
         let bboxes = layout.layout();

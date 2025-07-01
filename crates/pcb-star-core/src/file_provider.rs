@@ -91,8 +91,8 @@ impl FileProvider for InMemoryFileProvider {
                 let path_str = path.to_string_lossy();
                 self.files.keys().any(|file_path| {
                     let file_str = file_path.to_string_lossy();
-                    file_str.starts_with(&format!("{}/", path_str))
-                        || file_str.starts_with(&format!("{}\\", path_str))
+                    file_str.starts_with(&format!("{path_str}/"))
+                        || file_str.starts_with(&format!("{path_str}\\"))
                 })
             }
             Err(_) => false,

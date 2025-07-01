@@ -101,11 +101,11 @@ impl LoadResolver for BundleLoadResolver {
             .load_map
             .get(stripped_current_file.to_string_lossy().as_ref());
 
-        log::debug!("Load map: {:?}", load_map);
+        log::debug!("Load map: {load_map:?}");
 
         if let Some(load_map) = load_map {
             let resolved_path = load_map.get(load_path);
-            log::debug!("Load map resolved path: {:?}", resolved_path);
+            log::debug!("Load map resolved path: {resolved_path:?}");
             if let Some(resolved_path) = resolved_path {
                 return Ok(PathBuf::from(resolved_path));
             }

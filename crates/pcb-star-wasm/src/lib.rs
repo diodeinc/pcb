@@ -53,7 +53,7 @@ impl Module {
         module_name: &str,
     ) -> Result<Module, JsValue> {
         let files: HashMap<String, String> = serde_json::from_str(files_json)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse files JSON: {}", e)))?;
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse files JSON: {e}")))?;
 
         // Create InMemoryFileProvider with files
         let file_provider = Arc::new(InMemoryFileProvider::new(files));
@@ -84,7 +84,7 @@ impl Module {
     pub fn from_bundle(bundle_bytes: &[u8], module_name: &str) -> Result<Module, JsValue> {
         // Load the bundle
         let loaded_bundle = LoadedBundle::from_zip_bytes(bundle_bytes)
-            .map_err(|e| JsValue::from_str(&format!("Failed to load bundle: {}", e)))?;
+            .map_err(|e| JsValue::from_str(&format!("Failed to load bundle: {e}")))?;
 
         let main_file = loaded_bundle.entry_point().to_path_buf();
         let bundle_resolver = Arc::new(pcb_star_core::bundle::BundleLoadResolver::new(
@@ -131,7 +131,7 @@ impl Module {
         let mut input_map = InputMap::new();
         if let Some(json) = partial_inputs_json {
             let inputs: HashMap<String, serde_json::Value> = serde_json::from_str(&json)
-                .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs JSON: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs JSON: {e}")))?;
 
             // Convert JSON inputs to InputValue
             for (key, value) in inputs {
@@ -182,7 +182,7 @@ impl Module {
         };
 
         serde_json::to_string(&result)
-            .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {}", e)))
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
     }
 
     /// Evaluate the module with the given inputs
@@ -202,7 +202,7 @@ impl Module {
 
         // Parse inputs
         let inputs: HashMap<String, serde_json::Value> = serde_json::from_str(inputs_json)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs JSON: {}", e)))?;
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs JSON: {e}")))?;
 
         // Convert JSON inputs to InputMap
         let mut input_map = InputMap::new();
@@ -229,13 +229,14 @@ impl Module {
 
         if let Some(output) = eval_result.output {
             // Convert the frozen module to a schematic
-            let schematic = output.sch_module.to_schematic().map_err(|e| {
-                JsValue::from_str(&format!("Failed to convert to schematic: {}", e))
-            })?;
+            let schematic = output
+                .sch_module
+                .to_schematic()
+                .map_err(|e| JsValue::from_str(&format!("Failed to convert to schematic: {e}")))?;
 
             // Serialize the schematic to JSON
             let schematic_json = serde_json::to_value(schematic)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize schematic: {}", e)))?;
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize schematic: {e}")))?;
 
             let result = EvaluationResult {
                 success: true,
@@ -244,7 +245,7 @@ impl Module {
             };
 
             serde_json::to_string(&result)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {}", e)))
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
         } else {
             // Evaluation failed
             let result = EvaluationResult {
@@ -254,7 +255,7 @@ impl Module {
             };
 
             serde_json::to_string(&result)
-                .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {}", e)))
+                .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
         }
     }
 

@@ -140,11 +140,7 @@ impl<'a> Parser<'a> {
 
             // Log progress for large lists
             if item_count % 1000 == 0 {
-                log::trace!(
-                    "Parsed {} items in list at position {}",
-                    item_count,
-                    start_pos
-                );
+                log::trace!("Parsed {item_count} items in list at position {start_pos}");
             }
         }
 
@@ -253,9 +249,7 @@ impl<'a> Parser<'a> {
             // Log progress for large whitespace sections
             if skipped % 10000 == 0 && skipped > 0 {
                 log::trace!(
-                    "Skipped {} whitespace/comment chars starting at position {}",
-                    skipped,
-                    start_pos
+                    "Skipped {skipped} whitespace/comment chars starting at position {start_pos}"
                 );
             }
         }
@@ -293,7 +287,7 @@ pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
     let result = Parser::new(input).parse();
     match &result {
         Ok(_) => log::trace!("Successfully parsed S-expression"),
-        Err(e) => log::trace!("Failed to parse S-expression: {:?}", e),
+        Err(e) => log::trace!("Failed to parse S-expression: {e:?}"),
     }
     result
 }
@@ -307,7 +301,7 @@ pub fn parse_all(input: &str) -> Result<Vec<Sexpr>, ParseError> {
     let result = Parser::new(input).parse_all();
     match &result {
         Ok(exprs) => log::trace!("Successfully parsed {} S-expressions", exprs.len()),
-        Err(e) => log::trace!("Failed to parse S-expressions: {:?}", e),
+        Err(e) => log::trace!("Failed to parse S-expressions: {e:?}"),
     }
     result
 }
@@ -327,7 +321,7 @@ impl fmt::Display for ParseError {
         match self {
             ParseError::UnexpectedEof => write!(f, "Unexpected end of input"),
             ParseError::UnexpectedChar(found, expected) => {
-                write!(f, "Expected '{}', found '{}'", expected, found)
+                write!(f, "Expected '{expected}', found '{found}'")
             }
             ParseError::UnclosedList => write!(f, "Unclosed list"),
             ParseError::UnterminatedString => write!(f, "Unterminated string"),
@@ -354,7 +348,7 @@ fn format_sexpr_inner(sexpr: &Sexpr, indent_level: usize, add_indent: bool) -> S
     match sexpr {
         Sexpr::Symbol(s) => {
             // Symbols are never quoted
-            format!("{}{}", indent, s)
+            format!("{indent}{s}")
         }
         Sexpr::String(s) => {
             // Strings are always quoted
@@ -362,14 +356,14 @@ fn format_sexpr_inner(sexpr: &Sexpr, indent_level: usize, add_indent: bool) -> S
         }
         Sexpr::List(items) => {
             if items.is_empty() {
-                return format!("{}()", indent);
+                return format!("{indent}()");
             }
 
             // Check if this is a simple list that should be on one line
             let is_simple = is_simple_list(items);
 
             if is_simple {
-                let mut result = format!("{}(", indent);
+                let mut result = format!("{indent}(");
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {
                         result.push(' ');
@@ -379,7 +373,7 @@ fn format_sexpr_inner(sexpr: &Sexpr, indent_level: usize, add_indent: bool) -> S
                 result.push(')');
                 result
             } else {
-                let mut result = format!("{}(", indent);
+                let mut result = format!("{indent}(");
 
                 // First item on the same line
                 if let Some(first) = items.first() {
@@ -601,7 +595,7 @@ mod tests {
             let parsed = parse(input).unwrap();
             let formatted = format_sexpr(&parsed, 0);
             let reparsed = parse(&formatted).unwrap();
-            assert_eq!(parsed, reparsed, "Roundtrip failed for: {}", input);
+            assert_eq!(parsed, reparsed, "Roundtrip failed for: {input}");
         }
     }
 }

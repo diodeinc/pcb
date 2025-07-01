@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use log::warn;
 use pcb_sexpr::{format_sexpr, parse, Sexpr};
 use uuid::Uuid;
 
@@ -228,7 +227,7 @@ impl SchematicConverter {
         log::debug!("Processing {} instances", sch.instances.len());
         for (inst_ref, instance) in &sch.instances {
             if instance.kind == InstanceKind::Component {
-                log::debug!("Processing component: {}", inst_ref);
+                log::debug!("Processing component: {inst_ref}");
                 self.process_component(inst_ref, instance, output_path)?;
             }
         }
@@ -449,7 +448,7 @@ impl SchematicConverter {
 
                     self.rectangles.push(rect);
                 } else {
-                    log::warn!("No bounds found for component {}", inst_ref);
+                    log::warn!("No bounds found for component {inst_ref}");
                 }
             }
         }
@@ -457,7 +456,7 @@ impl SchematicConverter {
         // Third pass: create net connections
         log::debug!("Processing {} nets", sch.nets.len());
         for (net_name, net) in &sch.nets {
-            log::debug!("Processing net: {}", net_name);
+            log::debug!("Processing net: {net_name}");
             self.process_net(net_name, net, sch)?;
         }
 
@@ -479,7 +478,7 @@ impl SchematicConverter {
         instance: &Instance,
         _output_path: &Path,
     ) -> Result<(), ConversionError> {
-        log::debug!("Processing component {}", inst_ref);
+        log::debug!("Processing component {inst_ref}");
 
         // Get symbol path from attributes
         let symbol_path = instance
@@ -488,7 +487,7 @@ impl SchematicConverter {
             .and_then(|v| v.string())
             .ok_or_else(|| ConversionError::MissingSymbolPath(inst_ref.to_string()))?;
 
-        log::debug!("Component {} has symbol_path: {}", inst_ref, symbol_path);
+        log::debug!("Component {inst_ref} has symbol_path: {symbol_path}");
 
         // Try to load the symbol
         let symbol_result = if symbol_path.contains(':')
@@ -496,25 +495,25 @@ impl SchematicConverter {
             && !symbol_path.contains('\\')
         {
             // This is a KiCad library reference
-            log::debug!("Loading symbol from KiCad library: {}", symbol_path);
+            log::debug!("Loading symbol from KiCad library: {symbol_path}");
             self.load_symbol_from_library(symbol_path)
         } else {
             // This is a file path
             let symbol_path = PathBuf::from(symbol_path);
-            log::debug!("Loading symbol from file: {:?}", symbol_path);
+            log::debug!("Loading symbol from file: {symbol_path:?}");
             self.load_symbol(&symbol_path)
         };
 
         // Handle symbol loading errors gracefully
         let (symbol_info, lib_id) = match symbol_result {
             Ok(result) => {
-                log::debug!("Successfully loaded symbol for {}", inst_ref);
+                log::debug!("Successfully loaded symbol for {inst_ref}");
                 result
             }
             Err(e) => {
                 // Log warning and skip this component
-                log::warn!("Failed to load symbol for component {}: {}", inst_ref, e);
-                log::warn!("Skipping component {} in schematic output", inst_ref);
+                log::warn!("Failed to load symbol for component {inst_ref}: {e}");
+                log::warn!("Skipping component {inst_ref} in schematic output");
                 return Ok(());
             }
         };
@@ -593,7 +592,7 @@ impl SchematicConverter {
             updated_symbol_info
         });
 
-        log::debug!("Component {} processed successfully", inst_ref);
+        log::debug!("Component {inst_ref} processed successfully");
         Ok(())
     }
 
@@ -601,7 +600,7 @@ impl SchematicConverter {
         &mut self,
         library_ref: &str,
     ) -> Result<(SymbolInfo, String), ConversionError> {
-        log::debug!("Loading symbol from library reference: {}", library_ref);
+        log::debug!("Loading symbol from library reference: {library_ref}");
 
         // Parse the library reference (Library:Name)
         let parts: Vec<&str> = library_ref.split(':').collect();
@@ -614,21 +613,17 @@ impl SchematicConverter {
 
         let library_name = parts[0];
         let symbol_name = parts[1];
-        log::debug!(
-            "Looking for symbol '{}' in library '{}'",
-            symbol_name,
-            library_name
-        );
+        log::debug!("Looking for symbol '{symbol_name}' in library '{library_name}'");
 
         // Find the KiCad symbol directory
         log::debug!("Finding KiCad symbol directory");
         let kicad_symbol_dir =
             Self::find_kicad_symbol_dir().ok_or(ConversionError::KiCadSymbolDirNotFound)?;
-        log::debug!("KiCad symbol directory: {:?}", kicad_symbol_dir);
+        log::debug!("KiCad symbol directory: {kicad_symbol_dir:?}");
 
         // Construct the path to the KiCad library
-        let kicad_lib_path = kicad_symbol_dir.join(format!("{}.kicad_sym", library_name));
-        log::debug!("Loading symbol file: {:?}", kicad_lib_path);
+        let kicad_lib_path = kicad_symbol_dir.join(format!("{library_name}.kicad_sym"));
+        log::debug!("Loading symbol file: {kicad_lib_path:?}");
 
         // Read and parse the symbol file
         let content = fs::read_to_string(&kicad_lib_path)
@@ -642,20 +637,20 @@ impl SchematicConverter {
         log::debug!("Symbol file parsed successfully");
 
         // Find the specific symbol in the library
-        log::debug!("Searching for symbol '{}' in parsed data", symbol_name);
+        log::debug!("Searching for symbol '{symbol_name}' in parsed data");
         let symbol_info = self
             .find_symbol_in_library(&sexpr, symbol_name)
             .ok_or_else(|| {
                 ConversionError::SymbolNotFound(symbol_name.to_string(), kicad_lib_path.clone())
             })?;
 
-        let lib_id = format!("{}:{}", library_name, symbol_name);
-        log::debug!("Symbol loaded successfully with lib_id: {}", lib_id);
+        let lib_id = format!("{library_name}:{symbol_name}");
+        log::debug!("Symbol loaded successfully with lib_id: {lib_id}");
         Ok((symbol_info, lib_id))
     }
 
     fn load_symbol(&mut self, symbol_path: &Path) -> Result<(SymbolInfo, String), ConversionError> {
-        log::debug!("Loading symbol from file: {:?}", symbol_path);
+        log::debug!("Loading symbol from file: {symbol_path:?}");
 
         // Generate a nickname based on the file name
         let nickname = symbol_path
@@ -682,12 +677,12 @@ impl SchematicConverter {
         })?;
 
         let lib_id = format!("{}:{}", nickname, symbol_info.name);
-        log::debug!("Symbol loaded successfully with lib_id: {}", lib_id);
+        log::debug!("Symbol loaded successfully with lib_id: {lib_id}");
         Ok((symbol_info, lib_id))
     }
 
     fn find_symbol_in_library(&self, sexpr: &Sexpr, symbol_name: &str) -> Option<SymbolInfo> {
-        log::debug!("Searching for symbol '{}' in S-expression", symbol_name);
+        log::debug!("Searching for symbol '{symbol_name}' in S-expression");
         match sexpr {
             Sexpr::List(items) => {
                 log::debug!("Searching through {} top-level items", items.len());
@@ -698,16 +693,16 @@ impl SchematicConverter {
                                 symbol_data.first().and_then(|s| s.as_atom()),
                                 symbol_data.get(1).and_then(|s| s.as_atom()),
                             ) {
-                                log::trace!("Item {}: tag='{}', name='{}'", i, tag, name);
+                                log::trace!("Item {i}: tag='{tag}', name='{name}'");
                                 if tag == "symbol" && name == symbol_name {
-                                    log::debug!("Found symbol '{}'", symbol_name);
+                                    log::debug!("Found symbol '{symbol_name}'");
                                     return self.extract_symbol_info(item.clone());
                                 }
                             }
                         }
                     }
                 }
-                log::debug!("Symbol '{}' not found", symbol_name);
+                log::debug!("Symbol '{symbol_name}' not found");
             }
             _ => {
                 log::debug!("Top-level S-expression is not a list");
@@ -724,7 +719,7 @@ impl SchematicConverter {
                 for (i, item) in items.iter().enumerate() {
                     if let Sexpr::List(symbol_data) = item {
                         if let Some(tag) = symbol_data.first().and_then(|s| s.as_atom()) {
-                            log::trace!("Item {}: tag='{}'", i, tag);
+                            log::trace!("Item {i}: tag='{tag}'");
                             if tag == "symbol" {
                                 log::debug!("Found first symbol");
                                 return self.extract_symbol_info(item.clone());
@@ -749,7 +744,7 @@ impl SchematicConverter {
                 .and_then(|s| s.as_atom())
                 .map(|s| s.to_string())?;
 
-            log::debug!("Extracting info for symbol '{}'", name);
+            log::debug!("Extracting info for symbol '{name}'");
 
             let mut info = SymbolInfo {
                 name: name.clone(),
@@ -772,7 +767,7 @@ impl SchematicConverter {
                                 item_data.get(2).and_then(|s| s.as_atom()),
                             ) {
                                 prop_count += 1;
-                                log::trace!("Property: {} = {}", key, value);
+                                log::trace!("Property: {key} = {value}");
                                 match key {
                                     "Reference" => info.reference = value.to_string(),
                                     "Value" => info.value = value.to_string(),
@@ -793,7 +788,7 @@ impl SchematicConverter {
             info.origin_offset = (-info.bounds.0, -info.bounds.1);
             log::debug!("Symbol '{}' origin offset: {:?}", name, info.origin_offset);
 
-            log::debug!("Extracted {} properties for symbol '{}'", prop_count, name);
+            log::debug!("Extracted {prop_count} properties for symbol '{name}'");
             Some(info)
         } else {
             log::debug!("Symbol S-expression is not a list");
@@ -819,7 +814,7 @@ impl SchematicConverter {
                 if let Some(tag) = item_data.first().and_then(|s| s.as_atom()) {
                     match tag {
                         "rectangle" | "polyline" | "circle" | "arc" => {
-                            log::trace!("Found {} element", tag);
+                            log::trace!("Found {tag} element");
                             // Extract coordinates from these elements
                             self.update_bounds_from_element(
                                 item_data, &mut min_x, &mut max_x, &mut min_y, &mut max_y,
@@ -865,15 +860,11 @@ impl SchematicConverter {
 
         // If no bounds found, use a small default size
         if min_x == f64::MAX || !found_graphics {
-            warn!("No bounds found for symbol: {:?}", symbol_data);
+            log::warn!("No bounds found for symbol: {symbol_data:?}");
             (-10.0, -10.0, 10.0, 10.0) // Small default size centered at origin
         } else {
             log::trace!(
-                "Calculated bounds: min_x={}, min_y={}, max_x={}, max_y={}",
-                min_x,
-                min_y,
-                max_x,
-                max_y
+                "Calculated bounds: min_x={min_x}, min_y={min_y}, max_x={max_x}, max_y={max_y}",
             );
             // Return the actual bounds as found
             (min_x, min_y, max_x, max_y)
@@ -954,7 +945,7 @@ impl SchematicConverter {
                             sub_items.get(2).and_then(|s| s.as_atom()),
                         ) {
                             if let (Ok(x), Ok(y)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
-                                log::trace!("Pin at ({}, {})", x, y);
+                                log::trace!("Pin at ({x}, {y})");
                                 // Only use the pin base position
                                 *min_x = min_x.min(x);
                                 *max_x = max_x.max(x);
@@ -980,11 +971,7 @@ impl SchematicConverter {
             let comp_ref = match self.get_component_ref(port_ref) {
                 Ok(ref_) => ref_,
                 Err(e) => {
-                    log::warn!(
-                        "Failed to get component reference for port {}: {}",
-                        port_ref,
-                        e
-                    );
+                    log::warn!("Failed to get component reference for port {port_ref}: {e}");
                     continue;
                 }
             };
@@ -1118,8 +1105,7 @@ impl SchematicConverter {
             } else {
                 // Component was likely skipped due to symbol loading error
                 log::warn!(
-                    "Component {} not found in schematic (likely skipped due to symbol loading error)",
-                    comp_ref
+                    "Component {comp_ref} not found in schematic (likely skipped due to symbol loading error)"
                 );
             }
         }

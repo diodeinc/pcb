@@ -65,10 +65,10 @@ impl fmt::Display for InputValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InputValue::None => write!(f, "None"),
-            InputValue::Bool(b) => write!(f, "{}", b),
-            InputValue::Int(i) => write!(f, "{}", i),
-            InputValue::String(s) => write!(f, "\"{}\"", s),
-            InputValue::Float(x) => write!(f, "{}", x),
+            InputValue::Bool(b) => write!(f, "{b}"),
+            InputValue::Int(i) => write!(f, "{i}"),
+            InputValue::String(s) => write!(f, "\"{s}\""),
+            InputValue::Float(x) => write!(f, "{x}"),
             InputValue::List(l) => write!(f, "List(len={})", l.len()),
             InputValue::Dict(m) => write!(f, "Dict(len={})", m.len()),
             InputValue::Enum { variant } => write!(f, "Enum({variant})"),

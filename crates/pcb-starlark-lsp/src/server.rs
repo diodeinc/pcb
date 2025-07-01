@@ -752,7 +752,7 @@ impl<T: LspContext> Backend<T> {
                         let result = match result {
                             Ok(result) => result,
                             Err(e) => {
-                                eprintln!("Error jumping to definition: {:#}", e);
+                                eprintln!("Error jumping to definition: {e:#}");
                                 None
                             }
                         };
@@ -1088,9 +1088,9 @@ impl<T: LspContext> Backend<T> {
                             .into_iter()
                             .map(|(assign, import)| {
                                 if assign == import {
-                                    format!("\"{}\"", import)
+                                    format!("\"{import}\"")
                                 } else {
-                                    format!("{} = \"{}\"", assign, import)
+                                    format!("{assign} = \"{import}\"")
                                 }
                             })
                             .join(", ")
@@ -1369,7 +1369,7 @@ impl<T: LspContext> Backend<T> {
             Err(e) => {
                 self.log_message(
                     MessageType::WARNING,
-                    &format!("Error preloading workspace: {:#}", e),
+                    &format!("Error preloading workspace: {e:#}"),
                 );
             }
         }
@@ -1468,7 +1468,7 @@ impl<T: LspContext> Backend<T> {
     ) -> anyhow::Result<Option<LocationLink>> {
         const COMMON_EXTS: [&str; 2] = ["star", "kicad_sym"];
         for ext in COMMON_EXTS.iter() {
-            let candidate = dir.join(format!("{}.{}", module_name, ext));
+            let candidate = dir.join(format!("{module_name}.{ext}"));
             if candidate.exists() {
                 let uri = LspUrl::File(candidate);
                 return Self::location_link(source, &uri, Range::default());
@@ -1661,7 +1661,7 @@ where
             result: None,
             error: Some(ResponseError {
                 code: 0,
-                message: format!("{:#?}", e),
+                message: format!("{e:#?}"),
                 data: None,
             }),
         },
@@ -1941,7 +1941,7 @@ mod tests {
         .replace("{load}", &uri_to_load_string(&bar_uri))
         .trim()
         .to_owned();
-        eprintln!("foo_contents: {}", foo_contents);
+        eprintln!("foo_contents: {foo_contents}");
         let bar_contents = "def <baz>baz</baz>():\n    pass";
         let foo = FixtureWithRanges::from_fixture(foo_uri.path(), &foo_contents)?;
         let bar = FixtureWithRanges::from_fixture(bar_uri.path(), bar_contents)?;
@@ -2366,7 +2366,7 @@ mod tests {
             };
             let expected_location = expected_location_link_from_spans(
                 bar_uri.clone(),
-                foo.resolved_span(&format!("{}_click", name)),
+                foo.resolved_span(&format!("{name}_click")),
                 range,
             );
 
@@ -2781,7 +2781,7 @@ mod tests {
                 expected_location_link_from_spans(
                     (*uri).clone(),
                     foo.resolved_span(id),
-                    fixture.resolved_span(&format!("dest_{}", id)),
+                    fixture.resolved_span(&format!("dest_{id}")),
                 )
             })
             .collect::<Vec<_>>();
@@ -2792,8 +2792,8 @@ mod tests {
                 goto_definition_request(
                     &mut server,
                     foo_uri.clone(),
-                    foo.begin_line(&format!("{}_click", id)),
-                    foo.begin_column(&format!("{}_click", id)),
+                    foo.begin_line(&format!("{id}_click")),
+                    foo.begin_column(&format!("{id}_click")),
                 )
             })
             .collect::<Vec<_>>();

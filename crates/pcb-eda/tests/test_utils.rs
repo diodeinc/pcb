@@ -21,7 +21,7 @@ pub fn setup_symbol(name: &str) -> Symbol {
                 .is_some_and(|ext| ext == "kicad_sym")
         })
         .map(|entry| entry.path())
-        .unwrap_or_else(|| panic!("Could not find .kicad_sym file for {}", name));
+        .unwrap_or_else(|| panic!("Could not find .kicad_sym file for {name}"));
 
     Symbol::from_file(&lib_path).unwrap()
 }
@@ -46,8 +46,7 @@ pub fn setup_test_env() -> TempDir {
     // Copy the project files to the temporary directory
     copy_dir_all(&resources_dir, temp_dir.path()).unwrap_or_else(|e| {
         panic!(
-            "Failed to copy project files from {:?}: {}",
-            resources_dir, e
+            "Failed to copy project files from {resources_dir:?}: {e}"
         )
     });
 

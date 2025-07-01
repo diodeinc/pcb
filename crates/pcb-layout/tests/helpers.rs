@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 /// Gets the path to test resources
 #[allow(unused)]
 pub fn get_resource_path(resource_name: &str) -> PathBuf {
-    let relative_path = format!("tests/resources/{}", resource_name);
+    let relative_path = format!("tests/resources/{resource_name}");
 
     // Return the relative path - tests will be run from the crate root
     PathBuf::from(relative_path)
@@ -111,7 +111,7 @@ where
 
     Ok(entries
         .into_iter()
-        .map(|(name, info)| format!("{}: {}", name, info))
+        .map(|(name, info)| format!("{name}: {info}"))
         .collect())
 }
 

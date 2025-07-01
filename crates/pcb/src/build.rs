@@ -57,7 +57,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let file_name = star_path.file_name().unwrap().to_string_lossy();
 
         // Show spinner while building
-        let spinner = Spinner::builder(format!("{}: Building", file_name)).start();
+        let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
         // Evaluate the design
         let eval_result = pcb_star::run(&star_path);
@@ -102,7 +102,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                 component_count
             );
         } else {
-            spinner.error(format!("{}: No output generated", file_name));
+            spinner.error(format!("{file_name}: No output generated"));
             has_errors = true;
         }
     }

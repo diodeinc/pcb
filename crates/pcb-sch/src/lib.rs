@@ -116,7 +116,7 @@ impl std::fmt::Display for InstanceRef {
             self.module.module_name
         )?;
         for part in &self.instance_path {
-            write!(f, ".{}", part)?;
+            write!(f, ".{part}")?;
         }
         Ok(())
     }

@@ -61,7 +61,7 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
         let (eval_result, has_errors) = evaluate_star_file(&star_path);
 
         if has_errors {
-            eprintln!("Skipping {} due to build errors", file_name);
+            eprintln!("Skipping {file_name} due to build errors");
             continue;
         }
 

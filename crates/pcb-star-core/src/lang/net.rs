@@ -107,7 +107,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
         let mut props: Vec<_> = self.properties.iter().collect();
         props.sort_by(|(a, _), (b, _)| a.cmp(b));
         for (key, value) in props {
-            writeln!(f, "  {}: {:?}", key, value)?;
+            writeln!(f, "  {key}: {value:?}")?;
         }
         Ok(())
     }

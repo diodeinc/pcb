@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
 
             // First argument is the subcommand name
             let command = args[0].to_string_lossy();
-            let external_cmd = format!("pcb-{}", command);
+            let external_cmd = format!("pcb-{command}");
 
             // Try to find and execute the external command
             match Command::new(&external_cmd).args(&args[1..]).status() {
@@ -74,10 +74,9 @@ fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::NotFound {
-                        eprintln!("Error: Unknown command '{}'", command);
+                        eprintln!("Error: Unknown command '{command}'");
                         eprintln!(
-                            "No built-in command or external command '{}' found",
-                            external_cmd
+                            "No built-in command or external command '{external_cmd}' found"
                         );
                         std::process::exit(1);
                     } else {

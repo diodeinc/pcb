@@ -74,7 +74,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
             inputs.sort_by_key(|(k, _)| k.as_str());
             let inputs_map: std::collections::BTreeMap<_, _> = inputs
                 .into_iter()
-                .map(|(k, v)| (k.as_str(), format!("{:?}", v)))
+                .map(|(k, v)| (k.as_str(), format!("{v:?}")))
                 .collect();
             debug.field("inputs", &inputs_map);
         }
@@ -85,7 +85,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
             props.sort_by_key(|(k, _)| k.as_str());
             let props_map: std::collections::BTreeMap<_, _> = props
                 .into_iter()
-                .map(|(k, v)| (k.as_str(), format!("{:?}", v)))
+                .map(|(k, v)| (k.as_str(), format!("{v:?}")))
                 .collect();
             debug.field("properties", &props_map);
         }

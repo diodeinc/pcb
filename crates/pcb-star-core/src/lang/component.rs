@@ -98,14 +98,14 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
             .mpn
             .as_deref()
             .unwrap_or(self.ctype.as_deref().unwrap_or("<unknown>"));
-        writeln!(f, "Component({})", name)?;
+        writeln!(f, "Component({name})")?;
 
         let mut pins: Vec<_> = self.pins.iter().collect();
         pins.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         for (pin_name, pin_value) in pins {
             let pad_str = pin_value.to_value().unpack_str().unwrap_or("<pad>");
-            writeln!(f, "  {} ({})", pin_name, pad_str)?;
+            writeln!(f, "  {pin_name} ({pad_str})")?;
         }
 
         if !self.properties.is_empty() {
@@ -113,7 +113,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
             props.sort_by(|(a, _), (b, _)| a.cmp(b));
             writeln!(f, "Properties:")?;
             for (key, value) in props {
-                writeln!(f, "  {}: {:?}", key, value)?;
+                writeln!(f, "  {key}: {value:?}")?;
             }
         }
         Ok(())

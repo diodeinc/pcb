@@ -122,7 +122,7 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
                 // If caller explicitly specified a tag (non-default) we warn and ignore –
                 // alias definitions should embed the desired tag.
                 if tag != DEFAULT_PKG_TAG {
-                    log::debug!("ignoring tag '{}' on alias '{}'", tag, package);
+                    log::debug!("ignoring tag '{tag}' on alias '{package}'");
                 }
 
                 let new_spec = parse_load_spec(&new_spec_str).ok_or_else(|| {
@@ -204,7 +204,7 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
                     repo,
                     std::path::MAIN_SEPARATOR
                 );
-                let folder_name = format!("{}{}", folder_name, rev);
+                let folder_name = format!("{folder_name}{rev}");
                 let _ = expose_alias_symlink(root, &folder_name, path, &local_path);
             }
             Ok(local_path)
@@ -253,7 +253,7 @@ fn download_and_unpack_github_repo(
     rev: &str,
     dest_dir: &Path,
 ) -> anyhow::Result<()> {
-    log::info!("Fetching GitHub repo {}/{} @ {}", user, repo, rev);
+    log::info!("Fetching GitHub repo {user}/{repo} @ {rev}");
 
     // Reject abbreviated commit hashes – we only support full 40-character SHAs or branch/tag names.
     if looks_like_git_sha(rev) && rev.len() < 40 {
@@ -301,7 +301,7 @@ fn download_and_unpack_github_repo(
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
 
-        log::debug!("Running command: {:?}", cmd);
+        log::debug!("Running command: {cmd:?}");
         match cmd.status() {
             Ok(status) if status.success() => {
                 if rev_is_head {
@@ -371,8 +371,7 @@ fn download_and_unpack_github_repo(
 
     // Example tarball URL: https://codeload.github.com/<user>/<repo>/tar.gz/<rev>
     let url = format!(
-        "https://codeload.github.com/{}/{}/tar.gz/{}",
-        user, repo, effective_rev
+        "https://codeload.github.com/{user}/{repo}/tar.gz/{effective_rev}"
     );
 
     // Build a reqwest client so we can attach an Authorization header when needed
@@ -625,7 +624,7 @@ mod tests {
     #[test]
     fn parses_github_repo_root_with_long_commit() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
-        let input = format!("@github/foo/bar:{}", sha);
+        let input = format!("@github/foo/bar:{sha}");
         let spec = parse_load_spec(&input);
         assert_eq!(
             spec,

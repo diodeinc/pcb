@@ -55,11 +55,11 @@ impl LoadedBundle {
             match file.read_to_string(&mut contents) {
                 Ok(_) => {
                     // Successfully read as text, store with absolute path
-                    files.insert(format!("/{}", name), contents);
+                    files.insert(format!("/{name}"), contents);
                 }
                 Err(e) => {
                     // Failed to read as UTF-8, skip the file
-                    warn!("Skipping non-text file '{}' in bundle: {}", name, e);
+                    warn!("Skipping non-text file '{name}' in bundle: {e}");
                 }
             }
         }

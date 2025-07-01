@@ -188,7 +188,7 @@ where
                     // Create new net with template name and properties
                     let net_name = if !template_name.is_empty() {
                         if let Some(ref inst_name) = instance_name_opt {
-                            format!("{}_{}", inst_name, template_name)
+                            format!("{inst_name}_{template_name}")
                         } else {
                             template_name
                         }
@@ -322,7 +322,7 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> std::fmt::Display for InterfaceFactor
                     // For other types, just show the type name
                     val.get_type().to_string()
                 };
-                write!(f, "{}: {}", name, type_str)?;
+                write!(f, "{name}: {type_str}")?;
             }
             write!(f, ")")
         }
@@ -366,7 +366,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{}", k)?;
+            write!(f, "{k}")?;
         }
         write!(f, ")")
     }
@@ -549,13 +549,13 @@ fn instantiate_interface<'v>(
 
             let net_name = if !template_name.is_empty() {
                 prefix_opt
-                    .map(|p| format!("{}_{}", p, template_name))
+                    .map(|p| format!("{p}_{template_name}"))
                     .unwrap_or(template_name)
             } else {
                 // Fall back to standard naming
                 let name_suffix = field_name.to_ascii_uppercase();
                 prefix_opt
-                    .map(|p| format!("{}_{}", p, name_suffix))
+                    .map(|p| format!("{p}_{name_suffix}"))
                     .unwrap_or_default()
             };
 

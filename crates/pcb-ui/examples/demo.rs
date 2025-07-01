@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
 
     for i in 0..=50 {
         pb.set_position(i);
-        pb.set_message(format!("Building ({}/50)", i));
+        pb.set_message(format!("Building ({i}/50)"));
         thread::sleep(Duration::from_millis(40));
     }
     pb.finish_with_message("Build finished");
@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
     let long_text =
         "This is a very long text that might need to be truncated to fit in the terminal";
     let truncated = pcb_ui::truncate_text(long_text, 40);
-    println!("Truncated: {}", truncated);
+    println!("Truncated: {truncated}");
 
     Ok(())
 }

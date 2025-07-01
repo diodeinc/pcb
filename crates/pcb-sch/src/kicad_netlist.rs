@@ -200,7 +200,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
             ts_uuid
         )
         .unwrap();
-        writeln!(out, "      (tstamps \"{}\")", ts_uuid).unwrap();
+        writeln!(out, "      (tstamps \"{ts_uuid}\")").unwrap();
 
         // Explicitly add the standard KiCad "Reference" property pointing to the component's
         // reference designator.  This ensures the field is always present and consistent
@@ -399,7 +399,7 @@ pub fn format_footprint(fp: &str) -> (String, Option<(String, PathBuf)>) {
         .map(|d| d.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
     (
-        format!("{}:{}", lib_name, footprint_name),
+        format!("{lib_name}:{footprint_name}"),
         Some((lib_name, dir)),
     )
 }
@@ -487,7 +487,7 @@ pub fn serialize_fp_lib_table(layout_dir: &Path, libs: &HashMap<String, PathBuf>
 
         // Construct final URI: use project-relative `${KIPRJMOD}` only for relative paths.
         let mut uri = if rel_path.is_relative() {
-            format!("${{KIPRJMOD}}/{}", path_str)
+            format!("${{KIPRJMOD}}/{path_str}")
         } else {
             // Absolute path – use it directly.
             path_str.clone()

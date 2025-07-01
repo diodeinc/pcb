@@ -357,7 +357,7 @@ pub fn run_python_script(script: &str, options: PythonScriptOptions) -> Result<(
 /// Run a Python script from a file in the KiCad Python environment
 pub fn run_python_file(script_path: &Path, options: PythonScriptOptions) -> Result<()> {
     let script = std::fs::read_to_string(script_path)
-        .with_context(|| format!("Failed to read Python script from {:?}", script_path))?;
+        .with_context(|| format!("Failed to read Python script from {script_path:?}"))?;
     run_python_script(&script, options)
 }
 
@@ -380,7 +380,7 @@ impl PythonScriptBuilder {
     /// Create a builder from a script file
     pub fn from_file(path: &Path) -> Result<Self> {
         let script = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read Python script from {:?}", path))?;
+            .with_context(|| format!("Failed to read Python script from {path:?}"))?;
         Ok(Self::new(script))
     }
 

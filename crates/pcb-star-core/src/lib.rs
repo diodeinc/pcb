@@ -162,7 +162,7 @@ impl Display for Diagnostic {
         if !self.path.is_empty() {
             write!(f, "{}", self.path)?;
             if let Some(span) = &self.span {
-                write!(f, ":{}", span)?;
+                write!(f, ":{span}")?;
             }
             write!(f, " ")?;
         }
@@ -176,7 +176,7 @@ impl Display for Diagnostic {
             if !diag.path.is_empty() {
                 write!(f, "{}", diag.path)?;
                 if let Some(span) = &diag.span {
-                    write!(f, ":{}", span)?;
+                    write!(f, ":{span}")?;
                 }
                 write!(f, " ")?;
             }
@@ -204,10 +204,10 @@ pub struct WithDiagnostics<T> {
 impl<T: Display> Display for WithDiagnostics<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(output) = &self.output {
-            write!(f, "{}", output)?;
+            write!(f, "{output}")?;
         }
         for diagnostic in &self.diagnostics {
-            write!(f, "{}", diagnostic)?;
+            write!(f, "{diagnostic}")?;
         }
         Ok(())
     }

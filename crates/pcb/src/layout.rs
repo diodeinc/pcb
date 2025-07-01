@@ -46,7 +46,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         let file_name = star_path.file_name().unwrap().to_string_lossy();
 
         // Building stage
-        let mut spinner = Spinner::builder(format!("{}: Building", file_name)).start();
+        let mut spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
         // Evaluate the design
         let eval_result = pcb_star::run(&star_path);
@@ -78,10 +78,10 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
             }
 
             // Restart spinner for layout stage after diagnostics
-            spinner = Spinner::builder(format!("{}: Generating layout", file_name)).start();
+            spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
         } else {
             // No diagnostics - just update the spinner message
-            spinner.set_message(format!("{}: Generating layout", file_name));
+            spinner.set_message(format!("{file_name}: Generating layout"));
         }
 
         // Check if the schematic has a layout
@@ -121,7 +121,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
                         pcb_ui::icons::error(),
                         file_name.with_style(Style::Red).bold()
                     );
-                    eprintln!("  Error: {}", e);
+                    eprintln!("  Error: {e}");
                     has_errors = true;
                 }
             }

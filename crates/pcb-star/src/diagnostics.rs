@@ -42,7 +42,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     let primary_src = sources_map.get(&diag.path);
     if primary_src.is_none() {
         for m in &messages {
-            eprintln!("{}", m);
+            eprintln!("{m}");
         }
         return;
     }
@@ -63,7 +63,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     let primary_span = compute_span(primary_src_str, deepest_error_msg);
     if primary_span.is_none() {
         for m in &messages {
-            eprintln!("{}", m);
+            eprintln!("{m}");
         }
         return;
     }
@@ -152,7 +152,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
 
                     let branch = if is_last_frame { "╰─ " } else { "├─ " };
 
-                    eprintln!("{}{}{}", base_indent, branch, frame);
+                    eprintln!("{base_indent}{branch}{frame}");
                 }
             }
         }

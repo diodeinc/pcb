@@ -509,10 +509,7 @@ impl EvalContext {
                             path: file_load_path.clone(),
                             span: None,
                             severity: starlark::analysis::EvalSeverity::Error,
-                            body: format!(
-                                "Failed to resolve load path '{}': {}",
-                                file_load_path, e
-                            ),
+                            body: format!("Failed to resolve load path '{file_load_path}': {e}"),
                             call_stack: None,
                             child: None,
                         };
@@ -702,10 +699,7 @@ impl EvalContext {
                             path: file_load_path.clone(),
                             span: None,
                             severity: starlark::analysis::EvalSeverity::Error,
-                            body: format!(
-                                "Failed to resolve load path '{}': {}",
-                                file_load_path, e
-                            ),
+                            body: format!("Failed to resolve load path '{file_load_path}': {e}"),
                             call_stack: None,
                             child: None,
                         };
@@ -737,7 +731,7 @@ impl EvalContext {
                         path: file_load_path.clone(),
                         span: None,
                         severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Failed to load component from {}: {}", file_load_path, e),
+                        body: format!("Failed to load component from {file_load_path}: {e}"),
                         call_stack: None,
                         child: None,
                     };
@@ -1394,9 +1388,9 @@ impl FileLoader for EvalContext {
                     let error_path = if error_symbol != "<unknown>" {
                         // Check if the error is from a .star file or .kicad_sym file
                         if error.path.ends_with(".kicad_sym") {
-                            format!("{}/{}.kicad_sym", path, error_symbol)
+                            format!("{path}/{error_symbol}.kicad_sym")
                         } else {
-                            format!("{}/{}.star", path, error_symbol)
+                            format!("{path}/{error_symbol}.star")
                         }
                     } else {
                         path.to_string()
@@ -1414,7 +1408,7 @@ impl FileLoader for EvalContext {
                                     .unwrap_or_default(),
                                 span: Some(codemap.file_span(load_span).resolve_span()),
                                 severity: starlark::analysis::EvalSeverity::Error,
-                                body: format!("Error loading module `{}`", error_path),
+                                body: format!("Error loading module `{error_path}`"),
                                 call_stack: None,
                                 child: Some(Box::new(error.clone())),
                             };
@@ -1422,7 +1416,7 @@ impl FileLoader for EvalContext {
                             // Wrap in DiagnosticError and pass through anyhow
                             let diag_err = crate::DiagnosticError(parent_diag);
                             let load_err = crate::LoadError {
-                                message: format!("Error loading module `{}`", error_path),
+                                message: format!("Error loading module `{error_path}`"),
                                 diagnostic: diag_err,
                             };
                             let mut err = starlark::Error::new_other(anyhow::Error::new(load_err));
@@ -1439,13 +1433,13 @@ impl FileLoader for EvalContext {
                             .unwrap_or_default(),
                         span: None,
                         severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Error loading module `{}`", error_path),
+                        body: format!("Error loading module `{error_path}`"),
                         call_stack: None,
                         child: Some(Box::new(error.clone())),
                     };
                     let diag_err = crate::DiagnosticError(parent_diag);
                     let load_err = crate::LoadError {
-                        message: format!("Error loading module `{}`", error_path),
+                        message: format!("Error loading module `{error_path}`"),
                         diagnostic: diag_err,
                     };
                     let err = starlark::Error::new_other(anyhow::Error::new(load_err));
@@ -1480,7 +1474,7 @@ impl FileLoader for EvalContext {
                             .unwrap_or_default(),
                         span: Some(codemap.file_span(load_span).resolve_span()),
                         severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Error loading module `{}`", path),
+                        body: format!("Error loading module `{path}`"),
                         call_stack: None,
                         child: Some(Box::new(first_error.clone())),
                     };
@@ -1488,7 +1482,7 @@ impl FileLoader for EvalContext {
                     // Wrap in DiagnosticError and pass through anyhow
                     let diag_err = crate::DiagnosticError(parent_diag);
                     let load_err = crate::LoadError {
-                        message: format!("Error loading module `{}`", path),
+                        message: format!("Error loading module `{path}`"),
                         diagnostic: diag_err,
                     };
                     let mut err = starlark::Error::new_other(anyhow::Error::new(load_err));
@@ -1503,13 +1497,13 @@ impl FileLoader for EvalContext {
                             .unwrap_or_default(),
                         span: None,
                         severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Failed to load module `{}`", path),
+                        body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
-                        message: format!("Failed to load module `{}`", path),
+                        message: format!("Failed to load module `{path}`"),
                         diagnostic: diag_err,
                     };
                     let err = starlark::Error::new_other(anyhow::Error::new(load_err));
@@ -1539,13 +1533,13 @@ impl FileLoader for EvalContext {
                             .unwrap_or_default(),
                         span: Some(codemap.file_span(load_span).resolve_span()),
                         severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Failed to load module `{}`", path),
+                        body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
-                        message: format!("Failed to load module `{}`", path),
+                        message: format!("Failed to load module `{path}`"),
                         diagnostic: diag_err,
                     };
                     let mut err = starlark::Error::new_other(anyhow::Error::new(load_err));
@@ -1561,13 +1555,13 @@ impl FileLoader for EvalContext {
                     .unwrap_or_default(),
                 span: None,
                 severity: starlark::analysis::EvalSeverity::Error,
-                body: format!("Failed to load module `{}`", path),
+                body: format!("Failed to load module `{path}`"),
                 call_stack: None,
                 child: None,
             };
             let diag_err = crate::DiagnosticError(diag);
             let load_err = crate::LoadError {
-                message: format!("Failed to load module `{}`", path),
+                message: format!("Failed to load module `{path}`"),
                 diagnostic: diag_err,
             };
             let err = starlark::Error::new_other(anyhow::Error::new(load_err));

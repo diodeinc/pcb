@@ -323,7 +323,7 @@ impl ModuleConverter {
                     let full_layout_path = if module_dir.is_empty() {
                         layout_path
                     } else {
-                        format!("{}/{}", module_dir, layout_path)
+                        format!("{module_dir}/{layout_path}")
                     };
 
                     inst.add_attribute(key.clone(), AttributeValue::String(full_layout_path));
