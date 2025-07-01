@@ -25,12 +25,12 @@ Zener is a next-generation PCB design toolchain that brings modern software engi
 ## Table of Contents
 
 - [Installation](#installation)
-- [Privacy & Telemetry](#privacy--telemetry)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
 - [Command Reference](#command-reference)
 - [Examples](#examples)
 - [Architecture](#architecture)
+- [Privacy & Telemetry](#privacy--telemetry)
 - [License](#license)
 
 ## Installation
@@ -53,46 +53,6 @@ cd pcb
 
 - Rust 2024 edition or later
 - KiCad (for generating and editing layouts)
-
-## Privacy & Telemetry
-
-Zener includes optional telemetry to help improve the tool. The telemetry is:
-
-- **Only active in release builds** - Debug builds have no telemetry
-- **Anonymous** - No personally identifiable information is collected
-- **Opt-out** - You can disable telemetry at any time
-- **Minimal** - Only basic usage statistics and error reports are sent
-
-### Disabling Telemetry
-
-To opt out of telemetry, set the `PCB_TELEMETRY` environment variable to `off`:
-
-```bash
-# Disable telemetry for current session
-export PCB_TELEMETRY=off
-
-# Or disable for a single command
-PCB_TELEMETRY=off pcb build my-design.star
-
-# To permanently disable, add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
-echo 'export PCB_TELEMETRY=off' >> ~/.bashrc
-```
-
-### What is Collected?
-
-When telemetry is enabled, we collect:
-
-- Command invocations (e.g., `pcb build`, `pcb layout`)
-- Error messages and stack traces (to help fix bugs)
-- Basic system info (OS type, tool version)
-- Anonymous machine ID (hashed for privacy)
-
-We **never** collect:
-
-- Your PCB designs or source code
-- File names or directory paths with personal information
-- Network information or IP addresses
-- Any credentials or authentication data
 
 ## Quick Start
 
@@ -604,6 +564,15 @@ Flash(
 )
 
 Layout("layout")
+```
+
+## Privacy & Telemetry
+
+Zener includes opt-out telemetry (release builds only) to help improve the tool. We collect anonymous usage statistics and error reports - never your designs or personal data.
+
+To disable telemetry:
+```bash
+export PCB_TELEMETRY=off
 ```
 
 ## License
