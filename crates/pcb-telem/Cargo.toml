@@ -19,7 +19,8 @@ uuid = { workspace = true }
 sentry = { version = "0.32", features = ["anyhow", "log", "backtrace"], optional = true }
 posthog-rs = { version = "0.2", optional = true }
 gethostname = { version = "0.5", optional = true }
+machine-uid = { version = "0.5", optional = true }
 
 [features]
 default = ["telemetry"]
-telemetry = ["sentry", "posthog-rs", "gethostname"]
+telemetry = ["sentry", "posthog-rs", "gethostname", "machine-uid"]

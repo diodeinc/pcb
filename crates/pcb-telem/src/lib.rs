@@ -31,11 +31,50 @@ pub fn is_telemetry_enabled() -> bool {
         .unwrap_or(true)
 }
 
-/// Gets or creates a persistent anonymous user ID
+/// Gets a persistent anonymous machine ID (cached after first call)
 fn get_anonymous_id() -> String {
-    // For now, generate a new ID each time. In the future, this could be persisted
-    // in a config file in the user's home directory
-    uuid::Uuid::new_v4().to_string()
+    let mut state = TELEMETRY_STATE.lock().unwrap();
+    
+    // Return cached ID if available
+    if let Some(ref id) = state.anonymous_id {
+        return id.clone();
+    }
+    
+    // Generate new ID
+    let id = generate_anonymous_id();
+    state.anonymous_id = Some(id.clone());
+    id
+}
+
+/// Generates a new anonymous ID based on machine ID or random UUID
+fn generate_anonymous_id() -> String {
+    #[cfg(all(feature = "telemetry", not(debug_assertions)))]
+    {
+        // Try to get machine ID, fall back to random UUID if it fails
+        match machine_uid::get() {
+            Ok(id) => {
+                // Hash the machine ID to ensure it's anonymous
+                // We hash it so the raw machine ID is never sent to telemetry servers
+                // This provides consistent IDs per machine while maintaining privacy
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                
+                let mut hasher = DefaultHasher::new();
+                id.hash(&mut hasher);
+                format!("{:x}", hasher.finish())
+            }
+            Err(e) => {
+                log::debug!("Failed to get machine ID: {}, using random ID", e);
+                uuid::Uuid::new_v4().to_string()
+            }
+        }
+    }
+    
+    #[cfg(any(not(feature = "telemetry"), debug_assertions))]
+    {
+        // In debug builds or without telemetry feature, always use random ID
+        uuid::Uuid::new_v4().to_string()
+    }
 }
 
 /// Global telemetry state
@@ -44,6 +83,7 @@ static TELEMETRY_STATE: Lazy<Mutex<TelemetryState>> = Lazy::new(|| {
         #[cfg(all(feature = "telemetry", not(debug_assertions)))]
         _guard: None,
         initialized: false,
+        anonymous_id: None,
     })
 });
 
@@ -51,6 +91,7 @@ struct TelemetryState {
     #[cfg(all(feature = "telemetry", not(debug_assertions)))]
     _guard: Option<ClientInitGuard>,
     initialized: bool,
+    anonymous_id: Option<String>,
 }
 
 /// Initializes telemetry

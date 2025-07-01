@@ -46,13 +46,14 @@ When telemetry is enabled, we collect:
 - Command invocations
 - Error messages and stack traces
 - Basic system info (OS type, tool version)
-- Anonymous usage ID
+- Anonymous machine ID (hashed for privacy)
 
 We never collect:
 - Source code or design files
 - Personal file paths
 - Network information
 - Credentials
+- Raw machine identifiers
 
 ## Implementation Details
 
@@ -60,3 +61,5 @@ We never collect:
 - All telemetry functions are no-ops when disabled
 - Sentry is used for error reporting
 - PostHog is used for usage analytics
+- Machine UIDs are hashed for privacy using `machine-uid` crate
+- Anonymous IDs are cached per session for consistency

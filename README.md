@@ -85,7 +85,7 @@ When telemetry is enabled, we collect:
 - Command invocations (e.g., `pcb build`, `pcb layout`)
 - Error messages and stack traces (to help fix bugs)
 - Basic system info (OS type, tool version)
-- Anonymous usage ID (random UUID)
+- Anonymous machine ID (hashed for privacy)
 
 We **never** collect:
 
