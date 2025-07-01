@@ -370,9 +370,7 @@ fn download_and_unpack_github_repo(
     // Strategy 3: fall back to unauthenticated or token-authenticated codeload tarball.
 
     // Example tarball URL: https://codeload.github.com/<user>/<repo>/tar.gz/<rev>
-    let url = format!(
-        "https://codeload.github.com/{user}/{repo}/tar.gz/{effective_rev}"
-    );
+    let url = format!("https://codeload.github.com/{user}/{repo}/tar.gz/{effective_rev}");
 
     // Build a reqwest client so we can attach an Authorization header when needed
     let client = reqwest::blocking::Client::builder()

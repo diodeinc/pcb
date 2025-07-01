@@ -44,11 +44,8 @@ pub fn setup_test_env() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Copy the project files to the temporary directory
-    copy_dir_all(&resources_dir, temp_dir.path()).unwrap_or_else(|e| {
-        panic!(
-            "Failed to copy project files from {resources_dir:?}: {e}"
-        )
-    });
+    copy_dir_all(&resources_dir, temp_dir.path())
+        .unwrap_or_else(|e| panic!("Failed to copy project files from {resources_dir:?}: {e}"));
 
     temp_dir
 }

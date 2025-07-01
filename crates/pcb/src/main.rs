@@ -75,9 +75,7 @@ fn main() -> anyhow::Result<()> {
                 Err(e) => {
                     if e.kind() == std::io::ErrorKind::NotFound {
                         eprintln!("Error: Unknown command '{command}'");
-                        eprintln!(
-                            "No built-in command or external command '{external_cmd}' found"
-                        );
+                        eprintln!("No built-in command or external command '{external_cmd}' found");
                         std::process::exit(1);
                     } else {
                         anyhow::bail!(
