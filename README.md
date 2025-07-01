@@ -7,9 +7,14 @@
 
 Zener is a next-generation PCB design toolchain that brings modern software engineering practices to hardware design.
 
+> [!WARNING]
+> We're still in the early days of getting this out into the world; expect breaking changes
+> and better documentation in the next few days.
+
 ## Features
 
 - **Starlark-based Design** - Write PCB designs in a Python-like language with strong typing and deterministic evaluation
+- **KiCad Integration** - Export schematics and layouts into KiCad for industry-standard PCB design workflows
 - **Modular Components** - Create reusable component libraries and share them across projects
 - **Interface Templates** - Define and reuse connection patterns with type-safe interfaces
 - **Integrated Toolchain** - From schematic to layout generation in a single tool
@@ -70,17 +75,20 @@ led_anode = Net("LED_ANODE")
 Resistor(
     name = "R1",
     value = "1kohm",
+    package = "0402",
     P1 = vcc,
     P2 = led_anode
 )
 
 LED(
     name = "D1",
+    package = "0402",
+    color = "red",
     A = led_anode,
     K = gnd
 )
 
-Layout("layout")
+Layout("layout", "layout/")
 ```
 
 ### 2. Build Your Design
@@ -413,37 +421,44 @@ Zener is built as a modular Rust workspace with specialized crates:
 ### Simple LED Circuit
 
 ```python
-load("@github/diodeinc/stdlib:properties.star", "Layout")
+load("@github/diodeinc/stdlib:main/properties.star", "Layout")
 
 Resistor = Module("@github/diodeinc/stdlib:main/generics/Resistor.star")
 LED = Module("@github/diodeinc/stdlib:main/generics/LED.star")
 Capacitor = Module("@github/diodeinc/stdlib:main/generics/Capacitor.star")
 
+vcc = Net("VCC")
+gnd = Net("GND")
+led = Net("LED")
+
 # Power supply filtering
 Capacitor(
     name = "C1",
     value = "100nF",
-    P1 = Net("VCC"),
-    P2 = Net("GND")
+    package = "0402",
+    P1 = vcc,
+    P2 = gnd
 )
 
 # Current limiting resistor
 Resistor(
     name = "R1",
     value = "330ohm",
-    P1 = Net("VCC"),
-    P2 = Net("LED_NET")
+    package = "0402",
+    P1 = vcc,
+    P2 = led
 )
 
 # Status LED
 LED(
     name = "D1",
     color = "red",
-    A = Net("LED_NET"),
-    K = Net("GND")
+    package = "0402",
+    A = led,
+    K = gnd
 )
 
-Layout("layout")
+Layout("layout", "layout/")
 ```
 
 ### Module with Configuration
@@ -484,8 +499,8 @@ Component(
 )
 
 # main.star
-load("interfaces.star", "PowerInterface")
-VoltageRegulator = load_module("voltage_regulator.star")
+load("@github/diodeinc/stdlib:main/interfaces.star", "PowerInterface")
+VoltageRegulator = Module("voltage_regulator.star")
 
 # Define power rails
 input_power = PowerInterface(prefix = "VIN")
@@ -506,13 +521,13 @@ VoltageRegulator(
 ### Complex System with Multiple Modules
 
 ```python
-load("@github/diodeinc/stdlib:properties.star", "Layout")
-load("interfaces.star", "PowerInterface", "SPIInterface", "I2CInterface")
+load("@github/diodeinc/stdlib:main/properties.star", "Layout")
+load("@github/diodeinc/stdlib:main/interfaces.star", "PowerInterface", "SPIInterface", "I2CInterface")
 
 # Load modules
-MCU = load_module("stm32f4.star")
-Sensor = load_module("bmi270.star")
-Flash = load_module("w25q128.star")
+MCU = Module("stm32f4.star")
+Sensor = Module("bmi270.star")
+Flash = Module("w25q128.star")
 
 # Power distribution
 system_power = PowerInterface(prefix = "3V3")
@@ -555,12 +570,11 @@ Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- Built on [Starlark-Rust](https://github.com/facebookexperimental/starlark-rust) by Meta
-- Inspired by modern software build systems and hardware description languages
-- KiCad integration for industry-standard PCB design workflows
+- Built on [starlark-rust](https://github.com/facebookexperimental/starlark-rust) by Meta.
+- Inspired by [atopile](https://github.com/atopile/atopile), [tscircuit](https://github.com/tscircuit/tscircuit), and others.
 
 ---
 
 <p align="center">
-  Made with ❤️ by the Zener Team
+  Made in Brooklyn, NY, USA.
 </p>
