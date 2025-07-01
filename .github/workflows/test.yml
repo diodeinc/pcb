@@ -30,7 +30,9 @@ jobs:
             runs-on: macos-14
           - name: Ubuntu
             runs-on: ubuntu-latest
-            container: kicad/kicad:9.0
+            container:
+              image: kicad/kicad:9.0
+              options: --user root
     steps:
       - uses: actions/checkout@v3
 
