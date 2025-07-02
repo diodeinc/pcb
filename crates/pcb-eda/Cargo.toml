@@ -1,7 +1,11 @@
 [package]
 name = "pcb-eda"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "EDA tool integration for PCB design"
 
 [dependencies]
 anyhow = { workspace = true }

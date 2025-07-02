@@ -1,7 +1,10 @@
 [package]
 name = "pcb-ui"
-version = "0.1.0"
-edition = "2021"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
 description = "Consistent UI components for Diode PCB tools"
 license = "MIT OR Apache-2.0"
 

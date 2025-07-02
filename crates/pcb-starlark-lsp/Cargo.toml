@@ -1,17 +1,15 @@
 [package]
-authors = [
-    "Damien Martin-Guillerez <dmarting@google.com>",
-    "Facebook",
-]
-categories = ["parser-implementations", "development-tools"]
+name = "pcb-starlark-lsp"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
 description = "LSP bindings for starlark"
 documentation = "https://docs.rs/starlark"
-edition = "2021"
+categories = ["parser-implementations", "development-tools"]
 keywords = ["starlark", "skylark", "language", "interpreter"]
 license = "Apache-2.0"
-name = "pcb-starlark-lsp"
-repository = "https://github.com/facebook/starlark-rust"
-version = "0.13.0"
 
 [dependencies]
 anyhow = { workspace = true }

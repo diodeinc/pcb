@@ -4,6 +4,13 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.2.0-dev"
+edition = "2021"
+repository = "https://github.com/diodeinc/pcb"
+homepage = "https://github.com/diodeinc/pcb"
+authors = ["Diode Computers, Inc. <founders@diode.computer>"]
+
 [workspace.dependencies]
 starlark = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
 starlark_map = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }

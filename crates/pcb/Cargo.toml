@@ -1,11 +1,11 @@
 [package]
 name = "pcb"
-version = "0.2.0-dev"
-edition = "2021"
-repository = "https://github.com/diodeinc/pcb"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
 description = "next-gen tooling for pcb design"
-homepage = "https://github.com/diodeinc/pcb"
-authors = ["Diode Computers, Inc. <founders@diode.computer>"]
+homepage = { workspace = true }
+authors = { workspace = true }
 
 [package.metadata.wix]
 upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"

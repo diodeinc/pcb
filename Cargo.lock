@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-command-runner"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "log",
@@ -2103,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-eda"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -2114,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-kicad"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2130,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-layout"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sch"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "chrono",
  "dirs",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sexpr"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "log",
  "serde",
@@ -2174,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-starlark-lsp"
-version = "0.13.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "derivative",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ui"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "colored",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen"
-version = "0.13.0"
+version = "0.2.0-dev"
 dependencies = [
  "allocative",
  "anyhow",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-core"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "allocative",
  "anyhow",
@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-wasm"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "base64",
