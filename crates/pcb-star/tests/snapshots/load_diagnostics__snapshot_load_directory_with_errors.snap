@@ -1,6 +1,0 @@
----
-source: projects/cli/crates/diode_star/tests/load_diagnostics.rs
-expression: netlist
----
-Error: [TEMP_DIR]test.star:3:6-17 Error loading module `./modules/BadModule.star`
-Error: [TEMP_DIR]modules/BadModule.star:3:1-43 File not found: [TEMP_DIR]modules/./does_not_exist.star

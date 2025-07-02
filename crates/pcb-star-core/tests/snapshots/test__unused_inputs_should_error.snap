@@ -1,5 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/test.rs
-expression: output
----
-Error: top.star:4:1-7:2 Unknown argument(s) provided to module my_module: unused

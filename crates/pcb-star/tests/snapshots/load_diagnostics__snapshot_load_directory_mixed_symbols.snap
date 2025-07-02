@@ -1,6 +1,0 @@
----
-source: projects/cli/crates/diode_star/tests/load_diagnostics.rs
-expression: netlist
----
-Error: [TEMP_DIR]test.star:3:6-17 Error loading module `./modules/Broken.star`
-Error: [TEMP_DIR]modules/Broken.star:3:1-19 Variable `undefined_variable` not found

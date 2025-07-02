@@ -1,0 +1,7 @@
+---
+source: crates/pcb-zen-core/tests/load.rs
+expression: output
+---
+Error: b.zen:3:6-13 Error loading module `a.zen`
+Error: /a.zen:3:6-13 Error loading module `b.zen`
+Error: /b.zen:3:1-24 cyclic load detected while loading `/a.zen`

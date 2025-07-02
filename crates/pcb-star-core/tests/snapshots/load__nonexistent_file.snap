@@ -1,5 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/load.rs
-expression: output
----
-Error: test.star:3:1-32 File not found: /nonexistent.star

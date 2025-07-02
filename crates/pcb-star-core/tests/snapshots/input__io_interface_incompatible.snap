@@ -1,6 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/input.rs
-expression: output
----
-Error: parent.star:7:1-33 Error instantiating `Module`
-Error: /Module.star:2:10-27 Type mismatch: expected Net, received Interface

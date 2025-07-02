@@ -1,6 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/input.rs
-expression: output
----
-Error: top.star:4:1-7:2 Error instantiating `Module`
-Error: /Module.star:2:7-21 Input 'pwr' is required but was not provided and no default value was given

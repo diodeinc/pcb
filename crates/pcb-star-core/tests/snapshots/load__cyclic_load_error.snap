@@ -1,7 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/load.rs
-expression: output
----
-Error: b.star:3:6-14 Error loading module `a.star`
-Error: /a.star:3:6-14 Error loading module `b.star`
-Error: /b.star:3:1-25 cyclic load detected while loading `/a.star`

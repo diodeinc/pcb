@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen/tests/assert.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.zen:2:1-14 boom

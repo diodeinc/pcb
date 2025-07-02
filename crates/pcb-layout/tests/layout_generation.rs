@@ -18,20 +18,16 @@ macro_rules! layout_test {
                 let resource_path = get_resource_path($name);
                 temp.copy_from(&resource_path, &["**/*"])?;
 
-                // Persist the temp directory so it doesn't get cleaned up
-                let temp_path = temp.path().to_path_buf();
-                println!("Test directory persisted at: {}", temp_path.display());
+                // Find and evaluate the board zen file
+                let zen_file = temp.path().join(format!("{}.zen", $board_name));
+                assert!(zen_file.exists(), "{}.zen should exist", $board_name);
 
-                // Find and evaluate the board star file
-                let star_file = temp_path.join(format!("{}.star", $board_name));
-                assert!(star_file.exists(), "{}.star should exist", $board_name);
-
-                // Evaluate the Starlark file to generate a schematic
-                let eval_result = pcb_star::run(&star_file);
+                // Evaluate the Zen file to generate a schematic
+                let eval_result = pcb_zen::run(&zen_file);
 
                 // Check for errors in evaluation
                 if !eval_result.diagnostics.is_empty() {
-                    eprintln!("Starlark evaluation diagnostics:");
+                    eprintln!("Zen evaluation diagnostics:");
                     for diag in &eval_result.diagnostics {
                         eprintln!("  {:?}", diag);
                     }
@@ -39,10 +35,10 @@ macro_rules! layout_test {
 
                 let schematic = eval_result
                     .output
-                    .expect("Starlark evaluation should produce a schematic");
+                    .expect("Zen evaluation should produce a schematic");
 
                 // Process the layout
-                let result = process_layout(&schematic, &star_file)?;
+                let result = process_layout(&schematic, &zen_file)?;
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

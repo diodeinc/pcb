@@ -1,6 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/load.rs
-expression: output
----
-Error: test.star:3:6-19 Error loading module `broken.star`
-Error: /broken.star:5:1 Parse error: unexpected new line here, expected one of ")", "*", "**", "/" or "IDENTIFIER"

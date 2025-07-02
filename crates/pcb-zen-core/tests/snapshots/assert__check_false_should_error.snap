@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/assert.rs
+expression: output
+---
+Error: test.zen:3:1-34 failing condition

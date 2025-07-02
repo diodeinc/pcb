@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Error: parent.zen:7:1-33 Error instantiating `Module`
+Error: /Module.zen:2:10-27 Type mismatch: expected Net, received Interface

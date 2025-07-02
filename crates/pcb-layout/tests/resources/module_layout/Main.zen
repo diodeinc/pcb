@@ -1,0 +1,23 @@
+# Load our module
+Submodule = Module("Module.zen")
+
+# Create power net
+power = Net("MAIN_POWER")
+gnd = Net("MAIN_GND")
+
+# Instantiate the module multiple times
+# This demonstrates layout reuse - each instance should have the same relative layout
+Submodule(
+    name = "MODULE1",
+    power = power,
+    gnd = gnd,
+)
+
+Submodule(
+    name = "MODULE2",
+    power = power,
+    gnd = gnd,
+)
+
+# Set the layout path for test expectations
+add_property("layout_path", "build/main_layout")

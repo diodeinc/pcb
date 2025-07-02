@@ -376,9 +376,9 @@ Zener is built as a modular Rust workspace with specialized crates:
 
 ### Core Language & Runtime
 
-- **`pcb-star`** - Main Starlark runtime with PCB-specific extensions, LSP server, and DAP support
-- **`pcb-star-core`** - Core language features including components, modules, nets, interfaces, and the type system
-- **`pcb-star-wasm`** - WebAssembly bindings for running Starlark PCB designs in the browser
+- **`pcb-zen`** - Main Starlark runtime with PCB-specific extensions, LSP server, and DAP support
+- **`pcb-zen-core`** - Core language features including components, modules, nets, interfaces, and the type system
+- **`pcb-zen-wasm`** - WebAssembly bindings for running Starlark PCB designs in the browser
 
 ### Schematic & Layout
 

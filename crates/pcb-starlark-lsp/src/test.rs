@@ -245,7 +245,7 @@ impl LspContext for TestServerContext {
         self.resolve_load(&literal, current_file, workspace_root)
             .map(|url| match &url {
                 LspUrl::File(u) => match u.extension() {
-                    Some(e) if e == "star" => Some(StringLiteralResult {
+                    Some(e) if e == "star" || e == "zen" => Some(StringLiteralResult {
                         url,
                         location_finder: Some(Box::new(move |_ast| Ok(span))),
                     }),

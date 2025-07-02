@@ -2086,8 +2086,8 @@ dependencies = [
  "pcb-kicad",
  "pcb-layout",
  "pcb-sch",
- "pcb-star",
  "pcb-ui",
+ "pcb-zen",
 ]
 
 [[package]]
@@ -2140,7 +2140,7 @@ dependencies = [
  "paste",
  "pcb-kicad",
  "pcb-sch",
- "pcb-star",
+ "pcb-zen",
  "serde_json",
  "serial_test",
  "tempfile",
@@ -2173,7 +2173,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-star"
+name = "pcb-starlark-lsp"
+version = "0.13.0"
+dependencies = [
+ "anyhow",
+ "derivative",
+ "derive_more",
+ "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "itertools 0.13.0",
+ "lsp-server",
+ "lsp-types",
+ "maplit",
+ "regex",
+ "serde",
+ "serde_json",
+ "starlark",
+ "starlark_syntax",
+ "textwrap",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "pcb-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "colored",
+ "crossterm 0.28.1",
+ "indicatif",
+ "once_cell",
+ "terminal_size",
+ "unicode-width 0.2.1",
+]
+
+[[package]]
+name = "pcb-zen"
 version = "0.13.0"
 dependencies = [
  "allocative",
@@ -2200,8 +2234,8 @@ dependencies = [
  "pcb-eda",
  "pcb-kicad",
  "pcb-sch",
- "pcb-star-core",
  "pcb-starlark-lsp",
+ "pcb-zen-core",
  "regex",
  "reqwest",
  "serde",
@@ -2221,7 +2255,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-star-core"
+name = "pcb-zen-core"
 version = "0.1.0"
 dependencies = [
  "allocative",
@@ -2264,7 +2298,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-star-wasm"
+name = "pcb-zen-wasm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2276,7 +2310,7 @@ dependencies = [
  "log",
  "pcb-eda",
  "pcb-sch",
- "pcb-star-core",
+ "pcb-zen-core",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -2286,40 +2320,6 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "zip",
-]
-
-[[package]]
-name = "pcb-starlark-lsp"
-version = "0.13.0"
-dependencies = [
- "anyhow",
- "derivative",
- "derive_more",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "itertools 0.13.0",
- "lsp-server",
- "lsp-types",
- "maplit",
- "regex",
- "serde",
- "serde_json",
- "starlark",
- "starlark_syntax",
- "textwrap",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "pcb-ui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "colored",
- "crossterm 0.28.1",
- "indicatif",
- "once_cell",
- "terminal_size",
- "unicode-width 0.2.1",
 ]
 
 [[package]]

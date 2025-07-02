@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Error: top.zen:5:5-8:2 Error instantiating `Module`
+Error: /Module.zen:9:11-83 Input 'voltage' (type) has wrong type for this placeholder: expected record(value=field(float), unit=field(str)), got "5V"

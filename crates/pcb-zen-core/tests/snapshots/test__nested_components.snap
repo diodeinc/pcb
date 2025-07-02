@@ -1,0 +1,61 @@
+---
+source: crates/pcb-zen-core/tests/test.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "Top.zen",
+    children: [
+        FrozenValue(
+            Module {
+                name: "MyModule",
+                source: "/Module.zen",
+                children: [
+                    FrozenValue(
+                        Module {
+                            name: "MyComponent",
+                            source: "/Component.zen",
+                            children: [
+                                FrozenValue(
+                                    Component {
+                                        name: "Component",
+                                        footprint: "SMD:0805",
+                                        prefix: "U",
+                                        pins: {
+                                            "P1": FrozenValue(
+                                                "1",
+                                            ),
+                                            "P2": FrozenValue(
+                                                "2",
+                                            ),
+                                        },
+                                        connections: {
+                                            "P1": FrozenValue(
+                                                Net {
+                                                    name: "P1",
+                                                    id: "<ID>",
+                                                },
+                                            ),
+                                            "P2": FrozenValue(
+                                                Net {
+                                                    name: "P2",
+                                                    id: "<ID>",
+                                                },
+                                            ),
+                                        },
+                                        properties: {
+                                            "symbol_path": FrozenValue(
+                                                NoneType,
+                                            ),
+                                        },
+                                    },
+                                ),
+                            ],
+                        },
+                    ),
+                ],
+            },
+        ),
+    ],
+}
+[]

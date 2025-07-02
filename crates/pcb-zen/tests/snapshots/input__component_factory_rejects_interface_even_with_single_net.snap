@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen/tests/input.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.zen:12:1-25:2 Pin 'ICLK' must be connected to a Net, got InterfaceValue

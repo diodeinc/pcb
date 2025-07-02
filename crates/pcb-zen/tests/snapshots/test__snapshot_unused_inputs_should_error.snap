@@ -1,0 +1,17 @@
+---
+source: crates/pcb-zen/tests/test.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+  )
+  (libparts
+  )
+  (nets
+  )
+)
+Error: [TEMP_DIR]top.zen:4:1-7:2 Unknown argument(s) provided to module my_module: unused

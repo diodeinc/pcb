@@ -20,4 +20,4 @@ walkdir = { workspace = true }
 zip = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
-pcb-star = { workspace = true }
+pcb-zen = { workspace = true }
