@@ -4,12 +4,12 @@ use inquire::Select;
 use pcb_layout::utils;
 use std::path::{Path, PathBuf};
 
-use crate::build::{collect_star_files, evaluate_star_file};
+use crate::build::{collect_files, evaluate_zen_file};
 
 #[derive(Args, Debug)]
 pub struct OpenArgs {
-    /// One or more .star files to build/open. When omitted, behaves like before.
-    #[arg(value_name = "STAR", value_hint = clap::ValueHint::FilePath)]
+    /// One or more .zen files to build/open. When omitted, behaves like before.
+    #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     paths: Vec<PathBuf>,
 }
 
@@ -17,11 +17,11 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     open_layout(args.paths)
 }
 
-fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
-    // Collect .star files to process
-    let star_paths = collect_star_files(&star_paths)?;
+fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
+    // Collect .zen files to process
+    let zen_paths = collect_files(&zen_paths)?;
 
-    if star_paths.is_empty() {
+    if zen_paths.is_empty() {
         // Try to find a layout file in the current directory
         let cwd = std::env::current_dir()?;
         let layout_files: Vec<_> = std::fs::read_dir(&cwd)?
@@ -32,7 +32,7 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
 
         if layout_files.is_empty() {
             anyhow::bail!(
-                "No .star source files or .kicad_pcb layout files found in {}",
+                "No .zen/.zen source files or .kicad_pcb layout files found in {}",
                 cwd.canonicalize().unwrap_or(cwd).display()
             );
         }
@@ -53,12 +53,12 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
 
     let mut available_layouts = Vec::new();
 
-    // Process each .star file to find available layouts
-    for star_path in star_paths {
-        let file_name = star_path.file_name().unwrap().to_string_lossy();
+    // Process each .zen/.zen file to find available layouts
+    for zen_path in zen_paths {
+        let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
-        // Evaluate the star file
-        let (eval_result, has_errors) = evaluate_star_file(&star_path);
+        // Evaluate the zen file
+        let (eval_result, has_errors) = evaluate_zen_file(&zen_path);
 
         if has_errors {
             eprintln!("Skipping {file_name} due to build errors");
@@ -70,7 +70,7 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
             if let Some(layout_path_attr) = utils::extract_layout_path(schematic) {
                 // Convert relative path to absolute based on star file location
                 let layout_dir = if layout_path_attr.is_relative() {
-                    star_path
+                    zen_path
                         .parent()
                         .unwrap_or(Path::new("."))
                         .join(&layout_path_attr)
@@ -80,7 +80,7 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
 
                 let layout_path = utils::get_layout_paths(&layout_dir).pcb;
                 if layout_path.exists() {
-                    available_layouts.push((star_path.clone(), layout_path));
+                    available_layouts.push((zen_path.clone(), layout_path));
                 }
             }
         }
@@ -96,7 +96,7 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
         &available_layouts[0].1
     } else {
         // Multiple layouts - let user choose
-        let selected_idx = choose_star_layout(&available_layouts)?;
+        let selected_idx = choose_layout(&available_layouts)?;
         &available_layouts[selected_idx].1
     };
 
@@ -106,19 +106,19 @@ fn open_layout(star_paths: Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Let the user choose which layout to open from star file associations
-fn choose_star_layout(layouts: &[(PathBuf, PathBuf)]) -> Result<usize> {
+/// Let the user choose which layout to open from zen file associations
+fn choose_layout(layouts: &[(PathBuf, PathBuf)]) -> Result<usize> {
     // Get current directory for making relative paths
     let cwd = std::env::current_dir()?;
 
     let options: Vec<String> = layouts
         .iter()
-        .map(|(star_file, _)| {
+        .map(|(zen_file, _)| {
             // Try to make the path relative to current directory
-            star_file
+            zen_file
                 .strip_prefix(&cwd)
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| star_file.display().to_string())
+                .unwrap_or_else(|_| zen_file.display().to_string())
         })
         .collect();
 

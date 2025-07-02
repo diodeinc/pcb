@@ -1,26 +1,17 @@
-# Zener
+# `pcb`: CLI for circuit boards
 
-> A modern PCB design toolchain powered by Starlark
+> PCB tooling by [Diode Computers, Inc.](https://diode.computer/)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
-Zener is a next-generation PCB design toolchain that brings modern software engineering practices to hardware design.
+`pcb` is a command-line utility for building PCBs. It uses the
+[Zener](https://github.com/diodeinc/pcb/blob/main/docs/spec.md) language to describe
+PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
 > [!WARNING]
 > We're still in the early days of getting this out into the world; expect breaking changes
 > and better documentation in the next few days.
-
-## Features
-
-- **Starlark-based Design** - Write PCB designs in a Python-like language with strong typing and deterministic evaluation
-- **KiCad Integration** - Export schematics and layouts into KiCad for industry-standard PCB design workflows
-- **Modular Components** - Create reusable component libraries and share them across projects
-- **Interface Templates** - Define and reuse connection patterns with type-safe interfaces
-- **Integrated Toolchain** - From schematic to layout generation in a single tool
-- **LSP Support** - Full language server protocol support for intelligent code completion and diagnostics
-- **Type Safety** - Catch wiring errors at compile time with strongly-typed net connections
-- **Fast Iteration** - Instant feedback with live error reporting and diagnostics
 
 ## Table of Contents
 
@@ -51,8 +42,7 @@ cd pcb
 
 ### Requirements
 
-- Rust 2024 edition or later
-- KiCad (for generating and editing layouts)
+- [KiCad 9.x](https://kicad.org/) (for generating and editing layouts)
 
 ## Quick Start
 
@@ -188,8 +178,8 @@ input_voltage = config("input_voltage", float, default = 12.0)
 output_voltage = config("output_voltage", float, default = 3.3)
 
 # IO interfaces
-input = io("input", PowerInterface)
-output = io("output", PowerInterface)
+input = io("input", Power)
+output = io("output", Power)
 
 # Module implementation
 Regulator(
@@ -387,9 +377,9 @@ Zener is built as a modular Rust workspace with specialized crates:
 
 ### Core Language & Runtime
 
-- **`pcb-star`** - Main Starlark runtime with PCB-specific extensions, LSP server, and DAP support
-- **`pcb-star-core`** - Core language features including components, modules, nets, interfaces, and the type system
-- **`pcb-star-wasm`** - WebAssembly bindings for running Starlark PCB designs in the browser
+- **`pcb-zen`** - Main Starlark runtime with PCB-specific extensions, LSP server, and DAP support
+- **`pcb-zen-core`** - Core language features including components, modules, nets, interfaces, and the type system
+- **`pcb-zen-wasm`** - WebAssembly bindings for running Starlark PCB designs in the browser
 
 ### Schematic & Layout
 
@@ -409,14 +399,6 @@ Zener is built as a modular Rust workspace with specialized crates:
 - **`pcb-ui`** - Terminal UI components including spinners, progress bars, and styled output
 - **`pcb-command-runner`** - Utility for running external commands with proper output capture
 - **`pcb-telem`** - Telemetry support with Sentry error reporting and PostHog analytics (release builds only)
-
-### Key Design Principles
-
-1. **Modular Architecture** - Each crate has a focused responsibility, enabling reuse and testing
-2. **Type Safety** - Strong typing throughout, from Starlark evaluation to netlist generation
-3. **WASM Compatibility** - Core functionality can run in browsers via WebAssembly
-4. **Extensibility** - Clean interfaces between components allow for future expansion
-5. **Developer Experience** - Rich diagnostics, LSP support, and beautiful terminal output
 
 ## Examples
 
@@ -501,12 +483,12 @@ Component(
 )
 
 # main.star
-load("@github/diodeinc/stdlib:main/interfaces.star", "PowerInterface")
+load("@github/diodeinc/stdlib:main/interfaces.star", "Power")
 VoltageRegulator = Module("voltage_regulator.star")
 
 # Define power rails
-input_power = PowerInterface(prefix = "VIN")
-output_power = PowerInterface(prefix = "3V3")
+input_power = Power("VIN")
+output_power = Power("3V3")
 
 # Create voltage regulator
 VoltageRegulator(
@@ -524,7 +506,7 @@ VoltageRegulator(
 
 ```python
 load("@github/diodeinc/stdlib:main/properties.star", "Layout")
-load("@github/diodeinc/stdlib:main/interfaces.star", "PowerInterface", "SPIInterface", "I2CInterface")
+load("@github/diodeinc/stdlib:main/interfaces.star", "Power", "SPI", "I2C")
 
 # Load modules
 MCU = Module("stm32f4.star")
@@ -532,11 +514,11 @@ Sensor = Module("bmi270.star")
 Flash = Module("w25q128.star")
 
 # Power distribution
-system_power = PowerInterface(prefix = "3V3")
+system_power = Power("3V3")
 
 # Communication buses
-spi_bus = SPIInterface(prefix = "SPI1")
-i2c_bus = I2CInterface(prefix = "I2C1")
+spi_bus = SPI("SPI1")
+i2c_bus = I2C("I2C1")
 
 # Microcontroller
 MCU(

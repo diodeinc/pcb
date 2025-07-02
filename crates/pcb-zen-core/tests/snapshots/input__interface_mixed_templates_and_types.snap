@@ -1,0 +1,73 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "IC1",
+                type: "asic",
+                footprint: "QFN:48",
+                prefix: "U",
+                pins: {
+                    "EN": FrozenValue(
+                        "4",
+                    ),
+                    "RST": FrozenValue(
+                        "5",
+                    ),
+                    "SIG": FrozenValue(
+                        "3",
+                    ),
+                    "VDD": FrozenValue(
+                        "1",
+                    ),
+                    "VSS": FrozenValue(
+                        "2",
+                    ),
+                },
+                connections: {
+                    "EN": FrozenValue(
+                        Net {
+                            name: "CHIP_CONTROL_EN",
+                            id: "<ID>",
+                        },
+                    ),
+                    "RST": FrozenValue(
+                        Net {
+                            name: "CHIP_CONTROL_RST",
+                            id: "<ID>",
+                        },
+                    ),
+                    "SIG": FrozenValue(
+                        Net {
+                            name: "CHIP_SIGNAL",
+                            id: "<ID>",
+                        },
+                    ),
+                    "VDD": FrozenValue(
+                        Net {
+                            name: "CHIP_VDD",
+                            id: "<ID>",
+                        },
+                    ),
+                    "VSS": FrozenValue(
+                        Net {
+                            name: "CHIP_VSS",
+                            id: "<ID>",
+                        },
+                    ),
+                },
+                properties: {
+                    "symbol_path": FrozenValue(
+                        NoneType,
+                    ),
+                },
+            },
+        ),
+    ],
+}
+[]

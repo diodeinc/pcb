@@ -1,5 +1,0 @@
----
-source: crates/diode_star/tests/test.rs
-expression: netlist
----
-Error: [TEMP_DIR]test_missing.star:5:1-12:2 Unconnected pin(s): GND, OE, Q2, Q3, Q4, VDD

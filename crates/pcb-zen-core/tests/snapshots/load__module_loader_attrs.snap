@@ -1,0 +1,9 @@
+---
+source: crates/pcb-zen-core/tests/load.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "top.zen",
+}
+[]

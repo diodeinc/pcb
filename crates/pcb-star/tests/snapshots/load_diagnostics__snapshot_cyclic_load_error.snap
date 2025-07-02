@@ -1,7 +1,0 @@
----
-source: projects/cli/crates/diode_star/tests/load_diagnostics.rs
-expression: netlist
----
-Error: [TEMP_DIR]a.star:3:6-16 Error loading module `./b.star`
-Error: [TEMP_DIR]b.star:3:6-16 Error loading module `./a.star`
-Error: [TEMP_DIR]a.star:3:1-27 cyclic load detected while loading `[TEMP_DIR]b.star`

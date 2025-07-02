@@ -1,0 +1,24 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "top.zen",
+    children: [
+        FrozenValue(
+            Module {
+                name: "test",
+                source: "/Module.zen",
+                properties: {
+                    "current_unit": "FrozenValue(\"A\")",
+                    "current_value": "FrozenValue(StarlarkFloat(2.5))",
+                    "optional_power_is_none": "FrozenValue(StarlarkBool(true))",
+                    "voltage_unit": "FrozenValue(\"V\")",
+                    "voltage_value": "FrozenValue(StarlarkFloat(5.0))",
+                },
+            },
+        ),
+    ],
+}
+[]

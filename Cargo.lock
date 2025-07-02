@@ -1702,6 +1702,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b86e202f00093dcba4275d4636b93ef9dd75d025ae560d2521b45ea28ab49013"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2284,9 +2295,9 @@ dependencies = [
  "pcb-kicad",
  "pcb-layout",
  "pcb-sch",
- "pcb-star",
  "pcb-telem",
  "pcb-ui",
+ "pcb-zen",
 ]
 
 [[package]]
@@ -2339,7 +2350,7 @@ dependencies = [
  "paste",
  "pcb-kicad",
  "pcb-sch",
- "pcb-star",
+ "pcb-zen",
  "serde_json",
  "serial_test",
  "tempfile",
@@ -2369,122 +2380,6 @@ version = "0.1.0"
 dependencies = [
  "log",
  "serde",
-]
-
-[[package]]
-name = "pcb-star"
-version = "0.13.0"
-dependencies = [
- "allocative",
- "anyhow",
- "argfile",
- "ariadne",
- "clap",
- "debugserver-types",
- "derive_more",
- "dirs",
- "display_container 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "either",
- "flate2",
- "globset",
- "insta",
- "itertools 0.13.0",
- "log",
- "lsp-server",
- "lsp-types",
- "md5",
- "once_cell",
- "pathdiff",
- "pcb-eda",
- "pcb-kicad",
- "pcb-sch",
- "pcb-star-core",
- "pcb-starlark-lsp",
- "regex",
- "reqwest 0.12.21",
- "serde",
- "serde_json",
- "serde_yaml",
- "starlark",
- "starlark_derive",
- "starlark_map",
- "starlark_syntax",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
- "uuid",
- "walkdir",
- "zip",
-]
-
-[[package]]
-name = "pcb-star-core"
-version = "0.1.0"
-dependencies = [
- "allocative",
- "anyhow",
- "argfile",
- "ariadne",
- "chrono",
- "clap",
- "debugserver-types",
- "derive_more",
- "dirs",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "either",
- "flate2",
- "getrandom 0.2.16",
- "globset",
- "insta",
- "itertools 0.13.0",
- "log",
- "lsp-types",
- "once_cell",
- "pathdiff",
- "pcb-eda",
- "pcb-sch",
- "regex",
- "reqwest 0.12.21",
- "serde",
- "serde_json",
- "starlark",
- "starlark_derive",
- "starlark_map",
- "starlark_syntax",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
- "uuid",
- "walkdir",
- "zip",
-]
-
-[[package]]
-name = "pcb-star-wasm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "console_error_panic_hook",
- "console_log",
- "js-sys",
- "lazy_static",
- "log",
- "pcb-eda",
- "pcb-sch",
- "pcb-star-core",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "starlark",
- "toml",
- "wasm-bindgen",
- "wasm-bindgen-test",
- "web-sys",
- "zip",
 ]
 
 [[package]]
@@ -2536,6 +2431,122 @@ dependencies = [
  "once_cell",
  "terminal_size",
  "unicode-width 0.2.1",
+]
+
+[[package]]
+name = "pcb-zen"
+version = "0.13.0"
+dependencies = [
+ "allocative",
+ "anyhow",
+ "argfile",
+ "ariadne",
+ "clap",
+ "debugserver-types",
+ "derive_more",
+ "dirs",
+ "display_container 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "either",
+ "flate2",
+ "globset",
+ "insta",
+ "itertools 0.13.0",
+ "log",
+ "lsp-server",
+ "lsp-types",
+ "md5",
+ "once_cell",
+ "pathdiff",
+ "pcb-eda",
+ "pcb-kicad",
+ "pcb-sch",
+ "pcb-starlark-lsp",
+ "pcb-zen-core",
+ "regex",
+ "reqwest 0.12.22",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "starlark",
+ "starlark_derive",
+ "starlark_map",
+ "starlark_syntax",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "uuid",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
+name = "pcb-zen-core"
+version = "0.1.0"
+dependencies = [
+ "allocative",
+ "anyhow",
+ "argfile",
+ "ariadne",
+ "chrono",
+ "clap",
+ "debugserver-types",
+ "derive_more",
+ "dirs",
+ "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "either",
+ "flate2",
+ "getrandom 0.2.16",
+ "globset",
+ "insta",
+ "itertools 0.13.0",
+ "log",
+ "lsp-types",
+ "once_cell",
+ "pathdiff",
+ "pcb-eda",
+ "pcb-sch",
+ "regex",
+ "reqwest 0.12.22",
+ "serde",
+ "serde_json",
+ "starlark",
+ "starlark_derive",
+ "starlark_map",
+ "starlark_syntax",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "uuid",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
+name = "pcb-zen-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "console_error_panic_hook",
+ "console_log",
+ "js-sys",
+ "lazy_static",
+ "log",
+ "pcb-eda",
+ "pcb-sch",
+ "pcb-zen-core",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "starlark",
+ "toml",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+ "zip",
 ]
 
 [[package]]
@@ -2899,9 +2910,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.21"
+version = "0.12.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c8cea6b35bcceb099f30173754403d2eba0a5dc18cea3630fccd88251909288"
+checksum = "cbc931937e6ca3a06e3b6c0aa7841849b160a90351d6ab467a8b9b9959767531"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3215,7 +3226,7 @@ checksum = "00421ed8fa0c995f07cde48ba6c89e80f2b312f74ff637326f392fbfd23abe02"
 dependencies = [
  "httpdate",
  "native-tls",
- "reqwest 0.12.21",
+ "reqwest 0.12.22",
  "sentry-anyhow",
  "sentry-backtrace",
  "sentry-contexts",
@@ -3979,15 +3990,17 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.45.1"
+version = "1.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75ef51a33ef1da925cea3e4eb122833cb377c61439ca401b770f54902b806779"
+checksum = "1140bb80481756a8cbe10541f37433b459c5aa1e727b4c020fbfebdc25bf3ec4"
 dependencies = [
  "backtrace",
  "bytes",
+ "io-uring",
  "libc",
  "mio 1.0.4",
  "pin-project-lite",
+ "slab",
  "socket2",
  "windows-sys 0.52.0",
 ]

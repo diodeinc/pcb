@@ -1,8 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/load.rs
-expression: output
----
-Error: test.star:3:6-19 Error loading module `level1.star`
-Error: /level1.star:3:6-19 Error loading module `level2.star`
-Error: /level2.star:3:6-19 Error loading module `level3.star`
-Error: /level3.star:3:1-19 Variable `undefined_variable` not found

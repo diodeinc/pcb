@@ -1,5 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/test.rs
-expression: output
----
-Error: test_unknown.star:5:1-19:2 Unknown pin name 'INVALID'

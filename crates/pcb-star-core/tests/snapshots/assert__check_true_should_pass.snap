@@ -1,9 +1,0 @@
----
-source: projects/cli/crates/diode_star_core/tests/assert.rs
-expression: output
----
-Module {
-    name: "<root>",
-    source: "test.star",
-}
-[]

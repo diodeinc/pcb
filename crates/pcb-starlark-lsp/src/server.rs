@@ -1466,13 +1466,23 @@ impl<T: LspContext> Backend<T> {
         dir: &Path,
         module_name: &str,
     ) -> anyhow::Result<Option<LocationLink>> {
-        const COMMON_EXTS: [&str; 2] = ["star", "kicad_sym"];
-        for ext in COMMON_EXTS.iter() {
+        const STARLARK_EXTS: [&str; 2] = ["star", "zen"];
+        const KICAD_EXT: &str = "kicad_sym";
+
+        // Check for Starlark files first
+        for ext in STARLARK_EXTS.iter() {
             let candidate = dir.join(format!("{module_name}.{ext}"));
             if candidate.exists() {
                 let uri = LspUrl::File(candidate);
                 return Self::location_link(source, &uri, Range::default());
             }
+        }
+
+        // Then check for KiCad symbol files
+        let candidate = dir.join(format!("{module_name}.{KICAD_EXT}"));
+        if candidate.exists() {
+            let uri = LspUrl::File(candidate);
+            return Self::location_link(source, &uri, Range::default());
         }
 
         Ok(None)

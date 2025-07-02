@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen/tests/load_diagnostics.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.zen:3:6-17 Error loading module `./modules/BadModule.zen`
+Error: [TEMP_DIR]modules/BadModule.zen:3:1-42 File not found: [TEMP_DIR]modules/./does_not_exist.zen

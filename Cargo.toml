@@ -15,8 +15,8 @@ pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
 pcb-layout = { path = "crates/pcb-layout" }
 pcb-sch = { path = "crates/pcb-sch" }
-pcb-star = { path = "crates/pcb-star" }
-pcb-star-core = { path = "crates/pcb-star-core", default-features = true }
+pcb-zen = { path = "crates/pcb-zen" }
+pcb-zen-core = { path = "crates/pcb-zen-core", default-features = true }
 pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
 pcb-sexpr = { path = "crates/pcb-sexpr" }

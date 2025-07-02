@@ -1,0 +1,110 @@
+---
+source: crates/pcb-zen-core/tests/test.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "Top.zen",
+    children: [
+        FrozenValue(
+            Module {
+                name: "MyModule1",
+                source: "/MyModule.zen",
+                children: [
+                    FrozenValue(
+                        Component {
+                            name: "Component",
+                            footprint: "SMD:0805",
+                            prefix: "U",
+                            pins: {
+                                "P1": FrozenValue(
+                                    "1",
+                                ),
+                            },
+                            connections: {
+                                "P1": FrozenValue(
+                                    Net {
+                                        name: "INTERNAL",
+                                        id: "<ID>",
+                                    },
+                                ),
+                            },
+                            properties: {
+                                "symbol_path": FrozenValue(
+                                    NoneType,
+                                ),
+                            },
+                        },
+                    ),
+                ],
+            },
+        ),
+        FrozenValue(
+            Module {
+                name: "MyModule2",
+                source: "/MyModule.zen",
+                children: [
+                    FrozenValue(
+                        Component {
+                            name: "Component",
+                            footprint: "SMD:0805",
+                            prefix: "U",
+                            pins: {
+                                "P1": FrozenValue(
+                                    "1",
+                                ),
+                            },
+                            connections: {
+                                "P1": FrozenValue(
+                                    Net {
+                                        name: "INTERNAL",
+                                        id: "<ID>",
+                                    },
+                                ),
+                            },
+                            properties: {
+                                "symbol_path": FrozenValue(
+                                    NoneType,
+                                ),
+                            },
+                        },
+                    ),
+                ],
+            },
+        ),
+        FrozenValue(
+            Module {
+                name: "MyModule3",
+                source: "/MyModule.zen",
+                children: [
+                    FrozenValue(
+                        Component {
+                            name: "Component",
+                            footprint: "SMD:0805",
+                            prefix: "U",
+                            pins: {
+                                "P1": FrozenValue(
+                                    "1",
+                                ),
+                            },
+                            connections: {
+                                "P1": FrozenValue(
+                                    Net {
+                                        name: "INTERNAL",
+                                        id: "<ID>",
+                                    },
+                                ),
+                            },
+                            properties: {
+                                "symbol_path": FrozenValue(
+                                    NoneType,
+                                ),
+                            },
+                        },
+                    ),
+                ],
+            },
+        ),
+    ],
+}
+[]

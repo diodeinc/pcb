@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen/tests/load_diagnostics.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.zen:3:6-20 Error loading module `./broken.zen`
+Error: [TEMP_DIR]broken.zen:5:1 Parse error: unexpected new line here, expected one of ")", "*", "**", "/" or "IDENTIFIER"

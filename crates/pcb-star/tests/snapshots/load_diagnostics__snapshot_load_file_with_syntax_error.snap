@@ -1,6 +1,0 @@
----
-source: projects/cli/crates/diode_star/tests/load_diagnostics.rs
-expression: netlist
----
-Error: [TEMP_DIR]test.star:3:6-21 Error loading module `./broken.star`
-Error: [TEMP_DIR]broken.star:5:1 Parse error: unexpected new line here, expected one of ")", "*", "**", "/" or "IDENTIFIER"

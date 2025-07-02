@@ -1,5 +1,0 @@
----
-source: crates/diode-star-core/tests/file.rs
-expression: output
----
-Error: test.star:3:1-15 Path is a directory, not a file: /subdir

@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen/tests/load_diagnostics.rs
+expression: netlist
+---
+Error: [TEMP_DIR]test.zen:3:6-17 Error loading module `./modules/Broken.zen`
+Error: [TEMP_DIR]modules/Broken.zen:3:1-19 Variable `undefined_variable` not found

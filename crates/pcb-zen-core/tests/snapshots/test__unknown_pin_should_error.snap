@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/test.rs
+expression: output
+---
+Error: test_unknown.zen:5:1-19:2 Unknown pin name 'INVALID'

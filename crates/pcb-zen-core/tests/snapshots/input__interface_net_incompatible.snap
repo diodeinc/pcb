@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Error: Module.zen:6:1-14:2 Pin 'in' must be connected to a Net, got InterfaceValue
