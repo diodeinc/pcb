@@ -40,10 +40,10 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     // Initialize logger with telemetry support
     pcb_telem::setup_logger()?;
-    
+
     // Initialize telemetry (only active in release builds)
     if let Err(e) = pcb_telem::init_telemetry() {
-        log::debug!("Failed to initialize telemetry: {}", e);
+        log::debug!("Failed to initialize telemetry: {e}");
     }
 
     let cli = Cli::parse();
@@ -93,11 +93,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
     };
-    
+
     // Capture any errors to telemetry before returning
     if let Err(e) = &result {
         pcb_telem::capture_error(e);
     }
-    
+
     result
 }
