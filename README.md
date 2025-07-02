@@ -54,7 +54,7 @@ Create a file called `blinky.star`:
 load("@github/diodeinc/stdlib:main/properties.star", "Layout")
 
 Resistor = Module("@github/diodeinc/stdlib:main/generics/Resistor.star")
-LED = Module("@github/diodeinc/stdlib:main/generics/LED.star")
+Led = Module("@github/diodeinc/stdlib:main/generics/Led.star")
 
 # Define power nets
 vcc = Net("VCC")
@@ -70,7 +70,7 @@ Resistor(
     P2 = led_anode
 )
 
-LED(
+Led(
     name = "D1",
     package = "0402",
     color = "red",
