@@ -38,12 +38,17 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logger
-    env_logger::init();
+    // Initialize logger with telemetry support
+    pcb_telem::setup_logger()?;
+
+    // Initialize telemetry (only active in release builds)
+    if let Err(e) = pcb_telem::init_telemetry() {
+        log::debug!("Failed to initialize telemetry: {e}");
+    }
 
     let cli = Cli::parse();
 
-    match cli.command {
+    let result = match cli.command {
         Commands::Build(args) => build::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
@@ -87,5 +92,12 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+    };
+
+    // Capture any errors to telemetry before returning
+    if let Err(e) = &result {
+        pcb_telem::capture_error(e);
     }
+
+    result
 }

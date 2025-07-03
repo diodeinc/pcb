@@ -1,0 +1,328 @@
+//! Telemetry support for PCB tools with Sentry and PostHog integration
+//!
+//! This crate provides telemetry functionality that is only active in release builds.
+//! Users can opt-out of telemetry by setting the PCB_TELEMETRY environment variable to "off".
+
+use anyhow::Result;
+
+/// Checks if telemetry is enabled based on environment variable
+pub fn is_telemetry_enabled() -> bool {
+    std::env::var("PCB_TELEMETRY")
+        .map(|val| val.to_lowercase() != "off")
+        .unwrap_or(true)
+}
+
+#[cfg(all(feature = "telemetry", not(debug_assertions)))]
+mod telemetry_impl {
+    use super::*;
+    use gethostname::gethostname;
+    use once_cell::sync::Lazy;
+    use posthog_rs::Event;
+    use sentry::ClientInitGuard;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::sync::Mutex;
+
+    /// Sentry DSN for error reporting
+    const SENTRY_DSN: &str = "https://5d5c576f68c44baca59fc5352d3e40b5@o4508175627059200.ingest.us.sentry.io/4508175629352960";
+
+    /// PostHog API key for analytics
+    const POSTHOG_KEY: &str = "phc_h5EuYy42Vt2Qm5aOxx7ajD8inYEtj88v0KY8rwmcXhC";
+
+    /// Global telemetry state
+    static TELEMETRY_STATE: Lazy<Mutex<TelemetryState>> = Lazy::new(|| {
+        Mutex::new(TelemetryState {
+            initialized: false,
+            anonymous_id: None,
+        })
+    });
+
+    struct TelemetryState {
+        initialized: bool,
+        anonymous_id: Option<String>,
+    }
+
+    /// Global guard for Sentry client
+    static SENTRY_GUARD: Lazy<Mutex<Option<ClientInitGuard>>> = Lazy::new(|| Mutex::new(None));
+
+    /// Gets a persistent anonymous machine ID (cached after first call)
+    fn get_anonymous_id() -> String {
+        let mut state = TELEMETRY_STATE.lock().unwrap();
+
+        // Return cached ID if available
+        if let Some(ref id) = state.anonymous_id {
+            return id.clone();
+        }
+
+        // Generate new ID
+        let id = generate_anonymous_id();
+        state.anonymous_id = Some(id.clone());
+        id
+    }
+
+    /// Generates a new anonymous ID based on machine ID or random UUID
+    fn generate_anonymous_id() -> String {
+        // Try to get machine ID, fall back to random UUID if it fails
+        match machine_uid::get() {
+            Ok(id) => {
+                // Hash the machine ID to ensure it's anonymous
+                // We hash it so the raw machine ID is never sent to telemetry servers
+                // This provides consistent IDs per machine while maintaining privacy
+                let mut hasher = DefaultHasher::new();
+                id.hash(&mut hasher);
+                format!("{:x}", hasher.finish())
+            }
+            Err(e) => {
+                log::debug!("Failed to get machine ID: {}, using random ID", e);
+                uuid::Uuid::new_v4().to_string()
+            }
+        }
+    }
+
+    /// Initializes telemetry (Sentry and PostHog)
+    pub fn init_telemetry_impl() -> Result<()> {
+        if !is_telemetry_enabled() {
+            log::debug!("Telemetry is disabled via PCB_TELEMETRY environment variable");
+            return Ok(());
+        }
+
+        // Check if already initialized and release the lock immediately
+        let already_initialized = {
+            let state = TELEMETRY_STATE.lock().unwrap();
+            state.initialized
+        };
+
+        if already_initialized {
+            log::debug!("Telemetry already initialized");
+            return Ok(());
+        }
+
+        // Initialize Sentry
+        let guard = sentry::init((
+            SENTRY_DSN,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                ..Default::default()
+            },
+        ));
+
+        // Configure Sentry scope (this calls get_anonymous_id)
+        configure_sentry()?;
+
+        // Send initial PostHog event (this also calls get_anonymous_id)
+        track_invocation()?;
+
+        // Store the guard
+        *SENTRY_GUARD.lock().unwrap() = Some(guard);
+
+        // Mark as initialized
+        {
+            let mut state = TELEMETRY_STATE.lock().unwrap();
+            state.initialized = true;
+        }
+
+        Ok(())
+    }
+
+    /// Configures Sentry scope with command information
+    fn configure_sentry() -> Result<()> {
+        sentry::configure_scope(|scope| {
+            scope.set_tag(
+                "command",
+                format!("{:?}", std::env::args().collect::<Vec<String>>().join(" ")),
+            );
+            scope.set_tag("path", std::env::current_dir().unwrap().to_string_lossy());
+            scope.set_user(Some(sentry::User {
+                id: Some(get_anonymous_id()),
+                ..Default::default()
+            }));
+        });
+        Ok(())
+    }
+
+    /// Tracks a command invocation in PostHog
+    fn track_invocation() -> Result<()> {
+        let anonymous_id = get_anonymous_id();
+        let client = posthog_rs::client(POSTHOG_KEY);
+        let mut event = Event::new("invocation", &anonymous_id);
+
+        event.insert_prop(
+            "command",
+            std::env::args().collect::<Vec<String>>().join(" "),
+        )?;
+        event.insert_prop("path", std::env::current_dir().unwrap().to_string_lossy())?;
+        event.insert_prop("hostname", format!("{:?}", gethostname()))?;
+        event.insert_prop("version", env!("CARGO_PKG_VERSION"))?;
+
+        client.capture(event)?;
+        Ok(())
+    }
+
+    /// Sets up the logger with Sentry integration
+    pub fn setup_logger_impl() -> Result<()> {
+        if is_telemetry_enabled() {
+            let mut log_builder = pretty_env_logger::formatted_builder();
+            log_builder.parse_filters(&::std::env::var("RUST_LOG").unwrap_or("warn".to_string()));
+
+            let sentry_logger = sentry::integrations::log::SentryLogger::with_dest(
+                log_builder.build(),
+            )
+            .filter(|md| match md.level() {
+                log::Level::Error => sentry::integrations::log::LogFilter::Event,
+                _ => sentry::integrations::log::LogFilter::Breadcrumb,
+            });
+
+            // Set the global logger
+            log::set_boxed_logger(Box::new(sentry_logger))?;
+            log::set_max_level(log::LevelFilter::Debug);
+        } else {
+            // Just use pretty_env_logger without Sentry
+            pretty_env_logger::formatted_builder()
+                .parse_filters(&::std::env::var("RUST_LOG").unwrap_or("warn".to_string()))
+                .init();
+        }
+        Ok(())
+    }
+
+    /// Captures an error and sends it to Sentry
+    pub fn capture_error_impl(error: &anyhow::Error) {
+        if is_telemetry_enabled() {
+            sentry::integrations::anyhow::capture_anyhow(error);
+        }
+    }
+
+    /// Tracks a custom event in PostHog
+    pub fn track_event_impl(event_name: &str, properties: Option<serde_json::Value>) -> Result<()> {
+        if !is_telemetry_enabled() {
+            return Ok(());
+        }
+
+        let anonymous_id = get_anonymous_id();
+        let client = posthog_rs::client(POSTHOG_KEY);
+        let mut event = Event::new(event_name, &anonymous_id);
+
+        if let Some(props) = properties {
+            if let Some(obj) = props.as_object() {
+                for (key, value) in obj {
+                    event.insert_prop(key, value)?;
+                }
+            }
+        }
+
+        client.capture(event)?;
+        Ok(())
+    }
+}
+
+/// Initializes telemetry
+///
+/// This function should be called once at the start of the application.
+/// In debug builds, this is a no-op. In release builds, it initializes
+/// Sentry and sends an initial PostHog event.
+pub fn init_telemetry() -> Result<()> {
+    #[cfg(all(feature = "telemetry", not(debug_assertions)))]
+    {
+        telemetry_impl::init_telemetry_impl()
+    }
+
+    #[cfg(any(not(feature = "telemetry"), debug_assertions))]
+    {
+        Ok(())
+    }
+}
+
+/// Sets up the logger with Sentry integration
+///
+/// This creates a logger that sends errors to Sentry and other log levels
+/// as breadcrumbs. The actual log level is controlled by the RUST_LOG
+/// environment variable, defaulting to "warn".
+pub fn setup_logger() -> Result<()> {
+    #[cfg(all(feature = "telemetry", not(debug_assertions)))]
+    {
+        telemetry_impl::setup_logger_impl()
+    }
+
+    #[cfg(any(not(feature = "telemetry"), debug_assertions))]
+    {
+        // In debug builds or without telemetry feature, just use pretty_env_logger
+        pretty_env_logger::formatted_builder()
+            .parse_filters(&::std::env::var("RUST_LOG").unwrap_or("warn".to_string()))
+            .init();
+        Ok(())
+    }
+}
+
+/// Captures an error and sends it to Sentry (in release builds)
+///
+/// This is a convenience function for capturing errors. In debug builds,
+/// this is a no-op.
+pub fn capture_error(#[allow(unused_variables)] error: &anyhow::Error) {
+    #[cfg(all(feature = "telemetry", not(debug_assertions)))]
+    {
+        telemetry_impl::capture_error_impl(error);
+    }
+}
+
+/// Tracks a custom event in PostHog
+///
+/// This allows tracking custom events beyond the initial invocation.
+/// In debug builds, this is a no-op.
+pub fn track_event(
+    #[allow(unused_variables)] event_name: &str,
+    #[allow(unused_variables)] properties: Option<serde_json::Value>,
+) -> Result<()> {
+    #[cfg(all(feature = "telemetry", not(debug_assertions)))]
+    {
+        telemetry_impl::track_event_impl(event_name, properties)
+    }
+
+    #[cfg(any(not(feature = "telemetry"), debug_assertions))]
+    {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_telemetry_enabled_by_default() {
+        // Save current env var
+        let original = std::env::var("PCB_TELEMETRY").ok();
+
+        // Remove env var
+        std::env::remove_var("PCB_TELEMETRY");
+        assert!(is_telemetry_enabled());
+
+        // Restore original
+        if let Some(val) = original {
+            std::env::set_var("PCB_TELEMETRY", val);
+        }
+    }
+
+    #[test]
+    fn test_telemetry_can_be_disabled() {
+        // Save current env var
+        let original = std::env::var("PCB_TELEMETRY").ok();
+
+        // Set to off
+        std::env::set_var("PCB_TELEMETRY", "off");
+        assert!(!is_telemetry_enabled());
+
+        // Set to OFF (uppercase)
+        std::env::set_var("PCB_TELEMETRY", "OFF");
+        assert!(!is_telemetry_enabled());
+
+        // Set to something else
+        std::env::set_var("PCB_TELEMETRY", "on");
+        assert!(is_telemetry_enabled());
+
+        // Restore original
+        if let Some(val) = original {
+            std::env::set_var("PCB_TELEMETRY", val);
+        } else {
+            std::env::remove_var("PCB_TELEMETRY");
+        }
+    }
+}

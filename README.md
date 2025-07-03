@@ -21,6 +21,7 @@ PCB schematics and provides automations on top of KiCad to build PCBs fast.
 - [Command Reference](#command-reference)
 - [Examples](#examples)
 - [Architecture](#architecture)
+- [Privacy & Telemetry](#privacy--telemetry)
 - [License](#license)
 
 ## Installation
@@ -397,6 +398,7 @@ Zener is built as a modular Rust workspace with specialized crates:
 - **`pcb-sexpr`** - S-expression parser for KiCad file formats
 - **`pcb-ui`** - Terminal UI components including spinners, progress bars, and styled output
 - **`pcb-command-runner`** - Utility for running external commands with proper output capture
+- **`pcb-telem`** - Telemetry support with Sentry error reporting and PostHog analytics (release builds only)
 
 ## Examples
 
@@ -544,6 +546,15 @@ Flash(
 )
 
 Layout("layout")
+```
+
+## Privacy & Telemetry
+
+Zener includes opt-out telemetry (release builds only) to help improve the tool. We collect anonymous usage statistics and error reports - never your designs or personal data.
+
+To disable telemetry:
+```bash
+export PCB_TELEMETRY=off
 ```
 
 ## License
