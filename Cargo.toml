@@ -92,6 +92,8 @@ wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 flate2 = "1.0.34"
+openssl-sys = { version = "0.9", features = ["vendored"] }
+openssl = { version = "0.10", features = ["vendored"] }
 
 # The profile that 'dist' will build with
 [profile.dist]
