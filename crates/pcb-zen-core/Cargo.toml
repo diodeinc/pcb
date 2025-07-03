@@ -9,7 +9,7 @@ description = "Core functionality for Zen PCB design language"
 
 [features]
 default = ["native"]
-native = ["reqwest", "dirs", "flate2", "tar", "walkdir"]
+native = ["reqwest", "dirs", "flate2", "tar", "walkdir", "openssl-sys"]
 wasm = ["uuid/js", "getrandom/js", "dep:getrandom"]
 
 [dependencies]
@@ -51,6 +51,8 @@ zip = { workspace = true }
 
 pcb-eda = { workspace = true }
 pcb-sch = { workspace = true }
+
+openssl-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

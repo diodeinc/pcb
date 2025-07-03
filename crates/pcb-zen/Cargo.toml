@@ -56,6 +56,9 @@ pcb-sch = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-zen-core = { workspace = true }
 
+# Ensure OpenSSL is vendored
+openssl-sys = { workspace = true }
+
 [lib]
 path = "src/lib.rs"
 
