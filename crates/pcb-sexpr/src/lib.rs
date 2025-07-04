@@ -43,7 +43,7 @@ impl Sexpr {
 
     /// Check if this is a list
     pub fn is_list(&self) -> bool {
-        matches!(self, Sexpr::List(_))
+        self.as_list().is_some()
     }
 
     /// Get the atom value if this is an atom (symbol or string)
