@@ -236,7 +236,7 @@ pub struct EvalContext {
     pub(crate) file_provider: Option<Arc<dyn crate::FileProvider>>,
 
     /// Load resolver for resolving load() paths
-    load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+    pub(crate) load_resolver: Option<Arc<dyn crate::LoadResolver>>,
 }
 
 impl Default for EvalContext {

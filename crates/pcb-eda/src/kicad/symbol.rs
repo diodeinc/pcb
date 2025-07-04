@@ -20,6 +20,12 @@ pub struct KicadSymbol {
     properties: HashMap<String, String>,
 }
 
+impl KicadSymbol {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 #[derive(Debug, Default)]
 struct KicadPin {
     name: String,
@@ -84,7 +90,7 @@ impl KicadSymbol {
     }
 }
 
-fn parse_symbol(symbol_data: &[Sexp]) -> Result<KicadSymbol> {
+pub(super) fn parse_symbol(symbol_data: &[Sexp]) -> Result<KicadSymbol> {
     // Extract the symbol name
     let name = symbol_data
         .get(1)

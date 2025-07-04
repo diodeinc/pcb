@@ -114,6 +114,9 @@ Module {
                         "/C146731.kicad_sym",
                     ),
                 },
+                symbol: FrozenValue(
+                    NoneType,
+                ),
             },
         ),
     ],

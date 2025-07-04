@@ -260,8 +260,8 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) {
-        if let Some((pos, _)) = self.chars.next() {
-            self.current_pos = pos + 1; // pos is the start of the char, we want the position after it
+        if let Some((pos, ch)) = self.chars.next() {
+            self.current_pos = pos + ch.len_utf8(); // pos is the start of the char, we want the position after it
         }
     }
 
@@ -596,6 +596,23 @@ mod tests {
             let formatted = format_sexpr(&parsed, 0);
             let reparsed = parse(&formatted).unwrap();
             assert_eq!(parsed, reparsed, "Roundtrip failed for: {input}");
+        }
+    }
+
+    #[test]
+    fn test_utf8_handling() {
+        // Test with multi-byte UTF-8 characters
+        let input = r#"(symbol "résistance" "日本語" "🔥")"#;
+        let parsed = parse(input).unwrap();
+        
+        if let Sexpr::List(items) = parsed {
+            assert_eq!(items.len(), 4);
+            assert_eq!(items[0], Sexpr::Symbol("symbol".to_string()));
+            assert_eq!(items[1], Sexpr::String("résistance".to_string()));
+            assert_eq!(items[2], Sexpr::String("日本語".to_string()));
+            assert_eq!(items[3], Sexpr::String("🔥".to_string()));
+        } else {
+            panic!("Expected a list");
         }
     }
 }

@@ -4,7 +4,7 @@
 
 Zener is a domain-specific language built on top of
 [Starlark](https://github.com/bazelbuild/starlark/blob/master/spec.md) for
-describing PCB schematics. It provides primitives for defining components, nets,
+describing PCB schematics. It provides primitives for defining components, symbols, nets,
 interfaces, and modules in a type-safe, composable manner.
 
 This specification describes the language extensions and primitives added on top
@@ -45,13 +45,13 @@ The `load()` and `Module()` statements support multiple resolution strategies:
 
 ```starlark
 # Local file (relative to current file)
-load("./utils.star", "helper")
+load("./utils.zen", "helper")
 
 # Package reference
-load("@stdlib:1.2.3/math.star", "calculate")
+load("@stdlib:1.2.3/math.zen", "calculate")
 
 # GitHub repository
-load("@github/user/repo:branch/path.star", "function")
+load("@github/user/repo:branch/path.zen", "function")
 ```
 
 ## Core Types
@@ -71,37 +71,81 @@ net2 = Net("VCC")
 
 - `name` (optional): String identifier for the net
 
+### Symbol
+
+A `Symbol` represents a schematic symbol definition with its pins. Symbols can be created manually or loaded from KiCad symbol libraries.
+
+```starlark
+# Create a symbol from explicit definition
+my_symbol = Symbol(
+    name = "MyDevice",
+    definition = [
+        ("VCC", ["1", "8"]),    # VCC on pins 1 and 8
+        ("GND", ["4"]),         # GND on pin 4
+        ("IN", ["2"]),          # IN on pin 2
+        ("OUT", ["7"])          # OUT on pin 7
+    ]
+)
+
+# Load from a KiCad symbol library
+op_amp = Symbol(library = "./symbols/LM358.kicad_sym")
+
+# For multi-symbol libraries, specify which symbol
+mcu = Symbol(library = "./symbols/microcontrollers.kicad_sym", name = "STM32F103")
+```
+
+**Type**: `Symbol`  
+**Constructor**: `Symbol(name=None, definition=None, library=None)`
+
+- `name`: Symbol name (required when loading from multi-symbol library)
+- `definition`: List of (signal_name, [pad_numbers]) tuples
+- `library`: Path to KiCad symbol library file
+
 ### Component
 
 Components represent physical electronic parts with pins and properties.
 
 ```starlark
+# Using a Symbol for pin definitions
+my_symbol = Symbol(
+    definition = [
+        ("VCC", ["1"]),
+        ("GND", ["4"]),
+        ("OUT", ["8"])
+    ]
+)
+
 Component(
     name = "U1",                   # Required: instance name
     footprint = "SOIC-8",          # Required: PCB footprint
-    pin_defs = {                   # Required: pin name to number mapping
-        "VCC": "1",
-        "GND": "4",
-        "OUT": "8"
-    },
+    symbol = my_symbol,            # Symbol defines the pins
     pins = {                       # Required: pin connections
         "VCC": vcc_net,
         "GND": gnd_net,
         "OUT": output_net
     },
     prefix = "U",                  # Optional: reference designator prefix (default: "U")
-    symbol = "path/to/symbol",     # Optional: schematic symbol path
     mpn = "LM358",                 # Optional: manufacturer part number
     type = "op-amp",               # Optional: component type
     properties = {                 # Optional: additional properties
         "voltage": "5V"
-    },
-    ...
+    }
 )
 ```
 
 **Type**: `Component`  
 **Constructor**: `Component(**kwargs)`
+
+Key parameters:
+
+- `name`: Instance name (required)
+- `footprint`: PCB footprint (required)
+- `symbol`: Symbol object defining pins (required)
+- `pins`: Pin connections to nets (required)
+- `prefix`: Reference designator prefix (default: "U")
+- `mpn`: Manufacturer part number
+- `type`: Component type
+- `properties`: Additional properties dict
 
 ### Interface
 
@@ -148,7 +192,7 @@ Modules represent hierarchical subcircuits that can be instantiated multiple tim
 
 ```starlark
 # Load a module from a file
-SubCircuit = Module("./subcircuit.star")
+SubCircuit = Module("./subcircuit.zen")
 
 # Instantiate the module
 SubCircuit(
@@ -212,24 +256,6 @@ debug = config("debug", bool, optional=True)
 - `convert`: Optional conversion function
 - `optional`: If True, returns None when not provided (unless default is specified)
 
-### load_component(symbol_path, footprint=None)
-
-Loads a component factory from an EDA symbol file.
-
-```starlark
-# Load from KiCad symbol file
-OpAmp = load_component("./symbols/LM358.kicad_sym")
-
-# Override footprint
-OpAmp = load_component("./symbols/LM358.kicad_sym", footprint="SOIC-8")
-
-# Instantiate
-OpAmp(
-    name = "U1",
-    pins = { ... }
-)
-```
-
 ### File(path)
 
 Resolves a file or directory path using the load resolver.
@@ -273,10 +299,10 @@ add_property("critical", True)
 
 ### Module Definition
 
-A module is defined by a `.star` file that declares its inputs and creates components:
+A module is defined by a `.zen` file that declares its inputs and creates components:
 
 ```starlark
-# voltage_divider.star
+# voltage_divider.zen
 
 # Declare inputs
 vin = io("vin", Net)
@@ -286,12 +312,20 @@ gnd = io("gnd", Net)
 r1_value = config("r1", str, default="10k")
 r2_value = config("r2", str, default="10k")
 
+# Define a resistor symbol (could also load from library)
+resistor_symbol = Symbol(
+    definition = [
+        ("1", ["1"]),
+        ("2", ["2"])
+    ]
+)
+
 # Create components
 Component(
     name = "R1",
     type = "resistor",
     footprint = "0402",
-    pin_defs = {"1": "1", "2": "2"},
+    symbol = resistor_symbol,
     pins = {"1": vin, "2": vout},
     properties = {"value": r1_value}
 )
@@ -300,7 +334,7 @@ Component(
     name = "R2",
     type = "resistor",
     footprint = "0402",
-    pin_defs = {"1": "1", "2": "2"},
+    symbol = resistor_symbol,
     pins = {"1": vout, "2": gnd},
     properties = {"value": r2_value}
 )
@@ -310,7 +344,7 @@ Component(
 
 ```starlark
 # Load the module
-VDivider = Module("./voltage_divider.star")
+VDivider = Module("./voltage_divider.zen")
 
 # Create instances
 VDivider(

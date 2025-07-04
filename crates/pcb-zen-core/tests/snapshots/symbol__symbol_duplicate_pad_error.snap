@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/symbol.rs
+expression: output
+---
+Error: test.zen:3:7-8:2 Pad 'A1' is already assigned to signal 'SCL'

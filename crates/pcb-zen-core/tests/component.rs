@@ -42,3 +42,31 @@ snapshot_eval!(interface_net_incompatible, {
         )
     "#
 });
+
+snapshot_eval!(component_with_symbol, {
+    "test.zen" => r#"
+        # Create a symbol
+        i2c_symbol = Symbol(
+            name="I2C",
+            definition=[
+                ("SCL", ["1"]),
+                ("SDA", ["2"]),
+                ("VDD", ["3"]),
+                ("GND", ["4"])
+            ]
+        )
+        
+        # Create a component using the symbol
+        Component(
+            name = "I2C_Device",
+            footprint = "SOIC-8",
+            symbol = i2c_symbol,  # Use Symbol instead of pin_defs
+            pins = {
+                "SCL": Net("SCL"),
+                "SDA": Net("SDA"),
+                "VDD": Net("VDD"),
+                "GND": Net("GND"),
+            }
+        )
+    "#
+});

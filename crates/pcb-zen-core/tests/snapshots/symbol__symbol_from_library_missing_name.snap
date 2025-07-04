@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/symbol.rs
+expression: output
+---
+Error: test.zen:3:7-47 Library '/multi_symbol.kicad_sym' contains 2 symbols. Please specify which one with the 'name' parameter. Available symbols: Symbol1, Symbol2

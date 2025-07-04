@@ -50,6 +50,9 @@ pub(crate) trait EvaluatorExt<'v> {
 
     /// Return the FileProvider from the EvalContext if available.
     fn file_provider(&self) -> Option<Arc<dyn crate::FileProvider>>;
+
+    /// Return the LoadResolver from the EvalContext if available.
+    fn load_resolver(&self) -> Option<Arc<dyn crate::LoadResolver>>;
 }
 
 impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
@@ -117,5 +120,10 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
     fn file_provider(&self) -> Option<Arc<dyn crate::FileProvider>> {
         self.eval_context()
             .and_then(|ctx| ctx.file_provider.clone())
+    }
+
+    fn load_resolver(&self) -> Option<Arc<dyn crate::LoadResolver>> {
+        self.eval_context()
+            .and_then(|ctx| ctx.load_resolver.clone())
     }
 }

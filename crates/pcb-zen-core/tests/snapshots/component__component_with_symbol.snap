@@ -1,0 +1,77 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "I2C_Device",
+                footprint: "SOIC-8",
+                prefix: "U",
+                pins: {
+                    "GND": FrozenValue(
+                        "4",
+                    ),
+                    "SCL": FrozenValue(
+                        "1",
+                    ),
+                    "SDA": FrozenValue(
+                        "2",
+                    ),
+                    "VDD": FrozenValue(
+                        "3",
+                    ),
+                },
+                connections: {
+                    "GND": FrozenValue(
+                        Net {
+                            name: "GND",
+                            id: "<ID>",
+                        },
+                    ),
+                    "SCL": FrozenValue(
+                        Net {
+                            name: "SCL",
+                            id: "<ID>",
+                        },
+                    ),
+                    "SDA": FrozenValue(
+                        Net {
+                            name: "SDA",
+                            id: "<ID>",
+                        },
+                    ),
+                    "VDD": FrozenValue(
+                        Net {
+                            name: "VDD",
+                            id: "<ID>",
+                        },
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: "I2C",
+                        pins: {
+                            "1": FrozenValue(
+                                "SCL",
+                            ),
+                            "2": FrozenValue(
+                                "SDA",
+                            ),
+                            "3": FrozenValue(
+                                "VDD",
+                            ),
+                            "4": FrozenValue(
+                                "GND",
+                            ),
+                        },
+                    },
+                ),
+            },
+        ),
+    ],
+}
+[]
