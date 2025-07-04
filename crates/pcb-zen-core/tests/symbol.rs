@@ -132,4 +132,34 @@ snapshot_eval!(symbol_from_library_with_name, {
     "#
 });
 
+snapshot_eval!(symbol_tilde_pin_name, {
+    "tilde_pins.kicad_sym" => r#"(kicad_symbol_lib
+        (symbol "TildePinTest"
+            (property "Reference" "U" (at 0 0 0))
+            (symbol "TildePinTest_0_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                    (name "~" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+                (pin output line (at 0 0 0) (length 2.54)
+                    (name "OUT" (effects (font (size 1.27 1.27))))
+                    (number "2" (effects (font (size 1.27 1.27))))
+                )
+                (pin power_in line (at 0 0 0) (length 2.54)
+                    (name "~" (effects (font (size 1.27 1.27))))
+                    (number "3" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"#,
+    "test.zen" => r#"
+        # Test that pins with ~ as name use the pin number instead
+        sym = Symbol(library="tilde_pins.kicad_sym")
+        
+        # Print the symbol to see the pin mapping
+        # Pins with ~ name should show their number as the signal name
+        print(sym)
+    "#
+});
+
 // TODO: Add tests for loading from library once we have test symbol files

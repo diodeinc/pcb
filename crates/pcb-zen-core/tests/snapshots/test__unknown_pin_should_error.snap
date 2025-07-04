@@ -2,4 +2,4 @@
 source: crates/pcb-zen-core/tests/test.rs
 expression: output
 ---
-Error: test_unknown.zen:5:1-19:2 Unknown pin name 'INVALID'
+Error: test_unknown.zen:5:1-19:2 Unknown pin name 'INVALID' (expected one of: ICLK, Q1, Q2, Q3, OE, VDD, GND, Q4)

@@ -37,8 +37,7 @@ pub enum LoadSpec {
         path: PathBuf,
     },
     Gitlab {
-        user: String,
-        repo: String,
+        project_path: String, // Can be "user/repo" or "group/subgroup/repo"
         rev: String,
         path: PathBuf,
     },
@@ -67,7 +66,15 @@ pub enum LoadSpec {
 ///   `"HEAD"`) is assumed.
 ///   The `<rev>` component can be a branch name, tag, or a short/long commit
 ///   SHA (7–40 hexadecimal characters).
-///   Example: `"@gitlab/foo/bar:abc123/scripts/build.zen".
+///   
+///   For nested groups, include the full path before the revision:
+///   `"@gitlab/group/subgroup/repo:rev/path"`.
+///   Without a revision, the first two path components are assumed to be the project path.
+///   
+///   Examples:
+///   - `"@gitlab/foo/bar:main/src/lib.zen"` - Simple user/repo with revision
+///   - `"@gitlab/foo/bar/src/lib.zen"` - Simple user/repo without revision (assumes HEAD)
+///   - `"@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym"` - Nested groups with revision
 ///
 /// The function does not touch the filesystem – it only performs syntactic
 /// parsing.
@@ -92,24 +99,50 @@ pub fn parse_load_spec(s: &str) -> Option<LoadSpec> {
             path: PathBuf::from(remaining_path),
         })
     } else if let Some(rest) = s.strip_prefix("@gitlab/") {
-        // GitLab: @gitlab/user/repo:rev/path  (must come before generic "@pkg" handling)
-        let mut user_repo_rev_and_path = rest.splitn(3, '/');
-        let user = user_repo_rev_and_path.next().unwrap_or("").to_string();
-        let repo_and_rev = user_repo_rev_and_path.next().unwrap_or("");
-        let remaining_path = user_repo_rev_and_path.next().unwrap_or("");
+        // GitLab: @gitlab/group/subgroup/repo:rev/path
+        // We need to find where the project path ends and the file path begins
+        // This is tricky because both can contain slashes
 
-        let (repo, rev) = if let Some((repo, rev)) = repo_and_rev.split_once(':') {
-            (repo.to_string(), rev.to_string())
+        // First, check if there's a revision marker ':'
+        if let Some(colon_pos) = rest.find(':') {
+            // We have a revision specified
+            let project_part = &rest[..colon_pos];
+            let after_colon = &rest[colon_pos + 1..];
+
+            // Find the first slash after the colon to separate rev from path
+            if let Some(slash_pos) = after_colon.find('/') {
+                let rev = after_colon[..slash_pos].to_string();
+                let file_path = after_colon[slash_pos + 1..].to_string();
+
+                Some(LoadSpec::Gitlab {
+                    project_path: project_part.to_string(),
+                    rev,
+                    path: PathBuf::from(file_path),
+                })
+            } else {
+                // No file path after revision
+                Some(LoadSpec::Gitlab {
+                    project_path: project_part.to_string(),
+                    rev: after_colon.to_string(),
+                    path: PathBuf::new(),
+                })
+            }
         } else {
-            (repo_and_rev.to_string(), DEFAULT_GITLAB_REV.to_string())
-        };
+            // No revision specified, assume first 2 parts are the project path
+            let parts: Vec<&str> = rest.splitn(3, '/').collect();
+            if parts.len() >= 2 {
+                let project_path = format!("{}/{}", parts[0], parts[1]);
+                let file_path = parts.get(2).unwrap_or(&"").to_string();
 
-        Some(LoadSpec::Gitlab {
-            user,
-            repo,
-            rev,
-            path: PathBuf::from(remaining_path),
-        })
+                Some(LoadSpec::Gitlab {
+                    project_path,
+                    rev: DEFAULT_GITLAB_REV.to_string(),
+                    path: PathBuf::from(file_path),
+                })
+            } else {
+                None
+            }
+        }
     } else if let Some(rest) = s.strip_prefix('@') {
         // Generic package: @<pkg>[:<tag>]/optional/path
         // rest looks like "pkg[:tag]/path..." or just "pkg"/"pkg:tag"
@@ -247,16 +280,15 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
             Ok(local_path)
         }
         LoadSpec::Gitlab {
-            user,
-            repo,
+            project_path,
             rev,
             path,
         } => {
-            let cache_root = cache_dir()?.join("gitlab").join(user).join(repo).join(rev);
+            let cache_root = cache_dir()?.join("gitlab").join(project_path).join(rev);
 
             // Ensure the repo has been fetched & unpacked.
             if !cache_root.exists() {
-                download_and_unpack_gitlab_repo(user, repo, rev, &cache_root)?;
+                download_and_unpack_gitlab_repo(project_path, rev, &cache_root)?;
             }
 
             let local_path = cache_root.join(path);
@@ -268,11 +300,9 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
             }
             if let Some(root) = workspace_root {
                 let folder_name = format!(
-                    "gitlab{}{}{}{}{}",
+                    "gitlab{}{}{}",
                     std::path::MAIN_SEPARATOR,
-                    user,
-                    std::path::MAIN_SEPARATOR,
-                    repo,
+                    project_path,
                     std::path::MAIN_SEPARATOR
                 );
                 let folder_name = format!("{folder_name}{rev}");
@@ -498,12 +528,11 @@ fn download_and_unpack_github_repo(
 }
 
 fn download_and_unpack_gitlab_repo(
-    user: &str,
-    repo: &str,
+    project_path: &str,
     rev: &str,
     dest_dir: &Path,
 ) -> anyhow::Result<()> {
-    log::info!("Fetching GitLab repo {user}/{repo} @ {rev}");
+    log::info!("Fetching GitLab repo {project_path} @ {rev}");
 
     // Reject abbreviated commit hashes – we only support full 40-character SHAs or branch/tag names.
     if looks_like_git_sha(rev) && rev.len() < 40 {
@@ -606,13 +635,13 @@ fn download_and_unpack_gitlab_repo(
     };
 
     // Strategy 1: system git with HTTPS (respects credential helpers).
-    let https_url = format!("https://gitlab.com/{user}/{repo}.git");
+    let https_url = format!("https://gitlab.com/{project_path}.git");
     if git_is_available() && try_git_clone(&https_url)? {
         return Ok(());
     }
 
     // Strategy 2: system git with SSH.
-    let ssh_url = format!("git@gitlab.com:{user}/{repo}.git");
+    let ssh_url = format!("git@gitlab.com:{project_path}.git");
     if git_is_available() && try_git_clone(&ssh_url)? {
         return Ok(());
     }
@@ -620,8 +649,8 @@ fn download_and_unpack_gitlab_repo(
     // Strategy 3: fall back to unauthenticated or token-authenticated archive tarball.
     // GitLab's archive API: https://gitlab.com/api/v4/projects/{id}/repository/archive?sha={rev}
     // We need to URL-encode the project path (user/repo) for the API
-    let project_path = format!("{user}%2F{repo}");
-    let url = format!("https://gitlab.com/api/v4/projects/{project_path}/repository/archive.tar.gz?sha={effective_rev}");
+    let encoded_project_path = project_path.replace("/", "%2F");
+    let url = format!("https://gitlab.com/api/v4/projects/{encoded_project_path}/repository/archive.tar.gz?sha={effective_rev}");
 
     // Build a reqwest client so we can attach an Authorization header when needed
     let client = reqwest::blocking::Client::builder()
@@ -644,7 +673,7 @@ fn download_and_unpack_gitlab_repo(
         let code = resp.status();
         if code == reqwest::StatusCode::NOT_FOUND || code == reqwest::StatusCode::UNAUTHORIZED {
             anyhow::bail!(
-                "Failed to download GitLab repo {user}/{repo} at {rev} (HTTP {code}).\n\
+                "Failed to download GitLab repo {project_path} at {rev} (HTTP {code}).\n\
                  Tried clones via HTTPS & SSH, then archive download.\n\
                  If this repository is private please set an access token in the `GITLAB_TOKEN` environment variable."
             );
@@ -888,8 +917,7 @@ mod tests {
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
+                project_path: "foo/bar".to_string(),
                 rev: "abc123".to_string(),
                 path: PathBuf::from("scripts/build.zen"),
             })
@@ -902,8 +930,7 @@ mod tests {
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
+                project_path: "foo/bar".to_string(),
                 rev: DEFAULT_GITLAB_REV.to_string(),
                 path: PathBuf::from("scripts/build.zen"),
             })
@@ -916,8 +943,7 @@ mod tests {
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
+                project_path: "foo/bar".to_string(),
                 rev: "main".to_string(),
                 path: PathBuf::new(),
             })
@@ -932,9 +958,48 @@ mod tests {
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
+                project_path: "foo/bar".to_string(),
                 rev: sha.to_string(),
+                path: PathBuf::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_nested_groups_with_rev() {
+        let spec = parse_load_spec("@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
+                project_path: "kicad/libraries/kicad-symbols".to_string(),
+                rev: "main".to_string(),
+                path: PathBuf::from("Device.kicad_sym"),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_simple_without_rev_with_file_path() {
+        // Without revision, first 2 parts are project
+        let spec = parse_load_spec("@gitlab/user/repo/src/main.zen");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
+                project_path: "user/repo".to_string(),
+                rev: DEFAULT_GITLAB_REV.to_string(),
+                path: PathBuf::from("src/main.zen"),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_nested_groups_no_file() {
+        let spec = parse_load_spec("@gitlab/kicad/libraries/kicad-symbols:v7.0.0");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
+                project_path: "kicad/libraries/kicad-symbols".to_string(),
+                rev: "v7.0.0".to_string(),
                 path: PathBuf::new(),
             })
         );

@@ -53,8 +53,11 @@ load("@stdlib:1.2.3/math.zen", "calculate")
 # GitHub repository
 load("@github/user/repo:branch/path.zen", "function")
 
-# GitLab repository
+# GitLab repository (simple)
 load("@gitlab/user/repo:branch/path.zen", "function")
+
+# GitLab repository (nested groups)
+load("@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym", "Resistor")
 ```
 
 ## Core Types

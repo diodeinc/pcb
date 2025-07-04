@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use allocative::Allocative;
+use itertools::Itertools;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -323,8 +324,9 @@ where
                     .to_owned();
                 if !pins_str_map.contains_key(&pin_name) {
                     return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Unknown pin name '{}'",
-                        pin_name
+                        "Unknown pin name '{}' (expected one of: {})",
+                        pin_name,
+                        pins_str_map.keys().join(", ")
                     ))));
                 }
 
@@ -669,7 +671,13 @@ where
                 // Map pad number -> signal name (which is the pin name from the symbol)
                 let mut pins: SmallMap<String, Value<'v>> = SmallMap::new();
                 for pin in &selected_symbol.pins {
-                    pins.insert(pin.number.clone(), eval_ctx.heap().alloc_str(&pin.name).to_value());
+                    // If pin name is ~, use the pin number instead
+                    let signal_name = if pin.name == "~" {
+                        &pin.number
+                    } else {
+                        &pin.name
+                    };
+                    pins.insert(pin.number.clone(), eval_ctx.heap().alloc_str(signal_name).to_value());
                 }
                 
                 // Get the absolute path using file provider
@@ -832,8 +840,9 @@ where
                     .to_owned();
                 if !self.pins.contains_key(&pin_name) {
                     return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Unknown pin name '{}'",
-                        pin_name
+                        "Unknown pin name '{}' (expected one of: {})",
+                        pin_name,
+                        self.pins.keys().join(", ")
                     ))));
                 }
 
@@ -1009,7 +1018,13 @@ pub(crate) fn build_component_factory_from_symbol(
     // Build pins map
     let mut pins_map: SmallMap<String, String> = SmallMap::new();
     for pin in &symbol.pins {
-        pins_map.insert(pin.name.clone(), pin.number.clone());
+        // If pin name is ~, use the pin number instead
+        let signal_name = if pin.name == "~" {
+            pin.number.clone()
+        } else {
+            pin.name.clone()
+        };
+        pins_map.insert(signal_name, pin.number.clone());
     }
 
     // Determine footprint (override takes precedence over symbol default)
