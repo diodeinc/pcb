@@ -1,5 +1,5 @@
 ---
-source: projects/cli/crates/diode_star/tests/interface_templates_snapshot.rs
+source: crates/pcb-zen/tests/interface_templates_snapshot.rs
 expression: netlist
 ---
 (export (version "E")
@@ -15,7 +15,6 @@ expression: netlist
       (sheetpath (names "J1") (tstamps "b41f0e40-6e2d-5762-aae6-ebde6de0375a"))
       (tstamps "b41f0e40-6e2d-5762-aae6-ebde6de0375a")
       (property (name "Reference") (value "U1"))
-      (property (name "symbol_path") (value "None"))
     )
   )
   (libparts

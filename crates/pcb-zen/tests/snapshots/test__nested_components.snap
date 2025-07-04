@@ -1,5 +1,5 @@
 ---
-source: projects/cli/crates/diode_star/tests/test.rs
+source: crates/pcb-zen/tests/test.rs
 expression: netlist
 ---
 (export (version "E")
@@ -15,7 +15,6 @@ expression: netlist
       (sheetpath (names "MyModule.MyComponent.Component") (tstamps "88868ff1-5bd1-55c8-8857-a9182b7af4bf"))
       (tstamps "88868ff1-5bd1-55c8-8857-a9182b7af4bf")
       (property (name "Reference") (value "U1"))
-      (property (name "symbol_path") (value "None"))
     )
   )
   (libparts

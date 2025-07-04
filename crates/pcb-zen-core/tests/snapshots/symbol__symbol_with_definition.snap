@@ -2,6 +2,7 @@
 source: crates/pcb-zen-core/tests/symbol.rs
 expression: output
 ---
+Symbol { name: "MySymbol", pins: { "A1": "SCL", "A2": "SCL", "B1": "SDA", "C1": "VDD", "C2": "VDD", "C3": "VDD", "D1": "GND" } }
 Module {
     name: "<root>",
     source: "test.zen",

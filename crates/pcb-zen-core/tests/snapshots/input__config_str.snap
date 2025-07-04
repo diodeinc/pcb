@@ -34,13 +34,13 @@ Module {
                     ),
                 },
                 properties: {
-                    "symbol_path": FrozenValue(
-                        NoneType,
-                    ),
                     "value": FrozenValue(
                         "",
                     ),
                 },
+                symbol: FrozenValue(
+                    NoneType,
+                ),
             },
         ),
     ],

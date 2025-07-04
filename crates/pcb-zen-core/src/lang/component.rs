@@ -460,15 +460,21 @@ where
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for SymbolValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Symbol({})", self.name)?;
+        write!(f, "Symbol {{ name: \"{}\", pins: {{", self.name)?;
         
         let mut pins: Vec<_> = self.pins.iter().collect();
         pins.sort_by(|(a, _), (b, _)| a.cmp(b));
         
+        let mut first = true;
         for (pad_name, signal_value) in pins {
+            if !first {
+                write!(f, ",")?;
+            }
+            first = false;
             let signal_str = signal_value.to_value().unpack_str().unwrap_or("<signal>");
-            writeln!(f, "  {pad_name} -> {signal_str}")?;
+            write!(f, " \"{pad_name}\": \"{signal_str}\"")?;
         }
+        write!(f, " }} }}")?;
         Ok(())
     }
 }

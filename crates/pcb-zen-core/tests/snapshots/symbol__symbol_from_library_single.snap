@@ -2,6 +2,7 @@
 source: crates/pcb-zen-core/tests/symbol.rs
 expression: output
 ---
+Symbol { name: "NB3N551DG", pins: { "1": "ICLK", "2": "Q1", "3": "Q2", "4": "Q3", "5": "Q4", "6": "GND", "7": "VDD", "8": "OE" } }
 Module {
     name: "<root>",
     source: "test.zen",

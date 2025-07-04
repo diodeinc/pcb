@@ -1,5 +1,5 @@
 ---
-source: projects/cli/crates/diode_star/tests/test.rs
+source: crates/pcb-zen/tests/test.rs
 expression: netlist
 ---
 (export (version "E")
@@ -15,7 +15,6 @@ expression: netlist
       (sheetpath (names "MyModule1.Component") (tstamps "634986a9-509e-5464-b539-8450f6429931"))
       (tstamps "634986a9-509e-5464-b539-8450f6429931")
       (property (name "Reference") (value "U1"))
-      (property (name "symbol_path") (value "None"))
     )
     (comp (ref "U2")
       (value "?")
@@ -24,7 +23,6 @@ expression: netlist
       (sheetpath (names "MyModule2.Component") (tstamps "49d7b781-9d5f-5d3f-9170-df886b275b2f"))
       (tstamps "49d7b781-9d5f-5d3f-9170-df886b275b2f")
       (property (name "Reference") (value "U2"))
-      (property (name "symbol_path") (value "None"))
     )
     (comp (ref "U3")
       (value "?")
@@ -33,7 +31,6 @@ expression: netlist
       (sheetpath (names "MyModule3.Component") (tstamps "38812e2a-4ee1-57b0-9eb7-e9d1dcd3bf43"))
       (tstamps "38812e2a-4ee1-57b0-9eb7-e9d1dcd3bf43")
       (property (name "Reference") (value "U3"))
-      (property (name "symbol_path") (value "None"))
     )
   )
   (libparts

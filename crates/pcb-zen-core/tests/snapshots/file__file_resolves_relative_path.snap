@@ -2,6 +2,7 @@
 source: crates/pcb-zen-core/tests/file.rs
 expression: output
 ---
+Resolved path: /subdir/data.txt
 Module {
     name: "<root>",
     source: "test.zen",

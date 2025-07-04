@@ -1,5 +1,5 @@
 ---
-source: projects/cli/crates/diode_star/tests/interface_templates_snapshot.rs
+source: crates/pcb-zen/tests/interface_templates_snapshot.rs
 expression: netlist
 ---
 (export (version "E")
@@ -15,7 +15,6 @@ expression: netlist
       (sheetpath (names "CPU") (tstamps "5e0c7041-4196-5aa4-8e84-bc97699f0f38"))
       (tstamps "5e0c7041-4196-5aa4-8e84-bc97699f0f38")
       (property (name "Reference") (value "U1"))
-      (property (name "symbol_path") (value "None"))
     )
     (comp (ref "U2")
       (value "memory")
@@ -24,7 +23,6 @@ expression: netlist
       (sheetpath (names "MEM") (tstamps "55dd74bc-6fd0-5d18-9878-1dd593abf8dd"))
       (tstamps "55dd74bc-6fd0-5d18-9878-1dd593abf8dd")
       (property (name "Reference") (value "U2"))
-      (property (name "symbol_path") (value "None"))
     )
   )
   (libparts

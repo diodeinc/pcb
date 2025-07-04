@@ -43,11 +43,9 @@ Module {
                         },
                     ),
                 },
-                properties: {
-                    "symbol_path": FrozenValue(
-                        NoneType,
-                    ),
-                },
+                symbol: FrozenValue(
+                    NoneType,
+                ),
             },
         ),
         FrozenValue(
@@ -87,11 +85,9 @@ Module {
                         },
                     ),
                 },
-                properties: {
-                    "symbol_path": FrozenValue(
-                        NoneType,
-                    ),
-                },
+                symbol: FrozenValue(
+                    NoneType,
+                ),
             },
         ),
     ],

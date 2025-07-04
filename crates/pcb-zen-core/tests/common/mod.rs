@@ -235,7 +235,19 @@ macro_rules! snapshot_eval {
                     let mut sorted_signature: Vec<_> = eval_output.signature.into_iter().collect();
                     sorted_signature.sort_by(|a, b| a.0.cmp(&b.0));
 
-                    format!("{:#?}\n{:#?}\n", eval_output.sch_module, sorted_signature)
+                    let mut output_parts = vec![];
+
+                    // Include print output if there was any
+                    if !eval_output.print_output.is_empty() {
+                        for line in eval_output.print_output {
+                            output_parts.push(line);
+                        }
+                    }
+
+                    output_parts.push(format!("{:#?}", eval_output.sch_module));
+                    output_parts.push(format!("{:#?}", sorted_signature));
+
+                    output_parts.join("\n") + "\n"
                 } else {
                     String::new()
                 }

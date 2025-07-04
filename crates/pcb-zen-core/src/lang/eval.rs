@@ -20,6 +20,7 @@ use starlark::{
         dict::{AllocDict, DictRef},
         Heap, Value, ValueLike,
     },
+    PrintHandler,
 };
 
 use crate::lang::component::{build_component_factory_from_symbol, component_globals};
@@ -45,6 +46,31 @@ use super::{
     interface::interface_globals,
     module::{module_globals, FrozenModuleValue, ModuleLoader},
 };
+
+/// A PrintHandler that collects all print output into a vector
+struct CollectingPrintHandler {
+    output: RefCell<Vec<String>>,
+}
+
+impl CollectingPrintHandler {
+    fn new() -> Self {
+        Self {
+            output: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn take_output(&self) -> Vec<String> {
+        self.output.borrow_mut().drain(..).collect()
+    }
+}
+
+impl PrintHandler for CollectingPrintHandler {
+    fn println(&self, text: &str) -> starlark::Result<()> {
+        eprintln!("{text}");
+        self.output.borrow_mut().push(text.to_string());
+        Ok(())
+    }
+}
 
 pub(crate) trait DeepCopyToHeap {
     fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>>;
@@ -97,6 +123,8 @@ pub struct EvalOutput {
     pub sch_module: FrozenModuleValue,
     /// Map of parameter names to their full parameter information
     pub signature: HashMap<String, crate::lang::type_info::ParameterInfo>,
+    /// Print output collected during evaluation
+    pub print_output: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -836,10 +864,14 @@ impl EvalContext {
         };
 
         eval_res.flat_map(|ast| {
+            // Create a print handler to collect output
+            let print_handler = CollectingPrintHandler::new();
+
             let eval_result = {
                 let mut eval = Evaluator::new(&self.module);
                 eval.enable_static_typechecking(true);
                 eval.set_loader(&self);
+                eval.set_print_handler(&print_handler);
 
                 // Attach a `ContextValue` so user code can access evaluation context.
                 self.module
@@ -873,6 +905,9 @@ impl EvalContext {
                 // value of the final expression, so map the result to `()`.
                 eval.eval_module(ast.clone(), &globals).map(|_| ())
             };
+
+            // Collect print output after evaluation
+            let print_output = print_handler.take_output();
 
             let result = match eval_result {
                 Ok(_) => {
@@ -915,6 +950,7 @@ impl EvalContext {
                             star_module: frozen_module,
                             sch_module: extra.module.clone(),
                             signature,
+                            print_output,
                         },
                         diagnostics,
                     )
