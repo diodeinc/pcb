@@ -101,3 +101,20 @@ jobs:
           RUST_LOG: debug
           RUST_BACKTRACE: full
         run: cargo test --verbose --workspace
+
+      - name: Test stdlib builds
+        run: |
+          # Clone the stdlib repository
+          git clone https://github.com/diodeinc/stdlib.git /tmp/stdlib
+
+          # Find all .star and .zen files and build them
+          cd /tmp/stdlib
+          find . -name "*.star" -o -name "*.zen" | while read -r file; do
+            echo "Building $file..."
+            if ! ${{ github.workspace }}/target/debug/pcb build "$file"; then
+              echo "Failed to build $file"
+              exit 1
+            fi
+          done
+
+          echo "All stdlib files built successfully!"
