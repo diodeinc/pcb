@@ -52,6 +52,9 @@ load("@stdlib:1.2.3/math.zen", "calculate")
 
 # GitHub repository
 load("@github/user/repo:branch/path.zen", "function")
+
+# GitLab repository
+load("@gitlab/user/repo:branch/path.zen", "function")
 ```
 
 ## Core Types

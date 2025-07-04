@@ -19,6 +19,10 @@ pub(crate) const DEFAULT_PKG_TAG: &str = "latest";
 /// spec, e.g. `@github/user/repo/path.zen`.
 pub(crate) const DEFAULT_GITHUB_REV: &str = "HEAD";
 
+/// Default git revision that is assumed when the caller omits one in a GitLab
+/// spec, e.g. `@gitlab/user/repo/path.zen`.
+pub(crate) const DEFAULT_GITLAB_REV: &str = "HEAD";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LoadSpec {
     Package {
@@ -27,6 +31,12 @@ pub enum LoadSpec {
         path: PathBuf,
     },
     Github {
+        user: String,
+        repo: String,
+        rev: String,
+        path: PathBuf,
+    },
+    Gitlab {
         user: String,
         repo: String,
         rev: String,
@@ -51,6 +61,14 @@ pub enum LoadSpec {
 ///   SHA (7–40 hexadecimal characters).
 ///   Example: `"@github/foo/bar:abc123/scripts/build.zen".
 ///
+/// • **GitLab repository** –
+///   `"@gitlab/<user>/<repo>[:<rev>]/<path>"`.
+///   If `<rev>` is omitted the special value [`DEFAULT_GITLAB_REV`] (currently
+///   `"HEAD"`) is assumed.
+///   The `<rev>` component can be a branch name, tag, or a short/long commit
+///   SHA (7–40 hexadecimal characters).
+///   Example: `"@gitlab/foo/bar:abc123/scripts/build.zen".
+///
 /// The function does not touch the filesystem – it only performs syntactic
 /// parsing.
 pub fn parse_load_spec(s: &str) -> Option<LoadSpec> {
@@ -68,6 +86,25 @@ pub fn parse_load_spec(s: &str) -> Option<LoadSpec> {
         };
 
         Some(LoadSpec::Github {
+            user,
+            repo,
+            rev,
+            path: PathBuf::from(remaining_path),
+        })
+    } else if let Some(rest) = s.strip_prefix("@gitlab/") {
+        // GitLab: @gitlab/user/repo:rev/path  (must come before generic "@pkg" handling)
+        let mut user_repo_rev_and_path = rest.splitn(3, '/');
+        let user = user_repo_rev_and_path.next().unwrap_or("").to_string();
+        let repo_and_rev = user_repo_rev_and_path.next().unwrap_or("");
+        let remaining_path = user_repo_rev_and_path.next().unwrap_or("");
+
+        let (repo, rev) = if let Some((repo, rev)) = repo_and_rev.split_once(':') {
+            (repo.to_string(), rev.to_string())
+        } else {
+            (repo_and_rev.to_string(), DEFAULT_GITLAB_REV.to_string())
+        };
+
+        Some(LoadSpec::Gitlab {
             user,
             repo,
             rev,
@@ -100,7 +137,7 @@ pub fn parse_load_spec(s: &str) -> Option<LoadSpec> {
 /// filesystem and return its absolute path.
 ///
 /// * **Local** specs are returned unchanged.
-/// * **Package** and **GitHub** specs are fetched (and cached) under the
+/// * **Package**, **GitHub**, and **GitLab** specs are fetched (and cached) under the
 ///   user's cache directory on first use. Subsequent invocations will reuse
 ///   the cached copy.
 ///
@@ -209,12 +246,42 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
             }
             Ok(local_path)
         }
+        LoadSpec::Gitlab {
+            user,
+            repo,
+            rev,
+            path,
+        } => {
+            let cache_root = cache_dir()?.join("gitlab").join(user).join(repo).join(rev);
+
+            // Ensure the repo has been fetched & unpacked.
+            if !cache_root.exists() {
+                download_and_unpack_gitlab_repo(user, repo, rev, &cache_root)?;
+            }
+
+            let local_path = cache_root.join(path);
+            if !local_path.exists() {
+                anyhow::bail!(
+                    "Path {} not found inside cached GitLab repo",
+                    path.display()
+                );
+            }
+            if let Some(root) = workspace_root {
+                let folder_name = format!(
+                    "gitlab{}{}{}{}{}",
+                    std::path::MAIN_SEPARATOR,
+                    user,
+                    std::path::MAIN_SEPARATOR,
+                    repo,
+                    std::path::MAIN_SEPARATOR
+                );
+                let folder_name = format!("{folder_name}{rev}");
+                let _ = expose_alias_symlink(root, &folder_name, path, &local_path);
+            }
+            Ok(local_path)
+        }
     }
 }
-
-// ──────────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────────
 
 pub fn cache_dir() -> anyhow::Result<PathBuf> {
     // 1. Allow callers to force an explicit location via env var. This is handy in CI
@@ -258,7 +325,7 @@ fn download_and_unpack_github_repo(
     // Reject abbreviated commit hashes – we only support full 40-character SHAs or branch/tag names.
     if looks_like_git_sha(rev) && rev.len() < 40 {
         anyhow::bail!(
-            "Abbreviated commit hashes ({} characters) are not supported – please use the full 40-character commit SHA or a branch/tag name (got '{}').",
+            "Abbreviated commit hashes ({} characters) are not supported - please use the full 40-character commit SHA or a branch/tag name (got '{}').",
             rev.len(),
             rev
         );
@@ -414,6 +481,186 @@ fn download_and_unpack_github_repo(
     let mut archive = tar::Archive::new(gz);
 
     // The tarball contains a single top-level directory like <repo>-<rev>/...
+    // We extract its contents into dest_dir while stripping the first component.
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+        let mut comps = path.components();
+        comps.next(); // strip top-level folder
+        let stripped: PathBuf = comps.as_path().to_path_buf();
+        let out_path = dest_dir.join(stripped);
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        entry.unpack(&out_path)?;
+    }
+    Ok(())
+}
+
+fn download_and_unpack_gitlab_repo(
+    user: &str,
+    repo: &str,
+    rev: &str,
+    dest_dir: &Path,
+) -> anyhow::Result<()> {
+    log::info!("Fetching GitLab repo {user}/{repo} @ {rev}");
+
+    // Reject abbreviated commit hashes – we only support full 40-character SHAs or branch/tag names.
+    if looks_like_git_sha(rev) && rev.len() < 40 {
+        anyhow::bail!(
+            "Abbreviated commit hashes ({} characters) are not supported – please use the full 40-character commit SHA or a branch/tag name (got '{}').",
+            rev.len(),
+            rev
+        );
+    }
+
+    let effective_rev = rev.to_string();
+
+    // Helper that attempts to clone via the system `git` binary. Returns true on
+    // success, false on failure (so we can fall back to other mechanisms).
+    let try_git_clone = |remote_url: &str| -> anyhow::Result<bool> {
+        // Ensure parent dirs exist so `git clone` can create `dest_dir`.
+        if let Some(parent) = dest_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Build the basic clone command.
+        let mut cmd = Command::new("git");
+        cmd.arg("clone");
+        cmd.arg("--depth");
+        cmd.arg("1");
+        cmd.arg("--quiet"); // Suppress output
+
+        // Decide how to treat the requested revision.
+        let rev_is_head = effective_rev.eq_ignore_ascii_case("HEAD");
+        let rev_is_sha = looks_like_git_sha(&effective_rev);
+
+        // For branch or tag names we can use the efficient `--branch <name>` clone.
+        // For commit SHAs we first perform a regular shallow clone of the default branch
+        // and then fetch & checkout the desired commit afterwards.
+        if !rev_is_head && !rev_is_sha {
+            cmd.arg("--branch");
+            cmd.arg(&effective_rev);
+            cmd.arg("--single-branch");
+        }
+
+        cmd.arg(remote_url);
+        cmd.arg(dest_dir);
+
+        // Silence all output
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        log::debug!("Running command: {cmd:?}");
+        match cmd.status() {
+            Ok(status) if status.success() => {
+                if rev_is_head {
+                    // Nothing to do – HEAD already checked out.
+                    return Ok(true);
+                }
+
+                if rev_is_sha {
+                    // Fetch the specific commit (shallow) and check it out.
+                    let fetch_ok = Command::new("git")
+                        .arg("-C")
+                        .arg(dest_dir)
+                        .arg("fetch")
+                        .arg("--quiet")
+                        .arg("--depth")
+                        .arg("1")
+                        .arg("origin")
+                        .arg(&effective_rev)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+
+                    if !fetch_ok {
+                        return Ok(false);
+                    }
+                }
+
+                // Detach checkout for both commit SHAs and branch/tag when we didn't use --branch.
+                let checkout_ok = Command::new("git")
+                    .arg("-C")
+                    .arg(dest_dir)
+                    .arg("checkout")
+                    .arg("--quiet")
+                    .arg(&effective_rev)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+
+                if checkout_ok {
+                    return Ok(true);
+                }
+
+                // Fall through – treat as failure so other strategies can try.
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    };
+
+    // Strategy 1: system git with HTTPS (respects credential helpers).
+    let https_url = format!("https://gitlab.com/{user}/{repo}.git");
+    if git_is_available() && try_git_clone(&https_url)? {
+        return Ok(());
+    }
+
+    // Strategy 2: system git with SSH.
+    let ssh_url = format!("git@gitlab.com:{user}/{repo}.git");
+    if git_is_available() && try_git_clone(&ssh_url)? {
+        return Ok(());
+    }
+
+    // Strategy 3: fall back to unauthenticated or token-authenticated archive tarball.
+    // GitLab's archive API: https://gitlab.com/api/v4/projects/{id}/repository/archive?sha={rev}
+    // We need to URL-encode the project path (user/repo) for the API
+    let project_path = format!("{user}%2F{repo}");
+    let url = format!("https://gitlab.com/api/v4/projects/{project_path}/repository/archive.tar.gz?sha={effective_rev}");
+
+    // Build a reqwest client so we can attach an Authorization header when needed
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("diode-star-loader")
+        .build()?;
+
+    // Allow users to pass a token for private repositories via env var.
+    let token = std::env::var("DIODE_GITLAB_TOKEN")
+        .or_else(|_| std::env::var("GITLAB_TOKEN"))
+        .ok();
+
+    let mut request = client.get(&url);
+    if let Some(t) = token.as_ref() {
+        // GitLab uses a different header format
+        request = request.header("PRIVATE-TOKEN", t);
+    }
+
+    let resp = request.send()?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        if code == reqwest::StatusCode::NOT_FOUND || code == reqwest::StatusCode::UNAUTHORIZED {
+            anyhow::bail!(
+                "Failed to download GitLab repo {user}/{repo} at {rev} (HTTP {code}).\n\
+                 Tried clones via HTTPS & SSH, then archive download.\n\
+                 If this repository is private please set an access token in the `GITLAB_TOKEN` environment variable."
+            );
+        } else {
+            anyhow::bail!(
+                "Failed to download repo archive {url} (HTTP {code}) after trying git clone."
+            );
+        }
+    }
+    let bytes = resp.bytes()?;
+
+    // Decompress tar.gz in-memory.
+    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
+    let mut archive = tar::Archive::new(gz);
+
+    // The tarball contains a single top-level directory like <repo>-<rev>-<hash>/...
     // We extract its contents into dest_dir while stripping the first component.
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -627,6 +874,64 @@ mod tests {
         assert_eq!(
             spec,
             Some(LoadSpec::Github {
+                user: "foo".to_string(),
+                repo: "bar".to_string(),
+                rev: sha.to_string(),
+                path: PathBuf::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_with_rev_and_path() {
+        let spec = parse_load_spec("@gitlab/foo/bar:abc123/scripts/build.zen");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
+                user: "foo".to_string(),
+                repo: "bar".to_string(),
+                rev: "abc123".to_string(),
+                path: PathBuf::from("scripts/build.zen"),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_without_rev() {
+        let spec = parse_load_spec("@gitlab/foo/bar/scripts/build.zen");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
+                user: "foo".to_string(),
+                repo: "bar".to_string(),
+                rev: DEFAULT_GITLAB_REV.to_string(),
+                path: PathBuf::from("scripts/build.zen"),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_repo_root_with_rev() {
+        let spec = parse_load_spec("@gitlab/foo/bar:main");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
+                user: "foo".to_string(),
+                repo: "bar".to_string(),
+                rev: "main".to_string(),
+                path: PathBuf::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_repo_root_with_long_commit() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let input = format!("@gitlab/foo/bar:{sha}");
+        let spec = parse_load_spec(&input);
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Gitlab {
                 user: "foo".to_string(),
                 repo: "bar".to_string(),
                 rev: sha.to_string(),
