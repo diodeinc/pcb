@@ -60,6 +60,37 @@ load("@gitlab/user/repo:branch/path.zen", "function")
 load("@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym", "Resistor")
 ```
 
+#### Default Package Aliases
+
+Zener provides built-in package aliases for commonly used libraries:
+
+- `@kicad-symbols` → `@gitlab/kicad/libraries/kicad-symbols:9.0.0`
+- `@stdlib` → `@github/diodeinc/stdlib:HEAD`
+
+These can be used directly:
+
+```starlark
+# Load from KiCad symbols library
+load("@kicad-symbols/Device.kicad_sym", "R")
+
+# Load from stdlib
+load("@stdlib/units.zen", "kohm", "uF")
+```
+
+#### Custom Package Aliases
+
+You can define custom package aliases or override the defaults in your workspace's `pcb.toml`:
+
+```toml
+[packages]
+# Override default version
+kicad-symbols = "@gitlab/kicad/libraries/kicad-symbols:7.0.0"
+
+# Add custom aliases
+my-lib = "@github/myorg/mylib:v1.0.0"
+local-lib = "./path/to/local/lib"
+```
+
 ## Core Types
 
 ### Net

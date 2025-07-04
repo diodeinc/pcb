@@ -177,38 +177,38 @@ pub fn parse_load_spec(s: &str) -> Option<LoadSpec> {
 /// The returned path is guaranteed to exist on success.
 pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyhow::Result<PathBuf> {
     if let LoadSpec::Package { package, tag, path } = spec {
-        if let Some(root) = workspace_root {
-            if let Some(target) = lookup_package_alias(root, package) {
-                // Build new load string by appending any extra path the caller asked for.
-                let mut new_spec_str = target.clone();
-                if !path.as_os_str().is_empty() {
-                    new_spec_str = format!(
-                        "{}/{}",
-                        new_spec_str.trim_end_matches('/'),
-                        path.to_string_lossy()
-                    );
-                }
+        // Check for package alias (workspace or default)
+        if let Some(target) = lookup_package_alias(workspace_root, package) {
+            // Build new load string by appending any extra path the caller asked for.
+            let mut new_spec_str = target.clone();
+            if !path.as_os_str().is_empty() {
+                new_spec_str = format!(
+                    "{}/{}",
+                    new_spec_str.trim_end_matches('/'),
+                    path.to_string_lossy()
+                );
+            }
 
-                // If caller explicitly specified a tag (non-default) we warn and ignore –
-                // alias definitions should embed the desired tag.
-                if tag != DEFAULT_PKG_TAG {
-                    log::debug!("ignoring tag '{tag}' on alias '{package}'");
-                }
+            // If caller explicitly specified a tag (non-default) we warn and ignore –
+            // alias definitions should embed the desired tag.
+            if tag != DEFAULT_PKG_TAG {
+                log::debug!("ignoring tag '{tag}' on alias '{package}'");
+            }
 
-                let new_spec = parse_load_spec(&new_spec_str).ok_or_else(|| {
-                    anyhow::anyhow!("Failed to parse load spec: {}", new_spec_str)
-                })?;
+            let new_spec = parse_load_spec(&new_spec_str)
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse load spec: {}", new_spec_str))?;
 
-                // Recurse to resolve/load and obtain the concrete local path.
-                let resolved_path = materialise_load(&new_spec, workspace_root)?;
+            // Recurse to resolve/load and obtain the concrete local path.
+            let resolved_path = materialise_load(&new_spec, workspace_root)?;
 
-                // Attempt to expose in .pcb folder via symlink.
+            // Attempt to expose in .pcb folder via symlink if we have a workspace.
+            if let Some(root) = workspace_root {
                 if let Err(e) = expose_alias_symlink(root, package, path, &resolved_path) {
                     log::debug!("failed to create alias symlink: {e}");
                 }
-
-                return Ok(resolved_path);
             }
+
+            return Ok(resolved_path);
         }
         // No alias match – proceed with normal package handling below, but ensure we expose a symlink afterwards.
     }
@@ -739,6 +739,20 @@ pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
 
 // Package alias helpers
 
+/// Default package aliases that are always available
+fn default_package_aliases() -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    map.insert(
+        "kicad-symbols".to_string(),
+        "@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string(),
+    );
+    map.insert(
+        "stdlib".to_string(),
+        "@github/diodeinc/stdlib:HEAD".to_string(),
+    );
+    map
+}
+
 /// Thread-safe cache: workspace root → alias map.
 static ALIAS_CACHE: Lazy<
     Mutex<std::collections::HashMap<PathBuf, std::collections::HashMap<String, String>>>,
@@ -751,7 +765,9 @@ fn package_aliases(root: &Path) -> std::collections::HashMap<String, String> {
         return map.clone();
     }
 
-    let mut map = std::collections::HashMap::new();
+    // Start with default aliases
+    let mut map = default_package_aliases();
+
     let toml_path = root.join("pcb.toml");
     if let Ok(contents) = std::fs::read_to_string(&toml_path) {
         // Deserialize only the [packages] table to avoid large structs.
@@ -762,7 +778,8 @@ fn package_aliases(root: &Path) -> std::collections::HashMap<String, String> {
 
         if let Ok(parsed) = toml::from_str::<PkgRoot>(&contents) {
             if let Some(pkgs) = parsed.packages {
-                map = pkgs;
+                // User's aliases override defaults
+                map.extend(pkgs);
             }
         }
     }
@@ -771,9 +788,14 @@ fn package_aliases(root: &Path) -> std::collections::HashMap<String, String> {
     map
 }
 
-/// Look up an alias (package name) in workspace root. Returns mapped string if present.
-fn lookup_package_alias(root: &Path, alias: &str) -> Option<String> {
-    package_aliases(root).get(alias).cloned()
+/// Look up an alias (package name). Returns mapped string if present.
+/// If root is None, only checks default aliases.
+/// If root is Some, checks workspace aliases (which include defaults).
+fn lookup_package_alias(root: Option<&Path>, alias: &str) -> Option<String> {
+    match root {
+        Some(r) => package_aliases(r).get(alias).cloned(),
+        None => default_package_aliases().get(alias).cloned(),
+    }
 }
 
 // Create a symlink inside `<workspace>/.pcb/<alias>/<sub_path>` pointing to `target`.
@@ -1032,6 +1054,77 @@ mod tests {
             readme_exists,
             "expected README file to exist in extracted repo"
         );
+    }
+
+    #[test]
+    fn default_package_aliases() {
+        use tempfile::tempdir;
+
+        // Test 1: Default aliases work without pcb.toml
+        let temp_dir = tempdir().unwrap();
+        let aliases = package_aliases(temp_dir.path());
+
+        assert_eq!(
+            aliases.get("kicad-symbols"),
+            Some(&"@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
+        );
+        assert_eq!(
+            aliases.get("stdlib"),
+            Some(&"@github/diodeinc/stdlib:HEAD".to_string())
+        );
+
+        // Test 2: User can override defaults in pcb.toml
+        let pcb_toml = temp_dir.path().join("pcb.toml");
+        std::fs::write(
+            &pcb_toml,
+            r#"
+[packages]
+kicad-symbols = "@gitlab/kicad/libraries/kicad-symbols:7.0.0"
+custom = "@github/myuser/myrepo:main"
+"#,
+        )
+        .unwrap();
+
+        // Clear cache to force reload
+        ALIAS_CACHE.lock().unwrap().clear();
+
+        let aliases = package_aliases(temp_dir.path());
+
+        // User's version overrides default
+        assert_eq!(
+            aliases.get("kicad-symbols"),
+            Some(&"@gitlab/kicad/libraries/kicad-symbols:7.0.0".to_string())
+        );
+        // Default still present
+        assert_eq!(
+            aliases.get("stdlib"),
+            Some(&"@github/diodeinc/stdlib:HEAD".to_string())
+        );
+        // Custom alias added
+        assert_eq!(
+            aliases.get("custom"),
+            Some(&"@github/myuser/myrepo:main".to_string())
+        );
+    }
+
+    #[test]
+    fn default_aliases_without_workspace() {
+        // Test that default aliases work even without a workspace
+
+        // Test kicad-symbols alias
+        assert_eq!(
+            lookup_package_alias(None, "kicad-symbols"),
+            Some("@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
+        );
+
+        // Test stdlib alias
+        assert_eq!(
+            lookup_package_alias(None, "stdlib"),
+            Some("@github/diodeinc/stdlib:HEAD".to_string())
+        );
+
+        // Test non-existent alias
+        assert_eq!(lookup_package_alias(None, "nonexistent"), None);
     }
 }
 
