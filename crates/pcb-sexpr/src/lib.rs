@@ -604,7 +604,7 @@ mod tests {
         // Test with multi-byte UTF-8 characters
         let input = r#"(symbol "résistance" "日本語" "🔥")"#;
         let parsed = parse(input).unwrap();
-        
+
         if let Sexpr::List(items) = parsed {
             assert_eq!(items.len(), 4);
             assert_eq!(items[0], Sexpr::Symbol("symbol".to_string()));

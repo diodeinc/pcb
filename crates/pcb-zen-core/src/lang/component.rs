@@ -11,8 +11,8 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        dict::DictRef, list::ListRef, starlark_value, tuple::TupleRef, Coerce, Freeze, FreezeResult, Heap, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLike,
+        dict::DictRef, list::ListRef, starlark_value, tuple::TupleRef, Coerce, Freeze,
+        FreezeResult, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
     },
 };
 
@@ -35,7 +35,7 @@ pub struct ComponentValueGen<V> {
     connections: SmallMap<String, V>,
     properties: SmallMap<String, V>,
     source_path: String,
-    symbol: V,  // The Symbol value if one was provided (None if not)
+    symbol: V, // The Symbol value if one was provided (None if not)
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -79,7 +79,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
                 props.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
             debug.field("properties", &props_map);
         }
-        
+
         // Show symbol field
         debug.field("symbol", &self.symbol);
 
@@ -166,7 +166,7 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
     pub fn source_path(&self) -> &str {
         &self.source_path
     }
-    
+
     pub fn symbol(&self) -> &V {
         &self.symbol
     }
@@ -243,7 +243,7 @@ where
             }
 
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
-            
+
             // We'll determine pins_str_map later, after we check for symbol
             let mut pins_str_map: SmallMap<String, String> = SmallMap::new();
 
@@ -265,7 +265,7 @@ where
             let mpn: Option<Value> = param_parser.next_opt()?;
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
-            
+
             // Now determine pins_str_map based on either pin_defs or symbol
             if let Some(pin_defs) = pin_defs_val {
                 // Old way: pin_defs provided as a dict
@@ -292,7 +292,7 @@ where
                     let symbol_value = symbol.downcast_ref::<SymbolValue>().ok_or_else(|| {
                         starlark::Error::new_other(anyhow!("Failed to downcast Symbol value"))
                     })?;
-                    
+
                     // Convert Symbol pins (pad -> signal) to Component pins (signal -> pad)
                     for (pad, signal_val) in symbol_value.pins() {
                         if let Some(signal) = signal_val.unpack_str() {
@@ -378,7 +378,10 @@ where
                 if symbol.get_type() == "Symbol" {
                     if let Some(symbol_value) = symbol.downcast_ref::<SymbolValue>() {
                         if let Some(path) = symbol_value.source_path() {
-                            properties_map.insert("symbol_path".to_string(), eval_ctx.heap().alloc_str(path).to_value());
+                            properties_map.insert(
+                                "symbol_path".to_string(),
+                                eval_ctx.heap().alloc_str(path).to_value(),
+                            );
                         }
                     }
                 }
@@ -429,15 +432,15 @@ impl std::fmt::Display for ComponentType {
 #[repr(C)]
 pub struct SymbolValueGen<V> {
     name: String,
-    pins: SmallMap<String, V>,  // pad name -> signal name
-    source_path: Option<String>,  // Absolute path to the symbol library (if loaded from file)
+    pins: SmallMap<String, V>,   // pad name -> signal name
+    source_path: Option<String>, // Absolute path to the symbol library (if loaded from file)
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for SymbolValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Symbol");
         debug.field("name", &self.name);
-        
+
         // Sort pins for deterministic output
         if !self.pins.is_empty() {
             let mut pins: Vec<_> = self.pins.iter().collect();
@@ -446,7 +449,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for SymbolValueGen<V> {
                 pins.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
             debug.field("pins", &pins_map);
         }
-        
+
         debug.finish()
     }
 }
@@ -454,19 +457,16 @@ impl<V: std::fmt::Debug> std::fmt::Debug for SymbolValueGen<V> {
 starlark_complex_value!(pub SymbolValue);
 
 #[starlark_value(type = "Symbol")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for SymbolValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-}
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for SymbolValueGen<V> where Self: ProvidesStaticType<'v>
+{}
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for SymbolValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Symbol {{ name: \"{}\", pins: {{", self.name)?;
-        
+
         let mut pins: Vec<_> = self.pins.iter().collect();
         pins.sort_by(|(a, _), (b, _)| a.cmp(b));
-        
+
         let mut first = true;
         for (pad_name, signal_value) in pins {
             if !first {
@@ -485,11 +485,11 @@ impl<'v, V: ValueLike<'v>> SymbolValueGen<V> {
     pub fn name(&self) -> &str {
         &self.name
     }
-    
+
     pub fn pins(&self) -> &SmallMap<String, V> {
         &self.pins
     }
-    
+
     pub fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()
     }
@@ -691,7 +691,7 @@ where
                     pins,
                     source_path: Some(absolute_path),
                 });
-                
+
                 Ok(symbol)
             }
             else {
@@ -717,9 +717,10 @@ impl std::fmt::Display for SymbolType {
 
 /// Parse all symbols from a KiCad symbol library
 fn parse_all_symbols_from_library(content: &str) -> starlark::Result<Vec<EdaSymbol>> {
-    let library = SymbolLibrary::from_string(content, "kicad_sym")
-        .map_err(|e| starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e)))?;
-    
+    let library = SymbolLibrary::from_string(content, "kicad_sym").map_err(|e| {
+        starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e))
+    })?;
+
     Ok(library.symbols().to_vec())
 }
 
@@ -974,7 +975,7 @@ where
                 connections,
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
-                symbol: Value::new_none(),  // ComponentFactory doesn't have a symbol
+                symbol: Value::new_none(), // ComponentFactory doesn't have a symbol
             });
 
             Ok(component)
