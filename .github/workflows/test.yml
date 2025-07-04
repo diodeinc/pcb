@@ -111,7 +111,7 @@ jobs:
           cd /tmp/stdlib
           find . -name "*.star" -o -name "*.zen" | while read -r file; do
             echo "Building $file..."
-            if ! ${{ github.workspace }}/target/debug/pcb build "$file"; then
+            if ! cargo run --manifest-path=${{ github.workspace }}/Cargo.toml -p pcb -- build "$file"; then
               echo "Failed to build $file"
               exit 1
             fi
