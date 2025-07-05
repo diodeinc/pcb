@@ -747,6 +747,10 @@ fn default_package_aliases() -> std::collections::HashMap<String, String> {
         "@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string(),
     );
     map.insert(
+        "kicad-footprints".to_string(),
+        "@gitlab/kicad/libraries/kicad-footprints:9.0.0".to_string(),
+    );
+    map.insert(
         "stdlib".to_string(),
         "@github/diodeinc/stdlib:HEAD".to_string(),
     );

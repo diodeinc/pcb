@@ -64,6 +64,7 @@ load("@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym", "Resistor"
 
 Zener provides built-in package aliases for commonly used libraries:
 
+- `@kicad-footprints` → `@gitlab/kicad/libraries/kicad-footprints:9.0.0`
 - `@kicad-symbols` → `@gitlab/kicad/libraries/kicad-symbols:9.0.0`
 - `@stdlib` → `@github/diodeinc/stdlib:HEAD`
 

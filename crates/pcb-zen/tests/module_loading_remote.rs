@@ -39,3 +39,27 @@ Capacitor(name = "C1", package = package.value, value = 10e-6, P1 = Net("P1"), P
 
     star_snapshot!(env, "top.zen");
 }
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn load_kicad_symbol_from_default_alias() {
+    let env = TestProject::new();
+    // Test loading a resistor from the default @kicad-symbols alias
+    env.add_file(
+        "top.zen",
+        r#"
+# Create a resistor instance
+Component(
+    name = "R1",
+    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R_US"),
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pins = {
+        "1": Net("IN"),
+        "2": Net("OUT")
+    }
+)
+"#,
+    );
+
+    star_snapshot!(env, "top.zen");
+}
