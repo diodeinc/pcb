@@ -157,13 +157,32 @@ macro_rules! star_snapshot {
     ($env:expr, $entry:expr $(,)?) => {{
         let netlist = $env.eval_netlist($entry);
         let root_path = $env.root().to_string_lossy();
+
+        // Get the cache directory path for filtering
+        let cache_dir_path = pcb_zen::load::cache_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        // Create regex patterns as owned values
+        let temp_dir_pattern = ::regex::escape(&format!("{}{}", root_path, std::path::MAIN_SEPARATOR));
+        let cache_dir_pattern = if !cache_dir_path.is_empty() {
+            Some(::regex::escape(&format!("{}{}", cache_dir_path, std::path::MAIN_SEPARATOR)))
+        } else {
+            None
+        };
+
+        let mut filters = vec![
+            (temp_dir_pattern.as_ref(), "[TEMP_DIR]"),
+        ];
+
+        // Add cache directory filter if it exists
+        if let Some(cache_pattern) = cache_dir_pattern.as_ref() {
+            filters.push((cache_pattern.as_ref(), "[CACHE_DIR]"));
+        }
+
         insta::with_settings!({
-            filters => vec![
-                (
-                    ::regex::escape(&format!("{}{}", root_path, std::path::MAIN_SEPARATOR)).as_ref(),
-                    "[TEMP_DIR]",
-                ),
-            ],
+            filters => filters,
         }, {
             insta::assert_snapshot!(netlist);
         });
