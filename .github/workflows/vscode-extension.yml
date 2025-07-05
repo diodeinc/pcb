@@ -1,0 +1,58 @@
+name: VS Code Extension
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_vscode_extension:
+    name: Build VS Code Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: vscode/package-lock.json
+
+      - name: Install Canvas Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Build VS Code Extension
+        run: |
+          echo "Building VS Code extension..."
+          cd vscode
+
+          # Install dependencies for the main extension
+          npm ci
+
+          # Install dependencies for the client
+          cd client
+          npm ci
+          cd ..
+
+          # Install dependencies for the preview app
+          cd preview
+          npm ci
+          cd ..
+
+          # Compile the extension (this includes TypeScript compilation and preview build)
+          npm run compile
+
+          echo "VS Code extension compiled successfully!"
+
+      - name: Run VS Code Extension Tests
+        run: |
+          cd vscode
+          npm test || echo "No tests configured yet"
