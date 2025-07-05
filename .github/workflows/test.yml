@@ -130,6 +130,17 @@ jobs:
           cache: "npm"
           cache-dependency-path: vscode/package-lock.json
 
+      - name: Install Canvas Dependencies (macOS)
+        if: contains(matrix.config.name, 'macOS')
+        run: |
+          brew install pkg-config cairo pango libpng jpeg giflib librsvg
+
+      - name: Install Canvas Dependencies (Ubuntu)
+        if: matrix.config.name == 'Ubuntu'
+        run: |
+          apt-get update
+          apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
       - name: Test VS Code Extension Compilation
         shell: bash
         run: |
