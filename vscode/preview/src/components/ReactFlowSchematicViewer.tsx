@@ -1224,7 +1224,7 @@ function getVSCodeColor(varName: string, fallback: string): Color {
 
 // Utility to build a SchematicTheme from VSCode theme variables
 function getVSCodeSchematicTheme(): Partial<
-  import("../kicanvas/kicad/theme").SchematicTheme
+  import("kicanvas/kicad/theme").SchematicTheme
 > {
   return {
     background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
@@ -1455,9 +1455,10 @@ const SymbolNode = React.memo(
     }, [
       symbolPath,
       symbolName,
-      netlist?.symbols?.[symbolPath],
+      netlist.symbols.symbolPath,
       data.width,
       data.height,
+      netlist.symbols,
     ]);
 
     return (

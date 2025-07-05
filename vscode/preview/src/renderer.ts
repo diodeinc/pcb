@@ -351,7 +351,7 @@ export class SchematicRenderer {
     };
 
     // Check each net for connections to our ports
-    for (const [_netName, net] of Array.from(this.nets.entries())) {
+    for (const net of this.nets.values()) {
       const p1Port = `${instance_ref}.${p1Name}`;
       const p2Port = `${instance_ref}.${p2Name}`;
 
@@ -1028,17 +1028,6 @@ export class SchematicRenderer {
       properties: {},
     };
 
-    // Helper function to check if a port is connected to a ground net
-    const isGroundConnected = (port_ref: string): boolean => {
-      for (const [_netName, net] of Array.from(this.nets.entries())) {
-        if (!net.has(port_ref)) continue;
-
-        // Check if this net is a ground net
-        if (this._isGndNet(net)) return true;
-      }
-      return false;
-    };
-
     // Add a port on this node for (a) every child of type Port, and (b) every Port of an Interface.
     for (let [child_name, child_ref] of Object.entries(instance.children)) {
       let child_instance = this.netlist.instances[child_ref];
@@ -1110,9 +1099,7 @@ export class SchematicRenderer {
         }
 
         // Not collapsible – create individual ports.
-        for (let [port_name, _port_ref] of Object.entries(
-          child_instance.children
-        )) {
+        for (let port_name of Object.keys(child_instance.children)) {
           const full_port_ref = `${instance_ref}.${child_name}.${port_name}`;
           // Show all ports (including ground-connected ones)
 
@@ -2708,7 +2695,7 @@ export class SchematicRenderer {
     }
 
     // Process each module's nets separately
-    for (const [moduleName, moduleNets] of Array.from(netsByModule.entries())) {
+    for (const moduleNets of netsByModule.values()) {
       const usedNames = new Set<string>();
 
       // Collect all nets and their possible names for this module

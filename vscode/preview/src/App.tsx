@@ -24,187 +24,6 @@ const isVSCodeEnvironment = () => {
 // Initialize VSCode API only in production
 const vscode = isVSCodeEnvironment() ? acquireVsCodeApi() : null;
 
-// STM32G431K6U6 symbol content
-const STM32G431K6U6_SYMBOL = `(kicad_symbol_lib (version 20211014) (generator SamacSys_ECAD_Model)
-  (symbol "STM32G431K6U6" (in_bom yes) (on_board yes)
-    (property "Reference" "IC" (at 36.83 22.86 0)
-      (effects (font (size 1.27 1.27)) (justify left top))
-    )
-    (property "Value" "STM32G431K6U6" (at 36.83 20.32 0)
-      (effects (font (size 1.27 1.27)) (justify left top))
-    )
-    (property "Footprint" "QFN50P500X500X60-33N-D" (at 36.83 -79.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Datasheet" "https://www.st.com/resource/en/datasheet/stm32g431c6.pdf" (at 36.83 -179.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "ki_description" "STMicroelectronics	STM32G431K6U6	View	33	Quad Flat No-Lead" (at 36.83 -279.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Height" "0.6" (at 36.83 -379.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Manufacturer_Name" "STMicroelectronics" (at 36.83 -479.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Manufacturer_Part_Number" "STM32G431K6U6" (at 36.83 -579.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Mouser Part Number" "511-STM32G431K6U6" (at 36.83 -679.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Mouser Price/Stock" "https://www.mouser.co.uk/ProductDetail/STMicroelectronics/STM32G431K6U6?qs=xZ%2FP%252Ba9zWqZN9RlACkRMbQ%3D%3D" (at 36.83 -779.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Arrow Part Number" "STM32G431K6U6" (at 36.83 -879.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (property "Arrow Price/Stock" "https://www.arrow.com/en/products/stm32g431k6u6/stmicroelectronics?utm_currency=USD&region=nac" (at 36.83 -979.68 0)
-      (effects (font (size 1.27 1.27)) (justify left top) hide)
-    )
-    (rectangle
-      (start 5.08 17.78)
-      (end 35.56 -30.48)
-      (stroke (width 0.254) (type default))
-      (fill (type background))
-    )
-    (pin passive line (at 0 0 0) (length 5.08)
-      (name "VDD_1" (effects (font (size 1.27 1.27))))
-      (number "1" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -2.54 0) (length 5.08)
-      (name "PF0-OSC_IN" (effects (font (size 1.27 1.27))))
-      (number "2" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -5.08 0) (length 5.08)
-      (name "PF1-OSC_OUT" (effects (font (size 1.27 1.27))))
-      (number "3" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -7.62 0) (length 5.08)
-      (name "PG10-NRST" (effects (font (size 1.27 1.27))))
-      (number "4" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -10.16 0) (length 5.08)
-      (name "PA0" (effects (font (size 1.27 1.27))))
-      (number "5" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -12.7 0) (length 5.08)
-      (name "PA1" (effects (font (size 1.27 1.27))))
-      (number "6" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -15.24 0) (length 5.08)
-      (name "PA2" (effects (font (size 1.27 1.27))))
-      (number "7" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 0 -17.78 0) (length 5.08)
-      (name "PA3" (effects (font (size 1.27 1.27))))
-      (number "8" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 10.16 -35.56 90) (length 5.08)
-      (name "PA4" (effects (font (size 1.27 1.27))))
-      (number "9" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 12.7 -35.56 90) (length 5.08)
-      (name "PA5" (effects (font (size 1.27 1.27))))
-      (number "10" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 15.24 -35.56 90) (length 5.08)
-      (name "PA6" (effects (font (size 1.27 1.27))))
-      (number "11" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 17.78 -35.56 90) (length 5.08)
-      (name "PA7" (effects (font (size 1.27 1.27))))
-      (number "12" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 20.32 -35.56 90) (length 5.08)
-      (name "PB0" (effects (font (size 1.27 1.27))))
-      (number "13" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 22.86 -35.56 90) (length 5.08)
-      (name "VSSA" (effects (font (size 1.27 1.27))))
-      (number "14" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 25.4 -35.56 90) (length 5.08)
-      (name "VDDA" (effects (font (size 1.27 1.27))))
-      (number "15" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 27.94 -35.56 90) (length 5.08)
-      (name "VSS_1" (effects (font (size 1.27 1.27))))
-      (number "16" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 0 180) (length 5.08)
-      (name "PA14" (effects (font (size 1.27 1.27))))
-      (number "24" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -2.54 180) (length 5.08)
-      (name "PA13" (effects (font (size 1.27 1.27))))
-      (number "23" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -5.08 180) (length 5.08)
-      (name "PA12" (effects (font (size 1.27 1.27))))
-      (number "22" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -7.62 180) (length 5.08)
-      (name "PA11" (effects (font (size 1.27 1.27))))
-      (number "21" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -10.16 180) (length 5.08)
-      (name "PA10" (effects (font (size 1.27 1.27))))
-      (number "20" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -12.7 180) (length 5.08)
-      (name "PA9" (effects (font (size 1.27 1.27))))
-      (number "19" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -15.24 180) (length 5.08)
-      (name "PA8" (effects (font (size 1.27 1.27))))
-      (number "18" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 40.64 -17.78 180) (length 5.08)
-      (name "VDD_2" (effects (font (size 1.27 1.27))))
-      (number "17" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 10.16 22.86 270) (length 5.08)
-      (name "EP" (effects (font (size 1.27 1.27))))
-      (number "33" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 12.7 22.86 270) (length 5.08)
-      (name "VSS_2" (effects (font (size 1.27 1.27))))
-      (number "32" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 15.24 22.86 270) (length 5.08)
-      (name "PB8-BOOT0" (effects (font (size 1.27 1.27))))
-      (number "31" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 17.78 22.86 270) (length 5.08)
-      (name "PB7" (effects (font (size 1.27 1.27))))
-      (number "30" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 20.32 22.86 270) (length 5.08)
-      (name "PB6" (effects (font (size 1.27 1.27))))
-      (number "29" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 22.86 22.86 270) (length 5.08)
-      (name "PB5" (effects (font (size 1.27 1.27))))
-      (number "28" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 25.4 22.86 270) (length 5.08)
-      (name "PB4" (effects (font (size 1.27 1.27))))
-      (number "27" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 27.94 22.86 270) (length 5.08)
-      (name "PB3" (effects (font (size 1.27 1.27))))
-      (number "26" (effects (font (size 1.27 1.27))))
-    )
-    (pin passive line (at 30.48 22.86 270) (length 5.08)
-      (name "PA15" (effects (font (size 1.27 1.27))))
-      (number "25" (effects (font (size 1.27 1.27))))
-    )
-  )
-)
-`;
-
 const LED_SYMBOL = `
 (kicad_symbol_lib
 	(version 20241209)
@@ -467,6 +286,8 @@ function App() {
       setNetlistData(demoData as any);
       setCurrentFile("/Users/lenny/Downloads/PI0009 3/PI0009.star");
       setSelectedModule("/Users/lenny/Downloads/PI0009 3/PI0009.star:<root>");
+
+      return () => {};
     }
   }, []);
 
@@ -521,10 +342,6 @@ function App() {
 function SymbolTestView() {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
-  const [canvasDimensions, setCanvasDimensions] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
   const [symbolInfo, setSymbolInfo] = useState<any>(null);
   const [debugBounds, setDebugBounds] = useState(true);
   const [tightBounds, setTightBounds] = useState(false);
@@ -547,23 +364,17 @@ function SymbolTestView() {
         });
         setSymbolInfo(info);
 
-        const dimensions = await renderKicadSymbol(
-          canvasRef.current,
-          LED_SYMBOL,
-          "LED",
-          {
-            scale: 10,
-            padding: 50,
-            showPinNames: true,
-            showPinNumbers: true,
-            showPinEndpoints,
-            showFields,
-            tightBounds,
-            debugBounds,
-            includePinTextInBounds,
-          }
-        );
-        setCanvasDimensions(dimensions);
+        await renderKicadSymbol(canvasRef.current, LED_SYMBOL, "LED", {
+          scale: 10,
+          padding: 50,
+          showPinNames: true,
+          showPinNumbers: true,
+          showPinEndpoints,
+          showFields,
+          tightBounds,
+          debugBounds,
+          includePinTextInBounds,
+        });
       } catch (error) {
         console.error("Error rendering symbol:", error);
         setRenderError(

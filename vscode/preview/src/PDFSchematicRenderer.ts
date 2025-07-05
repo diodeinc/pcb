@@ -1,13 +1,11 @@
 import { jsPDF } from "jspdf";
-import { Netlist } from "./types/NetlistTypes";
+import type { Netlist } from "./types/NetlistTypes";
 import {
   SchematicRenderer,
-  SchematicConfig,
-  DEFAULT_CONFIG,
-  ElkNode,
-  ElkEdge,
+  type SchematicConfig,
+  type ElkNode,
+  type ElkEdge,
   NodeType,
-  ElkGraph,
   NetReferenceType,
 } from "./renderer";
 
@@ -520,54 +518,6 @@ export class PDFSchematicRenderer {
     }
   }
 
-  private calculateScale(layout: ElkGraph) {
-    const availableWidth =
-      this.options.pageSize.width - 2 * this.options.pageSize.margin;
-    const availableHeight =
-      this.options.pageSize.height - 2 * this.options.pageSize.margin;
-
-    // Find the bounding box of all nodes
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-
-    for (const node of layout.children) {
-      const x = node.x || 0;
-      const y = node.y || 0;
-      const width = node.width || 0;
-      const height = node.height || 0;
-
-      // Base dimensions
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x + width);
-      maxY = Math.max(maxY, y + height);
-
-      // Account for net reference labels
-      if (node.type === NodeType.NET_REFERENCE && node.labels?.[0]) {
-        // Estimate text width based on label length (rough approximation)
-        const labelWidth = node.labels[0].text.length * 6; // Assume ~6 units per character
-        const circleRadius = 3; // From drawNetReference
-
-        // Add space for label to the right of the net reference circle
-        maxX = Math.max(maxX, x + width + circleRadius + 5 + labelWidth);
-      }
-    }
-
-    const layoutWidth = maxX - minX;
-    const layoutHeight = maxY - minY;
-
-    if (layoutWidth === 0 || layoutHeight === 0) {
-      return 1;
-    }
-
-    const scaleX = availableWidth / layoutWidth;
-    const scaleY = availableHeight / layoutHeight;
-
-    return Math.min(scaleX, scaleY, 1) * this.options.components.scale;
-  }
-
   private drawBorder(
     doc: jsPDF,
     instance_ref: string,
@@ -874,7 +824,7 @@ export class PDFSchematicRenderer {
       submodules.push(instance_ref);
 
       // Recursively check all children
-      for (const [_, child_ref] of Object.entries(instance.children)) {
+      for (const child_ref of Object.values(instance.children)) {
         const child = this.layoutRenderer.netlist.instances[child_ref];
         if (child?.kind === "Module") {
           // Recursively get submodules of this child
