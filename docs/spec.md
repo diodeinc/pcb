@@ -53,11 +53,8 @@ load("@stdlib:1.2.3/math.zen", "calculate")
 # GitHub repository
 load("@github/user/repo:branch/path.zen", "function")
 
-# GitLab repository (simple)
+# GitLab repository
 load("@gitlab/user/repo:branch/path.zen", "function")
-
-# GitLab repository (nested groups)
-load("@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym", "Resistor")
 ```
 
 #### Default Package Aliases
@@ -70,8 +67,8 @@ Zener provides built-in package aliases for commonly used libraries:
 These can be used directly:
 
 ```starlark
-# Load from KiCad symbols library
-load("@kicad-symbols/Device.kicad_sym", "R")
+# Symbol from KiCad symbols library
+Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R")
 
 # Load from stdlib
 load("@stdlib/units.zen", "kohm", "uF")
