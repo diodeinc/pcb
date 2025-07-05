@@ -122,3 +122,34 @@ jobs:
           done
 
           echo "All stdlib files built successfully!"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: vscode/package-lock.json
+
+      - name: Test VS Code Extension Compilation
+        shell: bash
+        run: |
+          echo "Building VS Code extension..."
+          cd vscode
+
+          # Install dependencies for the main extension
+          npm ci
+
+          # Install dependencies for the client
+          cd client
+          npm ci
+          cd ..
+
+          # Install dependencies for the preview app
+          cd preview
+          npm ci
+          cd ..
+
+          # Compile the extension (this includes TypeScript compilation and preview build)
+          npm run compile
+
+          echo "VS Code extension compiled successfully!"
