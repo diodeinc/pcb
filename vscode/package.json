@@ -1,0 +1,153 @@
+{
+  "name": "zener",
+  "description": "A Zener language server",
+  "extensionKind": [
+    "workspace"
+  ],
+  "author": "Facebook",
+  "license": "Apache2",
+  "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/facebook/starlark-rust"
+  },
+  "publisher": "facebook",
+  "categories": [],
+  "keywords": [
+    "multi-root ready"
+  ],
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onLanguage:zener"
+  ],
+  "main": "./client/out/extension",
+  "contributes": {
+    "languages": [
+      {
+        "id": "zener",
+        "aliases": [
+          "Zener",
+          "zener"
+        ],
+        "extensions": [
+          ".star",
+          ".zen"
+        ],
+        "configuration": "./syntaxes/zener.configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zener",
+        "scopeName": "source.zener",
+        "path": "./syntaxes/zener.tmLanguage.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "zener"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "zener",
+        "label": "Zener Debug",
+        "program": "/usr/bin/env",
+        "args": [
+          "pcb",
+          "--dap"
+        ],
+        "languages": [
+          "zener"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The program to debug.",
+                "default": "${file}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "zener",
+            "request": "launch",
+            "name": "Launch Program",
+            "program": "${file}"
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "properties": {
+        "zener.lspPath": {
+          "type": "string",
+          "default": "pcb",
+          "description": "The path to the binary to invoke (possibly on the path) for the plugin to invoke that handles LSP over stdin/stdout"
+        },
+        "zener.lspArguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "lsp"
+          ],
+          "description": "Additional arguments that should be passed to the binary at zener.lspPath"
+        },
+        "zener.enableGotoDefinition": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to ask the LSP server to enable Goto Definition functionality"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "zener.openSchematic",
+        "title": "pcb: View Schematic",
+        "icon": "$(circuit-board)"
+      },
+      {
+        "command": "zener.runLayout",
+        "title": "pcb: Update Layout",
+        "icon": "$(chip)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "zener.openSchematic",
+          "when": "resourceLangId == zener",
+          "group": "navigation"
+        },
+        {
+          "command": "zener.runLayout",
+          "when": "resourceLangId == zener",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -b && cd preview && npm install && npm run build && cd ..",
+    "watch": "tsc -b -w"
+  },
+  "devDependencies": {
+    "@types/mocha": "^9.0.0",
+    "@types/node": "^16.10.2",
+    "@typescript-eslint/parser": "^4.32.0",
+    "eslint": "^7.32.0",
+    "mocha": "^11.1.0",
+    "typescript": "^4.4.3"
+  },
+  "dependencies": {
+    "vsce": "^2.9.2"
+  }
+}

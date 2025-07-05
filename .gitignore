@@ -9,5 +9,8 @@ target
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
+# Node
+node_modules
+
 .DS_Store
 build

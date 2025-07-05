@@ -1,0 +1,325 @@
+.react-flow-schematic-viewer {
+  width: 100%;
+  height: 100%;
+  min-height: 500px;
+  position: relative;
+  background-color: #ffffff;
+  border-radius: 4px;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  border: none;
+  box-shadow: none;
+  outline: none;
+}
+
+/* Module Node Styling */
+.react-flow-module-node, .react-flow-component-node {
+  padding: 0;
+  border-radius: 0; /* Squared-off corners */
+  border: 2px solid #000000; /* Black border */
+  background-color: white;
+  font-family: 'Courier New', monospace; /* Standard schematic font */
+  box-shadow: none; /* Remove shadow for cleaner look */
+  position: relative;
+  overflow: visible; /* Allow port labels to overflow */
+}
+
+.module-header, .component-header {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 0;
+  font-weight: bold;
+  background-color: transparent; /* No background */
+  color: #000; /* Black text */
+  text-align: left;
+  font-size: 12px;
+  z-index: 5;
+}
+
+.module-reference {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 0;
+  font-style: italic;
+  font-size: 10px;
+  color: #000; /* Black text */
+}
+
+.module-content {
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.module-ports {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.module-port {
+  font-size: 10px;
+  text-align: center;
+  position: relative;
+  z-index: 5;
+}
+
+.port-label {
+  color: #000;
+  font-size: 10px;
+  padding: 0 2px;
+  white-space: nowrap;
+  font-family: 'Courier New', monospace;
+  z-index: 10;
+}
+
+/* Resistor Node Styling */
+.react-flow-resistor-node, .react-flow-inductor-node, .react-flow-capacitor-node {
+  padding: 0;
+  border-radius: 0;
+  border: none; /* No border for electrical component */
+  background-color: transparent;
+  font-family: 'Courier New', monospace;
+  box-shadow: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.resistor-body {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Classic resistor zigzag symbol */
+.resistor-body:before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: #000; /* Black for electrical symbol */
+  transform: translateY(-50%);
+  z-index: 1;
+  clip-path: polygon(
+    0% 0%, 20% 0%, 25% 100%, 35% 0%, 
+    45% 100%, 55% 0%, 65% 100%, 75% 0%, 
+    80% 100%, 100% 100%, 100% 0%, 0% 0%
+  );
+}
+
+.resistor-label {
+  position: absolute;
+  top: -16px;
+  left: 0;
+  padding: 0;
+  font-size: 10px;
+  font-weight: bold;
+  color: #000;
+  background-color: transparent;
+  z-index: 2;
+}
+
+.resistor-value {
+  position: absolute;
+  bottom: -16px;
+  right: 0;
+  padding: 0;
+  font-size: 10px;
+  color: #000;
+  background-color: transparent;
+  z-index: 2;
+}
+
+.resistor-port {
+  z-index: 5;
+}
+
+/* Port Node Styling */
+.react-flow-port-node {
+  border-radius: 0;
+  border: 2px solid #000; /* Black border */
+  background-color: white;
+  font-family: 'Courier New', monospace;
+  box-shadow: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.port-body {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.port-connection {
+  z-index: 5;
+}
+
+/* Junction Node Styling */
+.react-flow-junction-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+.junction-dot {
+  width: 8px;
+  height: 8px;
+  background-color: #000; /* Black for electrical symbol */
+  border-radius: 50%;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px solid #000;
+}
+
+/* Make the ReactFlow container properly sized */
+.react-flow__container {
+  height: 100%;
+  width: 100%;
+}
+
+.react-flow {
+  background-color: #ffffff; /* White background for schematics */
+  background-image: 
+    linear-gradient(to right, rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+  background-size: 10px 10px; /* Standard engineering grid size */
+}
+
+/* Override ReactFlow styles for better integration */
+.react-flow__minimap {
+  background-color: #ffffff;
+  border: 1px solid #000;
+  border-radius: 0; /* Square corners */
+}
+
+.react-flow__controls {
+  box-shadow: none;
+  border: 1px solid #000;
+  border-radius: 0; /* Square corners */
+  overflow: hidden;
+}
+
+.react-flow__controls button {
+  background-color: white;
+  border-bottom: 1px solid #000;
+  width: 24px;
+  height: 24px;
+}
+
+.react-flow__controls button:hover {
+  background-color: #f0f0f0;
+}
+
+/* Edge styling for electrical connections */
+.react-flow__edge-path {
+  stroke: #000 !important; /* Black connections */
+  stroke-width: 1.5px !important; /* Consistent line width */
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #000 !important; /* Keep black even when selected */
+  stroke-width: 2px !important; /* Just slightly thicker */
+}
+
+/* Special styling for our electrical straight-line edges */
+.electrical-edge.straight-line {
+  stroke-linecap: square !important; /* Sharp ends for electrical connections */
+  stroke-linejoin: miter !important; /* Sharp corners for electrical connections */
+}
+
+/* Orthogonal edges with 90-degree angles */
+.electrical-edge.orthogonal {
+  stroke-linejoin: miter !important; /* Perfect sharp corners */
+  stroke-linecap: square !important; /* Square ends for electrical aesthetic */
+  stroke-miterlimit: 10 !important; /* Crisp corners */
+}
+
+.react-flow__node {
+  cursor: pointer; /* Show clickable cursor for navigation */
+  pointer-events: all; /* Allow click events */
+  user-select: none; /* Prevent text selection */
+}
+
+.react-flow__node:hover {
+  /* Subtle highlight effect (no movement or shadow) */
+  filter: brightness(0.95); /* Slightly darker on hover */
+  opacity: 0.95;
+}
+
+.react-flow__node.selected {
+  /* Highlight selected node without suggesting it's movable */
+  outline: 2px solid rgb(0, 102, 204); 
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Disable draggable appearance */
+.react-flow__node-drag-handle {
+  display: none !important; /* Hide any drag handles */
+}
+
+/* Handle styling - connection points */
+.react-flow__handle {
+  width: 4px;
+  height: 4px;
+  background-color: #000; /* Black connection points */
+  border: 1px solid #000;
+  border-radius: 50%; /* Circular connection points */
+  opacity: 0.5; /* More subtle appearance */
+  transform: translate(-50%, -50%); /* Center perfectly */
+  transition: opacity 0.2s; /* Smooth hover effect */
+  z-index: 20; /* Ensure handles are above other elements */
+}
+
+/* Show handles more clearly on hover for user feedback */
+.react-flow__handle:hover {
+  background-color: #000;
+  opacity: 0.8; /* Less intense highlight for subtle ports */
+}
+
+/* Adjust handle position to be exactly on the border */
+.react-flow__handle-left {
+  left: 0;
+}
+
+.react-flow__handle-right {
+  right: 0;
+}
+
+.react-flow__handle-top {
+  top: 0;
+}
+
+.react-flow__handle-bottom {
+  bottom: 0;
+}
+
+/* ReactFlow Background styling */
+.react-flow__background {
+  background-color: transparent;
+}
