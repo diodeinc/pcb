@@ -465,6 +465,13 @@ impl LoadResolver for WorkspaceLoadResolver {
         load_path: &str,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
+        // Reject paths that look like package imports - these should be handled by RemoteLoadResolver
+        if load_path.starts_with('@') {
+            return Err(anyhow::anyhow!(
+                "Package imports (paths starting with '@') are not handled by WorkspaceLoadResolver"
+            ));
+        }
+
         let canonical_root = file_provider.canonicalize(&self.workspace_root)?;
 
         log::debug!(

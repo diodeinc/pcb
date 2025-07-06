@@ -630,7 +630,20 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // Get the load resolver
         let load_resolver = parent_context
             .get_load_resolver()
-            .ok_or_else(|| anyhow::anyhow!("No load resolver available"))?;
+            .ok_or_else(|| {
+                // Check if the path looks like a special import that needs a RemoteLoadResolver
+                if path.starts_with('@') {
+                    anyhow::anyhow!(
+                        "No load resolver available for Module(). \
+                        Remote package imports (like '{}') require the evaluation context to be set up with a proper load resolver. \
+                        This typically happens when using the 'pcb' command-line tool or the LSP. \
+                        If you're evaluating this file programmatically, ensure you create the EvalContext with a load resolver that includes remote loading support.",
+                        path
+                    )
+                } else {
+                    anyhow::anyhow!("No load resolver available for Module()")
+                }
+            })?;
 
         // Get the current file path
         let current_file = parent_context
@@ -640,7 +653,18 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // Resolve the path using the load resolver
         let resolved_path = load_resolver
             .resolve_path(file_provider.as_ref(), &path, current_file)
-            .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
+            .map_err(|e| {
+                if path.starts_with('@') {
+                    anyhow::anyhow!(
+                        "Failed to resolve module path '{}': {}. \
+                        This might indicate that the load resolver doesn't support remote package imports. \
+                        Ensure you're using the proper evaluation context setup.",
+                        path, e
+                    )
+                } else {
+                    anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e)
+                }
+            })?;
 
         // Verify the resolved path exists
         if !file_provider.exists(&resolved_path) {

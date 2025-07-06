@@ -23,20 +23,40 @@ pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;
 
+/// Create an evaluation context with proper load resolver setup for a given workspace.
+///
+/// This helper ensures that the evaluation context has both:
+/// - RemoteLoadResolver for handling @package style imports (e.g., @kicad-symbols/...)
+/// - WorkspaceLoadResolver for handling relative paths
+///
+/// # Arguments
+/// * `workspace_root` - The root directory of the workspace (typically where pcb.toml is located)
+///
+/// # Example
+/// ```no_run
+/// use std::path::Path;
+/// use pcb_zen::create_eval_context;
+///
+/// let workspace = Path::new("/path/to/my/project");
+/// let ctx = create_eval_context(workspace);
+/// // Now Module() calls within evaluated files will support @package imports
+/// ```
+pub fn create_eval_context(workspace_root: &Path) -> EvalContext {
+    EvalContext::new()
+        .set_file_provider(Arc::new(DefaultFileProvider))
+        .set_load_resolver(Arc::new(CompoundLoadResolver::new(vec![
+            Arc::new(RemoteLoadResolver),
+            Arc::new(WorkspaceLoadResolver::new(workspace_root.to_path_buf())),
+        ])))
+}
+
 /// Evaluate `file` and return a [`Schematic`].
 pub fn run(file: &Path) -> WithDiagnostics<Schematic> {
     let abs_path = file
         .canonicalize()
         .expect("failed to canonicalise input path");
 
-    let ctx = EvalContext::new()
-        .set_file_provider(Arc::new(DefaultFileProvider))
-        .set_load_resolver(Arc::new(CompoundLoadResolver::new(vec![
-            Arc::new(RemoteLoadResolver),
-            Arc::new(WorkspaceLoadResolver::new(
-                abs_path.parent().unwrap().to_path_buf(),
-            )),
-        ])));
+    let ctx = create_eval_context(abs_path.parent().unwrap());
 
     // For now we don't inject any external inputs.
     let inputs = InputMap::new();

@@ -33,6 +33,7 @@ Each `.zen` file is a Starlark module. It can be used in two ways:
    example, `MyFile = Module("./MyFile.zen")` will import `MyFile.zen` as a
    schematic module, which you can instantiate like so:
    ```starlark
+   MyFile = Module("./MyFile.zen")
    MyFile(
        name = "MyFile",
        ...
@@ -55,6 +56,9 @@ load("@github/user/repo:branch/path.zen", "function")
 
 # GitLab repository
 load("@gitlab/user/repo:branch/path.zen", "function")
+
+# GitLab repository (nested groups)
+Symbol(library = "@gitlab/kicad/libraries/kicad-symbols:v7.0.0/Device.kicad_sym", name = "R_US")
 ```
 
 #### Default Package Aliases
@@ -68,11 +72,11 @@ Zener provides built-in package aliases for commonly used libraries:
 These can be used directly:
 
 ```starlark
-# Symbol from KiCad symbols library
-Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R")
-
 # Load from stdlib
 load("@stdlib/units.zen", "kohm", "uF")
+
+# Load from KiCad symbols library
+R_symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R")
 ```
 
 #### Custom Package Aliases
@@ -88,8 +92,6 @@ kicad-symbols = "@gitlab/kicad/libraries/kicad-symbols:7.0.0"
 my-lib = "@github/myorg/mylib:v1.0.0"
 local-lib = "./path/to/local/lib"
 ```
-
-## Core Types
 
 ### Net
 
