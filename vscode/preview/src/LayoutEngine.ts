@@ -2323,7 +2323,7 @@ export class SchematicLayoutEngine {
     };
   }
 
-  async render(instance_ref: string): Promise<ElkGraph> {
+  async layout(instance_ref: string): Promise<ElkGraph> {
     const graph = this._graphForInstance(instance_ref);
 
     const layoutOptions = {

@@ -1820,7 +1820,7 @@ const Visualizer = ({
       const renderer = new SchematicLayoutEngine(netlist, currentConfig);
       if (selectedComponent) {
         try {
-          let layout = await renderer.render(selectedComponent);
+          let layout = await renderer.layout(selectedComponent);
 
           // Determine if we should animate based on whether the component changed
           const isNewComponent = prevComponent !== selectedComponent;

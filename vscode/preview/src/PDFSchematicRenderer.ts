@@ -754,7 +754,7 @@ export class PDFSchematicRenderer {
     this.drawBorder(doc, instance_ref, pageNumber, totalPages);
 
     // Get the layout for this module
-    const graph = await this.layoutRenderer.render(instance_ref);
+    const graph = await this.layoutRenderer.layout(instance_ref);
 
     // Set up dimensions accounting for title block
     const margin = this.options.pageSize.margin;

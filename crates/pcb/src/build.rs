@@ -15,6 +15,10 @@ pub struct BuildArgs {
     /// When omitted, all .zen files in the current directory are built.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
+
+    /// Print JSON netlist to stdout (undocumented)
+    #[arg(long = "netlist", hide = true)]
+    pub netlist: bool,
 }
 
 /// Evaluate a single Starlark file and print any diagnostics
@@ -90,18 +94,29 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         } else if let Some(schematic) = &eval_result.output {
             spinner.finish();
 
-            // Print success with component count
-            let component_count = schematic
-                .instances
-                .values()
-                .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-                .count();
-            println!(
-                "{} {} ({} components)",
-                pcb_ui::icons::success(),
-                file_name.with_style(Style::Green).bold(),
-                component_count
-            );
+            // If netlist flag is set, print JSON to stdout
+            if args.netlist {
+                match schematic.to_json() {
+                    Ok(json) => println!("{json}"),
+                    Err(e) => {
+                        eprintln!("Error serializing netlist to JSON: {e}");
+                        has_errors = true;
+                    }
+                }
+            } else {
+                // Print success with component count
+                let component_count = schematic
+                    .instances
+                    .values()
+                    .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+                    .count();
+                eprintln!(
+                    "{} {} ({} components)",
+                    pcb_ui::icons::success(),
+                    file_name.with_style(Style::Green).bold(),
+                    component_count
+                );
+            }
         } else {
             spinner.error(format!("{file_name}: No output generated"));
             has_errors = true;
