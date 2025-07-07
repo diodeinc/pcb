@@ -93,6 +93,8 @@ my-lib = "@github/myorg/mylib:v1.0.0"
 local-lib = "./path/to/local/lib"
 ```
 
+## Core Types
+
 ### Net
 
 A `Net` represents an electrical connection between component pins.
