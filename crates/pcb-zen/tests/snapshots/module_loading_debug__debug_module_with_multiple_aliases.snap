@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/module_loading_debug.rs
-assertion_line: 66
 expression: netlist
 ---
 (export (version "E")

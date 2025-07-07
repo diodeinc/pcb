@@ -285,7 +285,7 @@ fn module_nonexistent_file() {
         "test.zen",
         r#"
 # This should fail - module file doesn't exist
-MissingModule = Module("./does_not_exist.zen")
+MissingModule = Module("does_not_exist.zen")
 "#,
     );
 
@@ -301,7 +301,7 @@ fn module_nonexistent_alias() {
         "pcb.toml",
         r#"
 [packages]
-missing = "./does_not_exist"
+missing = "does_not_exist"
 "#,
     );
 
