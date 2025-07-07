@@ -24,7 +24,7 @@ pub use lang::input::{InputMap, InputValue};
 // Re-export file provider types
 pub use file_provider::InMemoryFileProvider;
 
-// Re-export types needed by diode_star
+// Re-export types needed by pcb-zen
 pub use lang::component::FrozenComponentValue;
 pub use lang::module::FrozenModuleValue;
 pub use lang::net::{FrozenNetValue, NetId};

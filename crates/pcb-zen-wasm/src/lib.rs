@@ -26,7 +26,7 @@ lazy_static::lazy_static! {
 pub fn start() {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Debug).expect("Failed to initialize console log");
-    debug!("Initialized diode_star_wasm logger");
+    debug!("Initialized pcb-zen-wasm logger");
 }
 
 /// Information about a loaded module

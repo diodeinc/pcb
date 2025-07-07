@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::process::Command;
 
 mod build;
+mod clean;
 mod layout;
 mod lsp;
 mod open;
@@ -25,6 +26,9 @@ enum Commands {
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
 
+    /// Clean PCB build artifacts
+    Clean(clean::CleanArgs),
+
     /// Language Server Protocol support
     Lsp(lsp::LspArgs),
 
@@ -46,6 +50,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Build(args) => build::execute(args),
         Commands::Layout(args) => layout::execute(args),
+        Commands::Clean(args) => clean::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::External(args) => {

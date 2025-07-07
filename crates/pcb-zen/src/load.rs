@@ -325,7 +325,7 @@ pub fn cache_dir() -> anyhow::Result<PathBuf> {
 
     // 2. Attempt to use the standard per-user cache directory reported by the `dirs` crate.
     if let Some(base) = dirs::cache_dir() {
-        let dir = base.join("diode_star");
+        let dir = base.join("pcb");
         if std::fs::create_dir_all(&dir).is_ok() {
             return Ok(dir);
         }
@@ -335,7 +335,7 @@ pub fn cache_dir() -> anyhow::Result<PathBuf> {
 
     // 3. As a last resort fall back to a writable path under the system temp directory. While
     //    this is not cached across runs, it ensures functionality in locked-down CI systems.
-    let dir = std::env::temp_dir().join("diode_star_cache");
+    let dir = std::env::temp_dir().join("pcb_cache");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
