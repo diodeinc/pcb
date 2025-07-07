@@ -195,20 +195,53 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
                 log::debug!("ignoring tag '{tag}' on alias '{package}'");
             }
 
-            let new_spec = parse_load_spec(&new_spec_str)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse load spec: {}", new_spec_str))?;
+            // Check if the alias target is a local path or a load spec
+            if let Some(new_spec) = parse_load_spec(&new_spec_str) {
+                // It's a load spec (starts with @), recurse to resolve it
+                let resolved_path = materialise_load(&new_spec, workspace_root)?;
 
-            // Recurse to resolve/load and obtain the concrete local path.
-            let resolved_path = materialise_load(&new_spec, workspace_root)?;
+                // Attempt to expose in .pcb folder via symlink if we have a workspace.
+                if let Some(root) = workspace_root {
+                    if let Err(e) = expose_alias_symlink(root, package, path, &resolved_path) {
+                        log::debug!("failed to create alias symlink: {e}");
+                    }
+                }
 
-            // Attempt to expose in .pcb folder via symlink if we have a workspace.
-            if let Some(root) = workspace_root {
-                if let Err(e) = expose_alias_symlink(root, package, path, &resolved_path) {
-                    log::debug!("failed to create alias symlink: {e}");
+                return Ok(resolved_path);
+            } else {
+                // It's a local path - resolve it relative to the workspace root
+                if let Some(root) = workspace_root {
+                    let local_path = if Path::new(&new_spec_str).is_absolute() {
+                        PathBuf::from(&new_spec_str)
+                    } else {
+                        root.join(&new_spec_str)
+                    };
+
+                    // Canonicalize to handle .. and symlinks
+                    let canonical_path = local_path.canonicalize().map_err(|e| {
+                        anyhow::anyhow!("Failed to resolve local alias '{}': {}", new_spec_str, e)
+                    })?;
+
+                    if !canonical_path.exists() {
+                        anyhow::bail!(
+                            "Local alias target does not exist: {}",
+                            canonical_path.display()
+                        );
+                    }
+
+                    // Attempt to expose in .pcb folder via symlink
+                    if let Err(e) = expose_alias_symlink(root, package, path, &canonical_path) {
+                        log::debug!("failed to create alias symlink: {e}");
+                    }
+
+                    return Ok(canonical_path);
+                } else {
+                    anyhow::bail!(
+                        "Cannot resolve local alias '{}' without a workspace root",
+                        new_spec_str
+                    );
                 }
             }
-
-            return Ok(resolved_path);
         }
         // No alias match – proceed with normal package handling below, but ensure we expose a symlink afterwards.
     }
