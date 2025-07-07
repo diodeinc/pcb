@@ -4,7 +4,7 @@ members = ["cargo:."]
 # Config for 'dist'
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.28.0"
+cargo-dist-version = "0.28.1-prerelease.1"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
@@ -21,5 +21,5 @@ install-path = "CARGO_HOME"
 publish-jobs = ["homebrew"]
 # Whether to install an updater program
 install-updater = true
-# Whether to skip running the PR workflow
+# Which actions to run on pull requests
 pr-run-mode = "skip"
