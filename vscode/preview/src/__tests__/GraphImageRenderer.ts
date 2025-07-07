@@ -16,7 +16,7 @@ export class GraphImageRenderer {
     this.ctx = this.canvas.getContext("2d");
   }
 
-  render(graph: ElkGraph): Buffer {
+  makeImage(graph: ElkGraph): Buffer {
     // Clear canvas with white background
     this.ctx.fillStyle = "white";
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);

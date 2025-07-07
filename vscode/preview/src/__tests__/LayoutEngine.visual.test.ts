@@ -173,7 +173,7 @@ describe("LayoutEngine Visual Snapshots", () => {
 
     // Render to image
     const renderer = new GraphImageRenderer(600, 400);
-    const imageBuffer = renderer.render(layoutResult);
+    const imageBuffer = renderer.makeImage(layoutResult);
 
     // Save the image for visual inspection
     const imagePath = path.join(snapshotDir, "resistor-divider.png");
@@ -208,7 +208,7 @@ describe("LayoutEngine Visual Snapshots", () => {
 
     // Render to image
     const renderer = new GraphImageRenderer(600, 400);
-    const imageBuffer = renderer.render(layoutResult);
+    const imageBuffer = renderer.makeImage(layoutResult);
 
     // Save the image
     const imagePath = path.join(snapshotDir, "rc-filter.png");
@@ -293,7 +293,7 @@ describe("LayoutEngine Visual Snapshots", () => {
 
     // Render to image
     const renderer = new GraphImageRenderer(800, 600);
-    const imageBuffer = renderer.render(layoutResult);
+    const imageBuffer = renderer.makeImage(layoutResult);
 
     // Save the image
     const imagePath = path.join(snapshotDir, "hierarchical-system.png");
