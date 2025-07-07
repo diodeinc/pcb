@@ -630,20 +630,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // Get the load resolver
         let load_resolver = parent_context
             .get_load_resolver()
-            .ok_or_else(|| {
-                // Check if the path looks like a special import that needs a RemoteLoadResolver
-                if path.starts_with('@') {
-                    anyhow::anyhow!(
-                        "No load resolver available for Module(). \
-                        Remote package imports (like '{}') require the evaluation context to be set up with a proper load resolver. \
-                        This typically happens when using the 'pcb' command-line tool or the LSP. \
-                        If you're evaluating this file programmatically, ensure you create the EvalContext with a load resolver that includes remote loading support.",
-                        path
-                    )
-                } else {
-                    anyhow::anyhow!("No load resolver available for Module()")
-                }
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("No load resolver available"))?;
 
         // Get the current file path
         let current_file = parent_context

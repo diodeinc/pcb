@@ -56,7 +56,11 @@ pub fn run(file: &Path) -> WithDiagnostics<Schematic> {
         .canonicalize()
         .expect("failed to canonicalise input path");
 
-    let ctx = create_eval_context(abs_path.parent().unwrap());
+    // Find the workspace root by looking for pcb.toml
+    let workspace_root = load::find_workspace_root(&abs_path)
+        .unwrap_or_else(|| abs_path.parent().unwrap().to_path_buf());
+
+    let ctx = create_eval_context(&workspace_root);
 
     // For now we don't inject any external inputs.
     let inputs = InputMap::new();

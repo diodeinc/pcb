@@ -1,0 +1,40 @@
+---
+source: crates/pcb-zen/tests/module_loading.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "U1")
+      (value "?")
+      (footprint "SMD:0805")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "sub.TestComponent") (tstamps "3e2bd4f8-e122-5324-ba4c-49fa5528be8b"))
+      (tstamps "3e2bd4f8-e122-5324-ba4c-49fa5528be8b")
+      (property (name "Reference") (value "U1"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "N1") (name "1") (type "stereo"))
+        (pin (num "N2") (name "2") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "N1")
+      (node (ref "U1") (pin "N1") (pintype "stereo"))
+    )
+    (net (code "2") (name "N2")
+      (node (ref "U1") (pin "N2") (pintype "stereo"))
+    )
+  )
+)

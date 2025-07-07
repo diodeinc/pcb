@@ -1,94 +1,21 @@
-use pcb_zen::create_eval_context;
-use pcb_zen_core::InputMap;
-use tempfile::TempDir;
+mod common;
+use common::TestProject;
 
+// Module loading with relative paths
 #[test]
-fn test_module_with_package_imports() {
-    // Create a temporary directory for our test
-    let temp_dir = TempDir::new().unwrap();
-    let workspace_root = temp_dir.path();
+fn module_with_relative_paths() {
+    let env = TestProject::new();
 
-    // Create a test file that uses Module() with a package import
-    let test_file = workspace_root.join("test.zen");
-    std::fs::write(
-        &test_file,
-        r#"
-# Test that Module() can resolve @package style imports
-# Note: This will try to download from GitHub, so it requires network access
-Resistor = Module("@github/diodeinc/stdlib:v0.0.6/generic/Resistor.star")
-
-Resistor(
-    name = "Resistor",
-    value = "1kohm",
-    package = "0402",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
-)
-"#,
-    )
-    .unwrap();
-
-    // Create an evaluation context with proper load resolver setup
-    let ctx = create_eval_context(workspace_root);
-
-    // Evaluate the test file
-    let result = ctx
-        .set_source_path(test_file.clone())
-        .set_module_name("test".to_string())
-        .set_inputs(InputMap::new())
-        .eval();
-
-    // Check if there were any errors
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics:");
-        for diag in &result.diagnostics {
-            eprintln!("  {}", diag);
-            if diag.is_error() {
-                // If the error is about network access or the specific file not existing,
-                // that's expected in a test environment
-                if diag.body.contains("Failed to resolve module path")
-                    || diag.body.contains("Module file not found")
-                {
-                    eprintln!("  (This is expected if the remote file doesn't exist)");
-                } else {
-                    panic!("Unexpected error: {}", diag.body);
-                }
-            }
-        }
-    }
-
-    // The test passes if we didn't get an error about load resolver not being available
-    assert!(
-        !result
-            .diagnostics
-            .iter()
-            .any(|d| d.body.contains("No load resolver available")
-                || d.body.contains("Remote package imports")),
-        "Module() should not complain about missing load resolver"
-    );
-}
-
-#[test]
-fn test_module_with_relative_paths() {
-    // Create a temporary directory for our test
-    let temp_dir = TempDir::new().unwrap();
-    let workspace_root = temp_dir.path();
-
-    // Create a module file to be loaded
-    let module_file = workspace_root.join("MyModule.zen");
-    std::fs::write(
-        &module_file,
+    env.add_file(
+        "MyModule.zen",
         r#"
 # A simple module
 P1 = io("P1", Net)
 "#,
-    )
-    .unwrap();
+    );
 
-    // Create a test file that uses Module() with a relative path
-    let test_file = workspace_root.join("test.zen");
-    std::fs::write(
-        &test_file,
+    env.add_file(
+        "test.zen",
         r#"
 # Test that Module() works with relative paths
 MyModule = Module("./MyModule.zen")
@@ -98,112 +25,180 @@ MyModule(
     P1 = Net("P1"),
 )
 "#,
-    )
-    .unwrap();
+    );
 
-    // Create an evaluation context with proper load resolver setup
-    let ctx = create_eval_context(workspace_root);
-
-    // Evaluate the test file
-    let result = ctx
-        .set_source_path(test_file.clone())
-        .set_module_name("test".to_string())
-        .set_inputs(InputMap::new())
-        .eval();
-
-    // Check if there were any errors
-    for diag in &result.diagnostics {
-        if diag.is_error() {
-            panic!("Unexpected error: {}", diag);
-        }
-    }
-
-    // The evaluation should succeed
-    assert!(result.output.is_some(), "Evaluation should produce output");
+    star_snapshot!(env, "test.zen");
 }
 
+// Module loading with nested directories
 #[test]
-fn test_module_with_stdlib_package() {
-    // Create a temporary directory for our test
-    let temp_dir = TempDir::new().unwrap();
-    let workspace_root = temp_dir.path();
+fn module_with_nested_directories() {
+    let env = TestProject::new();
 
-    // Create a test file that uses Module() with a real stdlib file
-    // Using a known file from the stdlib repository
-    let test_file = workspace_root.join("test.zen");
-    std::fs::write(
-        &test_file,
+    env.add_file(
+        "nested/file/import.zen",
         r#"
-# Test that Module() can resolve @stdlib imports
-# This uses the units.zen file which defines unit conversions
-Units = Module("@stdlib/units.zen")
+def DummyFunction():
+    pass
 "#,
-    )
-    .unwrap();
+    );
 
-    // Create an evaluation context with proper load resolver setup
-    let ctx = create_eval_context(workspace_root);
+    env.add_file(
+        "sub.zen",
+        r#"
+load("//nested/file/import.zen", DummyFunction = "DummyFunction")
 
-    // Evaluate the test file
-    let result = ctx
-        .set_source_path(test_file.clone())
-        .set_module_name("test".to_string())
-        .set_inputs(InputMap::new())
-        .eval();
+DummyFunction()
 
-    // Check if there were any errors
-    for diag in &result.diagnostics {
-        if diag.is_error() {
-            eprintln!("Error: {}", diag);
-        }
-    }
+Component(
+    name = "TestComponent",
+    footprint = "SMD:0805",
+    symbol = Symbol(
+        definition = [ 
+            ("1" , ["1", "N1"]),
+            ("2" , ["2", "N2"]),
+        ],
+    ),
+    pins = {
+        "1": Net("N1"),
+        "2": Net("N2"),
+    },
+)
+"#,
+    );
 
-    // The evaluation should succeed if the file exists in stdlib
-    if result.output.is_some() {
-        println!("Successfully loaded @stdlib/units.zen via Module()");
-    }
+    env.add_file(
+        "top.zen",
+        r#"
+Sub = Module("sub.zen")
+Sub(name = "sub")
+"#,
+    );
+
+    star_snapshot!(env, "top.zen");
 }
 
+// Module loading with component factories
 #[test]
-fn test_module_with_alias_package() {
-    // Create a temporary directory for our test
-    let temp_dir = TempDir::new().unwrap();
-    let workspace_root = temp_dir.path();
+#[cfg(not(target_os = "windows"))]
+fn module_load_component_factory() {
+    let env = TestProject::new();
 
-    let pcb_toml_file = workspace_root.join("pcb.toml");
-    std::fs::write(
-        pcb_toml_file,
+    env.add_file(
+        "pcb.toml",
+        r#"
+[module]
+name = "test"
+"#,
+    );
+
+    env.add_file(
+        "C146731.kicad_sym",
+        include_str!("resources/C146731.kicad_sym"),
+    );
+
+    env.add_file(
+        "sub.zen",
+        r#"
+# Import the component factory from the current directory
+load(".", COMP = "C146731")
+
+# Instantiate with required pin connections
+COMP(
+    name = "NB3N551DG",
+    footprint = "SMD:0805",
+    pins = {
+        "ICLK": Net("ICLK"),
+        "Q1": Net("Q1"),
+        "Q2": Net("Q2"),
+        "Q3": Net("Q3"),
+        "Q4": Net("Q4"),
+        "GND": Net("GND"),
+        "VDD": Net("VDD"),
+        "OE": Net("OE"),
+    },
+)
+"#,
+    );
+
+    env.add_file(
+        "top.zen",
+        r#"
+# Import the sub module and alias it
+Sub = Module("sub.zen")
+Sub(name = "sub")
+"#,
+    );
+
+    star_snapshot!(env, "top.zen");
+}
+
+// Module loading with local package aliases
+#[test]
+fn module_with_local_alias() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "pcb.toml",
+        r#"
+[packages]
+local = "./modules"
+"#,
+    );
+
+    env.add_file(
+        "modules/MyModule.zen",
+        r#"
+# A simple module
+input = io("input", Net)
+output = io("output", Net)
+"#,
+    );
+
+    env.add_file(
+        "test.zen",
+        r#"
+# Test that Module() works with local package alias
+MyModule = Module("@local/MyModule.zen")
+
+MyModule(
+    name = "M1",
+    input = Net("IN"),
+    output = Net("OUT"),
+)
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+// Module loading with multiple package aliases
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn module_with_multiple_aliases() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "pcb.toml",
         r#"
 [packages]
 stdlib = "@github/diodeinc/stdlib:v0.0.6"
 stdlib_v5 = "@github/diodeinc/stdlib:v0.0.5"
 stdlib_v4 = "@github/diodeinc/stdlib:v0.0.4"
 "#,
-    )
-    .unwrap();
+    );
 
-    let submodule_file = workspace_root.join("submodule.zen");
-    std::fs::write(
-        submodule_file,
+    env.add_file(
+        "test.zen",
         r#"
-P1 = io("P1", Net)
-"#,
-    )
-    .unwrap();
-
-    // Create a test file that uses Module() with a real stdlib file
-    // Using a known file from the stdlib repository
-    let test_file = workspace_root.join("test.zen");
-    std::fs::write(
-        &test_file,
-        r#"
+# Test loading from different package versions
 Resistor = Module("@stdlib/generics/Resistor.star")
 Resistor_v5 = Module("@stdlib_v5/generics/Resistor.star")
 Resistor_v4 = Module("@stdlib_v4/generics/Resistor.star")
-Submodule = Module("//submodule.zen")
 
+# Create instances to verify they load correctly
 Resistor(
-    name = "R",
+    name = "R1",
     value = "1kohm",
     package = "0402",
     P1 = Net("P1"),
@@ -211,48 +206,239 @@ Resistor(
 )
 
 Resistor_v5(
-    name = "R_V5",
-    value = "1kohm",
-    package = "0402",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
+    name = "R2",
+    value = "2kohm",
+    package = "0603",
+    P1 = Net("P3"),
+    P2 = Net("P4"),
 )
 
 Resistor_v4(
-    name = "R_V4",
-    value = "1kohm",
-    package = "0402",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
+    name = "R3",
+    value = "3kohm",
+    package = "0805",
+    P1 = Net("P5"),
+    P2 = Net("P6"),
 )
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+// Module loading with workspace root references
+#[test]
+fn module_with_workspace_root() {
+    let env = TestProject::new();
+
+    env.add_file("pcb.toml", "");
+
+    env.add_file(
+        "submodule.zen",
+        r#"
+P1 = io("P1", Net)
+"#,
+    );
+
+    env.add_file(
+        "nested/test.zen",
+        r#"
+# Test workspace root reference
+Submodule = Module("//submodule.zen")
 
 Submodule(
     name = "Submodule",
     P1 = Net("P1"),
 )
 "#,
-    )
-    .unwrap();
+    );
 
-    // Create an evaluation context with proper load resolver setup
-    let ctx = create_eval_context(workspace_root);
+    star_snapshot!(env, "nested/test.zen");
+}
 
-    // Evaluate the test file
-    let result = ctx
-        .set_source_path(test_file.clone())
-        .set_module_name("test".to_string())
-        .set_inputs(InputMap::new())
-        .eval();
+// Module loading with @stdlib default alias
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn module_with_stdlib_alias() {
+    let env = TestProject::new();
 
-    // Check if there were any errors
-    for diag in &result.diagnostics {
-        if diag.is_error() {
-            eprintln!("Error: {}", diag);
-        }
+    env.add_file(
+        "test.zen",
+        r#"
+# Test that Module() can resolve @stdlib imports (using units as an example)
+Units = Module("@stdlib/units.star")
+
+# We don't instantiate Units since it's just definitions,
+# but the Module() call should resolve correctly
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+// Error case: nonexistent module file
+#[test]
+fn module_nonexistent_file() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "test.zen",
+        r#"
+# This should fail - module file doesn't exist
+MissingModule = Module("./does_not_exist.zen")
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+// Error case: nonexistent package alias
+#[test]
+fn module_nonexistent_alias() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "pcb.toml",
+        r#"
+[packages]
+missing = "./does_not_exist"
+"#,
+    );
+
+    env.add_file(
+        "test.zen",
+        r#"
+# This should fail - alias points to nonexistent directory
+MissingModule = Module("@missing/something.zen")
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+// Test Module() with github package syntax
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn module_with_github_package() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "test.zen",
+        r#"
+# Test Module() with full github package path
+# Note: This will try to download from GitHub, so it requires network access
+Resistor = Module("@github/diodeinc/stdlib:v0.0.6/generics/Resistor.star")
+
+# Create an instance to verify it loads
+Resistor(
+    name = "R1",
+    value = "1kohm",
+    package = "0402",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
+)
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}
+
+// Test loading remote modules with aliased packages
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn module_load_remote_with_alias() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "pcb.toml",
+        r#"
+[module]
+name = "test"
+
+[packages]
+test_package = "@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea"
+"#,
+    );
+
+    env.add_file(
+        "top.zen",
+        r#"
+# Load a type from a remote repository
+load("@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea/Capacitor.star", "Package")
+
+# Load a component from aliased package
+load("@test_package", "Capacitor")
+
+package = Package("0402")
+
+# Instantiate Capacitor
+Capacitor(name = "C1", package = package.value, value = 10e-6, P1 = Net("P1"), P2 = Net("P2"))
+"#,
+    );
+
+    star_snapshot!(env, "top.zen");
+}
+
+// Test loading KiCad symbols from default @kicad-symbols alias
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn module_load_kicad_symbol() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "top.zen",
+        r#"
+# Create a resistor instance using @kicad-symbols alias
+Component(
+    name = "R1",
+    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R_US"),
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pins = {
+        "1": Net("IN"),
+        "2": Net("OUT")
     }
+)
+"#,
+    );
 
-    // The evaluation should succeed if the file exists in stdlib
-    if result.output.is_some() {
-        println!("Successfully loaded @stdlib/units.zen via Module()");
-    }
+    star_snapshot!(env, "top.zen");
+}
+
+// Test Module() with relative paths from subdirectories
+#[test]
+fn module_relative_from_subdir() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "modules/MyModule.zen",
+        r#"
+# A simple module
+input = io("input", Net)
+output = io("output", Net)
+"#,
+    );
+
+    env.add_file(
+        "pcb.toml",
+        r#"
+[packages]
+local = "./modules"
+"#,
+    );
+
+    env.add_file(
+        "src/test.zen",
+        r#"
+# Test that Module() works with relative path alias from subdirectory
+MyModule = Module("@local/MyModule.zen")
+
+MyModule(
+    name = "M1",
+    input = Net("IN"),
+    output = Net("OUT"),
+)
+"#,
+    );
+
+    star_snapshot!(env, "src/test.zen");
 }
