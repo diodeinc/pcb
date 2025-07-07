@@ -2,6 +2,48 @@ const path = require("path");
 
 // Sorry!
 module.exports = {
+  jest: {
+    configure: (jestConfig) => {
+      // Update module name mapper
+      jestConfig.moduleNameMapper = {
+        ...jestConfig.moduleNameMapper,
+        "^kicanvas/base/(.*)$": "<rootDir>/node_modules/kicanvas/src/base/$1",
+        "^kicanvas/graphics/(.*)$":
+          "<rootDir>/node_modules/kicanvas/src/graphics/$1",
+        "^kicanvas/kicad/(.*)$": "<rootDir>/node_modules/kicanvas/src/kicad/$1",
+        "^kicanvas/viewers/(.*)$":
+          "<rootDir>/node_modules/kicanvas/src/viewers/$1",
+        "^kicanvas/kicanvas/(.*)$":
+          "<rootDir>/node_modules/kicanvas/src/kicanvas/$1",
+        "^kicanvas/kc-ui/(.*)$": "<rootDir>/node_modules/kicanvas/src/kc-ui/$1",
+      };
+
+      // Update transform ignore patterns to include kicanvas
+      jestConfig.transformIgnorePatterns = [
+        "[/\\\\]node_modules[/\\\\](?!(kicanvas|@vscode-elements)[/\\\\]).+\\.(js|jsx|mjs|cjs|ts|tsx)$",
+      ];
+
+      // Add transform for TypeScript files
+      jestConfig.transform = {
+        ...jestConfig.transform,
+        "^.+\\.(ts|tsx)$": require.resolve(
+          "react-scripts/config/jest/babelTransform.js"
+        ),
+      };
+
+      // Ensure TypeScript extensions are included
+      jestConfig.moduleFileExtensions = [
+        "ts",
+        "tsx",
+        "js",
+        "jsx",
+        "json",
+        "node",
+      ];
+
+      return jestConfig;
+    },
+  },
   webpack: {
     alias: {
       "kicanvas/base": path.resolve(

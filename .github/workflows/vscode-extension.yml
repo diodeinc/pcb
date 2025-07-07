@@ -56,3 +56,13 @@ jobs:
         run: |
           cd vscode
           npm test || echo "No tests configured yet"
+
+      - name: Run Preview App Tests
+        run: |
+          echo "Running preview app tests..."
+          cd vscode/preview
+
+          # Run the tests with CI=true to ensure they exit after completion
+          CI=true npm test
+
+          echo "Preview app tests completed successfully!"

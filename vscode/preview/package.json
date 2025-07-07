@@ -29,7 +29,8 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
-    "test": "craco test",
+    "test": "craco test --watchAll=false",
+    "test:watch": "craco test",
     "eject": "react-scripts eject",
     "render-symbol": "ts-node --project scripts/tsconfig.json scripts/render-kicad-sym.ts"
   },

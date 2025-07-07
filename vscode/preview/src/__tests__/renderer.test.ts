@@ -1,5 +1,5 @@
 import { SchematicRenderer, NodeType } from "../renderer";
-import { Netlist, InstanceKind, NetKind } from "../types/NetlistTypes";
+import { type Netlist, InstanceKind, NetKind } from "../types/NetlistTypes";
 
 // Mock out heavy native & web-worker dependencies that aren't needed for unit testing.
 // 1.   node-canvas – only used for simple text-measurement calls.  We replace it with a
@@ -27,10 +27,6 @@ jest.mock("elkjs/lib/elk-api.js", () => ({
     }
   },
 }));
-
-// ---------------------------------------------------------------------------
-// Test NetlistBuilder – utility for quickly constructing netlists
-// ---------------------------------------------------------------------------
 
 class NetlistBuilder {
   private namespace: string;
@@ -114,6 +110,35 @@ class NetlistBuilder {
       children: {},
     };
     this.addChild(this.ref(parentPath), name, ref);
+
+    // For resistors, capacitors, and inductors, add P1 and P2 ports
+    if (
+      attributes.type === "resistor" ||
+      attributes.type === "capacitor" ||
+      attributes.type === "inductor"
+    ) {
+      // Add uppercase P1 and P2 ports as children
+      const p1Ref = this.ref(`${path}.P1`);
+      const p2Ref = this.ref(`${path}.P2`);
+
+      this.instances[p1Ref] = {
+        type_ref: { source_path: this.namespace, module_name: "Port" },
+        kind: InstanceKind.PORT,
+        attributes: {},
+        children: {},
+      };
+
+      this.instances[p2Ref] = {
+        type_ref: { source_path: this.namespace, module_name: "Port" },
+        kind: InstanceKind.PORT,
+        attributes: {},
+        children: {},
+      };
+
+      this.instances[ref].children.P1 = p1Ref;
+      this.instances[ref].children.P2 = p2Ref;
+    }
+
     return ref;
   }
 
@@ -144,17 +169,18 @@ class NetlistBuilder {
     if (!this.nets[netName]) {
       this.nets[netName] = { kind: NetKind.NORMAL, ports: [] };
     }
-    this.nets[netName].ports.push(...portPaths.map((p) => this.ref(p)));
+    // Don't double-prefix if already prefixed with namespace
+    this.nets[netName].ports.push(
+      ...portPaths.map((p) =>
+        p.startsWith(`${this.namespace}:`) ? p : this.ref(p)
+      )
+    );
   }
 
   build(): Netlist {
     return { instances: this.instances, nets: this.nets } as Netlist;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Shared sample builders
-// ---------------------------------------------------------------------------
 
 /**
  * Builds a minimal sample netlist consisting of two resistors in series and
@@ -168,15 +194,14 @@ const buildSampleNetlist = (): Netlist => {
   b.addComponent(boardPath, "r1", { type: "resistor" });
   b.addComponent(boardPath, "r2", { type: "resistor" });
 
-  // Connectivity
-  b.connect("N1", ["Board.r1.p1", "Board.r2.p1"]);
-  b.connect("N2", ["Board.r1.p2", "Board.IN"]);
-  b.connect("N3", ["Board.r2.p2"]);
+  // Connectivity - use uppercase P1/P2 for port names
+  b.connect("N1", ["Board.r1.P1", "Board.r2.P1"]);
+  b.connect("N2", ["Board.r1.P2", "Board.IN"]);
+  b.connect("N3", ["Board.r2.P2"]);
 
-  return b.build();
+  const netlist = b.build();
+  return netlist;
 };
-
-// ---------------------------------------------------------------------------
 
 describe("SchematicRenderer - basic graph construction", () => {
   // Uses the shared helper `buildSampleNetlist` defined above.
@@ -207,7 +232,7 @@ describe("SchematicRenderer - basic graph construction", () => {
     const graph = renderer._graphForInstance("test:Board");
 
     // Find edge connecting the first ports of the two resistors
-    const expectedEdgeId = "test:Board.r1.p1-test:Board.r2.p1";
+    const expectedEdgeId = "test:Board.r1.P1-test:Board.r2.P1";
 
     expect(graph.edges).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: expectedEdgeId })])
@@ -326,10 +351,6 @@ describe("Interface aggregation with internal nets", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// New test – interface should NOT aggregate when one of its nets fans out
-// ---------------------------------------------------------------------------
-
 describe("Interface aggregation with fan-out on subset of pins", () => {
   const buildFanoutNetlist = (): Netlist => {
     const b = new NetlistBuilder("root");
@@ -375,10 +396,6 @@ describe("Interface aggregation with fan-out on subset of pins", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Cross-wired interface should NOT aggregate due to name mismatch
-// ---------------------------------------------------------------------------
-
 describe("Interface aggregation fails on pin-name mismatch", () => {
   const buildCrossWireNetlist = (): Netlist => {
     const b = new NetlistBuilder("cw");
@@ -394,12 +411,14 @@ describe("Interface aggregation fails on pin-name mismatch", () => {
     b.connect("n1", ["cw:A.uart.rx", "cw:B.uart.tx"]);
     b.connect("n2", ["cw:A.uart.tx", "cw:B.uart.rx"]);
 
-    return b.build();
+    const netlist = b.build();
+    return netlist;
   };
 
   test("uart interfaces should be exploded", () => {
     const renderer = new SchematicRenderer(buildCrossWireNetlist());
     const nodeA = renderer._nodeForInstance("cw:A")!;
+
     const portIds = (nodeA.ports || []).map((p) => p.id);
 
     expect(portIds).toEqual(
