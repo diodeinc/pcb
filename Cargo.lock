@@ -2241,6 +2241,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "serial_test",
  "starlark",
  "starlark_derive",
  "starlark_map",

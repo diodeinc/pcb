@@ -175,6 +175,7 @@ MyModule(
 // Module loading with multiple package aliases
 #[test]
 #[cfg(not(target_os = "windows"))]
+#[serial_test::serial]
 fn module_with_multiple_aliases() {
     let env = TestProject::new();
 
@@ -182,6 +183,7 @@ fn module_with_multiple_aliases() {
         "pcb.toml",
         r#"
 [packages]
+stdlib = "@github/diodeinc/stdlib:v0.0.6"
 stdlib_v5 = "@github/diodeinc/stdlib:v0.0.5"
 stdlib_v4 = "@github/diodeinc/stdlib:v0.0.4"
 "#,
@@ -191,8 +193,18 @@ stdlib_v4 = "@github/diodeinc/stdlib:v0.0.4"
         "test.zen",
         r#"
 # Test loading from different package versions
+Resistor = Module("@stdlib/generics/Resistor.star")
 Resistor_v5 = Module("@stdlib_v5/generics/Resistor.star")
 Resistor_v4 = Module("@stdlib_v4/generics/Resistor.star")
+
+# Create instances to verify they load correctly
+Resistor(
+    name = "R1",
+    value = "1kohm",
+    package = "0402",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
+)
 
 Resistor_v5(
     name = "R2",
@@ -248,6 +260,7 @@ Submodule(
 // Module loading with @stdlib default alias
 #[test]
 #[cfg(not(target_os = "windows"))]
+#[serial_test::serial]
 fn module_with_stdlib_alias() {
     let env = TestProject::new();
 
@@ -284,6 +297,7 @@ MissingModule = Module("does_not_exist.zen")
 // Error case: nonexistent package alias
 #[test]
 #[cfg(not(target_os = "windows"))]
+#[serial_test::serial]
 fn module_nonexistent_alias() {
     let env = TestProject::new();
 
@@ -336,6 +350,7 @@ Resistor(
 // Test loading remote modules with aliased packages
 #[test]
 #[cfg(not(target_os = "windows"))]
+#[serial_test::serial]
 fn module_load_remote_with_alias() {
     let env = TestProject::new();
 
@@ -372,6 +387,7 @@ Capacitor(name = "C1", package = package.value, value = 10e-6, P1 = Net("P1"), P
 // Test loading KiCad symbols from default @kicad-symbols alias
 #[test]
 #[cfg(not(target_os = "windows"))]
+#[serial_test::serial]
 fn module_load_kicad_symbol() {
     let env = TestProject::new();
 

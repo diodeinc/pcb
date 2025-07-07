@@ -64,3 +64,4 @@ tempfile = { workspace = true }
 insta = { workspace = true }
 serde_yaml = { workspace = true }
 zip = { workspace = true }
+serial_test = { workspace = true }
