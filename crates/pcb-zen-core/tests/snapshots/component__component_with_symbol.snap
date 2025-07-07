@@ -51,6 +51,11 @@ Module {
                         },
                     ),
                 },
+                properties: {
+                    "symbol_name": FrozenValue(
+                        "I2C",
+                    ),
+                },
                 symbol: FrozenValue(
                     Symbol {
                         name: "I2C",
