@@ -1,9 +1,11 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::path::Path;
+use std::sync::Mutex;
+use std::{collections::HashMap, path::Path};
 
 use allocative::Allocative;
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -22,6 +24,10 @@ use super::net::NetType;
 
 use anyhow::anyhow;
 use pcb_eda::{Symbol as EdaSymbol, SymbolLibrary};
+
+/// Cache for parsed symbol libraries to avoid re-parsing the same file multiple times
+static SYMBOL_LIBRARY_CACHE: Lazy<Mutex<HashMap<String, Vec<EdaSymbol>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -625,17 +631,8 @@ where
                     .file_provider()
                     .ok_or_else(|| starlark::Error::new_other(anyhow!("No file provider available")))?;
 
-                // Read and parse the symbol library
-                let contents = file_provider.read_file(&resolved_path).map_err(|e| {
-                    starlark::Error::new_other(anyhow!(
-                        "Failed to read symbol library '{}': {}", 
-                        resolved_path.display(),
-                        e
-                    ))
-                })?;
-
-                // Parse all symbols from the library
-                let symbols = parse_all_symbols_from_library(&contents)?;
+                // Parse all symbols from the library (with caching)
+                let symbols = load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
 
                 // Determine which symbol to use
                 let selected_symbol = if symbols.len() == 1 {
@@ -719,13 +716,51 @@ impl std::fmt::Display for SymbolType {
     }
 }
 
-/// Parse all symbols from a KiCad symbol library
-fn parse_all_symbols_from_library(content: &str) -> starlark::Result<Vec<EdaSymbol>> {
-    let library = SymbolLibrary::from_string(content, "kicad_sym").map_err(|e| {
-        starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e))
+/// Parse all symbols from a KiCad symbol library with caching
+fn load_symbols_from_library(
+    path: &std::path::Path,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<Vec<EdaSymbol>> {
+    // Get the canonical path for cache key
+    let cache_key = file_provider
+        .canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+
+    // Check cache first
+    {
+        let cache = SYMBOL_LIBRARY_CACHE
+            .lock()
+            .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
+        if let Some(symbols) = cache.get(&cache_key) {
+            return Ok(symbols.clone());
+        }
+    }
+
+    // Not in cache, read and parse the file
+    let contents = file_provider.read_file(path).map_err(|e| {
+        starlark::Error::new_other(anyhow!(
+            "Failed to read symbol library '{}': {}",
+            path.display(),
+            e
+        ))
     })?;
 
-    Ok(library.symbols().to_vec())
+    let library_symbols = SymbolLibrary::from_string(&contents, "kicad_sym")
+        .map_err(|e| starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e)))?
+        .symbols()
+        .to_vec();
+
+    // Store in cache
+    {
+        let mut cache = SYMBOL_LIBRARY_CACHE
+            .lock()
+            .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
+        cache.insert(cache_key, library_symbols.clone());
+    }
+
+    Ok(library_symbols)
 }
 
 #[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -1004,21 +1039,16 @@ pub(crate) fn build_component_factory_from_symbol(
     base_dir: Option<&std::path::Path>,
     file_provider: &dyn crate::FileProvider,
 ) -> anyhow::Result<ComponentFactoryValue> {
-    // Read symbol file contents using FileProvider
-    let contents = file_provider.read_file(symbol_path).map_err(|e| {
-        anyhow!(format!(
-            "Failed to read symbol file '{}': {e}",
-            symbol_path.display()
-        ))
-    })?;
+    // Parse all symbols from the library (with caching)
+    let symbols = load_symbols_from_library(symbol_path, file_provider)
+        .map_err(|e| anyhow!("Failed to load symbols: {}", e))?;
 
-    // Parse symbol file
-    let symbol: EdaSymbol = EdaSymbol::from_string(&contents, "kicad_sym").map_err(|e| {
-        anyhow!(format!(
-            "Failed to parse symbol file '{}': {e}",
-            symbol_path.display()
-        ))
-    })?;
+    // For single-symbol files (which is the common case for component factories),
+    // use the first symbol
+    let symbol = symbols
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("No symbols found in file '{}'", symbol_path.display()))?;
 
     // Build pins map
     let mut pins_map: SmallMap<String, String> = SmallMap::new();
