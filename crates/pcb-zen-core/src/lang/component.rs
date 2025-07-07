@@ -383,6 +383,11 @@ where
                                 eval_ctx.heap().alloc_str(path).to_value(),
                             );
                         }
+
+                        properties_map.insert(
+                            "symbol_name".to_string(),
+                            eval_ctx.heap().alloc_str(symbol_value.name()).to_value(),
+                        );
                     }
                 }
             }
