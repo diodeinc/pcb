@@ -528,7 +528,26 @@ class VirtualFootprint(VirtualItem):
         if hasattr(source, "GetPosition") and hasattr(target, "SetPosition"):
             target.SetPosition(source.GetPosition())
             target.SetOrientation(source.GetOrientation())
-            target.SetLayer(source.GetLayer())
+
+            # Handle layer and flipping
+            source_layer = source.GetLayer()
+            target_layer = target.GetLayer()
+
+            # Check if we need to flip the footprint
+            source_is_back = source_layer == pcbnew.B_Cu
+            target_is_back = target_layer == pcbnew.B_Cu
+
+            if source_is_back != target_is_back:
+                # Need to flip the footprint
+                # When flipping, we need to maintain the position
+                pos = target.GetPosition()
+                target.Flip(pos, True)  # True means flip around Y axis
+                logger.debug(
+                    f"Flipped footprint from {'back' if target_is_back else 'front'} to {'back' if source_is_back else 'front'}"
+                )
+
+            # Set the layer after flipping (flipping changes the layer)
+            target.SetLayer(source_layer)
             target.SetLayerSet(source.GetLayerSet())
 
             # Copy reference designator position/attributes
@@ -537,6 +556,13 @@ class VirtualFootprint(VirtualItem):
                 target_ref = target.Reference()
                 target_ref.SetPosition(source_ref.GetPosition())
                 target_ref.SetAttributes(source_ref.GetAttributes())
+
+            # Copy value field position/attributes
+            if hasattr(source, "Value") and hasattr(target, "Value"):
+                source_val = source.Value()
+                target_val = target.Value()
+                target_val.SetPosition(source_val.GetPosition())
+                target_val.SetAttributes(source_val.GetAttributes())
 
     def render_tree(self, indent: int = 0) -> str:
         """Render this footprint as a string."""

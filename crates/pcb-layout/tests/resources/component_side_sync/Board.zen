@@ -1,0 +1,7 @@
+load("@stdlib/properties.star", "Layout")
+
+MyModule = Module("Module.zen")
+
+MyModule(name = "MyModule")
+
+Layout(name = "Board", path = "build/layout/")

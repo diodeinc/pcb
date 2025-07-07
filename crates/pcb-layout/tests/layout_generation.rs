@@ -69,3 +69,4 @@ macro_rules! layout_test {
 layout_test!("simple", "MyBoard");
 
 layout_test!("module_layout", "Main");
+layout_test!("component_side_sync", "Board");
