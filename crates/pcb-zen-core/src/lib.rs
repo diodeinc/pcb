@@ -418,6 +418,8 @@ impl LoadResolver for CompoundLoadResolver {
         load_path: &str,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
+        let mut last_error = None;
+
         for resolver in &self.resolvers {
             match resolver.resolve_path(file_provider, load_path, current_file) {
                 Ok(path) => {
@@ -425,18 +427,18 @@ impl LoadResolver for CompoundLoadResolver {
                     if file_provider.exists(&path) {
                         return Ok(path);
                     }
+
+                    // If the file doesn't exist, treat it as a "not found" error
+                    last_error = Some(anyhow::anyhow!("File not found: {}", path.display()));
                 }
-                Err(_) => {
-                    // Try next resolver
+                Err(e) => {
+                    last_error = Some(e);
                 }
             }
         }
 
-        // All resolvers failed - return a simple error message
-        Err(anyhow::anyhow!(
-            "Failed to resolve module path '{}'",
-            load_path
-        ))
+        // If we get here, no resolver succeeded
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("File not found: {}", load_path)))
     }
 }
 
