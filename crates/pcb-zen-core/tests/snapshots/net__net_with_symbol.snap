@@ -1,0 +1,10 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+Power net: Net 'POWER'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

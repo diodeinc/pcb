@@ -41,6 +41,7 @@ pub struct NetValueGen<V> {
     id: NetId,
     name: String,
     properties: SmallMap<String, V>,
+    symbol: V, // The Symbol value if one was provided (None if not)
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
@@ -57,6 +58,9 @@ impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
                 props.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
             debug.field("properties", &props_map);
         }
+
+        // Show symbol field
+        debug.field("symbol", &self.symbol);
 
         debug.finish()
     }
@@ -89,6 +93,7 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for NetValueGen<V> {
             id: self.id,
             name: self.name.clone(),
             properties,
+            symbol: copy_value(self.symbol.to_value(), dst)?,
         }))
     }
 }
@@ -114,11 +119,12 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    pub fn new(id: NetId, name: String, properties: SmallMap<String, V>) -> Self {
+    pub fn new(id: NetId, name: String, properties: SmallMap<String, V>, symbol: V) -> Self {
         Self {
             id,
             name,
             properties,
+            symbol,
         }
     }
 
@@ -134,6 +140,11 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Return the properties map of this net instance.
     pub fn properties(&self) -> &SmallMap<String, V> {
         &self.properties
+    }
+
+    /// Return the symbol associated with this net (if any).
+    pub fn symbol(&self) -> &V {
+        &self.symbol
     }
 }
 
@@ -187,25 +198,40 @@ where
         let mut name_kwarg: Option<String> = None;
         let names_map = args.names_map()?;
 
+        let mut symbol_val: Option<Value<'v>> = None;
+
         for (key, value) in names_map.iter() {
-            if key.as_str() == "name" {
-                // Special handling for "name" kwarg
-                name_kwarg = Some(
-                    value
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow::anyhow!(
-                                "Expected string for net name"
-                            ))
-                        })?
-                        .to_owned(),
-                );
-            } else {
-                // No longer accept other kwargs as properties
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Net() does not accept keyword argument '{}'. Only 'name' is allowed.",
-                    key.as_str()
-                )));
+            match key.as_str() {
+                "name" => {
+                    // Special handling for "name" kwarg
+                    name_kwarg = Some(
+                        value
+                            .unpack_str()
+                            .ok_or_else(|| {
+                                starlark::Error::new_other(anyhow::anyhow!(
+                                    "Expected string for net name"
+                                ))
+                            })?
+                            .to_owned(),
+                    );
+                }
+                "symbol" => {
+                    // Check that the value is a Symbol
+                    if value.get_type() != "Symbol" {
+                        return Err(starlark::Error::new_other(anyhow::anyhow!(
+                            "Expected Symbol for 'symbol' parameter, got {}",
+                            value.get_type()
+                        )));
+                    }
+                    symbol_val = Some(*value);
+                }
+                _ => {
+                    // No other kwargs accepted
+                    return Err(starlark::Error::new_other(anyhow::anyhow!(
+                        "Net() does not accept keyword argument '{}'. Only 'name' and 'symbol' are allowed.",
+                        key.as_str()
+                    )));
+                }
             }
         }
 
@@ -231,6 +257,7 @@ where
             id: net_id,
             name: net_name,
             properties,
+            symbol: symbol_val.unwrap_or_else(Value::new_none),
         }))
     }
 

@@ -14,7 +14,7 @@ pub(crate) struct ModuleConverter {
     schematic: Schematic,
     net_to_ports: HashMap<NetId, Vec<InstanceRef>>,
     net_to_name: HashMap<NetId, String>,
-    net_to_properties: HashMap<NetId, HashMap<String, FrozenValue>>,
+    net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
     refdes_counters: HashMap<String, u32>,
 }
 
@@ -245,7 +245,7 @@ impl ModuleConverter {
             // Determine net kind from properties.
             let net_kind = if let Some(props) = self.net_to_properties.get(&info.id) {
                 if let Some(type_prop) = props.get("type") {
-                    match type_prop.to_value().unpack_str() {
+                    match type_prop.string() {
                         Some("ground") => NetKind::Ground,
                         Some("power") => NetKind::Power,
                         _ => NetKind::Normal,
@@ -265,7 +265,7 @@ impl ModuleConverter {
             // Add properties to the net.
             if let Some(props) = self.net_to_properties.get(&info.id) {
                 for (key, value) in props.iter() {
-                    net.add_property(key.clone(), to_attribute_value(*value)?);
+                    net.add_property(key.clone(), value.clone());
                 }
             }
 
@@ -362,12 +362,36 @@ impl ModuleConverter {
         entry.push(instance_ref.clone());
         self.net_to_name.insert(net.id(), net.name().to_string());
 
-        // Store net properties if not already stored
+        // Store net properties if not already stored, including symbol information
         self.net_to_properties.entry(net.id()).or_insert_with(|| {
             let mut props_map = HashMap::new();
+
+            // Convert regular properties to AttributeValue
             for (key, value) in net.properties().iter() {
-                props_map.insert(key.clone(), *value);
+                if let Ok(attr_value) = to_attribute_value(*value) {
+                    props_map.insert(key.clone(), attr_value);
+                }
             }
+
+            // Add symbol information if present
+            let symbol_value = net.symbol();
+            if !symbol_value.is_none() {
+                if let Some(symbol) =
+                    symbol_value.downcast_ref::<crate::lang::symbol::FrozenSymbolValue>()
+                {
+                    props_map.insert(
+                        "symbol_name".to_string(),
+                        AttributeValue::String(symbol.name().to_string()),
+                    );
+                    if let Some(path) = symbol.source_path() {
+                        props_map.insert(
+                            "symbol_path".to_string(),
+                            AttributeValue::String(path.to_string()),
+                        );
+                    }
+                }
+            }
+
             props_map
         });
     }

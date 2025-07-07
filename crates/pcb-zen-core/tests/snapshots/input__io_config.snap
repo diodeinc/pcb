@@ -26,6 +26,9 @@ Module {
                                     Net {
                                         name: "VCC",
                                         id: "<ID>",
+                                        symbol: FrozenValue(
+                                            NoneType,
+                                        ),
                                     },
                                 ),
                             },

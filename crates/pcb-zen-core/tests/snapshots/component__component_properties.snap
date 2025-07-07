@@ -43,48 +43,72 @@ Module {
                         Net {
                             name: "GND",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "ICLK": FrozenValue(
                         Net {
                             name: "ICLK",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "OE": FrozenValue(
                         Net {
                             name: "OE",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "Q1": FrozenValue(
                         Net {
                             name: "Q1",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "Q2": FrozenValue(
                         Net {
                             name: "Q2",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "Q3": FrozenValue(
                         Net {
                             name: "Q3",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "Q4": FrozenValue(
                         Net {
                             name: "Q4",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "VDD": FrozenValue(
                         Net {
                             name: "VDD",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                 },

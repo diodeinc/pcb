@@ -34,30 +34,45 @@ Module {
                         Net {
                             name: "CHIP_CONTROL_EN",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "RST": FrozenValue(
                         Net {
                             name: "CHIP_CONTROL_RST",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "SIG": FrozenValue(
                         Net {
                             name: "CHIP_SIGNAL",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "VDD": FrozenValue(
                         Net {
                             name: "CHIP_VDD",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "VSS": FrozenValue(
                         Net {
                             name: "CHIP_VSS",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                 },

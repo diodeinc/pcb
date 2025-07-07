@@ -1,0 +1,10 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+Ground net: Net 'GND'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

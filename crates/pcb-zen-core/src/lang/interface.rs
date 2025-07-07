@@ -167,17 +167,26 @@ where
                         Uuid::new_v4().as_u64_pair().1,
                         net_name,
                         SmallMap::new(),
+                        Value::new_none(),
                     ))
                 } else if spec_type == "Net" {
                     // Net instance - use as template
-                    let (template_name, template_props) =
+                    let (template_name, template_props, template_symbol) =
                         if let Some(net_val) = spec_value.downcast_ref::<NetValue<'v>>() {
-                            (net_val.name().to_string(), net_val.properties().clone())
+                            (
+                                net_val.name().to_string(),
+                                net_val.properties().clone(),
+                                net_val.symbol().to_value(),
+                            )
                         } else {
                             // Handle frozen net by copying first
                             let copied_template = copy_value(spec_value, heap)?;
                             if let Some(net_val) = copied_template.downcast_ref::<NetValue<'v>>() {
-                                (net_val.name().to_string(), net_val.properties().clone())
+                                (
+                                    net_val.name().to_string(),
+                                    net_val.properties().clone(),
+                                    net_val.symbol().to_value(),
+                                )
                             } else {
                                 return Err(starlark::Error::new_other(anyhow::anyhow!(
                                     "Failed to extract properties from net template"
@@ -207,10 +216,14 @@ where
                         new_props.insert(k.clone(), copy_value(v.to_value(), heap)?);
                     }
 
+                    // Deep copy the symbol
+                    let copied_symbol = copy_value(template_symbol, heap)?;
+
                     heap.alloc(NetValue::new(
                         Uuid::new_v4().as_u64_pair().1,
                         net_name,
                         new_props,
+                        copied_symbol,
                     ))
                 } else if spec_value.downcast_ref::<InterfaceFactory<'v>>().is_some()
                     || spec_value
@@ -529,17 +542,26 @@ fn instantiate_interface<'v>(
                 Uuid::new_v4().as_u64_pair().1,
                 net_name,
                 SmallMap::new(),
+                Value::new_none(),
             ))
         } else if spec_type == "Net" {
             // Net instance - use as template
-            let (template_name, template_props) =
+            let (template_name, template_props, template_symbol) =
                 if let Some(net_val) = spec_value.downcast_ref::<NetValue<'v>>() {
-                    (net_val.name().to_string(), net_val.properties().clone())
+                    (
+                        net_val.name().to_string(),
+                        net_val.properties().clone(),
+                        net_val.symbol().to_value(),
+                    )
                 } else {
                     // Handle frozen net by copying first
                     let copied_template = copy_value(spec_value, heap)?;
                     if let Some(net_val) = copied_template.downcast_ref::<NetValue<'v>>() {
-                        (net_val.name().to_string(), net_val.properties().clone())
+                        (
+                            net_val.name().to_string(),
+                            net_val.properties().clone(),
+                            net_val.symbol().to_value(),
+                        )
                     } else {
                         return Err(anyhow::anyhow!(
                             "Failed to extract properties from net template"
@@ -565,10 +587,14 @@ fn instantiate_interface<'v>(
                 new_props.insert(k.clone(), copy_value(v.to_value(), heap)?);
             }
 
+            // Deep copy the symbol
+            let copied_symbol = copy_value(template_symbol, heap)?;
+
             heap.alloc(NetValue::new(
                 Uuid::new_v4().as_u64_pair().1,
                 net_name,
                 new_props,
+                copied_symbol,
             ))
         } else if spec_value.downcast_ref::<InterfaceFactory<'v>>().is_some()
             || spec_value

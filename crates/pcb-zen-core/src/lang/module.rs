@@ -487,6 +487,7 @@ fn default_for_type<'v>(
                 uuid::Uuid::new_v4().as_u64_pair().1,
                 String::new(),
                 SmallMap::new(),
+                Value::new_none(),
             ))
             .to_value(),
         "InterfaceFactory" => typ

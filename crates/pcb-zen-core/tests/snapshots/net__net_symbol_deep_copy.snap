@@ -1,0 +1,11 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+Net1: Net 'NET1'
+Net2: Net 'NET2'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

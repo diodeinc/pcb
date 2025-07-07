@@ -1,0 +1,11 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Data net: Net 'SYS_DATA_DATA'
+Power net: Net 'SYS_POWER'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

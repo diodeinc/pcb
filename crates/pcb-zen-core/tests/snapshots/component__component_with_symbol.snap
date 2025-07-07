@@ -30,24 +30,36 @@ Module {
                         Net {
                             name: "GND",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "SCL": FrozenValue(
                         Net {
                             name: "SCL",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "SDA": FrozenValue(
                         Net {
                             name: "SDA",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "VDD": FrozenValue(
                         Net {
                             name: "VDD",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                 },

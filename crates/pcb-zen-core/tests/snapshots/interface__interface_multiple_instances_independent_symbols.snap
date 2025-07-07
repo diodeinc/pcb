@@ -1,0 +1,11 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+IO1 net: Net 'IO1_IO'
+IO2 net: Net 'IO2_IO'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

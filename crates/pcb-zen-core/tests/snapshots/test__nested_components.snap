@@ -34,12 +34,18 @@ Module {
                                                 Net {
                                                     name: "P1",
                                                     id: "<ID>",
+                                                    symbol: FrozenValue(
+                                                        NoneType,
+                                                    ),
                                                 },
                                             ),
                                             "P2": FrozenValue(
                                                 Net {
                                                     name: "P2",
                                                     id: "<ID>",
+                                                    symbol: FrozenValue(
+                                                        NoneType,
+                                                    ),
                                                 },
                                             ),
                                         },

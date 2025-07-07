@@ -25,12 +25,18 @@ Module {
                         Net {
                             name: "PREFIX_MYTEST",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                     "2": FrozenValue(
                         Net {
                             name: "GND",
                             id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
                         },
                     ),
                 },

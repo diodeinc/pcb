@@ -161,5 +161,3 @@ snapshot_eval!(symbol_tilde_pin_name, {
         print(sym)
     "#
 });
-
-// TODO: Add tests for loading from library once we have test symbol files

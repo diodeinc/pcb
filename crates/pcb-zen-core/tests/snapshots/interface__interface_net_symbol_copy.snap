@@ -1,0 +1,12 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Template net: Net 'POWER'
+Instance power net: Net 'PWR_POWER'
+Instance ground net: Net 'PWR_GND'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

@@ -150,7 +150,7 @@ pub enum AttributeValue {
 }
 
 impl AttributeValue {
-    pub fn string(&self) -> Option<&String> {
+    pub fn string(&self) -> Option<&str> {
         match self {
             AttributeValue::String(s) => Some(s),
             _ => None,

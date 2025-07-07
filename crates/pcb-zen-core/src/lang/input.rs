@@ -165,7 +165,12 @@ impl InputValue {
                     prop_map.insert(k.clone(), v.to_value(eval, None)?);
                 }
                 Ok(heap
-                    .alloc(NetValue::new(*id, name.clone(), prop_map))
+                    .alloc(NetValue::new(
+                        *id,
+                        name.clone(),
+                        prop_map,
+                        Value::new_none(),
+                    ))
                     .to_value())
             }
             InputValue::Interface { fields } => {

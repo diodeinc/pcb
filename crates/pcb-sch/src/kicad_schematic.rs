@@ -556,14 +556,14 @@ impl SchematicConverter {
                 .get("mpn")
                 .or_else(|| instance.attributes.get("type"))
                 .and_then(|v| v.string())
-                .cloned()
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| symbol_info.value.clone()),
             footprint: symbol_info.footprint.clone(),
             properties: {
                 let mut props: HashMap<String, String> = instance
                     .attributes
                     .iter()
-                    .filter_map(|(k, v)| v.string().map(|s| (k.clone(), s.clone())))
+                    .filter_map(|(k, v)| v.string().map(|s| (k.clone(), s.to_string())))
                     .collect();
 
                 // Add the instance path as a property
@@ -982,7 +982,7 @@ impl SchematicConverter {
                 .get(port_ref)
                 .and_then(|inst| inst.attributes.get("pad"))
                 .and_then(|v| v.string())
-                .cloned();
+                .map(|s| s.to_string());
 
             // Fallback to the port name if no pad attribute present.
             let pin_identifier = pin_identifier_owned.as_deref().unwrap_or_else(|| {

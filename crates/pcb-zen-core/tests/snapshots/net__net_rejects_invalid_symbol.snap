@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+Error: test.zen:3:1-37 Expected Symbol for 'symbol' parameter, got string

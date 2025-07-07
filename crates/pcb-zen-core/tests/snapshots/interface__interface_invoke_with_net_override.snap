@@ -1,0 +1,11 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Default instance net: Net 'INST1_DEFAULT'
+Override instance net: Net 'OVERRIDE'
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]
