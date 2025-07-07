@@ -15,6 +15,7 @@ expression: netlist
       (sheetpath (names "R1") (tstamps "993684ed-29bc-53ba-bc0d-39d7d84da9bd"))
       (tstamps "993684ed-29bc-53ba-bc0d-39d7d84da9bd")
       (property (name "Reference") (value "U1"))
+      (property (name "symbol_name") (value "R_US"))
       (property (name "symbol_path") (value "[CACHE_DIR]gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"))
     )
   )

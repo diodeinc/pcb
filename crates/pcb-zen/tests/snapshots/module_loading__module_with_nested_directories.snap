@@ -15,6 +15,7 @@ expression: netlist
       (sheetpath (names "sub.TestComponent") (tstamps "3e2bd4f8-e122-5324-ba4c-49fa5528be8b"))
       (tstamps "3e2bd4f8-e122-5324-ba4c-49fa5528be8b")
       (property (name "Reference") (value "U1"))
+      (property (name "symbol_name") (value "Symbol"))
     )
   )
   (libparts

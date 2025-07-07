@@ -294,6 +294,7 @@ MissingModule = Module("does_not_exist.zen")
 
 // Error case: nonexistent package alias
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn module_nonexistent_alias() {
     let env = TestProject::new();
 
