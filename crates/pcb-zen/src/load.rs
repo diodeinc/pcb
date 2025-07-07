@@ -797,8 +797,19 @@ static ALIAS_CACHE: Lazy<
 
 /// Return the package alias map for the given workspace root. Parsed once and cached.
 fn package_aliases(root: &Path) -> std::collections::HashMap<String, String> {
+    // Canonicalize the root path to ensure consistent cache keys
+    // This is important on systems where /tmp might be a symlink
+    let canonical_root = match root.canonicalize() {
+        Ok(path) => path,
+        Err(_) => {
+            // If canonicalization fails, fall back to the original path
+            // This might happen if the directory doesn't exist yet
+            root.to_path_buf()
+        }
+    };
+
     let mut guard = ALIAS_CACHE.lock().expect("alias cache poisoned");
-    if let Some(map) = guard.get(root) {
+    if let Some(map) = guard.get(&canonical_root) {
         return map.clone();
     }
 
@@ -821,7 +832,7 @@ fn package_aliases(root: &Path) -> std::collections::HashMap<String, String> {
         }
     }
 
-    guard.insert(root.to_path_buf(), map.clone());
+    guard.insert(canonical_root, map.clone());
     map
 }
 
@@ -1162,6 +1173,57 @@ custom = "@github/myuser/myrepo:main"
 
         // Test non-existent alias
         assert_eq!(lookup_package_alias(None, "nonexistent"), None);
+    }
+
+    #[test]
+    fn package_aliases_with_symlinks() {
+        use tempfile::tempdir;
+
+        // Create two temp directories
+        let real_dir = tempdir().unwrap();
+        let link_dir = tempdir().unwrap();
+
+        // Create a pcb.toml in the real directory
+        let pcb_toml = real_dir.path().join("pcb.toml");
+        std::fs::write(
+            &pcb_toml,
+            r#"
+[packages]
+test_alias = "@github/test/repo:main"
+"#,
+        )
+        .unwrap();
+
+        // Create a symlink to the real directory
+        let symlink_path = link_dir.path().join("symlink");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(real_dir.path(), &symlink_path).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(real_dir.path(), &symlink_path).unwrap();
+        }
+
+        // Clear the cache to ensure fresh lookups
+        ALIAS_CACHE.lock().unwrap().clear();
+
+        // Get aliases using the real path
+        let aliases_real = package_aliases(real_dir.path());
+        assert_eq!(
+            aliases_real.get("test_alias"),
+            Some(&"@github/test/repo:main".to_string())
+        );
+
+        // Get aliases using the symlink path - should return the same cached result
+        let aliases_link = package_aliases(&symlink_path);
+        assert_eq!(
+            aliases_link.get("test_alias"),
+            Some(&"@github/test/repo:main".to_string())
+        );
+
+        // Verify both calls returned the same HashMap (from cache)
+        assert_eq!(aliases_real, aliases_link);
     }
 }
 
