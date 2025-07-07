@@ -1,13 +1,13 @@
 import { jsPDF } from "jspdf";
 import type { Netlist } from "./types/NetlistTypes";
 import {
-  SchematicRenderer,
+  SchematicLayoutEngine,
   type SchematicConfig,
   type ElkNode,
   type ElkEdge,
   NodeType,
   NetReferenceType,
-} from "./renderer";
+} from "./LayoutEngine";
 
 export interface PDFRenderOptions {
   pageSize: {
@@ -66,7 +66,7 @@ export const DEFAULT_PDF_OPTIONS: PDFRenderOptions = {
 };
 
 export class PDFSchematicRenderer {
-  private layoutRenderer: SchematicRenderer;
+  private layoutRenderer: SchematicLayoutEngine;
   private options: PDFRenderOptions;
   private transform: {
     scale: number;
@@ -80,7 +80,7 @@ export class PDFSchematicRenderer {
     config: Partial<SchematicConfig> = {},
     options: Partial<PDFRenderOptions> = {}
   ) {
-    this.layoutRenderer = new SchematicRenderer(netlist, config);
+    this.layoutRenderer = new SchematicLayoutEngine(netlist, config);
     this.options = { ...DEFAULT_PDF_OPTIONS, ...options };
     this.transform = {
       scale: 1,

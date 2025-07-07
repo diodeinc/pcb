@@ -1,4 +1,4 @@
-import { SchematicRenderer, NodeType } from "../renderer";
+import { SchematicLayoutEngine, NodeType } from "../LayoutEngine";
 import { type Netlist, InstanceKind, NetKind } from "../types/NetlistTypes";
 
 // Mock out heavy native & web-worker dependencies that aren't needed for unit testing.
@@ -207,7 +207,7 @@ describe("SchematicRenderer - basic graph construction", () => {
   // Uses the shared helper `buildSampleNetlist` defined above.
 
   test("_nodeForInstance adds Port children to module", () => {
-    const renderer = new SchematicRenderer(buildSampleNetlist());
+    const renderer = new SchematicLayoutEngine(buildSampleNetlist());
     const boardNode = renderer._nodeForInstance("test:Board")!;
 
     expect(boardNode.type).toBe(NodeType.MODULE);
@@ -217,7 +217,7 @@ describe("SchematicRenderer - basic graph construction", () => {
   });
 
   test("resistor nodes expose exactly two ports", () => {
-    const renderer = new SchematicRenderer(buildSampleNetlist());
+    const renderer = new SchematicLayoutEngine(buildSampleNetlist());
     const r1Node = renderer._nodeForInstance("test:Board.r1")!;
     const r2Node = renderer._nodeForInstance("test:Board.r2")!;
 
@@ -228,7 +228,7 @@ describe("SchematicRenderer - basic graph construction", () => {
   });
 
   test("_graphForInstance wires up an edge between series resistors", () => {
-    const renderer = new SchematicRenderer(buildSampleNetlist());
+    const renderer = new SchematicLayoutEngine(buildSampleNetlist());
     const graph = renderer._graphForInstance("test:Board");
 
     // Find edge connecting the first ports of the two resistors
@@ -276,7 +276,7 @@ describe("Interface aggregation behavior", () => {
   };
 
   test("interface remains exploded when peer pin names differ", () => {
-    const renderer = new SchematicRenderer(buildInterfaceNetlist(true));
+    const renderer = new SchematicLayoutEngine(buildInterfaceNetlist(true));
     const boardNode = renderer._nodeForInstance("test:Board")!;
 
     const portIds = (boardNode.ports || []).map((p) => p.id);
@@ -287,7 +287,7 @@ describe("Interface aggregation behavior", () => {
   });
 
   test("keeps individual interface ports when connected inconsistently", () => {
-    const renderer = new SchematicRenderer(buildInterfaceNetlist(false));
+    const renderer = new SchematicLayoutEngine(buildInterfaceNetlist(false));
     const boardNode = renderer._nodeForInstance("test:Board")!;
 
     const portIds = (boardNode.ports || []).map((p) => p.id);
@@ -338,7 +338,7 @@ describe("Interface aggregation with internal nets", () => {
   };
 
   test("qspi interface is aggregated despite additional internal nets", () => {
-    const renderer = new SchematicRenderer(buildFlashNetlist());
+    const renderer = new SchematicLayoutEngine(buildFlashNetlist());
     const flashANode = renderer._nodeForInstance("test:Board.flash_a")!;
 
     const portIds = (flashANode.ports || []).map((p) => p.id);
@@ -381,7 +381,7 @@ describe("Interface aggregation with fan-out on subset of pins", () => {
   };
 
   test("test1.i2c interface should be exploded (not aggregated)", () => {
-    const renderer = new SchematicRenderer(buildFanoutNetlist());
+    const renderer = new SchematicLayoutEngine(buildFanoutNetlist());
 
     const test1Node = renderer._nodeForInstance("root:M.test1")!;
     const portIds = (test1Node.ports || []).map((p) => p.id);
@@ -416,7 +416,7 @@ describe("Interface aggregation fails on pin-name mismatch", () => {
   };
 
   test("uart interfaces should be exploded", () => {
-    const renderer = new SchematicRenderer(buildCrossWireNetlist());
+    const renderer = new SchematicLayoutEngine(buildCrossWireNetlist());
     const nodeA = renderer._nodeForInstance("cw:A")!;
 
     const portIds = (nodeA.ports || []).map((p) => p.id);

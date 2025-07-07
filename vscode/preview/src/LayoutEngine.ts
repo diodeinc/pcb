@@ -216,7 +216,6 @@ export const DEFAULT_CONFIG: SchematicConfig = {
   },
 };
 
-// Add this helper function before the SchematicRenderer class
 function calculateTextDimensions(
   text: string,
   fontSize: number,
@@ -241,7 +240,7 @@ function calculateTextDimensions(
   return { width, height };
 }
 
-export class SchematicRenderer {
+export class SchematicLayoutEngine {
   netlist: Netlist;
   elk: ELKType;
   nets: Map<string, Set<string>>;

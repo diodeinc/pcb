@@ -24,11 +24,16 @@ import type { Edge, EdgeProps, EdgeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
   NodeType,
-  SchematicRenderer,
+  SchematicLayoutEngine,
   DEFAULT_CONFIG,
   NetReferenceType,
-} from "../renderer";
-import type { ElkEdge, ElkGraph, ElkNode, SchematicConfig } from "../renderer";
+} from "../LayoutEngine";
+import type {
+  ElkEdge,
+  ElkGraph,
+  ElkNode,
+  SchematicConfig,
+} from "../LayoutEngine";
 import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
 import type { Netlist } from "../types/NetlistTypes";
 import { debounce } from "lodash";
@@ -1812,7 +1817,7 @@ const Visualizer = ({
 
   useEffect(() => {
     async function render() {
-      const renderer = new SchematicRenderer(netlist, currentConfig);
+      const renderer = new SchematicLayoutEngine(netlist, currentConfig);
       if (selectedComponent) {
         try {
           let layout = await renderer.render(selectedComponent);
