@@ -1,0 +1,133 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: symbols
+---
+- name: BaseAmplifier
+  footprint: SOIC-8
+  in_bom: true
+  pins:
+    - name: V-
+      number: "4"
+    - name: V+
+      number: "8"
+    - name: "~"
+      number: "1"
+    - name: "-"
+      number: "2"
+    - name: +
+      number: "3"
+  datasheet: "https://example.com/base_datasheet.pdf"
+  manufacturer: Generic Corp
+  mpn: BASE123
+  distributors:
+    Mouser:
+      part_number: 123-BASE123
+      url: "https://www.mouser.com/ProductDetail/123-BASE123"
+  description: Generic operational amplifier
+  properties:
+    Datasheet: "https://example.com/base_datasheet.pdf"
+    Footprint: SOIC-8
+    Manufacturer_Name: Generic Corp
+    Manufacturer_Part_Number: BASE123
+    Mouser Part Number: 123-BASE123
+    Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+    Reference: U
+    Value: BaseAmplifier
+    ki_description: Generic operational amplifier
+- name: SpecificAmplifier
+  footprint: SOIC-8_Custom
+  in_bom: true
+  pins:
+    - name: V-
+      number: "4"
+    - name: V+
+      number: "8"
+    - name: "~"
+      number: "1"
+    - name: "-"
+      number: "2"
+    - name: +
+      number: "3"
+  datasheet: "https://example.com/base_datasheet.pdf"
+  manufacturer: Texas Instruments
+  mpn: LM358N
+  distributors:
+    Arrow:
+      part_number: LM358N
+      url: "https://www.arrow.com/en/products/lm358n/texas-instruments"
+    Mouser:
+      part_number: 123-BASE123
+      url: "https://www.mouser.com/ProductDetail/123-BASE123"
+  description: "Dual operational amplifier, low power"
+  properties:
+    Arrow Part Number: LM358N
+    Arrow Price/Stock: "https://www.arrow.com/en/products/lm358n/texas-instruments"
+    Datasheet: "https://example.com/base_datasheet.pdf"
+    Footprint: SOIC-8_Custom
+    Manufacturer_Name: Texas Instruments
+    Manufacturer_Part_Number: LM358N
+    Mouser Part Number: 123-BASE123
+    Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+    Reference: U
+    Value: LM358
+    ki_description: "Dual operational amplifier, low power"
+- name: CustomPinAmplifier
+  footprint: SOIC-8
+  in_bom: true
+  pins:
+    - name: VSS
+      number: "5"
+    - name: VDD
+      number: "7"
+    - name: NC
+      number: "6"
+  datasheet: "https://example.com/base_datasheet.pdf"
+  manufacturer: Generic Corp
+  mpn: BASE123
+  distributors:
+    Mouser:
+      part_number: 123-BASE123
+      url: "https://www.mouser.com/ProductDetail/123-BASE123"
+  description: Generic operational amplifier
+  properties:
+    Datasheet: "https://example.com/base_datasheet.pdf"
+    Footprint: SOIC-8
+    Manufacturer_Name: Generic Corp
+    Manufacturer_Part_Number: BASE123
+    Mouser Part Number: 123-BASE123
+    Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+    Reference: U
+    Value: CustomAmp
+    ki_description: Generic operational amplifier
+- name: MinimalExtends
+  footprint: SOIC-8
+  in_bom: true
+  pins:
+    - name: V-
+      number: "4"
+    - name: V+
+      number: "8"
+    - name: "~"
+      number: "1"
+    - name: "-"
+      number: "2"
+    - name: +
+      number: "3"
+  datasheet: "https://example.com/base_datasheet.pdf"
+  manufacturer: Generic Corp
+  mpn: BASE123
+  distributors:
+    Mouser:
+      part_number: 123-BASE123
+      url: "https://www.mouser.com/ProductDetail/123-BASE123"
+  description: Generic operational amplifier
+  properties:
+    Datasheet: "https://example.com/base_datasheet.pdf"
+    Footprint: SOIC-8
+    Manufacturer_Name: Generic Corp
+    Manufacturer_Part_Number: BASE123
+    Mouser Part Number: 123-BASE123
+    Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+    Reference: U
+    Value: BaseAmplifier
+    ki_description: Generic operational amplifier

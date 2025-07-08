@@ -1,0 +1,37 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: symbol
+---
+name: BaseAmplifier
+extends: ~
+footprint: SOIC-8
+in_bom: true
+pins:
+  - name: V-
+    number: "4"
+  - name: V+
+    number: "8"
+  - name: "~"
+    number: "1"
+  - name: "-"
+    number: "2"
+  - name: +
+    number: "3"
+mpn: BASE123
+manufacturer: Generic Corp
+datasheet_url: "https://example.com/base_datasheet.pdf"
+description: Generic operational amplifier
+distributors:
+  Mouser:
+    part_number: 123-BASE123
+    url: "https://www.mouser.com/ProductDetail/123-BASE123"
+properties:
+  Datasheet: "https://example.com/base_datasheet.pdf"
+  Footprint: SOIC-8
+  Manufacturer_Name: Generic Corp
+  Manufacturer_Part_Number: BASE123
+  Mouser Part Number: 123-BASE123
+  Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+  Reference: U
+  Value: BaseAmplifier
+  ki_description: Generic operational amplifier

@@ -1,0 +1,33 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: symbol
+---
+name: CustomPinAmplifier
+extends: BaseAmplifier
+footprint: SOIC-8
+in_bom: true
+pins:
+  - name: VSS
+    number: "5"
+  - name: VDD
+    number: "7"
+  - name: NC
+    number: "6"
+mpn: BASE123
+manufacturer: Generic Corp
+datasheet_url: "https://example.com/base_datasheet.pdf"
+description: Generic operational amplifier
+distributors:
+  Mouser:
+    part_number: 123-BASE123
+    url: "https://www.mouser.com/ProductDetail/123-BASE123"
+properties:
+  Datasheet: "https://example.com/base_datasheet.pdf"
+  Footprint: SOIC-8
+  Manufacturer_Name: Generic Corp
+  Manufacturer_Part_Number: BASE123
+  Mouser Part Number: 123-BASE123
+  Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+  Reference: U
+  Value: CustomAmp
+  ki_description: Generic operational amplifier

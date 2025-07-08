@@ -1,0 +1,42 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: symbol
+---
+name: SpecificAmplifier
+extends: BaseAmplifier
+footprint: SOIC-8_Custom
+in_bom: true
+pins:
+  - name: V-
+    number: "4"
+  - name: V+
+    number: "8"
+  - name: "~"
+    number: "1"
+  - name: "-"
+    number: "2"
+  - name: +
+    number: "3"
+mpn: LM358N
+manufacturer: Texas Instruments
+datasheet_url: "https://example.com/base_datasheet.pdf"
+description: "Dual operational amplifier, low power"
+distributors:
+  Arrow:
+    part_number: LM358N
+    url: "https://www.arrow.com/en/products/lm358n/texas-instruments"
+  Mouser:
+    part_number: 123-BASE123
+    url: "https://www.mouser.com/ProductDetail/123-BASE123"
+properties:
+  Arrow Part Number: LM358N
+  Arrow Price/Stock: "https://www.arrow.com/en/products/lm358n/texas-instruments"
+  Datasheet: "https://example.com/base_datasheet.pdf"
+  Footprint: SOIC-8_Custom
+  Manufacturer_Name: Texas Instruments
+  Manufacturer_Part_Number: LM358N
+  Mouser Part Number: 123-BASE123
+  Mouser Price/Stock: "https://www.mouser.com/ProductDetail/123-BASE123"
+  Reference: U
+  Value: LM358
+  ki_description: "Dual operational amplifier, low power"

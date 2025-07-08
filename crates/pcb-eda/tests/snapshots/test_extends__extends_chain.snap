@@ -1,0 +1,20 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: final_symbol
+---
+name: Final
+extends: Middle
+footprint: BaseFootprint
+in_bom: false
+pins: []
+mpn: ~
+manufacturer: ~
+datasheet_url: ~
+description: ~
+distributors: {}
+properties:
+  Footprint: BaseFootprint
+  PropA: ValueA
+  PropB: ValueB_Override
+  PropC: ValueC_Override
+  PropD: ValueD

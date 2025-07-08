@@ -1,35 +1,41 @@
 use crate::{Part, Pin, Symbol};
 use anyhow::Result;
+use serde::Serialize;
 use sexp::{parse, Atom, Sexp};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct KicadSymbol {
-    name: String,
-    footprint: String,
-    in_bom: bool,
-    pins: Vec<KicadPin>,
-    mpn: Option<String>,
-    manufacturer: Option<String>,
-    datasheet_url: Option<String>,
-    description: Option<String>,
-    distributors: HashMap<String, Part>,
-    properties: HashMap<String, String>,
+    pub(super) name: String,
+    pub(super) extends: Option<String>,
+    pub(super) footprint: String,
+    pub(super) in_bom: bool,
+    pub(super) pins: Vec<KicadPin>,
+    pub(super) mpn: Option<String>,
+    pub(super) manufacturer: Option<String>,
+    pub(super) datasheet_url: Option<String>,
+    pub(super) description: Option<String>,
+    pub(super) distributors: HashMap<String, Part>,
+    pub(super) properties: HashMap<String, String>,
 }
 
 impl KicadSymbol {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    pub fn extends(&self) -> Option<&str> {
+        self.extends.as_deref()
+    }
 }
 
-#[derive(Debug, Default)]
-struct KicadPin {
-    name: String,
-    number: String,
+#[derive(Debug, Default, Clone, Serialize)]
+pub(super) struct KicadPin {
+    pub(super) name: String,
+    pub(super) number: String,
 }
 
 impl From<KicadSymbol> for Symbol {
@@ -109,6 +115,11 @@ pub(super) fn parse_symbol(symbol_data: &[Sexp]) -> Result<KicadSymbol> {
         if let Sexp::List(prop_list) = prop {
             if let Some(Sexp::Atom(Atom::S(prop_name))) = prop_list.first() {
                 match prop_name.as_str() {
+                    "extends" => {
+                        if let Some(Sexp::Atom(Atom::S(parent_name))) = prop_list.get(1) {
+                            symbol.extends = Some(parent_name.clone());
+                        }
+                    }
                     "in_bom" => parse_in_bom(&mut symbol, prop_list),
                     "property" => parse_property(&mut symbol, prop_list),
                     "pin" => {

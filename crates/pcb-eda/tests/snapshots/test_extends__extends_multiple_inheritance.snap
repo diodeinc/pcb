@@ -1,0 +1,78 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: symbols
+---
+- - BaseComponent
+  - name: BaseComponent
+    extends: ~
+    footprint: SOIC-8
+    in_bom: true
+    pins:
+      - name: VCC
+        number: "1"
+      - name: GND
+        number: "2"
+    mpn: ~
+    manufacturer: Generic Corp
+    datasheet_url: ~
+    description: ~
+    distributors:
+      Mouser:
+        part_number: 123-456
+        url: "https://mouser.com/123-456"
+    properties:
+      Footprint: SOIC-8
+      Manufacturer_Name: Generic Corp
+      Mouser Part Number: 123-456
+      Mouser Price/Stock: "https://mouser.com/123-456"
+- - ExtendedWithNewDistributor
+  - name: ExtendedWithNewDistributor
+    extends: BaseComponent
+    footprint: SOIC-8
+    in_bom: true
+    pins:
+      - name: VCC
+        number: "1"
+      - name: GND
+        number: "2"
+    mpn: ~
+    manufacturer: Generic Corp
+    datasheet_url: ~
+    description: ~
+    distributors:
+      Arrow:
+        part_number: ARR-789
+        url: "https://arrow.com/arr-789"
+      Mouser:
+        part_number: 123-456
+        url: "https://mouser.com/123-456"
+    properties:
+      Arrow Part Number: ARR-789
+      Arrow Price/Stock: "https://arrow.com/arr-789"
+      Footprint: SOIC-8
+      Manufacturer_Name: Generic Corp
+      Mouser Part Number: 123-456
+      Mouser Price/Stock: "https://mouser.com/123-456"
+- - ExtendedWithOverride
+  - name: ExtendedWithOverride
+    extends: BaseComponent
+    footprint: TQFP-32
+    in_bom: true
+    pins:
+      - name: VCC
+        number: "1"
+      - name: GND
+        number: "2"
+    mpn: ~
+    manufacturer: Generic Corp
+    datasheet_url: ~
+    description: ~
+    distributors:
+      Mouser:
+        part_number: 999-888
+        url: "https://mouser.com/123-456"
+    properties:
+      Footprint: TQFP-32
+      Manufacturer_Name: Generic Corp
+      Mouser Part Number: 999-888
+      Mouser Price/Stock: "https://mouser.com/123-456"

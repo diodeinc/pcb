@@ -9,6 +9,7 @@ description = "EDA tool integration for PCB design"
 
 [dependencies]
 anyhow = { workspace = true }
+serde = { workspace = true }
 sexp = { workspace = true }
 
 [dev-dependencies]

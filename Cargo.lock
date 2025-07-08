@@ -2108,6 +2108,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "insta",
+ "serde",
  "sexp",
  "tempfile",
 ]

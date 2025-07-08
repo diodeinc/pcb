@@ -1,0 +1,17 @@
+---
+source: crates/pcb-eda/tests/test_extends.rs
+expression: orphan
+---
+name: OrphanSymbol
+extends: NonExistentParent
+footprint: OrphanFootprint
+in_bom: false
+pins: []
+mpn: ~
+manufacturer: ~
+datasheet_url: ~
+description: ~
+distributors: {}
+properties:
+  Footprint: OrphanFootprint
+  Value: Orphan

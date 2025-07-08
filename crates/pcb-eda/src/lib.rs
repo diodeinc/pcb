@@ -3,13 +3,14 @@ pub mod kicad;
 use anyhow::Result;
 use kicad::symbol::KicadSymbol;
 use kicad::symbol_library::KicadSymbolLibrary;
+use serde::Serialize;
 
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::str::FromStr;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct Symbol {
     pub name: String,
     pub footprint: String,
@@ -23,13 +24,13 @@ pub struct Symbol {
     pub properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Serialize)]
 pub struct Part {
     pub part_number: String,
     pub url: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Pin {
     pub name: String,
     pub number: String,
