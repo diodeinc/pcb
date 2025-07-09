@@ -67,5 +67,7 @@ export enum NetKind {
  */
 export interface Net {
   kind: NetKind;
+  name: string;
   ports: string[];
+  properties?: Record<string, any>;
 }

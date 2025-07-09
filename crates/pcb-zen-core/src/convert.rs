@@ -306,7 +306,7 @@ impl ModuleConverter {
     ) -> anyhow::Result<()> {
         // Create instance for this module type.
         let type_modref = ModuleRef::new(module.source_path(), "<root>");
-        let mut inst = Instance::module(type_modref);
+        let mut inst = Instance::module(type_modref.clone());
 
         // Add only this module's own properties to this instance.
         for (key, val) in module.properties().iter() {
@@ -334,6 +334,39 @@ impl ModuleConverter {
             } else {
                 inst.add_attribute(key.clone(), to_attribute_value(*val)?);
             }
+        }
+
+        // Process the module's signature (io() parameters) and add them as children
+        for (param_name, param_type) in module.signature().iter() {
+            let param_inst_ref = instance_ref.append(param_name.clone());
+
+            // Check if this is a Net type
+            if let Some(net) = param_type.downcast_ref::<crate::lang::net::FrozenNetValue>() {
+                // Create a port instance for the net
+                let port_inst = Instance::port(type_modref.clone());
+
+                // Record this net in our tracking
+                self.update_net(net, &param_inst_ref);
+
+                // Add the port instance to the schematic
+                self.schematic
+                    .add_instance(param_inst_ref.clone(), port_inst);
+                inst.add_child(param_name.clone(), param_inst_ref);
+            }
+            // Check if this is an Interface type
+            else if let Some(_interface) =
+                param_type.downcast_ref::<crate::lang::interface::FrozenInterfaceValue>()
+            {
+                // Create an interface instance
+                let interface_inst = Instance::interface(type_modref.clone());
+
+                // Add the interface instance to the schematic
+                self.schematic
+                    .add_instance(param_inst_ref.clone(), interface_inst);
+                inst.add_child(param_name.clone(), param_inst_ref);
+            }
+            // For other types (like enums, records, etc.), we skip them for now
+            // as they're not represented in the schematic
         }
 
         // Recurse into children, but don't pass any properties down.

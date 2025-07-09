@@ -51,8 +51,8 @@ raw_sexp:
             - Symbol: "0"
     - List:
         - Symbol: property
-        - String: PropD
-        - String: ValueD
+        - String: PropC
+        - String: ValueC_Override
         - List:
             - Symbol: at
             - Symbol: "0"
@@ -60,8 +60,8 @@ raw_sexp:
             - Symbol: "0"
     - List:
         - Symbol: property
-        - String: PropC
-        - String: ValueC_Override
+        - String: PropD
+        - String: ValueD
         - List:
             - Symbol: at
             - Symbol: "0"

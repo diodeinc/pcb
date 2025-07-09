@@ -93,8 +93,8 @@ test.describe("Schematic Visual Tests", () => {
           <style>{`
             /* Ensure the mount root has full height */
             #root {
-              width: 800px;
-              height: 600px;
+              width: 1920px;
+              height: 1080px;
               position: relative;
               overflow: hidden;
             }
@@ -162,7 +162,7 @@ test.describe("Schematic Visual Tests", () => {
         `${exampleName.toLowerCase()}.png`,
         {
           animations: "disabled",
-          scale: "device",
+          scale: "css",
         }
       );
     });

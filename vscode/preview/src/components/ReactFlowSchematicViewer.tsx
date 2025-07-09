@@ -1405,7 +1405,7 @@ const SymbolNode = React.memo(
           const nodeHeight = data.height || 100;
 
           // Get device pixel ratio for crisp rendering
-          const dpr = window.devicePixelRatio || 1;
+          const dpr = window.devicePixelRatio || 2;
 
           // Set canvas size to match node size exactly, accounting for device pixel ratio
           canvas.width = nodeWidth * dpr;
@@ -2125,6 +2125,8 @@ const Visualizer = ({
           panOnScroll={true}
           panOnDrag={true}
           preventScrolling={false}
+          minZoom={0.1}
+          maxZoom={1.5}
         >
           <Controls showInteractive={false} />
           <Panel position="top-right">

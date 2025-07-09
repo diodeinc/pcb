@@ -155,8 +155,8 @@ export const DEFAULT_CONFIG: SchematicConfig = {
   },
   layout: {
     direction: "LEFT",
-    spacing: 10,
-    padding: 20,
+    spacing: 0,
+    padding: 0,
     explodeModules: true,
     smartNetReferencePositioning: true,
     smartEdgeSplitting: true,
@@ -198,14 +198,12 @@ export class SchematicLayoutEngine {
   elk: ELKType;
   nets: Map<string, Set<string>>;
   config: SchematicConfig;
-  netNames: Map<string, string>;
 
   constructor(netlist: Netlist, config: Partial<SchematicConfig> = {}) {
     this.netlist = netlist;
     // Use the default ELK configuration which works in the browser
     this.elk = new ELK();
     this.nets = this._generateNets();
-    this.netNames = this._generateUniqueNetNames();
     // Merge provided config with defaults
     this.config = {
       ...DEFAULT_CONFIG,
@@ -397,20 +395,6 @@ export class SchematicLayoutEngine {
     }
 
     return nets;
-  }
-
-  private _generateUniqueNetNames(): Map<string, string> {
-    const netNames = new Map<string, string>();
-
-    // For now, just use net IDs as names
-    // In the future, we can implement smarter naming based on connected components
-    let netCounter = 1;
-    for (const [netId, net] of this.nets.entries()) {
-      netNames.set(netId, `net${netCounter}`);
-      netCounter++;
-    }
-
-    return netNames;
   }
 
   // Helper methods from old implementation
@@ -1006,20 +990,59 @@ export class SchematicLayoutEngine {
         }
       }
 
-      // If we found at least 2 connected ports, create a single net reference
-      if (connectedPorts.length >= 2) {
-        // Get the net name
-        const netName = this.netNames.get(netId) || netId;
+      // Create a separate net reference for each connected port
+      if (connectedPorts.length >= 1) {
+        // Get the net name from the netlist
+        const net = this.netlist.nets[netId];
+        const netName = net?.name || netId;
 
-        // Create a single net reference for this net
-        const netRefId = `${netId}_ref`;
-        const netRefNode = this._netReferenceNode(netRefId, netName, "WEST");
+        // Create a net reference for each connected port
+        for (let i = 0; i < connectedPorts.length; i++) {
+          const { portId, nodeId } = connectedPorts[i];
 
-        // Add the net reference node to the graph
-        graph.children.push(netRefNode);
+          // Find the port to get its side
+          let portSide: "NORTH" | "SOUTH" | "EAST" | "WEST" = "WEST";
+          const node = graph.children.find((n) => n.id === nodeId);
+          if (node && node.ports) {
+            const port = node.ports.find((p) => p.id === portId);
+            if (port && port.properties && port.properties["port.side"]) {
+              portSide = port.properties["port.side"] as
+                | "NORTH"
+                | "SOUTH"
+                | "EAST"
+                | "WEST";
+            }
+          }
 
-        // Create edges from all connected ports to the net reference
-        for (const { portId, nodeId } of connectedPorts) {
+          // Determine opposite side for net reference
+          let netRefSide: "NORTH" | "SOUTH" | "EAST" | "WEST";
+          switch (portSide) {
+            case "NORTH":
+              netRefSide = "SOUTH";
+              break;
+            case "SOUTH":
+              netRefSide = "NORTH";
+              break;
+            case "EAST":
+              netRefSide = "WEST";
+              break;
+            case "WEST":
+              netRefSide = "EAST";
+              break;
+          }
+
+          // Create a unique net reference for this port
+          const netRefId = `${netId}_ref_${i}`;
+          const netRefNode = this._netReferenceNode(
+            netRefId,
+            netName,
+            netRefSide
+          );
+
+          // Add the net reference node to the graph
+          graph.children.push(netRefNode);
+
+          // Create edge from the port to its dedicated net reference
           graph.edges.push({
             id: `${portId}_to_${netRefId}`,
             netId: netId,
@@ -1029,10 +1052,6 @@ export class SchematicLayoutEngine {
             targetComponentRef: netRefId,
           });
         }
-      } else if (connectedPorts.length === 1) {
-        // For single port nets, we might want to add a net reference if the net
-        // connects to something outside this graph (to be implemented later)
-        // For now, just mark the port
       }
     }
 

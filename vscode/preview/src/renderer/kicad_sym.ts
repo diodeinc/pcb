@@ -33,7 +33,6 @@ import {
 import { StrokeFont } from "../third_party/kicanvas/kicad/text/stroke-font";
 import { LibText as LibTextRenderer } from "../third_party/kicanvas/kicad/text/lib-text";
 import { SchField } from "../third_party/kicanvas/kicad/text/sch-field";
-import { parse_expr, P, T } from "../third_party/kicanvas/kicad/parser";
 import type { SchematicTheme } from "../third_party/kicanvas/kicad/theme";
 import { LayerNames } from "../third_party/kicanvas/viewers/schematic/layers";
 import {

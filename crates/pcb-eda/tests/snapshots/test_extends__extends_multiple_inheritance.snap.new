@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-eda/tests/test_extends.rs
+assertion_line: 172
 expression: symbols
 ---
 - - BaseComponent
@@ -420,8 +421,8 @@ expression: symbols
                                 - Symbol: "1.27"
         - List:
             - Symbol: property
-            - String: Footprint
-            - String: TQFP-32
+            - String: Mouser Part Number
+            - String: 999-888
             - List:
                 - Symbol: at
                 - Symbol: "0"
@@ -429,8 +430,8 @@ expression: symbols
                 - Symbol: "0"
         - List:
             - Symbol: property
-            - String: Mouser Part Number
-            - String: 999-888
+            - String: Footprint
+            - String: TQFP-32
             - List:
                 - Symbol: at
                 - Symbol: "0"

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-eda/tests/test_extends.rs
+assertion_line: 27
 expression: symbols
 ---
 - - BaseAmplifier
@@ -674,8 +675,8 @@ expression: symbols
                                 - Symbol: "1.27"
         - List:
             - Symbol: property
-            - String: ki_description
-            - String: "Dual operational amplifier, low power"
+            - String: Manufacturer_Name
+            - String: Texas Instruments
             - List:
                 - Symbol: at
                 - Symbol: "0"
@@ -709,26 +710,8 @@ expression: symbols
                         - Symbol: "1.27"
         - List:
             - Symbol: property
-            - String: Arrow Part Number
+            - String: Manufacturer_Part_Number
             - String: LM358N
-            - List:
-                - Symbol: at
-                - Symbol: "0"
-                - Symbol: "0"
-                - Symbol: "0"
-            - List:
-                - Symbol: effects
-                - List:
-                    - Symbol: font
-                    - List:
-                        - Symbol: size
-                        - Symbol: "1.27"
-                        - Symbol: "1.27"
-                - Symbol: hide
-        - List:
-            - Symbol: property
-            - String: Arrow Price/Stock
-            - String: "https://www.arrow.com/en/products/lm358n/texas-instruments"
             - List:
                 - Symbol: at
                 - Symbol: "0"
@@ -763,7 +746,25 @@ expression: symbols
                 - Symbol: hide
         - List:
             - Symbol: property
-            - String: Manufacturer_Part_Number
+            - String: ki_description
+            - String: "Dual operational amplifier, low power"
+            - List:
+                - Symbol: at
+                - Symbol: "0"
+                - Symbol: "0"
+                - Symbol: "0"
+            - List:
+                - Symbol: effects
+                - List:
+                    - Symbol: font
+                    - List:
+                        - Symbol: size
+                        - Symbol: "1.27"
+                        - Symbol: "1.27"
+                - Symbol: hide
+        - List:
+            - Symbol: property
+            - String: Arrow Part Number
             - String: LM358N
             - List:
                 - Symbol: at
@@ -781,8 +782,8 @@ expression: symbols
                 - Symbol: hide
         - List:
             - Symbol: property
-            - String: Manufacturer_Name
-            - String: Texas Instruments
+            - String: Arrow Price/Stock
+            - String: "https://www.arrow.com/en/products/lm358n/texas-instruments"
             - List:
                 - Symbol: at
                 - Symbol: "0"
