@@ -1,0 +1,83 @@
+"""
+Type: High Side Current Sensor
+Description: High side current sensor using INA240A with 2mohm shunt resistor, 20x V/V gain. 80Vin Max
+"""
+load("@stdlib:zen/interfaces.zen", "Power", "Analog", "Ground")
+load("@stdlib:zen/units.zen", "Resistance")
+load("@stdlib:zen/config.zen", "config_unit")
+
+Resistor = Module("@stdlib:zen/generics/Resistor.zen")
+NetTie = Module("@stdlib:zen/generics/NetTie.zen")
+INA240A = Module("../INA240A/INA240A.zen")
+
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+shunt_value = config("shunt_value", str, default="2mohm 1%", optional=True)
+shunt_package = config("shunt_package", str, default="2512", optional=True)
+shunt_mpn = config("shunt_mpn", str, optional=True)
+ina_gain = config("ina_gain", str, default="A1", optional=True)
+ina_package = config("ina_package", str, default="TSSOP", optional=True)
+properties = config("properties", dict, optional=True)
+ref_config = config("ref_config", str, default="GROUND")
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+power_bus_in = io("power_bus_in", Power)  # Input power bus
+power_bus_out = io("power_bus_out", Power)  # Output power bus
+power_3v3 = io("power_3v3", Power)  # Digital power supply
+isense_out = io("isense_out", Analog)  # Current sense output
+gnd = io("gnd", Ground)  # Ground reference
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+_in_p = Analog("_in_p")
+_in_n = Analog("_in_n")
+
+shunt_properties = {}
+if shunt_mpn:
+    shunt_properties = {
+        "mpn": shunt_mpn,
+    }
+
+# Create nettie modules for power connections
+NetTie(
+    name="isense_shunt_high",
+    P1 = power_bus_in.NET,
+    P2 = _in_p.NET
+)
+
+NetTie(
+    name="isense_shunt_low", 
+    P1 = power_bus_out.NET,
+    P2 = _in_n.NET
+)
+
+# Shunt resistor
+Resistor(
+    name="r_shunt",
+    value=shunt_value,
+    package=shunt_package,
+    P1=power_bus_in.NET,
+    P2=power_bus_out.NET,
+    properties=shunt_properties,
+)
+
+# INA240 current sense inalifier
+INA240A(
+    name="ina240",
+    ref_config=ref_config,
+    package=ina_package,
+    gain=ina_gain,
+    implementation_type="WITH_PASSIVES",
+    power=power_3v3,
+    gnd=gnd,
+    in_p=_in_p,
+    in_n=_in_n,
+    out=isense_out,
+)

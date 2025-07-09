@@ -1,0 +1,90 @@
+"""
+Type: Gate Driver
+Description: L6387E - High voltage high and low side driver with integrated bootstrap diode for driving N-Channel Power MOSFETs or IGBTs up to 600V
+Features:
+- High voltage rail up to 600V
+- dV/dt immunity ±50V/nsec in full temperature range
+- Driver current capability: 400mA source, 650mA sink
+- Switching times 50/30 nsec rise/fall with 1nF load
+- CMOS/TTL Schmitt trigger inputs with hysteresis and pull down
+- Internal bootstrap diode
+- Outputs in phase with inputs
+- Interlocking function to prevent simultaneous turn-on
+"""
+
+load("@stdlib:zen/interfaces.zen", "Power", "Ground", "Gpio")
+
+Capacitor = Module("@stdlib:zen/generics/Capacitor.zen")
+
+# Configuration options
+ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
+Package = enum("DIP", "SOIC")
+
+implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"), optional=True)
+package = config("package", Package, default=Package("SOIC"))
+bootstrap_cap_value = config("bootstrap_cap_value", str, default="100nF 10%")
+
+# Component configuration mapping
+component_config = {
+    "symbols": {
+        Package("SOIC"): Symbol(library = "./L6387ED.kicad_sym"),
+    },
+    "footprints": {
+        Package("SOIC"): "Package_SOIC:SOIC-8_3.9x4.9mm_P1.27mm",
+    },
+    "mpns": {
+        Package("DIP"): "L6387E",
+        Package("SOIC"): "L6387ED",
+    },
+}
+
+# Properties
+properties = config("properties", dict, optional=True)
+
+# IO ports
+lin = io("lin", Gpio)            # Low side driver logic input
+hin = io("hin", Gpio)            # High side driver logic input
+vcc = io("vcc", Power)           # Low voltage power supply (max 17V)
+gnd = io("gnd", Ground)          # Ground
+LVG = io("LVG", Net)            # Low side driver output
+OUT = io("OUT", Net)             # High side driver floating reference (max 580V)
+HVG = io("HVG", Net)             # High side driver output
+VBOOT = io("VBOOT", Net)         # Bootstrap supply voltage (VBOOT-OUT ≤ 17V)
+
+# Get the appropriate symbol and configuration
+symbol = component_config["symbols"][package]
+footprint = component_config["footprints"][package]
+mpn = component_config["mpns"][package]
+
+# Create the component
+Component(
+    symbol=symbol,
+    name=mpn,
+    footprint=footprint,
+    mpn=mpn,
+    pins={
+        "LIN": lin.NET,
+        "HIN": hin.NET,
+        "VCC": vcc.NET,
+        "GND": gnd.NET,
+        "LVG": LVG, 
+        "OUT": OUT,
+        "HVG": HVG,
+        "VBOOT": VBOOT,
+    }
+)
+
+# Add passive components if configured
+if implementation_type == ImplementationType("WITH_PASSIVES"):
+    # Bootstrap capacitor
+    # Based on datasheet recommendation, CBOOT should be much larger than the external
+    # MOSFET gate capacitance. A typical value of 100nF is used.
+    # For a MOSFET with 30nC gate charge at 10V, the expected voltage drop would be ~300mV.
+    Capacitor(
+        name="C_BOOT",
+        value=bootstrap_cap_value,
+        voltage="50V",
+        package="0805",
+        P1=VBOOT,
+        P2=OUT
+    )

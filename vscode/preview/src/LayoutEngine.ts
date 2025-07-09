@@ -532,14 +532,10 @@ export class SchematicLayoutEngine {
 
       // Calculate node size based on symbol bounding box
       const scale = 10;
-      const nodeWidth = Math.max(
-        symbolInfo.bbox.w * scale,
-        this.config.nodeSizes.symbol.width
-      );
-      const nodeHeight = Math.max(
-        symbolInfo.bbox.h * scale,
-        this.config.nodeSizes.symbol.height
-      );
+      const nodeWidth = symbolInfo.bbox.w * scale;
+      const nodeHeight = symbolInfo.bbox.h * scale;
+
+      console.log("Node", instance_ref, "size:", nodeWidth, nodeHeight);
 
       // Get reference designator and value
       const refDes = instance.reference_designator;

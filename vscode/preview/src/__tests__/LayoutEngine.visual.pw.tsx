@@ -13,7 +13,7 @@ test.describe("Schematic Visual Tests", () => {
     exampleName: string
   ): Promise<Netlist> {
     const examplePath = path.join(examplesDir, exampleName);
-    const starFile = path.join(examplePath, `${exampleName}.star`);
+    const starFile = path.join(examplePath, `${exampleName}.zen`);
 
     if (!fs.existsSync(starFile)) {
       throw new Error(`Example file not found: ${starFile}`);

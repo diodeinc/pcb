@@ -1,0 +1,144 @@
+"""
+Type: Current Sense Amplifier
+Description: Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection.
+Features:
+- AEC-Q100 Qualified for Automotive Applications
+- Enhanced PWM Rejection
+- Wide Common-Mode Range: -4V to 80V
+- High Accuracy:
+  * Gain Error: 0.20% (Maximum)
+  * Offset Voltage: ±25µV (Maximum)
+- Four Gain Options:
+  * A1: 20 V/V - Best for high current sensing with larger shunt resistors
+  * A2: 50 V/V - Good balance between resolution and range
+  * A3: 100 V/V - Higher resolution for lower current sensing
+  * A4: 200 V/V - Highest resolution for very low current sensing
+- Two Package Options:
+  * SOIC-8 (D) - Better thermal performance
+  * TSSOP-8 (PW) - Smaller footprint
+- REF1/REF2 Configuration Options:
+  * GROUND: Both REF pins to GND for unidirectional sensing starting at 0V
+  * VS: Both REF pins to VS for unidirectional sensing starting at VS
+  * MIDSUPPLY: REF1 to VS, REF2 to GND for bidirectional sensing at VS/2 (default)
+  * EXTERNAL: Both REF pins tied together for external reference voltage
+  * CUSTOM: REF pins left unconnected for manual configuration
+"""
+
+load("@stdlib:zen/interfaces.zen", "Power", "Ground", "Analog")
+
+Capacitor = Module("@stdlib:zen/generics/Capacitor.zen")
+
+# Configuration options
+Gain = enum("A1", "A2", "A3", "A4")
+Package = enum("SOIC", "TSSOP")
+RefConfig = enum("GROUND", "VS", "MIDSUPPLY", "CUSTOM")
+ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
+
+# Component configuration
+component_config = {
+    "symbols": {
+        Package("SOIC"): {
+            Gain("A1"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1D"),
+            Gain("A2"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A2D"),
+            Gain("A3"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A3D"),
+            Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4D"),
+        },
+        Package("TSSOP"): {
+            Gain("A1"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A1PW"),
+            Gain("A2"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A2PW"),
+            Gain("A3"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A3PW"),
+            Gain("A4"): Symbol(library = "@kicad-symbols/Amplifier_Current.kicad_sym", name = "INA240A4PW"),
+        },
+    },
+    "footprints": {
+        Package("SOIC"): "eda/SOIC127P600X175-8N.kicad_mod",
+        Package("TSSOP"): "eda/SOP65P640X120-8N.kicad_mod",
+    },
+    "mpns": {
+        Package("SOIC"): {
+            Gain("A1"): "INA240A1QDRQ1",
+            Gain("A2"): "INA240A2QDRQ1",
+            Gain("A3"): "INA240A3QDRQ1",
+            Gain("A4"): "INA240A4QDRQ1",
+        },
+        Package("TSSOP"): {
+            Gain("A1"): "INA240A1QPWRQ1",
+            Gain("A2"): "INA240A2QPWRQ1",
+            Gain("A3"): "INA240A3QPWRQ1",
+            Gain("A4"): "INA240A4QPWRQ1",
+        },
+    },
+}
+
+gain = config("gain", Gain, default=Gain("A2"))
+package = config("package", Package, default=Package("TSSOP"))
+ref_config = config("ref_config", RefConfig, default=RefConfig("MIDSUPPLY"))
+implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"))
+
+# Properties
+properties = config("properties", dict, optional = True)
+
+# IO ports
+power = io("power", Power)
+gnd = io("gnd", Ground)
+in_p = io("in_p", Analog)
+in_n = io("in_n", Analog)
+out = io("out", Analog)
+
+ref_pins = {
+    "ref1": gnd,
+    "ref2": gnd,
+}
+
+# Configure REF pins based on selected configuration
+if ref_config == RefConfig("GROUND"):
+    # Ground referenced output - both REF pins to ground
+    # Best for unidirectional sensing with output starting at ground
+    ref_pins["ref1"] = gnd
+    ref_pins["ref2"] = gnd
+
+elif ref_config == RefConfig("VS"):
+    # VS referenced output - both REF pins to supply
+    # Useful when you need output to start at VS and go down
+    ref_pins["ref1"] = power
+    ref_pins["ref2"] = power
+
+elif ref_config == RefConfig("MIDSUPPLY"):
+    # Midsupply voltage output - REF1 to VS, REF2 to GND
+    # Creates VS/2 reference for bidirectional sensing
+    ref_pins["ref1"] = power
+    ref_pins["ref2"] = gnd
+
+elif ref_config == RefConfig("CUSTOM"):
+    # Custom configuration - REF1 and REF2 left unconnected for user configuration
+    # User has full control over REF pin connections
+    REF1 = io("REF1", Net)
+    REF2 = io("REF2", Net)
+    ref_pins["ref1"] = REF1
+    ref_pins["ref2"] = REF2
+
+# Get the appropriate symbol for the selected gain/package
+symbol = component_config["symbols"][package][gain]
+
+# Create the component
+Component(
+    name=component_config["mpns"][package][gain],
+    symbol = symbol,
+    footprint=component_config["footprints"][package],
+    mpn=component_config["mpns"][package][gain],
+    pins={
+        "+": in_p.NET,
+        "-": in_n.NET,
+        "GND": gnd.NET,
+        "V+": power.NET,
+        "REF2": ref_pins["ref2"].NET,
+        "REF1": ref_pins["ref1"].NET,
+        "8": out.NET,
+    }
+)
+
+# Add bypass capacitor if not raw component
+if implementation_type == ImplementationType("WITH_PASSIVES"):
+    # 100nF ceramic capacitor recommended for power supply bypassing
+    # Place as close as possible to VS and GND pins
+    Capacitor(name="C1", value="100nF 10%", package="0402", P1=power.NET, P2=gnd.NET)

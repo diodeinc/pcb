@@ -1,0 +1,269 @@
+load("@stdlib:zen/interfaces.zen", "Gpio", "Analog", "Power", "Ground", "Pwm")
+
+Capacitor = Module("@stdlib:zen/generics/Capacitor.zen")
+Resistor = Module("@stdlib:zen/generics/Resistor.zen")
+HighSideCurrentSense = Module("../HighSideCurrentSense/HighSideCurrentSense.zen")
+L6387E = Module("../L6387E/L6387E.zen")
+
+
+POWER_GATE_DRIVE = io("POWER_GATE_DRIVE", Power)
+POWER_PHASE = io("POWER_PHASE", Power)
+POWER_3V3 = io("POWER_3V3", Power)
+PWM_LOW = io("PWM_LOW", Pwm)
+PWM_HIGH = io("PWM_HIGH", Pwm)
+ISENSE = io("ISENSE", Analog)
+PHASE_BEMF = io("PHASE_BEMF", Analog)
+PHASE_OUT = io("PHASE_OUT", Net)
+P_GROUND = io("P_GROUND", Ground)
+D_GROUND = io("D_GROUND", Ground)
+GPIO_BEMF = io("GPIO_BEMF", Gpio)
+RUN_ENABLE = io("RUN_ENABLE", Gpio)
+N_RUN_ENABLE = io("N_RUN_ENABLE", Gpio)
+
+power_phase_post_shunt = Power("power_phase_post_shunt")
+vboot_net = Net("vboot_net")
+high_side_gate_p1 = Net("high_side_gate_p1")
+high_side_gate_p2 = Net("high_side_gate_p2") 
+low_side_gate_p1 = Net("low_side_gate_p1")
+low_side_gate_p2 = Net("low_side_gate_p2")
+
+
+# Gate Driver
+L6387E(
+    name = "L6387ED",
+    package = "SOIC",
+    bootstrap_cap_value = "1uF 10%",
+    vcc = POWER_GATE_DRIVE,
+    gnd = P_GROUND,
+    VBOOT = vboot_net,
+    OUT = PHASE_OUT,
+    lin = PWM_LOW,
+    hin = PWM_HIGH,
+    LVG = low_side_gate_p1,
+    HVG = high_side_gate_p1,
+)
+
+Component(
+    name = "D_BOOTSTRAP",
+    symbol = Symbol(library = "./B05100W-TP.kicad_sym"),
+    footprint = "Diode_SMD:D_SOD-123",
+    properties = {
+        "mpn": "B05100W",
+        "description": "Schottky Diode",
+        "voltage": "100V",
+        "current": "1A",
+    },
+    pins = {
+        "A": POWER_GATE_DRIVE.NET,
+        "K": vboot_net,
+    }
+)
+
+Capacitor(
+    name = "C_VCC",
+    value = "470nF 10%",
+    voltage = "25V",
+    package = "0402",
+    P1 = POWER_GATE_DRIVE.NET,
+    P2 = P_GROUND.NET,
+)
+
+Capacitor(
+    name = "C_HIGH_IN",
+    value = "100pF 10%",
+    voltage = "25V",
+    package = "0402",
+    P1 = PWM_HIGH.NET,
+    P2 = P_GROUND.NET,
+)
+
+Capacitor(
+    name = "C_LOW_IN",
+    value = "100pF 10%",
+    voltage = "25V", 
+    package = "0402",
+    P1 = PWM_LOW.NET,
+    P2 = P_GROUND.NET,
+)
+
+# Fets
+
+HighSideCurrentSense(
+    name = "R_SHUNT",
+    ref_config = "MIDSUPPLY",
+    shunt_value = "0.010ohm 1%",
+    shunt_package = "2512",
+    shunt_mpn = "WSLP2010R0100FEA",
+    power_bus_in = POWER_PHASE,
+    power_bus_out = power_phase_post_shunt,
+    power_3v3 = POWER_3V3,
+    isense_out = ISENSE,
+    gnd = D_GROUND,
+)
+
+Component(
+    name = "STL100N8F7-high",
+    symbol = Symbol(library = "./STL100N8F7.kicad_sym"),
+    footprint = "Package_TO_SOT_SMD:TO-252-2",
+    properties = {
+        "mpn": "STL100N8F7",
+        "description": "N-Channel MOSFET",
+        "voltage": "80V",
+        "current": "100A",
+        "rds_on": "7.5mOhm",
+    },
+    pins = {
+        "G": high_side_gate_p2,
+        "D_1": power_phase_post_shunt.NET,
+        "D_2": power_phase_post_shunt.NET,
+        "D_3": power_phase_post_shunt.NET,
+        "D_4": power_phase_post_shunt.NET,
+        "D_5": power_phase_post_shunt.NET,
+        "S_1": PHASE_OUT,
+        "S_2": PHASE_OUT,
+        "S_3": PHASE_OUT,
+    }
+)
+
+Component(
+    name = "STL100N8F7-low",
+    symbol = Symbol(library = "./STL100N8F7.kicad_sym"),
+    footprint = "Package_TO_SOT_SMD:TO-252-2",
+    properties = {
+        "mpn": "STL100N8F7",
+        "description": "N-Channel MOSFET",
+        "voltage": "80V",
+        "current": "100A",
+        "rds_on": "7.5mOhm",
+    },
+    pins = {
+        "G": low_side_gate_p2,
+        "D_1": PHASE_OUT,
+        "D_2": PHASE_OUT,
+        "D_3": PHASE_OUT,
+        "D_4": PHASE_OUT,
+        "D_5": PHASE_OUT,
+        "S_1": P_GROUND.NET,
+        "S_2": P_GROUND.NET,
+        "S_3": P_GROUND.NET,
+    }
+)
+
+# Connecting Components 
+
+Resistor(
+    name = "R_HIGH_GATE",
+    value = "33ohms 1%",
+    package = "0402",
+    P1 = high_side_gate_p1,
+    P2 = high_side_gate_p2,
+)
+
+Resistor(
+    name = "R_LOW_GATE",
+    value = "33ohms 1%", 
+    package = "0402",
+    P1 = low_side_gate_p1,
+    P2 = low_side_gate_p2,
+)
+
+# Gate-Source discharge resistors
+Resistor(
+    name = "R_HIGH_GS",
+    value = "10kohm 1%",
+    package = "0402",
+    P1 = high_side_gate_p2,
+    P2 = PHASE_OUT,
+)
+
+Resistor(
+    name = "R_LOW_GS", 
+    value = "10kohm 1%",
+    package = "0402",
+    P1 = low_side_gate_p2,
+    P2 = P_GROUND.NET,
+)
+
+phase_r_out = Net("phase_r_out")
+
+Resistor(
+    name = "R_OUT",
+    value = "1ohm 1%",
+    package = "0603",
+    P1 = PHASE_OUT,
+    P2 = phase_r_out,
+)
+
+Capacitor(
+    name = "C_OUT",
+    value = "10nF 1%",
+    voltage = "100V",
+    package = "0603",
+    P1 = phase_r_out,
+    P2 = P_GROUND.NET,
+)
+
+
+Capacitor(
+    name = "C_IN",
+    value = "10uF 20%",
+    voltage = "100V",
+    package = "1210",
+    P1 = POWER_PHASE.NET,
+    P2 = P_GROUND.NET,
+    properties = {
+        "mpn": "GMC32X7S106K100NT",
+    }
+)
+
+# Bemf
+
+Component(
+    name = "bemf_d1",
+    symbol = Symbol(library = "./BAT30KFILM.kicad_sym"),
+    footprint = "Diode_SMD:D_SOD-123",
+    properties = {
+        "mpn": "BAT30KFILM",
+        "description": "Schottky Diode",
+        "voltage": "30V",
+        "current": "200mA",
+    },
+    pins = {
+        "A": PHASE_BEMF.NET,
+        "K": POWER_3V3.NET,
+    }
+)
+
+bemf_r_net = Net("bemf_r_net")
+
+Resistor(
+    name = "bemf_r_top",
+    value = "120kohm 1%",
+    package = "0402",
+    P1 = PHASE_OUT,
+    P2 = PHASE_BEMF.NET,
+)
+
+Resistor(
+    name = "bemf_r_bottom",
+    value = "4.7kohm 1%",
+    package = "0402",
+    P1 = bemf_r_net,
+    P2 = PHASE_BEMF.NET,
+)
+
+Component(
+    name = "bemf_d2",
+    symbol = Symbol(library = "./BAT30KFILM.kicad_sym"),
+    footprint = "Diode_SMD:D_SOD-123",
+    properties = {
+        "mpn": "BAT30KFILM",
+        "description": "Schottky Diode",
+        "voltage": "30V",
+        "current": "200mA",
+    },
+    pins = {
+        "A": bemf_r_net,
+        "K": GPIO_BEMF.NET,
+    }
+)
