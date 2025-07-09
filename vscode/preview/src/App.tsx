@@ -284,8 +284,12 @@ function App() {
       // Browser environment - use demo data
       setIsLoading(false);
       setNetlistData(demoData as any);
-      setCurrentFile("/Users/lenny/Downloads/PI0009 3/PI0009.star");
-      setSelectedModule("/Users/lenny/Downloads/PI0009 3/PI0009.star:<root>");
+      setCurrentFile(
+        "/Users/lenny/code/diode/pcb/examples/RCFilter/RCFilter.star"
+      );
+      setSelectedModule(
+        "/Users/lenny/code/diode/pcb/examples/RCFilter/RCFilter.star:<root>"
+      );
 
       return () => {};
     }

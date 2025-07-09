@@ -10,7 +10,7 @@ description = "EDA tool integration for PCB design"
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
-sexp = { workspace = true }
+pcb-sexpr = { workspace = true }
 
 [dev-dependencies]
 env_logger = { workspace = true }

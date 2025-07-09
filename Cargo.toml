@@ -26,7 +26,7 @@ pcb-zen = { path = "crates/pcb-zen" }
 pcb-zen-core = { path = "crates/pcb-zen-core", default-features = true }
 pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
-pcb-sexpr = { path = "crates/pcb-sexpr" }
+pcb-sexpr = { path = "crates/pcb-sexpr", features = ["serde"] }
 pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
 
 anyhow = "1.0"
@@ -80,7 +80,6 @@ reqwest = { version = "0.12.19", features = ["blocking", "json"] }
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
 serial_test = "3.0"
-sexp = "1.1.4"
 strip-ansi-escapes = "0.2"
 tar = "0.4"
 terminal_size = "0.4.0"

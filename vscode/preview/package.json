@@ -17,7 +17,6 @@
     "canvas": "^2.11.2",
     "elkjs": "^0.10.0",
     "jspdf": "^3.0.1",
-    "kicanvas": "theacodes/kicanvas#e3327e5e",
     "pdfkit": "^0.16.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -32,7 +31,8 @@
     "test": "craco test --watchAll=false",
     "test:watch": "craco test",
     "eject": "react-scripts eject",
-    "render-symbol": "ts-node --project scripts/tsconfig.json scripts/render-kicad-sym.ts"
+    "render-symbol": "ts-node --project scripts/tsconfig.json scripts/render-kicad-sym.ts",
+    "test-ct": "playwright test -c playwright-ct.config.ts"
   },
   "eslintConfig": {
     "extends": [
@@ -54,6 +54,8 @@
   },
   "devDependencies": {
     "@craco/craco": "^7.1.0",
+    "@playwright/experimental-ct-react": "^1.53.2",
+    "@playwright/test": "^1.53.2",
     "@types/lodash": "^4.17.16",
     "@types/puppeteer": "^7.0.4",
     "esbuild": "^0.25.4",

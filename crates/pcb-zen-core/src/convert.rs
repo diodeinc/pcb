@@ -389,6 +389,17 @@ impl ModuleConverter {
                             AttributeValue::String(path.to_string()),
                         );
                     }
+                    // Add the raw s-expression if available
+                    let raw_sexp = symbol.raw_sexp();
+                    if !raw_sexp.is_none() {
+                        // The raw_sexp is stored as a string value in the SymbolValue
+                        if let Some(sexp_string) = raw_sexp.to_value().unpack_str() {
+                            props_map.insert(
+                                "__symbol_value".to_string(),
+                                AttributeValue::String(sexp_string.to_string()),
+                            );
+                        }
+                    }
                 }
             }
 
@@ -427,6 +438,40 @@ impl ModuleConverter {
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
             comp_inst.add_attribute(key.clone(), to_attribute_value(*val)?);
+        }
+
+        // Add symbol information if the component has a symbol
+        let symbol_value = component.symbol();
+        if !symbol_value.is_none() {
+            if let Some(symbol) =
+                symbol_value.downcast_ref::<crate::lang::symbol::FrozenSymbolValue>()
+            {
+                // Add symbol_name for backwards compatibility
+                comp_inst.add_attribute(
+                    "symbol_name".to_string(),
+                    AttributeValue::String(symbol.name().to_string()),
+                );
+
+                // Add symbol_path for backwards compatibility
+                if let Some(path) = symbol.source_path() {
+                    comp_inst.add_attribute(
+                        "symbol_path".to_string(),
+                        AttributeValue::String(path.to_string()),
+                    );
+                }
+
+                // Add the raw s-expression if available
+                let raw_sexp = symbol.raw_sexp();
+                if !raw_sexp.is_none() {
+                    // The raw_sexp is stored as a string value in the SymbolValue
+                    if let Some(sexp_string) = raw_sexp.to_value().unpack_str() {
+                        comp_inst.add_attribute(
+                            "__symbol_value".to_string(),
+                            AttributeValue::String(sexp_string.to_string()),
+                        );
+                    }
+                }
+            }
         }
 
         comp_inst.set_reference_designator(self.next_refdes(component.prefix()));

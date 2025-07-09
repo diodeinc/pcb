@@ -49,9 +49,8 @@ export interface Instance {
 export interface Netlist {
   instances: Record<string, Instance>;
   nets: Record<string, Net>;
-
-  // Mapping of symbol_path to contents of the symbol file
-  symbols: Record<string, string>;
+  root_ref: string;
+  symbols?: Record<string, string>;
 }
 
 /**

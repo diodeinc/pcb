@@ -33,6 +33,7 @@ pub struct SymbolValueGen<V> {
     name: String,
     pins: SmallMap<String, V>,   // pad name -> signal name
     source_path: Option<String>, // Absolute path to the symbol library (if loaded from file)
+    raw_sexp: V, // Raw s-expression of the symbol (if loaded from file, otherwise None)
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for SymbolValueGen<V> {
@@ -98,6 +99,10 @@ impl<'v, V: ValueLike<'v>> SymbolValueGen<V> {
     pub fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()
     }
+
+    pub fn raw_sexp(&self) -> &V {
+        &self.raw_sexp
+    }
 }
 
 impl<'v, V: ValueLike<'v>> DeepCopyToHeap for SymbolValueGen<V> {
@@ -115,6 +120,7 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for SymbolValueGen<V> {
             name: self.name.clone(),
             pins,
             source_path: self.source_path.clone(),
+            raw_sexp: copy_value(self.raw_sexp.to_value(), dst)?,
         }))
     }
 }
@@ -228,6 +234,7 @@ where
                     name,
                     pins,
                     source_path: None,  // No source path for manually defined symbols
+                    raw_sexp: Value::new_none(),
                 });
 
                 Ok(symbol)
@@ -310,10 +317,20 @@ where
                     .to_string_lossy()
                     .into_owned();
 
+                // Store the raw s-expression if available
+                let raw_sexp_value = if let Some(raw_sexp) = selected_symbol.raw_sexp() {
+                    // Convert Sexpr to string and store as a Starlark string
+                    let sexp_string = pcb_sexpr::format_sexpr(raw_sexp, 0);
+                    eval_ctx.heap().alloc_str(&sexp_string).to_value()
+                } else {
+                    Value::new_none()
+                };
+
                 let symbol = eval_ctx.heap().alloc_complex(SymbolValue {
                     name: selected_symbol.name.clone(),
                     pins,
                     source_path: Some(absolute_path),
+                    raw_sexp: raw_sexp_value,
                 });
 
                 Ok(symbol)

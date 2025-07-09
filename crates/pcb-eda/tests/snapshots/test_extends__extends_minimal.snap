@@ -35,3 +35,346 @@ properties:
   Reference: U
   Value: BaseAmplifier
   ki_description: Generic operational amplifier
+raw_sexp:
+  List:
+    - Symbol: symbol
+    - String: MinimalExtends
+    - List:
+        - Symbol: in_bom
+        - Symbol: "yes"
+    - List:
+        - Symbol: property
+        - String: Reference
+        - String: U
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+    - List:
+        - Symbol: property
+        - String: Value
+        - String: BaseAmplifier
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+    - List:
+        - Symbol: property
+        - String: Footprint
+        - String: SOIC-8
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: property
+        - String: Datasheet
+        - String: "https://example.com/base_datasheet.pdf"
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: property
+        - String: Manufacturer_Name
+        - String: Generic Corp
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: property
+        - String: Manufacturer_Part_Number
+        - String: BASE123
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: property
+        - String: ki_description
+        - String: Generic operational amplifier
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: property
+        - String: Mouser Part Number
+        - String: 123-BASE123
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: property
+        - String: Mouser Price/Stock
+        - String: "https://www.mouser.com/ProductDetail/123-BASE123"
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+        - List:
+            - Symbol: effects
+            - List:
+                - Symbol: font
+                - List:
+                    - Symbol: size
+                    - Symbol: "1.27"
+                    - Symbol: "1.27"
+            - Symbol: hide
+    - List:
+        - Symbol: symbol
+        - String: BaseAmplifier_0_1
+        - List:
+            - Symbol: pin
+            - Symbol: power_in
+            - Symbol: line
+            - List:
+                - Symbol: at
+                - Symbol: "-7.62"
+                - Symbol: "-2.54"
+                - Symbol: "0"
+            - List:
+                - Symbol: length
+                - Symbol: "3.81"
+            - List:
+                - Symbol: name
+                - String: V-
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+            - List:
+                - Symbol: number
+                - String: "4"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+        - List:
+            - Symbol: pin
+            - Symbol: power_in
+            - Symbol: line
+            - List:
+                - Symbol: at
+                - Symbol: "-7.62"
+                - Symbol: "2.54"
+                - Symbol: "0"
+            - List:
+                - Symbol: length
+                - Symbol: "3.81"
+            - List:
+                - Symbol: name
+                - String: V+
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+            - List:
+                - Symbol: number
+                - String: "8"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+    - List:
+        - Symbol: symbol
+        - String: BaseAmplifier_1_1
+        - List:
+            - Symbol: pin
+            - Symbol: output
+            - Symbol: line
+            - List:
+                - Symbol: at
+                - Symbol: "7.62"
+                - Symbol: "0"
+                - Symbol: "180"
+            - List:
+                - Symbol: length
+                - Symbol: "2.54"
+            - List:
+                - Symbol: name
+                - String: "~"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+            - List:
+                - Symbol: number
+                - String: "1"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+        - List:
+            - Symbol: pin
+            - Symbol: input
+            - Symbol: line
+            - List:
+                - Symbol: at
+                - Symbol: "-7.62"
+                - Symbol: "-2.54"
+                - Symbol: "0"
+            - List:
+                - Symbol: length
+                - Symbol: "2.54"
+            - List:
+                - Symbol: name
+                - String: "-"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+            - List:
+                - Symbol: number
+                - String: "2"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+        - List:
+            - Symbol: pin
+            - Symbol: input
+            - Symbol: line
+            - List:
+                - Symbol: at
+                - Symbol: "-7.62"
+                - Symbol: "2.54"
+                - Symbol: "0"
+            - List:
+                - Symbol: length
+                - Symbol: "2.54"
+            - List:
+                - Symbol: name
+                - String: +
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"
+            - List:
+                - Symbol: number
+                - String: "3"
+                - List:
+                    - Symbol: effects
+                    - List:
+                        - Symbol: font
+                        - List:
+                            - Symbol: size
+                            - Symbol: "1.27"
+                            - Symbol: "1.27"

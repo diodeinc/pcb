@@ -283,6 +283,9 @@ pub struct Schematic {
 
     /// Root module reference.
     pub root_ref: Option<InstanceRef>,
+
+    /// Symbol library - maps symbol paths to their s-expression content
+    pub symbols: HashMap<String, String>,
 }
 
 impl Schematic {

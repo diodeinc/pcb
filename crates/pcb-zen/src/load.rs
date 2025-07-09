@@ -181,23 +181,50 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
         if let Some(target) = lookup_package_alias(workspace_root, package) {
             // Build new load string by appending any extra path the caller asked for.
             let mut new_spec_str = target.clone();
-            if !path.as_os_str().is_empty() {
-                new_spec_str = format!(
-                    "{}/{}",
-                    new_spec_str.trim_end_matches('/'),
-                    path.to_string_lossy()
-                );
-            }
 
-            // If caller explicitly specified a tag (non-default) we warn and ignore –
-            // alias definitions should embed the desired tag.
-            if tag != DEFAULT_PKG_TAG {
-                log::debug!("ignoring tag '{tag}' on alias '{package}'");
-            }
+            // Check if the alias target is a load spec
+            if let Some(mut new_spec) = parse_load_spec(&new_spec_str) {
+                // If caller explicitly specified a tag (non-default), override the alias's tag
+                if tag != DEFAULT_PKG_TAG {
+                    match &mut new_spec {
+                        LoadSpec::Package { tag: alias_tag, .. } => {
+                            *alias_tag = tag.clone();
+                        }
+                        LoadSpec::Github { rev: alias_rev, .. } => {
+                            *alias_rev = tag.clone();
+                        }
+                        LoadSpec::Gitlab { rev: alias_rev, .. } => {
+                            *alias_rev = tag.clone();
+                        }
+                    }
+                }
 
-            // Check if the alias target is a local path or a load spec
-            if let Some(new_spec) = parse_load_spec(&new_spec_str) {
-                // It's a load spec (starts with @), recurse to resolve it
+                // Now append the path if needed
+                match &mut new_spec {
+                    LoadSpec::Package {
+                        path: alias_path, ..
+                    } => {
+                        if !path.as_os_str().is_empty() {
+                            *alias_path = alias_path.join(path);
+                        }
+                    }
+                    LoadSpec::Github {
+                        path: alias_path, ..
+                    } => {
+                        if !path.as_os_str().is_empty() {
+                            *alias_path = alias_path.join(path);
+                        }
+                    }
+                    LoadSpec::Gitlab {
+                        path: alias_path, ..
+                    } => {
+                        if !path.as_os_str().is_empty() {
+                            *alias_path = alias_path.join(path);
+                        }
+                    }
+                }
+
+                // Recurse to resolve the modified spec
                 let resolved_path = materialise_load(&new_spec, workspace_root)?;
 
                 // Attempt to expose in .pcb folder via symlink if we have a workspace.
@@ -209,6 +236,20 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
 
                 return Ok(resolved_path);
             } else {
+                // It's a local path
+                if !path.as_os_str().is_empty() {
+                    new_spec_str = format!(
+                        "{}/{}",
+                        new_spec_str.trim_end_matches('/'),
+                        path.to_string_lossy()
+                    );
+                }
+
+                // If caller explicitly specified a tag (non-default) we warn since local paths don't support tags
+                if tag != DEFAULT_PKG_TAG {
+                    log::warn!("ignoring tag '{tag}' on local alias '{package}' - local paths don't support tags");
+                }
+
                 // It's a local path - resolve it relative to the workspace root
                 if let Some(root) = workspace_root {
                     let local_path = if Path::new(&new_spec_str).is_absolute() {
@@ -1224,6 +1265,44 @@ test_alias = "@github/test/repo:main"
 
         // Verify both calls returned the same HashMap (from cache)
         assert_eq!(aliases_real, aliases_link);
+    }
+
+    #[test]
+    fn alias_with_custom_tag_override() {
+        // Test that custom tags override the default alias tags
+
+        // Test 1: Package alias with tag override
+        let spec = parse_load_spec("@stdlib:zen/math.zen");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Package {
+                package: "stdlib".to_string(),
+                tag: "zen".to_string(),
+                path: PathBuf::from("math.zen"),
+            })
+        );
+
+        // Test 2: Verify that default tag is used when not specified
+        let spec = parse_load_spec("@stdlib/math.zen");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Package {
+                package: "stdlib".to_string(),
+                tag: DEFAULT_PKG_TAG.to_string(),
+                path: PathBuf::from("math.zen"),
+            })
+        );
+
+        // Test 3: KiCad symbols with custom version
+        let spec = parse_load_spec("@kicad-symbols:8.0.0/Device.kicad_sym");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Package {
+                package: "kicad-symbols".to_string(),
+                tag: "8.0.0".to_string(),
+                path: PathBuf::from("Device.kicad_sym"),
+            })
+        );
     }
 }
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import ReactFlowSchematicViewer from "./ReactFlowSchematicViewer";
 import "./ReactFlowSchematicViewer.css";
-import { Netlist } from "../types/NetlistTypes";
+import { type Netlist } from "../types/NetlistTypes";
 import "@vscode-elements/elements/dist/bundled.js";
 
 // Adjust styles for VSCode-like appearance

@@ -39,7 +39,7 @@ import type { Netlist } from "../types/NetlistTypes";
 import { debounce } from "lodash";
 import { Download, Loader, Settings } from "react-feather";
 import { renderKicadSymbol, getKicadSymbolInfo } from "../renderer/kicad_sym";
-import { Color } from "kicanvas/base/color";
+import { Color } from "../third_party/kicanvas/base/color";
 
 type SelectionState = {
   selectedNetId: string | null;
@@ -1229,7 +1229,7 @@ function getVSCodeColor(varName: string, fallback: string): Color {
 
 // Utility to build a SchematicTheme from VSCode theme variables
 function getVSCodeSchematicTheme(): Partial<
-  import("kicanvas/kicad/theme").SchematicTheme
+  import("../third_party/kicanvas/kicad/theme").SchematicTheme
 > {
   return {
     background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
@@ -1352,19 +1352,13 @@ const SymbolNode = React.memo(
       });
     const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
 
-    // Get symbol properties from node data
-    const symbolPath = data.properties?.symbolPath as string;
-    const symbolName = data.properties?.symbolName as string;
+    // Get netlist from node data
     const netlist = (data as any).netlist as Netlist;
 
     useEffect(() => {
       const renderSymbol = async () => {
-        if (
-          !canvasRef.current ||
-          !symbolPath ||
-          !netlist?.symbols?.[symbolPath]
-        ) {
-          setRenderError("Symbol data not available");
+        if (!canvasRef.current) {
+          setRenderError("Canvas not available");
           setIsRendering(false);
           return;
         }
@@ -1372,10 +1366,34 @@ const SymbolNode = React.memo(
         try {
           setIsRendering(true);
           const canvas = canvasRef.current;
-          const symbolContent = netlist.symbols[symbolPath];
+
+          // Get the symbol content from the __symbol_value attribute
+          const instance = netlist.instances[data.id];
+          const symbolValueAttr = instance?.attributes?.__symbol_value;
+
+          // Extract the string value from AttributeValue
+          let symbolContent: string | undefined;
+          if (typeof symbolValueAttr === "string") {
+            symbolContent = symbolValueAttr;
+          } else if (
+            symbolValueAttr &&
+            typeof symbolValueAttr === "object" &&
+            "String" in symbolValueAttr
+          ) {
+            symbolContent = symbolValueAttr.String;
+          }
+
+          if (!symbolContent) {
+            setRenderError(
+              "Symbol content not found in __symbol_value attribute"
+            );
+            setIsRendering(false);
+            return;
+          }
 
           // First, get the symbol info to know its natural size
-          const symbolInfo = getKicadSymbolInfo(symbolContent, symbolName, {
+          // We don't need a symbol name anymore since the content is self-contained
+          const symbolInfo = getKicadSymbolInfo(symbolContent, undefined, {
             unit: 1,
             bodyStyle: 1,
             tightBounds: false,
@@ -1419,20 +1437,11 @@ const SymbolNode = React.memo(
           const scaleY = availableHeight / symbolHeightWithPadding;
           const scale = Math.min(scaleX, scaleY);
 
-          console.log("Symbol rendering debug:", {
-            nodeWidth,
-            nodeHeight,
-            symbolBBox: symbolInfo.bbox,
-            scaleX,
-            scaleY,
-            finalScale: scale,
-          });
-
           // Get theme from VSCode CSS variables
           const vscodeTheme = getVSCodeSchematicTheme();
 
           // Render the symbol at the calculated scale
-          await renderKicadSymbol(canvas, symbolContent, symbolName, {
+          await renderKicadSymbol(canvas, symbolContent, undefined, {
             scale: scale,
             padding: symbolPadding, // Zero padding
             showPinNames: false,
@@ -1457,14 +1466,7 @@ const SymbolNode = React.memo(
       };
 
       renderSymbol();
-    }, [
-      symbolPath,
-      symbolName,
-      netlist.symbols.symbolPath,
-      data.width,
-      data.height,
-      netlist.symbols,
-    ]);
+    }, [data.width, data.height, data.id, netlist.instances]);
 
     return (
       <div
@@ -1472,9 +1474,6 @@ const SymbolNode = React.memo(
         style={{
           width: data.width,
           height: data.height,
-          backgroundColor: "transparent",
-          border: "none",
-          cursor: "default",
           pointerEvents: "none",
           position: "relative",
           opacity: opacity,
@@ -1609,21 +1608,17 @@ const SymbolNode = React.memo(
     );
   },
   (prevProps, nextProps) => {
-    // Custom comparison function for React.memo
     // Only re-render if the symbol data or dimensions change
     return (
-      prevProps.data.properties?.symbolPath ===
-        nextProps.data.properties?.symbolPath &&
-      prevProps.data.properties?.symbolName ===
-        nextProps.data.properties?.symbolName &&
       prevProps.data.width === nextProps.data.width &&
       prevProps.data.height === nextProps.data.height &&
-      // Also check if the opacity should change due to selection state
+      prevProps.data.id === nextProps.data.id &&
+      // Check if selection state changed
       prevProps.data.selectionState?.selectedNetId ===
         nextProps.data.selectionState?.selectedNetId &&
       prevProps.data.selectionState?.hoveredNetId ===
         nextProps.data.selectionState?.hoveredNetId &&
-      // Check if connected ports' netIds are the same
+      // Check if connected ports changed
       JSON.stringify(prevProps.data.ports?.map((p) => p.netId)) ===
         JSON.stringify(nextProps.data.ports?.map((p) => p.netId))
     );

@@ -51,6 +51,7 @@ zip = { workspace = true }
 
 pcb-eda = { workspace = true }
 pcb-sch = { workspace = true }
+pcb-sexpr = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

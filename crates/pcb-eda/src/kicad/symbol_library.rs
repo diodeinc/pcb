@@ -1,7 +1,8 @@
 use crate::Symbol;
 use anyhow::Result;
-use sexp::{parse, Atom, Sexp};
+use pcb_sexpr::{parse, Sexpr};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -15,31 +16,62 @@ pub struct KicadSymbolLibrary {
 impl KicadSymbolLibrary {
     /// Parse a KiCad symbol library from a string
     pub fn from_string(content: &str) -> Result<Self> {
-        let sexp = parse(content)?;
-        let mut symbols = Vec::new();
+        // Parse with raw s-expressions
+        let mut symbol_pairs = parse_with_raw_sexprs(content)?;
 
-        match sexp {
-            Sexp::List(kicad_symbol_lib) => {
-                // Iterate through all items in the library
-                for item in kicad_symbol_lib {
-                    if let Sexp::List(ref symbol_list) = item {
-                        if let Some(Sexp::Atom(Atom::S(ref sym))) = symbol_list.first() {
-                            if sym == "symbol" {
-                                // Parse this symbol
-                                match parse_symbol(symbol_list) {
-                                    Ok(symbol) => symbols.push(symbol),
-                                    Err(e) => {
-                                        // Log error but continue parsing other symbols
-                                        eprintln!("Warning: Failed to parse symbol: {e}");
-                                    }
-                                }
-                            }
-                        }
+        // Create a map for extends resolution
+        let mut symbol_map: HashMap<String, (usize, Sexpr)> = HashMap::new();
+        for (idx, (symbol, sexp)) in symbol_pairs.iter().enumerate() {
+            symbol_map.insert(symbol.name().to_string(), (idx, sexp.clone()));
+        }
+
+        // Build dependency order for extends resolution
+        let mut resolved: HashSet<String> = HashSet::new();
+        let mut to_process: Vec<usize> = Vec::new();
+
+        // First, add all symbols without extends
+        for (idx, (symbol, _)) in symbol_pairs.iter().enumerate() {
+            if symbol.extends().is_none() {
+                resolved.insert(symbol.name().to_string());
+                to_process.push(idx);
+            }
+        }
+
+        // Then, iteratively add symbols whose parent has been resolved
+        let mut made_progress = true;
+        while made_progress {
+            made_progress = false;
+            for (idx, (symbol, _)) in symbol_pairs.iter().enumerate() {
+                if let Some(parent_name) = symbol.extends() {
+                    if resolved.contains(parent_name) && !resolved.contains(symbol.name()) {
+                        resolved.insert(symbol.name().to_string());
+                        to_process.push(idx);
+                        made_progress = true;
                     }
                 }
             }
-            _ => return Err(anyhow::anyhow!("Invalid KiCad symbol library format")),
         }
+
+        // Process symbols in dependency order
+        for &idx in &to_process {
+            let (symbol, _) = &symbol_pairs[idx];
+            if let Some(parent_name) = symbol.extends() {
+                // Find the parent's already-merged sexp
+                let parent_sexp = symbol_pairs
+                    .iter()
+                    .find(|(s, _)| s.name() == parent_name)
+                    .map(|(_, sexp)| sexp.clone())
+                    .unwrap_or_else(|| symbol_pairs[idx].1.clone());
+
+                let (_, child_sexp) = &symbol_pairs[idx].clone();
+                let merged_sexp = merge_symbol_sexprs(&parent_sexp, child_sexp);
+                symbol_pairs[idx].1 = merged_sexp.clone();
+                symbol_pairs[idx].0.raw_sexp = Some(merged_sexp);
+            }
+        }
+
+        // Extract just the symbols
+        let mut symbols: Vec<KicadSymbol> = symbol_pairs.into_iter().map(|(s, _)| s).collect();
 
         // Resolve extends references
         resolve_extends(&mut symbols)?;
@@ -72,6 +104,141 @@ impl KicadSymbolLibrary {
     pub fn into_symbols(self) -> Vec<Symbol> {
         self.symbols.into_iter().map(|s| s.into()).collect()
     }
+}
+
+/// Merge two symbol S-expressions, with child overriding parent
+fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
+    // Both should be lists starting with "symbol"
+    let parent_list = match parent_sexp {
+        Sexpr::List(items) => items,
+        _ => return child_sexp.clone(),
+    };
+
+    let child_list = match child_sexp {
+        Sexpr::List(items) => items,
+        _ => return child_sexp.clone(),
+    };
+
+    // Start with parent items, but skip the "symbol" and name
+    let mut merged_items = vec![
+        Sexpr::Symbol("symbol".to_string()),
+        child_list
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| Sexpr::Symbol("Unknown".to_string())),
+    ];
+
+    // Create a map of child properties for easy lookup
+    let mut child_props: HashMap<String, Sexpr> = HashMap::new();
+    let mut child_symbols: Vec<Sexpr> = Vec::new();
+    let mut has_child_in_bom = false;
+
+    for item in child_list.iter().skip(2) {
+        if let Sexpr::List(prop_items) = item {
+            if let Some(Sexpr::Symbol(prop_type)) = prop_items.first() {
+                match prop_type.as_str() {
+                    "extends" => continue, // Skip extends in merged output
+                    "property" => {
+                        if let Some(Sexpr::Symbol(key) | Sexpr::String(key)) = prop_items.get(1) {
+                            child_props.insert(key.clone(), item.clone());
+                        }
+                    }
+                    "in_bom" => {
+                        has_child_in_bom = true;
+                        child_props.insert("in_bom".to_string(), item.clone());
+                    }
+                    s if s.starts_with("symbol") => {
+                        // This is a symbol section (like "symbol_0_1")
+                        child_symbols.push(item.clone());
+                    }
+                    _ => {
+                        // Other properties
+                        child_props.insert(prop_type.clone(), item.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Add parent properties that aren't overridden by child
+    for item in parent_list.iter().skip(2) {
+        if let Sexpr::List(prop_items) = item {
+            if let Some(Sexpr::Symbol(prop_type)) = prop_items.first() {
+                match prop_type.as_str() {
+                    "property" => {
+                        if let Some(Sexpr::Symbol(key) | Sexpr::String(key)) = prop_items.get(1) {
+                            if !child_props.contains_key(key) {
+                                merged_items.push(item.clone());
+                            }
+                        }
+                    }
+                    "in_bom" => {
+                        if !has_child_in_bom {
+                            merged_items.push(item.clone());
+                        }
+                    }
+                    s if s.starts_with("symbol") => {
+                        // Skip parent symbol sections if child has any
+                        if child_symbols.is_empty() {
+                            merged_items.push(item.clone());
+                        }
+                    }
+                    _ => {
+                        if !child_props.contains_key(prop_type) {
+                            merged_items.push(item.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add all child properties
+    for (_, prop) in child_props {
+        merged_items.push(prop);
+    }
+
+    // Add child symbol sections
+    for sym in child_symbols {
+        merged_items.push(sym);
+    }
+
+    Sexpr::List(merged_items)
+}
+
+/// Parse a KiCad symbol library from a string, keeping raw S-expressions
+pub fn parse_with_raw_sexprs(content: &str) -> Result<Vec<(KicadSymbol, Sexpr)>> {
+    let sexp = parse(content)?;
+    let mut symbol_pairs = Vec::new();
+
+    match sexp {
+        Sexpr::List(kicad_symbol_lib) => {
+            // Iterate through all items in the library
+            for item in kicad_symbol_lib {
+                if let Sexpr::List(ref symbol_list) = item {
+                    if let Some(Sexpr::Symbol(ref sym)) = symbol_list.first() {
+                        if sym == "symbol" {
+                            // Parse this symbol
+                            match parse_symbol(symbol_list) {
+                                Ok(mut symbol) => {
+                                    // Store the raw s-expression with the symbol
+                                    symbol.raw_sexp = Some(item.clone());
+                                    symbol_pairs.push((symbol, item.clone()));
+                                }
+                                Err(e) => {
+                                    // Log error but continue parsing other symbols
+                                    eprintln!("Warning: Failed to parse symbol: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => return Err(anyhow::anyhow!("Invalid KiCad symbol library format")),
+    }
+
+    Ok(symbol_pairs)
 }
 
 /// Resolve extends references by cloning parent symbols and applying child overrides
@@ -156,6 +323,11 @@ fn resolve_extends(symbols: &mut [KicadSymbol]) -> Result<()> {
             // So we'll use the child's value if it's true, otherwise keep parent's
             if child.in_bom {
                 merged.in_bom = child.in_bom;
+            }
+
+            // For raw_sexp, use the child's if it exists, otherwise keep parent's
+            if child.raw_sexp.is_some() {
+                merged.raw_sexp = child.raw_sexp.clone();
             }
 
             // Replace the child with the merged symbol

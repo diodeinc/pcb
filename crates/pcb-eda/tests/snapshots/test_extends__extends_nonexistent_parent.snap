@@ -15,3 +15,28 @@ distributors: {}
 properties:
   Footprint: OrphanFootprint
   Value: Orphan
+raw_sexp:
+  List:
+    - Symbol: symbol
+    - String: OrphanSymbol
+    - List:
+        - Symbol: extends
+        - String: NonExistentParent
+    - List:
+        - Symbol: property
+        - String: Value
+        - String: Orphan
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"
+    - List:
+        - Symbol: property
+        - String: Footprint
+        - String: OrphanFootprint
+        - List:
+            - Symbol: at
+            - Symbol: "0"
+            - Symbol: "0"
+            - Symbol: "0"

@@ -1,10 +1,21 @@
 // KiCad Symbol Renderer
 // Renders a kicad_sym file to a canvas element
 
-import { Color } from "kicanvas/base/color";
-import { Angle, BBox, Matrix3, Vec2, Arc as MathArc } from "kicanvas/base/math";
-import { Canvas2DRenderer } from "kicanvas/graphics/canvas2d";
-import { Arc, Circle, Polygon, Polyline } from "kicanvas/graphics/shapes";
+import { Color } from "../third_party/kicanvas/base/color";
+import {
+  Angle,
+  BBox,
+  Matrix3,
+  Vec2,
+  Arc as MathArc,
+} from "../third_party/kicanvas/base/math";
+import { Canvas2DRenderer } from "../third_party/kicanvas/graphics/canvas2d";
+import {
+  Arc,
+  Circle,
+  Polygon,
+  Polyline,
+} from "../third_party/kicanvas/graphics/shapes";
 import {
   LibSymbol,
   LibText,
@@ -18,20 +29,20 @@ import {
   DefaultValues,
   Property,
   SchematicSymbol,
-} from "kicanvas/kicad/schematic";
-import { StrokeFont } from "kicanvas/kicad/text/stroke-font";
-import { LibText as LibTextRenderer } from "kicanvas/kicad/text/lib-text";
-import { SchField } from "kicanvas/kicad/text/sch-field";
-import { parse_expr, P, T } from "kicanvas/kicad/parser";
-import type { SchematicTheme } from "kicanvas/kicad/theme";
-import { LayerNames } from "kicanvas/viewers/schematic/layers";
+} from "../third_party/kicanvas/kicad/schematic";
+import { StrokeFont } from "../third_party/kicanvas/kicad/text/stroke-font";
+import { LibText as LibTextRenderer } from "../third_party/kicanvas/kicad/text/lib-text";
+import { SchField } from "../third_party/kicanvas/kicad/text/sch-field";
+import { parse_expr, P, T } from "../third_party/kicanvas/kicad/parser";
+import type { SchematicTheme } from "../third_party/kicanvas/kicad/theme";
+import { LayerNames } from "../third_party/kicanvas/viewers/schematic/layers";
 import {
   PinPainter,
   PinShapeInternals,
   PinLabelInternals,
   type PinInfo,
-} from "kicanvas/viewers/schematic/painters/pin";
-import type { SymbolTransform } from "kicanvas/viewers/schematic/painters/symbol";
+} from "../third_party/kicanvas/viewers/schematic/painters/pin";
+import type { SymbolTransform } from "../third_party/kicanvas/viewers/schematic/painters/symbol";
 
 // Default theme colors matching kicanvas defaults
 const DEFAULT_THEME: SchematicTheme = {
@@ -159,24 +170,20 @@ export class KicadSymRenderer {
   }
 
   /**
-   * Parse a kicad_sym file content and extract symbols
+   * Parse a single symbol s-expression
    */
   parseKicadSym(content: string): LibSymbol[] {
-    // A kicad_sym file has the structure:
-    // (kicad_symbol_lib (version ...) (generator ...)
-    //   (symbol "name" ...)
-    //   (symbol "name2" ...)
-    // )
+    // The content is now a single symbol s-expression:
+    // (symbol "name" ...)
 
-    const parsed = parse_expr(
-      content,
-      P.start("kicad_symbol_lib"),
-      P.pair("version", T.number),
-      P.pair("generator", T.string),
-      P.collection("symbols", "symbol", T.item(LibSymbol))
-    );
-
-    return parsed["symbols"] || [];
+    try {
+      // Create a LibSymbol directly from the string
+      const symbol = new LibSymbol(content as any);
+      return [symbol];
+    } catch (error) {
+      console.error("Failed to parse symbol:", error);
+      return [];
+    }
   }
 
   /**
@@ -1091,15 +1098,6 @@ export class KicadSymRenderer {
               pin.length
             );
             points.push(p0);
-
-            // Include pin text bounds if requested
-            // if (
-            //   includePinTextInBounds &&
-            //   (this.showPinNames || this.showPinNumbers)
-            // ) {
-            //   const textPoints = this.calculatePinTextBounds(pinInfo, symbol);
-            //   points.push(...textPoints);
-            // }
           }
         }
       };

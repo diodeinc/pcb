@@ -1,0 +1,317 @@
+/*
+    Variables
+*/
+:host {
+    font-size: var(--font-size, 16px);
+
+    --transition-time-very-short: 100ms;
+    --transition-time-short: 200ms;
+    --transition-time-medium: 500ms;
+
+    --bg: #131218;
+    --fg: #f8f8f0;
+
+    --tooltip-bg: #8864cb;
+    --tooltip-fg: #f8f8f0;
+    --tooltip-border: 1px solid #131218;
+
+    --scrollbar-bg: #131218;
+    --scrollbar-fg: #ae81ff66;
+    --scrollbar-active-fg: #ae81ff;
+    --scrollbar-hover-bg: #ae81ffbb;
+
+    --activity-bar-bg: #282634;
+    --activity-bar-fg: #f8f8f0;
+    --activity-bar-active-bg: #131218;
+    --activity-bar-active-fg: #f8f8f0;
+
+    --resizer-bg: #ae81ff;
+    --resizer-active-bg: #ae81ffbb;
+
+    --panel-bg: #131218;
+    --panel-fg: #f8f8f0;
+    --panel-border: 2px solid #282634;
+    --panel-title-bg: #8077a8;
+    --panel-title-fg: #f8f8f0;
+    --panel-title-border: 1px solid #634e89;
+    --panel-title-button-bg: transparent;
+    --panel-title-button-fg: #dcc8ff;
+    --panel-title-button-hover-bg: #ae81ff;
+    --panel-title-button-hover-fg: inherit;
+    --panel-title-button-disabled-bg: inherit;
+    --panel-title-button-disabled-fg: #888;
+    --panel-subtitle-bg: #634e89;
+    --panel-subtitle-fg: var(--panel-fg);
+
+    --dropdown-bg: #464258;
+    --dropdown-fg: #f8f8f0;
+
+    --button-bg: #81eeff;
+    --button-fg: #131218;
+    --button-hover-bg: #a3f3ff;
+    --button-hover-fg: #131218;
+    --button-focus-outline: 1px solid #ae81ff;
+    --button-selected-bg: #ae81ff;
+    --button-selected-fg: #131218;
+    --button-disabled-bg: #131218;
+    --button-disabled-fg: #888;
+    --button-success-bg: #64cb96;
+    --button-success-fg: #131218;
+    --button-success-hover-bg: #81ffbe;
+    --button-success-hover-fg: #131218;
+    --button-danger-bg: #cb6488;
+    --button-danger-fg: #131218;
+    --button-danger-hover-bg: #ff81ad;
+    --button-danger-hover-fg: #131218;
+    --button-outline-bg: #282634;
+    --button-outline-fg: #f8f8f0;
+    --button-outline-hover-bg: #282634;
+    --button-outline-hover-fg: #81eeff;
+    --button-outline-disabled-bg: #131218;
+    --button-outline-disabled-fg: #888;
+    --button-toolbar-bg: #282634;
+    --button-toolbar-fg: #f8f8f0;
+    --button-toolbar-hover-bg: #282634;
+    --button-toolbar-hover-fg: #81eeff;
+    --button-toolbar-disabled-bg: #131218;
+    --button-toolbar-disabled-fg: #888;
+    --button-menu-bg: transparent;
+    --button-menu-fg: #f8f8f0;
+    --button-menu-hover-bg: transparent;
+    --button-menu-hover-fg: #81eeff;
+    --button-menu-disabled-bg: transparent;
+    --button-menu-disabled-fg: #888;
+
+    --input-bg: #131218;
+    --input-fg: #f8f8f0;
+    --input-border: 1px solid #8077a8;
+    --input-accent: #ae81ff;
+    --input-hover-shadow: 1px 1px 10px 5px rgba(0, 0, 0, 0.2);
+    --input-focus-outline: 1px solid #ae81ff;
+    --input-placeholder: #8077a8;
+    --input-disabled-bg: #131218;
+    --input-disabled-fg: #888;
+
+    --input-range-bg: #8077a8;
+    --input-range-fg: #f8f8f0;
+    --input-range-hover-bg: #ae81ff;
+    --input-range-disabled-bg: #131218;
+    --input-range-hover-shadow: 1px 1px 10px 5px rgba(0, 0, 0, 0.2);
+    --input-range-handle-shadow: 1px 1px 5px 5px rgba(180, 180, 180, 0.2);
+
+    --list-item-bg: var(--panel-bg);
+    --list-item-fg: var(--panel-fg);
+    --list-item-active-bg: #634e89;
+    --list-item-active-fg: var(--list-item-fg);
+    --list-item-hover-bg: #64cb96;
+    --list-item-hover-fg: var(--list-item-bg);
+    --list-item-disabled-bg: var(--list-item-bg);
+    --list-item-disabled-fg: #888;
+
+    --grid-outline: #433e56;
+}
+
+/*
+    Gradient theme
+*/
+:host {
+    --gradient-purple-green-light: linear-gradient(
+            190deg,
+            hsl(261deg 27% 42%) 0%,
+            hsl(243deg 27% 42%) 17%,
+            hsl(224deg 27% 42%) 33%,
+            hsl(205deg 27% 42%) 50%,
+            hsl(187deg 27% 42%) 67%,
+            hsl(168deg 27% 42%) 83%,
+            hsl(149deg 27% 42%) 100%
+        )
+        0 0 fixed;
+    --gradient-purple-blue-medium: linear-gradient(
+            190deg,
+            hsl(261deg 28% 30%) 0%,
+            hsl(248deg 30% 31%) 17%,
+            hsl(235deg 32% 32%) 33%,
+            hsl(222deg 34% 33%) 50%,
+            hsl(209deg 35% 34%) 67%,
+            hsl(197deg 37% 35%) 83%,
+            hsl(183deg 38% 36%) 100%
+        )
+        0 0 fixed;
+    --gradient-purple-blue-dark: linear-gradient(10deg, #111928, #1d162a) 0 0
+        fixed;
+    --gradient-cyan-blue-light: linear-gradient(
+            190deg,
+            hsl(183deg 63% 33%) 0%,
+            hsl(189deg 69% 30%) 17%,
+            hsl(194deg 74% 27%) 33%,
+            hsl(199deg 79% 24%) 50%,
+            hsl(203deg 85% 21%) 67%,
+            hsl(209deg 89% 18%) 83%,
+            hsl(214deg 95% 15%) 100%
+        )
+        0 0 fixed;
+    --gradient-purple-green-highlight: linear-gradient(
+            190deg,
+            hsl(261deg 27% 53%) 0%,
+            hsl(243deg 27% 52%) 17%,
+            hsl(224deg 27% 52%) 33%,
+            hsl(205deg 27% 51%) 50%,
+            hsl(186deg 27% 51%) 67%,
+            hsl(168deg 27% 50%) 83%,
+            hsl(149deg 27% 50%) 100%
+        )
+        0 0 fixed;
+    --gradient-purple-red: linear-gradient(90deg, #8864cb, #cb6488) 0 0 fixed;
+    --gradient-purple-red-highlight: linear-gradient(90deg, #b187ff, #ff80ac) 0
+        0 fixed;
+
+    --scrollbar-bg: var(--gradient-purple-blue-dark);
+    --scrollbar-fg: var(--gradient-purple-green-light);
+    --scrollbar-hover-fg: var(--scrollbar-fg);
+    --scrollbar-active-fg: var(--scrollbar-fg);
+
+    --activity-bar-bg: var(--gradient-purple-green-light);
+
+    --resizer-bg: var(--gradient-purple-blue-medium);
+    --resizer-active-bg: var(--gradient-purple-green-highlight);
+
+    --panel-bg: var(--gradient-purple-blue-dark);
+    --panel-title-bg: var(--gradient-purple-green-light);
+    --panel-subtitle-bg: var(--gradient-purple-blue-medium);
+
+    --button-toolbar-bg: var(--gradient-purple-blue-dark);
+    --button-toolbar-hover-bg: var(--gradient-purple-green-light);
+    --button-toolbar-hover-fg: #f8f8f0;
+    --button-toolbar-disabled-bg: var(--gradient-purple-blue-dark);
+
+    --button-toolbar-alt-bg: var(--gradient-purple-green-light);
+    --button-toolbar-alt-hover-bg: var(--gradient-purple-green-highlight);
+    --button-toolbar-alt-hover-fg: #f8f8f0;
+    --button-toolbar-alt-disabled-bg: var(--gradient-purple-blue-dark);
+
+    --dropdown-bg: var(--gradient-purple-green-light);
+    --dropdown-fg: #f8f8f0;
+    --dropdown-hover-bg: var(--gradient-purple-green-highlight);
+    --dropdown-hover-fg: #f8f8f0;
+    --dropdown-active-bg: var(--gradient-purple-blue-dark);
+    --dropdown-active-fg: #f8f8f0;
+
+    --input-range-bg: var(--gradient-purple-green-light);
+
+    --list-item-hover-bg: var(--gradient-purple-green-highlight);
+    --list-item-active-bg: var(--gradient-cyan-blue-light);
+
+    --focus-overlay-bg: var(--gradient-purple-green-light);
+    --focus-overlay-opacity: 0.5;
+    --focus-overlay-fg: #f8f8f0;
+}
+
+/*
+    Scrollbar
+*/
+
+::-webkit-scrollbar {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    margin-left: -6px;
+    background: var(--scrollbar-bg);
+}
+
+::-webkit-scrollbar-thumb {
+    position: absolute;
+    background: var(--scrollbar-fg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-hover-fg);
+}
+
+::-webkit-scrollbar-thumb:active {
+    background: var(--scrollbar-active-fg);
+}
+
+/*
+    Layout
+*/
+
+kc-ui-app {
+    width: 100%;
+    height: 100%;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+}
+
+/*
+    Input elements
+*/
+
+label {
+    display: block;
+    width: 100%;
+    margin-top: 0.75em;
+}
+
+input,
+select,
+textarea {
+    all: unset;
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin-top: 0.5em;
+    font-family: inherit;
+    border-radius: 0.25em;
+    text-align: center;
+    padding: 0.25em;
+    background: var(--input-bg);
+    color: var(--input-fg);
+    transition:
+        color var(--transition-time-medium) ease,
+        box-shadow var(--transition-time-medium) ease,
+        outline var(--transition-time-medium) ease,
+        background var(--transition-time-medium) ease,
+        border var(--transition-time-medium) ease;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+    z-index: 10;
+    box-shadow: var(--input-hover-shadow);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    z-index: 10;
+    box-shadow: none;
+    outline: var(--input-focus-outline);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+    background: var(--input-disabled-bg);
+    color: var(--input-disabled-fg);
+}
+
+input:disabled:hover,
+select:disabled:hover,
+textarea:disabled:hover {
+    z-index: 10;
+    cursor: unset;
+}
+
+input[type="color"]::-webkit-color-swatch {
+    border: 1px solid transparent;
+    border-radius: 0.25em;
+}
+
+textarea {
+    text-align: left;
+    padding: 0.5em;
+}

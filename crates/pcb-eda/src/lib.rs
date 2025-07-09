@@ -3,6 +3,7 @@ pub mod kicad;
 use anyhow::Result;
 use kicad::symbol::KicadSymbol;
 use kicad::symbol_library::KicadSymbolLibrary;
+use pcb_sexpr::Sexpr;
 use serde::Serialize;
 
 use std::collections::HashMap;
@@ -22,6 +23,8 @@ pub struct Symbol {
     pub distributors: HashMap<String, Part>,
     pub description: Option<String>,
     pub properties: HashMap<String, String>,
+    #[serde(skip)]
+    pub raw_sexp: Option<Sexpr>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone, Serialize)]
@@ -51,6 +54,10 @@ impl Symbol {
             "kicad_sym" => Ok(KicadSymbol::from_str(contents)?.into()),
             _ => Err(anyhow::anyhow!("Unsupported file type: {}", file_type)),
         }
+    }
+
+    pub fn raw_sexp(&self) -> Option<&Sexpr> {
+        self.raw_sexp.as_ref()
     }
 }
 

@@ -1,0 +1,20 @@
+"""
+A simple voltage divider circuit using standard KiCad components.
+This demonstrates basic module structure without external dependencies.
+"""
+
+load("@stdlib:zen/interfaces.zen", "Power", "Ground", "Analog")
+Resistor = Module("@stdlib:zen/generics/Resistor.zen")
+
+# Configuration parameters
+r1_value = config("r1_value", str, default="10kohms", optional=True)
+r2_value = config("r2_value", str, default="10kohms", optional=True)
+
+# IO ports
+vin = io("vin", Power)
+vout = io("vout", Analog)
+gnd = io("gnd", Ground)
+
+# Create the voltage divider
+Resistor(name="R1", value=r1_value, package="0603", P1=vin.NET, P2=vout.NET)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout.NET, P2=gnd.NET) 

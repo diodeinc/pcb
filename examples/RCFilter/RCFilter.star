@@ -1,0 +1,21 @@
+"""
+A simple RC low-pass filter using standard KiCad components.
+This demonstrates using both resistors and capacitors from the standard library.
+"""
+
+load("@stdlib:zen/interfaces.zen", "Analog", "Ground")
+Resistor = Module("@stdlib:zen/generics/Resistor.zen")
+Capacitor = Module("@stdlib:zen/generics/Capacitor.zen")
+
+# Configuration parameters
+r_value = config("r_value", str, default="1kohms", optional=True)
+c_value = config("c_value", str, default="100nF", optional=True)
+
+# IO ports
+input = io("input", Analog)
+output = io("output", Analog)
+gnd = io("gnd", Ground)
+
+# Create the RC filter
+Resistor(name="R1", value=r_value, package="0603", P1=input.NET, P2=output.NET)
+Capacitor(name="C1", value=c_value, package="0603", P1=output.NET, P2=gnd.NET) 

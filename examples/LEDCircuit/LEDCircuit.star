@@ -1,0 +1,23 @@
+"""
+A simple LED circuit with current limiting resistor.
+This demonstrates using standard components to create a basic LED driver.
+"""
+
+load("@stdlib:zen/interfaces.zen", "Power", "Ground")
+Resistor = Module("@stdlib:zen/generics/Resistor.zen")
+Led = Module("@stdlib:zen/generics/Led.zen")
+
+# Configuration parameters
+r_value = config("r_value", str, default="330ohms", optional=True)
+led_color = config("led_color", str, default="red", optional=True)
+
+# IO ports
+vcc = io("vcc", Power)
+gnd = io("gnd", Ground)
+
+# Internal net for LED anode
+led_anode = Net("LED_ANODE")
+
+# Create the LED circuit
+Resistor(name="R1", value=r_value, package="0603", P1=vcc.NET, P2=led_anode)
+Led(name="D1", color=led_color, package="0603", A=led_anode, K=gnd.NET) 

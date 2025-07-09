@@ -548,47 +548,8 @@ impl LspContext for LspEvalContext {
                             eval_result.output.and_then(|fmv| {
                                 match fmv.sch_module.to_schematic() {
                                     Ok(schematic) => {
-                                        use pcb_sch::AttributeValue;
-                                        use std::collections::HashMap;
-
-                                        // Collect symbols into a map
-                                        let mut symbols_map: HashMap<String, String> =
-                                            HashMap::new();
-
-                                        for inst in schematic.instances.values() {
-                                            if let Some(AttributeValue::String(path_str)) =
-                                                inst.attributes.get("symbol_path")
-                                            {
-                                                if let Ok(contents) =
-                                                    std::fs::read_to_string(path_str)
-                                                {
-                                                    symbols_map.insert(path_str.clone(), contents);
-                                                }
-                                            }
-                                        }
-
                                         // Serialize to JSON
-                                        let mut schem_val = match serde_json::to_value(&schematic) {
-                                            Ok(v) => v,
-                                            Err(_) => return None,
-                                        };
-
-                                        if !symbols_map.is_empty() {
-                                            if let serde_json::Value::Object(ref mut obj) =
-                                                schem_val
-                                            {
-                                                let symbols_json = symbols_map
-                                                    .into_iter()
-                                                    .map(|(k, v)| (k, serde_json::Value::String(v)))
-                                                    .collect();
-                                                obj.insert(
-                                                    "symbols".to_owned(),
-                                                    serde_json::Value::Object(symbols_json),
-                                                );
-                                            }
-                                        }
-
-                                        Some(schem_val)
+                                        serde_json::to_value(&schematic).ok()
                                     }
                                     Err(_) => None,
                                 }

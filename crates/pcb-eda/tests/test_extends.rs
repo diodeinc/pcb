@@ -1,5 +1,3 @@
-mod test_utils;
-
 use insta::{assert_yaml_snapshot, with_settings};
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use std::path::PathBuf;
