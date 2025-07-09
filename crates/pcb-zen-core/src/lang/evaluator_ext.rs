@@ -80,7 +80,8 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
             Some(value) => {
                 // Record that this input was consumed so we can detect unused parameters later.
                 if let Some(ctx) = self.context_value() {
-                    ctx.add_used_input(name.to_string(), expected_typ);
+                    let mut module = ctx.module_mut();
+                    module.add_signature_param(name.to_string(), expected_typ);
                 }
 
                 Ok(Some(value.to_value(self, Some(expected_typ))?))

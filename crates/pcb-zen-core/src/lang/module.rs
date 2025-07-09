@@ -48,6 +48,8 @@ pub struct ModuleValueGen<V> {
     inputs: SmallMap<String, V>,
     children: Vec<V>,
     properties: SmallMap<String, V>,
+    /// Ordered list of (parameter_name, type_value) pairs representing the module's signature
+    signature: Vec<(String, V)>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -116,6 +118,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             inputs: SmallMap::new(),
             children: Vec::new(),
             properties: SmallMap::new(),
+            signature: Vec::new(),
         }
     }
 
@@ -141,6 +144,19 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Set the user-visible name for this Module.
     pub fn set_name(&mut self, name: String) {
         self.name = name;
+    }
+
+    /// Add a parameter to the module's signature.
+    pub fn add_signature_param(&mut self, name: String, type_value: V) {
+        // Check if this parameter already exists
+        if !self.signature.iter().any(|(n, _)| n == &name) {
+            self.signature.push((name, type_value));
+        }
+    }
+
+    /// Get the module's signature.
+    pub fn signature(&self) -> &Vec<(String, V)> {
+        &self.signature
     }
 }
 
@@ -343,7 +359,13 @@ where
                     .star_module
                     .extra_value()
                     .and_then(|extra| extra.downcast_ref::<FrozenContextValue>())
-                    .map(|fctx| fctx.used_inputs.keys().cloned().collect())
+                    .map(|fctx| {
+                        fctx.module
+                            .signature()
+                            .iter()
+                            .map(|(name, _)| name.clone())
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 // Remove any potential `name` override from the unused-check set.
@@ -670,10 +692,10 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] optional: Option<bool>, // if true, the placeholder is not required
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        // Record that this placeholder was referenced so signature helpers can
-        // surface it later, even if the parent module did not supply a value.
+        // Record that this placeholder was referenced in the module's signature
         if let Some(ctx) = eval.context_value() {
-            ctx.add_used_input(name.clone(), typ);
+            let mut module = ctx.module_mut();
+            module.add_signature_param(name.clone(), typ);
         }
 
         // 1. Value supplied by the parent module.
@@ -762,9 +784,10 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] optional: Option<bool>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        // Record usage for signature help (even if no value supplied).
+        // Record usage in the module's signature
         if let Some(ctx) = eval.context_value() {
-            ctx.add_used_input(name.clone(), typ);
+            let mut module = ctx.module_mut();
+            module.add_signature_param(name.clone(), typ);
         }
 
         // 1. Value supplied by the parent module.
@@ -863,8 +886,8 @@ pub fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> M
             .extra_value()
             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
         {
-            // used_inputs now contains both parameter names and their types
-            for (param_name, param_type) in extra.used_inputs.iter() {
+            // Get the signature from the module
+            for (param_name, param_type) in extra.module.signature().iter() {
                 params.push(param_name.clone());
                 param_types.insert(param_name.clone(), param_type.to_string());
             }

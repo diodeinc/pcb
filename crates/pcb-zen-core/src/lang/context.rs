@@ -6,7 +6,6 @@ use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
-    collections::SmallMap,
     values::{starlark_value, Freeze, FreezeResult, Freezer, StarlarkValue, Trace, Value},
 };
 
@@ -28,9 +27,6 @@ pub(crate) struct ContextValue<'v> {
     missing_inputs: RefCell<Vec<String>>,
     #[allocative(skip)]
     diagnostics: RefCell<Vec<crate::Diagnostic>>,
-    // Track which inputs have been consumed by io()/config() calls inside the module
-    // along with their type values. Maps parameter name to type value
-    used_inputs: RefCell<SmallMap<String, Value<'v>>>,
     /// The eval::Context that the current evaluator is running in.
     #[allocative(skip)]
     #[serde(skip)]
@@ -42,8 +38,6 @@ pub(crate) struct ContextValue<'v> {
 pub(crate) struct FrozenContextValue {
     pub(crate) module: FrozenModuleValue,
     pub(crate) strict_io_config: bool,
-    /// Names of inputs that were actually consumed by the module body mapped to their type values
-    pub(crate) used_inputs: SmallMap<String, starlark::values::FrozenValue>,
     #[allocative(skip)]
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
 }
@@ -52,14 +46,9 @@ impl Freeze for ContextValue<'_> {
     type Frozen = FrozenContextValue;
 
     fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
-        let mut frozen_inputs = SmallMap::new();
-        for (name, value) in self.used_inputs.into_inner() {
-            frozen_inputs.insert(name, value.freeze(freezer)?);
-        }
         Ok(FrozenContextValue {
             module: self.module.freeze(freezer)?,
             strict_io_config: self.strict_io_config,
-            used_inputs: frozen_inputs,
             diagnostics: self.diagnostics.into_inner(),
         })
     }
@@ -116,7 +105,6 @@ impl<'v> ContextValue<'v> {
             )),
             strict_io_config: context.strict_io_config,
             missing_inputs: RefCell::new(Vec::new()),
-            used_inputs: RefCell::new(SmallMap::new()),
             diagnostics: RefCell::new(Vec::new()),
             context: context as *const _,
         }
@@ -153,11 +141,6 @@ impl<'v> ContextValue<'v> {
     #[allow(dead_code)]
     pub(crate) fn diagnostics(&self) -> std::cell::Ref<'_, Vec<crate::Diagnostic>> {
         self.diagnostics.borrow()
-    }
-
-    /// Record that an input placeholder with `name` has been requested by the module.
-    pub(crate) fn add_used_input(&self, name: String, typ: Value<'v>) {
-        self.used_inputs.borrow_mut().insert(name, typ);
     }
 
     pub fn inputs(&self) -> Option<&InputMap> {

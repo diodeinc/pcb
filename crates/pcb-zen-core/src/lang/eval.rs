@@ -643,7 +643,7 @@ impl EvalContext {
                             .extra_value()
                             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
                         {
-                            for (param_name, _) in extra.used_inputs.iter() {
+                            for (param_name, _) in extra.module.signature().iter() {
                                 params.push(param_name.clone());
                             }
                         }
@@ -658,7 +658,7 @@ impl EvalContext {
                             .extra_value()
                             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
                         {
-                            for (param_name, param_type) in extra.used_inputs.iter() {
+                            for (param_name, param_type) in extra.module.signature().iter() {
                                 param_types.insert(param_name.clone(), param_type.to_string());
                             }
                         }
@@ -924,7 +924,8 @@ impl EvalContext {
                     let heap = Heap::new();
 
                     let signature = extra
-                        .used_inputs
+                        .module
+                        .signature()
                         .iter()
                         .map(|(name, frozen_type_value)| {
                             use crate::lang::type_info::{ParameterInfo, TypeInfo};
