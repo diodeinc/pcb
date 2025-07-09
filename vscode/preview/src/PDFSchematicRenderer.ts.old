@@ -6,7 +6,6 @@ import {
   type ElkNode,
   type ElkEdge,
   NodeType,
-  NetReferenceType,
 } from "./LayoutEngine";
 
 export interface PDFRenderOptions {

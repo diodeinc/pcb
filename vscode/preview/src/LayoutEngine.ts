@@ -1,6 +1,6 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ELK as ELKType } from "elkjs/lib/elk-api";
-import { InstanceKind, NetKind } from "./types/NetlistTypes";
+import { InstanceKind } from "./types/NetlistTypes";
 import type { Netlist, AttributeValue } from "./types/NetlistTypes";
 import { createCanvas } from "canvas";
 import { getKicadSymbolInfo } from "./renderer/kicad_sym";
@@ -11,18 +11,9 @@ export enum NodeType {
   META = "meta",
   MODULE = "module",
   COMPONENT = "component",
-  RESISTOR = "resistor",
-  CAPACITOR = "capacitor",
-  INDUCTOR = "inductor",
-  NET_REFERENCE = "net_reference",
   NET_JUNCTION = "net_junction",
+  NET_REFERENCE = "net_reference",
   SYMBOL = "symbol",
-}
-
-export enum NetReferenceType {
-  NORMAL = "normal",
-  GROUND = "ground",
-  VDD = "vdd",
 }
 
 export interface ElkNode {
@@ -36,7 +27,6 @@ export interface ElkNode {
   properties?: Record<string, string>;
   type: NodeType;
   netId?: string; // Only used for net reference nodes
-  netReferenceType?: NetReferenceType; // Only used for net reference nodes
   children?: ElkNode[];
   edges?: ElkEdge[];
 }
@@ -95,31 +85,11 @@ export interface NodeSizeConfig {
     width: number;
     height: number;
   };
-  resistor: {
-    width: number;
-    height: number;
-  };
-  capacitor: {
-    width: number;
-    height: number;
-  };
-  inductor: {
-    width: number;
-    height: number;
-  };
-  netReference: {
-    width: number;
-    height: number;
-  };
   netJunction: {
     width: number;
     height: number;
   };
-  ground: {
-    width: number;
-    height: number;
-  };
-  vdd: {
+  netReference: {
     width: number;
     height: number;
   };
@@ -170,32 +140,12 @@ export const DEFAULT_CONFIG: SchematicConfig = {
       width: 256,
       height: 128,
     },
-    resistor: {
-      width: 40,
-      height: 30,
-    },
-    capacitor: {
-      width: 40,
-      height: 20,
-    },
-    inductor: {
-      width: 40,
-      height: 40,
-    },
-    netReference: {
-      width: 10,
-      height: 10,
-    },
     netJunction: {
       width: 10,
       height: 10,
     },
-    ground: {
-      width: 30,
-      height: 50,
-    },
-    vdd: {
-      width: 30,
+    netReference: {
+      width: 10,
       height: 10,
     },
     symbol: {
@@ -369,9 +319,8 @@ export class SchematicLayoutEngine {
       edges: [],
     };
 
-    // TODO: Add connectivity (edges) in a future implementation
-
-    return graph;
+    // Add connectivity (edges and net references)
+    return this._addConnectivity(graph);
   }
 
   /**
@@ -451,8 +400,17 @@ export class SchematicLayoutEngine {
   }
 
   private _generateUniqueNetNames(): Map<string, string> {
-    // TODO: Implement this method
-    return new Map();
+    const netNames = new Map<string, string>();
+
+    // For now, just use net IDs as names
+    // In the future, we can implement smarter naming based on connected components
+    let netCounter = 1;
+    for (const [netId, net] of this.nets.entries()) {
+      netNames.set(netId, `net${netCounter}`);
+      netCounter++;
+    }
+
+    return netNames;
   }
 
   // Helper methods from old implementation
@@ -477,26 +435,6 @@ export class SchematicLayoutEngine {
     if (value?.Physical !== undefined) return String(value.Physical);
 
     return undefined;
-  }
-
-  private _isGndNet(net: Set<string>): boolean {
-    const netId = Array.from(this.nets.entries()).find(
-      ([, set]) => set === net
-    )?.[0];
-    if (netId && this.netlist.nets[netId]) {
-      return this.netlist.nets[netId].kind === NetKind.GROUND;
-    }
-    return false;
-  }
-
-  private _isPowerNet(net: Set<string>): boolean {
-    const netId = Array.from(this.nets.entries()).find(
-      ([, set]) => set === net
-    )?.[0];
-    if (netId && this.netlist.nets[netId]) {
-      return this.netlist.nets[netId].kind === NetKind.POWER;
-    }
-    return false;
   }
 
   private _symbolNode(instance_ref: string): ElkNode | null {
@@ -892,9 +830,94 @@ export class SchematicLayoutEngine {
   }
 
   /**
+   * Create a simple net reference node for a net
+   */
+  private _netReferenceNode(
+    ref_id: string,
+    netName: string,
+    side: "NORTH" | "WEST" | "SOUTH" | "EAST" = "WEST"
+  ): ElkNode {
+    // Calculate label dimensions
+    const labelDimensions = calculateTextDimensions(netName, 12);
+
+    // Use configured size for net reference, but expand for label
+    const baseWidth = this.config.nodeSizes.netReference.width;
+    const baseHeight = this.config.nodeSizes.netReference.height;
+    const nodeWidth = Math.max(baseWidth, labelDimensions.width + 20);
+    const nodeHeight = Math.max(baseHeight, 20);
+
+    // Calculate port position based on side
+    let portX = 0;
+    let portY = nodeHeight / 2;
+
+    switch (side) {
+      case "EAST":
+        portX = nodeWidth;
+        break;
+      case "WEST":
+        portX = 0;
+        break;
+      case "NORTH":
+        portX = nodeWidth / 2;
+        portY = 0;
+        break;
+      case "SOUTH":
+        portX = nodeWidth / 2;
+        portY = nodeHeight;
+        break;
+    }
+
+    return {
+      id: ref_id,
+      type: NodeType.NET_REFERENCE,
+      width: nodeWidth,
+      height: nodeHeight,
+      netId: netName,
+      labels: [
+        {
+          text: netName,
+          x:
+            side === "EAST"
+              ? -labelDimensions.width - 5
+              : side === "WEST"
+              ? nodeWidth + 5
+              : 10,
+          y:
+            side === "NORTH" || side === "SOUTH"
+              ? -labelDimensions.height - 5
+              : (nodeHeight - labelDimensions.height) / 2,
+          width: labelDimensions.width,
+          height: labelDimensions.height,
+          textAlign: "center" as const,
+        },
+      ],
+      ports: [
+        {
+          id: `${ref_id}.port`,
+          x: portX,
+          y: portY,
+          width: 0,
+          height: 0,
+          properties: {
+            "port.side": side,
+            "port.alignment": "CENTER",
+          },
+        },
+      ],
+      properties: {
+        "elk.portConstraints": "FIXED_POS",
+        "elk.nodeSize.constraints": "MINIMUM_SIZE",
+        "elk.nodeSize.minimum": `(${nodeWidth}, ${nodeHeight})`,
+      },
+    };
+  }
+
+  /**
    * Check if a module should be auto-exploded (has only one module/component child)
    */
   private _shouldAutoExplode(instance_ref: string): boolean {
+    return true;
+
     const instance = this.netlist.instances[instance_ref];
     if (!instance || instance.kind !== InstanceKind.MODULE) {
       return false;
@@ -958,5 +981,61 @@ export class SchematicLayoutEngine {
     // Otherwise, this module should be shown as a node
     const node = this._nodeForInstance(instance_ref);
     return node ? [node] : [];
+  }
+
+  /**
+   * Add connectivity to the graph by creating net references for each net
+   */
+  private _addConnectivity(graph: ElkGraph): ElkGraph {
+    // For each net in the netlist
+    for (const [netId, net] of this.nets.entries()) {
+      // Find all ports in this graph that are connected to this net
+      const connectedPorts: { portId: string; nodeId: string }[] = [];
+
+      // Check all nodes in the graph
+      for (const node of graph.children) {
+        if (!node.ports) continue;
+
+        // Check each port on the node
+        for (const port of node.ports) {
+          if (net.has(port.id)) {
+            connectedPorts.push({ portId: port.id, nodeId: node.id });
+            // Mark the port as connected to this net
+            port.netId = netId;
+          }
+        }
+      }
+
+      // If we found at least 2 connected ports, create a single net reference
+      if (connectedPorts.length >= 2) {
+        // Get the net name
+        const netName = this.netNames.get(netId) || netId;
+
+        // Create a single net reference for this net
+        const netRefId = `${netId}_ref`;
+        const netRefNode = this._netReferenceNode(netRefId, netName, "WEST");
+
+        // Add the net reference node to the graph
+        graph.children.push(netRefNode);
+
+        // Create edges from all connected ports to the net reference
+        for (const { portId, nodeId } of connectedPorts) {
+          graph.edges.push({
+            id: `${portId}_to_${netRefId}`,
+            netId: netId,
+            sources: [portId],
+            targets: [netRefNode.ports![0].id],
+            sourceComponentRef: nodeId,
+            targetComponentRef: netRefId,
+          });
+        }
+      } else if (connectedPorts.length === 1) {
+        // For single port nets, we might want to add a net reference if the net
+        // connects to something outside this graph (to be implemented later)
+        // For now, just mark the port
+      }
+    }
+
+    return graph;
   }
 }

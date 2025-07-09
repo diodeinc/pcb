@@ -26,7 +26,6 @@ import {
   NodeType,
   SchematicLayoutEngine,
   DEFAULT_CONFIG,
-  NetReferenceType,
 } from "../LayoutEngine";
 import type {
   ElkEdge,
@@ -34,7 +33,7 @@ import type {
   ElkNode,
   SchematicConfig,
 } from "../LayoutEngine";
-import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
+// import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
 import type { Netlist } from "../types/NetlistTypes";
 import { debounce } from "lodash";
 import { Download, Loader, Settings } from "react-feather";
@@ -970,8 +969,10 @@ const InductorNode = ({ data }: { data: SchematicNodeData }) => {
 
 // Define a node specifically for net references with an open circle symbol or ground/VDD symbol
 const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
-  const isGround = data.netReferenceType === NetReferenceType.GROUND;
-  const isVdd = data.netReferenceType === NetReferenceType.VDD;
+  // const isGround = data.netReferenceType === NetReferenceType.GROUND;
+  // const isVdd = data.netReferenceType === NetReferenceType.VDD;
+  const isGround = false;
+  const isVdd = false;
 
   // Use fixed size for circle, ground, and VDD symbols
   const circleRadius = 3;
@@ -1911,22 +1912,22 @@ const Visualizer = ({
   const handleDownloadPDF = async () => {
     if (!selectedComponent) return;
 
-    setIsGeneratingPDF(true);
-    try {
-      // Create PDF renderer with current config - use the exact same config as the React viewer
-      const pdfRenderer = new PDFSchematicRenderer(netlist, currentConfig);
+    // setIsGeneratingPDF(true);
+    // try {
+    //   // Create PDF renderer with current config - use the exact same config as the React viewer
+    //   const pdfRenderer = new PDFSchematicRenderer(netlist, currentConfig);
 
-      // Render the PDF
-      const doc = await pdfRenderer.render(selectedComponent);
+    //   // Render the PDF
+    //   const doc = await pdfRenderer.render(selectedComponent);
 
-      // Save the PDF with a clean filename
-      const filename = `${selectedComponent.split(".").pop()}_schematic.pdf`;
-      doc.save(filename);
-    } catch (error) {
-      console.error("Error generating PDF:", error);
-    } finally {
-      setIsGeneratingPDF(false);
-    }
+    //   // Save the PDF with a clean filename
+    //   const filename = `${selectedComponent.split(".").pop()}_schematic.pdf`;
+    //   doc.save(filename);
+    // } catch (error) {
+    //   console.error("Error generating PDF:", error);
+    // } finally {
+    //   setIsGeneratingPDF(false);
+    // }
   };
 
   const updateConfig = useCallback((updates: Partial<SchematicConfig>) => {
