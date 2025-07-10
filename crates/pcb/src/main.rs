@@ -4,6 +4,7 @@ use std::process::Command;
 
 mod build;
 mod clean;
+mod fmt;
 mod layout;
 mod lsp;
 mod open;
@@ -29,6 +30,9 @@ enum Commands {
     /// Clean PCB build artifacts
     Clean(clean::CleanArgs),
 
+    /// Format .zen and .star files
+    Fmt(fmt::FmtArgs),
+
     /// Language Server Protocol support
     Lsp(lsp::LspArgs),
 
@@ -51,6 +55,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Build(args) => build::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Clean(args) => clean::execute(args),
+        Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::External(args) => {
