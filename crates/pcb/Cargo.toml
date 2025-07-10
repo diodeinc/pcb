@@ -31,4 +31,4 @@ pcb-kicad = { workspace = true }
 open = { workspace = true }
 inquire = { workspace = true }
 pcb-ui = { workspace = true }
-pcb-buildifier = { path = "../pcb-buildifier" }
+pcb-buildifier = { workspace = true }

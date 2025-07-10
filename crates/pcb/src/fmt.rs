@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Format .zen and .star files using buildifier")]
 pub struct FmtArgs {
-    /// One or more .zen/.star files or directories containing such files (non-recursive) to format.
-    /// When omitted, all .zen/.star files in the current directory are formatted.
+    /// One or more .zen/.star files or directories containing such files to format.
+    /// When omitted, all .zen/.star files in the current directory tree are formatted.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
@@ -44,12 +44,26 @@ fn format_file(buildifier: &Buildifier, file_path: &Path, args: &FmtArgs) -> Res
     }
 }
 
+/// Recursively collect .zen and .star files from a directory
+fn collect_files_recursive(dir: &Path, files: &mut HashSet<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
+            files.insert(path);
+        } else if path.is_dir() {
+            // Recursively traverse subdirectories
+            collect_files_recursive(&path, files)?;
+        }
+    }
+    Ok(())
+}
+
 /// Collect .zen and .star files from the provided paths
 pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut unique: HashSet<PathBuf> = HashSet::new();
 
     if !paths.is_empty() {
-        // Collect files from the provided paths (non-recursive)
+        // Collect files from the provided paths (recursive for directories)
         for user_path in paths {
             // Resolve path relative to current directory if not absolute
             let resolved = if user_path.is_absolute() {
@@ -63,24 +77,14 @@ pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
                     unique.insert(resolved);
                 }
             } else if resolved.is_dir() {
-                // Iterate over files in the directory (non-recursive)
-                for entry in fs::read_dir(resolved)?.flatten() {
-                    let path = entry.path();
-                    if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-                        unique.insert(path);
-                    }
-                }
+                // Recursively collect files from the directory
+                collect_files_recursive(&resolved, &mut unique)?;
             }
         }
     } else {
-        // Fallback: find all Starlark files in the current directory (non-recursive)
+        // Fallback: find all Starlark files in the current directory tree (recursive)
         let cwd = std::env::current_dir()?;
-        for entry in fs::read_dir(cwd)?.flatten() {
-            let path = entry.path();
-            if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-                unique.insert(path);
-            }
-        }
+        collect_files_recursive(&cwd, &mut unique)?;
     }
 
     // Convert to vec and keep deterministic ordering

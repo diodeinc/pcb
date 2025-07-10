@@ -1,7 +1,5 @@
 [workspace]
-members = [
-    "crates/*",
-]
+members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -28,6 +26,7 @@ pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
 pcb-sexpr = { path = "crates/pcb-sexpr" }
 pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
+pcb-buildifier = { path = "crates/pcb-buildifier" }
 
 anyhow = "1.0"
 ariadne = { version = "0.5", features = ["auto-color"] }
