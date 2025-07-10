@@ -332,6 +332,38 @@ The open command:
 - Prompts for selection when multiple layouts are found
 - Opens the selected layout in your system's default PCB editor (typically KiCad)
 
+### `pcb fmt`
+
+Format `.zen` and `.star` files using the bundled buildifier formatter.
+
+```bash
+pcb fmt [OPTIONS] [PATHS...]
+
+Options:
+      --check     Check if files are formatted correctly without modifying them
+      --diff      Show diffs instead of writing files
+  -h, --help      Show help information
+
+Arguments:
+  [PATHS...]      One or more .zen/.star files or directories containing such files
+                  When omitted, all .zen/.star files in the current directory are formatted
+
+Examples:
+  pcb fmt                      # Format all .zen/.star files in current directory
+  pcb fmt design.star          # Format specific file
+  pcb fmt src/                 # Format all files in src/ directory
+  pcb fmt --check              # Check formatting without making changes
+  pcb fmt --diff main.star     # Show what would change
+```
+
+The fmt command:
+
+- Uses the bundled buildifier formatter (no external dependencies)
+- Formats files according to Bazel/Starlark style conventions
+- Supports checking mode (`--check`) for CI/CD pipelines
+- Shows diffs (`--diff`) without modifying files
+- Returns non-zero exit code if files need formatting in check mode
+
 ### `pcb lsp`
 
 Start the Language Server Protocol server for editor integration.
@@ -549,6 +581,10 @@ Layout("layout")
 ## License
 
 Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+### Third-Party Software
+
+- **buildifier**: The `pcb fmt` command includes a bundled buildifier binary from the [bazelbuild/buildtools](https://github.com/bazelbuild/buildtools) project, which is licensed under the Apache License, Version 2.0. See [crates/pcb-buildifier/LICENSE](crates/pcb-buildifier/LICENSE) for the full license text.
 
 ## Acknowledgments
 

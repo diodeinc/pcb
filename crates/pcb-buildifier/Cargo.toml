@@ -1,0 +1,21 @@
+[package]
+name = "pcb-buildifier"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+description = "Bundled buildifier for pcb tooling"
+homepage = { workspace = true }
+authors = { workspace = true }
+license = "MIT AND Apache-2.0"
+
+[dependencies]
+anyhow = { workspace = true }
+dirs = "5"
+log = { workspace = true }
+once_cell = "1.19"
+
+[build-dependencies]
+anyhow = { workspace = true }
+reqwest = { version = "0.11", features = ["blocking"] }
+sha2 = "0.10"
+hex = "0.4"

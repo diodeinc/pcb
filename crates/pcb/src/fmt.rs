@@ -1,12 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use log::debug;
+use pcb_buildifier::Buildifier;
 use pcb_ui::prelude::*;
 use pcb_zen::file_extensions;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Format .zen and .star files using buildifier")]
@@ -26,105 +26,21 @@ pub struct FmtArgs {
     pub diff: bool,
 }
 
-/// Check if buildifier is available in the system PATH
-fn check_buildifier_available() -> Result<()> {
-    match Command::new("buildifier")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        _ => Err(anyhow::anyhow!(
-            "buildifier is not installed or not available in PATH.\n\
-            Please install buildifier to use the fmt command.\n\
-            \n\
-            Installation options:\n\
-            - Go: go install github.com/bazelbuild/buildtools/buildifier@latest\n\
-            - Homebrew: brew install buildifier\n\
-            - Download from: https://github.com/bazelbuild/buildtools/releases"
-        )),
-    }
-}
-
 /// Format a single file using buildifier
-fn format_file(file_path: &Path, args: &FmtArgs) -> Result<bool> {
+fn format_file(buildifier: &Buildifier, file_path: &Path, args: &FmtArgs) -> Result<bool> {
     debug!("Formatting file: {}", file_path.display());
 
-    let mut cmd = Command::new("buildifier");
-
-    // Set the appropriate mode based on arguments
     if args.check {
-        cmd.arg("--mode=check");
+        buildifier.check_file(file_path)
     } else if args.diff {
-        cmd.arg("--mode=diff");
+        let diff = buildifier.diff_file(file_path)?;
+        if !diff.is_empty() {
+            print!("{}", diff);
+        }
+        Ok(true)
     } else {
-        cmd.arg("--mode=fix");
-    }
-
-    // Add the file path
-    cmd.arg(file_path);
-
-    // Execute the command
-    let output = cmd.output()?;
-
-    // Handle different exit codes
-    match output.status.code() {
-        Some(0) => {
-            // File was already formatted or successfully formatted
-            if args.diff && !output.stdout.is_empty() {
-                // Print diff output
-                print!("{}", String::from_utf8_lossy(&output.stdout));
-            }
-            Ok(true)
-        }
-        Some(1) => {
-            // File needs formatting (in check mode) or had formatting applied
-            if args.check {
-                // In check mode, this means file needs formatting
-                Ok(false)
-            } else {
-                // In format mode, this should not happen if file was successfully formatted
-                Ok(true)
-            }
-        }
-        Some(4) => {
-            // Exit code 4 means file needs reformatting (common in check mode)
-            if args.check {
-                Ok(false)
-            } else if args.diff {
-                // In diff mode, print the output and consider it successful
-                if !output.stdout.is_empty() {
-                    print!("{}", String::from_utf8_lossy(&output.stdout));
-                }
-                Ok(true)
-            } else {
-                // In format mode, this shouldn't happen if formatting was successful
-                Ok(true)
-            }
-        }
-        Some(2) => {
-            // Syntax error or other buildifier error
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(anyhow::anyhow!(
-                "Buildifier error for {}: {}",
-                file_path.display(),
-                stderr
-            ))
-        }
-        Some(code) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(anyhow::anyhow!(
-                "Buildifier exited with code {} for {}: {}",
-                code,
-                file_path.display(),
-                stderr
-            ))
-        }
-        None => Err(anyhow::anyhow!(
-            "Buildifier was terminated by signal for {}",
-            file_path.display()
-        )),
+        buildifier.format_file(file_path)?;
+        Ok(true)
     }
 }
 
@@ -174,8 +90,16 @@ pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 }
 
 pub fn execute(args: FmtArgs) -> Result<()> {
-    // Check if buildifier is available
-    check_buildifier_available()?;
+    // Create a buildifier instance
+    let buildifier = Buildifier::new().context("Failed to initialize bundled buildifier")?;
+
+    // Print version info in debug mode
+    debug!(
+        "Using {}",
+        buildifier
+            .version()
+            .unwrap_or_else(|_| "buildifier".to_string())
+    );
 
     // Determine which files to format
     let starlark_paths = collect_files(&args.paths)?;
@@ -204,7 +128,7 @@ pub fn execute(args: FmtArgs) -> Result<()> {
             Spinner::builder(format!("{file_name}: Formatting")).start()
         };
 
-        match format_file(&file_path, &args) {
+        match format_file(&buildifier, &file_path, &args) {
             Ok(is_formatted) => {
                 spinner.finish();
 
