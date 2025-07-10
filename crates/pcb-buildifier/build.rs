@@ -45,10 +45,7 @@ fn main() -> Result<()> {
         "aarch64-unknown-linux-gnu" | "aarch64-unknown-linux-musl" => ("linux", "arm64", ""),
         "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => ("windows", "amd64", ".exe"),
         _ => {
-            eprintln!(
-                "Warning: Unsupported target '{}', buildifier will not be bundled",
-                target
-            );
+            eprintln!("Warning: Unsupported target '{target}', buildifier will not be bundled");
             return Ok(());
         }
     };
