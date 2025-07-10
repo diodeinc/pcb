@@ -53,10 +53,9 @@ fn main() -> Result<()> {
         }
     };
 
-    let binary_name = format!("buildifier-{}-{}{}", platform, arch, extension);
+    let binary_name = format!("buildifier-{platform}-{arch}{extension}");
     let url = format!(
-        "https://github.com/bazelbuild/buildtools/releases/download/v{}/{}",
-        BUILDIFIER_VERSION, binary_name
+        "https://github.com/bazelbuild/buildtools/releases/download/v{BUILDIFIER_VERSION}/{binary_name}"
     );
 
     // Find the expected checksum
@@ -64,7 +63,7 @@ fn main() -> Result<()> {
         .iter()
         .find(|(name, _)| *name == binary_name)
         .map(|(_, checksum)| *checksum)
-        .context(format!("No checksum found for {}", binary_name))?;
+        .context(format!("No checksum found for {binary_name}"))?;
 
     let out_dir = env::var("OUT_DIR")?;
     let buildifier_path = Path::new(&out_dir).join("buildifier");
@@ -84,13 +83,10 @@ fn main() -> Result<()> {
     }
 
     // Download the binary
-    println!(
-        "cargo:warning=Downloading buildifier {} for {}-{}",
-        BUILDIFIER_VERSION, platform, arch
-    );
+    println!("cargo:warning=Downloading buildifier {BUILDIFIER_VERSION} for {platform}-{arch}");
 
     let response = reqwest::blocking::get(&url)
-        .with_context(|| format!("Failed to download buildifier from {}", url))?;
+        .with_context(|| format!("Failed to download buildifier from {url}"))?;
 
     if !response.status().is_success() {
         anyhow::bail!("Failed to download buildifier: HTTP {}", response.status());
@@ -106,9 +102,7 @@ fn main() -> Result<()> {
 
     if actual_checksum != expected_checksum {
         anyhow::bail!(
-            "Checksum mismatch for buildifier binary:\nExpected: {}\nActual: {}",
-            expected_checksum,
-            actual_checksum
+            "Checksum mismatch for buildifier binary:\nExpected: {expected_checksum}\nActual: {actual_checksum}"
         );
     }
 
