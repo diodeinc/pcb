@@ -148,13 +148,8 @@ pub fn execute(args: FmtArgs) -> Result<()> {
                         all_formatted = false;
                         files_needing_format.push(file_path.clone());
                     }
-                } else if args.diff {
-                    println!(
-                        "{} {}",
-                        pcb_ui::icons::success(),
-                        file_name.with_style(Style::Green).bold()
-                    );
                 } else {
+                    // For both diff mode and regular format mode, show success
                     println!(
                         "{} {}",
                         pcb_ui::icons::success(),
