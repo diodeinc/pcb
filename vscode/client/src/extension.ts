@@ -307,11 +307,10 @@ export function activate(context: ExtensionContext) {
     new ZenerFileHandler()
   );
 
-  const lspPath: string = requireSetting("zener.lspPath");
-  const args: [string] = requireSetting("zener.lspArguments");
+  const pcbPath: string = requireSetting("zener.pcbPath");
 
   // Otherwise to spawn the server
-  let serverOptions: ServerOptions = { command: lspPath, args: args };
+  let serverOptions: ServerOptions = { command: pcbPath, args: ["lsp"] };
 
   // Options to control the language client
   let clientOptions: LanguageClientOptions = {
@@ -399,6 +398,61 @@ export function activate(context: ExtensionContext) {
     })
   );
 
+  // Register document formatting provider
+  context.subscriptions.push(
+    vscode.languages.registerDocumentFormattingEditProvider("zener", {
+      async provideDocumentFormattingEdits(
+        document: vscode.TextDocument,
+        _options: vscode.FormattingOptions,
+        _token: vscode.CancellationToken
+      ): Promise<vscode.TextEdit[]> {
+        try {
+          // Save the document first to ensure pcb fmt works on the latest content
+          if (document.isDirty) {
+            await document.save();
+          }
+
+          const { execFile } = require("child_process");
+          const util = require("util");
+          const execFileAsync = util.promisify(execFile);
+
+          try {
+            // Run pcb fmt on the file
+            await execFileAsync(pcbPath, ["fmt", document.uri.fsPath], {
+              cwd: path.dirname(document.uri.fsPath),
+            });
+
+            // Read the formatted content
+            const fs = require("fs");
+            const formattedContent = fs.readFileSync(document.uri.fsPath, "utf8");
+
+            // If content changed, return a TextEdit to replace the entire document
+            if (formattedContent !== document.getText()) {
+              const fullRange = new vscode.Range(
+                document.positionAt(0),
+                document.positionAt(document.getText().length)
+              );
+              return [vscode.TextEdit.replace(fullRange, formattedContent)];
+            }
+
+            return [];
+          } catch (error: any) {
+            // If formatting failed, show a message but don't throw
+            if (error.code !== 0) {
+              vscode.window.showWarningMessage(
+                `Formatting failed: ${error.stderr || error.message}`
+              );
+            }
+            return [];
+          }
+        } catch (error) {
+          console.error("Formatting error:", error);
+          return [];
+        }
+      },
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand("zener.runLayout", async () => {
       const activeEditor = vscode.window.activeTextEditor;
@@ -409,7 +463,7 @@ export function activate(context: ExtensionContext) {
         return;
       }
 
-      const pcbBinary = lspPath;
+      const pcbBinary = pcbPath;
       const targetPath = activeEditor.document.uri.fsPath;
 
       const shellCmd = `"${pcbBinary}" layout "${targetPath}"`;

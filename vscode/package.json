@@ -85,20 +85,10 @@
     ],
     "configuration": {
       "properties": {
-        "zener.lspPath": {
+        "zener.pcbPath": {
           "type": "string",
           "default": "pcb",
-          "description": "The path to the binary to invoke (possibly on the path) for the plugin to invoke that handles LSP over stdin/stdout"
-        },
-        "zener.lspArguments": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [
-            "lsp"
-          ],
-          "description": "Additional arguments that should be passed to the binary at zener.lspPath"
+          "description": "The path to the PCB binary (used for LSP, formatting, and layout commands)"
         },
         "zener.enableGotoDefinition": {
           "type": "boolean",
