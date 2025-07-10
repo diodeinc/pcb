@@ -16,6 +16,25 @@ export enum NodeType {
   SYMBOL = "symbol",
 }
 
+// New interfaces for node positioning and rotation
+export interface NodePosition {
+  x: number;
+  y: number;
+  width?: number; // Optional, in case user resizes
+  height?: number; // Optional, in case user resizes
+  rotation?: number; // Rotation in degrees (0-360)
+}
+
+export interface NodePositions {
+  [nodeId: string]: NodePosition;
+}
+
+export interface LayoutResult extends ElkGraph {
+  // Additional metadata about the layout
+  nodePositions: NodePositions;
+  newlyPlacedNodes: string[]; // IDs of nodes that were auto-placed
+}
+
 export interface ElkNode {
   id: string;
   width?: number;
@@ -29,6 +48,7 @@ export interface ElkNode {
   netId?: string; // Only used for net reference nodes
   children?: ElkNode[];
   edges?: ElkEdge[];
+  rotation?: number; // Rotation in degrees
 }
 
 export interface ElkPort {
@@ -111,8 +131,6 @@ export interface SchematicConfig {
     spacing: number;
     // Padding around the entire layout
     padding: number;
-    // Create hierarchical nodes for symbols with vertical net references
-    hierarchicalSymbols?: boolean;
   };
 
   // Visual configuration
@@ -153,7 +171,6 @@ export const DEFAULT_CONFIG: SchematicConfig = {
     direction: "LEFT",
     spacing: 0,
     padding: 0,
-    hierarchicalSymbols: false,
   },
   visual: {
     showPortLabels: true,
@@ -192,12 +209,14 @@ export class SchematicLayoutEngine {
   elk: ELKType;
   nets: Map<string, Set<string>>;
   config: SchematicConfig;
+  private _nodePositions: NodePositions;
 
   constructor(netlist: Netlist, config: Partial<SchematicConfig> = {}) {
     this.netlist = netlist;
     // Use the default ELK configuration which works in the browser
     this.elk = new ELK();
     this.nets = this._generateNets();
+    this._nodePositions = {};
     // Merge provided config with defaults
     this.config = {
       ...DEFAULT_CONFIG,
@@ -318,10 +337,16 @@ export class SchematicLayoutEngine {
   /**
    * Layout the schematic for the given instance
    */
-  async layout(instance_ref: string): Promise<ElkGraph> {
+  async layout(
+    instance_ref: string,
+    nodePositions: NodePositions = {}
+  ): Promise<LayoutResult> {
+    // Store the provided node positions
+    this._nodePositions = nodePositions;
+
     const graph = this._graphForInstance(instance_ref);
 
-    // Basic layout options
+    // Always use layered algorithm with interactive mode
     const layoutOptions = {
       "elk.algorithm": "layered",
       "elk.direction": this.config.layout.direction,
@@ -331,6 +356,10 @@ export class SchematicLayoutEngine {
       "elk.nodeSize.constraints": "NODE_LABELS PORTS PORT_LABELS MINIMUM_SIZE",
       "elk.portConstraints": "FIXED_ORDER",
       "elk.portLabels.placement": "INSIDE NEXT_TO_PORT_IF_POSSIBLE",
+      // Enable interactive mode to respect fixed positions
+      "elk.interactive": "true",
+      // Consider fixed positions when routing edges
+      "elk.layered.considerModelOrder": "NODES_AND_EDGES",
     };
 
     // Create pre-layout graph with noLayout option for debugging
@@ -368,10 +397,49 @@ export class SchematicLayoutEngine {
       `https://rtsys.informatik.uni-kiel.de/elklive/json.html?compressedContent=${postLayoutCompressed}`
     );
 
-    const flattenedGraph = this._flattenGraph(layoutedGraph);
+    // Extract positions from the layout result
+    const extractedNodePositions: NodePositions = {};
+    const newlyPlacedNodes: string[] = [];
+
+    const extractPositions = (nodes: ElkNode[], parentX = 0, parentY = 0) => {
+      for (const node of nodes) {
+        if (node.x !== undefined && node.y !== undefined) {
+          const absoluteX = node.x + parentX;
+          const absoluteY = node.y + parentY;
+
+          extractedNodePositions[node.id] = {
+            x: absoluteX,
+            y: absoluteY,
+            width: node.width,
+            height: node.height,
+            rotation: node.rotation || nodePositions[node.id]?.rotation || 0,
+          };
+
+          // Track which nodes were newly placed (didn't have positions before)
+          if (!nodePositions[node.id]) {
+            newlyPlacedNodes.push(node.id);
+          }
+        }
+
+        // Recursively extract from children if any
+        if (node.children) {
+          extractPositions(
+            node.children,
+            (node.x || 0) + parentX,
+            (node.y || 0) + parentY
+          );
+        }
+      }
+    };
+
+    extractPositions(layoutedGraph.children || []);
 
     // Ensure the graph has the required properties
-    return flattenedGraph;
+    return {
+      ...layoutedGraph,
+      nodePositions: extractedNodePositions,
+      newlyPlacedNodes,
+    } as LayoutResult;
   }
 
   // Private helper methods
@@ -462,6 +530,12 @@ export class SchematicLayoutEngine {
         type: NodeType.SYMBOL,
         width: nodeWidth,
         height: nodeHeight,
+        // Apply position if provided
+        ...(this._nodePositions[instance_ref] && {
+          x: this._nodePositions[instance_ref].x,
+          y: this._nodePositions[instance_ref].y,
+          rotation: this._nodePositions[instance_ref].rotation || 0,
+        }),
         ports: [],
         labels: [
           // Reference designator
@@ -508,6 +582,11 @@ export class SchematicLayoutEngine {
           "elk.portConstraints": "FIXED_POS",
           "elk.nodeSize.constraints": "MINIMUM_SIZE",
           "elk.nodeSize.minimum": `(${nodeWidth}, ${nodeHeight})`,
+          // Mark as fixed if position is provided
+          ...(this._nodePositions[instance_ref] && {
+            "elk.position": `(${this._nodePositions[instance_ref].x},${this._nodePositions[instance_ref].y})`,
+            "elk.fixed": "true",
+          }),
         },
       };
 
@@ -650,6 +729,12 @@ export class SchematicLayoutEngine {
     const node: ElkNode = {
       id: instance_ref,
       type: NodeType.MODULE,
+      // Apply position and rotation if provided
+      ...(this._nodePositions[instance_ref] && {
+        x: this._nodePositions[instance_ref].x,
+        y: this._nodePositions[instance_ref].y,
+        rotation: this._nodePositions[instance_ref].rotation || 0,
+      }),
       ports: [],
       labels: [
         {
@@ -688,7 +773,13 @@ export class SchematicLayoutEngine {
             ]
           : []),
       ],
-      properties: {},
+      properties: {
+        // Mark as fixed if position is provided
+        ...(this._nodePositions[instance_ref] && {
+          "elk.position": `(${this._nodePositions[instance_ref].x},${this._nodePositions[instance_ref].y})`,
+          "elk.fixed": "true",
+        }),
+      },
     };
 
     // Add ports for all children (no interface aggregation)
@@ -849,6 +940,12 @@ export class SchematicLayoutEngine {
       width: nodeWidth,
       height: nodeHeight,
       netId: netName,
+      // Apply position and rotation if provided
+      ...(this._nodePositions[ref_id] && {
+        x: this._nodePositions[ref_id].x,
+        y: this._nodePositions[ref_id].y,
+        rotation: this._nodePositions[ref_id].rotation || 0,
+      }),
       labels: [
         {
           text: netName,
@@ -884,6 +981,11 @@ export class SchematicLayoutEngine {
         "elk.portConstraints": "FIXED_POS",
         "elk.nodeSize.constraints": "MINIMUM_SIZE",
         "elk.nodeSize.minimum": `(${nodeWidth}, ${nodeHeight})`,
+        // Mark as fixed if position is provided
+        ...(this._nodePositions[ref_id] && {
+          "elk.position": `(${this._nodePositions[ref_id].x},${this._nodePositions[ref_id].y})`,
+          "elk.fixed": "true",
+        }),
       },
     };
   }
@@ -936,315 +1038,50 @@ export class SchematicLayoutEngine {
    * Add connectivity to the graph by creating net references for each net
    */
   private _addConnectivity(graph: ElkGraph): ElkGraph {
-    // First pass: collect all net references that would be created
-    const nodeNetReferences: Map<
-      string,
-      Array<{
-        netRefNode: ElkNode;
-        edge: ElkEdge;
-        portSide: "NORTH" | "SOUTH" | "EAST" | "WEST";
-      }>
-    > = new Map();
-
-    // For each net in the netlist
+    // First pass: Add net information to ports
     for (const [netId, net] of this.nets.entries()) {
-      // Find all ports in this graph that are connected to this net
-      const connectedPorts: { portId: string; nodeId: string }[] = [];
+      // Get the net name from the netlist
+      const netInfo = this.netlist.nets[netId];
+      const netName = netInfo?.name || netId;
 
-      // Check all nodes in the graph
+      // Find all ports in this graph that are connected to this net
       for (const node of graph.children) {
         if (!node.ports) continue;
 
         // Check each port on the node
         for (const port of node.ports) {
           if (net.has(port.id)) {
-            connectedPorts.push({ portId: port.id, nodeId: node.id });
             // Mark the port as connected to this net
             port.netId = netId;
-          }
-        }
-      }
 
-      // Create a separate net reference for each connected port
-      if (connectedPorts.length >= 1) {
-        // Get the net name from the netlist
-        const net = this.netlist.nets[netId];
-        const netName = net?.name || netId;
-
-        // Create a net reference for each connected port
-        for (let i = 0; i < connectedPorts.length; i++) {
-          const { portId, nodeId } = connectedPorts[i];
-
-          // Find the port to get its side
-          let portSide: "NORTH" | "SOUTH" | "EAST" | "WEST" = "WEST";
-          const node = graph.children.find((n) => n.id === nodeId);
-          if (node && node.ports) {
-            const port = node.ports.find((p) => p.id === portId);
-            if (port && port.properties && port.properties["port.side"]) {
-              portSide = port.properties["port.side"] as
-                | "NORTH"
-                | "SOUTH"
-                | "EAST"
-                | "WEST";
+            // Add net name as a label on the port
+            if (!port.labels) {
+              port.labels = [];
             }
+
+            // Get the port side to determine if we need to swap dimensions
+            const portSide = port.properties?.["port.side"];
+            const isVertical = portSide === "NORTH" || portSide === "SOUTH";
+
+            const dimensions = calculateTextDimensions(netName, 10);
+
+            // Add net reference label to the port
+            // This will be rendered as a circle with text by the viewer
+            port.labels.push({
+              text: netName,
+              width: isVertical ? dimensions.height : dimensions.width,
+              height: isVertical ? dimensions.width : dimensions.height,
+              properties: {
+                labelType: "netReference",
+              },
+            });
           }
-
-          // Determine opposite side for net reference
-          let netRefSide: "NORTH" | "SOUTH" | "EAST" | "WEST";
-          switch (portSide) {
-            case "NORTH":
-              netRefSide = "SOUTH";
-              break;
-            case "SOUTH":
-              netRefSide = "NORTH";
-              break;
-            case "EAST":
-              netRefSide = "WEST";
-              break;
-            case "WEST":
-              netRefSide = "EAST";
-              break;
-          }
-
-          // Create a unique net reference for this port
-          const netRefId = `${netId}_ref_${i}`;
-          const netRefNode = this._netReferenceNode(
-            netRefId,
-            netName,
-            netRefSide
-          );
-
-          // Create edge from the port to its dedicated net reference
-          const edge: ElkEdge = {
-            id: `${portId}_to_${netRefId}`,
-            netId: netId,
-            sources: [portId],
-            targets: [netRefNode.ports![0].id],
-            sourceComponentRef: nodeId,
-            targetComponentRef: netRefId,
-          };
-
-          // Store the net reference info grouped by node
-          if (!nodeNetReferences.has(nodeId)) {
-            nodeNetReferences.set(nodeId, []);
-          }
-          nodeNetReferences.get(nodeId)!.push({
-            netRefNode,
-            edge,
-            portSide,
-          });
         }
       }
     }
 
-    // Second pass: process nodes and create hierarchical nodes where needed
-    const processedNodes = new Set<string>();
-    const newChildren: ElkNode[] = [];
-    const newEdges: ElkEdge[] = [];
-
-    for (const node of graph.children) {
-      if (processedNodes.has(node.id)) continue;
-
-      const netRefs = nodeNetReferences.get(node.id) || [];
-      const verticalNetRefs = netRefs.filter(
-        (ref) => ref.portSide === "NORTH" || ref.portSide === "SOUTH"
-      );
-      const horizontalNetRefs = netRefs.filter(
-        (ref) => ref.portSide === "EAST" || ref.portSide === "WEST"
-      );
-
-      // If the node has vertical net references, create a hierarchical node
-      if (
-        verticalNetRefs.length > 0 &&
-        node.type === NodeType.SYMBOL &&
-        this.config.layout.hierarchicalSymbols
-      ) {
-        const hierarchicalNode = this._createHierarchicalNode(
-          node,
-          verticalNetRefs,
-          horizontalNetRefs
-        );
-        newChildren.push(hierarchicalNode);
-
-        // Add edges for horizontal net references (they stay outside)
-        for (const ref of horizontalNetRefs) {
-          newChildren.push(ref.netRefNode);
-          newEdges.push(ref.edge);
-        }
-
-        processedNodes.add(node.id);
-      } else {
-        // No vertical net references, add node and all its net references normally
-        newChildren.push(node);
-        for (const ref of netRefs) {
-          newChildren.push(ref.netRefNode);
-          newEdges.push(ref.edge);
-        }
-        processedNodes.add(node.id);
-      }
-    }
-
-    // Update the graph with new children and edges
-    graph.children = newChildren;
-    graph.edges = [...graph.edges, ...newEdges];
-
+    // For now, we'll keep the graph as-is without creating separate net reference nodes
+    // The viewer will handle rendering the net labels on the ports directly
     return graph;
-  }
-
-  /**
-   * Create a hierarchical node containing a symbol and its vertical net references
-   */
-  private _createHierarchicalNode(
-    symbolNode: ElkNode,
-    verticalNetRefs: Array<{
-      netRefNode: ElkNode;
-      edge: ElkEdge;
-      portSide: "NORTH" | "SOUTH" | "EAST" | "WEST";
-    }>,
-    horizontalNetRefs: Array<{
-      netRefNode: ElkNode;
-      edge: ElkEdge;
-      portSide: "NORTH" | "SOUTH" | "EAST" | "WEST";
-    }>
-  ): ElkNode {
-    const hierarchicalId = `${symbolNode.id}_hierarchical`;
-
-    // Create internal edges for vertical net references
-    const internalEdges: ElkEdge[] = verticalNetRefs.map((ref) => ({
-      ...ref.edge,
-      // Update the edge to reference the internal nodes
-      sourceComponentRef: ref.edge.sourceComponentRef.replace(
-        symbolNode.id,
-        symbolNode.id
-      ),
-      targetComponentRef: ref.netRefNode.id,
-    }));
-
-    // Create the hierarchical node
-    const hierarchicalNode: ElkNode = {
-      id: hierarchicalId,
-      type: NodeType.MODULE, // Use MODULE type for hierarchical nodes
-      children: [symbolNode, ...verticalNetRefs.map((ref) => ref.netRefNode)],
-      edges: internalEdges,
-      ports: [],
-      labels: [],
-      properties: {
-        "elk.algorithm": "layered",
-        "elk.direction": "DOWN", // Vertical layout for this subgraph
-        "elk.spacing.nodeNode": "10",
-        "elk.layered.spacing.nodeNodeBetweenLayers": "20",
-        "elk.padding": "[top=10, left=10, bottom=10, right=10]",
-        "elk.nodeSize.constraints":
-          "NODE_LABELS PORTS PORT_LABELS MINIMUM_SIZE",
-        "elk.portConstraints": "FIXED_ORDER",
-      },
-    };
-
-    // Create ports on the hierarchical node for horizontal connections
-    // These will be used to connect horizontal net references from outside
-    for (const port of symbolNode.ports || []) {
-      // Only expose ports that have horizontal connections
-      const hasHorizontalConnection = horizontalNetRefs.some((ref) =>
-        ref.edge.sources.includes(port.id)
-      );
-
-      if (hasHorizontalConnection) {
-        const hierarchicalPort: ElkPort = {
-          id: port.id.replace(symbolNode.id, hierarchicalId),
-          x: port.x,
-          y: port.y,
-          width: port.width,
-          height: port.height,
-          labels: port.labels,
-          properties: port.properties,
-          netId: port.netId,
-        };
-        hierarchicalNode.ports!.push(hierarchicalPort);
-      }
-    }
-
-    // Update horizontal net reference edges to connect to the hierarchical node's ports
-    for (const ref of horizontalNetRefs) {
-      // Update the edge source to use the hierarchical node's port
-      ref.edge.sources = ref.edge.sources.map((source) =>
-        source.replace(symbolNode.id, hierarchicalId)
-      );
-      ref.edge.sourceComponentRef = hierarchicalId;
-    }
-
-    return hierarchicalNode;
-  }
-
-  /**
-   * Flatten a hierarchical graph by extracting all nested nodes and edges
-   * This is useful after layout when we want to render everything at the same level
-   */
-  private _flattenGraph(graph: ElkGraph): ElkGraph {
-    const flattenedNodes: ElkNode[] = [];
-    const flattenedEdges: ElkEdge[] = [];
-
-    // Helper function to recursively process nodes
-    const processNode = (
-      node: ElkNode,
-      parentX: number = 0,
-      parentY: number = 0
-    ) => {
-      // If this is a hierarchical container node (has children)
-      if (node.children && node.children.length > 0) {
-        // Process all child nodes, adjusting their positions relative to parent
-        for (const child of node.children) {
-          processNode(child, parentX + (node.x || 0), parentY + (node.y || 0));
-        }
-
-        // Process all edges within this hierarchical node
-        if (node.edges) {
-          for (const edge of node.edges) {
-            // Adjust edge positions if they have layout information
-            if (edge.sections) {
-              for (const section of edge.sections) {
-                if (section.startPoint) {
-                  section.startPoint.x += parentX + (node.x || 0);
-                  section.startPoint.y += parentY + (node.y || 0);
-                }
-                if (section.endPoint) {
-                  section.endPoint.x += parentX + (node.x || 0);
-                  section.endPoint.y += parentY + (node.y || 0);
-                }
-                if (section.bendPoints) {
-                  for (const bendPoint of section.bendPoints) {
-                    bendPoint.x += parentX + (node.x || 0);
-                    bendPoint.y += parentY + (node.y || 0);
-                  }
-                }
-              }
-            }
-            flattenedEdges.push(edge);
-          }
-        }
-      } else {
-        // This is a leaf node, add it to the flattened list
-        // Adjust its position based on parent offset
-        const flatNode = {
-          ...node,
-          x: (node.x || 0) + parentX,
-          y: (node.y || 0) + parentY,
-        };
-        flattenedNodes.push(flatNode);
-      }
-    };
-
-    // Process all top-level nodes
-    for (const node of graph.children) {
-      processNode(node);
-    }
-
-    // Add all top-level edges
-    flattenedEdges.push(...graph.edges);
-
-    return {
-      id: graph.id,
-      children: flattenedNodes,
-      edges: flattenedEdges,
-    };
   }
 }

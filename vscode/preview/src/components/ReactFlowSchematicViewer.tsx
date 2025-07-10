@@ -32,6 +32,8 @@ import type {
   ElkGraph,
   ElkNode,
   SchematicConfig,
+  NodePositions,
+  NodePosition,
 } from "../LayoutEngine";
 // import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
 import type { Netlist } from "../types/NetlistTypes";
@@ -72,7 +74,7 @@ function createSchematicNode(
     },
     position: { x: elkNode.x || 0, y: elkNode.y || 0 },
     type: elkNode.type,
-    draggable: false,
+    draggable: true,
     // Only make modules selectable
     selectable: elkNode.type === NodeType.MODULE,
     connectable: false,
@@ -81,7 +83,7 @@ function createSchematicNode(
       // Prevent hover effects on component nodes
       ...(elkNode.type === NodeType.COMPONENT
         ? {
-            cursor: "default",
+            cursor: "move",
             // Add some !important styles but NOT transform
             backgroundColor: "#f5f5f5 !important",
             border: "1px solid #ddd !important",
@@ -91,9 +93,7 @@ function createSchematicNode(
     },
     // Add class for additional styling with CSS
     className:
-      elkNode.type === NodeType.MODULE
-        ? "module-node"
-        : "component-node non-interactive",
+      elkNode.type === NodeType.MODULE ? "module-node" : "component-node",
   };
 }
 
@@ -147,32 +147,34 @@ const customStyles = `
     background-color: var(--vscode-editor-background, #fff);
   }
 
-  /* Disable hover effects for component nodes */
-  .react-flow__node-componentNode {
-    pointer-events: none !important;
+  /* Component nodes are now draggable */
+  .react-flow__node-component {
+    cursor: move !important;
   }
   
-  .react-flow__node-componentNode .component-port {
+  .react-flow__node-component .component-port {
     pointer-events: auto !important;
   }
   
-  /* Prevent hover color change for component nodes */
-  .react-flow__node-componentNode:hover {
-    background-color: var(--vscode-editor-background, #f5f5f5) !important;
-    border-color: ${edgeColor} !important;
-    box-shadow: none !important;
-    cursor: default !important;
+  /* Hover effect for draggable nodes */
+  .react-flow__node:hover {
+    cursor: move !important;
   }
   
-  /* Keep module nodes interactive */
-  .react-flow__node-moduleNode {
-    cursor: pointer;
+  /* Keep module nodes interactive with both drag and click */
+  .react-flow__node-module {
+    cursor: move;
   }
 
   /* Module node hover state */
-  .react-flow__node-moduleNode:hover {
+  .react-flow__node-module:hover {
     border-color: var(--vscode-focusBorder, #0066cc) !important;
     box-shadow: 0 0 0 2px var(--vscode-focusBorder, #0066cc) !important;
+  }
+  
+  /* Show different cursor when dragging */
+  .react-flow__node.dragging {
+    cursor: grabbing !important;
   }
   
   /* Make sure the port connection points remain interactive */
@@ -310,8 +312,8 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
       : `color-mix(in srgb, var(--vscode-editorLineNumber-foreground, #666) 5%, var(--vscode-editor-background, #fff))`,
     border: `1px solid ${electricalComponentColor}`,
     opacity: moduleOpacity,
-    cursor: isModule ? "pointer" : "default",
-    pointerEvents: isModule ? "auto" : "none",
+    cursor: "move",
+    pointerEvents: "auto",
     borderRadius: "0px",
   };
 
@@ -452,9 +454,11 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
                   />
 
                   {/* Port label */}
-                  <div className="port-label" style={labelStyle}>
-                    {port.labels?.[0]?.text}
-                  </div>
+                  {port.labels && port.labels.length > 0 && (
+                    <div className="port-label" style={labelStyle}>
+                      {port.labels[0].text}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1543,65 +1547,149 @@ const SymbolNode = React.memo(
             else if (side === "SOUTH") handlePosition = Position.Bottom;
 
             return (
-              <div
-                key={port.id}
-                className="component-port"
-                style={{
-                  position: "absolute",
-                  left: portX,
-                  top: portY,
-                  width: 1,
-                  height: 1,
-                  opacity: 0,
-                  zIndex: 20,
-                  pointerEvents: "auto",
-                }}
-                data-port-id={port.id}
-              >
-                <Handle
-                  type="source"
-                  position={handlePosition}
-                  id={`${port.id}-source`}
-                  style={{ ...portHandleStyle, opacity: 0 }}
-                />
-                <Handle
-                  type="target"
-                  position={handlePosition}
-                  id={`${port.id}-target`}
-                  style={{ ...portHandleStyle, opacity: 0 }}
-                />
+              <React.Fragment key={port.id}>
+                <div
+                  className="component-port"
+                  style={{
+                    position: "absolute",
+                    left: portX,
+                    top: portY,
+                    width: 1,
+                    height: 1,
+                    opacity: 0,
+                    zIndex: 20,
+                    pointerEvents: "auto",
+                  }}
+                  data-port-id={port.id}
+                >
+                  <Handle
+                    type="source"
+                    position={handlePosition}
+                    id={`${port.id}-source`}
+                    style={{ ...portHandleStyle, opacity: 0 }}
+                  />
+                  <Handle
+                    type="target"
+                    position={handlePosition}
+                    id={`${port.id}-target`}
+                    style={{ ...portHandleStyle, opacity: 0 }}
+                  />
+                </div>
 
-                {/* Port label - only show if configured */}
+                {/* Port label - rendered outside the port div */}
                 {port.labels && port.labels[0] && (
-                  <div
-                    className="port-label"
-                    style={{
-                      position: "absolute",
-                      fontSize: "10px",
-                      whiteSpace: "nowrap",
-                      pointerEvents: "none",
-                      color: electricalComponentColor,
-                      opacity: 0.7,
-                      transform:
-                        side === "WEST"
-                          ? "translate(5px, -5px)"
-                          : side === "EAST"
-                          ? "translate(-100%, -5px) translateX(-5px)"
-                          : side === "NORTH"
-                          ? "translate(-50%, 5px)"
-                          : "translate(-50%, -15px)",
-                      textAlign:
-                        side === "WEST"
-                          ? "left"
-                          : side === "EAST"
-                          ? "right"
-                          : "center",
-                    }}
-                  >
-                    {port.labels[0].text}
-                  </div>
+                  <>
+                    {/* Check if this is a net reference label */}
+                    {port.labels.some(
+                      (label) => label.properties?.labelType === "netReference"
+                    ) ? (
+                      // Render net reference with circle and label
+                      <div
+                        className="port-net-reference"
+                        style={{
+                          position: "absolute",
+                          left: portX,
+                          top: portY,
+                          opacity: 0.7,
+                          pointerEvents: "none",
+                          zIndex: 100, // Higher z-index to ensure visibility
+                        }}
+                      >
+                        {/* Circle - always centered on the port */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            width: "6px",
+                            height: "6px",
+                            borderRadius: "50%",
+                            border: `1.5px solid ${electricalComponentColor}`,
+                            backgroundColor: "white", // White fill for visibility
+                            // Center the circle on the port
+                            left: "-4px",
+                            top: "-4px",
+                          }}
+                        />
+                        {/* Label text - positioned based on side */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            fontSize: "10px",
+                            fontWeight: "bold",
+                            color: electricalComponentColor,
+                            whiteSpace: "nowrap",
+                            // Position text based on side
+                            ...(side === "WEST" && {
+                              // Text to the left of circle (outside)
+                              right: "6px",
+                              top: "-5px",
+                              textAlign: "right" as const,
+                            }),
+                            ...(side === "EAST" && {
+                              // Text to the right of circle (outside)
+                              left: "6px",
+                              top: "-5px",
+                            }),
+                            ...(side === "NORTH" && {
+                              // Text above circle
+                              left: "50%",
+                              bottom: "8px", // Position above the circle (8px = 6px circle + 2px gap)
+                              transform: "translateX(-50%)",
+                              writingMode: "vertical-rl",
+                              textOrientation: "mixed",
+                            }),
+                            ...(side === "SOUTH" && {
+                              // Text below circle
+                              left: "50%",
+                              top: "8px",
+                              transform: "translateX(-50%)",
+                              writingMode: "vertical-rl",
+                              textOrientation: "mixed",
+                            }),
+                          }}
+                        >
+                          {
+                            port.labels.find(
+                              (label) =>
+                                label.properties?.labelType === "netReference"
+                            )?.text
+                          }
+                        </div>
+                      </div>
+                    ) : (
+                      // Regular port label (non-net reference)
+                      <div
+                        className="port-label"
+                        style={{
+                          position: "absolute",
+                          left: portX,
+                          top: portY,
+                          fontSize: "10px",
+                          whiteSpace: "nowrap",
+                          pointerEvents: "none",
+                          color: electricalComponentColor,
+                          opacity: 0.7,
+                          transform:
+                            side === "WEST"
+                              ? "translate(5px, -5px)"
+                              : side === "EAST"
+                              ? "translate(-100%, -5px) translateX(-5px)"
+                              : side === "NORTH"
+                              ? "translate(-50%, 5px)"
+                              : "translate(-50%, -15px)",
+                          textAlign:
+                            side === "WEST"
+                              ? "left"
+                              : side === "EAST"
+                              ? "right"
+                              : "center",
+                        }}
+                      >
+                        {port.labels[0].text}
+                      </div>
+                    )}
+                  </>
                 )}
-              </div>
+              </React.Fragment>
             );
           })}
         </div>
@@ -1748,6 +1836,7 @@ const Visualizer = ({
   const [edges, setEdges, onEdgesChange] = useEdgesState<SchematicEdge>([]);
   const [elkLayout, setElkLayout] = useState<ElkGraph | null>(null);
   const [layoutError, setLayoutError] = useState<string | null>(null);
+  const [nodePositions, setNodePositions] = useState<NodePositions>({});
   const [selectionState, setSelectionState] = useState<SelectionState>({
     selectedNetId: null,
     hoveredNetId: null,
@@ -1798,6 +1887,32 @@ const Visualizer = ({
     []
   );
 
+  // Function to update edge routing only (no debounce needed)
+  const updateEdgeRouting = useCallback(
+    async (updatedPositions: NodePositions) => {
+      if (!selectedComponent) return;
+
+      try {
+        const renderer = new SchematicLayoutEngine(netlist, currentConfig);
+
+        // Use the unified layout method with updated positions
+        const layoutResult = await renderer.layout(
+          selectedComponent,
+          updatedPositions
+        );
+
+        // Only update the edges from the layout result
+        const newEdges = layoutResult.edges.map((elkEdge) =>
+          createSchematicEdge(elkEdge, selectionState)
+        );
+        setEdges(newEdges);
+      } catch (error) {
+        console.error("Error updating edge routing:", error);
+      }
+    },
+    [netlist, selectedComponent, currentConfig, selectionState, setEdges]
+  );
+
   // Cleanup debounced functions on unmount
   useEffect(() => {
     return () => {
@@ -1813,17 +1928,33 @@ const Visualizer = ({
 
   useEffect(() => {
     async function render() {
-      const renderer = new SchematicLayoutEngine(netlist, currentConfig);
       if (selectedComponent) {
         try {
-          let layout = await renderer.layout(selectedComponent);
-
           // Determine if we should animate based on whether the component changed
           const isNewComponent = prevComponent !== selectedComponent;
+
+          // If switching to a new component, clear node positions
+          let currentNodePositions = nodePositions;
+          if (isNewComponent && prevComponent !== null) {
+            // Clear positions when switching components
+            setNodePositions({});
+            currentNodePositions = {};
+          }
+
+          const renderer = new SchematicLayoutEngine(netlist, currentConfig);
+
+          const layoutResult = await renderer.layout(
+            selectedComponent,
+            currentNodePositions
+          );
+
           setShouldAnimate(!isNewComponent);
           setPrevComponent(selectedComponent);
 
-          setElkLayout(layout as ElkGraph);
+          // Update node positions with the layout result
+          setNodePositions(layoutResult.nodePositions);
+
+          setElkLayout(layoutResult as ElkGraph);
           // Center the view after new component is rendered
           setTimeout(() => {
             reactFlowInstance.current?.fitView({
@@ -1893,6 +2024,59 @@ const Visualizer = ({
       }
     },
     [onComponentSelect]
+  );
+
+  // Custom handler for node changes to capture position updates
+  const handleNodesChange = useCallback(
+    (changes: any[]) => {
+      // First, apply the changes using the default handler
+      onNodesChange(changes);
+
+      // Check if any position changes occurred (including during dragging)
+      const positionChanges = changes.filter(
+        (change) => change.type === "position" && change.position
+      );
+
+      if (positionChanges.length > 0) {
+        // Update node positions based on the changes
+        const updatedPositions = { ...nodePositions };
+        let hasActualChanges = false;
+
+        positionChanges.forEach((change) => {
+          if (change.position) {
+            const currentPos = nodePositions[change.id];
+            // Only update if position actually changed
+            if (
+              !currentPos ||
+              Math.abs(currentPos.x - change.position.x) > 0.01 ||
+              Math.abs(currentPos.y - change.position.y) > 0.01
+            ) {
+              hasActualChanges = true;
+              updatedPositions[change.id] = {
+                x: change.position.x,
+                y: change.position.y,
+                // Preserve existing width/height/rotation if they exist
+                ...(currentPos && {
+                  width: currentPos.width,
+                  height: currentPos.height,
+                  rotation: currentPos.rotation,
+                }),
+              };
+            }
+          }
+        });
+
+        // Only update if there were actual changes
+        if (hasActualChanges) {
+          // Update the positions in state
+          setNodePositions(updatedPositions);
+
+          // Trigger edge routing update immediately
+          updateEdgeRouting(updatedPositions);
+        }
+      }
+    },
+    [onNodesChange, nodePositions, updateEdgeRouting]
   );
 
   useOnSelectionChange({
@@ -2085,7 +2269,7 @@ const Visualizer = ({
           proOptions={{ hideAttribution: true }}
           nodes={nodes}
           edges={edges}
-          onNodesChange={onNodesChange}
+          onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
@@ -2117,7 +2301,7 @@ const Visualizer = ({
           style={{
             backgroundColor: "var(--vscode-editor-background, #fff)",
           }}
-          nodesDraggable={false}
+          nodesDraggable={true}
           nodesConnectable={false}
           elementsSelectable={true}
           selectNodesOnDrag={false}
