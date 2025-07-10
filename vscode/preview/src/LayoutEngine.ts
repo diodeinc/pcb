@@ -32,7 +32,6 @@ export interface NodePositions {
 export interface LayoutResult extends ElkGraph {
   // Additional metadata about the layout
   nodePositions: NodePositions;
-  newlyPlacedNodes: string[]; // IDs of nodes that were auto-placed
 }
 
 export interface ElkNode {
@@ -44,6 +43,7 @@ export interface ElkNode {
   ports?: ElkPort[];
   labels?: ElkLabel[];
   properties?: Record<string, string>;
+  layoutOptions?: Record<string, string>;
   type: NodeType;
   netId?: string; // Only used for net reference nodes
   children?: ElkNode[];
@@ -131,6 +131,10 @@ export interface SchematicConfig {
     spacing: number;
     // Padding around the entire layout
     padding: number;
+    // Distance threshold for creating edges between pins on the same net
+    netConnectionThreshold: number;
+    // Whether to hide net labels on ports that have edges
+    hideLabelsOnConnectedPorts: boolean;
   };
 
   // Visual configuration
@@ -171,6 +175,8 @@ export const DEFAULT_CONFIG: SchematicConfig = {
     direction: "LEFT",
     spacing: 0,
     padding: 0,
+    netConnectionThreshold: 300, // Default to 300 units (about 1-2 node widths)
+    hideLabelsOnConnectedPorts: true,
   },
   visual: {
     showPortLabels: true,
@@ -348,6 +354,7 @@ export class SchematicLayoutEngine {
 
     // Always use layered algorithm with interactive mode
     const layoutOptions = {
+      // "elk.algorithm": "layered",
       "elk.algorithm": "layered",
       "elk.direction": this.config.layout.direction,
       "elk.spacing.nodeNode": `${this.config.layout.spacing}`,
@@ -356,6 +363,7 @@ export class SchematicLayoutEngine {
       "elk.nodeSize.constraints": "NODE_LABELS PORTS PORT_LABELS MINIMUM_SIZE",
       "elk.portConstraints": "FIXED_ORDER",
       "elk.portLabels.placement": "INSIDE NEXT_TO_PORT_IF_POSSIBLE",
+      "elk.layered.nodePlacement.strategy": "INTERACTIVE",
       // Enable interactive mode to respect fixed positions
       "elk.interactive": "true",
       // Consider fixed positions when routing edges
@@ -366,6 +374,7 @@ export class SchematicLayoutEngine {
     const preLayoutGraph = {
       ...graph,
       layoutOptions: {
+        ...layoutOptions,
         noLayout: true,
       },
     };
@@ -388,8 +397,17 @@ export class SchematicLayoutEngine {
     // Run the layout
     const layoutedGraph = await this.elk.layout(graphWithOptions);
 
+    // Add noLayout option for debugging in post-layout graph
+    const postLayoutGraph = {
+      ...layoutedGraph,
+      layoutOptions: {
+        ...layoutedGraph.layoutOptions,
+        noLayout: true,
+      },
+    };
+
     // Generate debugging link for post-layout graph
-    const postLayoutJson = JSON.stringify(layoutedGraph, null, 2);
+    const postLayoutJson = JSON.stringify(postLayoutGraph, null, 2);
     const postLayoutCompressed =
       LZString.compressToEncodedURIComponent(postLayoutJson);
     console.log("\nPost-layout ELK Live link:");
@@ -399,7 +417,6 @@ export class SchematicLayoutEngine {
 
     // Extract positions from the layout result
     const extractedNodePositions: NodePositions = {};
-    const newlyPlacedNodes: string[] = [];
 
     const extractPositions = (nodes: ElkNode[], parentX = 0, parentY = 0) => {
       for (const node of nodes) {
@@ -414,11 +431,6 @@ export class SchematicLayoutEngine {
             height: node.height,
             rotation: node.rotation || nodePositions[node.id]?.rotation || 0,
           };
-
-          // Track which nodes were newly placed (didn't have positions before)
-          if (!nodePositions[node.id]) {
-            newlyPlacedNodes.push(node.id);
-          }
         }
 
         // Recursively extract from children if any
@@ -438,7 +450,6 @@ export class SchematicLayoutEngine {
     return {
       ...layoutedGraph,
       nodePositions: extractedNodePositions,
-      newlyPlacedNodes,
     } as LayoutResult;
   }
 
@@ -1038,6 +1049,9 @@ export class SchematicLayoutEngine {
    * Add connectivity to the graph by creating net references for each net
    */
   private _addConnectivity(graph: ElkGraph): ElkGraph {
+    // Track which ports have edges so we can optionally hide their labels
+    const portsWithEdges = new Set<string>();
+
     // First pass: Add net information to ports
     for (const [netId, net] of this.nets.entries()) {
       // Get the net name from the netlist
@@ -1053,35 +1067,307 @@ export class SchematicLayoutEngine {
           if (net.has(port.id)) {
             // Mark the port as connected to this net
             port.netId = netId;
-
-            // Add net name as a label on the port
-            if (!port.labels) {
-              port.labels = [];
-            }
-
-            // Get the port side to determine if we need to swap dimensions
-            const portSide = port.properties?.["port.side"];
-            const isVertical = portSide === "NORTH" || portSide === "SOUTH";
-
-            const dimensions = calculateTextDimensions(netName, 10);
-
-            // Add net reference label to the port
-            // This will be rendered as a circle with text by the viewer
-            port.labels.push({
-              text: netName,
-              width: isVertical ? dimensions.height : dimensions.width,
-              height: isVertical ? dimensions.width : dimensions.height,
-              properties: {
-                labelType: "netReference",
-              },
-            });
           }
         }
       }
     }
 
-    // For now, we'll keep the graph as-is without creating separate net reference nodes
-    // The viewer will handle rendering the net labels on the ports directly
+    // Second pass: Create edges for nearby connections
+    let edgeCounter = 0;
+    for (const [netId, net] of this.nets.entries()) {
+      const netInfo = this.netlist.nets[netId];
+      const netName = netInfo?.name || netId;
+
+      // Find clusters of nearby ports
+      const clusters = this._findNetClusters(netId, graph.children);
+
+      // Create MST edges for each cluster
+      for (const cluster of clusters) {
+        const mstEdges = this._createMinimalSpanningTree(cluster);
+
+        for (const mstEdge of mstEdges) {
+          const edgeId = `edge_${netId}_${edgeCounter++}`;
+
+          // Create the edge
+          const edge: ElkEdge = {
+            id: edgeId,
+            netId: netId,
+            sources: [mstEdge.source.port.id],
+            targets: [mstEdge.target.port.id],
+            sourceComponentRef: mstEdge.source.node.id,
+            targetComponentRef: mstEdge.target.node.id,
+            labels: [
+              {
+                text: netName,
+                width: calculateTextDimensions(netName, 10).width,
+                height: calculateTextDimensions(netName, 10).height,
+              },
+            ],
+            properties: {
+              netName: netName,
+            },
+          };
+
+          graph.edges.push(edge);
+
+          // Track that these ports have edges
+          portsWithEdges.add(mstEdge.source.port.id);
+          portsWithEdges.add(mstEdge.target.port.id);
+        }
+      }
+    }
+
+    // Third pass: Add net labels to ports (but optionally hide them if they have edges)
+    for (const node of graph.children) {
+      if (!node.ports) continue;
+
+      for (const port of node.ports) {
+        if (port.netId) {
+          const netInfo = this.netlist.nets[port.netId];
+          const netName = netInfo?.name || port.netId;
+
+          // Skip adding label if this port has edges and we're configured to hide labels
+          if (
+            this.config.layout.hideLabelsOnConnectedPorts &&
+            portsWithEdges.has(port.id)
+          ) {
+            continue;
+          }
+
+          // Add net name as a label on the port
+          if (!port.labels) {
+            port.labels = [];
+          }
+
+          // Get the port side to determine if we need to swap dimensions
+          const portSide = port.properties?.["port.side"];
+          const isVertical = portSide === "NORTH" || portSide === "SOUTH";
+
+          const dimensions = calculateTextDimensions(netName, 10);
+
+          // Add net reference label to the port
+          port.labels.push({
+            text: netName,
+            width: isVertical ? dimensions.height : dimensions.width,
+            height: isVertical ? dimensions.width : dimensions.height,
+            properties: {
+              labelType: "netReference",
+            },
+          });
+        }
+      }
+    }
+
     return graph;
+  }
+
+  /**
+   * Calculate the absolute position of a port
+   */
+  private _getPortPosition(
+    node: ElkNode,
+    port: ElkPort
+  ): { x: number; y: number } | null {
+    // If node doesn't have a position yet, return null
+    if (node.x === undefined || node.y === undefined) {
+      return null;
+    }
+
+    const nodeX = node.x;
+    const nodeY = node.y;
+    const portX = port.x || 0;
+    const portY = port.y || 0;
+
+    return {
+      x: nodeX + portX,
+      y: nodeY + portY,
+    };
+  }
+
+  /**
+   * Calculate Euclidean distance between two positions
+   */
+  private _calculateDistance(
+    pos1: { x: number; y: number },
+    pos2: { x: number; y: number }
+  ): number {
+    const dx = pos2.x - pos1.x;
+    const dy = pos2.y - pos1.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  /**
+   * Find clusters of nearby ports for a given net
+   */
+  private _findNetClusters(
+    netId: string,
+    nodes: ElkNode[]
+  ): Array<
+    Array<{ node: ElkNode; port: ElkPort; position: { x: number; y: number } }>
+  > {
+    // Collect all ports connected to this net with their positions
+    const connectedPorts: Array<{
+      node: ElkNode;
+      port: ElkPort;
+      position: { x: number; y: number };
+    }> = [];
+
+    for (const node of nodes) {
+      if (!node.ports) continue;
+      for (const port of node.ports) {
+        if (port.netId === netId) {
+          const position = this._getPortPosition(node, port);
+          // Only include ports that have valid positions
+          if (position) {
+            connectedPorts.push({ node, port, position });
+          }
+        }
+      }
+    }
+
+    // If less than 2 ports, no edges needed
+    if (connectedPorts.length < 2) {
+      return [];
+    }
+
+    // Build adjacency graph based on distance threshold
+    const threshold = this.config.layout.netConnectionThreshold;
+    const adjacency: Map<number, Set<number>> = new Map();
+
+    for (let i = 0; i < connectedPorts.length; i++) {
+      adjacency.set(i, new Set());
+    }
+
+    for (let i = 0; i < connectedPorts.length; i++) {
+      for (let j = i + 1; j < connectedPorts.length; j++) {
+        const distance = this._calculateDistance(
+          connectedPorts[i].position,
+          connectedPorts[j].position
+        );
+        if (distance <= threshold) {
+          adjacency.get(i)!.add(j);
+          adjacency.get(j)!.add(i);
+        }
+      }
+    }
+
+    // Find connected components using DFS
+    const visited = new Set<number>();
+    const clusters: Array<
+      Array<{
+        node: ElkNode;
+        port: ElkPort;
+        position: { x: number; y: number };
+      }>
+    > = [];
+
+    const dfs = (index: number, cluster: number[]) => {
+      visited.add(index);
+      cluster.push(index);
+      for (const neighbor of adjacency.get(index)!) {
+        if (!visited.has(neighbor)) {
+          dfs(neighbor, cluster);
+        }
+      }
+    };
+
+    for (let i = 0; i < connectedPorts.length; i++) {
+      if (!visited.has(i)) {
+        const clusterIndices: number[] = [];
+        dfs(i, clusterIndices);
+
+        // Only create clusters with 2 or more ports
+        if (clusterIndices.length >= 2) {
+          const cluster = clusterIndices.map((idx) => connectedPorts[idx]);
+          clusters.push(cluster);
+        }
+      }
+    }
+
+    return clusters;
+  }
+
+  /**
+   * Create a minimal spanning tree for a cluster of ports
+   */
+  private _createMinimalSpanningTree(
+    cluster: Array<{
+      node: ElkNode;
+      port: ElkPort;
+      position: { x: number; y: number };
+    }>
+  ): Array<{
+    source: { node: ElkNode; port: ElkPort };
+    target: { node: ElkNode; port: ElkPort };
+    distance: number;
+  }> {
+    if (cluster.length < 2) return [];
+
+    // Kruskal's algorithm for MST
+    const edges: Array<{
+      source: { node: ElkNode; port: ElkPort };
+      target: { node: ElkNode; port: ElkPort };
+      distance: number;
+      sourceIdx: number;
+      targetIdx: number;
+    }> = [];
+
+    // Create all possible edges with distances
+    for (let i = 0; i < cluster.length; i++) {
+      for (let j = i + 1; j < cluster.length; j++) {
+        const distance = this._calculateDistance(
+          cluster[i].position,
+          cluster[j].position
+        );
+        edges.push({
+          source: { node: cluster[i].node, port: cluster[i].port },
+          target: { node: cluster[j].node, port: cluster[j].port },
+          distance,
+          sourceIdx: i,
+          targetIdx: j,
+        });
+      }
+    }
+
+    // Sort edges by distance
+    edges.sort((a, b) => a.distance - b.distance);
+
+    // Union-Find data structure
+    const parent = new Array(cluster.length).fill(0).map((_, i) => i);
+    const find = (x: number): number => {
+      if (parent[x] !== x) {
+        parent[x] = find(parent[x]);
+      }
+      return parent[x];
+    };
+    const union = (x: number, y: number): boolean => {
+      const px = find(x);
+      const py = find(y);
+      if (px === py) return false;
+      parent[px] = py;
+      return true;
+    };
+
+    // Select edges for MST
+    const mstEdges: Array<{
+      source: { node: ElkNode; port: ElkPort };
+      target: { node: ElkNode; port: ElkPort };
+      distance: number;
+    }> = [];
+
+    for (const edge of edges) {
+      if (union(edge.sourceIdx, edge.targetIdx)) {
+        mstEdges.push({
+          source: edge.source,
+          target: edge.target,
+          distance: edge.distance,
+        });
+        if (mstEdges.length === cluster.length - 1) {
+          break; // MST complete
+        }
+      }
+    }
+
+    return mstEdges;
   }
 }
