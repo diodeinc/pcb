@@ -2247,64 +2247,6 @@ const Visualizer = ({
                       {currentConfig.layout.padding}
                     </span>
                   </div>
-
-                  <div className="debug-pane-control">
-                    <label htmlFor="explodeModules">Explode Modules:</label>
-                    <input
-                      id="explodeModules"
-                      type="checkbox"
-                      checked={currentConfig.layout.explodeModules}
-                      onChange={(e) =>
-                        updateConfig({
-                          layout: {
-                            ...currentConfig.layout,
-                            explodeModules: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="debug-pane-control">
-                    <label htmlFor="smartNetReferencePositioning">
-                      Smart Net Reference Positioning:
-                    </label>
-                    <input
-                      id="smartNetReferencePositioning"
-                      type="checkbox"
-                      checked={
-                        currentConfig.layout.smartNetReferencePositioning ??
-                        true
-                      }
-                      onChange={(e) =>
-                        updateConfig({
-                          layout: {
-                            ...currentConfig.layout,
-                            smartNetReferencePositioning: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="debug-pane-control">
-                    <label htmlFor="smartEdgeSplitting">
-                      Smart Edge Splitting:
-                    </label>
-                    <input
-                      id="smartEdgeSplitting"
-                      type="checkbox"
-                      checked={currentConfig.layout.smartEdgeSplitting ?? true}
-                      onChange={(e) =>
-                        updateConfig({
-                          layout: {
-                            ...currentConfig.layout,
-                            smartEdgeSplitting: e.target.checked,
-                          },
-                        })
-                      }
-                    />
-                  </div>
                 </div>
 
                 <div className="debug-pane-section">
