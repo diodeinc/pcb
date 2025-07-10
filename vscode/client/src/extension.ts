@@ -489,24 +489,28 @@ export function activate(context: ExtensionContext) {
         _token: vscode.CancellationToken
       ): Promise<vscode.TextEdit[]> {
         try {
-          // Save the document first to ensure pcb fmt works on the latest content
-          if (document.isDirty) {
-            await document.save();
-          }
-
           const { execFile } = require("child_process");
           const util = require("util");
           const execFileAsync = util.promisify(execFile);
+          const os = require("os");
+          const crypto = require("crypto");
+
+          // Create a temporary file with the current document content
+          const tempDir = os.tmpdir();
+          const tempFileName = `pcb-fmt-${crypto.randomBytes(6).toString("hex")}.zen`;
+          const tempFilePath = path.join(tempDir, tempFileName);
 
           try {
-            // Run pcb fmt on the file
-            await execFileAsync(pcbPath, ["fmt", document.uri.fsPath], {
+            // Write current document content to temp file
+            fs.writeFileSync(tempFilePath, document.getText(), "utf8");
+
+            // Run pcb fmt on the temp file
+            await execFileAsync(pcbPath, ["fmt", tempFilePath], {
               cwd: path.dirname(document.uri.fsPath),
             });
 
-            // Read the formatted content
-            const fs = require("fs");
-            const formattedContent = fs.readFileSync(document.uri.fsPath, "utf8");
+            // Read the formatted content from temp file
+            const formattedContent = fs.readFileSync(tempFilePath, "utf8");
 
             // If content changed, return a TextEdit to replace the entire document
             if (formattedContent !== document.getText()) {
@@ -526,6 +530,13 @@ export function activate(context: ExtensionContext) {
               );
             }
             return [];
+          } finally {
+            // Clean up temp file
+            try {
+              fs.unlinkSync(tempFilePath);
+            } catch {
+              // Ignore cleanup errors
+            }
           }
         } catch (error) {
           console.error("Formatting error:", error);
