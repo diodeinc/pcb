@@ -24,6 +24,9 @@ import {
 } from "vscode-languageclient";
 import * as path from "path";
 import { TextDecoder } from "util";
+import * as fs from "fs";
+import * as os from "os";
+import { execSync } from "child_process";
 
 let client: LanguageClient;
 
@@ -38,6 +41,72 @@ function requireSetting<T>(path: string): T {
     throw new Error(`Setting "${path}" was not configured`);
   }
   return ret;
+}
+
+/**
+ * Attempts to resolve the pcb binary path.
+ * Tries multiple strategies:
+ * 1. Use the configured path as-is if it exists
+ * 2. Try common installation locations
+ * 3. Try to find it in PATH using system commands
+ */
+function resolvePcbPath(): string {
+  const configuredPath: string = vscode.workspace
+    .getConfiguration()
+    .get("zener.pcbPath", "pcb");
+
+  // First, check if the configured path works as-is
+  if (fs.existsSync(configuredPath)) {
+    return configuredPath;
+  }
+
+  // Common installation locations to check
+  const commonPaths = [
+    // macOS/Linux common locations
+    "/usr/local/bin/pcb",
+    "/usr/bin/pcb",
+    "/opt/pcb/bin/pcb",
+    path.join(os.homedir(), ".cargo", "bin", "pcb"),
+    path.join(os.homedir(), ".local", "bin", "pcb"),
+    // Windows common locations
+    "C:\\Program Files\\pcb\\pcb.exe",
+    "C:\\Program Files (x86)\\pcb\\pcb.exe",
+    path.join(os.homedir(), ".cargo", "bin", "pcb.exe"),
+  ];
+
+  // Add .exe extension on Windows if not already present
+  if (process.platform === "win32" && !configuredPath.endsWith(".exe")) {
+    commonPaths.unshift(configuredPath + ".exe");
+  }
+
+  // Check common paths
+  for (const possiblePath of commonPaths) {
+    if (fs.existsSync(possiblePath)) {
+      return possiblePath;
+    }
+  }
+
+  // Try to find in PATH using system commands
+  try {
+    const command = process.platform === "win32" ? "where" : "which";
+    const result = execSync(`${command} pcb`, { encoding: "utf-8" }).trim();
+    if (result && fs.existsSync(result)) {
+      return result;
+    }
+  } catch {
+    // Command failed, pcb not in PATH
+  }
+
+  // If we still haven't found it, show a helpful error message
+  vscode.window.showErrorMessage(
+    `Unable to find 'pcb' binary. Please install it or set the 'zener.pcbPath' setting to its location. ` +
+    `Tried: ${configuredPath}` +
+    (configuredPath !== "pcb" ? ` (configured path)` : ` (default)`)
+  );
+
+  // Return the configured path anyway - it will fail when used,
+  // but at least we've warned the user
+  return configuredPath;
 }
 
 function additionalClientSettings(): AdditionalClientSettings {
@@ -307,7 +376,7 @@ export function activate(context: ExtensionContext) {
     new ZenerFileHandler()
   );
 
-  const pcbPath: string = requireSetting("zener.pcbPath");
+  const pcbPath: string = resolvePcbPath();
 
   // Otherwise to spawn the server
   let serverOptions: ServerOptions = { command: pcbPath, args: ["lsp"] };
@@ -329,6 +398,19 @@ export function activate(context: ExtensionContext) {
 
   // Start the client. This will also launch the server.
   client.start();
+  
+  // Handle client errors
+  client.onDidChangeState((event) => {
+    if (event.newState === 1) { // Starting state
+      console.log("Zener language server is starting...");
+    } else if (event.newState === 3) { // Failed state
+      vscode.window.showErrorMessage(
+        `Zener language server failed to start. ` +
+        `Please check that 'pcb' is installed and the 'zener.pcbPath' setting is correct. ` +
+        `Current path: ${pcbPath}`
+      );
+    }
+  });
 
   /* -------------------------- preview initialisation -------------------------- */
 
@@ -476,6 +558,58 @@ export function activate(context: ExtensionContext) {
         },
         () => runShellCommand(shellCmd, path.dirname(targetPath))
       );
+    })
+  );
+
+  // Add diagnostic command to check pcb installation
+  context.subscriptions.push(
+    vscode.commands.registerCommand("zener.checkInstallation", async () => {
+      const outputChannel = vscode.window.createOutputChannel("Zener Diagnostics");
+      outputChannel.show();
+      
+      outputChannel.appendLine("=== Zener PCB Installation Check ===");
+      outputChannel.appendLine("");
+      
+      const configuredPath = vscode.workspace
+        .getConfiguration()
+        .get("zener.pcbPath", "pcb");
+      
+      outputChannel.appendLine(`Configured path: ${configuredPath}`);
+      outputChannel.appendLine(`Resolved path: ${pcbPath}`);
+      outputChannel.appendLine(`Platform: ${process.platform}`);
+      outputChannel.appendLine("");
+      
+      // Check if the resolved path exists
+      if (fs.existsSync(pcbPath)) {
+        outputChannel.appendLine(`✓ Binary found at: ${pcbPath}`);
+        
+        // Try to get version
+        try {
+          const version = execSync(`"${pcbPath}" --version`, { encoding: "utf-8" }).trim();
+          outputChannel.appendLine(`✓ Version: ${version}`);
+        } catch (error) {
+          outputChannel.appendLine(`✗ Could not get version: ${error.message}`);
+        }
+      } else {
+        outputChannel.appendLine(`✗ Binary not found at: ${pcbPath}`);
+      }
+      
+      // Check PATH
+      outputChannel.appendLine("");
+      outputChannel.appendLine("Checking system PATH:");
+      try {
+        const command = process.platform === "win32" ? "where" : "which";
+        const result = execSync(`${command} pcb`, { encoding: "utf-8" }).trim();
+        outputChannel.appendLine(`✓ Found in PATH: ${result}`);
+      } catch {
+        outputChannel.appendLine(`✗ 'pcb' not found in system PATH`);
+      }
+      
+      outputChannel.appendLine("");
+      outputChannel.appendLine("To fix installation issues:");
+      outputChannel.appendLine("1. Install pcb from https://pcb.new");
+      outputChannel.appendLine("2. Add it to your system PATH, or");
+      outputChannel.appendLine("3. Set the full path in VS Code settings: 'zener.pcbPath'");
     })
   );
 }
