@@ -35,7 +35,7 @@ fn format_file(buildifier: &Buildifier, file_path: &Path, args: &FmtArgs) -> Res
     } else if args.diff {
         let diff = buildifier.diff_file(file_path)?;
         if !diff.is_empty() {
-            print!("{}", diff);
+            print!("{diff}");
         }
         Ok(true)
     } else {
@@ -163,7 +163,7 @@ pub fn execute(args: FmtArgs) -> Result<()> {
             }
             Err(e) => {
                 spinner.error(format!("{file_name}: Format failed"));
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {e}");
                 all_formatted = false;
             }
         }

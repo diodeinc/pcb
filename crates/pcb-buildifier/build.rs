@@ -80,7 +80,7 @@ fn main() -> Result<()> {
     }
 
     // Download the binary
-    println!("cargo:warning=Downloading buildifier {BUILDIFIER_VERSION} for {platform}-{arch}");
+    println!("cargo:info=Downloading buildifier {BUILDIFIER_VERSION} for {platform}-{arch}");
 
     let response = reqwest::blocking::get(&url)
         .with_context(|| format!("Failed to download buildifier from {url}"))?;

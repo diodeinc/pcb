@@ -44,7 +44,7 @@ fn get_cached_binary_path() -> Result<PathBuf> {
         .context("Failed to determine cache directory")?
         .join("pcb")
         .join("buildifier")
-        .join(format!("v{}", BUILDIFIER_VERSION));
+        .join(format!("v{BUILDIFIER_VERSION}"));
 
     // Create cache directory if it doesn't exist
     fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
@@ -151,7 +151,7 @@ impl Buildifier {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to format file: {}", stderr);
+            anyhow::bail!("Failed to format file: {stderr}");
         }
 
         Ok(())
