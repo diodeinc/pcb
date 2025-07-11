@@ -52,6 +52,22 @@ import {
 } from "../renderer/kicad_global_label";
 // import { Color } from "../third_party/kicanvas/base/color";
 
+// Utility function for grid snapping
+function snapToGrid(value: number, gridSize: number): number {
+  return Math.round(value / gridSize) * gridSize;
+}
+
+function snapPosition(
+  x: number,
+  y: number,
+  gridSize: number
+): { x: number; y: number } {
+  return {
+    x: snapToGrid(x, gridSize),
+    y: snapToGrid(y, gridSize),
+  };
+}
+
 type SelectionState = {
   selectedNetId: string | null;
   hoveredNetId: string | null;
@@ -74,6 +90,7 @@ function createSchematicNode(
   selectionState: SelectionState,
   netlist?: Netlist
 ): SchematicNode {
+  // Note: positions should already be snapped by the layout engine
   return {
     id: elkNode.id,
     data: {
@@ -2301,6 +2318,27 @@ const Visualizer = ({
   // Custom handler for node changes to capture position updates
   const handleNodesChange = useCallback(
     (changes: any[]) => {
+      // Apply snapping to position changes before they're applied
+      if (currentConfig.layout.gridSnap.enabled) {
+        const gridSize = currentConfig.layout.gridSnap.size;
+
+        changes = changes.map((change) => {
+          if (change.type === "position" && change.position) {
+            // Snap the position immediately
+            const snapped = snapPosition(
+              change.position.x,
+              change.position.y,
+              gridSize
+            );
+            return {
+              ...change,
+              position: snapped,
+            };
+          }
+          return change;
+        });
+      }
+
       // First, apply the changes using the default handler
       onNodesChange(changes);
 
@@ -2360,6 +2398,7 @@ const Visualizer = ({
       updateLayoutAfterDrag,
       isDragging,
       debouncedUpdateLayout,
+      currentConfig,
     ]
   );
 
@@ -2776,6 +2815,56 @@ const Visualizer = ({
                     />
                     <span className="value-display">
                       {currentConfig.layout.padding}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="debug-pane-section">
+                  <h4>Grid Snapping</h4>
+
+                  <div className="debug-pane-control">
+                    <label htmlFor="gridSnapEnabled">Enable Grid Snap:</label>
+                    <input
+                      id="gridSnapEnabled"
+                      type="checkbox"
+                      checked={currentConfig.layout.gridSnap.enabled}
+                      onChange={(e) =>
+                        updateConfig({
+                          layout: {
+                            ...currentConfig.layout,
+                            gridSnap: {
+                              ...currentConfig.layout.gridSnap,
+                              enabled: e.target.checked,
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div className="debug-pane-control">
+                    <label htmlFor="gridSize">Grid Size:</label>
+                    <input
+                      id="gridSize"
+                      type="range"
+                      min="5"
+                      max="50"
+                      step="0.1"
+                      value={currentConfig.layout.gridSnap.size}
+                      onChange={(e) =>
+                        updateConfig({
+                          layout: {
+                            ...currentConfig.layout,
+                            gridSnap: {
+                              ...currentConfig.layout.gridSnap,
+                              size: Number(e.target.value),
+                            },
+                          },
+                        })
+                      }
+                    />
+                    <span className="value-display">
+                      {currentConfig.layout.gridSnap.size.toFixed(1)}
                     </span>
                   </div>
                 </div>

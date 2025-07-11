@@ -141,6 +141,11 @@ export interface SchematicConfig {
     netConnectionThreshold: number;
     // Whether to hide net labels on ports that have edges
     hideLabelsOnConnectedPorts: boolean;
+    // Grid snapping configuration
+    gridSnap: {
+      enabled: boolean;
+      size: number; // Grid size in pixels (50mil converted to pixels)
+    };
   };
 
   // Visual configuration
@@ -183,6 +188,10 @@ export const DEFAULT_CONFIG: SchematicConfig = {
     padding: 20,
     netConnectionThreshold: 300, // Default to 300 units (about 1-2 node widths)
     hideLabelsOnConnectedPorts: true,
+    gridSnap: {
+      enabled: true,
+      size: 12.7, // 50mil = 1.27mm, at 10x scale = 12.7 pixels
+    },
   },
   visual: {
     showPortLabels: true,
@@ -214,6 +223,22 @@ function calculateTextDimensions(
   const height = lineHeight * lines.length;
 
   return { width, height };
+}
+
+// Utility functions for grid snapping
+function snapToGrid(value: number, gridSize: number): number {
+  return Math.round(value / gridSize) * gridSize;
+}
+
+function snapPosition(
+  x: number,
+  y: number,
+  gridSize: number
+): { x: number; y: number } {
+  return {
+    x: snapToGrid(x, gridSize),
+    y: snapToGrid(y, gridSize),
+  };
 }
 
 // Junction detection types
@@ -450,6 +475,21 @@ export class SchematicLayoutEngine {
 
     // Initialize extracted node positions early since we'll add junction nodes
     const extractedNodePositions: NodePositions = {};
+
+    // Apply grid snapping if enabled - do this before creating obstacles for libavoid
+    if (this.config.layout.gridSnap.enabled) {
+      const gridSize = this.config.layout.gridSnap.size;
+
+      if (layoutedGraph.children) {
+        for (const node of layoutedGraph.children) {
+          if (node.x !== undefined && node.y !== undefined) {
+            const snapped = snapPosition(node.x, node.y, gridSize);
+            node.x = snapped.x;
+            node.y = snapped.y;
+          }
+        }
+      }
+    }
 
     // Convert nodes to obstacles for libavoid
     const obstacles: Obstacle[] = [];
@@ -749,12 +789,24 @@ export class SchematicLayoutEngine {
   ): void {
     if (!graph.children) return;
 
+    const gridSize = this.config.layout.gridSnap.enabled
+      ? this.config.layout.gridSnap.size
+      : 0;
+
     const applyToNodes = (nodes: ElkNode[]) => {
       for (const node of nodes) {
         const position = nodePositions[node.id];
         if (position) {
-          node.x = position.x;
-          node.y = position.y;
+          if (gridSize > 0) {
+            // Snap the position when applying
+            const snapped = snapPosition(position.x, position.y, gridSize);
+            node.x = snapped.x;
+            node.y = snapped.y;
+          } else {
+            node.x = position.x;
+            node.y = position.y;
+          }
+
           if (position.width !== undefined) node.width = position.width;
           if (position.height !== undefined) node.height = position.height;
           if (position.rotation !== undefined)
