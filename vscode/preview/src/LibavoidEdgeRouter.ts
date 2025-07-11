@@ -84,20 +84,20 @@ export class LibavoidEdgeRouter {
     this.router.setRoutingParameter(this.avoidLib.anglePenalty, 100);
     this.router.setRoutingParameter(this.avoidLib.crossingPenalty, 0);
     this.router.setRoutingParameter(this.avoidLib.shapeBufferDistance, 15);
-    this.router.setRoutingParameter(this.avoidLib.idealNudgingDistance, 1);
+    this.router.setRoutingParameter(this.avoidLib.idealNudgingDistance, 10);
 
     // Enable hyperedge routing options
     this.router.setRoutingOption(
       this.avoidLib.improveHyperedgeRoutesMovingJunctions,
       true
     );
-    // this.router.setRoutingOption(
-    //   this.avoidLib.improveHyperedgeRoutesMovingAddingAndDeletingJunctions,
-    //   true
-    // );
+    this.router.setRoutingOption(
+      this.avoidLib.improveHyperedgeRoutesMovingAddingAndDeletingJunctions,
+      true
+    );
     this.router.setRoutingOption(
       this.avoidLib.nudgeSharedPathsWithCommonEndPoint,
-      true
+      false
     );
     this.router.setRoutingOption(
       this.avoidLib.penaliseOrthogonalSharedPathsAtConnEnds,

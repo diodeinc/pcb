@@ -961,19 +961,20 @@ export class SchematicLayoutEngine {
           snappedY = nodeHeight;
         }
 
-        // Calculate label text and dimensions
-        const labelText =
-          pinEndpoint.name === "~" ? pinEndpoint.number || "~" : portName;
-        const baseDimensions = calculateTextDimensions(labelText, 10);
+        // // Calculate label text and dimensions
+        // const labelText =
+        //   pinEndpoint.name === "~" ? pinEndpoint.number || "~" : portName;
 
-        // For vertical ports (NORTH/SOUTH), text is rotated 90 degrees, so swap width/height
+        // const baseDimensions = calculateTextDimensions(labelText, 10);
+
+        // // For vertical ports (NORTH/SOUTH), text is rotated 90 degrees, so swap width/height
         const isVertical = side === "NORTH" || side === "SOUTH";
-        const labelWidth = isVertical
-          ? baseDimensions.height
-          : baseDimensions.width;
-        const labelHeight = isVertical
-          ? baseDimensions.width
-          : baseDimensions.height;
+        // const labelWidth = isVertical
+        //   ? baseDimensions.height
+        //   : baseDimensions.width;
+        // const labelHeight = isVertical
+        //   ? baseDimensions.width
+        //   : baseDimensions.height;
 
         // Prepare port labels
         const portLabels: ElkLabel[] = [];
@@ -1018,8 +1019,19 @@ export class SchematicLayoutEngine {
           const netInfo = this.netlist.nets[netId];
           const netName = netInfo?.name || netId;
 
+          const maxLabelLength = 10;
+          const halfLength = Math.floor(maxLabelLength / 2);
+          let truncatedLabelText = netName;
+
+          if (netName.length > maxLabelLength) {
+            truncatedLabelText =
+              netName.slice(0, halfLength) + "..." + netName.slice(-halfLength);
+          }
           // Calculate net label dimensions and position
-          const netLabelDimensions = calculateTextDimensions(netName, 10);
+          const netLabelDimensions = calculateTextDimensions(
+            truncatedLabelText,
+            10
+          );
           const netLabelWidth = isVertical
             ? netLabelDimensions.height
             : netLabelDimensions.width;
@@ -1051,7 +1063,7 @@ export class SchematicLayoutEngine {
           }
 
           portLabels.push({
-            text: netName,
+            text: truncatedLabelText,
             x: netLabelX,
             y: netLabelY,
             width: netLabelWidth,
