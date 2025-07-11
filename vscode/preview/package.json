@@ -17,7 +17,7 @@
     "canvas": "^2.11.2",
     "elkjs": "^0.10.0",
     "jspdf": "^3.0.1",
-    "libavoid-js": "^0.4.5",
+    "libavoid-js": "github:LK/libavoid-js#f994097",
     "pdfkit": "^0.16.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -29,7 +29,7 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
-    "postbuild": "cp -f node_modules/libavoid-js/dist/libavoid.wasm build/static/js/libavoid.wasm",
+    "postbuild": "for dir in ./playwright/.cache ./public ./build ./build/static/js; do cp -f node_modules/libavoid-js/dist/libavoid.wasm $dir/libavoid.wasm; done",
     "test": "craco test --watchAll=false",
     "test:watch": "craco test",
     "eject": "react-scripts eject",

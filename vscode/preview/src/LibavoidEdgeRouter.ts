@@ -1,21 +1,46 @@
 import { AvoidLib } from "libavoid-js";
 import type { Avoid } from "libavoid-js";
-import type {
-  ElkEdge,
-  ElkNode,
-  ElkPort,
-  ElkGraph,
-  ElkLabel,
-} from "./LayoutEngine";
 
-export interface EdgeRoute {
+// Input types
+export interface Obstacle {
   id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Port {
+  id: string;
+  x: number;
+  y: number;
+  visibilityDirection?: "NORTH" | "SOUTH" | "EAST" | "WEST" | "ALL";
+}
+
+export interface Hyperedge {
+  id: string;
+  ports: Port[];
+}
+
+// Output types
+export interface Junction {
+  id: string;
+  x: number;
+  y: number;
+  hyperedgeId: string;
+}
+
+export interface PointToPointEdge {
+  id: string;
+  sourceType: "port" | "junction";
+  sourceId: string;
+  sourceX: number;
+  sourceY: number;
+  targetType: "port" | "junction";
+  targetId: string;
+  targetX: number;
+  targetY: number;
   points: { x: number; y: number }[];
-  netId: string;
-  sourceComponentRef: string;
-  targetComponentRef: string;
-  labels?: ElkLabel[];
-  junctionPoints?: { x: number; y: number }[];
 }
 
 export class LibavoidEdgeRouter {
@@ -23,8 +48,7 @@ export class LibavoidEdgeRouter {
   private router: any = null;
   private shapes: Map<string, any> = new Map();
   private connectors: Map<string, any> = new Map();
-  private junctions: Map<string, any> = new Map(); // Track junctions by netId
-  private netPortMap: Map<string, Set<string>> = new Map(); // Map netId to port IDs
+  private junctions: Map<string, any> = new Map();
   private isInitialized: boolean = false;
 
   /**
@@ -42,22 +66,36 @@ export class LibavoidEdgeRouter {
     this.router = new this.avoidLib.Router(this.avoidLib.OrthogonalRouting);
 
     // Configure routing penalties for better hyperedge routing
-    this.router.setRoutingParameter(this.avoidLib.segmentPenalty, 10);
-    this.router.setRoutingParameter(this.avoidLib.fixedSharedPathPenalty, 0);
-    this.router.setRoutingParameter(this.avoidLib.anglePenalty, 0);
+    this.router.setRoutingParameter(this.avoidLib.segmentPenalty, 1);
+    this.router.setRoutingParameter(this.avoidLib.fixedSharedPathPenalty, 10);
+    this.router.setRoutingParameter(this.avoidLib.anglePenalty, 100);
     this.router.setRoutingParameter(this.avoidLib.crossingPenalty, 0);
+    this.router.setRoutingParameter(this.avoidLib.shapeBufferDistance, 15);
+    this.router.setRoutingParameter(this.avoidLib.idealNudgingDistance, 1);
 
     // Enable hyperedge routing options
     this.router.setRoutingOption(
       this.avoidLib.improveHyperedgeRoutesMovingJunctions,
       true
     );
+    // this.router.setRoutingOption(
+    //   this.avoidLib.improveHyperedgeRoutesMovingAddingAndDeletingJunctions,
+    //   true
+    // );
     this.router.setRoutingOption(
-      this.avoidLib.improveHyperedgeRoutesMovingAddingAndDeletingJunctions,
+      this.avoidLib.nudgeSharedPathsWithCommonEndPoint,
       true
     );
     this.router.setRoutingOption(
-      this.avoidLib.nudgeSharedPathsWithCommonEndPoint,
+      this.avoidLib.penaliseOrthogonalSharedPathsAtConnEnds,
+      true
+    );
+    this.router.setRoutingOption(
+      this.avoidLib.nudgeOrthogonalSegmentsConnectedToShapes,
+      true
+    );
+    this.router.setRoutingOption(
+      this.avoidLib.nudgeOrthogonalTouchingColinearSegments,
       true
     );
 
@@ -65,238 +103,326 @@ export class LibavoidEdgeRouter {
   }
 
   /**
-   * Route edges using libavoid
+   * Route hyperedges using libavoid
+   * @param obstacles List of rectangular obstacles to avoid
+   * @param hyperedges List of hyperedges (each connecting multiple ports)
+   * @returns Junctions and point-to-point edges
    */
-  async routeEdges(graph: ElkGraph): Promise<EdgeRoute[]> {
+  async route(
+    obstacles: Obstacle[],
+    hyperedges: Hyperedge[]
+  ): Promise<{
+    junctions: Junction[];
+    edges: PointToPointEdge[];
+  }> {
     if (!this.isInitialized) {
       await this.initialize();
     }
+
+    console.log(
+      "Starting libavoid routing:",
+      JSON.stringify(obstacles),
+      JSON.stringify(hyperedges)
+    );
 
     if (!this.avoidLib || !this.router) {
       throw new Error("LibavoidEdgeRouter not initialized");
     }
 
-    // Clear previous shapes and connectors
+    // Clear previous routing
     this.clearPreviousRouting();
 
-    // Add nodes as obstacles
-    if (graph.children) {
-      for (const node of graph.children) {
-        this.addNodeAsObstacle(node);
+    // Add obstacles
+    for (const obstacle of obstacles) {
+      this.addObstacle(obstacle);
+    }
+
+    // Process hyperedges
+    const junctionResults: Junction[] = [];
+    const edgeResults: PointToPointEdge[] = [];
+
+    for (const hyperedge of hyperedges) {
+      if (hyperedge.ports.length < 2) {
+        continue; // Skip edges with less than 2 ports
+      }
+
+      if (hyperedge.ports.length === 2) {
+        // Simple point-to-point edge
+        const connectorId = `edge_${hyperedge.id}`;
+        this.createSimpleConnector(
+          connectorId,
+          hyperedge.ports[0],
+          hyperedge.ports[1]
+        );
+      } else {
+        // Hyperedge with junction
+        const junction = this.createJunction(hyperedge);
+        if (junction) {
+          // Don't add to results yet - we'll update position after routing
+
+          // Create connectors from each port to the junction
+          for (let i = 0; i < hyperedge.ports.length; i++) {
+            const port = hyperedge.ports[i];
+            const connectorId = `${hyperedge.id}_port_${i}`;
+            this.createPortToJunctionConnector(connectorId, port, junction.id);
+          }
+        }
       }
     }
 
-    // Build a map of netId to ports for hyperedge creation
-    this.buildNetPortMap(graph);
-
-    // Create junctions for nets with more than 2 connections
-    this.createJunctionsForNets(graph);
-
-    // Create connectors for edges using junctions where appropriate
-    for (const edge of graph.edges) {
-      this.createConnectorWithJunctions(edge, graph.children || []);
+    // Register all junctions with the hyperedge rerouter after all connections are created
+    for (const [hyperedgeId, junctionRef] of this.junctions) {
+      this.router
+        .hyperedgeRerouter()
+        .registerHyperedgeForRerouting(junctionRef);
+      console.log("Registered junction:", hyperedgeId);
     }
 
     // Process routing
     this.router.processTransaction();
 
+    // Now get the actual junction positions after routing
+    for (const [hyperedgeId, junctionRef] of this.junctions) {
+      const pos = junctionRef.recommendedPosition();
+      junctionResults.push({
+        id: `junction_${hyperedgeId}`,
+        x: pos.x,
+        y: pos.y,
+        hyperedgeId: hyperedgeId,
+      });
+    }
+
     // Extract routes
-    const finalRoutes: EdgeRoute[] = [];
-    const processedNets = new Set<string>();
+    for (const [connectorId, connector] of this.connectors) {
+      const polyline = connector.displayRoute();
+      const points: { x: number; y: number }[] = [];
 
-    for (const [edgeId, connector] of this.connectors) {
-      // Skip junction connectors (they are handled as part of the main edge)
-      if (edgeId.endsWith("_junction")) continue;
+      const size = polyline.size();
+      for (let i = 0; i < size; i++) {
+        const point = polyline.get_ps(i);
+        points.push({ x: point.x, y: point.y });
+      }
 
-      const edge = graph.edges.find((e) => e.id === edgeId);
-      if (!edge) continue;
+      // Determine source and target info from connector ID
+      if (connectorId.startsWith("edge_")) {
+        // Simple edge
+        const hyperedgeId = connectorId.substring(5);
+        const hyperedge = hyperedges.find((h) => h.id === hyperedgeId);
+        if (hyperedge && hyperedge.ports.length === 2) {
+          edgeResults.push({
+            id: connectorId,
+            sourceType: "port",
+            sourceId: hyperedge.ports[0].id,
+            sourceX: hyperedge.ports[0].x,
+            sourceY: hyperedge.ports[0].y,
+            targetType: "port",
+            targetId: hyperedge.ports[1].id,
+            targetX: hyperedge.ports[1].x,
+            targetY: hyperedge.ports[1].y,
+            points,
+          });
+        }
+      } else if (connectorId.includes("_port_")) {
+        // Port to junction edge
+        // Extract hyperedge ID and port index more carefully
+        // The connector ID format is: {hyperedgeId}_port_{portIndex}
+        const portSeparator = "_port_";
+        const portSeparatorIndex = connectorId.lastIndexOf(portSeparator);
 
-      const junction = this.junctions.get(edge.netId);
+        if (portSeparatorIndex !== -1) {
+          const hyperedgeId = connectorId.substring(0, portSeparatorIndex);
+          const portIndexStr = connectorId.substring(
+            portSeparatorIndex + portSeparator.length
+          );
+          const portIndex = parseInt(portIndexStr);
 
-      if (
-        junction &&
-        this.netPortMap.get(edge.netId)?.size >= 3 &&
-        !processedNets.has(edge.netId)
-      ) {
-        // For hyperedges, we need to collect all edges for this net
-        // and create a unified route through the junction
-        processedNets.add(edge.netId);
+          const hyperedge = hyperedges.find((h) => h.id === hyperedgeId);
+          const junction = junctionResults.find(
+            (j) => j.hyperedgeId === hyperedgeId
+          );
 
-        const netEdges = graph.edges.filter((e) => e.netId === edge.netId);
-
-        for (const netEdge of netEdges) {
-          const connector1 = this.connectors.get(netEdge.id);
-          const connector2 = this.connectors.get(netEdge.id + "_junction");
-
-          if (connector1 && connector2) {
-            // Combine the two route segments
-            const points: { x: number; y: number }[] = [];
-
-            // Get first segment (source to junction)
-            const polyline1 = connector1.displayRoute();
-            const size1 = polyline1.size();
-            for (let i = 0; i < size1; i++) {
-              const point = polyline1.get_ps(i);
-              points.push({ x: point.x, y: point.y });
-            }
-
-            // Get second segment (junction to target)
-            const polyline2 = connector2.displayRoute();
-            const size2 = polyline2.size();
-            // Skip the first point of the second segment as it's the junction point (duplicate)
-            for (let i = 1; i < size2; i++) {
-              const point = polyline2.get_ps(i);
-              points.push({ x: point.x, y: point.y });
-            }
-
-            const jPos = junction.position();
-
-            finalRoutes.push({
-              id: netEdge.id,
+          if (
+            hyperedge &&
+            junction &&
+            !isNaN(portIndex) &&
+            portIndex < hyperedge.ports.length
+          ) {
+            const port = hyperedge.ports[portIndex];
+            edgeResults.push({
+              id: connectorId,
+              sourceType: "port",
+              sourceId: port.id,
+              sourceX: port.x,
+              sourceY: port.y,
+              targetType: "junction",
+              targetId: junction.id,
+              targetX: junction.x,
+              targetY: junction.y,
               points,
-              netId: netEdge.netId,
-              sourceComponentRef: netEdge.sourceComponentRef,
-              targetComponentRef: netEdge.targetComponentRef,
-              labels: netEdge.labels,
-              junctionPoints: [{ x: jPos.x, y: jPos.y }],
             });
           }
         }
-      } else if (!junction || this.netPortMap.get(edge.netId)?.size < 3) {
-        // Regular edge without junction
-        const polyline = connector.displayRoute();
-        const points: { x: number; y: number }[] = [];
-
-        const size = polyline.size();
-        for (let i = 0; i < size; i++) {
-          const point = polyline.get_ps(i);
-          points.push({ x: point.x, y: point.y });
-        }
-
-        finalRoutes.push({
-          id: edge.id,
-          points,
-          netId: edge.netId,
-          sourceComponentRef: edge.sourceComponentRef,
-          targetComponentRef: edge.targetComponentRef,
-          labels: edge.labels,
-          junctionPoints: [],
-        });
       }
     }
 
-    return finalRoutes;
+    console.log(
+      "Libavoid routing results:",
+      JSON.stringify(junctionResults),
+      JSON.stringify(edgeResults)
+    );
+
+    return {
+      junctions: junctionResults,
+      edges: edgeResults,
+    };
   }
 
   /**
-   * Add a node as an obstacle in the routing graph
+   * Add an obstacle to the routing graph
    */
-  private addNodeAsObstacle(node: ElkNode): void {
-    if (
-      !this.avoidLib ||
-      node.x === undefined ||
-      node.y === undefined ||
-      !node.width ||
-      !node.height
-    ) {
+  private addObstacle(obstacle: Obstacle): void {
+    if (!this.avoidLib) {
       return;
     }
 
-    // Create a rectangle for the node with some padding
-    const padding = 5;
+    const padding = 0;
     const topLeft = new this.avoidLib.Point(
-      node.x! - padding,
-      node.y! - padding
+      obstacle.x - padding,
+      obstacle.y - padding
     );
     const bottomRight = new this.avoidLib.Point(
-      node.x! + node.width + padding,
-      node.y! + node.height + padding
+      obstacle.x + obstacle.width + padding,
+      obstacle.y + obstacle.height + padding
     );
 
     const rect = new this.avoidLib.Rectangle(topLeft, bottomRight);
     const shape = new this.avoidLib.ShapeRef(this.router, rect);
 
-    this.shapes.set(node.id, shape);
-
-    // Clean up points
-    this.avoidLib.destroy(topLeft);
-    this.avoidLib.destroy(bottomRight);
+    this.shapes.set(obstacle.id, shape);
   }
 
   /**
-   * Create a connector for an edge
+   * Create a simple connector between two ports
    */
-  private createConnector(edge: ElkEdge, nodes: ElkNode[]): EdgeRoute | null {
-    if (
-      !this.avoidLib ||
-      edge.sources.length === 0 ||
-      edge.targets.length === 0
-    ) {
-      return null;
+  private createSimpleConnector(
+    connectorId: string,
+    sourcePort: Port,
+    targetPort: Port
+  ): void {
+    if (!this.avoidLib) {
+      return;
     }
 
-    // Find source and target ports
-    const sourcePortId = edge.sources[0];
-    const targetPortId = edge.targets[0];
+    const srcPoint = new this.avoidLib.Point(sourcePort.x, sourcePort.y);
+    const dstPoint = new this.avoidLib.Point(targetPort.x, targetPort.y);
 
-    const sourceInfo = this.findPortPosition(sourcePortId, nodes);
-    const targetInfo = this.findPortPosition(targetPortId, nodes);
+    // Convert visibility directions to ConnDirFlags
+    const srcVisDirs = this.getConnDirFlags(sourcePort.visibilityDirection);
+    const dstVisDirs = this.getConnDirFlags(targetPort.visibilityDirection);
 
-    if (!sourceInfo || !targetInfo) {
-      return null;
-    }
+    const srcEnd = new this.avoidLib.ConnEnd(srcPoint, srcVisDirs);
+    const dstEnd = new this.avoidLib.ConnEnd(dstPoint, dstVisDirs);
 
-    // Create connector endpoints
-    const srcPoint = new this.avoidLib.Point(sourceInfo.x, sourceInfo.y);
-    const dstPoint = new this.avoidLib.Point(targetInfo.x, targetInfo.y);
-
-    const srcEnd = new this.avoidLib.ConnEnd(srcPoint);
-    const dstEnd = new this.avoidLib.ConnEnd(dstPoint);
-
-    // Create connector
     const connector = new this.avoidLib.ConnRef(this.router, srcEnd, dstEnd);
     connector.setRoutingType(this.avoidLib.OrthogonalRouting);
 
-    this.connectors.set(edge.id, connector);
-
-    // Clean up
-    this.avoidLib.destroy(srcPoint);
-    this.avoidLib.destroy(dstPoint);
-
-    return null; // Route will be extracted after processing
+    this.connectors.set(connectorId, connector);
   }
 
   /**
-   * Find the absolute position of a port
+   * Create a junction for a hyperedge
    */
-  private findPortPosition(
-    portId: string,
-    nodes: ElkNode[]
-  ): { x: number; y: number } | null {
-    for (const node of nodes) {
-      if (!node.ports || node.x === undefined || node.y === undefined) continue;
-
-      for (const port of node.ports) {
-        if (port.id === portId) {
-          const portX = (port.x || 0) + node.x;
-          const portY = (port.y || 0) + node.y;
-          return { x: portX, y: portY };
-        }
-      }
-
-      // Check children recursively
-      if (node.children) {
-        const childResult = this.findPortPosition(portId, node.children);
-        if (childResult) {
-          return {
-            x: childResult.x + (node.x || 0),
-            y: childResult.y + (node.y || 0),
-          };
-        }
-      }
+  private createJunction(hyperedge: Hyperedge): Junction | null {
+    if (!this.avoidLib || hyperedge.ports.length < 2) {
+      return null;
     }
 
-    return null;
+    // Calculate centroid of all ports
+    const centerX =
+      hyperedge.ports.reduce((sum, p) => sum + p.x, 0) / hyperedge.ports.length;
+    const centerY =
+      hyperedge.ports.reduce((sum, p) => sum + p.y, 0) / hyperedge.ports.length;
+
+    // Create junction
+    const junctionPoint = new this.avoidLib.Point(centerX, centerY);
+    const junction = new this.avoidLib.JunctionRef(this.router, junctionPoint);
+
+    // Let libavoid optimize the junction position
+    junction.setPositionFixed(false);
+
+    // Store junction
+    const junctionId = `junction_${hyperedge.id}`;
+    this.junctions.set(junctionId, junction);
+
+    // Get the actual position after creation
+    const pos = junction.position();
+
+    return {
+      id: junctionId,
+      x: pos.x,
+      y: pos.y,
+      hyperedgeId: hyperedge.id,
+    };
+  }
+
+  /**
+   * Create a connector from a port to a junction
+   */
+  private createPortToJunctionConnector(
+    connectorId: string,
+    port: Port,
+    junctionId: string
+  ): void {
+    if (!this.avoidLib) {
+      return;
+    }
+
+    // Extract hyperedge ID from junction ID
+    const junction = this.junctions.get(junctionId);
+
+    const portPoint = new this.avoidLib.Point(port.x, port.y);
+    const portVisDirs = this.getConnDirFlags(port.visibilityDirection);
+    const portEnd = new this.avoidLib.ConnEnd(portPoint, portVisDirs);
+
+    // Try creating ConnEnd directly with the junction reference
+    // The second parameter is the classId (connection pin ID), using 0 as default
+    const junctionEnd = new this.avoidLib.ConnEnd(junction);
+
+    const connector = new this.avoidLib.ConnRef(
+      this.router,
+      junctionEnd,
+      portEnd
+    );
+    console.log("Created connector:", port.id, junctionId);
+    connector.setRoutingType(this.avoidLib.OrthogonalRouting);
+
+    this.connectors.set(connectorId, connector);
+  }
+
+  /**
+   * Convert visibility direction to libavoid ConnDirFlags
+   */
+  private getConnDirFlags(
+    direction?: "NORTH" | "SOUTH" | "EAST" | "WEST" | "ALL"
+  ): number {
+    if (!this.avoidLib || !direction) {
+      return this.avoidLib?.ConnDirAll || 15; // Default to all directions
+    }
+
+    switch (direction) {
+      case "NORTH":
+        return this.avoidLib.ConnDirUp;
+      case "SOUTH":
+        return this.avoidLib.ConnDirDown;
+      case "EAST":
+        return this.avoidLib.ConnDirRight;
+      case "WEST":
+        return this.avoidLib.ConnDirLeft;
+      case "ALL":
+        return this.avoidLib.ConnDirAll;
+      default:
+        return this.avoidLib.ConnDirAll;
+    }
   }
 
   /**
@@ -308,24 +434,17 @@ export class LibavoidEdgeRouter {
     // Delete all shapes
     for (const [_, shape] of this.shapes) {
       this.router.deleteShape(shape);
-      this.avoidLib.destroy(shape);
     }
     this.shapes.clear();
 
     // Delete all connectors
     for (const [_, connector] of this.connectors) {
       this.router.deleteConnector(connector);
-      this.avoidLib.destroy(connector);
     }
     this.connectors.clear();
 
-    // Delete all junctions
-    for (const [_, junction] of this.junctions) {
-      // Junctions are automatically deleted when their connectors are deleted
-      // But we still need to clear our tracking
-    }
+    // Junctions are automatically deleted when their connectors are deleted
     this.junctions.clear();
-    this.netPortMap.clear();
   }
 
   /**
@@ -335,130 +454,10 @@ export class LibavoidEdgeRouter {
     this.clearPreviousRouting();
 
     if (this.router && this.avoidLib) {
-      this.avoidLib.destroy(this.router);
       this.router = null;
     }
 
     this.avoidLib = null;
     this.isInitialized = false;
-  }
-
-  /**
-   * Build a map of netId to port IDs
-   */
-  private buildNetPortMap(graph: ElkGraph): void {
-    this.netPortMap.clear();
-
-    if (!graph.children) return;
-
-    // Iterate through all nodes and their ports
-    for (const node of graph.children) {
-      if (!node.ports) continue;
-
-      for (const port of node.ports) {
-        if (port.netId) {
-          if (!this.netPortMap.has(port.netId)) {
-            this.netPortMap.set(port.netId, new Set());
-          }
-          this.netPortMap.get(port.netId)!.add(port.id);
-        }
-      }
-    }
-  }
-
-  /**
-   * Create junctions for nets with more than 2 connections
-   */
-  private createJunctionsForNets(graph: ElkGraph): void {
-    if (!this.avoidLib || !graph.children) return;
-
-    for (const [netId, portIds] of this.netPortMap) {
-      // Only create junctions for nets with 3 or more connections
-      if (portIds.size >= 3) {
-        // Find the center point of all ports in this net
-        const positions: { x: number; y: number }[] = [];
-
-        for (const portId of portIds) {
-          const pos = this.findPortPosition(portId, graph.children);
-          if (pos) {
-            positions.push(pos);
-          }
-        }
-
-        if (positions.length >= 3) {
-          // Calculate the centroid of all port positions as initial position
-          const centerX =
-            positions.reduce((sum, p) => sum + p.x, 0) / positions.length;
-          const centerY =
-            positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
-
-          // Create a junction at the centroid
-          const junctionPoint = new this.avoidLib.Point(centerX, centerY);
-          const junction = new this.avoidLib.JunctionRef(
-            this.router,
-            junctionPoint
-          );
-
-          // IMPORTANT: Set the junction position as NOT fixed so libavoid can optimize it
-          junction.setPositionFixed(false);
-
-          this.junctions.set(netId, junction);
-
-          // Clean up
-          this.avoidLib.destroy(junctionPoint);
-        }
-      }
-    }
-  }
-
-  /**
-   * Create a connector using junctions if available
-   */
-  private createConnectorWithJunctions(edge: ElkEdge, nodes: ElkNode[]): void {
-    if (
-      !this.avoidLib ||
-      edge.sources.length === 0 ||
-      edge.targets.length === 0
-    ) {
-      return;
-    }
-
-    const sourcePortId = edge.sources[0];
-    const targetPortId = edge.targets[0];
-    const junction = this.junctions.get(edge.netId);
-
-    if (junction && this.netPortMap.get(edge.netId)?.size >= 3) {
-      // For hyperedges, create a single connector from source to target
-      // but use the junction as an intermediate point
-      const sourceInfo = this.findPortPosition(sourcePortId, nodes);
-      const targetInfo = this.findPortPosition(targetPortId, nodes);
-
-      if (!sourceInfo || !targetInfo) {
-        return;
-      }
-
-      // Create ConnEnd objects for the ports
-      const srcPoint = new this.avoidLib.Point(sourceInfo.x, sourceInfo.y);
-      const tgtPoint = new this.avoidLib.Point(targetInfo.x, targetInfo.y);
-
-      // Create ConnEnds that connect through the junction
-      // This is the key: we create ConnEnds that reference the junction
-      const srcEnd = new this.avoidLib.ConnEnd(srcPoint);
-      const tgtEnd = new this.avoidLib.ConnEnd(tgtPoint);
-
-      // Create a single connector but it will be part of a hyperedge
-      const connector = new this.avoidLib.ConnRef(this.router, srcEnd, tgtEnd);
-      connector.setRoutingType(this.avoidLib.OrthogonalRouting);
-
-      // Store the connector
-      this.connectors.set(edge.id, connector);
-
-      // Clean up
-      this.avoidLib.destroy(srcPoint);
-      this.avoidLib.destroy(tgtPoint);
-    } else {
-      // Regular point-to-point routing
-      this.createConnector(edge, nodes);
-    }
   }
 }

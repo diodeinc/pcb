@@ -1178,8 +1178,23 @@ const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
   );
 };
 
-// Define a node specifically for net junctions - invisible in the final rendering
+// Define a node specifically for net junctions - a small dot at wire intersections
 const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
+  // Determine if this node should be dimmed based on selection state
+  const selectionState = data.selectionState;
+  const shouldDim =
+    selectionState?.selectedNetId || selectionState?.hoveredNetId;
+  const isConnectedToHighlightedNet =
+    shouldDim &&
+    data.ports?.some((port) => {
+      const netId = port.netId;
+      return (
+        netId === selectionState.selectedNetId ||
+        netId === selectionState.hoveredNetId
+      );
+    });
+  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
+
   return (
     <div
       className="react-flow-net-junction-node"
@@ -1191,28 +1206,35 @@ const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
         cursor: "default",
         pointerEvents: "none",
         position: "relative",
-        opacity: 0, // Make it completely invisible
+        opacity: opacity,
       }}
     >
-      <div className="module-ports" data-port-id={data.ports?.[0]?.id}>
+      {/* Junction dot */}
+      <div
+        style={{
+          position: "absolute",
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          backgroundColor: edgeColor,
+          top: "2px",
+          left: "2px",
+        }}
+      />
+
+      <div className="junction-ports" data-port-id={data.ports?.[0]?.id}>
         {/* Single handle for connections */}
         <Handle
           type="source"
           id={`${data.ports?.[0]?.id}-source`}
           position={Position.Left}
-          style={{ opacity: 0 }}
+          style={{ opacity: 0, left: 5, top: 5 }}
         />
         <Handle
           type="target"
           id={`${data.ports?.[0]?.id}-target`}
           position={Position.Left}
-          style={{ opacity: 0 }}
-        />
-        <Handle
-          type="target"
-          id={`${data.ports?.[0]?.id}`}
-          position={Position.Left}
-          style={{ opacity: 0 }}
+          style={{ opacity: 0, left: 5, top: 5 }}
         />
       </div>
     </div>
@@ -1773,25 +1795,6 @@ const ElectricalEdge = ({
         strokeWidth={interactionWidth}
         className="react-flow__edge-interaction"
       />
-
-      {/* Render junction points if they exist */}
-      {data?.junctionPoints &&
-        data.junctionPoints.map(
-          (point: { x: number; y: number }, index: number) => (
-            <circle
-              key={`junction-${id}-${index}`}
-              cx={point.x}
-              cy={point.y}
-              r={3.5}
-              fill={style.stroke || edgeColor}
-              style={{
-                ...style,
-                opacity: opacity,
-              }}
-              className="electrical-junction-point"
-            />
-          )
-        )}
     </>
   );
 };
@@ -1895,6 +1898,7 @@ const Visualizer = ({
 
       try {
         const renderer = new SchematicLayoutEngine(netlist, currentConfig);
+        return;
 
         // Use the unified layout method with updated positions
         const layoutResult = await renderer.layout(

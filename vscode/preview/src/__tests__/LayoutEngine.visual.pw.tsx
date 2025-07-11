@@ -53,14 +53,7 @@ test.describe("Schematic Visual Tests", () => {
         // Get all arguments passed to console.log/error/etc
         const args = [];
         for (const arg of msg.args()) {
-          try {
-            // Try to get the JSON value (works for objects, arrays, primitives)
-            const value = await arg.jsonValue();
-            args.push(value);
-          } catch {
-            // If jsonValue fails, fall back to string representation
-            args.push(arg.toString());
-          }
+          args.push(arg.toString());
         }
 
         if (msg.text().includes("kicanvas")) {
