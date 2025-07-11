@@ -139,11 +139,14 @@ impl LoadResolver for BundleTrackingResolver {
             let mut load_map = self.load_map.lock().unwrap();
 
             // Use the bundle-relative path of the current file as the key
-            let current_file_key = current_file_bundle_path.to_string_lossy().into_owned();
+            // Always use forward slashes for cross-platform compatibility
+            let current_file_key = current_file_bundle_path
+                .to_string_lossy()
+                .replace('\\', "/");
 
             load_map.entry(current_file_key).or_default().insert(
                 load_path.to_string(),
-                bundle_path.to_string_lossy().into_owned(),
+                bundle_path.to_string_lossy().replace('\\', "/"),
             );
         }
 
@@ -332,7 +335,8 @@ fn add_directory_to_zip<W: Write + std::io::Seek>(
             add_directory_to_zip(zip, &path, base_dir)?;
         } else {
             // Add file to zip
-            let file_name = relative_path.to_string_lossy();
+            // Always use forward slashes in ZIP archives (ZIP standard)
+            let file_name = relative_path.to_string_lossy().replace('\\', "/");
             zip.start_file(file_name, FileOptions::<()>::default())?;
 
             let mut file = File::open(&path)?;
