@@ -260,6 +260,10 @@
   stroke-miterlimit: 10 !important; /* Crisp corners */
 }
 
+.electrical-edge {
+  z-index: 9999;
+}
+
 .react-flow__node {
   cursor: pointer; /* Show clickable cursor for navigation */
   pointer-events: all; /* Allow click events */

@@ -40,8 +40,17 @@ import type {
 import type { Netlist } from "../types/NetlistTypes";
 import { debounce } from "lodash";
 import { Download, Loader, Settings } from "react-feather";
-import { renderKicadSymbol, getKicadSymbolInfo } from "../renderer/kicad_sym";
-import { Color } from "../third_party/kicanvas/base/color";
+import {
+  renderKicadSymbol,
+  getKicadSymbolInfo,
+  DEFAULT_THEME,
+} from "../renderer/kicad_sym";
+import {
+  renderGlobalLabel,
+  getGlobalLabelInfo,
+  type LabelDirection,
+} from "../renderer/kicad_global_label";
+// import { Color } from "../third_party/kicanvas/base/color";
 
 type SelectionState = {
   selectedNetId: string | null;
@@ -116,16 +125,21 @@ function createSchematicEdge(
 }
 
 // Common color for electrical components
-const electricalComponentColor = "var(--vscode-editor-foreground, #666)";
-const edgeColor = "var(--vscode-editorLineNumber-dimmedForeground, #666)";
-const accentColor = "var(--vscode-activityBarBadge-background, #666)";
+// const electricalComponentColor = "var(--vscode-editor-foreground, #666)";
+// const edgeColor = "var(--vscode-editorLineNumber-dimmedForeground, #666)";
+// const accentColor = "var(--vscode-activityBarBadge-background, #666)";
+const electricalComponentColor = DEFAULT_THEME.component_outline.to_css();
+const edgeColor = DEFAULT_THEME.wire.to_css();
+const accentColor = DEFAULT_THEME.sheet_fields.to_css();
+const backgroundColor = DEFAULT_THEME.background.to_css();
+const labelColor = DEFAULT_THEME.reference.to_css();
 
 // Common CSS to override ReactFlow default hover effects
 const customStyles = `
-  /* Use VSCode theme colors for nodes and edges with fallbacks */
+  /* Use KiCad theme colors for nodes and edges */
   .react-flow__node {
-    color: var(--vscode-foreground, #000);
-    border-color: var(--vscode-editor-selectionBackground, #666);
+    color: ${labelColor};
+    border-color: ${electricalComponentColor};
   }
 
   /* Add transition for smooth layout changes */
@@ -147,7 +161,7 @@ const customStyles = `
 
   /* Style the graph background */
   .react-flow {
-    background-color: var(--vscode-editor-background, #fff);
+    background-color: ${backgroundColor};
   }
 
   /* Component nodes are now draggable */
@@ -171,8 +185,8 @@ const customStyles = `
 
   /* Module node hover state */
   .react-flow__node-module:hover {
-    border-color: var(--vscode-focusBorder, #0066cc) !important;
-    box-shadow: 0 0 0 2px var(--vscode-focusBorder, #0066cc) !important;
+    border-color: ${accentColor} !important;
+    box-shadow: 0 0 0 2px ${accentColor} !important;
   }
   
   /* Show different cursor when dragging */
@@ -187,23 +201,28 @@ const customStyles = `
 
   /* Style the minimap */
   .react-flow__minimap {
-    background-color: var(--vscode-editor-background, #fff);
+    background-color: ${backgroundColor};
   }
 
   /* Style the controls */
   .react-flow__controls {
-    background-color: var(--vscode-editor-background, #fff);
-    border-color: var(--vscode-editor-selectionBackground, #666);
+    background-color: ${backgroundColor};
+    border-color: ${electricalComponentColor};
   }
 
   .react-flow__controls button {
-    background-color: var(--vscode-button-background, #0066cc);
-    color: var(--vscode-button-foreground, #fff);
-    border-color: var(--vscode-button-border, transparent);
+    background-color: ${backgroundColor};
+    color: ${electricalComponentColor};
+    border-color: ${electricalComponentColor};
   }
 
   .react-flow__controls button:hover {
-    background-color: var(--vscode-button-hoverBackground, #0052a3);
+    background-color: ${electricalComponentColor};
+    color: ${backgroundColor};
+  }
+
+  .react-flow__controls button svg {
+    stroke: currentColor;
   }
 
   /* Style port labels */
@@ -224,14 +243,14 @@ const customStyles = `
     display: flex;
     align-items: center;
     gap: 8px;
-    background-color: var(--vscode-button-background, #0066cc);
-    color: var(--vscode-button-foreground, #fff);
-    border: 1px solid var(--vscode-button-border, transparent);
+    background-color: ${backgroundColor};
+    color: ${electricalComponentColor};
+    border: 1px solid ${electricalComponentColor};
     padding: 8px 12px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
-    transition: background-color 0.2s;
+    transition: background-color 0.2s, color 0.2s;
   }
 
   .download-button:disabled {
@@ -240,11 +259,14 @@ const customStyles = `
   }
 
   .download-button:not(:disabled):hover {
-    background-color: var(--vscode-button-hoverBackground, #0052a3);
+    background-color: ${electricalComponentColor};
+    color: ${backgroundColor};
   }
 
   .download-button:active {
-    background-color: var(--vscode-button-activeBackground, #004080);
+    background-color: ${electricalComponentColor};
+    color: ${backgroundColor};
+    opacity: 0.8;
   }
 
   .download-button svg {
@@ -314,8 +336,8 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
     width: data.width,
     height: data.height,
     backgroundColor: isModule
-      ? "var(--vscode-editor-background, #fff)"
-      : `color-mix(in srgb, var(--vscode-editorLineNumber-foreground, #666) 5%, var(--vscode-editor-background, #fff))`,
+      ? backgroundColor
+      : `color-mix(in srgb, ${electricalComponentColor} 5%, ${backgroundColor})`,
     border: `1px solid ${electricalComponentColor}`,
     opacity: moduleOpacity,
     cursor: "move",
@@ -343,7 +365,7 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
             padding: "4px",
             fontSize: "12px",
             fontWeight: "bold",
-            color: "var(--vscode-foreground, #000)",
+            color: labelColor,
             textAlign: label.textAlign || "left",
             width: label.width || "auto",
           }}
@@ -1251,125 +1273,258 @@ const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
 };
 
 // Utility to get a CSS variable and convert to Color
-function getVSCodeColor(varName: string, fallback: string): Color {
-  const cssValue = getComputedStyle(document.documentElement)
-    .getPropertyValue(varName)
-    .trim();
-  try {
-    return Color.from_css(cssValue || fallback);
-  } catch {
-    // fallback if parsing fails
-    return Color.from_css(fallback);
-  }
-}
+// function getVSCodeColor(varName: string, fallback: string): Color {
+//   const cssValue = getComputedStyle(document.documentElement)
+//     .getPropertyValue(varName)
+//     .trim();
+//   try {
+//     return Color.from_css(cssValue || fallback);
+//   } catch {
+//     // fallback if parsing fails
+//     return Color.from_css(fallback);
+//   }
+// }
 
 // Utility to build a SchematicTheme from VSCode theme variables
-function getVSCodeSchematicTheme(): Partial<
-  import("../third_party/kicanvas/kicad/theme").SchematicTheme
-> {
-  return {
-    background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-    component_outline: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-    component_body: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-    pin: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-    pin_name: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-    pin_number: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-    reference: getVSCodeColor(
-      "--vscode-editorLineNumber-foreground",
-      "#666666"
-    ),
-    value: getVSCodeColor("--vscode-editorLineNumber-foreground", "#666666"),
-    fields: getVSCodeColor("--vscode-editorLineNumber-foreground", "#666666"),
-    wire: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#666666"
-    ),
-    bus: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#666666"
-    ),
-    junction: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#666666"
-    ),
-    label_local: getVSCodeColor("--vscode-foreground", "#000000"),
-    label_global: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#666666"
-    ),
-    label_hier: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#666666"
-    ),
-    no_connect: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#666666"
-    ),
-    note: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#666666"
-    ),
-    sheet_background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-    sheet: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-    sheet_label: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#666666"
-    ),
-    sheet_fields: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#666666"
-    ),
-    sheet_filename: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#666666"
-    ),
-    sheet_name: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#666666"
-    ),
-    erc_warning: getVSCodeColor("--vscode-editorWarning-foreground", "#FFA500"),
-    erc_error: getVSCodeColor("--vscode-editorError-foreground", "#FF0000"),
-    grid: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#cccccc"
-    ),
-    grid_axes: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#cccccc"
-    ),
-    hidden: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#cccccc"
-    ),
-    brightened: getVSCodeColor(
-      "--vscode-activityBarBadge-background",
-      "#ff00ff"
-    ),
-    worksheet: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-    cursor: getVSCodeColor("--vscode-editorCursor-foreground", "#000000"),
-    aux_items: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#666666"
-    ),
-    anchor: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#0000ff"
-    ),
-    shadow: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "rgba(128,128,128,0.5)"
-    ),
-    bus_junction: getVSCodeColor(
-      "--vscode-editorLineNumber-dimmedForeground",
-      "#008000"
-    ),
-  };
-}
+// function getVSCodeSchematicTheme(): Partial<
+//   import("../third_party/kicanvas/kicad/theme").SchematicTheme
+// > {
+//   return {
+//     background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
+//     component_outline: getVSCodeColor("--vscode-editor-foreground", "#666666"),
+//     component_body: getVSCodeColor("--vscode-editor-background", "#ffffff"),
+//     pin: getVSCodeColor("--vscode-editor-foreground", "#666666"),
+//     pin_name: getVSCodeColor("--vscode-editor-foreground", "#666666"),
+//     pin_number: getVSCodeColor("--vscode-editor-foreground", "#666666"),
+//     reference: getVSCodeColor(
+//       "--vscode-editorLineNumber-foreground",
+//       "#666666"
+//     ),
+//     value: getVSCodeColor("--vscode-editorLineNumber-foreground", "#666666"),
+//     fields: getVSCodeColor("--vscode-editorLineNumber-foreground", "#666666"),
+//     wire: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#666666"
+//     ),
+//     bus: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#666666"
+//     ),
+//     junction: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#666666"
+//     ),
+//     label_local: getVSCodeColor("--vscode-foreground", "#000000"),
+//     label_global: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#666666"
+//     ),
+//     label_hier: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#666666"
+//     ),
+//     no_connect: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#666666"
+//     ),
+//     note: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#666666"
+//     ),
+//     sheet_background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
+//     sheet: getVSCodeColor("--vscode-editor-foreground", "#666666"),
+//     sheet_label: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#666666"
+//     ),
+//     sheet_fields: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#666666"
+//     ),
+//     sheet_filename: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#666666"
+//     ),
+//     sheet_name: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#666666"
+//     ),
+//     erc_warning: getVSCodeColor("--vscode-editorWarning-foreground", "#FFA500"),
+//     erc_error: getVSCodeColor("--vscode-editorError-foreground", "#FF0000"),
+//     grid: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#cccccc"
+//     ),
+//     grid_axes: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#cccccc"
+//     ),
+//     hidden: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#cccccc"
+//     ),
+//     brightened: getVSCodeColor(
+//       "--vscode-activityBarBadge-background",
+//       "#ff00ff"
+//     ),
+//     worksheet: getVSCodeColor("--vscode-editor-background", "#ffffff"),
+//     cursor: getVSCodeColor("--vscode-editorCursor-foreground", "#000000"),
+//     aux_items: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#666666"
+//     ),
+//     anchor: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#0000ff"
+//     ),
+//     shadow: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "rgba(128,128,128,0.5)"
+//     ),
+//     bus_junction: getVSCodeColor(
+//       "--vscode-editorLineNumber-dimmedForeground",
+//       "#008000"
+//     ),
+//   };
+// }
+
+// Component to render net reference labels using KiCanvas
+const NetReferenceLabel = React.memo(
+  ({
+    port,
+    side,
+    portX,
+    portY,
+    canvasRef,
+  }: {
+    port: any;
+    side: string;
+    portX: number;
+    portY: number;
+    canvasRef: (canvas: HTMLCanvasElement | null) => void;
+  }) => {
+    const internalCanvasRef = useRef<HTMLCanvasElement>(null);
+    const [dimensions, setDimensions] = useState({ width: 100, height: 60 });
+
+    // Get the label text
+    const labelText =
+      port.labels.find(
+        (label: any) => label.properties?.labelType === "netReference"
+      )?.text || "";
+
+    // Convert side to direction - the arrow should point toward the symbol
+    const getDirection = useCallback((): LabelDirection => {
+      switch (side) {
+        case "WEST":
+          return "left"; // Arrow points left (toward symbol on the right)
+        case "EAST":
+          return "right"; // Arrow points right (toward symbol on the left)
+        case "NORTH":
+          return "up"; // Arrow points up (toward symbol below)
+        case "SOUTH":
+          return "down"; // Arrow points down (toward symbol above)
+        default:
+          return "left";
+      }
+    }, [side]);
+
+    useEffect(() => {
+      const renderLabel = async () => {
+        if (!internalCanvasRef.current || !labelText) return;
+
+        try {
+          const PADDING_MM = 0.15;
+
+          const info = await renderGlobalLabel(
+            internalCanvasRef.current,
+            labelText,
+            {
+              direction: getDirection(),
+              shape: "input",
+              scale: 10, // Scale up for visibility in the schematic
+              padding: PADDING_MM,
+              fontSize: 1.27, // Default KiCad font size
+            }
+          );
+
+          // Update dimensions if they changed
+          if (
+            info.width !== dimensions.width ||
+            info.height !== dimensions.height
+          ) {
+            setDimensions({ width: info.width, height: info.height });
+          }
+        } catch (error) {
+          console.error("Error rendering net reference label:", error);
+        }
+      };
+
+      renderLabel();
+    }, [labelText, side, dimensions, getDirection]);
+
+    // Calculate position offset based on side
+    const getPositionStyle = () => {
+      const baseStyle = {
+        position: "absolute" as const,
+        pointerEvents: "none" as const,
+        zIndex: 100,
+      };
+
+      switch (side) {
+        case "WEST":
+          return {
+            ...baseStyle,
+            left: portX - dimensions.width,
+            top: portY - dimensions.height / 2,
+          };
+        case "EAST":
+          return {
+            ...baseStyle,
+            left: portX,
+            top: portY - dimensions.height / 2,
+          };
+        case "NORTH":
+          return {
+            ...baseStyle,
+            left: portX - dimensions.width / 2,
+            top: portY - dimensions.height,
+          };
+        case "SOUTH":
+          return {
+            ...baseStyle,
+            left: portX - dimensions.width / 2,
+            top: portY,
+          };
+        default:
+          return baseStyle;
+      }
+    };
+
+    return (
+      <div className="port-net-reference" style={getPositionStyle()}>
+        <canvas
+          ref={(canvas) => {
+            internalCanvasRef.current = canvas;
+            canvasRef(canvas);
+          }}
+          width={dimensions.width}
+          height={dimensions.height}
+          style={{
+            width: `${dimensions.width}px`,
+            height: `${dimensions.height}px`,
+            backgroundColor: "rgba(0, 0, 0, 0)",
+          }}
+        />
+      </div>
+    );
+  }
+);
 
 // Define a node for KiCad symbols
 const SymbolNode = React.memo(
   ({ data }: { data: SchematicNodeData }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const labelCanvasRefs = useRef<Map<string, HTMLCanvasElement>>(new Map());
     const [isRendering, setIsRendering] = useState(true);
     const [renderError, setRenderError] = useState<string | null>(null);
 
@@ -1477,7 +1632,7 @@ const SymbolNode = React.memo(
           const scale = Math.min(scaleX, scaleY);
 
           // Get theme from VSCode CSS variables
-          const vscodeTheme = getVSCodeSchematicTheme();
+          // const vscodeTheme = getVSCodeSchematicTheme();
 
           // Render the symbol at the calculated scale
           await renderKicadSymbol(canvas, symbolContent, undefined, {
@@ -1486,7 +1641,7 @@ const SymbolNode = React.memo(
             showPinNames: false,
             showPinNumbers: false,
             tightBounds: false, // Include pins to match renderer.ts
-            theme: vscodeTheme,
+            // theme: vscodeTheme,
           });
 
           // Restore canvas context state
@@ -1620,78 +1775,18 @@ const SymbolNode = React.memo(
                     {port.labels.some(
                       (label) => label.properties?.labelType === "netReference"
                     ) ? (
-                      // Render net reference with circle and label
-                      <div
-                        className="port-net-reference"
-                        style={{
-                          position: "absolute",
-                          left: portX,
-                          top: portY,
-                          opacity: 0.7,
-                          pointerEvents: "none",
-                          zIndex: 100, // Higher z-index to ensure visibility
-                        }}
-                      >
-                        {/* Circle - always centered on the port */}
-                        <div
-                          style={{
-                            position: "absolute",
-                            width: "6px",
-                            height: "6px",
-                            borderRadius: "50%",
-                            border: `1.5px solid ${electricalComponentColor}`,
-                            backgroundColor: "white", // White fill for visibility
-                            // Center the circle on the port
-                            left: "-4px",
-                            top: "-4px",
-                          }}
-                        />
-                        {/* Label text - positioned based on side */}
-                        <div
-                          style={{
-                            position: "absolute",
-                            fontSize: "10px",
-                            fontWeight: "bold",
-                            color: electricalComponentColor,
-                            whiteSpace: "nowrap",
-                            // Position text based on side
-                            ...(side === "WEST" && {
-                              // Text to the left of circle (outside)
-                              right: "6px",
-                              top: "-5px",
-                              textAlign: "right" as const,
-                            }),
-                            ...(side === "EAST" && {
-                              // Text to the right of circle (outside)
-                              left: "6px",
-                              top: "-5px",
-                            }),
-                            ...(side === "NORTH" && {
-                              // Text above circle
-                              left: "50%",
-                              bottom: "8px", // Position above the circle (8px = 6px circle + 2px gap)
-                              transform: "translateX(-50%)",
-                              writingMode: "vertical-rl",
-                              textOrientation: "mixed",
-                            }),
-                            ...(side === "SOUTH" && {
-                              // Text below circle
-                              left: "50%",
-                              top: "8px",
-                              transform: "translateX(-50%)",
-                              writingMode: "vertical-rl",
-                              textOrientation: "mixed",
-                            }),
-                          }}
-                        >
-                          {
-                            port.labels.find(
-                              (label) =>
-                                label.properties?.labelType === "netReference"
-                            )?.text
+                      // Render net reference with global label style using canvas
+                      <NetReferenceLabel
+                        port={port}
+                        side={side}
+                        portX={portX}
+                        portY={portY}
+                        canvasRef={(canvas) => {
+                          if (canvas) {
+                            labelCanvasRefs.current.set(port.id, canvas);
                           }
-                        </div>
-                      </div>
+                        }}
+                      />
                     ) : (
                       // Regular port label (non-net reference)
                       <div
@@ -1855,6 +1950,8 @@ interface ReactFlowSchematicViewerProps {
   onComponentSelect?: (componentId: string | null) => void;
   selectedComponent?: string | null;
   config?: Partial<SchematicConfig>;
+  showSettings?: boolean;
+  showDownloadButton?: boolean;
 }
 
 const Visualizer = ({
@@ -1862,11 +1959,15 @@ const Visualizer = ({
   onComponentSelect = () => {},
   selectedComponent = null,
   config = DEFAULT_CONFIG,
+  showSettings = false,
+  showDownloadButton = false,
 }: {
   netlist: Netlist;
   onComponentSelect?: (componentId: string | null) => void;
   selectedComponent?: string | null;
   config?: Partial<SchematicConfig>;
+  showSettings?: boolean;
+  showDownloadButton?: boolean;
 }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<SchematicNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SchematicEdge>([]);
@@ -2048,12 +2149,34 @@ const Visualizer = ({
   // Handle node click to select a component - only if the component is clickable (modules)
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
-      event.preventDefault();
+      // Don't prevent default - let React Flow handle selection
 
-      // Check if the node is a module (which should be clickable)
+      // Check if the node is a module (which should be clickable for navigation)
       const nodeData = node.data as SchematicNodeData;
       if (nodeData.componentType === NodeType.MODULE) {
-        onComponentSelect(node.id);
+        // Only navigate if it's a double-click or some other interaction
+        // Single click should just select the node
+        if (event.detail === 2) {
+          // Double click
+          onComponentSelect(node.id);
+        }
+      }
+
+      // For all nodes, ensure selection is handled properly
+      if (reactFlowInstance.current) {
+        const currentNodes = reactFlowInstance.current.getNodes();
+        const isMultiSelect = event.shiftKey || event.metaKey || event.ctrlKey;
+
+        const updatedNodes = currentNodes.map((n: any) => ({
+          ...n,
+          selected: isMultiSelect
+            ? n.id === node.id
+              ? !n.selected
+              : n.selected
+            : n.id === node.id,
+        }));
+
+        reactFlowInstance.current.setNodes(updatedNodes);
       }
     },
     [onComponentSelect]
@@ -2241,9 +2364,31 @@ const Visualizer = ({
   );
 
   // Handle node drag start
-  const handleNodeDragStart = useCallback(() => {
-    setIsDragging(true);
-  }, []);
+  const handleNodeDragStart = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      setIsDragging(true);
+
+      // Select the node when dragging starts
+      if (reactFlowInstance.current) {
+        const currentNodes = reactFlowInstance.current.getNodes();
+
+        // Update nodes to select only the dragged node (unless shift/cmd is held)
+        const isMultiSelect = event.shiftKey || event.metaKey || event.ctrlKey;
+
+        const updatedNodes = currentNodes.map((n: any) => ({
+          ...n,
+          selected: isMultiSelect
+            ? n.id === node.id
+              ? true
+              : n.selected
+            : n.id === node.id,
+        }));
+
+        reactFlowInstance.current.setNodes(updatedNodes);
+      }
+    },
+    []
+  );
 
   // Handle node drag stop - finalize the drag operation
   const handleNodeDragStop = useCallback(() => {
@@ -2321,8 +2466,8 @@ const Visualizer = ({
         {`
         /* Debug pane styles */
         .debug-pane {
-          background-color: var(--vscode-sideBar-background, #252526);
-          border: 1px solid var(--vscode-sideBar-border, #3c3c3c);
+          background-color: ${backgroundColor};
+          border: 1px solid ${electricalComponentColor};
           border-radius: 4px;
           padding: 12px;
           max-width: 280px;
@@ -2335,7 +2480,7 @@ const Visualizer = ({
           margin: 0 0 12px 0;
           font-size: 14px;
           font-weight: 600;
-          color: var(--vscode-foreground, #cccccc);
+          color: ${labelColor};
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -2349,7 +2494,7 @@ const Visualizer = ({
           margin: 0 0 8px 0;
           font-size: 12px;
           font-weight: 600;
-          color: var(--vscode-foreground, #cccccc);
+          color: ${labelColor};
           opacity: 0.8;
         }
 
@@ -2362,7 +2507,7 @@ const Visualizer = ({
 
         .debug-pane-control label {
           font-size: 12px;
-          color: var(--vscode-foreground, #cccccc);
+          color: ${labelColor};
           flex: 1;
         }
 
@@ -2376,9 +2521,9 @@ const Visualizer = ({
         }
 
         .debug-pane-control select {
-          background-color: var(--vscode-input-background, #3c3c3c);
-          color: var(--vscode-input-foreground, #cccccc);
-          border: 1px solid var(--vscode-input-border, #616161);
+          background-color: ${backgroundColor};
+          color: ${labelColor};
+          border: 1px solid ${electricalComponentColor};
           border-radius: 2px;
           padding: 2px 4px;
           font-size: 12px;
@@ -2387,7 +2532,7 @@ const Visualizer = ({
 
         .debug-pane-control .value-display {
           font-size: 11px;
-          color: var(--vscode-foreground, #cccccc);
+          color: ${labelColor};
           opacity: 0.7;
           min-width: 30px;
           text-align: right;
@@ -2397,17 +2542,18 @@ const Visualizer = ({
           display: flex;
           align-items: center;
           justify-content: center;
-          background-color: var(--vscode-button-background, #0066cc);
-          color: var(--vscode-button-foreground, #fff);
-          border: 1px solid var(--vscode-button-border, transparent);
+          background-color: ${backgroundColor};
+          color: ${electricalComponentColor};
+          border: 1px solid ${electricalComponentColor};
           padding: 8px;
           border-radius: 4px;
           cursor: pointer;
-          transition: background-color 0.2s;
+          transition: background-color 0.2s, color 0.2s;
         }
 
         .debug-toggle-button:hover {
-          background-color: var(--vscode-button-hoverBackground, #0052a3);
+          background-color: ${electricalComponentColor};
+          color: ${backgroundColor};
         }
 
         .debug-toggle-button svg {
@@ -2421,11 +2567,9 @@ const Visualizer = ({
         <div
           className="error-message"
           style={{
-            color: "var(--vscode-errorForeground, #f44336)",
-            backgroundColor:
-              "var(--vscode-inputValidation-errorBackground, #fde7e9)",
-            border:
-              "1px solid var(--vscode-inputValidation-errorBorder, #f44336)",
+            color: DEFAULT_THEME.erc_error.to_css(),
+            backgroundColor: backgroundColor,
+            border: `1px solid ${DEFAULT_THEME.erc_error.to_css()}`,
             padding: "10px",
             margin: "10px",
             borderRadius: "4px",
@@ -2439,8 +2583,8 @@ const Visualizer = ({
       <div
         className="react-flow-schematic-viewer"
         style={{
-          backgroundColor: "var(--vscode-editor-background, #fff)",
-          color: "var(--vscode-foreground, #000)",
+          backgroundColor: backgroundColor,
+          color: labelColor,
           height: "100%",
           width: "100%",
           outline: "none",
@@ -2461,6 +2605,17 @@ const Visualizer = ({
           onNodeClick={handleNodeClick}
           onNodeDragStart={handleNodeDragStart}
           onNodeDragStop={handleNodeDragStop}
+          onPaneClick={() => {
+            // Clear selection when clicking on background
+            if (reactFlowInstance.current) {
+              const currentNodes = reactFlowInstance.current.getNodes();
+              const updatedNodes = currentNodes.map((n: any) => ({
+                ...n,
+                selected: false,
+              }));
+              reactFlowInstance.current.setNodes(updatedNodes);
+            }
+          }}
           onEdgeMouseEnter={(_event, edge) => {
             if (
               edge.data?.netId &&
@@ -2482,12 +2637,12 @@ const Visualizer = ({
             interactionWidth: 10,
           }}
           style={{
-            backgroundColor: "var(--vscode-editor-background, #fff)",
+            backgroundColor: backgroundColor,
           }}
           nodesDraggable={true}
           nodesConnectable={false}
           elementsSelectable={true}
-          selectNodesOnDrag={false}
+          selectNodesOnDrag={true}
           zoomOnScroll={true}
           panOnScroll={true}
           panOnDrag={true}
@@ -2497,36 +2652,44 @@ const Visualizer = ({
         >
           <Background variant={BackgroundVariant.Dots} />
           <Controls showInteractive={false} />
-          <Panel position="top-right">
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-              <button
-                className="debug-toggle-button"
-                onClick={() => setShowDebugPane(!showDebugPane)}
-                title="Toggle debug options"
+          {(showSettings || showDownloadButton) && (
+            <Panel position="top-right">
+              <div
+                style={{ display: "flex", gap: "8px", alignItems: "center" }}
               >
-                <Settings size={16} />
-              </button>
-              <button
-                className="download-button"
-                onClick={handleDownloadPDF}
-                disabled={!selectedComponent || isGeneratingPDF}
-                title={
-                  !selectedComponent
-                    ? "Select a component to download"
-                    : isGeneratingPDF
-                    ? "Generating PDF..."
-                    : "Download schematic as PDF"
-                }
-              >
-                {isGeneratingPDF ? (
-                  <Loader size={16} className="loading-icon" />
-                ) : (
-                  <Download size={16} />
+                {showSettings && (
+                  <button
+                    className="debug-toggle-button"
+                    onClick={() => setShowDebugPane(!showDebugPane)}
+                    title="Toggle debug options"
+                  >
+                    <Settings size={16} />
+                  </button>
                 )}
-                {isGeneratingPDF ? "Generating..." : "Download PDF"}
-              </button>
-            </div>
-          </Panel>
+                {showDownloadButton && (
+                  <button
+                    className="download-button"
+                    onClick={handleDownloadPDF}
+                    disabled={!selectedComponent || isGeneratingPDF}
+                    title={
+                      !selectedComponent
+                        ? "Select a component to download"
+                        : isGeneratingPDF
+                        ? "Generating PDF..."
+                        : "Download schematic as PDF"
+                    }
+                  >
+                    {isGeneratingPDF ? (
+                      <Loader size={16} className="loading-icon" />
+                    ) : (
+                      <Download size={16} />
+                    )}
+                    {isGeneratingPDF ? "Generating..." : "Download PDF"}
+                  </button>
+                )}
+              </div>
+            </Panel>
+          )}
 
           {showDebugPane && (
             <Panel position="top-left">
@@ -2538,7 +2701,7 @@ const Visualizer = ({
                     style={{
                       background: "none",
                       border: "none",
-                      color: "var(--vscode-foreground, #cccccc)",
+                      color: labelColor,
                       cursor: "pointer",
                       padding: "4px",
                       opacity: 0.7,
@@ -2687,6 +2850,8 @@ const ReactFlowSchematicViewer = ({
   onComponentSelect = () => {},
   selectedComponent = null,
   config = DEFAULT_CONFIG,
+  showSettings = false,
+  showDownloadButton = false,
 }: ReactFlowSchematicViewerProps) => {
   return (
     <ReactFlowProvider>
@@ -2695,6 +2860,8 @@ const ReactFlowSchematicViewer = ({
         onComponentSelect={onComponentSelect}
         selectedComponent={selectedComponent}
         config={config}
+        showSettings={showSettings}
+        showDownloadButton={showDownloadButton}
       />
     </ReactFlowProvider>
   );

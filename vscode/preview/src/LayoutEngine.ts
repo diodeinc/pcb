@@ -1083,7 +1083,7 @@ export class SchematicLayoutEngine {
           // Calculate net label dimensions and position
           const netLabelDimensions = calculateTextDimensions(
             truncatedLabelText,
-            10
+            12
           );
           const netLabelWidth = isVertical
             ? netLabelDimensions.height

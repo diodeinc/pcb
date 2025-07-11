@@ -44,7 +44,7 @@ import {
 import type { SymbolTransform } from "../third_party/kicanvas/viewers/schematic/painters/symbol";
 
 // Default theme colors matching kicanvas defaults
-const DEFAULT_THEME: SchematicTheme = {
+export const DEFAULT_THEME: SchematicTheme = {
   background: new Color(1, 1, 1, 1), // White background
   component_outline: new Color(0.5, 0, 0, 1), // Dark red outlines
   component_body: new Color(1, 1, 0.8, 1), // Light yellow fill
