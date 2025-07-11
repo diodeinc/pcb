@@ -450,6 +450,7 @@ export class SchematicLayoutEngine {
           node.width &&
           node.height
         ) {
+          // Add the node itself as an obstacle
           obstacles.push({
             id: node.id,
             x: node.x,
@@ -457,6 +458,36 @@ export class SchematicLayoutEngine {
             width: node.width,
             height: node.height,
           });
+
+          // Add port labels as obstacles
+          if (node.ports) {
+            for (const port of node.ports) {
+              if (port.labels && port.x !== undefined && port.y !== undefined) {
+                for (let i = 0; i < port.labels.length; i++) {
+                  const label = port.labels[i];
+                  if (
+                    label.x !== undefined &&
+                    label.y !== undefined &&
+                    label.width !== undefined &&
+                    label.height !== undefined
+                  ) {
+                    // Calculate absolute position of the label
+                    // Port positions are relative to node, label positions are relative to port
+                    const labelX = node.x + port.x + label.x;
+                    const labelY = node.y + port.y + label.y;
+
+                    obstacles.push({
+                      id: `${port.id}_label_${i}`,
+                      x: labelX,
+                      y: labelY,
+                      width: label.width,
+                      height: label.height,
+                    });
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

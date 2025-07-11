@@ -1898,7 +1898,6 @@ const Visualizer = ({
 
       try {
         const renderer = new SchematicLayoutEngine(netlist, currentConfig);
-        return;
 
         // Use the unified layout method with updated positions
         const layoutResult = await renderer.layout(
@@ -1911,26 +1910,14 @@ const Visualizer = ({
           createSchematicNode(elkNode, selectionState, netlist)
         );
 
-        // Add animation class for smooth transitions
-        const nodesWithAnimation = newNodes.map((node) => ({
-          ...node,
-          className: `${node.className || ""} animate-layout`.trim(),
-        }));
-
-        setNodes(nodesWithAnimation);
+        setNodes(newNodes);
 
         // Update edges as well
         const newEdges = layoutResult.edges.map((elkEdge) =>
           createSchematicEdge(elkEdge, selectionState)
         );
 
-        // Add animation class to edges
-        const edgesWithAnimation = newEdges.map((edge) => ({
-          ...edge,
-          className: "animate-layout",
-        }));
-
-        setEdges(edgesWithAnimation);
+        setEdges(newEdges);
 
         // Update the stored node positions
         setNodePositions(layoutResult.nodePositions);
