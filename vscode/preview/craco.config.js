@@ -1,4 +1,5 @@
 const path = require("path");
+const CopyWebpackPlugin = require("copy-webpack-plugin");
 
 // Sorry!
 module.exports = {
@@ -118,7 +119,32 @@ module.exports = {
         }
       }
 
+      // Add CopyWebpackPlugin to copy WASM files
+      webpackConfig.plugins.push(
+        new CopyWebpackPlugin({
+          patterns: [
+            {
+              from: path.resolve(
+                __dirname,
+                "node_modules/libavoid-js/dist/libavoid.wasm"
+              ),
+              to: "static/js/libavoid.wasm",
+            },
+          ],
+        })
+      );
+
       return webpackConfig;
+    },
+  },
+  devServer: {
+    setupMiddlewares: (middlewares, devServer) => {
+      // Ensure WASM files are served with correct MIME type
+      devServer.app.get("*.wasm", (req, res, next) => {
+        res.type("application/wasm");
+        next();
+      });
+      return middlewares;
     },
   },
 };

@@ -5,6 +5,7 @@ import type { Netlist, AttributeValue } from "./types/NetlistTypes";
 import { createCanvas } from "canvas";
 import { getKicadSymbolInfo } from "./renderer/kicad_sym";
 import * as LZString from "lz-string";
+import { LibavoidEdgeRouter } from "./LibavoidEdgeRouter";
 
 // Re-export all the public types and enums from the old implementation
 export enum NodeType {
@@ -179,7 +180,7 @@ export const DEFAULT_CONFIG: SchematicConfig = {
     hideLabelsOnConnectedPorts: true,
   },
   visual: {
-    showPortLabels: true,
+    showPortLabels: false,
     showComponentValues: true,
     showFootprints: true,
   },
@@ -216,6 +217,7 @@ export class SchematicLayoutEngine {
   nets: Map<string, Set<string>>;
   config: SchematicConfig;
   private _nodePositions: NodePositions;
+  private edgeRouter: LibavoidEdgeRouter;
 
   constructor(netlist: Netlist, config: Partial<SchematicConfig> = {}) {
     this.netlist = netlist;
@@ -223,6 +225,7 @@ export class SchematicLayoutEngine {
     this.elk = new ELK();
     this.nets = this._generateNets();
     this._nodePositions = {};
+    this.edgeRouter = new LibavoidEdgeRouter();
     // Merge provided config with defaults
     this.config = {
       ...DEFAULT_CONFIG,
@@ -307,7 +310,7 @@ export class SchematicLayoutEngine {
         children: instances
           .map((ref) => this._nodeForInstance(ref))
           .filter((node) => node !== null) as ElkNode[],
-        edges: [],
+        edges: [], // Start with no edges
       };
     }
 
@@ -329,15 +332,15 @@ export class SchematicLayoutEngine {
       }
     }
 
-    // Create the graph
+    // Create the graph without edges initially
     const graph: ElkGraph = {
       id: instance_ref,
       children: nodes,
-      edges: [],
+      edges: [], // Start with no edges
     };
 
-    // Add connectivity (edges and net references)
-    return this._addConnectivity(graph);
+    // Don't add connectivity here - it will be added later
+    return graph;
   }
 
   /**
@@ -350,58 +353,107 @@ export class SchematicLayoutEngine {
     // Store the provided node positions
     this._nodePositions = nodePositions;
 
+    // Create the graph structure without edges
     const graph = this._graphForInstance(instance_ref);
 
-    // Always use layered algorithm with interactive mode
-    const layoutOptions = {
-      // "elk.algorithm": "layered",
-      "elk.algorithm": "layered",
-      "elk.direction": this.config.layout.direction,
-      "elk.spacing.nodeNode": `${this.config.layout.spacing}`,
-      "elk.layered.spacing.nodeNodeBetweenLayers": `${this.config.layout.spacing}`,
-      "elk.padding": `[top=${this.config.layout.padding}, left=${this.config.layout.padding}, bottom=${this.config.layout.padding}, right=${this.config.layout.padding}]`,
-      "elk.nodeSize.constraints": "NODE_LABELS PORTS PORT_LABELS MINIMUM_SIZE",
-      "elk.portConstraints": "FIXED_ORDER",
-      "elk.portLabels.placement": "INSIDE NEXT_TO_PORT_IF_POSSIBLE",
-      "elk.layered.nodePlacement.strategy": "INTERACTIVE",
-      // Enable interactive mode to respect fixed positions
-      "elk.interactive": "true",
-      // Consider fixed positions when routing edges
-      "elk.layered.considerModelOrder": "NODES_AND_EDGES",
-    };
-
-    // Create pre-layout graph with noLayout option for debugging
-    const preLayoutGraph = {
-      ...graph,
-      layoutOptions: {
-        ...layoutOptions,
-        noLayout: true,
-      },
-    };
-
-    // Generate debugging link for pre-layout graph
-    const preLayoutJson = JSON.stringify(preLayoutGraph, null, 2);
-    const preLayoutCompressed =
-      LZString.compressToEncodedURIComponent(preLayoutJson);
-    console.log("Pre-layout ELK Live link:");
-    console.log(
-      `https://rtsys.informatik.uni-kiel.de/elklive/json.html?compressedContent=${preLayoutCompressed}`
+    // Check if all nodes have positions
+    const allNodesHavePositions = this._checkAllNodesHavePositions(
+      graph,
+      nodePositions
     );
 
-    // Create the graph with layout options for actual layout
-    const graphWithOptions = {
-      ...graph,
-      layoutOptions: layoutOptions,
-    };
+    let layoutedGraph: ElkGraph;
 
-    // Run the layout
-    const layoutedGraph = await this.elk.layout(graphWithOptions);
+    if (!allNodesHavePositions) {
+      // Remove edges temporarily for ELK layout
+      const edges = graph.edges;
+      graph.edges = [];
+
+      // Use ELK only for node placement
+      const layoutOptions = {
+        "elk.algorithm": "layered",
+        "elk.direction": this.config.layout.direction,
+        "elk.spacing.nodeNode": `${this.config.layout.spacing}`,
+        "elk.layered.spacing.nodeNodeBetweenLayers": `${this.config.layout.spacing}`,
+        "elk.padding": `[top=${this.config.layout.padding}, left=${this.config.layout.padding}, bottom=${this.config.layout.padding}, right=${this.config.layout.padding}]`,
+        "elk.nodeSize.constraints":
+          "NODE_LABELS PORTS PORT_LABELS MINIMUM_SIZE",
+        "elk.portConstraints": "FIXED_ORDER",
+        "elk.portLabels.placement": "INSIDE NEXT_TO_PORT_IF_POSSIBLE",
+        "elk.layered.nodePlacement.strategy": "INTERACTIVE",
+        "elk.interactive": "true",
+        "elk.layered.considerModelOrder": "NODES_AND_EDGES",
+      };
+
+      // Create pre-layout graph for debugging
+      const preLayoutGraph = {
+        ...graph,
+        layoutOptions: {
+          ...layoutOptions,
+          noLayout: true,
+        },
+      };
+
+      // Generate debugging link for pre-layout graph
+      const preLayoutJson = JSON.stringify(preLayoutGraph, null, 2);
+      const preLayoutCompressed =
+        LZString.compressToEncodedURIComponent(preLayoutJson);
+      console.log("Pre-layout ELK Live link (nodes only):");
+      console.log(
+        `https://rtsys.informatik.uni-kiel.de/elklive/json.html?compressedContent=${preLayoutCompressed}`
+      );
+
+      // Create the graph with layout options for actual layout
+      const graphWithOptions = {
+        ...graph,
+        layoutOptions: layoutOptions,
+      };
+
+      // Run ELK layout for node placement
+      layoutedGraph = await this.elk.layout(graphWithOptions);
+
+      // Restore edges
+      layoutedGraph.edges = edges;
+    } else {
+      // Skip ELK layout - use existing positions
+      console.log("All nodes have positions, skipping ELK layout");
+      layoutedGraph = graph;
+
+      // Apply existing positions to nodes
+      this._applyExistingPositions(layoutedGraph, nodePositions);
+    }
+
+    // Now build edges and route them with libavoid
+    layoutedGraph = this._addConnectivity(layoutedGraph);
+
+    // Route edges using libavoid
+    const edgeRoutes = await this.edgeRouter.routeEdges(layoutedGraph);
+
+    // Update the graph with the routed edges
+    for (const route of edgeRoutes) {
+      const edge = layoutedGraph.edges.find((e) => e.id === route.id);
+      if (edge) {
+        // Convert route points to ELK edge sections
+        edge.sections = [
+          {
+            id: `${edge.id}_section`,
+            startPoint: route.points[0],
+            endPoint: route.points[route.points.length - 1],
+            bendPoints: route.points.slice(1, -1),
+          },
+        ];
+
+        // Add junction points if any
+        if (route.junctionPoints && route.junctionPoints.length > 0) {
+          edge.junctionPoints = route.junctionPoints;
+        }
+      }
+    }
 
     // Add noLayout option for debugging in post-layout graph
     const postLayoutGraph = {
       ...layoutedGraph,
       layoutOptions: {
-        ...layoutedGraph.layoutOptions,
         noLayout: true,
       },
     };
@@ -410,7 +462,7 @@ export class SchematicLayoutEngine {
     const postLayoutJson = JSON.stringify(postLayoutGraph, null, 2);
     const postLayoutCompressed =
       LZString.compressToEncodedURIComponent(postLayoutJson);
-    console.log("\nPost-layout ELK Live link:");
+    console.log("\nPost-layout ELK Live link (with routed edges):");
     console.log(
       `https://rtsys.informatik.uni-kiel.de/elklive/json.html?compressedContent=${postLayoutCompressed}`
     );
@@ -451,6 +503,66 @@ export class SchematicLayoutEngine {
       ...layoutedGraph,
       nodePositions: extractedNodePositions,
     } as LayoutResult;
+  }
+
+  /**
+   * Check if all nodes in the graph have positions
+   */
+  private _checkAllNodesHavePositions(
+    graph: ElkGraph,
+    nodePositions: NodePositions
+  ): boolean {
+    if (!graph.children) return true;
+
+    const checkNodes = (nodes: ElkNode[]): boolean => {
+      for (const node of nodes) {
+        // Check if this node has a position
+        if (!nodePositions[node.id]) {
+          return false;
+        }
+
+        // Check children recursively
+        if (node.children) {
+          if (!checkNodes(node.children)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    };
+
+    return checkNodes(graph.children);
+  }
+
+  /**
+   * Apply existing positions to nodes in the graph
+   */
+  private _applyExistingPositions(
+    graph: ElkGraph,
+    nodePositions: NodePositions
+  ): void {
+    if (!graph.children) return;
+
+    const applyToNodes = (nodes: ElkNode[]) => {
+      for (const node of nodes) {
+        const position = nodePositions[node.id];
+        if (position) {
+          node.x = position.x;
+          node.y = position.y;
+          if (position.width !== undefined) node.width = position.width;
+          if (position.height !== undefined) node.height = position.height;
+          if (position.rotation !== undefined)
+            node.rotation = position.rotation;
+        }
+
+        // Apply to children recursively
+        if (node.children) {
+          applyToNodes(node.children);
+        }
+      }
+    };
+
+    applyToNodes(graph.children);
   }
 
   // Private helper methods
@@ -1096,13 +1208,13 @@ export class SchematicLayoutEngine {
             targets: [mstEdge.target.port.id],
             sourceComponentRef: mstEdge.source.node.id,
             targetComponentRef: mstEdge.target.node.id,
-            labels: [
-              {
-                text: netName,
-                width: calculateTextDimensions(netName, 10).width,
-                height: calculateTextDimensions(netName, 10).height,
-              },
-            ],
+            // labels: [
+            //   {
+            //     text: netName,
+            //     width: calculateTextDimensions(netName, 10).width,
+            //     height: calculateTextDimensions(netName, 10).height,
+            //   },
+            // ],
             properties: {
               netName: netName,
             },
@@ -1369,5 +1481,12 @@ export class SchematicLayoutEngine {
     }
 
     return mstEdges;
+  }
+
+  /**
+   * Clean up resources
+   */
+  destroy(): void {
+    this.edgeRouter.destroy();
   }
 }
