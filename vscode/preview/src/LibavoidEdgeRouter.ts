@@ -65,6 +65,26 @@ export class LibavoidEdgeRouter {
   > = new Map();
 
   /**
+   * Check if a series of points forms an orthogonal path
+   * (all segments are either horizontal or vertical)
+   */
+  private isOrthogonalPath(points: { x: number; y: number }[]): boolean {
+    if (points.length < 2) return true;
+
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const curr = points[i];
+
+      // Check if segment is neither horizontal nor vertical
+      if (prev.x !== curr.x && prev.y !== curr.y) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Initialize the libavoid library
    */
   async initialize(): Promise<void> {
@@ -250,6 +270,15 @@ export class LibavoidEdgeRouter {
             targetPort.y
           );
 
+          // Check if the path is orthogonal
+          if (!this.isOrthogonalPath(correctedPoints)) {
+            console.warn(
+              `Skipping non-orthogonal edge ${connectorId} with points:`,
+              correctedPoints
+            );
+            continue;
+          }
+
           edgeResults.push({
             id: connectorId,
             sourceType: "port",
@@ -283,6 +312,15 @@ export class LibavoidEdgeRouter {
             junction.x,
             junction.y
           );
+
+          // Check if the path is orthogonal
+          if (!this.isOrthogonalPath(correctedPoints)) {
+            console.warn(
+              `Skipping non-orthogonal edge ${connectorId} with points:`,
+              correctedPoints
+            );
+            continue;
+          }
 
           edgeResults.push({
             id: connectorId,

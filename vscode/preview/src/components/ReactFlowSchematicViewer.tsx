@@ -1896,6 +1896,8 @@ const Visualizer = ({
     async (updatedPositions: NodePositions) => {
       if (!selectedComponent) return;
 
+      console.log("Updating layout after drag: ", updatedPositions);
+
       try {
         const renderer = new SchematicLayoutEngine(netlist, currentConfig);
 
@@ -1952,6 +1954,7 @@ const Visualizer = ({
   // This effect handles fitView to center the schematic
   useEffect(() => {
     async function render() {
+      console.log("Running main render effect: ", selectedComponent);
       if (selectedComponent) {
         try {
           // Determine if we should animate based on whether the component changed
@@ -1979,6 +1982,17 @@ const Visualizer = ({
           setNodePositions(layoutResult.nodePositions);
 
           setElkLayout(layoutResult as ElkGraph);
+
+          const nodes = layoutResult.children.map((elkNode) =>
+            createSchematicNode(elkNode, selectionState, netlist)
+          );
+          const edges = layoutResult.edges.map((elkEdge) =>
+            createSchematicEdge(elkEdge, selectionState)
+          );
+
+          setNodes(nodes);
+          setEdges(edges);
+
           // Center the view after new component is rendered
           setTimeout(() => {
             reactFlowInstance.current?.fitView({
@@ -1998,44 +2012,6 @@ const Visualizer = ({
     render();
   }, [netlist, selectedComponent, prevComponent, currentConfig]);
 
-  // Update nodes and edges when layout changes
-  useEffect(() => {
-    if (elkLayout) {
-      const nodes = elkLayout.children.map((elkNode) =>
-        createSchematicNode(elkNode, selectionState, netlist)
-      );
-
-      // Add animation class if we're updating the same component
-      const nodesWithAnimation = nodes.map((node) => ({
-        ...node,
-        className: `${node.className || ""} ${
-          shouldAnimate ? "animate-layout" : ""
-        }`.trim(),
-      }));
-
-      setNodes(nodesWithAnimation);
-
-      const edges = elkLayout.edges.map((elkEdge) =>
-        createSchematicEdge(elkEdge, selectionState)
-      );
-
-      // Add animation class to edges as well
-      const edgesWithAnimation = edges.map((edge) => ({
-        ...edge,
-        className: shouldAnimate ? "animate-layout" : "",
-      }));
-
-      setEdges(edgesWithAnimation);
-
-      // Reset animation flag after applying it
-      if (shouldAnimate) {
-        setTimeout(() => {
-          setShouldAnimate(false);
-        }, 50);
-      }
-    }
-  }, [elkLayout, setNodes, setEdges, selectionState, shouldAnimate, netlist]);
-
   // Handle node click to select a component - only if the component is clickable (modules)
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
@@ -2053,6 +2029,22 @@ const Visualizer = ({
   // Track dragging state
   const [isDragging, setIsDragging] = useState(false);
   const [pendingPositions, setPendingPositions] = useState<NodePositions>({});
+
+  // Create a debounced version of updateLayoutAfterDrag for real-time updates
+  const debouncedUpdateLayout = useMemo(
+    () =>
+      debounce((positions: NodePositions) => {
+        updateLayoutAfterDrag(positions);
+      }, 50), // 50ms debounce for smooth real-time updates
+    [updateLayoutAfterDrag]
+  );
+
+  // Cleanup debounced layout update on unmount
+  useEffect(() => {
+    return () => {
+      debouncedUpdateLayout.cancel();
+    };
+  }, [debouncedUpdateLayout]);
 
   // Custom handler for node changes to capture position updates
   const handleNodesChange = useCallback(
@@ -2096,18 +2088,27 @@ const Visualizer = ({
 
         // Only update if there were actual changes
         if (hasActualChanges) {
-          // If we're dragging, just save the positions for later
+          // Update positions immediately
+          setNodePositions(updatedPositions);
+          setPendingPositions(updatedPositions);
+
+          // If we're dragging, update layout with debouncing
           if (isDragging) {
-            setPendingPositions(updatedPositions);
+            debouncedUpdateLayout(updatedPositions);
           } else {
             // Not dragging, update positions immediately (e.g., programmatic moves)
-            setNodePositions(updatedPositions);
             updateLayoutAfterDrag(updatedPositions);
           }
         }
       }
     },
-    [onNodesChange, nodePositions, updateLayoutAfterDrag, isDragging]
+    [
+      onNodesChange,
+      nodePositions,
+      updateLayoutAfterDrag,
+      isDragging,
+      debouncedUpdateLayout,
+    ]
   );
 
   // Handle node drag start
@@ -2115,17 +2116,20 @@ const Visualizer = ({
     setIsDragging(true);
   }, []);
 
-  // Handle node drag stop - update edges after drag is complete
+  // Handle node drag stop - finalize the drag operation
   const handleNodeDragStop = useCallback(() => {
     setIsDragging(false);
 
-    // If we have pending positions from the drag, apply them now
+    // Cancel any pending debounced updates
+    debouncedUpdateLayout.cancel();
+
+    // If we have pending positions from the drag, do a final update
     if (Object.keys(pendingPositions).length > 0) {
-      setNodePositions(pendingPositions);
+      // Do a final update to ensure we have the exact final positions
       updateLayoutAfterDrag(pendingPositions);
       setPendingPositions({});
     }
-  }, [pendingPositions, updateLayoutAfterDrag]);
+  }, [pendingPositions, updateLayoutAfterDrag, debouncedUpdateLayout]);
 
   useOnSelectionChange({
     onChange: useCallback(

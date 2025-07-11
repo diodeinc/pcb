@@ -627,6 +627,10 @@ export class SchematicLayoutEngine {
 
       // Replace the edges with the new routed edges
       layoutedGraph.edges = newEdges;
+
+      // Restore net labels for any ports that don't have edges
+      // (e.g., if libavoid filtered out non-orthogonal edges)
+      this._restoreNetLabelsForUnconnectedPorts(layoutedGraph, newEdges);
     } finally {
       // Clean up the edge router
       edgeRouter.destroy();
@@ -1706,6 +1710,112 @@ export class SchematicLayoutEngine {
             port.labels = port.labels.filter(
               (label) => label.properties?.labelType !== "netReference"
             );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Restore net labels for ports that don't have any edges connected
+   */
+  private _restoreNetLabelsForUnconnectedPorts(
+    graph: ElkGraph,
+    edges: ElkEdge[]
+  ): void {
+    // Build a set of all ports that have edges
+    const connectedPorts = new Set<string>();
+    for (const edge of edges) {
+      edge.sources.forEach((source) => connectedPorts.add(source));
+      edge.targets.forEach((target) => connectedPorts.add(target));
+    }
+
+    // Check all ports and add net labels to those without edges
+    for (const node of graph.children || []) {
+      if (!node.ports) continue;
+
+      // Skip junction nodes - they don't need net labels
+      if (node.type === NodeType.NET_JUNCTION) continue;
+
+      for (const port of node.ports) {
+        // If this port doesn't have any edges, add a net label if it has a netId
+        if (!connectedPorts.has(port.id) && port.netId) {
+          const netInfo = this.netlist.nets[port.netId];
+          const netName = netInfo?.name || port.netId;
+
+          // Check if we already have a net reference label
+          const hasNetLabel = port.labels?.some(
+            (label) => label.properties?.labelType === "netReference"
+          );
+
+          if (!hasNetLabel) {
+            const maxLabelLength = 10;
+            const halfLength = Math.floor(maxLabelLength / 2);
+            let truncatedLabelText = netName;
+
+            if (netName.length > maxLabelLength) {
+              truncatedLabelText =
+                netName.slice(0, halfLength) +
+                "..." +
+                netName.slice(-halfLength);
+            }
+
+            // Calculate label dimensions based on port side
+            const portSide = port.properties?.["port.side"] || "WEST";
+            const isVertical = portSide === "NORTH" || portSide === "SOUTH";
+
+            const netLabelDimensions = calculateTextDimensions(
+              truncatedLabelText,
+              10
+            );
+            const netLabelWidth = isVertical
+              ? netLabelDimensions.height
+              : netLabelDimensions.width;
+            const netLabelHeight = isVertical
+              ? netLabelDimensions.width
+              : netLabelDimensions.height;
+
+            // Position net label based on port side
+            const netLabelOffset = 15;
+            let netLabelX: number, netLabelY: number;
+
+            switch (portSide) {
+              case "WEST":
+                netLabelX = -netLabelWidth - netLabelOffset;
+                netLabelY = -netLabelHeight / 2;
+                break;
+              case "EAST":
+                netLabelX = netLabelOffset;
+                netLabelY = -netLabelHeight / 2;
+                break;
+              case "NORTH":
+                netLabelX = -netLabelWidth / 2;
+                netLabelY = -netLabelHeight - netLabelOffset;
+                break;
+              case "SOUTH":
+                netLabelX = -netLabelWidth / 2;
+                netLabelY = netLabelOffset;
+                break;
+              default:
+                netLabelX = netLabelOffset;
+                netLabelY = -netLabelHeight / 2;
+            }
+
+            // Initialize labels array if it doesn't exist
+            if (!port.labels) {
+              port.labels = [];
+            }
+
+            port.labels.push({
+              text: truncatedLabelText,
+              x: netLabelX,
+              y: netLabelY,
+              width: netLabelWidth,
+              height: netLabelHeight,
+              properties: {
+                labelType: "netReference",
+              },
+            });
           }
         }
       }
