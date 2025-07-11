@@ -72,7 +72,7 @@ component_config = {
 
 gain = config("gain", Gain, default=Gain("A2"))
 package = config("package", Package, default=Package("TSSOP"))
-ref_config = config("ref_config", RefConfig, default=RefConfig("MIDSUPPLY"))
+ref_config = config("ref_config", RefConfig, default=RefConfig("GROUND"))
 implementation_type = config("implementation_type", ImplementationType, default=ImplementationType("WITH_PASSIVES"))
 
 # Properties

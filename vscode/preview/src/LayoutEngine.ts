@@ -353,6 +353,8 @@ export class SchematicLayoutEngine {
     nodePositions: NodePositions = {}
   ): Promise<LayoutResult> {
     console.log("*** STARTING LAYOUT PASS ***");
+    console.log("Node positions with rotations:", nodePositions);
+
     // Store the provided node positions
     this._nodePositions = nodePositions;
 
@@ -914,6 +916,12 @@ export class SchematicLayoutEngine {
           }),
         },
       };
+
+      if (this._nodePositions[instance_ref]?.rotation) {
+        console.log(
+          `[LayoutEngine] Applied rotation ${this._nodePositions[instance_ref].rotation} to symbol ${instance_ref}`
+        );
+      }
 
       // Create ports based on pin endpoints
       for (const pinEndpoint of symbolInfo.pinEndpoints) {
@@ -1600,7 +1608,10 @@ export class SchematicLayoutEngine {
           id: port.id,
           x: position.x,
           y: position.y,
-          visibilityDirection: this._getPortVisibilityDirection(port),
+          visibilityDirection: this._getPortVisibilityDirection(
+            port,
+            node.rotation
+          ),
         }));
 
         // Create hyperedge for libavoid with context
@@ -1674,9 +1685,27 @@ export class SchematicLayoutEngine {
    * Get the visibility direction for a port based on its side
    */
   private _getPortVisibilityDirection(
-    port: ElkPort
+    port: ElkPort,
+    nodeRotation?: number
   ): "NORTH" | "SOUTH" | "EAST" | "WEST" | "ALL" | undefined {
     const portSide = port.properties?.["port.side"];
+
+    // If no side is specified, allow connections from all directions
+    if (!portSide) {
+      return "ALL";
+    }
+
+    // If node is rotated, transform the port side accordingly
+    if (nodeRotation && nodeRotation !== 0) {
+      const rotationSteps = Math.round(nodeRotation / 90) % 4;
+      const sides = ["NORTH", "EAST", "SOUTH", "WEST"];
+      const currentIndex = sides.indexOf(portSide);
+
+      if (currentIndex !== -1) {
+        const newIndex = (currentIndex + rotationSteps + 4) % 4;
+        return sides[newIndex] as "NORTH" | "SOUTH" | "EAST" | "WEST";
+      }
+    }
 
     switch (portSide) {
       case "NORTH":
@@ -1839,9 +1868,58 @@ export class SchematicLayoutEngine {
     const portX = port.x || 0;
     const portY = port.y || 0;
 
+    // If the node has rotation, transform the port position
+    if (node.rotation && node.rotation !== 0) {
+      const nodeWidth = node.width || 0;
+      const nodeHeight = node.height || 0;
+
+      // Transform port position based on rotation
+      const rotatedPos = this._rotatePoint(
+        portX,
+        portY,
+        nodeWidth / 2,
+        nodeHeight / 2,
+        node.rotation
+      );
+
+      return {
+        x: nodeX + rotatedPos.x,
+        y: nodeY + rotatedPos.y,
+      };
+    }
+
     return {
       x: nodeX + portX,
       y: nodeY + portY,
+    };
+  }
+
+  /**
+   * Rotate a point around a center by a given angle in degrees
+   */
+  private _rotatePoint(
+    x: number,
+    y: number,
+    centerX: number,
+    centerY: number,
+    angleDegrees: number
+  ): { x: number; y: number } {
+    const angleRadians = (angleDegrees * Math.PI) / 180;
+    const cos = Math.cos(angleRadians);
+    const sin = Math.sin(angleRadians);
+
+    // Translate point to origin
+    const translatedX = x - centerX;
+    const translatedY = y - centerY;
+
+    // Rotate
+    const rotatedX = translatedX * cos - translatedY * sin;
+    const rotatedY = translatedX * sin + translatedY * cos;
+
+    // Translate back
+    return {
+      x: rotatedX + centerX,
+      y: rotatedY + centerY,
     };
   }
 

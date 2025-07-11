@@ -19,6 +19,8 @@ import {
   useOnSelectionChange,
   ReactFlowProvider,
   Panel,
+  Background,
+  BackgroundVariant,
 } from "@xyflow/react";
 import type { Edge, EdgeProps, EdgeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -71,12 +73,14 @@ function createSchematicNode(
       selectionState,
       ...elkNode,
       ...(elkNode.type === NodeType.SYMBOL && netlist ? { netlist } : {}),
+      // Ensure rotation is included in data
+      rotation: elkNode.rotation || 0,
     },
     position: { x: elkNode.x || 0, y: elkNode.y || 0 },
     type: elkNode.type,
     draggable: true,
-    // Only make modules selectable
-    selectable: elkNode.type === NodeType.MODULE,
+    // Make all nodes selectable so they can be rotated
+    selectable: true,
     connectable: false,
     // Add custom styles based on node type
     style: {
@@ -303,6 +307,9 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
     return isPortHighlighted ? 1 : 0.2;
   };
 
+  // Get rotation from data
+  const rotation = data.rotation || 0;
+
   // Different styles for modules vs components
   const nodeStyle: CSSProperties = {
     width: data.width,
@@ -315,6 +322,9 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
     cursor: "move",
     pointerEvents: "auto",
     borderRadius: "0px",
+    // Apply rotation transform
+    transform: rotation !== 0 ? `rotate(${rotation}deg)` : undefined,
+    transformOrigin: "center",
   };
 
   return (
@@ -1379,6 +1389,9 @@ const SymbolNode = React.memo(
       });
     const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
 
+    // Get rotation from data
+    const rotation = data.rotation || 0;
+
     // Get netlist from node data
     const netlist = (data as any).netlist as Netlist;
 
@@ -1504,6 +1517,9 @@ const SymbolNode = React.memo(
           pointerEvents: "none",
           position: "relative",
           opacity: opacity,
+          // Apply rotation transform
+          transform: rotation !== 0 ? `rotate(${rotation}deg)` : undefined,
+          transformOrigin: "center",
         }}
       >
         {/* Canvas for KiCad symbol rendering */}
@@ -1731,7 +1747,9 @@ const SymbolNode = React.memo(
         nextProps.data.selectionState?.hoveredNetId &&
       // Check if connected ports changed
       JSON.stringify(prevProps.data.ports?.map((p) => p.netId)) ===
-        JSON.stringify(nextProps.data.ports?.map((p) => p.netId))
+        JSON.stringify(nextProps.data.ports?.map((p) => p.netId)) &&
+      // Check if rotation changed
+      prevProps.data.rotation === nextProps.data.rotation
     );
   }
 );
@@ -2045,6 +2063,102 @@ const Visualizer = ({
       debouncedUpdateLayout.cancel();
     };
   }, [debouncedUpdateLayout]);
+
+  // Add keyboard event handler for rotation
+  useEffect(() => {
+    const handleKeyPress = (event: KeyboardEvent) => {
+      // Check if 'R' key is pressed (case insensitive)
+      if (event.key.toLowerCase() === "r") {
+        console.log("[Rotation] R key pressed");
+
+        // Get the currently selected nodes from React Flow
+        const selectedNodes = reactFlowInstance.current
+          ?.getNodes()
+          .filter((node: any) => node.selected);
+
+        console.log("[Rotation] Selected nodes:", selectedNodes);
+
+        if (selectedNodes && selectedNodes.length > 0) {
+          // Update rotation for each selected node
+          const updatedPositions = { ...nodePositions };
+          let hasChanges = false;
+
+          selectedNodes.forEach((node: any) => {
+            const currentPosition = nodePositions[node.id];
+            console.log(
+              `[Rotation] Current position for ${node.id}:`,
+              currentPosition
+            );
+
+            if (currentPosition) {
+              // Rotate by 90 degrees clockwise
+              const currentRotation = currentPosition.rotation || 0;
+              const newRotation = (currentRotation + 90) % 360;
+
+              console.log(
+                `[Rotation] Rotating ${node.id} from ${currentRotation} to ${newRotation} degrees`
+              );
+
+              updatedPositions[node.id] = {
+                ...currentPosition,
+                rotation: newRotation,
+              };
+              hasChanges = true;
+            } else {
+              console.log(
+                `[Rotation] No position found for ${node.id}, creating new position`
+              );
+              // If no position exists yet, create one with just rotation
+              updatedPositions[node.id] = {
+                x: node.position.x,
+                y: node.position.y,
+                rotation: 90,
+              };
+              hasChanges = true;
+            }
+          });
+
+          if (hasChanges) {
+            console.log("[Rotation] Updated positions:", updatedPositions);
+            // Update positions and trigger layout update
+            setNodePositions(updatedPositions);
+            updateLayoutAfterDrag(updatedPositions);
+
+            // Preserve selection after rotation by re-selecting the nodes
+            setTimeout(() => {
+              if (reactFlowInstance.current) {
+                // Get the current nodes
+                const currentNodes = reactFlowInstance.current.getNodes();
+
+                // Update the selected nodes to maintain selection
+                const updatedNodes = currentNodes.map((node: any) => {
+                  const wasSelected = selectedNodes.some(
+                    (selected: any) => selected.id === node.id
+                  );
+                  return {
+                    ...node,
+                    selected: wasSelected,
+                  };
+                });
+
+                reactFlowInstance.current.setNodes(updatedNodes);
+              }
+            }, 100); // Small delay to ensure layout update has completed
+          }
+        } else {
+          console.log("[Rotation] No nodes selected");
+        }
+      }
+    };
+
+    // Add event listener
+    window.addEventListener("keydown", handleKeyPress);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener("keydown", handleKeyPress);
+    };
+  }, [nodePositions, updateLayoutAfterDrag]);
 
   // Custom handler for node changes to capture position updates
   const handleNodesChange = useCallback(
@@ -2366,6 +2480,7 @@ const Visualizer = ({
           minZoom={0.1}
           maxZoom={1.5}
         >
+          <Background variant={BackgroundVariant.Dots} />
           <Controls showInteractive={false} />
           <Panel position="top-right">
             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>

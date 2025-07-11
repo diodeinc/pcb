@@ -160,4 +160,144 @@ test.describe("Schematic Visual Tests", () => {
       );
     });
   }
+
+  // Test rotation functionality
+  test("VoltageDivider with rotation", async ({ mount, page }) => {
+    // Capture console logs from the browser
+    page.on("console", async (msg) => {
+      const type = msg.type();
+      const args = [];
+      for (const arg of msg.args()) {
+        args.push(arg.toString());
+      }
+      if (msg.text().includes("kicanvas")) {
+        return;
+      }
+      if (type === "log") {
+        console.log("[Browser Console]", ...args);
+      } else if (type === "error") {
+        console.error("[Browser Console Error]", ...args);
+      }
+    });
+
+    page.on("pageerror", (error) => {
+      console.error(`[Page Error] ${error.message}`);
+      console.error(error.stack);
+    });
+
+    const netlist = await buildNetlistFromExample("VoltageDivider");
+
+    // Mount the component
+    const component = await mount(
+      <>
+        <style>{`
+          /* Ensure the mount root has full height */
+          #root {
+            width: 1920px;
+            height: 1080px;
+            position: relative;
+            overflow: hidden;
+          }
+          /* Override the 100vh in SchematicContainer to use parent height */
+          .schematic-layout {
+            height: 100% !important;
+          }
+          .schematic-viewer-container {
+            height: 100% !important;
+          }
+          /* Ensure React Flow fills the container */
+          .react-flow {
+            height: 100% !important;
+            width: 100% !important;
+          }
+          .react-flow__renderer {
+            height: 100% !important;
+            width: 100% !important;
+          }
+          .react-flow__viewport {
+            height: 100% !important;
+            width: 100% !important;
+          }
+          .schematic-viewer {
+            height: 100% !important;
+            width: 100% !important;
+          }
+          .react-flow-schematic-viewer {
+            height: 100% !important;
+            width: 100% !important;
+          }
+        `}</style>
+        <SchematicContainer
+          netlistData={netlist}
+          currentFile={netlist.root_ref.split(":")[0]}
+          selectedModule={netlist.root_ref}
+        />
+      </>
+    );
+
+    // Wait for React Flow to finish rendering
+    await page.waitForSelector(".react-flow__renderer", {
+      state: "attached",
+      timeout: 10000,
+    });
+
+    // Wait for nodes to be rendered
+    await page.waitForSelector(".react-flow__node", {
+      state: "visible",
+      timeout: 10000,
+    });
+
+    // Give time for layout to stabilize
+    await page.waitForTimeout(1000);
+
+    // Find and click on a resistor node (R1 or R2)
+    const resistorNode = await page
+      .locator('.react-flow__node[data-id*="R1"]')
+      .first();
+
+    // Click to select the resistor
+    await resistorNode.click();
+
+    // Wait a bit for selection to register
+    await page.waitForTimeout(100);
+
+    // Press 'R' to rotate
+    await page.keyboard.press("r");
+
+    // Wait for rotation animation and re-layout
+    await page.waitForTimeout(500);
+
+    // Take screenshot with rotated component
+    await expect(component).toHaveScreenshot("voltagedivider-rotated.png", {
+      animations: "disabled",
+      scale: "css",
+    });
+
+    // Rotate again (should be 180 degrees now)
+    await page.keyboard.press("r");
+    await page.waitForTimeout(500);
+
+    await expect(component).toHaveScreenshot("voltagedivider-rotated-180.png", {
+      animations: "disabled",
+      scale: "css",
+    });
+
+    // Rotate again (should be 270 degrees now)
+    await page.keyboard.press("r");
+    await page.waitForTimeout(500);
+
+    await expect(component).toHaveScreenshot("voltagedivider-rotated-270.png", {
+      animations: "disabled",
+      scale: "css",
+    });
+
+    // Rotate once more (should be back to 0 degrees)
+    await page.keyboard.press("r");
+    await page.waitForTimeout(500);
+
+    await expect(component).toHaveScreenshot("voltagedivider-rotated-360.png", {
+      animations: "disabled",
+      scale: "css",
+    });
+  });
 });

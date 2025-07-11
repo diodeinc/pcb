@@ -204,10 +204,11 @@
 
 .react-flow {
   background-color: #ffffff; /* White background for schematics */
+  /* Removed grid background - using React Flow's dots instead
   background-image: 
     linear-gradient(to right, rgba(0, 0, 0, 0.1) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
-  background-size: 10px 10px; /* Standard engineering grid size */
+  background-size: 10px 10px; */ /* Standard engineering grid size */
 }
 
 /* Override ReactFlow styles for better integration */
