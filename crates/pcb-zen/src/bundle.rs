@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use pcb_zen_core::bundle::{Bundle, BundleManifest};
 use pcb_zen_core::{
     CompoundLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
-    WorkspaceLoadResolver,
+    RelativeLoadResolver, WorkspaceLoadResolver,
 };
 use zip::write::FileOptions;
 use zip::ZipWriter;
@@ -225,6 +225,10 @@ pub fn create_bundle(input_path: &Path, output_path: &Path) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Input file has no parent directory"))?
         .to_path_buf();
 
+    // Find the workspace root by looking for pcb.toml, fall back to source dir if not found
+    let workspace_root =
+        crate::load::find_workspace_root(&canonical_input).unwrap_or_else(|| source_dir.clone());
+
     // Create a temporary directory for the bundle
     let temp_dir = tempfile::tempdir()?;
     let bundle_dir = temp_dir.path().to_path_buf();
@@ -243,11 +247,11 @@ pub fn create_bundle(input_path: &Path, output_path: &Path) -> Result<()> {
         .unwrap()
         .to_path_buf();
 
-    // Create the base load resolver and file provider
-    let workspace_root = source_dir.to_path_buf();
+    // Create the base load resolver and file provider with the correct workspace root
     let base_resolver = Arc::new(CompoundLoadResolver::new(vec![
         Arc::new(RemoteLoadResolver),
         Arc::new(WorkspaceLoadResolver::new(workspace_root)),
+        Arc::new(RelativeLoadResolver),
     ]));
     let file_provider = Arc::new(DefaultFileProvider);
 

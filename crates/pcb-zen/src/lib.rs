@@ -13,7 +13,8 @@ use crate::load::RemoteLoadResolver;
 use pcb_sch::Schematic;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{
-    CompoundLoadResolver, DefaultFileProvider, EvalContext, InputMap, WorkspaceLoadResolver,
+    CompoundLoadResolver, DefaultFileProvider, EvalContext, InputMap, RelativeLoadResolver,
+    WorkspaceLoadResolver,
 };
 use starlark::errors::EvalMessage;
 
@@ -47,6 +48,7 @@ pub fn create_eval_context(workspace_root: &Path) -> EvalContext {
         .set_load_resolver(Arc::new(CompoundLoadResolver::new(vec![
             Arc::new(RemoteLoadResolver),
             Arc::new(WorkspaceLoadResolver::new(workspace_root.to_path_buf())),
+            Arc::new(RelativeLoadResolver),
         ])))
 }
 

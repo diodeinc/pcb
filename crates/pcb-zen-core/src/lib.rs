@@ -474,10 +474,25 @@ impl LoadResolver for WorkspaceLoadResolver {
         );
 
         let resolved_path = if let Some(workspace_relative) = load_path.strip_prefix("//") {
+            // Workspace-relative path (starts with //)
             canonical_root.join(workspace_relative)
         } else {
-            let current_dir = current_file.parent().unwrap_or(Path::new(""));
-            canonical_root.join(current_dir).join(load_path)
+            // For relative paths, we need to check if the current file is within the workspace
+            let canonical_current_file = file_provider.canonicalize(current_file)?;
+
+            if canonical_current_file.starts_with(&canonical_root) {
+                // Current file is within the workspace
+                let current_dir = canonical_current_file.parent().unwrap_or(Path::new(""));
+                let relative_dir = current_dir.strip_prefix(&canonical_root).unwrap();
+                canonical_root.join(relative_dir).join(load_path)
+            } else {
+                // Current file is outside the workspace (e.g., a remote dependency)
+                // In this case, this resolver should not handle it - return an error
+                // so that the next resolver in the chain can try
+                return Err(anyhow::anyhow!(
+                    "WorkspaceLoadResolver cannot resolve relative paths for files outside the workspace"
+                ));
+            }
         };
 
         // Canonicalize the resolved path to handle .. and symlinks
@@ -497,6 +512,40 @@ impl LoadResolver for WorkspaceLoadResolver {
             Err(anyhow::anyhow!(
                 "File not found: {}",
                 canonical_path.display()
+            ))
+        }
+    }
+}
+
+/// RelativeLoadResolver handles basic relative path resolution from any file.
+/// This is used as a fallback for files that are not within a workspace.
+pub struct RelativeLoadResolver;
+
+impl LoadResolver for RelativeLoadResolver {
+    fn resolve_path(
+        &self,
+        file_provider: &dyn FileProvider,
+        load_path: &str,
+        current_file: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
+        // Get the directory containing the current file
+        let current_dir = current_file
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
+
+        // Resolve the path relative to the current file's directory
+        let resolved_path = current_dir.join(load_path);
+
+        // Check if the file exists
+        if file_provider.exists(&resolved_path) {
+            // Canonicalize to get the absolute path
+            file_provider
+                .canonicalize(&resolved_path)
+                .map_err(|e| anyhow::anyhow!("Failed to canonicalize path: {}", e))
+        } else {
+            Err(anyhow::anyhow!(
+                "File not found: {}",
+                resolved_path.display()
             ))
         }
     }

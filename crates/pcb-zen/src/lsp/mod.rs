@@ -8,8 +8,10 @@ use lsp_types::{
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
-use pcb_zen_core::{CompoundLoadResolver, EvalContext, InputMap, LoadResolver};
-use pcb_zen_core::{DefaultFileProvider, FileProvider, WorkspaceLoadResolver};
+use pcb_zen_core::{
+    CompoundLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
+    RelativeLoadResolver, WorkspaceLoadResolver,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::docs::DocModule;
@@ -32,6 +34,7 @@ fn create_standard_load_resolver(workspace_root: &Path) -> Arc<CompoundLoadResol
     Arc::new(CompoundLoadResolver::new(vec![
         Arc::new(RemoteLoadResolver),
         Arc::new(WorkspaceLoadResolver::new(workspace_root.to_path_buf())),
+        Arc::new(RelativeLoadResolver),
     ]))
 }
 

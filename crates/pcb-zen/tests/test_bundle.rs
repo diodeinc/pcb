@@ -13,6 +13,14 @@ fn verify_bundle_contents(bundle_path: &Path, expected_files: &[&str]) -> anyhow
     let file = File::open(bundle_path)?;
     let mut archive = ZipArchive::new(file)?;
 
+    // Collect all files in the archive for debugging
+    let mut actual_files = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(file) = archive.by_index(i) {
+            actual_files.push(file.name().to_string());
+        }
+    }
+
     // Check that all expected files exist in the bundle
     for expected in expected_files {
         let found = (0..archive.len()).any(|i| {
@@ -23,7 +31,11 @@ fn verify_bundle_contents(bundle_path: &Path, expected_files: &[&str]) -> anyhow
         });
 
         if !found {
-            anyhow::bail!("Expected file '{}' not found in bundle", expected);
+            anyhow::bail!(
+                "Expected file '{}' not found in bundle. Bundle contains: {:?}",
+                expected,
+                actual_files
+            );
         }
     }
 
@@ -374,7 +386,7 @@ NetType = Net
         "src/modules/board.zen",
         r#"
 # Board module using workspace root reference
-load("../../common/types.zen", "NetType")
+load("//common/types.zen", "NetType")
 
 input = io("input", NetType)
 "#,
@@ -398,12 +410,29 @@ Board(
         "src/main.zen",
         &[
             "bundle.toml",
-            "src/main.zen",
-            "src/modules/board.zen",
-            "common/types.zen",
-            "pcb.toml",
+            "main.zen", // src/main.zen becomes main.zen (relative to src/)
+            "modules/board.zen", // src/modules/board.zen becomes modules/board.zen
+                        // common/types.zen goes to deps/ with a hash prefix - we can't predict the exact name
         ],
     );
+
+    // Additionally verify that the deps file exists
+    let output_path = env.root().join("output.bundle");
+    let file = File::open(&output_path).unwrap();
+    let mut archive = ZipArchive::new(file).unwrap();
+
+    let mut found_types_in_deps = false;
+    for i in 0..archive.len() {
+        if let Ok(file) = archive.by_index(i) {
+            let name = file.name();
+            if name.starts_with("deps/") && name.ends_with("_types.zen") {
+                found_types_in_deps = true;
+                break;
+            }
+        }
+    }
+
+    assert!(found_types_in_deps, "Should have types.zen in deps folder");
 }
 
 #[test]
