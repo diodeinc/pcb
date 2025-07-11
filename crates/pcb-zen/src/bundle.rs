@@ -261,6 +261,7 @@ pub fn create_bundle(input_path: &Path, output_path: &Path) -> Result<()> {
 
     // Create evaluation context with the tracking resolver
     let eval_context = EvalContext::new()
+        .set_file_provider(file_provider.clone())
         .set_load_resolver(tracking_resolver.clone())
         .set_source_path(canonical_input.clone())
         .set_inputs(InputMap::new());
