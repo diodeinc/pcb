@@ -93,6 +93,7 @@ export interface ElkEdge {
     bendPoints?: { x: number; y: number }[];
   }[];
   properties?: Record<string, string>;
+  junctionPoints?: { x: number; y: number }[];
 }
 
 export interface ElkGraph {
@@ -213,6 +214,14 @@ function calculateTextDimensions(
   const height = lineHeight * lines.length;
 
   return { width, height };
+}
+
+// Junction detection types
+interface Segment {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+  edgeId: string;
+  isHorizontal: boolean;
 }
 
 export class SchematicLayoutEngine {
@@ -629,6 +638,9 @@ export class SchematicLayoutEngine {
 
       // Replace the edges with the new routed edges
       layoutedGraph.edges = newEdges;
+
+      // Find junction points where edges on the same net intersect
+      this._findJunctionPoints(newEdges);
 
       // Restore net labels for any ports that don't have edges
       // (e.g., if libavoid filtered out non-orthogonal edges)
@@ -1063,12 +1075,10 @@ export class SchematicLayoutEngine {
           const netName = netInfo?.name || netId;
 
           const maxLabelLength = 10;
-          const halfLength = Math.floor(maxLabelLength / 2);
           let truncatedLabelText = netName;
 
           if (netName.length > maxLabelLength) {
-            truncatedLabelText =
-              netName.slice(0, halfLength) + "..." + netName.slice(-halfLength);
+            truncatedLabelText = "..." + netName.slice(-(maxLabelLength - 3));
           }
           // Calculate net label dimensions and position
           const netLabelDimensions = calculateTextDimensions(
@@ -1779,14 +1789,10 @@ export class SchematicLayoutEngine {
 
           if (!hasNetLabel) {
             const maxLabelLength = 10;
-            const halfLength = Math.floor(maxLabelLength / 2);
             let truncatedLabelText = netName;
 
             if (netName.length > maxLabelLength) {
-              truncatedLabelText =
-                netName.slice(0, halfLength) +
-                "..." +
-                netName.slice(-halfLength);
+              truncatedLabelText = "..." + netName.slice(-(maxLabelLength - 3));
             }
 
             // Calculate label dimensions based on port side
@@ -2099,5 +2105,250 @@ export class SchematicLayoutEngine {
     }
 
     return clusters;
+  }
+
+  /**
+   * Find orthogonal intersection between two segments
+   * Returns the intersection point if segments cross, null otherwise
+   */
+  private _findOrthogonalIntersection(
+    seg1: Segment,
+    seg2: Segment
+  ): { x: number; y: number } | null {
+    // One must be horizontal, one must be vertical
+    if (seg1.isHorizontal === seg2.isHorizontal) {
+      return null;
+    }
+
+    const horizontal = seg1.isHorizontal ? seg1 : seg2;
+    const vertical = seg1.isHorizontal ? seg2 : seg1;
+
+    // Check if they actually intersect
+    const hMinX = Math.min(horizontal.start.x, horizontal.end.x);
+    const hMaxX = Math.max(horizontal.start.x, horizontal.end.x);
+    const vMinY = Math.min(vertical.start.y, vertical.end.y);
+    const vMaxY = Math.max(vertical.start.y, vertical.end.y);
+
+    const intersectX = vertical.start.x;
+    const intersectY = horizontal.start.y;
+
+    // Check if intersection point is within both segments
+    if (
+      intersectX >= hMinX &&
+      intersectX <= hMaxX &&
+      intersectY >= vMinY &&
+      intersectY <= vMaxY
+    ) {
+      return { x: intersectX, y: intersectY };
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if a point lies on a segment (excluding endpoints)
+   */
+  private _isPointOnSegment(
+    point: { x: number; y: number },
+    segment: Segment
+  ): boolean {
+    // Check if point is at either endpoint (we exclude these)
+    if (
+      (point.x === segment.start.x && point.y === segment.start.y) ||
+      (point.x === segment.end.x && point.y === segment.end.y)
+    ) {
+      return false;
+    }
+
+    if (segment.isHorizontal) {
+      // For horizontal segment, y must match and x must be between start and end
+      const minX = Math.min(segment.start.x, segment.end.x);
+      const maxX = Math.max(segment.start.x, segment.end.x);
+      return point.y === segment.start.y && point.x > minX && point.x < maxX;
+    } else {
+      // For vertical segment, x must match and y must be between start and end
+      const minY = Math.min(segment.start.y, segment.end.y);
+      const maxY = Math.max(segment.start.y, segment.end.y);
+      return point.x === segment.start.x && point.y > minY && point.y < maxY;
+    }
+  }
+
+  /**
+   * Find junction points where edges on the same net intersect
+   */
+  private _findJunctionPoints(edges: ElkEdge[]): void {
+    // Group edges by netId for efficiency
+    const edgesByNet = new Map<string, ElkEdge[]>();
+
+    for (const edge of edges) {
+      if (!edgesByNet.has(edge.netId)) {
+        edgesByNet.set(edge.netId, []);
+      }
+      edgesByNet.get(edge.netId)!.push(edge);
+    }
+
+    // Process each net separately
+    for (const [netId, netEdges] of edgesByNet) {
+      // Skip nets with only one edge
+      if (netEdges.length < 2) continue;
+
+      // Extract all segments from all edges in this net
+      const segments: Segment[] = [];
+
+      for (const edge of netEdges) {
+        const section = edge.sections?.[0];
+        if (!section) continue;
+
+        // Build path points
+        const points = [
+          section.startPoint,
+          ...(section.bendPoints || []),
+          section.endPoint,
+        ];
+
+        // Convert to segments
+        for (let i = 0; i < points.length - 1; i++) {
+          segments.push({
+            start: points[i],
+            end: points[i + 1],
+            edgeId: edge.id,
+            isHorizontal: points[i].y === points[i + 1].y,
+          });
+        }
+      }
+
+      // Find intersections between segments
+      const junctionPoints = new Map<string, { x: number; y: number }>();
+
+      // Find cross intersections
+      for (let i = 0; i < segments.length; i++) {
+        for (let j = i + 1; j < segments.length; j++) {
+          const seg1 = segments[i];
+          const seg2 = segments[j];
+
+          // Skip if both segments are from the same edge
+          if (seg1.edgeId === seg2.edgeId) continue;
+
+          // Check for intersection
+          const intersection = this._findOrthogonalIntersection(seg1, seg2);
+          if (intersection) {
+            // Use a key to avoid duplicate junction points
+            const key = `${intersection.x},${intersection.y}`;
+            junctionPoints.set(key, intersection);
+          }
+        }
+      }
+
+      // Check for T-intersections (endpoints on segments)
+      for (const segment of segments) {
+        // Check if any other edge's endpoint lies on this segment
+        for (const otherEdge of netEdges) {
+          if (otherEdge.id === segment.edgeId) continue;
+
+          const section = otherEdge.sections?.[0];
+          if (!section) continue;
+
+          // Check start and end points
+          for (const point of [section.startPoint, section.endPoint]) {
+            if (this._isPointOnSegment(point, segment)) {
+              const key = `${point.x},${point.y}`;
+              junctionPoints.set(key, point);
+            }
+          }
+        }
+      }
+
+      // Assign junction points to edges
+      for (const edge of netEdges) {
+        edge.junctionPoints = [];
+
+        // Check which junction points lie on this edge's path
+        const section = edge.sections?.[0];
+        if (!section) continue;
+
+        const points = [
+          section.startPoint,
+          ...(section.bendPoints || []),
+          section.endPoint,
+        ];
+
+        for (const [key, junctionPoint] of junctionPoints) {
+          // Check if junction point lies on any segment of this edge
+          for (let i = 0; i < points.length - 1; i++) {
+            const segment: Segment = {
+              start: points[i],
+              end: points[i + 1],
+              edgeId: edge.id,
+              isHorizontal: points[i].y === points[i + 1].y,
+            };
+
+            if (
+              this._isPointOnSegment(junctionPoint, segment) ||
+              (junctionPoint.x === segment.start.x &&
+                junctionPoint.y === segment.start.y) ||
+              (junctionPoint.x === segment.end.x &&
+                junctionPoint.y === segment.end.y)
+            ) {
+              // Check if this is a bend point for the current edge
+              const isBendPoint = section.bendPoints?.some(
+                (p) => p.x === junctionPoint.x && p.y === junctionPoint.y
+              );
+
+              // A point should be shown as a junction if:
+              // 1. It's not a bend point, OR
+              // 2. It's a bend point but multiple edges meet here (making it a true junction)
+
+              // Count how many edges pass through this junction point
+              let edgeCount = 0;
+              for (const checkEdge of netEdges) {
+                const checkSection = checkEdge.sections?.[0];
+                if (!checkSection) continue;
+
+                const checkPoints = [
+                  checkSection.startPoint,
+                  ...(checkSection.bendPoints || []),
+                  checkSection.endPoint,
+                ];
+
+                // Check if this junction point is on any segment of the edge
+                for (let k = 0; k < checkPoints.length - 1; k++) {
+                  const checkSegment: Segment = {
+                    start: checkPoints[k],
+                    end: checkPoints[k + 1],
+                    edgeId: checkEdge.id,
+                    isHorizontal: checkPoints[k].y === checkPoints[k + 1].y,
+                  };
+
+                  if (
+                    this._isPointOnSegment(junctionPoint, checkSegment) ||
+                    (junctionPoint.x === checkSegment.start.x &&
+                      junctionPoint.y === checkSegment.start.y) ||
+                    (junctionPoint.x === checkSegment.end.x &&
+                      junctionPoint.y === checkSegment.end.y)
+                  ) {
+                    edgeCount++;
+                    break;
+                  }
+                }
+              }
+
+              // Only skip if it's a bend point AND only 1 edge passes through it
+              const shouldSkip = isBendPoint && edgeCount <= 1;
+
+              if (!shouldSkip) {
+                // Check if we already have this junction point
+                const alreadyExists = edge.junctionPoints!.some(
+                  (jp) => jp.x === junctionPoint.x && jp.y === junctionPoint.y
+                );
+                if (!alreadyExists) {
+                  edge.junctionPoints!.push(junctionPoint);
+                }
+              }
+              break; // Found on this edge, no need to check other segments
+            }
+          }
+        }
+      }
+    }
   }
 }

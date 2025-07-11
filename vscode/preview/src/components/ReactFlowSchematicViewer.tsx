@@ -35,7 +35,6 @@ import type {
   ElkNode,
   SchematicConfig,
   NodePositions,
-  NodePosition,
 } from "../LayoutEngine";
 // import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
 import type { Netlist } from "../types/NetlistTypes";
@@ -1791,6 +1790,9 @@ const ElectricalEdge = ({
     !isHovered;
   const opacity = shouldDim ? 0.2 : 1;
 
+  // Get junction points from edge data
+  const junctionPoints = data?.junctionPoints || [];
+
   return (
     <>
       <path
@@ -1813,6 +1815,19 @@ const ElectricalEdge = ({
         strokeWidth={interactionWidth}
         className="react-flow__edge-interaction"
       />
+
+      {/* Render junction points as small dots */}
+      {junctionPoints.map((point, index) => (
+        <circle
+          key={`${id}-junction-${index}`}
+          cx={point.x}
+          cy={point.y}
+          r={3}
+          fill={edgeColor}
+          opacity={opacity}
+          className="electrical-edge-junction"
+        />
+      ))}
     </>
   );
 };
