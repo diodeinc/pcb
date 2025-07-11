@@ -184,7 +184,7 @@ export const DEFAULT_CONFIG: SchematicConfig = {
     hideLabelsOnConnectedPorts: true,
   },
   visual: {
-    showPortLabels: false,
+    showPortLabels: true,
     showComponentValues: true,
     showFootprints: true,
   },
@@ -431,8 +431,8 @@ export class SchematicLayoutEngine {
     // Build connectivity for routing - use clustering (ignoreClusters=false) for efficient routing
     connectivityInfo = this._buildConnectivity(layoutedGraph, false);
 
-    // Add port labels for nets without edges
-    this._addPortNetLabels(layoutedGraph, connectivityInfo.portsWithEdges);
+    // Remove net labels from ports that have edges
+    this._removePortNetLabels(layoutedGraph, connectivityInfo.portsWithEdges);
 
     // Store the ELK edges for later use
     layoutedGraph.edges = connectivityInfo.elkEdges;
@@ -517,39 +517,15 @@ export class SchematicLayoutEngine {
       }
 
       // Convert the point-to-point edges from libavoid to ELK edges
-      // Create a map from hyperedge ID to ELK edge for quick lookup
-      const hyperedgeToElkEdge = new Map<string, ElkEdge>();
-      for (const elkEdge of layoutedGraph.edges) {
-        hyperedgeToElkEdge.set(elkEdge.id, elkEdge);
-      }
+      // We no longer need to create a map since we pass context through routing
 
       // Simple 1:1 mapping - each libavoid edge becomes one ELK edge
       const newEdges: ElkEdge[] = [];
 
       for (const routedEdge of routingResult.edges) {
-        // Extract the hyperedge ID from the routed edge ID
-        // Since we're using MST decomposition, edge IDs are in format: "edge_{original_id}_mst_N"
-        let originalEdgeId: string;
-        if (routedEdge.id.startsWith("edge_")) {
-          // Remove the "edge_" prefix
-          const edgeId = routedEdge.id.substring(5);
-          // Extract the original edge ID by removing the "_mst_N" suffix
-          const mstIndex = edgeId.lastIndexOf("_mst_");
-          if (mstIndex !== -1) {
-            originalEdgeId = edgeId.substring(0, mstIndex);
-          } else {
-            originalEdgeId = edgeId;
-          }
-        } else {
-          originalEdgeId = routedEdge.id;
-        }
-
-        // Find the original ELK edge
-        const originalEdge = hyperedgeToElkEdge.get(originalEdgeId);
-        if (!originalEdge) {
-          console.warn(
-            `Could not find original edge for ${originalEdgeId} (routed edge: ${routedEdge.id})`
-          );
+        // Use context directly instead of trying to parse edge IDs
+        if (!routedEdge.context) {
+          console.warn(`No context found for routed edge ${routedEdge.id}`);
           continue;
         }
 
@@ -593,15 +569,15 @@ export class SchematicLayoutEngine {
           continue;
         }
 
-        // Create the ELK edge
+        // Create the ELK edge using context information
         const elkEdge: ElkEdge = {
           id: routedEdge.id,
-          netId: originalEdge.netId,
+          netId: routedEdge.context.netId,
           sources: [sourceId],
           targets: [targetId],
           sourceComponentRef: sourceComponentRef,
           targetComponentRef: targetComponentRef,
-          labels: originalEdge.labels, // Preserve original labels
+          labels: [], // Start with empty labels, could be enhanced later
           sections: [
             {
               id: `${routedEdge.id}_section`,
@@ -610,7 +586,9 @@ export class SchematicLayoutEngine {
               bendPoints: routedEdge.points.slice(1, -1),
             },
           ],
-          properties: originalEdge.properties, // Preserve original properties
+          properties: {
+            netName: routedEdge.context.netName,
+          },
         };
 
         newEdges.push(elkEdge);
@@ -757,6 +735,18 @@ export class SchematicLayoutEngine {
     }
 
     return nets;
+  }
+
+  /**
+   * Find which net a port belongs to
+   */
+  private _findNetForPort(portId: string): string | null {
+    for (const [netId, portSet] of this.nets.entries()) {
+      if (portSet.has(portId)) {
+        return netId;
+      }
+    }
+    return null;
   }
 
   // Helper methods from old implementation
@@ -985,27 +975,91 @@ export class SchematicLayoutEngine {
           ? baseDimensions.width
           : baseDimensions.height;
 
-        // Calculate label position based on port side
-        let labelX: number, labelY: number;
-        const labelOffset = 5; // Distance from port
+        // Prepare port labels
+        const portLabels: ElkLabel[] = [];
 
-        switch (side) {
-          case "WEST":
-            labelX = -labelWidth - labelOffset;
-            labelY = -labelHeight / 2;
-            break;
-          case "EAST":
-            labelX = labelOffset;
-            labelY = -labelHeight / 2;
-            break;
-          case "NORTH":
-            labelX = -labelWidth / 2;
-            labelY = -labelHeight - labelOffset;
-            break;
-          case "SOUTH":
-            labelX = -labelWidth / 2;
-            labelY = labelOffset;
-            break;
+        // // Add pin name/number label if configured
+        // if (this.config.visual.showPortLabels) {
+        //   // Calculate label position based on port side
+        //   let labelX: number, labelY: number;
+        //   const labelOffset = 5; // Distance from port
+
+        //   switch (side) {
+        //     case "WEST":
+        //       labelX = -labelWidth - labelOffset;
+        //       labelY = -labelHeight / 2;
+        //       break;
+        //     case "EAST":
+        //       labelX = labelOffset;
+        //       labelY = -labelHeight / 2;
+        //       break;
+        //     case "NORTH":
+        //       labelX = -labelWidth / 2;
+        //       labelY = -labelHeight - labelOffset;
+        //       break;
+        //     case "SOUTH":
+        //       labelX = -labelWidth / 2;
+        //       labelY = labelOffset;
+        //       break;
+        //   }
+
+        //   portLabels.push({
+        //     text: labelText,
+        //     x: labelX,
+        //     y: labelY,
+        //     width: labelWidth,
+        //     height: labelHeight,
+        //   });
+        // }
+
+        // Check if this port is connected to a net and add net label
+        const netId = this._findNetForPort(portRef);
+        if (netId) {
+          const netInfo = this.netlist.nets[netId];
+          const netName = netInfo?.name || netId;
+
+          // Calculate net label dimensions and position
+          const netLabelDimensions = calculateTextDimensions(netName, 10);
+          const netLabelWidth = isVertical
+            ? netLabelDimensions.height
+            : netLabelDimensions.width;
+          const netLabelHeight = isVertical
+            ? netLabelDimensions.width
+            : netLabelDimensions.height;
+
+          // Position net label further out than pin label
+          const netLabelOffset = 15; // Further from port than pin labels
+          let netLabelX: number, netLabelY: number;
+
+          switch (side) {
+            case "WEST":
+              netLabelX = -netLabelWidth - netLabelOffset;
+              netLabelY = -netLabelHeight / 2;
+              break;
+            case "EAST":
+              netLabelX = netLabelOffset;
+              netLabelY = -netLabelHeight / 2;
+              break;
+            case "NORTH":
+              netLabelX = -netLabelWidth / 2;
+              netLabelY = -netLabelHeight - netLabelOffset;
+              break;
+            case "SOUTH":
+              netLabelX = -netLabelWidth / 2;
+              netLabelY = netLabelOffset;
+              break;
+          }
+
+          portLabels.push({
+            text: netName,
+            x: netLabelX,
+            y: netLabelY,
+            width: netLabelWidth,
+            height: netLabelHeight,
+            properties: {
+              labelType: "netReference",
+            },
+          });
         }
 
         // Add the port
@@ -1015,17 +1069,7 @@ export class SchematicLayoutEngine {
           y: snappedY,
           width: 0,
           height: 0,
-          labels: this.config.visual.showPortLabels
-            ? [
-                {
-                  text: labelText,
-                  x: labelX,
-                  y: labelY,
-                  width: labelWidth,
-                  height: labelHeight,
-                },
-              ]
-            : [],
+          labels: portLabels,
           properties: {
             "port.side": side,
             "port.alignment": "CENTER",
@@ -1444,6 +1488,7 @@ export class SchematicLayoutEngine {
       result.push({
         id: `${hyperedge.id}_mst_${i}`,
         ports: [ports[edge.from], ports[edge.to]],
+        context: hyperedge.context, // Preserve context from original hyperedge
       });
     }
 
@@ -1511,10 +1556,15 @@ export class SchematicLayoutEngine {
           visibilityDirection: this._getPortVisibilityDirection(port),
         }));
 
-        // Create hyperedge for libavoid
+        // Create hyperedge for libavoid with context
         const hyperedge: Hyperedge = {
           id: edgeId,
           ports: ports,
+          context: {
+            netId: netId,
+            netName: netName,
+            // Store any other context we might need
+          },
         };
         hyperedges.push(hyperedge);
 
@@ -1597,83 +1647,23 @@ export class SchematicLayoutEngine {
   }
 
   /**
-   * Add net labels to ports that don't have edges
+   * Remove net labels from ports that have edges
    */
-  private _addPortNetLabels(
+  private _removePortNetLabels(
     graph: ElkGraph,
-    portsWithEdges: Set<string> | null = null
+    portsWithEdges: Set<string>
   ): void {
     for (const node of graph.children || []) {
       if (!node.ports) continue;
 
       for (const port of node.ports) {
-        if (port.netId) {
-          const netInfo = this.netlist.nets[port.netId];
-          const netName = netInfo?.name || port.netId;
-
-          // Skip adding label if this port has edges and we're configured to hide labels
-          if (
-            this.config.layout.hideLabelsOnConnectedPorts &&
-            portsWithEdges !== null &&
-            portsWithEdges.has(port.id)
-          ) {
-            continue;
+        // If this port has edges, remove any net reference labels
+        if (portsWithEdges.has(port.id)) {
+          if (port.labels) {
+            port.labels = port.labels.filter(
+              (label) => label.properties?.labelType !== "netReference"
+            );
           }
-
-          // Add net name as a label on the port
-          if (!port.labels) {
-            port.labels = [];
-          }
-
-          // Get the port side to determine if we need to swap dimensions
-          const portSide = port.properties?.["port.side"];
-          const isVertical = portSide === "NORTH" || portSide === "SOUTH";
-
-          const dimensions = calculateTextDimensions(netName, 10);
-
-          // For vertical ports, text is rotated 90 degrees, so swap width/height
-          const labelWidth = isVertical ? dimensions.height : dimensions.width;
-          const labelHeight = isVertical ? dimensions.width : dimensions.height;
-
-          // Calculate label position based on port side
-          let labelX: number, labelY: number;
-          const labelOffset = 5; // Distance from port
-
-          switch (portSide) {
-            case "WEST":
-              labelX = -labelWidth - labelOffset;
-              labelY = -labelHeight / 2;
-              break;
-            case "EAST":
-              labelX = labelOffset;
-              labelY = -labelHeight / 2;
-              break;
-            case "NORTH":
-              labelX = -labelWidth / 2;
-              labelY = -labelHeight - labelOffset;
-              break;
-            case "SOUTH":
-              labelX = -labelWidth / 2;
-              labelY = labelOffset;
-              break;
-            default:
-              // Default positioning if no side is specified
-              labelX = labelOffset;
-              labelY = -labelHeight / 2;
-              break;
-          }
-
-          // Add net reference label to the port
-          port.labels.push({
-            text: netName,
-            x: labelX,
-            y: labelY,
-            width: labelWidth,
-            height: labelHeight,
-            properties: {
-              labelType: "netReference",
-            },
-          });
         }
       }
     }

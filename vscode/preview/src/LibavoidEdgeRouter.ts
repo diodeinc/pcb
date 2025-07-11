@@ -20,6 +20,7 @@ export interface Port {
 export interface Hyperedge {
   id: string;
   ports: Port[];
+  context?: any; // Additional context information to pass through routing
 }
 
 // Output types
@@ -41,6 +42,7 @@ export interface PointToPointEdge {
   targetX: number;
   targetY: number;
   points: { x: number; y: number }[];
+  context?: any; // Context information passed through from hyperedge
 }
 
 export class LibavoidEdgeRouter {
@@ -50,6 +52,17 @@ export class LibavoidEdgeRouter {
   private connectors: Map<string, any> = new Map();
   private junctions: Map<string, any> = new Map();
   private isInitialized: boolean = false;
+
+  // Store metadata about connectors to avoid string parsing
+  private connectorMetadata: Map<
+    string,
+    {
+      type: "simple" | "port-to-junction";
+      hyperedgeId: string;
+      sourcePortIndex?: number;
+      targetPortIndex?: number;
+    }
+  > = new Map();
 
   /**
    * Initialize the libavoid library
@@ -122,6 +135,7 @@ export class LibavoidEdgeRouter {
     console.log(
       "Starting libavoid routing:",
       JSON.stringify(obstacles),
+      "*******",
       JSON.stringify(hyperedges)
     );
 
@@ -148,11 +162,12 @@ export class LibavoidEdgeRouter {
 
       if (hyperedge.ports.length === 2) {
         // Simple point-to-point edge
-        const connectorId = `edge_${hyperedge.id}`;
+        const connectorId = `connector_${hyperedge.id}_simple`;
         this.createSimpleConnector(
           connectorId,
           hyperedge.ports[0],
-          hyperedge.ports[1]
+          hyperedge.ports[1],
+          hyperedge.id
         );
       } else {
         // Hyperedge with junction
@@ -163,8 +178,14 @@ export class LibavoidEdgeRouter {
           // Create connectors from each port to the junction
           for (let i = 0; i < hyperedge.ports.length; i++) {
             const port = hyperedge.ports[i];
-            const connectorId = `${hyperedge.id}_port_${i}`;
-            this.createPortToJunctionConnector(connectorId, port, junction.id);
+            const connectorId = `connector_${hyperedge.id}_p${i}`;
+            this.createPortToJunctionConnector(
+              connectorId,
+              port,
+              junction.id,
+              hyperedge.id,
+              i
+            );
           }
         }
       }
@@ -203,64 +224,79 @@ export class LibavoidEdgeRouter {
         points.push({ x: point.x, y: point.y });
       }
 
-      // Determine source and target info from connector ID
-      if (connectorId.startsWith("edge_")) {
-        // Simple edge
-        const hyperedgeId = connectorId.substring(5);
-        const hyperedge = hyperedges.find((h) => h.id === hyperedgeId);
-        if (hyperedge && hyperedge.ports.length === 2) {
+      // Get metadata for this connector
+      const metadata = this.connectorMetadata.get(connectorId);
+      if (!metadata) {
+        console.warn(`No metadata found for connector ${connectorId}`);
+        continue;
+      }
+
+      const hyperedge = hyperedges.find((h) => h.id === metadata.hyperedgeId);
+      if (!hyperedge) {
+        console.warn(`Hyperedge ${metadata.hyperedgeId} not found`);
+        continue;
+      }
+
+      if (metadata.type === "simple") {
+        // Simple edge between two ports
+        if (hyperedge.ports.length === 2) {
+          const sourcePort = hyperedge.ports[0];
+          const targetPort = hyperedge.ports[1];
+          const correctedPoints = this.ensureEndpoints(
+            points,
+            sourcePort.x,
+            sourcePort.y,
+            targetPort.x,
+            targetPort.y
+          );
+
           edgeResults.push({
             id: connectorId,
             sourceType: "port",
-            sourceId: hyperedge.ports[0].id,
-            sourceX: hyperedge.ports[0].x,
-            sourceY: hyperedge.ports[0].y,
+            sourceId: sourcePort.id,
+            sourceX: sourcePort.x,
+            sourceY: sourcePort.y,
             targetType: "port",
-            targetId: hyperedge.ports[1].id,
-            targetX: hyperedge.ports[1].x,
-            targetY: hyperedge.ports[1].y,
-            points,
+            targetId: targetPort.id,
+            targetX: targetPort.x,
+            targetY: targetPort.y,
+            points: correctedPoints,
+            context: hyperedge.context,
           });
         }
-      } else if (connectorId.includes("_port_")) {
+      } else if (metadata.type === "port-to-junction") {
         // Port to junction edge
-        // Extract hyperedge ID and port index more carefully
-        // The connector ID format is: {hyperedgeId}_port_{portIndex}
-        const portSeparator = "_port_";
-        const portSeparatorIndex = connectorId.lastIndexOf(portSeparator);
+        const junction = junctionResults.find(
+          (j) => j.hyperedgeId === metadata.hyperedgeId
+        );
 
-        if (portSeparatorIndex !== -1) {
-          const hyperedgeId = connectorId.substring(0, portSeparatorIndex);
-          const portIndexStr = connectorId.substring(
-            portSeparatorIndex + portSeparator.length
+        if (
+          junction &&
+          metadata.sourcePortIndex !== undefined &&
+          metadata.sourcePortIndex < hyperedge.ports.length
+        ) {
+          const port = hyperedge.ports[metadata.sourcePortIndex];
+          const correctedPoints = this.ensureEndpoints(
+            points,
+            port.x,
+            port.y,
+            junction.x,
+            junction.y
           );
-          const portIndex = parseInt(portIndexStr);
 
-          const hyperedge = hyperedges.find((h) => h.id === hyperedgeId);
-          const junction = junctionResults.find(
-            (j) => j.hyperedgeId === hyperedgeId
-          );
-
-          if (
-            hyperedge &&
-            junction &&
-            !isNaN(portIndex) &&
-            portIndex < hyperedge.ports.length
-          ) {
-            const port = hyperedge.ports[portIndex];
-            edgeResults.push({
-              id: connectorId,
-              sourceType: "port",
-              sourceId: port.id,
-              sourceX: port.x,
-              sourceY: port.y,
-              targetType: "junction",
-              targetId: junction.id,
-              targetX: junction.x,
-              targetY: junction.y,
-              points,
-            });
-          }
+          edgeResults.push({
+            id: connectorId,
+            sourceType: "port",
+            sourceId: port.id,
+            sourceX: port.x,
+            sourceY: port.y,
+            targetType: "junction",
+            targetId: junction.id,
+            targetX: junction.x,
+            targetY: junction.y,
+            points: correctedPoints,
+            context: hyperedge.context,
+          });
         }
       }
     }
@@ -268,6 +304,7 @@ export class LibavoidEdgeRouter {
     console.log(
       "Libavoid routing results:",
       JSON.stringify(junctionResults),
+      "*******",
       JSON.stringify(edgeResults)
     );
 
@@ -307,7 +344,8 @@ export class LibavoidEdgeRouter {
   private createSimpleConnector(
     connectorId: string,
     sourcePort: Port,
-    targetPort: Port
+    targetPort: Port,
+    hyperedgeId: string
   ): void {
     if (!this.avoidLib) {
       return;
@@ -327,6 +365,10 @@ export class LibavoidEdgeRouter {
     connector.setRoutingType(this.avoidLib.OrthogonalRouting);
 
     this.connectors.set(connectorId, connector);
+    this.connectorMetadata.set(connectorId, {
+      type: "simple",
+      hyperedgeId: hyperedgeId,
+    });
   }
 
   /**
@@ -371,7 +413,9 @@ export class LibavoidEdgeRouter {
   private createPortToJunctionConnector(
     connectorId: string,
     port: Port,
-    junctionId: string
+    junctionId: string,
+    hyperedgeId: string,
+    portIndex: number
   ): void {
     if (!this.avoidLib) {
       return;
@@ -397,6 +441,11 @@ export class LibavoidEdgeRouter {
     connector.setRoutingType(this.avoidLib.OrthogonalRouting);
 
     this.connectors.set(connectorId, connector);
+    this.connectorMetadata.set(connectorId, {
+      type: "port-to-junction",
+      hyperedgeId: hyperedgeId,
+      sourcePortIndex: portIndex,
+    });
   }
 
   /**
@@ -426,6 +475,43 @@ export class LibavoidEdgeRouter {
   }
 
   /**
+   * Ensure points array starts at source and ends at target coordinates
+   */
+  private ensureEndpoints(
+    points: { x: number; y: number }[],
+    sourceX: number,
+    sourceY: number,
+    targetX: number,
+    targetY: number
+  ): { x: number; y: number }[] {
+    if (points.length === 0) {
+      // If no points, create a direct line
+      return [
+        { x: sourceX, y: sourceY },
+        { x: targetX, y: targetY },
+      ];
+    }
+
+    const result = [...points];
+
+    // Check if first point matches source
+    const firstPoint = result[0];
+    if (firstPoint.x !== sourceX || firstPoint.y !== sourceY) {
+      // Add source point at the beginning
+      result.unshift({ x: sourceX, y: sourceY });
+    }
+
+    // Check if last point matches target
+    const lastPoint = result[result.length - 1];
+    if (lastPoint.x !== targetX || lastPoint.y !== targetY) {
+      // Add target point at the end
+      result.push({ x: targetX, y: targetY });
+    }
+
+    return result;
+  }
+
+  /**
    * Clear previous routing data
    */
   private clearPreviousRouting(): void {
@@ -442,6 +528,9 @@ export class LibavoidEdgeRouter {
       this.router.deleteConnector(connector);
     }
     this.connectors.clear();
+
+    // Clear connector metadata
+    this.connectorMetadata.clear();
 
     // Junctions are automatically deleted when their connectors are deleted
     this.junctions.clear();
