@@ -20,8 +20,8 @@ use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::evaluator_ext::EvaluatorExt;
 
 use anyhow::anyhow;
-use pcb_eda::Symbol as EdaSymbol;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
+use pcb_eda::Symbol as EdaSymbol;
 
 /// Cache for parsed symbol libraries with lazy extends resolution
 #[derive(Clone)]
@@ -273,7 +273,7 @@ where
 
                 // If we have a specific symbol name, use lazy loading
                 let symbol_name = name_val.and_then(|v| v.unpack_str());
-                
+
                 let selected_symbol = if let Some(name) = symbol_name {
                     // Load only the specific symbol we need
                     match load_symbol_from_library(&resolved_path, name, file_provider.as_ref())? {
@@ -292,7 +292,7 @@ where
                 } else {
                     // No specific name provided, need to check if library has exactly one symbol
                     let symbols = load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
-                    
+
                     if symbols.len() == 1 {
                         // Only one symbol, use it
                         symbols.into_iter().next().unwrap()
@@ -428,8 +428,9 @@ pub fn load_symbols_from_library(
     })?;
 
     // Parse library without resolving extends
-    let kicad_library = KicadSymbolLibrary::from_string_lazy(&contents)
-        .map_err(|e| starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e)))?;
+    let kicad_library = KicadSymbolLibrary::from_string_lazy(&contents).map_err(|e| {
+        starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e))
+    })?;
 
     // Get all symbols and resolve them eagerly for now (to maintain compatibility)
     let mut resolved_symbols = HashMap::new();
