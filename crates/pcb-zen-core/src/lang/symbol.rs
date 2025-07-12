@@ -1,7 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use allocative::Allocative;
 use once_cell::sync::Lazy;
@@ -20,10 +20,20 @@ use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::evaluator_ext::EvaluatorExt;
 
 use anyhow::anyhow;
-use pcb_eda::{Symbol as EdaSymbol, SymbolLibrary};
+use pcb_eda::Symbol as EdaSymbol;
+use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 
-/// Cache for parsed symbol libraries to avoid re-parsing the same file multiple times
-static SYMBOL_LIBRARY_CACHE: Lazy<Mutex<HashMap<String, Vec<EdaSymbol>>>> =
+/// Cache for parsed symbol libraries with lazy extends resolution
+#[derive(Clone)]
+struct CachedLibrary {
+    /// The unresolved library for lazy loading
+    kicad_library: Arc<KicadSymbolLibrary>,
+    /// Cache of already resolved symbols
+    resolved_symbols: Arc<Mutex<HashMap<String, EdaSymbol>>>,
+}
+
+/// Global cache for symbol libraries
+static SYMBOL_LIBRARY_CACHE: Lazy<Mutex<HashMap<String, CachedLibrary>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Symbol represents a schematic symbol definition with pins
@@ -261,41 +271,45 @@ where
                     .file_provider()
                     .ok_or_else(|| starlark::Error::new_other(anyhow!("No file provider available")))?;
 
-                // Parse all symbols from the library (with caching)
-                let symbols = load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
-
-                // Determine which symbol to use
-                let selected_symbol = if symbols.len() == 1 {
-                    // Only one symbol, use it
-                    &symbols[0]
-                } else if symbols.is_empty() {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "No symbols found in library '{}'", 
-                        resolved_path.display()
-                    )));
-                } else {
-                    // Multiple symbols, need name parameter
-                    let symbol_name = name_val
-                        .and_then(|v| v.unpack_str())
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!(
-                                "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
-                                resolved_path.display(),
-                                symbols.len(),
-                                symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
-                            ))
-                        })?;
-
-                    symbols.iter()
-                        .find(|s| s.name == symbol_name)
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!(
+                // If we have a specific symbol name, use lazy loading
+                let symbol_name = name_val.and_then(|v| v.unpack_str());
+                
+                let selected_symbol = if let Some(name) = symbol_name {
+                    // Load only the specific symbol we need
+                    match load_symbol_from_library(&resolved_path, name, file_provider.as_ref())? {
+                        Some(symbol) => symbol,
+                        None => {
+                            // If not found, we need to load all symbols to provide a helpful error
+                            let symbols = load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
+                            return Err(starlark::Error::new_other(anyhow!(
                                 "Symbol '{}' not found in library '{}'. Available symbols: {}",
-                                symbol_name,
+                                name,
                                 resolved_path.display(),
                                 symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
-                            ))
-                        })?
+                            )));
+                        }
+                    }
+                } else {
+                    // No specific name provided, need to check if library has exactly one symbol
+                    let symbols = load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
+                    
+                    if symbols.len() == 1 {
+                        // Only one symbol, use it
+                        symbols.into_iter().next().unwrap()
+                    } else if symbols.is_empty() {
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "No symbols found in library '{}'", 
+                            resolved_path.display()
+                        )));
+                    } else {
+                        // Multiple symbols, need name parameter
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
+                            resolved_path.display(),
+                            symbols.len(),
+                            symbols.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
                 };
 
                 // Convert EdaSymbol pins to our Symbol format
@@ -367,12 +381,44 @@ pub fn load_symbols_from_library(
         let cache = SYMBOL_LIBRARY_CACHE
             .lock()
             .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
-        if let Some(symbols) = cache.get(&cache_key) {
-            return Ok(symbols.clone());
+        if let Some(cached_lib) = cache.get(&cache_key) {
+            // Library is cached, get all symbols lazily resolved
+            let kicad_lib = &cached_lib.kicad_library;
+            let mut result = Vec::new();
+
+            // Get all symbol names and resolve them lazily
+            for symbol_name in kicad_lib.symbol_names() {
+                // Check if already resolved
+                let mut resolved_cache = cached_lib.resolved_symbols.lock().map_err(|e| {
+                    starlark::Error::new_other(anyhow!("Failed to lock resolved cache: {}", e))
+                })?;
+
+                if let Some(resolved) = resolved_cache.get(symbol_name) {
+                    result.push(resolved.clone());
+                } else {
+                    // Resolve the symbol lazily
+                    if let Some(resolved_kicad) =
+                        kicad_lib.get_symbol_lazy(symbol_name).map_err(|e| {
+                            starlark::Error::new_other(anyhow!(
+                                "Failed to resolve symbol '{}': {}",
+                                symbol_name,
+                                e
+                            ))
+                        })?
+                    {
+                        let eda_symbol: EdaSymbol = resolved_kicad.into();
+                        resolved_cache.insert(symbol_name.to_string(), eda_symbol.clone());
+                        result.push(eda_symbol);
+                    }
+                }
+            }
+
+            return Ok(result);
         }
     }
 
     // Not in cache, read and parse the file
+    eprintln!("*** CACHE MISS: {}", path.display());
     let contents = file_provider.read_file(path).map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to read symbol library '{}': {}",
@@ -381,20 +427,100 @@ pub fn load_symbols_from_library(
         ))
     })?;
 
-    let library_symbols = SymbolLibrary::from_string(&contents, "kicad_sym")
-        .map_err(|e| starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e)))?
-        .symbols()
-        .to_vec();
+    // Parse library without resolving extends
+    let kicad_library = KicadSymbolLibrary::from_string_lazy(&contents)
+        .map_err(|e| starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e)))?;
+
+    // Get all symbols and resolve them eagerly for now (to maintain compatibility)
+    let mut resolved_symbols = HashMap::new();
+    let mut result = Vec::new();
+
+    for symbol_name in kicad_library.symbol_names() {
+        if let Some(resolved_kicad) = kicad_library.get_symbol_lazy(symbol_name).map_err(|e| {
+            starlark::Error::new_other(anyhow!("Failed to resolve symbol '{}': {}", symbol_name, e))
+        })? {
+            let eda_symbol: EdaSymbol = resolved_kicad.into();
+            resolved_symbols.insert(symbol_name.to_string(), eda_symbol.clone());
+            result.push(eda_symbol);
+        }
+    }
 
     // Store in cache
     {
         let mut cache = SYMBOL_LIBRARY_CACHE
             .lock()
             .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
-        cache.insert(cache_key, library_symbols.clone());
+        cache.insert(
+            cache_key,
+            CachedLibrary {
+                kicad_library: Arc::new(kicad_library),
+                resolved_symbols: Arc::new(Mutex::new(resolved_symbols)),
+            },
+        );
     }
 
-    Ok(library_symbols)
+    Ok(result)
+}
+
+/// Load a specific symbol from a library with lazy resolution
+pub fn load_symbol_from_library(
+    path: &std::path::Path,
+    symbol_name: &str,
+    file_provider: &dyn crate::FileProvider,
+) -> starlark::Result<Option<EdaSymbol>> {
+    // Get the canonical path for cache key
+    let cache_key = file_provider
+        .canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+
+    // Check cache first
+    {
+        let cache = SYMBOL_LIBRARY_CACHE
+            .lock()
+            .map_err(|e| starlark::Error::new_other(anyhow!("Failed to lock cache: {}", e)))?;
+        if let Some(cached_lib) = cache.get(&cache_key) {
+            // Check if already resolved
+            {
+                let resolved_cache = cached_lib.resolved_symbols.lock().map_err(|e| {
+                    starlark::Error::new_other(anyhow!("Failed to lock resolved cache: {}", e))
+                })?;
+
+                if let Some(resolved) = resolved_cache.get(symbol_name) {
+                    return Ok(Some(resolved.clone()));
+                }
+            }
+
+            // Not resolved yet, resolve it now
+            let kicad_lib = &cached_lib.kicad_library;
+            if let Some(resolved_kicad) = kicad_lib.get_symbol_lazy(symbol_name).map_err(|e| {
+                starlark::Error::new_other(anyhow!(
+                    "Failed to resolve symbol '{}': {}",
+                    symbol_name,
+                    e
+                ))
+            })? {
+                let eda_symbol: EdaSymbol = resolved_kicad.into();
+
+                // Cache the resolved symbol
+                let mut resolved_cache = cached_lib.resolved_symbols.lock().map_err(|e| {
+                    starlark::Error::new_other(anyhow!("Failed to lock resolved cache: {}", e))
+                })?;
+                resolved_cache.insert(symbol_name.to_string(), eda_symbol.clone());
+
+                return Ok(Some(eda_symbol));
+            }
+
+            return Ok(None);
+        }
+    }
+
+    // Not in cache, need to load the library first
+    load_symbols_from_library(path, file_provider)?;
+
+    // Now try again
+    load_symbol_from_library(path, symbol_name, file_provider)
 }
 
 impl DeepCopyToHeap for SymbolType {

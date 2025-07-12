@@ -14,7 +14,16 @@ pub struct KicadSymbolLibrary {
 }
 
 impl KicadSymbolLibrary {
-    /// Parse a KiCad symbol library from a string
+    /// Parse a KiCad symbol library from a string with lazy extends resolution
+    pub fn from_string_lazy(content: &str) -> Result<Self> {
+        // Parse symbols without resolving extends
+        let symbol_pairs = parse_with_raw_sexprs(content)?;
+        let symbols: Vec<KicadSymbol> = symbol_pairs.into_iter().map(|(s, _)| s).collect();
+
+        Ok(KicadSymbolLibrary { symbols })
+    }
+
+    /// Parse a KiCad symbol library from a string (eager resolution for backwards compatibility)
     pub fn from_string(content: &str) -> Result<Self> {
         // Parse with raw s-expressions
         let mut symbol_pairs = parse_with_raw_sexprs(content)?;
@@ -95,6 +104,134 @@ impl KicadSymbolLibrary {
         self.symbols.iter().find(|s| s.name() == name)
     }
 
+    /// Get a symbol by name with lazy extends resolution
+    pub fn get_symbol_lazy(&self, name: &str) -> Result<Option<KicadSymbol>> {
+        // Find the base symbol
+        let base_symbol = match self.symbols.iter().find(|s| s.name() == name) {
+            Some(symbol) => symbol,
+            None => return Ok(None),
+        };
+
+        // If no extends, return as-is
+        if base_symbol.extends().is_none() {
+            return Ok(Some(base_symbol.clone()));
+        }
+
+        // Otherwise, resolve the extends chain
+        self.resolve_symbol_extends(base_symbol)
+    }
+
+    /// Resolve extends for a single symbol
+    fn resolve_symbol_extends(&self, symbol: &KicadSymbol) -> Result<Option<KicadSymbol>> {
+        let mut resolved = symbol.clone();
+        let mut extends_chain = Vec::new();
+
+        // Build the extends chain
+        let mut current = symbol;
+        while let Some(parent_name) = current.extends() {
+            if extends_chain.contains(&parent_name) {
+                // Circular dependency detected
+                eprintln!(
+                    "Warning: Circular extends dependency detected for symbol '{}'",
+                    symbol.name()
+                );
+                break;
+            }
+            extends_chain.push(parent_name);
+
+            // Find parent in current library
+            if let Some(parent) = self.symbols.iter().find(|s| s.name() == parent_name) {
+                current = parent;
+            } else {
+                // Parent not found in current library
+                eprintln!(
+                    "Warning: Symbol '{}' extends '{}' but parent not found",
+                    symbol.name(),
+                    parent_name
+                );
+                break;
+            }
+        }
+
+        // Apply inheritance in reverse order (from base to derived)
+        for parent_name in extends_chain.iter().rev() {
+            if let Some(parent) = self.symbols.iter().find(|s| s.name() == *parent_name) {
+                // Merge raw S-expressions if both have them
+                if let (Some(parent_sexp), Some(child_sexp)) =
+                    (&parent.raw_sexp, &resolved.raw_sexp)
+                {
+                    resolved.raw_sexp = Some(merge_symbol_sexprs(parent_sexp, child_sexp));
+                }
+                resolved = self.merge_symbols(parent, &resolved);
+            }
+        }
+
+        Ok(Some(resolved))
+    }
+
+    /// Merge parent and child symbols
+    fn merge_symbols(&self, parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
+        let mut merged = parent.clone();
+
+        // Override with child's values
+        merged.name = child.name.clone();
+        merged.extends = child.extends.clone();
+
+        // Override properties that are explicitly set in child
+        if !child.footprint.is_empty() {
+            merged.footprint = child.footprint.clone();
+        }
+
+        if !child.pins.is_empty() {
+            merged.pins = child.pins.clone();
+        }
+
+        if child.mpn.is_some() {
+            merged.mpn = child.mpn.clone();
+        }
+
+        if child.manufacturer.is_some() {
+            merged.manufacturer = child.manufacturer.clone();
+        }
+
+        if child.datasheet_url.is_some() {
+            merged.datasheet_url = child.datasheet_url.clone();
+        }
+
+        if child.description.is_some() {
+            merged.description = child.description.clone();
+        }
+
+        // Merge properties - child properties override parent
+        for (key, value) in &child.properties {
+            merged.properties.insert(key.clone(), value.clone());
+        }
+
+        // Merge distributors
+        for (dist, part) in &child.distributors {
+            if let Some(parent_part) = merged.distributors.get_mut(dist) {
+                if !part.part_number.is_empty() {
+                    parent_part.part_number = part.part_number.clone();
+                }
+                if !part.url.is_empty() {
+                    parent_part.url = part.url.clone();
+                }
+            } else {
+                merged.distributors.insert(dist.clone(), part.clone());
+            }
+        }
+
+        if child.in_bom {
+            merged.in_bom = child.in_bom;
+        }
+
+        if child.raw_sexp.is_some() {
+            merged.raw_sexp = child.raw_sexp.clone();
+        }
+
+        merged
+    }
+
     /// Get the names of all symbols in the library
     pub fn symbol_names(&self) -> Vec<&str> {
         self.symbols.iter().map(|s| s.name()).collect()
@@ -103,6 +240,24 @@ impl KicadSymbolLibrary {
     /// Convert all symbols to the generic Symbol type
     pub fn into_symbols(self) -> Vec<Symbol> {
         self.symbols.into_iter().map(|s| s.into()).collect()
+    }
+
+    /// Convert all symbols to the generic Symbol type with lazy resolution
+    pub fn into_symbols_lazy(self) -> Result<Vec<Symbol>> {
+        let mut result = Vec::new();
+
+        for symbol in &self.symbols {
+            if let Some(resolved) = self.get_symbol_lazy(symbol.name())? {
+                result.push(resolved.into());
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Get a specific symbol with lazy resolution and convert to generic Symbol type
+    pub fn get_symbol_lazy_as_eda(&self, name: &str) -> Result<Option<Symbol>> {
+        Ok(self.get_symbol_lazy(name)?.map(|s| s.into()))
     }
 }
 

@@ -707,6 +707,8 @@ pub(crate) fn build_component_factory_from_symbol(
     file_provider: &dyn crate::FileProvider,
 ) -> anyhow::Result<ComponentFactoryValue> {
     // Parse all symbols from the library (with caching)
+    // Note: Component factories expect single-symbol files, so we load all symbols
+    // to provide a helpful error if multiple symbols are found
     let symbols = load_symbols_from_library(symbol_path, file_provider)
         .map_err(|e| anyhow!("Failed to load symbols: {}", e))?;
 

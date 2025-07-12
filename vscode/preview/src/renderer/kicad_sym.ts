@@ -167,7 +167,10 @@ class AlphaCanvas2DRenderer extends Canvas2DRenderer {
 
   override clear_canvas() {
     this.ctx2d!.setTransform();
-    this.ctx2d!.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+    // Don't apply device pixel ratio scaling here - let the canvas handle it naturally
+    // This was causing double-scaling in VSCode's webview environment
+    // this.ctx2d!.scale(window.devicePixelRatio, window.devicePixelRatio);
 
     // Clear with transparent background if alpha is 0
     if (this.background_color.a === 0) {

@@ -205,7 +205,9 @@ function calculateTextDimensions(
   text: string,
   fontSize: number,
   fontFamily: string = "monospace",
-  fontWeight: string = "normal"
+  fontWeight: string = "normal",
+  paddingWidth: number = 15,
+  paddingHeight: number = 5
 ): { width: number; height: number } {
   // Create a canvas for text measurement
   const canvas = createCanvas(1, 1);
@@ -222,7 +224,10 @@ function calculateTextDimensions(
   );
   const height = lineHeight * lines.length;
 
-  return { width, height };
+  return {
+    width: width + paddingWidth * 2,
+    height: height + paddingHeight * 2,
+  };
 }
 
 // Utility functions for grid snapping
