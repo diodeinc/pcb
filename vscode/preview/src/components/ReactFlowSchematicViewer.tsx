@@ -2677,7 +2677,13 @@ const Visualizer = ({
           minZoom={0.1}
           maxZoom={1.5}
         >
-          <Background variant={BackgroundVariant.Dots} />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={currentConfig.layout.gridSnap.size}
+            size={1}
+            color={electricalComponentColor}
+            style={{ opacity: 0.25 }}
+          />
           <Controls showInteractive={false} />
           {(showSettings || showDownloadButton) && (
             <Panel position="top-right">
