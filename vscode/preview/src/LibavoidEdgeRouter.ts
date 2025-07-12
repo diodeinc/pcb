@@ -92,7 +92,7 @@ export class LibavoidEdgeRouter {
       return;
     }
 
-    await AvoidLib.load();
+    await AvoidLib.load("/wasm/libavoid.wasm");
     this.avoidLib = AvoidLib.getInstance();
 
     // Create router with orthogonal routing

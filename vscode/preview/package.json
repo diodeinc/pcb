@@ -29,7 +29,7 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
-    "postbuild": "for dir in ./playwright/.cache ./public ./build ./build/static/js; do cp -f node_modules/libavoid-js/dist/libavoid.wasm $dir/libavoid.wasm; done",
+    "postbuild": "mkdir -p ./public/wasm ./build/wasm ./build/static/js/wasm ./playwright/.cache/wasm && for dir in ./playwright/.cache/wasm ./public/wasm ./build/wasm ./build/static/js/wasm; do cp -f node_modules/libavoid-js/dist/libavoid.wasm $dir/libavoid.wasm; done",
     "test": "craco test --watchAll=false",
     "test:watch": "craco test",
     "test:visual": "playwright test -c playwright-ct.config.ts",

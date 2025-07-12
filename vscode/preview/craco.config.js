@@ -128,7 +128,7 @@ module.exports = {
                 __dirname,
                 "node_modules/libavoid-js/dist/libavoid.wasm"
               ),
-              to: "static/js/libavoid.wasm",
+              to: "wasm/libavoid.wasm",
             },
           ],
         })

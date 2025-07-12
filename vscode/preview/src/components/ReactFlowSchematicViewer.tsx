@@ -24,6 +24,7 @@ import {
 } from "@xyflow/react";
 import type { Edge, EdgeProps, EdgeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./ReactFlowSchematicViewer.css";
 import {
   NodeType,
   SchematicLayoutEngine,
@@ -149,166 +150,6 @@ const edgeColor = DEFAULT_THEME.wire.to_css();
 const accentColor = DEFAULT_THEME.sheet_fields.to_css();
 const backgroundColor = DEFAULT_THEME.background.to_css();
 const labelColor = DEFAULT_THEME.reference.to_css();
-
-// Common CSS to override ReactFlow default hover effects
-const customStyles = `
-  /* Use KiCad theme colors for nodes and edges */
-  .react-flow__node {
-    color: ${labelColor};
-    border-color: ${electricalComponentColor};
-  }
-
-  /* Add transition for smooth layout changes */
-  .react-flow__node.animate-layout {
-    transition: transform 300ms ease-in-out;
-  }
-
-  .react-flow__edge.animate-layout .react-flow__edge-path {
-    transition: d 300ms ease-in-out;
-  }
-
-  .react-flow__edge {
-    stroke: ${edgeColor};
-  }
-
-  .react-flow__edge-path {
-    stroke: ${edgeColor} !important;
-  }
-
-  /* Style the graph background */
-  .react-flow {
-    background-color: ${backgroundColor};
-  }
-
-  /* Component nodes are now draggable */
-  .react-flow__node-component {
-    cursor: move !important;
-  }
-  
-  .react-flow__node-component .component-port {
-    pointer-events: auto !important;
-  }
-  
-  /* Hover effect for draggable nodes */
-  .react-flow__node:hover {
-    cursor: move !important;
-  }
-  
-  /* Keep module nodes interactive with both drag and click */
-  .react-flow__node-module {
-    cursor: move;
-  }
-
-  /* Module node hover state */
-  .react-flow__node-module:hover {
-    border-color: ${accentColor} !important;
-    box-shadow: 0 0 0 2px ${accentColor} !important;
-  }
-  
-  /* Show different cursor when dragging */
-  .react-flow__node.dragging {
-    cursor: grabbing !important;
-  }
-  
-  /* Make sure the port connection points remain interactive */
-  .react-flow__handle {
-    pointer-events: all !important;
-  }
-
-  /* Style the minimap */
-  .react-flow__minimap {
-    background-color: ${backgroundColor};
-  }
-
-  /* Style the controls */
-  .react-flow__controls {
-    background-color: ${backgroundColor};
-    border-color: ${electricalComponentColor};
-  }
-
-  .react-flow__controls button {
-    background-color: ${backgroundColor};
-    color: ${electricalComponentColor};
-    border-color: ${electricalComponentColor};
-  }
-
-  .react-flow__controls button:hover {
-    background-color: ${electricalComponentColor};
-    color: ${backgroundColor};
-  }
-
-  .react-flow__controls button svg {
-    stroke: currentColor;
-  }
-
-  /* Style port labels */
-  .port-label {
-    color: ${accentColor};
-    font-weight: 1000;
-    font-size: 12px;
-  }
-
-  /* Style component/module names */
-  .module-header, .component-header {
-    color: ${electricalComponentColor} !important;
-    font-weight: 600;
-  }
-
-  /* Disable outline on symbol nodes when selected */
-  .react-flow__node-symbol.selected {
-    outline: none !important;
-    box-shadow: none !important;
-  }
-
-  /* Style the download button */
-  .download-button {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background-color: ${backgroundColor};
-    color: ${electricalComponentColor};
-    border: 1px solid ${electricalComponentColor};
-    padding: 8px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    transition: background-color 0.2s, color 0.2s;
-  }
-
-  .download-button:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-
-  .download-button:not(:disabled):hover {
-    background-color: ${electricalComponentColor};
-    color: ${backgroundColor};
-  }
-
-  .download-button:active {
-    background-color: ${electricalComponentColor};
-    color: ${backgroundColor};
-    opacity: 0.8;
-  }
-
-  .download-button svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  .download-button .loading-icon {
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
-  }
-`;
 
 // Common style for all handles - subtle dots on component borders
 const portHandleStyle = {
@@ -1411,435 +1252,439 @@ const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
 // }
 
 // Component to render net reference labels using KiCanvas
-const NetReferenceLabel = React.memo(
-  ({
-    port,
-    side,
-    portX,
-    portY,
-    canvasRef,
-    selected,
-  }: {
-    port: any;
-    side: string;
-    portX: number;
-    portY: number;
-    canvasRef: (canvas: HTMLCanvasElement | null) => void;
-    selected?: boolean;
-  }) => {
-    const internalCanvasRef = useRef<HTMLCanvasElement>(null);
-    const [dimensions, setDimensions] = useState({ width: 100, height: 60 });
+const NetReferenceLabel = React.memo(function NetReferenceLabel({
+  port,
+  side,
+  portX,
+  portY,
+  canvasRef,
+  selected,
+}: {
+  port: any;
+  side: string;
+  portX: number;
+  portY: number;
+  canvasRef: (canvas: HTMLCanvasElement | null) => void;
+  selected?: boolean;
+}) {
+  const internalCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 100, height: 60 });
 
-    // Get the label text
-    const labelText =
-      port.labels.find(
-        (label: any) => label.properties?.labelType === "netReference"
-      )?.text || "";
+  // Get the label text
+  const labelText =
+    port.labels.find(
+      (label: any) => label.properties?.labelType === "netReference"
+    )?.text || "";
 
-    // Convert side to direction - the arrow should point toward the symbol
-    const getDirection = useCallback((): LabelDirection => {
-      switch (side) {
-        case "WEST":
-          return "left"; // Arrow points left (toward symbol on the right)
-        case "EAST":
-          return "right"; // Arrow points right (toward symbol on the left)
-        case "NORTH":
-          return "up"; // Arrow points up (toward symbol below)
-        case "SOUTH":
-          return "down"; // Arrow points down (toward symbol above)
-        default:
-          return "left";
-      }
-    }, [side]);
+  // Convert side to direction - the arrow should point toward the symbol
+  const getDirection = useCallback((): LabelDirection => {
+    switch (side) {
+      case "WEST":
+        return "left"; // Arrow points left (toward symbol on the right)
+      case "EAST":
+        return "right"; // Arrow points right (toward symbol on the left)
+      case "NORTH":
+        return "up"; // Arrow points up (toward symbol below)
+      case "SOUTH":
+        return "down"; // Arrow points down (toward symbol above)
+      default:
+        return "left";
+    }
+  }, [side]);
 
-    useEffect(() => {
-      const renderLabel = async () => {
-        if (!internalCanvasRef.current || !labelText) return;
+  useEffect(() => {
+    const renderLabel = async () => {
+      if (!internalCanvasRef.current || !labelText) return;
 
-        try {
-          const PADDING_MM = 0.15;
+      try {
+        const PADDING_MM = 0.15;
 
-          const info = await renderGlobalLabel(
-            internalCanvasRef.current,
-            labelText,
-            {
-              direction: getDirection(),
-              shape: "input",
-              scale: 10, // Scale up for visibility in the schematic
-              padding: PADDING_MM,
-              fontSize: 1.27, // Default KiCad font size
-              theme: selected ? SELECTED_THEME : DEFAULT_THEME,
-            }
-          );
-
-          // Update dimensions if they changed
-          if (
-            info.width !== dimensions.width ||
-            info.height !== dimensions.height
-          ) {
-            setDimensions({ width: info.width, height: info.height });
+        const info = await renderGlobalLabel(
+          internalCanvasRef.current,
+          labelText,
+          {
+            direction: getDirection(),
+            shape: "input",
+            scale: 10, // Scale up for visibility in the schematic
+            padding: PADDING_MM,
+            fontSize: 1.27, // Default KiCad font size
+            theme: selected ? SELECTED_THEME : DEFAULT_THEME,
           }
-        } catch (error) {
-          console.error("Error rendering net reference label:", error);
+        );
+
+        // Update dimensions if they changed
+        if (
+          info.width !== dimensions.width ||
+          info.height !== dimensions.height
+        ) {
+          setDimensions({ width: info.width, height: info.height });
         }
-      };
-
-      renderLabel();
-    }, [labelText, side, dimensions, getDirection, selected]);
-
-    // Calculate position offset based on side
-    const getPositionStyle = () => {
-      const baseStyle = {
-        position: "absolute" as const,
-        pointerEvents: "none" as const,
-        zIndex: 100,
-      };
-
-      switch (side) {
-        case "WEST":
-          return {
-            ...baseStyle,
-            left: portX - dimensions.width,
-            top: portY - dimensions.height / 2,
-          };
-        case "EAST":
-          return {
-            ...baseStyle,
-            left: portX,
-            top: portY - dimensions.height / 2,
-          };
-        case "NORTH":
-          return {
-            ...baseStyle,
-            left: portX - dimensions.width / 2,
-            top: portY - dimensions.height,
-          };
-        case "SOUTH":
-          return {
-            ...baseStyle,
-            left: portX - dimensions.width / 2,
-            top: portY,
-          };
-        default:
-          return baseStyle;
+      } catch (error) {
+        console.error("Error rendering net reference label:", error);
       }
     };
 
-    return (
-      <div className="port-net-reference" style={getPositionStyle()}>
-        <canvas
-          ref={(canvas) => {
-            internalCanvasRef.current = canvas;
-            canvasRef(canvas);
-          }}
-          width={dimensions.width}
-          height={dimensions.height}
-          style={{
-            width: `${dimensions.width}px`,
-            height: `${dimensions.height}px`,
-            backgroundColor: "rgba(0, 0, 0, 0)",
-          }}
-        />
-      </div>
-    );
-  }
-);
+    renderLabel();
+  }, [labelText, side, dimensions, getDirection, selected]);
+
+  // Calculate position offset based on side
+  const getPositionStyle = () => {
+    const baseStyle = {
+      position: "absolute" as const,
+      pointerEvents: "none" as const,
+      zIndex: 100,
+    };
+
+    switch (side) {
+      case "WEST":
+        return {
+          ...baseStyle,
+          left: portX - dimensions.width,
+          top: portY - dimensions.height / 2,
+        };
+      case "EAST":
+        return {
+          ...baseStyle,
+          left: portX,
+          top: portY - dimensions.height / 2,
+        };
+      case "NORTH":
+        return {
+          ...baseStyle,
+          left: portX - dimensions.width / 2,
+          top: portY - dimensions.height,
+        };
+      case "SOUTH":
+        return {
+          ...baseStyle,
+          left: portX - dimensions.width / 2,
+          top: portY,
+        };
+      default:
+        return baseStyle;
+    }
+  };
+
+  return (
+    <div className="port-net-reference" style={getPositionStyle()}>
+      <canvas
+        ref={(canvas) => {
+          if (internalCanvasRef.current !== canvas) {
+            (internalCanvasRef as any).current = canvas;
+          }
+          canvasRef(canvas);
+        }}
+        width={dimensions.width}
+        height={dimensions.height}
+        style={{
+          width: `${dimensions.width}px`,
+          height: `${dimensions.height}px`,
+          backgroundColor: "rgba(0, 0, 0, 0)",
+        }}
+      />
+    </div>
+  );
+});
 
 // Define a node for KiCad symbols
-const SymbolNode = React.memo(
-  ({ data, selected }: { data: SchematicNodeData; selected?: boolean }) => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const labelCanvasRefs = useRef<Map<string, HTMLCanvasElement>>(new Map());
-    const [isRendering, setIsRendering] = useState(true);
-    const [renderError, setRenderError] = useState<string | null>(null);
+const SymbolNode = React.memo(function SymbolNode({
+  data,
+  selected,
+}: {
+  data: SchematicNodeData;
+  selected?: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const labelCanvasRefs = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const [isRendering, setIsRendering] = useState(true);
+  const [renderError, setRenderError] = useState<string | null>(null);
 
-    // Determine if this node should be dimmed based on selection state
-    const selectionState = data.selectionState;
-    const shouldDim =
-      selectionState?.selectedNetId || selectionState?.hoveredNetId;
-    const isConnectedToHighlightedNet =
-      shouldDim &&
-      data.ports?.some((port) => {
-        const netId = port.netId;
-        return (
-          netId === selectionState.selectedNetId ||
-          netId === selectionState.hoveredNetId
-        );
-      });
-    const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
+  // Determine if this node should be dimmed based on selection state
+  const selectionState = data.selectionState;
+  const shouldDim =
+    selectionState?.selectedNetId || selectionState?.hoveredNetId;
+  const isConnectedToHighlightedNet =
+    shouldDim &&
+    data.ports?.some((port) => {
+      const netId = port.netId;
+      return (
+        netId === selectionState.selectedNetId ||
+        netId === selectionState.hoveredNetId
+      );
+    });
+  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
 
-    // Get rotation from data
-    const rotation = data.rotation || 0;
+  // Get rotation from data
+  const rotation = data.rotation || 0;
 
-    // Get netlist from node data
-    const netlist = (data as any).netlist as Netlist;
+  // Get netlist from node data
+  const netlist = (data as any).netlist as Netlist;
 
-    useEffect(() => {
-      const renderSymbol = async () => {
-        if (!canvasRef.current) {
-          setRenderError("Canvas not available");
+  useEffect(() => {
+    const renderSymbol = async () => {
+      if (!canvasRef.current) {
+        setRenderError("Canvas not available");
+        setIsRendering(false);
+        return;
+      }
+
+      try {
+        setIsRendering(true);
+        const canvas = canvasRef.current;
+
+        // Get the symbol content from the __symbol_value attribute
+        const instance = netlist.instances[data.id];
+        const symbolValueAttr = instance?.attributes?.__symbol_value;
+
+        // Extract the string value from AttributeValue
+        let symbolContent: string | undefined;
+        if (typeof symbolValueAttr === "string") {
+          symbolContent = symbolValueAttr;
+        } else if (
+          symbolValueAttr &&
+          typeof symbolValueAttr === "object" &&
+          "String" in symbolValueAttr
+        ) {
+          symbolContent = symbolValueAttr.String;
+        }
+
+        if (!symbolContent) {
+          setRenderError(
+            "Symbol content not found in __symbol_value attribute"
+          );
           setIsRendering(false);
           return;
         }
 
-        try {
-          setIsRendering(true);
-          const canvas = canvasRef.current;
+        // First, get the symbol info to know its natural size
+        // We don't need a symbol name anymore since the content is self-contained
+        const symbolInfo = getKicadSymbolInfo(symbolContent, undefined, {
+          unit: 1,
+          bodyStyle: 1,
+          tightBounds: false,
+        });
 
-          // Get the symbol content from the __symbol_value attribute
-          const instance = netlist.instances[data.id];
-          const symbolValueAttr = instance?.attributes?.__symbol_value;
+        // The node dimensions are already calculated by renderer.ts
+        const nodeWidth = data.width || 100;
+        const nodeHeight = data.height || 100;
 
-          // Extract the string value from AttributeValue
-          let symbolContent: string | undefined;
-          if (typeof symbolValueAttr === "string") {
-            symbolContent = symbolValueAttr;
-          } else if (
-            symbolValueAttr &&
-            typeof symbolValueAttr === "object" &&
-            "String" in symbolValueAttr
-          ) {
-            symbolContent = symbolValueAttr.String;
-          }
+        // Set canvas size to match node size exactly
+        // The KiCad renderer handles device pixel ratio internally
+        canvas.width = nodeWidth;
+        canvas.height = nodeHeight;
 
-          if (!symbolContent) {
-            setRenderError(
-              "Symbol content not found in __symbol_value attribute"
-            );
-            setIsRendering(false);
-            return;
-          }
+        // The renderer.ts uses a scale factor of 10 to convert from symbol units to schematic units
+        // So if the node is sized as symbolInfo.bbox.w * 10, we need to render at a scale
+        // that makes the symbol fill the canvas
 
-          // First, get the symbol info to know its natural size
-          // We don't need a symbol name anymore since the content is self-contained
-          const symbolInfo = getKicadSymbolInfo(symbolContent, undefined, {
-            unit: 1,
-            bodyStyle: 1,
-            tightBounds: false,
-          });
+        // Calculate the scale needed to fit the symbol in the canvas
+        // Use zero padding for exact fit
+        const symbolPadding = 0; // Zero padding
 
-          // The node dimensions are already calculated by renderer.ts
-          const nodeWidth = data.width || 100;
-          const nodeHeight = data.height || 100;
+        // The symbol's natural size (no padding needed since we want exact fit)
+        const symbolWidthWithPadding = symbolInfo.bbox.w;
+        const symbolHeightWithPadding = symbolInfo.bbox.h;
 
-          // Set canvas size to match node size exactly
-          // The KiCad renderer handles device pixel ratio internally
-          canvas.width = nodeWidth;
-          canvas.height = nodeHeight;
+        // Calculate scale to fit the symbol in the logical node size
+        const scaleX = nodeWidth / symbolWidthWithPadding;
+        const scaleY = nodeHeight / symbolHeightWithPadding;
+        const scale = Math.min(scaleX, scaleY);
 
-          // The renderer.ts uses a scale factor of 10 to convert from symbol units to schematic units
-          // So if the node is sized as symbolInfo.bbox.w * 10, we need to render at a scale
-          // that makes the symbol fill the canvas
+        // Use selected theme if the node is selected
+        const theme = selected ? SELECTED_THEME : DEFAULT_THEME;
 
-          // Calculate the scale needed to fit the symbol in the canvas
-          // Use zero padding for exact fit
-          const symbolPadding = 0; // Zero padding
+        // Render the symbol at the calculated scale
+        await renderKicadSymbol(canvas, symbolContent, undefined, {
+          scale: scale,
+          padding: symbolPadding, // Zero padding
+          showPinNames: false,
+          showPinNumbers: false,
+          tightBounds: false, // Include pins to match renderer.ts
+          theme: theme,
+        });
 
-          // The symbol's natural size (no padding needed since we want exact fit)
-          const symbolWidthWithPadding = symbolInfo.bbox.w;
-          const symbolHeightWithPadding = symbolInfo.bbox.h;
+        // No context state to restore since we're not manually scaling
 
-          // Calculate scale to fit the symbol in the logical node size
-          const scaleX = nodeWidth / symbolWidthWithPadding;
-          const scaleY = nodeHeight / symbolHeightWithPadding;
-          const scale = Math.min(scaleX, scaleY);
+        setIsRendering(false);
+      } catch (error) {
+        console.error("Error rendering symbol:", error);
+        setRenderError(
+          error instanceof Error ? error.message : "Unknown error"
+        );
+        setIsRendering(false);
+      }
+    };
 
-          // Use selected theme if the node is selected
-          const theme = selected ? SELECTED_THEME : DEFAULT_THEME;
+    renderSymbol();
+  }, [data.width, data.height, data.id, netlist.instances, selected]);
 
-          // Render the symbol at the calculated scale
-          await renderKicadSymbol(canvas, symbolContent, undefined, {
-            scale: scale,
-            padding: symbolPadding, // Zero padding
-            showPinNames: false,
-            showPinNumbers: false,
-            tightBounds: false, // Include pins to match renderer.ts
-            theme: theme,
-          });
-
-          // No context state to restore since we're not manually scaling
-
-          setIsRendering(false);
-        } catch (error) {
-          console.error("Error rendering symbol:", error);
-          setRenderError(
-            error instanceof Error ? error.message : "Unknown error"
-          );
-          setIsRendering(false);
-        }
-      };
-
-      renderSymbol();
-    }, [data.width, data.height, data.id, netlist.instances, selected]);
-
-    return (
-      <div
-        className="react-flow-symbol-node"
+  return (
+    <div
+      className="react-flow-symbol-node"
+      style={{
+        width: data.width,
+        height: data.height,
+        pointerEvents: "none",
+        position: "relative",
+        opacity: opacity,
+        // Apply rotation transform
+        transform: rotation !== 0 ? `rotate(${rotation}deg)` : undefined,
+        transformOrigin: "center",
+      }}
+    >
+      {/* Canvas for KiCad symbol rendering */}
+      <canvas
+        ref={canvasRef}
         style={{
-          width: data.width,
-          height: data.height,
-          pointerEvents: "none",
-          position: "relative",
-          opacity: opacity,
-          // Apply rotation transform
-          transform: rotation !== 0 ? `rotate(${rotation}deg)` : undefined,
-          transformOrigin: "center",
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: `${data.width}px`,
+          height: `${data.height}px`,
+          imageRendering: "crisp-edges",
+          backgroundColor: "transparent",
         }}
-      >
-        {/* Canvas for KiCad symbol rendering */}
-        <canvas
-          ref={canvasRef}
+      />
+
+      {/* Loading indicator */}
+      {isRendering && (
+        <div
           style={{
             position: "absolute",
-            top: 0,
-            left: 0,
-            width: `${data.width}px`,
-            height: `${data.height}px`,
-            imageRendering: "crisp-edges",
-            backgroundColor: "transparent",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            color: electricalComponentColor,
+            fontSize: "12px",
           }}
-        />
-
-        {/* Loading indicator */}
-        {isRendering && (
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              color: electricalComponentColor,
-              fontSize: "12px",
-            }}
-          >
-            Loading...
-          </div>
-        )}
-
-        {/* Error message */}
-        {renderError && (
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              color: "red",
-              fontSize: "10px",
-              textAlign: "center",
-              width: "90%",
-            }}
-          >
-            {renderError}
-          </div>
-        )}
-
-        {/* Port connections */}
-        <div className="component-ports">
-          {data.ports?.map((port) => {
-            // Port position is already calculated by the renderer
-            const portX = port.x || 0;
-            const portY = port.y || 0;
-
-            // Determine handle position based on port side
-            let handlePosition = Position.Left;
-            const side = port.properties?.["port.side"];
-            if (side === "EAST") handlePosition = Position.Right;
-            else if (side === "NORTH") handlePosition = Position.Top;
-            else if (side === "SOUTH") handlePosition = Position.Bottom;
-
-            return (
-              <React.Fragment key={port.id}>
-                <div
-                  className="component-port"
-                  style={{
-                    position: "absolute",
-                    left: portX,
-                    top: portY,
-                    width: 1,
-                    height: 1,
-                    opacity: 0,
-                    zIndex: 20,
-                    pointerEvents: "auto",
-                  }}
-                  data-port-id={port.id}
-                >
-                  <Handle
-                    type="source"
-                    position={handlePosition}
-                    id={`${port.id}-source`}
-                    style={{ ...portHandleStyle, opacity: 0 }}
-                  />
-                  <Handle
-                    type="target"
-                    position={handlePosition}
-                    id={`${port.id}-target`}
-                    style={{ ...portHandleStyle, opacity: 0 }}
-                  />
-                </div>
-
-                {/* Port label - rendered outside the port div */}
-                {port.labels && port.labels[0] && (
-                  <>
-                    {/* Check if this is a net reference label */}
-                    {port.labels.some(
-                      (label) => label.properties?.labelType === "netReference"
-                    ) ? (
-                      // Render net reference with global label style using canvas
-                      <NetReferenceLabel
-                        port={port}
-                        side={side}
-                        portX={portX}
-                        portY={portY}
-                        selected={selected}
-                        canvasRef={(canvas) => {
-                          if (canvas) {
-                            labelCanvasRefs.current.set(port.id, canvas);
-                          }
-                        }}
-                      />
-                    ) : (
-                      // Regular port label (non-net reference)
-                      <div
-                        className="port-label"
-                        style={{
-                          position: "absolute",
-                          left: portX,
-                          top: portY,
-                          fontSize: "10px",
-                          whiteSpace: "nowrap",
-                          pointerEvents: "none",
-                          color: electricalComponentColor,
-                          opacity: 0.7,
-                          transform:
-                            side === "WEST"
-                              ? "translate(5px, -5px)"
-                              : side === "EAST"
-                              ? "translate(-100%, -5px) translateX(-5px)"
-                              : side === "NORTH"
-                              ? "translate(-50%, 5px)"
-                              : "translate(-50%, -15px)",
-                          textAlign:
-                            side === "WEST"
-                              ? "left"
-                              : side === "EAST"
-                              ? "right"
-                              : "center",
-                        }}
-                      >
-                        {port.labels[0].text}
-                      </div>
-                    )}
-                  </>
-                )}
-              </React.Fragment>
-            );
-          })}
+        >
+          Loading...
         </div>
+      )}
+
+      {/* Error message */}
+      {renderError && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            color: "red",
+            fontSize: "10px",
+            textAlign: "center",
+            width: "90%",
+          }}
+        >
+          {renderError}
+        </div>
+      )}
+
+      {/* Port connections */}
+      <div className="component-ports">
+        {data.ports?.map((port) => {
+          // Port position is already calculated by the renderer
+          const portX = port.x || 0;
+          const portY = port.y || 0;
+
+          // Determine handle position based on port side
+          let handlePosition = Position.Left;
+          const side = port.properties?.["port.side"];
+          if (side === "EAST") handlePosition = Position.Right;
+          else if (side === "NORTH") handlePosition = Position.Top;
+          else if (side === "SOUTH") handlePosition = Position.Bottom;
+
+          return (
+            <React.Fragment key={port.id}>
+              <div
+                className="component-port"
+                style={{
+                  position: "absolute",
+                  left: portX,
+                  top: portY,
+                  width: 1,
+                  height: 1,
+                  opacity: 0,
+                  zIndex: 20,
+                  pointerEvents: "auto",
+                }}
+                data-port-id={port.id}
+              >
+                <Handle
+                  type="source"
+                  position={handlePosition}
+                  id={`${port.id}-source`}
+                  style={{ ...portHandleStyle, opacity: 0 }}
+                />
+                <Handle
+                  type="target"
+                  position={handlePosition}
+                  id={`${port.id}-target`}
+                  style={{ ...portHandleStyle, opacity: 0 }}
+                />
+              </div>
+
+              {/* Port label - rendered outside the port div */}
+              {port.labels && port.labels[0] && (
+                <>
+                  {/* Check if this is a net reference label */}
+                  {port.labels.some(
+                    (label) => label.properties?.labelType === "netReference"
+                  ) ? (
+                    // Render net reference with global label style using canvas
+                    <NetReferenceLabel
+                      port={port}
+                      side={side || "WEST"}
+                      portX={portX}
+                      portY={portY}
+                      selected={selected}
+                      canvasRef={(canvas) => {
+                        if (canvas) {
+                          labelCanvasRefs.current.set(port.id, canvas);
+                        }
+                      }}
+                    />
+                  ) : (
+                    // Regular port label (non-net reference)
+                    <div
+                      className="port-label"
+                      style={{
+                        position: "absolute",
+                        left: portX,
+                        top: portY,
+                        fontSize: "10px",
+                        whiteSpace: "nowrap",
+                        pointerEvents: "none",
+                        color: electricalComponentColor,
+                        opacity: 0.7,
+                        transform:
+                          side === "WEST"
+                            ? "translate(5px, -5px)"
+                            : side === "EAST"
+                            ? "translate(-100%, -5px) translateX(-5px)"
+                            : side === "NORTH"
+                            ? "translate(-50%, 5px)"
+                            : "translate(-50%, -15px)",
+                        textAlign:
+                          side === "WEST"
+                            ? "left"
+                            : side === "EAST"
+                            ? "right"
+                            : "center",
+                      }}
+                    >
+                      {port.labels[0].text}
+                    </div>
+                  )}
+                </>
+              )}
+            </React.Fragment>
+          );
+        })}
       </div>
-    );
-  }
-);
+    </div>
+  );
+});
 
 // Define custom edge for electrical connections
 const ElectricalEdge = ({
@@ -2038,7 +1883,7 @@ const Visualizer = ({
         );
 
         // Update both nodes and edges from the layout result
-        const newNodes = layoutResult.children.map((elkNode) => {
+        const newNodes = (layoutResult.children || []).map((elkNode) => {
           const node = createSchematicNode(elkNode, selectionState, netlist);
           // Preserve selection state
           node.selected = selectedNodeIds.has(node.id);
@@ -2113,7 +1958,7 @@ const Visualizer = ({
           // Update node positions with the layout result
           setNodePositions(layoutResult.nodePositions);
 
-          const nodes = layoutResult.children.map((elkNode) =>
+          const nodes = (layoutResult.children || []).map((elkNode) =>
             createSchematicNode(elkNode, selectionState, netlist)
           );
           const edges = layoutResult.edges.map((elkEdge) =>
@@ -2468,108 +2313,6 @@ const Visualizer = ({
 
   return (
     <div className="schematic-viewer">
-      <style>
-        {customStyles}
-        {`
-        /* Debug pane styles */
-        .debug-pane {
-          background-color: ${backgroundColor};
-          border: 1px solid ${electricalComponentColor};
-          border-radius: 4px;
-          padding: 12px;
-          max-width: 280px;
-          max-height: 400px;
-          overflow-y: auto;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        }
-
-        .debug-pane h3 {
-          margin: 0 0 12px 0;
-          font-size: 14px;
-          font-weight: 600;
-          color: ${labelColor};
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        }
-
-        .debug-pane-section {
-          margin-bottom: 16px;
-        }
-
-        .debug-pane-section h4 {
-          margin: 0 0 8px 0;
-          font-size: 12px;
-          font-weight: 600;
-          color: ${labelColor};
-          opacity: 0.8;
-        }
-
-        .debug-pane-control {
-          margin-bottom: 8px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        }
-
-        .debug-pane-control label {
-          font-size: 12px;
-          color: ${labelColor};
-          flex: 1;
-        }
-
-        .debug-pane-control input[type="checkbox"] {
-          margin-left: 8px;
-        }
-
-        .debug-pane-control input[type="range"] {
-          flex: 1;
-          margin: 0 8px;
-        }
-
-        .debug-pane-control select {
-          background-color: ${backgroundColor};
-          color: ${labelColor};
-          border: 1px solid ${electricalComponentColor};
-          border-radius: 2px;
-          padding: 2px 4px;
-          font-size: 12px;
-          margin-left: 8px;
-        }
-
-        .debug-pane-control .value-display {
-          font-size: 11px;
-          color: ${labelColor};
-          opacity: 0.7;
-          min-width: 30px;
-          text-align: right;
-        }
-
-        .debug-toggle-button {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background-color: ${backgroundColor};
-          color: ${electricalComponentColor};
-          border: 1px solid ${electricalComponentColor};
-          padding: 8px;
-          border-radius: 4px;
-          cursor: pointer;
-          transition: background-color 0.2s, color 0.2s;
-        }
-
-        .debug-toggle-button:hover {
-          background-color: ${electricalComponentColor};
-          color: ${backgroundColor};
-        }
-
-        .debug-toggle-button svg {
-          width: 16px;
-          height: 16px;
-        }
-      `}
-      </style>
-
       {layoutError && (
         <div
           className="error-message"
