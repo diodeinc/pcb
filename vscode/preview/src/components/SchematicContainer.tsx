@@ -140,6 +140,7 @@ interface SchematicContainerProps {
   netlistData: Netlist;
   currentFile: string;
   selectedModule?: string;
+  showBreadcrumbs?: boolean;
 }
 
 const Breadcrumbs = ({
@@ -191,6 +192,7 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
   netlistData,
   currentFile,
   selectedModule: initialSelectedModule,
+  showBreadcrumbs = false,
 }) => {
   console.log("schematic container with currentFile", currentFile);
   const [error, setError] = useState<string | null>(null);
@@ -237,7 +239,7 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
 
       {/* Main Schematic Viewer */}
       <div className="schematic-viewer-container">
-        {selectedModule && (
+        {showBreadcrumbs && selectedModule && (
           <Breadcrumbs
             moduleId={selectedModule}
             onNavigate={handleComponentSelect}

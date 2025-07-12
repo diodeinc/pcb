@@ -82,6 +82,45 @@ export const DEFAULT_THEME: SchematicTheme = {
   bus_junction: new Color(0, 0.5, 0, 1),
 };
 
+// Brighter theme for selected symbols
+export const SELECTED_THEME: SchematicTheme = {
+  background: new Color(1, 1, 1, 1), // Keep white background
+  component_outline: new Color(0.8, 0, 0, 1), // Brighter red outlines
+  component_body: new Color(1, 1, 0.9, 1), // Lighter yellow fill
+  pin: new Color(0.8, 0, 0, 1), // Brighter red pins
+  pin_name: new Color(0.8, 0, 0, 1),
+  pin_number: new Color(0.8, 0, 0, 1),
+  reference: new Color(0, 0.8, 0.8, 1), // Brighter cyan reference
+  value: new Color(0, 0.8, 0.8, 1), // Brighter cyan value
+  fields: new Color(0, 0.8, 0.8, 1), // Brighter cyan fields
+  wire: new Color(0, 0.8, 0, 1), // Brighter green
+  bus: new Color(0, 0, 0.8, 1), // Brighter blue
+  junction: new Color(0, 0.8, 0, 1),
+  label_local: new Color(0.2, 0.2, 0.2, 1), // Slightly lighter black
+  label_global: new Color(0.8, 0, 0, 1), // Brighter red
+  label_hier: new Color(0.8, 0.4, 0, 1), // Brighter orange
+  no_connect: new Color(0, 0, 0.8, 1),
+  note: new Color(0, 0, 0.8, 1),
+  sheet_background: new Color(1, 1, 0.9, 1),
+  sheet: new Color(0.8, 0, 0, 1),
+  sheet_label: new Color(0.8, 0.4, 0, 1),
+  sheet_fields: new Color(0.8, 0, 0.8, 1),
+  sheet_filename: new Color(0.8, 0.4, 0, 1),
+  sheet_name: new Color(0, 0.8, 0.8, 1),
+  erc_warning: new Color(1, 0.7, 0, 1),
+  erc_error: new Color(1, 0.2, 0.2, 1),
+  grid: new Color(0.7, 0.7, 0.7, 1),
+  grid_axes: new Color(0, 0, 0.8, 1),
+  hidden: new Color(0.7, 0.7, 0.7, 1),
+  brightened: new Color(1, 0.2, 1, 1),
+  worksheet: new Color(0.8, 0, 0, 1),
+  cursor: new Color(0.2, 0.2, 0.2, 1),
+  aux_items: new Color(0.2, 0.2, 0.2, 1),
+  anchor: new Color(0, 0, 1, 1),
+  shadow: new Color(0.6, 0.6, 0.6, 0.5),
+  bus_junction: new Color(0, 0.8, 0, 1),
+};
+
 export interface RenderOptions {
   unit?: number;
   bodyStyle?: number;
@@ -124,12 +163,9 @@ class AlphaCanvas2DRenderer extends Canvas2DRenderer {
     }
 
     this.ctx2d = ctx2d;
-    this.update_canvas_size();
   }
 
   override clear_canvas() {
-    this.update_canvas_size();
-
     this.ctx2d!.setTransform();
     this.ctx2d!.scale(window.devicePixelRatio, window.devicePixelRatio);
 
