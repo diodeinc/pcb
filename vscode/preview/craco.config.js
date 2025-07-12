@@ -19,9 +19,9 @@ module.exports = {
         "^kicanvas/kc-ui/(.*)$": "<rootDir>/node_modules/kicanvas/src/kc-ui/$1",
       };
 
-      // Update transform ignore patterns to include kicanvas
+      // Update transform ignore patterns to include kicanvas and libavoid-js
       jestConfig.transformIgnorePatterns = [
-        "[/\\\\]node_modules[/\\\\](?!(kicanvas|@vscode-elements)[/\\\\]).+\\.(js|jsx|mjs|cjs|ts|tsx)$",
+        "[/\\\\]node_modules[/\\\\](?!(kicanvas|@vscode-elements|libavoid-js)[/\\\\]).+\\.(js|jsx|mjs|cjs|ts|tsx)$",
       ];
 
       // Add transform for TypeScript files

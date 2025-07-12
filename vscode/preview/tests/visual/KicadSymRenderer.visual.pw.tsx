@@ -1,13 +1,13 @@
 import { test, expect } from "@playwright/experimental-ct-react";
 import React from "react";
-import type { RenderOptions } from "../renderer/kicad_sym";
+import type { RenderOptions } from "../../src/renderer/kicad_sym";
 import * as fs from "fs";
 import * as path from "path";
-import KicadSymbolRenderer from "./components/KicadSymbolRenderer";
+import KicadSymbolRenderer from "../fixtures/components/KicadSymbolRenderer";
 
 test.describe("KiCad Symbol Renderer Visual Tests", () => {
   // Load symbol files from resources
-  const resourcesDir = path.join(__dirname, "resources");
+  const resourcesDir = path.join(__dirname, "../fixtures/resources");
 
   // Find all .kicad_sym files in the resources directory
   const symbolFiles = fs
@@ -35,7 +35,7 @@ test.describe("KiCad Symbol Renderer Visual Tests", () => {
     test(`${symbolName} with debug`, async ({ mount, page }) => {
       // Capture console logs
       page.on("console", async (msg) => {
-        const args = [];
+        const args: any[] = [];
         for (const arg of msg.args()) {
           try {
             const value = await arg.jsonValue();

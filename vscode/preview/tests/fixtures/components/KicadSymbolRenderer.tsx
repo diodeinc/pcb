@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { renderKicadSymbol } from "../../renderer/kicad_sym";
-import type { RenderOptions } from "../../renderer/kicad_sym";
+import { renderKicadSymbol } from "../../../src/renderer/kicad_sym";
+import type { RenderOptions } from "../../../src/renderer/kicad_sym";
 
 // Component to render a KiCad symbol
 interface KicadSymbolRendererProps {

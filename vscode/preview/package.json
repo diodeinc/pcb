@@ -32,9 +32,11 @@
     "postbuild": "for dir in ./playwright/.cache ./public ./build ./build/static/js; do cp -f node_modules/libavoid-js/dist/libavoid.wasm $dir/libavoid.wasm; done",
     "test": "craco test --watchAll=false",
     "test:watch": "craco test",
+    "test:visual": "playwright test -c playwright-ct.config.ts",
+    "test:visual:ui": "playwright test -c playwright-ct.config.ts --ui",
+    "test:all": "npm run test && npm run test:visual",
     "eject": "react-scripts eject",
-    "render-symbol": "ts-node --project scripts/tsconfig.json scripts/render-kicad-sym.ts",
-    "test-ct": "playwright test -c playwright-ct.config.ts"
+    "render-symbol": "ts-node --project scripts/tsconfig.json scripts/render-kicad-sym.ts"
   },
   "eslintConfig": {
     "extends": [

@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/experimental-ct-react";
-import SchematicContainer from "../components/SchematicContainer";
-import type { Netlist } from "../types/NetlistTypes";
+import React from "react";
+import SchematicContainer from "../../src/components/SchematicContainer";
+import type { Netlist } from "../../src/types/NetlistTypes";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
@@ -51,7 +52,7 @@ test.describe("Schematic Visual Tests", () => {
         const type = msg.type();
 
         // Get all arguments passed to console.log/error/etc
-        const args = [];
+        const args: string[] = [];
         for (const arg of msg.args()) {
           args.push(arg.toString());
         }
@@ -166,7 +167,7 @@ test.describe("Schematic Visual Tests", () => {
     // Capture console logs from the browser
     page.on("console", async (msg) => {
       const type = msg.type();
-      const args = [];
+      const args: string[] = [];
       for (const arg of msg.args()) {
         args.push(arg.toString());
       }

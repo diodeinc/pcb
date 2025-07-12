@@ -1,14 +1,15 @@
 import { defineConfig, devices } from "@playwright/experimental-ct-react";
+import path from "path";
 
 /**
  * See https://playwright.dev/docs/test-configuration.
  */
 export default defineConfig({
-  testDir: "./src/__tests__",
+  testDir: "./tests/visual",
   /* Test files to run */
   testMatch: "**/*.visual.pw.tsx",
   /* The base directory, relative to the config file, for snapshot files created with toMatchSnapshot and toHaveScreenshot. */
-  snapshotDir: "./src/__tests__/__snapshots__",
+  snapshotDir: "./tests/visual/__snapshots__",
   /* Maximum time one test can run for. */
   timeout: 30 * 1000, // Increased timeout for building netlists
   /* Run tests in files in parallel */
@@ -28,6 +29,16 @@ export default defineConfig({
 
     /* Port to use for Playwright component endpoint. */
     ctPort: 3100,
+
+    /* Vite config for resolving paths */
+    ctViteConfig: {
+      resolve: {
+        alias: {
+          "@": path.resolve(__dirname, "./src"),
+          tests: path.resolve(__dirname, "./tests"),
+        },
+      },
+    },
   },
 
   /* Configure projects for major browsers */
