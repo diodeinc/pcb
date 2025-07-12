@@ -4,11 +4,7 @@
 import { Color } from "../third_party/kicanvas/base/color";
 import { Angle, BBox, Matrix3, Vec2 } from "../third_party/kicanvas/base/math";
 import { Canvas2DRenderer } from "../third_party/kicanvas/graphics/canvas2d";
-import {
-  Circle,
-  Polygon,
-  Polyline,
-} from "../third_party/kicanvas/graphics/shapes";
+import { Polygon, Polyline } from "../third_party/kicanvas/graphics/shapes";
 import { StrokeFont } from "../third_party/kicanvas/kicad/text/stroke-font";
 import { SchText } from "../third_party/kicanvas/kicad/text/sch-text";
 import { At, Effects } from "../third_party/kicanvas/kicad/common";
@@ -137,12 +133,6 @@ export class KicadGlobalLabelRenderer {
     // Calculate shape dimensions in mm
     const xMm = symbolLengthMm + 0.3; // 0.3mm padding
     const yMm = halfSizeMm + 0.3; // 0.3mm padding
-
-    // Adjust for shape type
-    let extraWidthMm = 0;
-    if (["input", "bidirectional", "tri_state"].includes(shape)) {
-      extraWidthMm = halfSizeMm; // Account for the arrow point
-    }
 
     // Create bounding box based on direction (in mm)
     // The bbox should represent the full extent of the shape

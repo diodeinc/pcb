@@ -556,13 +556,13 @@ export class LibavoidEdgeRouter {
     if (!this.avoidLib) return;
 
     // Delete all shapes
-    for (const [_, shape] of this.shapes) {
+    for (const [, shape] of this.shapes) {
       this.router.deleteShape(shape);
     }
     this.shapes.clear();
 
     // Delete all connectors
-    for (const [_, connector] of this.connectors) {
+    for (const [, connector] of this.connectors) {
       this.router.deleteConnector(connector);
     }
     this.connectors.clear();

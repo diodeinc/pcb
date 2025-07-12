@@ -21,7 +21,6 @@ import {
   Panel,
   Background,
   BackgroundVariant,
-  useStore,
 } from "@xyflow/react";
 import type { Edge, EdgeProps, EdgeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -32,7 +31,6 @@ import {
 } from "../LayoutEngine";
 import type {
   ElkEdge,
-  ElkGraph,
   ElkNode,
   SchematicConfig,
   NodePositions,
@@ -40,7 +38,7 @@ import type {
 // import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
 import type { Netlist } from "../types/NetlistTypes";
 import { debounce } from "lodash";
-import { Download, Loader, Settings } from "react-feather";
+import { Settings } from "react-feather";
 import {
   renderKicadSymbol,
   getKicadSymbolInfo,
@@ -49,7 +47,6 @@ import {
 } from "../renderer/kicad_sym";
 import {
   renderGlobalLabel,
-  getGlobalLabelInfo,
   type LabelDirection,
 } from "../renderer/kicad_global_label";
 // import { Color } from "../third_party/kicanvas/base/color";
@@ -1967,7 +1964,6 @@ const Visualizer = ({
 }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<SchematicNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SchematicEdge>([]);
-  const [elkLayout, setElkLayout] = useState<ElkGraph | null>(null);
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const [nodePositions, setNodePositions] = useState<NodePositions>({});
   const [selectionState, setSelectionState] = useState<SelectionState>({
@@ -1975,8 +1971,6 @@ const Visualizer = ({
     hoveredNetId: null,
   });
   const [prevComponent, setPrevComponent] = useState<string | null>(null);
-  const [shouldAnimate, setShouldAnimate] = useState(false);
-  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [showDebugPane, setShowDebugPane] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<SchematicConfig>({
     ...DEFAULT_CONFIG,
@@ -2114,13 +2108,10 @@ const Visualizer = ({
             currentNodePositions
           );
 
-          setShouldAnimate(!isNewComponent);
           setPrevComponent(selectedComponent);
 
           // Update node positions with the layout result
           setNodePositions(layoutResult.nodePositions);
-
-          setElkLayout(layoutResult as ElkGraph);
 
           const nodes = layoutResult.children.map((elkNode) =>
             createSchematicNode(elkNode, selectionState, netlist)
@@ -2149,7 +2140,17 @@ const Visualizer = ({
     }
 
     render();
-  }, [netlist, selectedComponent, prevComponent, currentConfig]);
+    // TODO: fix
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    netlist,
+    selectedComponent,
+    prevComponent,
+    currentConfig,
+    selectionState,
+    setEdges,
+    setNodes,
+  ]);
 
   // Handle node click to select a component - only if the component is clickable (modules)
   const handleNodeClick = useCallback(
@@ -2446,27 +2447,6 @@ const Visualizer = ({
     ),
   });
 
-  const handleDownloadPDF = async () => {
-    if (!selectedComponent) return;
-
-    // setIsGeneratingPDF(true);
-    // try {
-    //   // Create PDF renderer with current config - use the exact same config as the React viewer
-    //   const pdfRenderer = new PDFSchematicRenderer(netlist, currentConfig);
-
-    //   // Render the PDF
-    //   const doc = await pdfRenderer.render(selectedComponent);
-
-    //   // Save the PDF with a clean filename
-    //   const filename = `${selectedComponent.split(".").pop()}_schematic.pdf`;
-    //   doc.save(filename);
-    // } catch (error) {
-    //   console.error("Error generating PDF:", error);
-    // } finally {
-    //   setIsGeneratingPDF(false);
-    // }
-  };
-
   const updateConfig = useCallback((updates: Partial<SchematicConfig>) => {
     setCurrentConfig((prev) => ({
       ...prev,
@@ -2699,7 +2679,7 @@ const Visualizer = ({
                     <Settings size={16} />
                   </button>
                 )}
-                {showDownloadButton && (
+                {/* {showDownloadButton && (
                   <button
                     className="download-button"
                     onClick={handleDownloadPDF}
@@ -2719,7 +2699,7 @@ const Visualizer = ({
                     )}
                     {isGeneratingPDF ? "Generating..." : "Download PDF"}
                   </button>
-                )}
+                )} */}
               </div>
             </Panel>
           )}

@@ -1636,8 +1636,6 @@ export class SchematicLayoutEngine {
     // First pass: Add net information to ports
     for (const [netId, net] of this.nets.entries()) {
       // Get the net name from the netlist
-      const netInfo = this.netlist.nets[netId];
-      const netName = netInfo?.name || netId;
 
       // Find all ports in this graph that are connected to this net
       for (const node of graph.children || []) {
@@ -1655,7 +1653,7 @@ export class SchematicLayoutEngine {
 
     // Second pass: Create hyperedges for routing and corresponding binary ELK edges
     let edgeCounter = 0;
-    for (const [netId, net] of this.nets.entries()) {
+    for (const [netId] of this.nets.entries()) {
       const netInfo = this.netlist.nets[netId];
       const netName = netInfo?.name || netId;
 
@@ -2245,7 +2243,7 @@ export class SchematicLayoutEngine {
     }
 
     // Process each net separately
-    for (const [netId, netEdges] of edgesByNet) {
+    for (const [, netEdges] of edgesByNet) {
       // Skip nets with only one edge
       if (netEdges.length < 2) continue;
 
@@ -2329,7 +2327,7 @@ export class SchematicLayoutEngine {
           section.endPoint,
         ];
 
-        for (const [key, junctionPoint] of junctionPoints) {
+        for (const [, junctionPoint] of junctionPoints) {
           // Check if junction point lies on any segment of this edge
           for (let i = 0; i < points.length - 1; i++) {
             const segment: Segment = {

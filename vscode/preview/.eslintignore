@@ -1,0 +1,18 @@
+# Ignore third-party code
+src/third_party/
+
+# Build outputs
+build/
+dist/
+
+# Dependencies
+node_modules/
+
+# Test outputs
+coverage/
+playwright-report/
+test-results/
+
+# Other generated files
+*.min.js
+*.bundle.js 
