@@ -826,7 +826,7 @@ fn default_package_aliases() -> std::collections::HashMap<String, String> {
     );
     map.insert(
         "stdlib".to_string(),
-        "@github/diodeinc/stdlib:HEAD".to_string(),
+        "@github/diodeinc/stdlib:v0.1.0".to_string(),
     );
     map
 }
