@@ -418,7 +418,6 @@ pub fn load_symbols_from_library(
     }
 
     // Not in cache, read and parse the file
-    eprintln!("*** CACHE MISS: {}", path.display());
     let contents = file_provider.read_file(path).map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to read symbol library '{}': {}",
