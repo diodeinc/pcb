@@ -36,6 +36,7 @@ import type {
   SchematicConfig,
   NodePositions,
 } from "../LayoutEngine";
+
 // import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
 import type { Netlist } from "../types/NetlistTypes";
 import { debounce } from "lodash";
@@ -1790,6 +1791,9 @@ interface ReactFlowSchematicViewerProps {
   config?: Partial<SchematicConfig>;
   showSettings?: boolean;
   showDownloadButton?: boolean;
+  // Persistence callbacks
+  onPositionsChange?: (componentId: string, positions: NodePositions) => void;
+  loadPositions?: (componentId: string) => Promise<NodePositions | null>;
 }
 
 const Visualizer = ({
@@ -1799,6 +1803,8 @@ const Visualizer = ({
   config = DEFAULT_CONFIG,
   showSettings = false,
   showDownloadButton = false,
+  onPositionsChange,
+  loadPositions,
 }: {
   netlist: Netlist;
   onComponentSelect?: (componentId: string | null) => void;
@@ -1806,6 +1812,8 @@ const Visualizer = ({
   config?: Partial<SchematicConfig>;
   showSettings?: boolean;
   showDownloadButton?: boolean;
+  onPositionsChange?: (componentId: string, positions: NodePositions) => void;
+  loadPositions?: (componentId: string) => Promise<NodePositions | null>;
 }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<SchematicNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<SchematicEdge>([]);
@@ -1835,6 +1843,25 @@ const Visualizer = ({
   });
   const elkInstance = useRef<ELKType | null>(null);
   const reactFlowInstance = useRef<any>(null);
+
+  // Debounced callback for position changes
+  const debouncedOnPositionsChange = useMemo(
+    () =>
+      debounce((componentId: string, positions: NodePositions) => {
+        console.log(
+          `[ReactFlow] Debounced position change fired for component: ${componentId}`
+        );
+        console.log(
+          `[ReactFlow] Sending ${
+            Object.keys(positions).length
+          } positions to parent`
+        );
+        if (onPositionsChange) {
+          onPositionsChange(componentId, positions);
+        }
+      }, 500), // 500ms debounce for persistence
+    [onPositionsChange]
+  );
 
   // Create separate debounced functions for each state field
   const debouncedSetSelectedNet = useMemo(
@@ -1901,6 +1928,14 @@ const Visualizer = ({
 
         // Update the stored node positions
         setNodePositions(layoutResult.nodePositions);
+
+        // Notify about position changes
+        if (selectedComponent && onPositionsChange) {
+          debouncedOnPositionsChange(
+            selectedComponent,
+            layoutResult.nodePositions
+          );
+        }
       } catch (error) {
         console.error("Error updating nodes and edges:", error);
       }
@@ -1912,6 +1947,8 @@ const Visualizer = ({
       selectionState,
       setNodes,
       setEdges,
+      debouncedOnPositionsChange,
+      onPositionsChange,
     ]
   );
 
@@ -1920,8 +1957,13 @@ const Visualizer = ({
     return () => {
       debouncedSetSelectedNet.cancel();
       debouncedSetHoveredNet.cancel();
+      debouncedOnPositionsChange.cancel();
     };
-  }, [debouncedSetSelectedNet, debouncedSetHoveredNet]);
+  }, [
+    debouncedSetSelectedNet,
+    debouncedSetHoveredNet,
+    debouncedOnPositionsChange,
+  ]);
 
   // Initialize ELK engine
   useEffect(() => {
@@ -1938,12 +1980,54 @@ const Visualizer = ({
           // Determine if we should animate based on whether the component changed
           const isNewComponent = prevComponent !== selectedComponent;
 
-          // If switching to a new component, clear node positions
+          // If switching to a new component, load saved positions or clear
           let currentNodePositions = nodePositions;
           if (isNewComponent && prevComponent !== null) {
-            // Clear positions when switching components
-            setNodePositions({});
-            currentNodePositions = {};
+            // Try to load saved positions for this component
+            if (loadPositions) {
+              console.log(
+                `[ReactFlow] Loading saved positions for component: ${selectedComponent}`
+              );
+              const savedPos = await loadPositions(selectedComponent);
+              if (savedPos) {
+                console.log(
+                  `[ReactFlow] Found ${
+                    Object.keys(savedPos).length
+                  } saved positions`
+                );
+                currentNodePositions = savedPos;
+                setNodePositions(currentNodePositions);
+              } else {
+                console.log(
+                  `[ReactFlow] No saved positions found, clearing positions`
+                );
+                // Clear positions when switching components without saved positions
+                setNodePositions({});
+                currentNodePositions = {};
+              }
+            } else {
+              console.log(
+                `[ReactFlow] No loadPositions function provided, clearing positions`
+              );
+              // Clear positions when no load function provided
+              setNodePositions({});
+              currentNodePositions = {};
+            }
+          } else if (isNewComponent && loadPositions) {
+            // First time loading, check for saved positions
+            console.log(
+              `[ReactFlow] First time loading, checking for saved positions`
+            );
+            const savedPos = await loadPositions(selectedComponent);
+            if (savedPos) {
+              console.log(
+                `[ReactFlow] Found ${
+                  Object.keys(savedPos).length
+                } saved positions for initial load`
+              );
+              currentNodePositions = savedPos;
+              setNodePositions(currentNodePositions);
+            }
           }
 
           const renderer = new SchematicLayoutEngine(netlist, currentConfig);
@@ -1995,6 +2079,7 @@ const Visualizer = ({
     selectionState,
     setEdges,
     setNodes,
+    loadPositions,
   ]);
 
   // Handle node click to select a component - only if the component is clickable (modules)
@@ -2147,7 +2232,13 @@ const Visualizer = ({
     return () => {
       window.removeEventListener("keydown", handleKeyPress);
     };
-  }, [nodePositions, updateLayoutAfterDrag]);
+  }, [
+    nodePositions,
+    updateLayoutAfterDrag,
+    selectedComponent,
+    onPositionsChange,
+    debouncedOnPositionsChange,
+  ]);
 
   // Custom handler for node changes to capture position updates
   const handleNodesChange = useCallback(
@@ -2216,6 +2307,15 @@ const Visualizer = ({
           setNodePositions(updatedPositions);
           setPendingPositions(updatedPositions);
 
+          // Notify about position changes
+          if (selectedComponent && onPositionsChange) {
+            console.log(
+              `[ReactFlow] Notifying position changes for component: ${selectedComponent}`
+            );
+            console.log(`[ReactFlow] Updated positions:`, updatedPositions);
+            debouncedOnPositionsChange(selectedComponent, updatedPositions);
+          }
+
           // If we're dragging, update layout with debouncing
           if (isDragging) {
             debouncedUpdateLayout(updatedPositions);
@@ -2233,6 +2333,9 @@ const Visualizer = ({
       isDragging,
       debouncedUpdateLayout,
       currentConfig,
+      selectedComponent,
+      onPositionsChange,
+      debouncedOnPositionsChange,
     ]
   );
 
@@ -2658,6 +2761,8 @@ const ReactFlowSchematicViewer = ({
   config = DEFAULT_CONFIG,
   showSettings = false,
   showDownloadButton = false,
+  onPositionsChange,
+  loadPositions,
 }: ReactFlowSchematicViewerProps) => {
   return (
     <ReactFlowProvider>
@@ -2668,6 +2773,8 @@ const ReactFlowSchematicViewer = ({
         config={config}
         showSettings={showSettings}
         showDownloadButton={showDownloadButton}
+        onPositionsChange={onPositionsChange}
+        loadPositions={loadPositions}
       />
     </ReactFlowProvider>
   );

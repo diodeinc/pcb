@@ -100,8 +100,8 @@ function resolvePcbPath(): string {
   // If we still haven't found it, show a helpful error message
   vscode.window.showErrorMessage(
     `Unable to find 'pcb' binary. Please install it or set the 'zener.pcbPath' setting to its location. ` +
-    `Tried: ${configuredPath}` +
-    (configuredPath !== "pcb" ? ` (configured path)` : ` (default)`)
+      `Tried: ${configuredPath}` +
+      (configuredPath !== "pcb" ? ` (configured path)` : ` (default)`)
   );
 
   // Return the configured path anyway - it will fail when used,
@@ -242,11 +242,190 @@ class SchematicPreviewProvider {
     console.log("updatePreview");
     const netlist = await this.getNetlist(document);
     console.log("netlist", netlist);
+
     await webviewPanel.webview.postMessage({
       command: "update",
       netlist,
       currentFile: document.uri.fsPath,
     });
+  }
+
+  private parseSavedPositionsForComponent(
+    document: vscode.TextDocument,
+    componentId: string
+  ): Record<string, any> {
+    console.log(
+      `[Extension] Parsing saved positions for component: ${componentId}`
+    );
+    const positions: Record<string, any> = {};
+    const text = document.getText();
+    const lines = text.split("\n");
+
+    // Pattern to match position comments: # pcb:sch <id> x=<x> y=<y> rot=<rotation>
+    const positionPattern =
+      /^#\s*pcb:sch\s+(\S+)\s+x=([^\s]+)\s+y=([^\s]+)\s+rot=([^\s]+)/;
+
+    for (const line of lines) {
+      const match = line.match(positionPattern);
+      if (match) {
+        const [, id, x, y, rotation] = match;
+        // The positions in the file are already cleaned (no file paths or <root>)
+        // So we just use them as-is
+        positions[id] = {
+          x: parseFloat(x),
+          y: parseFloat(y),
+          rotation: parseFloat(rotation),
+        };
+        console.log(
+          `[Extension] Found position for ${id}: x=${x}, y=${y}, rot=${rotation}`
+        );
+      }
+    }
+
+    console.log(
+      `[Extension] Total positions found: ${Object.keys(positions).length}`
+    );
+    return positions;
+  }
+
+  private async updatePositionsInDocument(
+    document: vscode.TextDocument,
+    componentId: string,
+    positions: Record<string, { x: number; y: number; rotation?: number }>
+  ): Promise<void> {
+    console.log(
+      `[Extension] Updating positions in document for component: ${componentId}`
+    );
+    console.log(
+      `[Extension] Number of positions to update: ${
+        Object.keys(positions).length
+      }`
+    );
+
+    const text = document.getText();
+    const lines = text.split("\n");
+
+    // Pattern to match existing position comments
+    const positionPattern = /^#\s*pcb:sch\s+(\S+)\s+/;
+
+    // Process node IDs to remove file path and <root>
+    const cleanNodeId = (nodeId: string): string => {
+      // Split on ":" and take everything after the first colon
+      const parts = nodeId.split(":");
+      if (parts.length > 1) {
+        // Join back everything after the first part (in case there are multiple colons)
+        let cleanId = parts.slice(1).join(":");
+        // Remove "<root>." prefix if present
+        cleanId = cleanId.replace(/^<root>\./, "");
+        return cleanId;
+      }
+      // If no colon, return as-is
+      return nodeId;
+    };
+
+    // Create a map of clean IDs to positions
+    const cleanPositions: Record<
+      string,
+      { x: number; y: number; rotation?: number }
+    > = {};
+    for (const [nodeId, pos] of Object.entries(positions)) {
+      const cleanId = cleanNodeId(nodeId);
+      cleanPositions[cleanId] = pos;
+      console.log(`[Extension] Cleaned node ID: ${nodeId} -> ${cleanId}`);
+    }
+
+    // Track which positions we've updated
+    const updatedIds = new Set<string>();
+
+    // Update existing lines in place or keep them
+    const updatedLines = lines.map((line) => {
+      const match = line.match(positionPattern);
+      if (match) {
+        const [, existingId] = match;
+        const cleanExistingId = cleanNodeId(existingId);
+
+        // Check if this position needs to be updated
+        if (cleanPositions[cleanExistingId]) {
+          const pos = cleanPositions[cleanExistingId];
+          const rotation = pos.rotation || 0;
+          const newComment = `# pcb:sch ${cleanExistingId} x=${pos.x.toFixed(
+            4
+          )} y=${pos.y.toFixed(4)} rot=${rotation}`;
+          updatedIds.add(cleanExistingId);
+          console.log(
+            `[Extension] Updating existing position: ${line} -> ${newComment}`
+          );
+          return newComment;
+        }
+      }
+      return line;
+    });
+
+    // Add new positions that weren't updated in place
+    const newPositions: string[] = [];
+    for (const [cleanId, pos] of Object.entries(cleanPositions)) {
+      if (!updatedIds.has(cleanId)) {
+        const rotation = pos.rotation || 0;
+        const comment = `# pcb:sch ${cleanId} x=${pos.x.toFixed(
+          4
+        )} y=${pos.y.toFixed(4)} rot=${rotation}`;
+        newPositions.push(comment);
+        console.log(`[Extension] Adding new position at end: ${comment}`);
+      }
+    }
+
+    // Combine updated lines with new positions at the end
+    let finalLines = [...updatedLines];
+
+    // If we have new positions to add and the file doesn't end with a comment
+    if (newPositions.length > 0 && finalLines.length > 0) {
+      const lastLine = finalLines[finalLines.length - 1].trim();
+      const isLastLineComment = lastLine.startsWith("#");
+
+      // Add extra newline if the last line isn't a comment
+      if (!isLastLineComment && lastLine !== "") {
+        finalLines.push(""); // Add blank line
+        console.log(
+          `[Extension] Adding blank line before new position comments`
+        );
+      }
+    }
+
+    // Add the new positions
+    finalLines = [...finalLines, ...newPositions];
+    const newText = finalLines.join("\n");
+
+    // Apply the edit to the document
+    const edit = new vscode.WorkspaceEdit();
+    const fullRange = new vscode.Range(
+      document.positionAt(0),
+      document.positionAt(text.length)
+    );
+    edit.replace(document.uri, fullRange, newText);
+
+    // Check if document was dirty before we edit it
+    const wasClean = !document.isDirty;
+    console.log(
+      `[Extension] Document was ${wasClean ? "clean" : "dirty"} before edit`
+    );
+
+    const success = await vscode.workspace.applyEdit(edit);
+    console.log(
+      `[Extension] Document update ${success ? "succeeded" : "failed"}`
+    );
+    console.log(
+      `[Extension] Updated ${updatedIds.size} existing positions, added ${newPositions.length} new positions`
+    );
+
+    // If document was clean before and edit succeeded, save it
+    if (wasClean && success) {
+      console.log(`[Extension] Document was clean before edit, saving it now`);
+      await document.save();
+    } else if (!wasClean) {
+      console.log(
+        `[Extension] Document had unsaved changes, leaving it unsaved`
+      );
+    }
   }
 
   async resolveCustomTextEditor(
@@ -293,14 +472,70 @@ class SchematicPreviewProvider {
     webviewPanel.webview.html = htmlContent;
 
     // Respond to messages from the webview.
-    webviewPanel.webview.onDidReceiveMessage((message) => {
-      switch (message.command) {
-        case "ready":
-          this.updatePreviewDebounced(document, webviewPanel);
-          break;
-        case "error":
-          vscode.window.showErrorMessage(message.text);
-          break;
+    webviewPanel.webview.onDidReceiveMessage(async (message) => {
+      console.log(`[Extension] Received message from webview:`, message);
+      try {
+        switch (message.command) {
+          case "ready":
+            this.updatePreviewDebounced(document, webviewPanel);
+            break;
+          case "error":
+            vscode.window.showErrorMessage(message.text);
+            break;
+          case "updatePositions":
+            console.log(
+              `[Extension] Received updatePositions for component: ${message.componentId}`
+            );
+            console.log(`[Extension] Positions to save:`, message.positions);
+            await this.updatePositionsInDocument(
+              document,
+              message.componentId,
+              message.positions
+            );
+            break;
+          case "loadPositions":
+            console.log(
+              `[Extension] Received loadPositions request for component: ${message.componentId}`
+            );
+            console.log(`[Extension] Request ID: ${message.requestId}`);
+            const positions = this.parseSavedPositionsForComponent(
+              document,
+              message.componentId
+            );
+
+            // "Unclean" the positions - add back the component prefix
+            const uncleanedPositions: Record<string, any> = {};
+            for (const [cleanId, pos] of Object.entries(positions)) {
+              // Prepend the component ID to restore the full node ID
+              // The componentId already ends with :<root>, so just add a dot and the clean ID
+              const fullId = `${message.componentId}.${cleanId}`;
+              uncleanedPositions[fullId] = pos;
+              console.log(
+                `[Extension] Uncleaned node ID: ${cleanId} -> ${fullId}`
+              );
+            }
+
+            console.log(
+              `[Extension] Found ${
+                Object.keys(positions).length
+              } saved positions, uncleaned to ${
+                Object.keys(uncleanedPositions).length
+              }`
+            );
+            console.log(`[Extension] Sending response back to webview`);
+            await webviewPanel.webview.postMessage({
+              command: "positionsLoaded",
+              requestId: message.requestId,
+              positions: uncleanedPositions,
+            });
+            console.log(`[Extension] Response sent successfully`);
+            break;
+        }
+      } catch (error) {
+        console.error(`[Extension] Error handling message:`, error);
+        vscode.window.showErrorMessage(
+          `Error handling webview message: ${error}`
+        );
       }
     });
 
@@ -398,16 +633,18 @@ export function activate(context: ExtensionContext) {
 
   // Start the client. This will also launch the server.
   client.start();
-  
+
   // Handle client errors
   client.onDidChangeState((event) => {
-    if (event.newState === 1) { // Starting state
+    if (event.newState === 1) {
+      // Starting state
       console.log("Zener language server is starting...");
-    } else if (event.newState === 3) { // Failed state
+    } else if (event.newState === 3) {
+      // Failed state
       vscode.window.showErrorMessage(
         `Zener language server failed to start. ` +
-        `Please check that 'pcb' is installed and the 'zener.pcbPath' setting is correct. ` +
-        `Current path: ${pcbPath}`
+          `Please check that 'pcb' is installed and the 'zener.pcbPath' setting is correct. ` +
+          `Current path: ${pcbPath}`
       );
     }
   });
@@ -456,9 +693,12 @@ export function activate(context: ExtensionContext) {
         return;
       }
 
+      // Get the filename from the active editor's document
+      const fileName = path.basename(activeEditor.document.fileName);
+
       const panel = vscode.window.createWebviewPanel(
         "zener.preview",
-        "Schematic Preview",
+        `Schematic: ${fileName}`,
         vscode.ViewColumn.Beside,
         {
           enableScripts: true,
@@ -497,7 +737,9 @@ export function activate(context: ExtensionContext) {
 
           // Create a temporary file with the current document content
           const tempDir = os.tmpdir();
-          const tempFileName = `pcb-fmt-${crypto.randomBytes(6).toString("hex")}.zen`;
+          const tempFileName = `pcb-fmt-${crypto
+            .randomBytes(6)
+            .toString("hex")}.zen`;
           const tempFilePath = path.join(tempDir, tempFileName);
 
           try {
@@ -575,28 +817,31 @@ export function activate(context: ExtensionContext) {
   // Add diagnostic command to check pcb installation
   context.subscriptions.push(
     vscode.commands.registerCommand("zener.checkInstallation", async () => {
-      const outputChannel = vscode.window.createOutputChannel("Zener Diagnostics");
+      const outputChannel =
+        vscode.window.createOutputChannel("Zener Diagnostics");
       outputChannel.show();
-      
+
       outputChannel.appendLine("=== Zener PCB Installation Check ===");
       outputChannel.appendLine("");
-      
+
       const configuredPath = vscode.workspace
         .getConfiguration()
         .get("zener.pcbPath", "pcb");
-      
+
       outputChannel.appendLine(`Configured path: ${configuredPath}`);
       outputChannel.appendLine(`Resolved path: ${pcbPath}`);
       outputChannel.appendLine(`Platform: ${process.platform}`);
       outputChannel.appendLine("");
-      
+
       // Check if the resolved path exists
       if (fs.existsSync(pcbPath)) {
         outputChannel.appendLine(`✓ Binary found at: ${pcbPath}`);
-        
+
         // Try to get version
         try {
-          const version = execSync(`"${pcbPath}" --version`, { encoding: "utf-8" }).trim();
+          const version = execSync(`"${pcbPath}" --version`, {
+            encoding: "utf-8",
+          }).trim();
           outputChannel.appendLine(`✓ Version: ${version}`);
         } catch (error) {
           outputChannel.appendLine(`✗ Could not get version: ${error.message}`);
@@ -604,7 +849,7 @@ export function activate(context: ExtensionContext) {
       } else {
         outputChannel.appendLine(`✗ Binary not found at: ${pcbPath}`);
       }
-      
+
       // Check PATH
       outputChannel.appendLine("");
       outputChannel.appendLine("Checking system PATH:");
@@ -615,12 +860,14 @@ export function activate(context: ExtensionContext) {
       } catch {
         outputChannel.appendLine(`✗ 'pcb' not found in system PATH`);
       }
-      
+
       outputChannel.appendLine("");
       outputChannel.appendLine("To fix installation issues:");
       outputChannel.appendLine("1. Install pcb from https://pcb.new");
       outputChannel.appendLine("2. Add it to your system PATH, or");
-      outputChannel.appendLine("3. Set the full path in VS Code settings: 'zener.pcbPath'");
+      outputChannel.appendLine(
+        "3. Set the full path in VS Code settings: 'zener.pcbPath'"
+      );
     })
   );
 }

@@ -2406,4 +2406,28 @@ export class SchematicLayoutEngine {
       }
     }
   }
+
+  /**
+   * Check if a net has a symbol value and extract it
+   */
+  private _getNetSymbolValue(netId: string): string | null {
+    const net = this.netlist.nets[netId];
+    if (!net) return null;
+
+    const symbolValueAttr = net.attributes?.__symbol_value;
+    if (!symbolValueAttr) return null;
+
+    // Extract the string value from AttributeValue
+    if (typeof symbolValueAttr === "string") {
+      return symbolValueAttr;
+    } else if (
+      symbolValueAttr &&
+      typeof symbolValueAttr === "object" &&
+      "String" in symbolValueAttr
+    ) {
+      return (symbolValueAttr as any).String;
+    }
+
+    return null;
+  }
 }

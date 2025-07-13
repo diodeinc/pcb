@@ -122,7 +122,7 @@ const containerStyles = `
 `;
 
 // Create a style element to inject the styles
-const StyleInjector = () => {
+const StyleInjector = (): React.ReactElement => {
   useEffect(() => {
     const styleEl = document.createElement("style");
     styleEl.innerHTML = containerStyles;
@@ -141,6 +141,8 @@ interface SchematicContainerProps {
   currentFile: string;
   selectedModule?: string;
   showBreadcrumbs?: boolean;
+  onPositionsChange?: (componentId: string, positions: any) => void;
+  loadPositions?: (componentId: string) => Promise<any>;
 }
 
 const Breadcrumbs = ({
@@ -193,6 +195,8 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
   currentFile,
   selectedModule: initialSelectedModule,
   showBreadcrumbs = false,
+  onPositionsChange,
+  loadPositions,
 }) => {
   console.log("schematic container with currentFile", currentFile);
   const [error, setError] = useState<string | null>(null);
@@ -258,6 +262,8 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
           onError={handleError}
           onComponentSelect={handleComponentSelect}
           selectedComponent={selectedModule}
+          onPositionsChange={onPositionsChange}
+          loadPositions={loadPositions}
         />
       </div>
     </div>
