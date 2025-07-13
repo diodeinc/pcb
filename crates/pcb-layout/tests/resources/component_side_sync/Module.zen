@@ -1,6 +1,6 @@
-load("@stdlib/properties.star", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
-Resistor = Module("@stdlib/generics/Resistor.star")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 P1 = Net("P1")
 P2 = Net("P2")

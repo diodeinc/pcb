@@ -6,7 +6,7 @@ expression: content
   "footprints": [
     {
       "dnp": false,
-      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,
@@ -255,7 +255,7 @@ expression: content
     },
     {
       "dnp": false,
-      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,

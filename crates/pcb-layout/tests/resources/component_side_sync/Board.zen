@@ -1,4 +1,4 @@
-load("@stdlib/properties.star", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
 MyModule = Module("Module.zen")
 
