@@ -148,7 +148,6 @@ function createSchematicEdge(
 // const accentColor = "var(--vscode-activityBarBadge-background, #666)";
 const electricalComponentColor = DEFAULT_THEME.component_outline.to_css();
 const edgeColor = DEFAULT_THEME.wire.to_css();
-const accentColor = DEFAULT_THEME.sheet_fields.to_css();
 const backgroundColor = DEFAULT_THEME.background.to_css();
 const labelColor = DEFAULT_THEME.reference.to_css();
 
