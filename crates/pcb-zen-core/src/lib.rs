@@ -16,10 +16,12 @@ pub mod bundle;
 pub mod convert;
 mod file_provider;
 pub mod lang;
+pub mod load_spec;
 
 // Re-export commonly used types
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use lang::input::{InputMap, InputValue};
+pub use load_spec::LoadSpec;
 
 // Re-export file provider types
 pub use file_provider::InMemoryFileProvider;
@@ -383,6 +385,19 @@ impl FileProvider for DefaultFileProvider {
 
 /// Abstraction for resolving load() paths to file contents
 pub trait LoadResolver: Send + Sync {
+    /// Resolve a LoadSpec to an absolute file path
+    ///
+    /// The `spec` is a parsed load specification.
+    /// The `current_file` is the file that contains the load() statement.
+    ///
+    /// Returns the resolved absolute path that should be loaded.
+    fn resolve_spec(
+        &self,
+        file_provider: &dyn FileProvider,
+        spec: &LoadSpec,
+        current_file: &Path,
+    ) -> Result<PathBuf, anyhow::Error>;
+
     /// Resolve a load path to an absolute file path
     ///
     /// The `load_path` is the string passed to load() in Starlark code.
@@ -394,7 +409,11 @@ pub trait LoadResolver: Send + Sync {
         file_provider: &dyn FileProvider,
         load_path: &str,
         current_file: &Path,
-    ) -> Result<PathBuf, anyhow::Error>;
+    ) -> Result<PathBuf, anyhow::Error> {
+        let spec = LoadSpec::parse(load_path)
+            .ok_or_else(|| anyhow::anyhow!("Invalid load spec: {}", load_path))?;
+        self.resolve_spec(file_provider, &spec, current_file)
+    }
 }
 
 /// A LoadResolver that combines multiple resolvers in sequence.
@@ -412,16 +431,16 @@ impl CompoundLoadResolver {
 }
 
 impl LoadResolver for CompoundLoadResolver {
-    fn resolve_path(
+    fn resolve_spec(
         &self,
         file_provider: &dyn FileProvider,
-        load_path: &str,
+        spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         let mut last_error = None;
 
         for resolver in &self.resolvers {
-            match resolver.resolve_path(file_provider, load_path, current_file) {
+            match resolver.resolve_spec(file_provider, spec, current_file) {
                 Ok(path) => {
                     // Verify the resolved file actually exists
                     if file_provider.exists(&path) {
@@ -438,7 +457,8 @@ impl LoadResolver for CompoundLoadResolver {
         }
 
         // If we get here, no resolver succeeded
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("File not found: {}", load_path)))
+        Err(last_error
+            .unwrap_or_else(|| anyhow::anyhow!("Failed to resolve: {}", spec.to_load_string())))
     }
 }
 
@@ -459,94 +479,76 @@ impl WorkspaceLoadResolver {
 }
 
 impl LoadResolver for WorkspaceLoadResolver {
-    fn resolve_path(
+    fn resolve_spec(
         &self,
         file_provider: &dyn FileProvider,
-        load_path: &str,
+        spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        let canonical_root = file_provider.canonicalize(&self.workspace_root)?;
+        // WorkspaceLoadResolver only handles local paths
+        match spec {
+            LoadSpec::Path { path } | LoadSpec::WorkspacePath { path } => {
+                let canonical_root = file_provider.canonicalize(&self.workspace_root)?;
 
-        log::debug!(
-            "Resolving path: {} in workspace root: {}",
-            load_path,
-            canonical_root.display()
-        );
+                log::debug!(
+                    "Resolving path: {} in workspace root: {}",
+                    path.display(),
+                    canonical_root.display()
+                );
 
-        let resolved_path = if let Some(workspace_relative) = load_path.strip_prefix("//") {
-            // Workspace-relative path (starts with //)
-            canonical_root.join(workspace_relative)
-        } else {
-            // For relative paths, we need to check if the current file is within the workspace
-            let canonical_current_file = file_provider.canonicalize(current_file)?;
+                let resolved_path = if let Some(workspace_relative) =
+                    path.to_str().and_then(|p| p.strip_prefix("//"))
+                {
+                    // Workspace-relative path (starts with //)
+                    canonical_root.join(workspace_relative)
+                } else if path.is_absolute() {
+                    // Absolute paths are not handled by workspace resolver
+                    return Err(anyhow::anyhow!(
+                        "WorkspaceLoadResolver cannot handle absolute paths"
+                    ));
+                } else {
+                    // For relative paths, we need to check if the current file is within the workspace
+                    let canonical_current_file = file_provider.canonicalize(current_file)?;
 
-            if canonical_current_file.starts_with(&canonical_root) {
-                // Current file is within the workspace
-                let current_dir = canonical_current_file.parent().unwrap_or(Path::new(""));
-                let relative_dir = current_dir.strip_prefix(&canonical_root).unwrap();
-                canonical_root.join(relative_dir).join(load_path)
-            } else {
-                // Current file is outside the workspace (e.g., a remote dependency)
-                // In this case, this resolver should not handle it - return an error
-                // so that the next resolver in the chain can try
-                return Err(anyhow::anyhow!(
-                    "WorkspaceLoadResolver cannot resolve relative paths for files outside the workspace"
-                ));
+                    if canonical_current_file.starts_with(&canonical_root) {
+                        // Current file is within the workspace
+                        let current_dir = canonical_current_file.parent().unwrap_or(Path::new(""));
+                        let relative_dir = current_dir.strip_prefix(&canonical_root).unwrap();
+                        canonical_root.join(relative_dir).join(path)
+                    } else {
+                        // Current file is outside the workspace (e.g., a remote dependency)
+                        // In this case, this resolver should not handle it - return an error
+                        // so that the next resolver in the chain can try
+                        return Err(anyhow::anyhow!(
+                            "WorkspaceLoadResolver cannot resolve relative paths for files outside the workspace"
+                        ));
+                    }
+                };
+
+                // Canonicalize the resolved path to handle .. and symlinks
+                let canonical_path = file_provider.canonicalize(&resolved_path)?;
+
+                // Ensure the resolved path is within the workspace
+                if !canonical_path.starts_with(&canonical_root) && self.strict {
+                    return Err(anyhow::anyhow!(
+                        "Path '{}' is outside the workspace root",
+                        path.display()
+                    ));
+                }
+
+                if file_provider.exists(&canonical_path) {
+                    Ok(canonical_path)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "File not found: {}",
+                        canonical_path.display()
+                    ))
+                }
             }
-        };
-
-        // Canonicalize the resolved path to handle .. and symlinks
-        let canonical_path = file_provider.canonicalize(&resolved_path)?;
-
-        // Ensure the resolved path is within the workspace
-        if !canonical_path.starts_with(&canonical_root) && self.strict {
-            return Err(anyhow::anyhow!(
-                "Path '{}' is outside the workspace root",
-                load_path
-            ));
-        }
-
-        if file_provider.exists(&canonical_path) {
-            Ok(canonical_path)
-        } else {
-            Err(anyhow::anyhow!(
-                "File not found: {}",
-                canonical_path.display()
-            ))
-        }
-    }
-}
-
-/// RelativeLoadResolver handles basic relative path resolution from any file.
-/// This is used as a fallback for files that are not within a workspace.
-pub struct RelativeLoadResolver;
-
-impl LoadResolver for RelativeLoadResolver {
-    fn resolve_path(
-        &self,
-        file_provider: &dyn FileProvider,
-        load_path: &str,
-        current_file: &Path,
-    ) -> Result<PathBuf, anyhow::Error> {
-        // Get the directory containing the current file
-        let current_dir = current_file
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
-
-        // Resolve the path relative to the current file's directory
-        let resolved_path = current_dir.join(load_path);
-
-        // Check if the file exists
-        if file_provider.exists(&resolved_path) {
-            // Canonicalize to get the absolute path
-            file_provider
-                .canonicalize(&resolved_path)
-                .map_err(|e| anyhow::anyhow!("Failed to canonicalize path: {}", e))
-        } else {
-            Err(anyhow::anyhow!(
-                "File not found: {}",
-                resolved_path.display()
-            ))
+            _ => Err(anyhow::anyhow!(
+                "WorkspaceLoadResolver can only handle local paths, not {}",
+                spec.to_load_string()
+            )),
         }
     }
 }

@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use pcb_zen_core::{FileProvider, LoadResolver};
+use pcb_zen_core::{FileProvider, LoadResolver, LoadSpec};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,160 +11,8 @@ use std::os::unix::fs as unix_fs;
 #[cfg(windows)]
 use std::os::windows::fs as win_fs;
 
-/// Default tag that is assumed when the caller does not specify one in a
-/// package spec, e.g. `@mypkg/utils.zen`.
-pub(crate) const DEFAULT_PKG_TAG: &str = "latest";
-
-/// Default git revision that is assumed when the caller omits one in a GitHub
-/// spec, e.g. `@github/user/repo/path.zen`.
-pub(crate) const DEFAULT_GITHUB_REV: &str = "HEAD";
-
-/// Default git revision that is assumed when the caller omits one in a GitLab
-/// spec, e.g. `@gitlab/user/repo/path.zen`.
-pub(crate) const DEFAULT_GITLAB_REV: &str = "HEAD";
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum LoadSpec {
-    Package {
-        package: String,
-        tag: String,
-        path: PathBuf,
-    },
-    Github {
-        user: String,
-        repo: String,
-        rev: String,
-        path: PathBuf,
-    },
-    Gitlab {
-        project_path: String, // Can be "user/repo" or "group/subgroup/repo"
-        rev: String,
-        path: PathBuf,
-    },
-}
-
-/// Parse the raw string passed to `load()` into a [`LoadSpec`].
-///
-/// The supported grammar is:
-///
-/// • **Package reference** – `"@<package>[:<tag>]/<optional/path>"`.
-///   If `<tag>` is omitted the [`DEFAULT_PKG_TAG`] (currently `"latest"`) is
-///   assumed.
-///   Example: `"@stdlib:1.2.3/math.zen"` or `"@stdlib/math.zen"`.
-///
-/// • **GitHub repository** –
-///   `"@github/<user>/<repo>[:<rev>]/<path>"`.
-///   If `<rev>` is omitted the special value [`DEFAULT_GITHUB_REV`] (currently
-///   `"HEAD"`) is assumed.
-///   The `<rev>` component can be a branch name, tag, or a short/long commit
-///   SHA (7–40 hexadecimal characters).
-///   Example: `"@github/foo/bar:abc123/scripts/build.zen".
-///
-/// • **GitLab repository** –
-///   `"@gitlab/<user>/<repo>[:<rev>]/<path>"`.
-///   If `<rev>` is omitted the special value [`DEFAULT_GITLAB_REV`] (currently
-///   `"HEAD"`) is assumed.
-///   The `<rev>` component can be a branch name, tag, or a short/long commit
-///   SHA (7–40 hexadecimal characters).
-///   
-///   For nested groups, include the full path before the revision:
-///   `"@gitlab/group/subgroup/repo:rev/path"`.
-///   Without a revision, the first two path components are assumed to be the project path.
-///   
-///   Examples:
-///   - `"@gitlab/foo/bar:main/src/lib.zen"` - Simple user/repo with revision
-///   - `"@gitlab/foo/bar/src/lib.zen"` - Simple user/repo without revision (assumes HEAD)
-///   - `"@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym"` - Nested groups with revision
-///
-/// The function does not touch the filesystem – it only performs syntactic
-/// parsing.
-pub fn parse_load_spec(s: &str) -> Option<LoadSpec> {
-    if let Some(rest) = s.strip_prefix("@github/") {
-        // GitHub: @github/user/repo:rev/path  (must come before generic "@pkg" handling)
-        let mut user_repo_rev_and_path = rest.splitn(3, '/');
-        let user = user_repo_rev_and_path.next().unwrap_or("").to_string();
-        let repo_and_rev = user_repo_rev_and_path.next().unwrap_or("");
-        let remaining_path = user_repo_rev_and_path.next().unwrap_or("");
-
-        let (repo, rev) = if let Some((repo, rev)) = repo_and_rev.split_once(':') {
-            (repo.to_string(), rev.to_string())
-        } else {
-            (repo_and_rev.to_string(), DEFAULT_GITHUB_REV.to_string())
-        };
-
-        Some(LoadSpec::Github {
-            user,
-            repo,
-            rev,
-            path: PathBuf::from(remaining_path),
-        })
-    } else if let Some(rest) = s.strip_prefix("@gitlab/") {
-        // GitLab: @gitlab/group/subgroup/repo:rev/path
-        // We need to find where the project path ends and the file path begins
-        // This is tricky because both can contain slashes
-
-        // First, check if there's a revision marker ':'
-        if let Some(colon_pos) = rest.find(':') {
-            // We have a revision specified
-            let project_part = &rest[..colon_pos];
-            let after_colon = &rest[colon_pos + 1..];
-
-            // Find the first slash after the colon to separate rev from path
-            if let Some(slash_pos) = after_colon.find('/') {
-                let rev = after_colon[..slash_pos].to_string();
-                let file_path = after_colon[slash_pos + 1..].to_string();
-
-                Some(LoadSpec::Gitlab {
-                    project_path: project_part.to_string(),
-                    rev,
-                    path: PathBuf::from(file_path),
-                })
-            } else {
-                // No file path after revision
-                Some(LoadSpec::Gitlab {
-                    project_path: project_part.to_string(),
-                    rev: after_colon.to_string(),
-                    path: PathBuf::new(),
-                })
-            }
-        } else {
-            // No revision specified, assume first 2 parts are the project path
-            let parts: Vec<&str> = rest.splitn(3, '/').collect();
-            if parts.len() >= 2 {
-                let project_path = format!("{}/{}", parts[0], parts[1]);
-                let file_path = parts.get(2).unwrap_or(&"").to_string();
-
-                Some(LoadSpec::Gitlab {
-                    project_path,
-                    rev: DEFAULT_GITLAB_REV.to_string(),
-                    path: PathBuf::from(file_path),
-                })
-            } else {
-                None
-            }
-        }
-    } else if let Some(rest) = s.strip_prefix('@') {
-        // Generic package: @<pkg>[:<tag>]/optional/path
-        // rest looks like "pkg[:tag]/path..." or just "pkg"/"pkg:tag"
-        let mut parts = rest.splitn(2, '/');
-        let pkg_and_tag = parts.next().unwrap_or("");
-        let rel_path = parts.next().unwrap_or("");
-
-        let (package, tag) = if let Some((pkg, tag)) = pkg_and_tag.split_once(':') {
-            (pkg.to_string(), tag.to_string())
-        } else {
-            (pkg_and_tag.to_string(), DEFAULT_PKG_TAG.to_string())
-        };
-
-        Some(LoadSpec::Package {
-            package,
-            tag,
-            path: PathBuf::from(rel_path),
-        })
-    } else {
-        None
-    }
-}
+// Re-export constants from LoadSpec for backward compatibility
+pub use pcb_zen_core::load_spec::{DEFAULT_GITHUB_REV, DEFAULT_GITLAB_REV, DEFAULT_PKG_TAG};
 
 /// Ensure that the resource referenced by `spec` exists on the **local**
 /// filesystem and return its absolute path.
@@ -183,7 +31,7 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
             let mut new_spec_str = target.clone();
 
             // Check if the alias target is a load spec
-            if let Some(mut new_spec) = parse_load_spec(&new_spec_str) {
+            if let Some(mut new_spec) = LoadSpec::parse(&new_spec_str) {
                 // If caller explicitly specified a tag (non-default), override the alias's tag
                 if tag != DEFAULT_PKG_TAG {
                     match &mut new_spec {
@@ -195,6 +43,9 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
                         }
                         LoadSpec::Gitlab { rev: alias_rev, .. } => {
                             *alias_rev = tag.clone();
+                        }
+                        LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
+                            // Local paths don't have tags, so we ignore this
                         }
                     }
                 }
@@ -218,6 +69,16 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
                     LoadSpec::Gitlab {
                         path: alias_path, ..
                     } => {
+                        if !path.as_os_str().is_empty() {
+                            *alias_path = alias_path.join(path);
+                        }
+                    }
+                    LoadSpec::Path { path: alias_path } => {
+                        if !path.as_os_str().is_empty() {
+                            *alias_path = alias_path.join(path);
+                        }
+                    }
+                    LoadSpec::WorkspacePath { path: alias_path } => {
                         if !path.as_os_str().is_empty() {
                             *alias_path = alias_path.join(path);
                         }
@@ -288,6 +149,11 @@ pub fn materialise_load(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyho
     }
 
     match spec {
+        LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
+            // Local specs should not reach here in materialise_load
+            // They should be handled by the load resolvers
+            anyhow::bail!("Local paths should be resolved by load resolvers, not materialised")
+        }
         LoadSpec::Package { package, tag, path } => {
             let cache_root = cache_dir()?.join("packages").join(package).join(tag);
 
@@ -933,14 +799,14 @@ fn looks_like_git_sha(rev: &str) -> bool {
     rev.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-// Add unit tests for parse_load_spec
+// Add unit tests for LoadSpec::parse
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_package_without_tag() {
-        let spec = parse_load_spec("@stdlib/math.zen");
+        let spec = LoadSpec::parse("@stdlib/math.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Package {
@@ -953,7 +819,7 @@ mod tests {
 
     #[test]
     fn parses_package_with_tag_and_root_path() {
-        let spec = parse_load_spec("@stdlib:1.2.3");
+        let spec = LoadSpec::parse("@stdlib:1.2.3");
         assert_eq!(
             spec,
             Some(LoadSpec::Package {
@@ -966,7 +832,7 @@ mod tests {
 
     #[test]
     fn parses_github_with_rev_and_path() {
-        let spec = parse_load_spec("@github/foo/bar:abc123/scripts/build.zen");
+        let spec = LoadSpec::parse("@github/foo/bar:abc123/scripts/build.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Github {
@@ -980,7 +846,7 @@ mod tests {
 
     #[test]
     fn parses_github_without_rev() {
-        let spec = parse_load_spec("@github/foo/bar/scripts/build.zen");
+        let spec = LoadSpec::parse("@github/foo/bar/scripts/build.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Github {
@@ -994,7 +860,7 @@ mod tests {
 
     #[test]
     fn parses_github_repo_root_with_rev() {
-        let spec = parse_load_spec("@github/foo/bar:main");
+        let spec = LoadSpec::parse("@github/foo/bar:main");
         assert_eq!(
             spec,
             Some(LoadSpec::Github {
@@ -1010,7 +876,7 @@ mod tests {
     fn parses_github_repo_root_with_long_commit() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
         let input = format!("@github/foo/bar:{sha}");
-        let spec = parse_load_spec(&input);
+        let spec = LoadSpec::parse(&input);
         assert_eq!(
             spec,
             Some(LoadSpec::Github {
@@ -1024,7 +890,7 @@ mod tests {
 
     #[test]
     fn parses_gitlab_with_rev_and_path() {
-        let spec = parse_load_spec("@gitlab/foo/bar:abc123/scripts/build.zen");
+        let spec = LoadSpec::parse("@gitlab/foo/bar:abc123/scripts/build.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1037,7 +903,7 @@ mod tests {
 
     #[test]
     fn parses_gitlab_without_rev() {
-        let spec = parse_load_spec("@gitlab/foo/bar/scripts/build.zen");
+        let spec = LoadSpec::parse("@gitlab/foo/bar/scripts/build.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1050,7 +916,7 @@ mod tests {
 
     #[test]
     fn parses_gitlab_repo_root_with_rev() {
-        let spec = parse_load_spec("@gitlab/foo/bar:main");
+        let spec = LoadSpec::parse("@gitlab/foo/bar:main");
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1065,7 +931,7 @@ mod tests {
     fn parses_gitlab_repo_root_with_long_commit() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
         let input = format!("@gitlab/foo/bar:{sha}");
-        let spec = parse_load_spec(&input);
+        let spec = LoadSpec::parse(&input);
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1078,7 +944,7 @@ mod tests {
 
     #[test]
     fn parses_gitlab_nested_groups_with_rev() {
-        let spec = parse_load_spec("@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym");
+        let spec = LoadSpec::parse("@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym");
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1092,7 +958,7 @@ mod tests {
     #[test]
     fn parses_gitlab_simple_without_rev_with_file_path() {
         // Without revision, first 2 parts are project
-        let spec = parse_load_spec("@gitlab/user/repo/src/main.zen");
+        let spec = LoadSpec::parse("@gitlab/user/repo/src/main.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1105,7 +971,7 @@ mod tests {
 
     #[test]
     fn parses_gitlab_nested_groups_no_file() {
-        let spec = parse_load_spec("@gitlab/kicad/libraries/kicad-symbols:v7.0.0");
+        let spec = LoadSpec::parse("@gitlab/kicad/libraries/kicad-symbols:v7.0.0");
         assert_eq!(
             spec,
             Some(LoadSpec::Gitlab {
@@ -1272,7 +1138,7 @@ test_alias = "@github/test/repo:main"
         // Test that custom tags override the default alias tags
 
         // Test 1: Package alias with tag override
-        let spec = parse_load_spec("@stdlib:zen/math.zen");
+        let spec = LoadSpec::parse("@stdlib:zen/math.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Package {
@@ -1283,7 +1149,7 @@ test_alias = "@github/test/repo:main"
         );
 
         // Test 2: Verify that default tag is used when not specified
-        let spec = parse_load_spec("@stdlib/math.zen");
+        let spec = LoadSpec::parse("@stdlib/math.zen");
         assert_eq!(
             spec,
             Some(LoadSpec::Package {
@@ -1294,7 +1160,7 @@ test_alias = "@github/test/repo:main"
         );
 
         // Test 3: KiCad symbols with custom version
-        let spec = parse_load_spec("@kicad-symbols:8.0.0/Device.kicad_sym");
+        let spec = LoadSpec::parse("@kicad-symbols:8.0.0/Device.kicad_sym");
         assert_eq!(
             spec,
             Some(LoadSpec::Package {
@@ -1311,21 +1177,23 @@ test_alias = "@github/test/repo:main"
 pub struct RemoteLoadResolver;
 
 impl LoadResolver for RemoteLoadResolver {
-    fn resolve_path(
+    fn resolve_spec(
         &self,
         _file_provider: &dyn FileProvider,
-        load_path: &str,
+        spec: &LoadSpec,
         current_file: &std::path::Path,
     ) -> Result<std::path::PathBuf, anyhow::Error> {
-        // Parse the load spec
-        if let Some(spec) = parse_load_spec(load_path) {
-            // Find workspace root starting from the current file
-            let workspace_root = find_workspace_root(current_file);
-
-            // Materialize the load (download if needed)
-            materialise_load(&spec, workspace_root.as_deref())
-        } else {
-            anyhow::bail!("Invalid load spec: {}", load_path);
+        // RemoteLoadResolver only handles remote specs
+        if !spec.is_remote() {
+            return Err(anyhow::anyhow!(
+                "RemoteLoadResolver can only handle remote specs, not local paths"
+            ));
         }
+
+        // Find workspace root starting from the current file
+        let workspace_root = find_workspace_root(current_file);
+
+        // Materialize the load (download if needed)
+        materialise_load(spec, workspace_root.as_deref())
     }
 }

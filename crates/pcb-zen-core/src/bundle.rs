@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::{FileProvider, LoadResolver};
+use crate::{FileProvider, LoadResolver, LoadSpec};
 
 /// Runtime representation of a bundle with additional metadata
 #[derive(Debug, Clone)]
@@ -78,39 +78,15 @@ impl BundleLoadResolver {
 }
 
 impl LoadResolver for BundleLoadResolver {
-    fn resolve_path(
+    fn resolve_spec(
         &self,
         file_provider: &dyn FileProvider,
-        load_path: &str,
+        spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf> {
-        let canonical_current_file = file_provider.canonicalize(current_file)?;
-        let stripped_current_file = canonical_current_file
-            .strip_prefix(&self.bundle.bundle_path)
-            .unwrap_or(canonical_current_file.as_path());
-
-        log::debug!(
-            "Resolving path: {} from file: {}",
-            load_path,
-            stripped_current_file.display()
-        );
-
-        let load_map = self
-            .bundle
-            .manifest
-            .load_map
-            .get(stripped_current_file.to_string_lossy().as_ref());
-
-        log::debug!("Load map: {load_map:?}");
-
-        if let Some(load_map) = load_map {
-            let resolved_path = load_map.get(load_path);
-            log::debug!("Load map resolved path: {resolved_path:?}");
-            if let Some(resolved_path) = resolved_path {
-                return Ok(PathBuf::from(resolved_path));
-            }
-        }
-
-        Ok(PathBuf::from(load_path))
+        // For bundles, we need to convert the spec back to a string
+        // since the bundle manifest uses string keys
+        let load_path = spec.to_load_string();
+        self.resolve_path(file_provider, &load_path, current_file)
     }
 }

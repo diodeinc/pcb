@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use pcb_zen_core::bundle::{Bundle, BundleManifest};
 use pcb_zen_core::{
     CompoundLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
-    RelativeLoadResolver, WorkspaceLoadResolver,
+    WorkspaceLoadResolver,
 };
 use zip::write::FileOptions;
 use zip::ZipWriter;
@@ -117,16 +117,14 @@ impl BundleTrackingResolver {
 }
 
 impl LoadResolver for BundleTrackingResolver {
-    fn resolve_path(
+    fn resolve_spec(
         &self,
         file_provider: &dyn FileProvider,
-        load_path: &str,
+        spec: &pcb_zen_core::LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         // First resolve using the inner resolver
-        let resolved_path = self
-            .inner
-            .resolve_path(file_provider, load_path, current_file)?;
+        let resolved_path = self.inner.resolve_spec(file_provider, spec, current_file)?;
 
         // Copy the resolved file to the bundle
         let bundle_path = self.copy_to_bundle(&resolved_path)?;
@@ -145,7 +143,7 @@ impl LoadResolver for BundleTrackingResolver {
                 .replace('\\', "/");
 
             load_map.entry(current_file_key).or_default().insert(
-                load_path.to_string(),
+                spec.to_load_string(),
                 bundle_path.to_string_lossy().replace('\\', "/"),
             );
         }
@@ -254,7 +252,6 @@ pub fn create_bundle(input_path: &Path, output_path: &Path) -> Result<()> {
     let base_resolver = Arc::new(CompoundLoadResolver::new(vec![
         Arc::new(RemoteLoadResolver),
         Arc::new(WorkspaceLoadResolver::new(workspace_root)),
-        Arc::new(RelativeLoadResolver),
     ]));
     let file_provider = Arc::new(DefaultFileProvider);
 
