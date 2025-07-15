@@ -52,6 +52,17 @@ impl InMemoryFileProvider {
     pub fn files(&self) -> &HashMap<PathBuf, String> {
         &self.files
     }
+
+    /// Remove a file from the provider
+    pub fn remove_file(&mut self, path: impl Into<PathBuf>) {
+        let path_buf: PathBuf = path.into();
+        let absolute_path = if path_buf.is_absolute() {
+            path_buf
+        } else {
+            PathBuf::from("/").join(path_buf)
+        };
+        self.files.remove(&absolute_path);
+    }
 }
 
 impl FileProvider for InMemoryFileProvider {

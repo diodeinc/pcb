@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use log::debug;
@@ -7,14 +7,36 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use pcb_zen_core::{
-    convert::ToSchematic, lang::type_info::TypeInfo, Diagnostic, InputMap, InputValue,
+    convert::ToSchematic, lang::type_info::TypeInfo, Diagnostic, FileProvider, FileProviderError,
+    InMemoryFileProvider, InputMap, InputValue, LoadSpec, RemoteFetcher,
 };
 use starlark::errors::EvalSeverity;
 
-mod bundle;
+/// Wrapper to make Arc<Mutex<InMemoryFileProvider>> implement FileProvider
+#[derive(Clone)]
+struct SharedFileProvider(Arc<Mutex<InMemoryFileProvider>>);
 
-use bundle::LoadedBundle;
-use pcb_zen_core::InMemoryFileProvider;
+impl FileProvider for SharedFileProvider {
+    fn read_file(&self, path: &Path) -> Result<String, FileProviderError> {
+        self.0.lock().unwrap().read_file(path)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        self.0.lock().unwrap().exists(path)
+    }
+
+    fn is_directory(&self, path: &Path) -> bool {
+        self.0.lock().unwrap().is_directory(path)
+    }
+
+    fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
+        self.0.lock().unwrap().list_directory(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileProviderError> {
+        self.0.lock().unwrap().canonicalize(path)
+    }
+}
 
 // Global module storage - stores the file providers and metadata for loaded modules
 lazy_static::lazy_static! {
@@ -29,9 +51,148 @@ pub fn start() {
     debug!("Initialized pcb-zen-wasm logger");
 }
 
+/// JavaScript callback interface for remote fetching
+#[wasm_bindgen]
+extern "C" {
+    /// JavaScript function that handles remote fetching synchronously.
+    /// Takes a JSON-serialized FetchRequest and returns a JSON-serialized FetchResponse.
+    /// The JavaScript implementation should handle async operations internally.
+    #[wasm_bindgen(js_namespace = ["window", "pcbZen"], js_name = "fetchRemoteSync")]
+    fn js_fetch_remote_sync(request: &str) -> String;
+}
+
+/// Request structure sent to JavaScript for remote fetching
+#[derive(Serialize, Deserialize)]
+struct FetchRequest {
+    /// Type of the load spec (package, github, gitlab)
+    spec_type: String,
+    /// Package name (for package specs)
+    package: Option<String>,
+    /// Version (for package specs)
+    version: Option<String>,
+    /// Owner (for github/gitlab specs)
+    owner: Option<String>,
+    /// Repo (for github/gitlab specs)
+    repo: Option<String>,
+    /// Ref (for github/gitlab specs)
+    git_ref: Option<String>,
+    /// Path within the repo (for github/gitlab specs)
+    path: Option<String>,
+    /// Workspace root path (if available)
+    workspace_root: Option<String>,
+}
+
+/// Response structure from JavaScript remote fetching
+#[derive(Serialize, Deserialize)]
+struct FetchResponse {
+    /// The files fetched, keyed by their path
+    files: HashMap<String, String>,
+    /// The entry point file path
+    entry_point: String,
+}
+
+/// WASM implementation of RemoteFetcher that delegates to JavaScript
+pub struct WasmRemoteFetcher {
+    /// Reference to the file provider to store fetched files
+    file_provider: Arc<Mutex<InMemoryFileProvider>>,
+}
+
+impl WasmRemoteFetcher {
+    pub fn new(file_provider: Arc<Mutex<InMemoryFileProvider>>) -> Self {
+        Self { file_provider }
+    }
+}
+
+impl RemoteFetcher for WasmRemoteFetcher {
+    fn fetch_remote(
+        &self,
+        spec: &LoadSpec,
+        workspace_root: Option<&std::path::Path>,
+    ) -> Result<PathBuf, anyhow::Error> {
+        // Create the fetch request based on the spec type
+        let request = match spec {
+            LoadSpec::Package { package, tag, path } => FetchRequest {
+                spec_type: "package".to_string(),
+                package: Some(package.clone()),
+                version: Some(tag.clone()),
+                owner: None,
+                repo: None,
+                git_ref: None,
+                path: Some(path.to_string_lossy().to_string()),
+                workspace_root: workspace_root.map(|p| p.to_string_lossy().to_string()),
+            },
+            LoadSpec::Github {
+                user,
+                repo,
+                rev,
+                path,
+            } => FetchRequest {
+                spec_type: "github".to_string(),
+                package: None,
+                version: None,
+                owner: Some(user.clone()),
+                repo: Some(repo.clone()),
+                git_ref: Some(rev.clone()),
+                path: Some(path.to_string_lossy().to_string()),
+                workspace_root: workspace_root.map(|p| p.to_string_lossy().to_string()),
+            },
+            LoadSpec::Gitlab {
+                project_path,
+                rev,
+                path,
+            } => FetchRequest {
+                spec_type: "gitlab".to_string(),
+                package: None,
+                version: None,
+                owner: Some(project_path.clone()),
+                repo: None,
+                git_ref: Some(rev.clone()),
+                path: Some(path.to_string_lossy().to_string()),
+                workspace_root: workspace_root.map(|p| p.to_string_lossy().to_string()),
+            },
+            _ => return Err(anyhow::anyhow!("Unsupported spec type for remote fetching")),
+        };
+
+        // Serialize the request to JSON
+        let request_json = serde_json::to_string(&request)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize fetch request: {}", e))?;
+
+        // Call the JavaScript function synchronously
+        let response_str = js_fetch_remote_sync(&request_json);
+
+        // Check if it's an error response
+        if let Some(error_msg) = response_str.strip_prefix("ERROR:") {
+            return Err(anyhow::anyhow!("{}", error_msg));
+        }
+
+        let response: FetchResponse = serde_json::from_str(&response_str)
+            .map_err(|e| anyhow::anyhow!("Failed to parse fetch response: {}", e))?;
+
+        // Store all the fetched files in the file provider
+        {
+            let mut file_provider = self.file_provider.lock().unwrap();
+
+            // Use the spec's cache key to create a unique cache directory
+            let cache_dir = format!("/.cache/{}/", spec.cache_key());
+
+            for (path, content) in response.files {
+                // Store files at their original paths
+                file_provider.add_file(&path, content.clone());
+
+                // Also store in cache directory for debugging/inspection
+                let cache_path = format!("{}{}", cache_dir, path.trim_start_matches('/'));
+                file_provider.add_file(cache_path, content);
+            }
+        }
+
+        // The entry point path from the response
+        Ok(PathBuf::from(response.entry_point))
+    }
+}
+
 /// Information about a loaded module
 struct ModuleInfo {
-    file_provider: Arc<dyn pcb_zen_core::FileProvider>,
+    file_provider: Arc<Mutex<InMemoryFileProvider>>,
     load_resolver: Option<Arc<dyn pcb_zen_core::LoadResolver>>,
     main_file: PathBuf,
     module_name: String,
@@ -56,39 +217,20 @@ impl Module {
             .map_err(|e| JsValue::from_str(&format!("Failed to parse files JSON: {e}")))?;
 
         // Create InMemoryFileProvider with files
-        let file_provider = Arc::new(InMemoryFileProvider::new(files));
+        let file_provider = Arc::new(Mutex::new(InMemoryFileProvider::new(files)));
 
-        // Generate unique ID using counter
-        let id = {
-            let mut counter = MODULE_COUNTER.lock().unwrap();
-            *counter += 1;
-            format!("module_{}", *counter)
-        };
+        // Create the remote fetcher with access to the file provider
+        let remote_fetcher = Arc::new(WasmRemoteFetcher::new(file_provider.clone()));
 
-        // Store the module info
-        let module_info = ModuleInfo {
-            file_provider: file_provider as Arc<dyn pcb_zen_core::FileProvider>,
-            load_resolver: None,
-            main_file: PathBuf::from(main_file),
-            module_name: module_name.to_string(),
-        };
+        // Always use root as workspace root in WASM
+        let workspace_root = Some(PathBuf::from("/"));
 
-        let mut modules = LOADED_MODULES.lock().unwrap();
-        modules.insert(id.clone(), module_info);
-
-        Ok(Module { id })
-    }
-
-    /// Create a module from a bundle zip file
-    #[wasm_bindgen(js_name = fromBundle)]
-    pub fn from_bundle(bundle_bytes: &[u8], module_name: &str) -> Result<Module, JsValue> {
-        // Load the bundle
-        let loaded_bundle = LoadedBundle::from_zip_bytes(bundle_bytes)
-            .map_err(|e| JsValue::from_str(&format!("Failed to load bundle: {e}")))?;
-
-        let main_file = loaded_bundle.entry_point().to_path_buf();
-        let bundle_resolver = Arc::new(pcb_zen_core::bundle::BundleLoadResolver::new(
-            loaded_bundle.bundle.clone(),
+        // Create the CoreLoadResolver with SharedFileProvider wrapper
+        let shared_provider = Arc::new(SharedFileProvider(file_provider.clone()));
+        let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
+            shared_provider.clone(),
+            remote_fetcher,
+            workspace_root,
         ));
 
         // Generate unique ID using counter
@@ -100,9 +242,9 @@ impl Module {
 
         // Store the module info
         let module_info = ModuleInfo {
-            file_provider: loaded_bundle.file_provider.clone(),
-            load_resolver: Some(bundle_resolver as Arc<dyn pcb_zen_core::LoadResolver>),
-            main_file,
+            file_provider: file_provider.clone(),
+            load_resolver: Some(load_resolver as Arc<dyn pcb_zen_core::LoadResolver>),
+            main_file: PathBuf::from(main_file),
             module_name: module_name.to_string(),
         };
 
@@ -120,9 +262,9 @@ impl Module {
             .get(&self.id)
             .ok_or_else(|| JsValue::from_str("Module not found"))?;
 
-        // Create evaluation context
-        let mut eval_ctx =
-            pcb_zen_core::EvalContext::with_file_provider(module_info.file_provider.clone());
+        // Create evaluation context with SharedFileProvider
+        let shared_provider = Arc::new(SharedFileProvider(module_info.file_provider.clone()));
+        let mut eval_ctx = pcb_zen_core::EvalContext::with_file_provider(shared_provider);
         if let Some(resolver) = &module_info.load_resolver {
             eval_ctx = eval_ctx.set_load_resolver(resolver.clone());
         }
@@ -193,9 +335,9 @@ impl Module {
             .get(&self.id)
             .ok_or_else(|| JsValue::from_str("Module not found"))?;
 
-        // Create evaluation context
-        let mut eval_ctx =
-            pcb_zen_core::EvalContext::with_file_provider(module_info.file_provider.clone());
+        // Create evaluation context with SharedFileProvider
+        let shared_provider = Arc::new(SharedFileProvider(module_info.file_provider.clone()));
+        let mut eval_ctx = pcb_zen_core::EvalContext::with_file_provider(shared_provider);
         if let Some(resolver) = &module_info.load_resolver {
             eval_ctx = eval_ctx.set_load_resolver(resolver.clone());
         }
@@ -269,6 +411,69 @@ impl Module {
     pub fn free_module(&self) {
         let mut modules = LOADED_MODULES.lock().unwrap();
         modules.remove(&self.id);
+    }
+
+    /// Read a file from the module's file system
+    #[wasm_bindgen(js_name = readFile)]
+    pub fn read_file(&self, path: &str) -> Result<String, JsValue> {
+        let modules = LOADED_MODULES.lock().unwrap();
+        let module_info = modules
+            .get(&self.id)
+            .ok_or_else(|| JsValue::from_str("Module not found"))?;
+
+        let file_provider = module_info.file_provider.lock().unwrap();
+        file_provider
+            .read_file(Path::new(path))
+            .map_err(|e| JsValue::from_str(&format!("Failed to read file: {e}")))
+    }
+
+    /// Write a file to the module's file system
+    #[wasm_bindgen(js_name = writeFile)]
+    pub fn write_file(&self, path: &str, content: &str) -> Result<(), JsValue> {
+        let modules = LOADED_MODULES.lock().unwrap();
+        let module_info = modules
+            .get(&self.id)
+            .ok_or_else(|| JsValue::from_str("Module not found"))?;
+
+        let mut file_provider = module_info.file_provider.lock().unwrap();
+        file_provider.add_file(path, content.to_string());
+        Ok(())
+    }
+
+    /// Delete a file from the module's file system
+    #[wasm_bindgen(js_name = deleteFile)]
+    pub fn delete_file(&self, path: &str) -> Result<(), JsValue> {
+        let modules = LOADED_MODULES.lock().unwrap();
+        let module_info = modules
+            .get(&self.id)
+            .ok_or_else(|| JsValue::from_str("Module not found"))?;
+
+        let mut file_provider = module_info.file_provider.lock().unwrap();
+        file_provider.remove_file(path);
+        Ok(())
+    }
+
+    /// List all files in the module's file system
+    #[wasm_bindgen(js_name = listFiles)]
+    pub fn list_files(&self) -> Result<String, JsValue> {
+        let modules = LOADED_MODULES.lock().unwrap();
+        let module_info = modules
+            .get(&self.id)
+            .ok_or_else(|| JsValue::from_str("Module not found"))?;
+
+        // Get all files from the InMemoryFileProvider
+        let file_provider = module_info.file_provider.lock().unwrap();
+        let mut all_files: Vec<String> = file_provider
+            .files()
+            .keys()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect();
+
+        // Sort files for consistent output
+        all_files.sort();
+
+        serde_json::to_string(&all_files)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize file list: {e}")))
     }
 }
 

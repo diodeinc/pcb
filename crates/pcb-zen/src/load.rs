@@ -571,6 +571,32 @@ fn looks_like_git_sha(rev: &str) -> bool {
     rev.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+// Re-export for backward compatibility
+/// Walk up the directory tree starting at `start` until a directory containing
+/// `pcb.toml` is found. Returns `Some(PathBuf)` pointing at that directory or
+/// `None` if we reach the filesystem root without finding one.
+///
+/// This is a convenience wrapper that uses the default file provider.
+pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    let file_provider = pcb_zen_core::DefaultFileProvider;
+    pcb_zen_core::workspace::find_workspace_root(&file_provider, start)
+}
+
+/// Default implementation of RemoteFetcher that handles downloading and caching
+/// remote resources (GitHub repos, GitLab repos, packages).
+#[derive(Debug, Clone)]
+pub struct DefaultRemoteFetcher;
+
+impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
+    fn fetch_remote(
+        &self,
+        spec: &LoadSpec,
+        workspace_root: Option<&Path>,
+    ) -> Result<PathBuf, anyhow::Error> {
+        // Use the existing materialise_load function
+        materialise_remote(spec, workspace_root)
+    }
+}
 // Add unit tests for LoadSpec::parse
 #[cfg(test)]
 mod tests {
@@ -855,32 +881,5 @@ mod tests {
                 path: PathBuf::from("Device.kicad_sym"),
             })
         );
-    }
-}
-
-// Re-export for backward compatibility
-/// Walk up the directory tree starting at `start` until a directory containing
-/// `pcb.toml` is found. Returns `Some(PathBuf)` pointing at that directory or
-/// `None` if we reach the filesystem root without finding one.
-///
-/// This is a convenience wrapper that uses the default file provider.
-pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
-    let file_provider = pcb_zen_core::DefaultFileProvider;
-    pcb_zen_core::workspace::find_workspace_root(&file_provider, start)
-}
-
-/// Default implementation of RemoteFetcher that handles downloading and caching
-/// remote resources (GitHub repos, GitLab repos, packages).
-#[derive(Debug, Clone)]
-pub struct DefaultRemoteFetcher;
-
-impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
-    fn fetch_remote(
-        &self,
-        spec: &LoadSpec,
-        workspace_root: Option<&Path>,
-    ) -> Result<PathBuf, anyhow::Error> {
-        // Use the existing materialise_load function
-        materialise_remote(spec, workspace_root)
     }
 }
