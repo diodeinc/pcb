@@ -65,3 +65,24 @@ snapshot_eval!(net_symbol_deep_copy, {
         print("Net2:", net2)
     "#
 });
+
+snapshot_eval!(net_name_property_access, {
+    "test.zen" => r#"
+        # Test accessing the name property on Net instances
+        
+        # Create nets with different names
+        net1 = Net("POWER_3V3")
+        net2 = Net("GND")
+        net3 = Net()  # Empty name
+        
+        # Access and print the name property
+        print("net1.name:", net1.name)
+        print("net2.name:", net2.name)
+        print("net3.name:", net3.name)
+        
+        # Verify the name property matches what was passed to Net()
+        check(net1.name == "POWER_3V3", "net1.name should be 'POWER_3V3'")
+        check(net2.name == "GND", "net2.name should be 'GND'")
+        check(net3.name == "", "net3.name should be empty string")
+    "#
+});

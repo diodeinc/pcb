@@ -24,6 +24,16 @@ std::thread_local! {
     static NEXT_NET_ID: RefCell<u64> = const { RefCell::new(1) };
 }
 
+/// Generate a new unique net ID using the thread-local counter.
+pub fn generate_net_id() -> NetId {
+    NEXT_NET_ID.with(|counter| {
+        let mut c = counter.borrow_mut();
+        let id = *c;
+        *c += 1;
+        id
+    })
+}
+
 /// Reset the net ID counter to 1. This is only intended for use in tests
 /// to ensure reproducible net IDs across test runs.
 #[cfg(test)]
@@ -75,6 +85,21 @@ where
 {
     fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
         demand.provide_value::<&dyn DeepCopyToHeap>(self);
+    }
+
+    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attribute {
+            "name" => Some(heap.alloc(self.name.clone())),
+            _ => None,
+        }
+    }
+
+    fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
+        matches!(attribute, "name")
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec!["name".to_string()]
     }
 }
 
@@ -238,12 +263,7 @@ where
         // Generate a deterministic, per-thread unique ID for this net. A thread-local
         // counter guarantees deterministic results within a single evaluation and
         // avoids cross-test interference when Rust tests execute in parallel.
-        let net_id = NEXT_NET_ID.with(|counter| {
-            let mut c = counter.borrow_mut();
-            let id = *c;
-            *c += 1;
-            id
-        });
+        let net_id = generate_net_id();
 
         // Use positional name if provided, otherwise use kwarg name
         // Keep name empty when not supplied so that later passes can derive a context-aware

@@ -11,10 +11,9 @@ use starlark::values::{
     StarlarkValue, Trace, Value, ValueLike,
 };
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
-use crate::lang::net::NetValue;
+use crate::lang::net::{generate_net_id, NetValue};
 
 // Interface type data, similar to TyRecordData
 #[derive(Debug, Allocative)]
@@ -160,11 +159,11 @@ where
                     let net_name = if let Some(ref inst_name) = instance_name_opt {
                         make_prefix(inst_name, name)
                     } else {
-                        String::new()
+                        name.to_ascii_uppercase()
                     };
 
                     heap.alloc(NetValue::new(
-                        Uuid::new_v4().as_u64_pair().1,
+                        generate_net_id(),
                         net_name,
                         SmallMap::new(),
                         Value::new_none(),
@@ -221,7 +220,7 @@ where
                     let copied_symbol = copy_value(template_symbol, heap)?;
 
                     heap.alloc(NetValue::new(
-                        Uuid::new_v4().as_u64_pair().1,
+                        generate_net_id(),
                         net_name,
                         new_props,
                         copied_symbol,
@@ -536,11 +535,11 @@ fn instantiate_interface<'v>(
             let net_name = if let Some(p) = prefix_opt {
                 format!("{}_{}", p, field_name.to_ascii_uppercase())
             } else {
-                String::new()
+                field_name.to_ascii_uppercase()
             };
 
             heap.alloc(NetValue::new(
-                Uuid::new_v4().as_u64_pair().1,
+                generate_net_id(),
                 net_name,
                 SmallMap::new(),
                 Value::new_none(),
@@ -593,7 +592,7 @@ fn instantiate_interface<'v>(
             let copied_symbol = copy_value(template_symbol, heap)?;
 
             heap.alloc(NetValue::new(
-                Uuid::new_v4().as_u64_pair().1,
+                generate_net_id(),
                 net_name,
                 new_props,
                 copied_symbol,

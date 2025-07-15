@@ -29,7 +29,7 @@ use crate::lang::input::{convert_from_starlark, InputMap};
 use crate::Diagnostic;
 use starlark::values::dict::DictRef;
 
-use super::net::NetValue;
+use super::net::{generate_net_id, NetValue};
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::{EvalMessage, EvalSeverity};
 use thiserror::Error;
@@ -506,7 +506,7 @@ fn default_for_type<'v>(
     let default = match typ.get_type() {
         "NetType" => heap
             .alloc(NetValue::new(
-                uuid::Uuid::new_v4().as_u64_pair().1,
+                generate_net_id(),
                 String::new(),
                 SmallMap::new(),
                 Value::new_none(),
