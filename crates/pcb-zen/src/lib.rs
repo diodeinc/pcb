@@ -9,13 +9,11 @@ pub mod suppression;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::load::RemoteLoadResolver;
+use crate::load::DefaultRemoteFetcher;
 use pcb_sch::Schematic;
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::{
-    CompoundLoadResolver, DefaultFileProvider, EvalContext, InputMap, RelativeLoadResolver,
-    WorkspaceLoadResolver,
-};
+use pcb_zen_core::workspace::find_workspace_root;
+use pcb_zen_core::{CoreLoadResolver, DefaultFileProvider, EvalContext, InputMap};
 use starlark::errors::EvalMessage;
 
 pub use diagnostics::render_diagnostic;
@@ -26,9 +24,11 @@ pub use starlark::errors::EvalSeverity;
 
 /// Create an evaluation context with proper load resolver setup for a given workspace.
 ///
-/// This helper ensures that the evaluation context has both:
-/// - RemoteLoadResolver for handling @package style imports (e.g., @kicad-symbols/...)
-/// - WorkspaceLoadResolver for handling relative paths
+/// This helper ensures that the evaluation context has a unified load resolver that handles:
+/// - Remote packages (@package style imports like @kicad-symbols/...)
+/// - Workspace-relative paths (//...)
+/// - Relative paths (./... or ../...)
+/// - Absolute paths
 ///
 /// # Arguments
 /// * `workspace_root` - The root directory of the workspace (typically where pcb.toml is located)
@@ -40,16 +40,20 @@ pub use starlark::errors::EvalSeverity;
 ///
 /// let workspace = Path::new("/path/to/my/project");
 /// let ctx = create_eval_context(workspace);
-/// // Now Module() calls within evaluated files will support @package imports
+/// // Now Module() calls within evaluated files will support all import types
 /// ```
 pub fn create_eval_context(workspace_root: &Path) -> EvalContext {
+    let file_provider = Arc::new(DefaultFileProvider);
+    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+    let load_resolver = Arc::new(CoreLoadResolver::new(
+        file_provider.clone(),
+        remote_fetcher,
+        Some(workspace_root.to_path_buf()),
+    ));
+
     EvalContext::new()
-        .set_file_provider(Arc::new(DefaultFileProvider))
-        .set_load_resolver(Arc::new(CompoundLoadResolver::new(vec![
-            Arc::new(RemoteLoadResolver),
-            Arc::new(WorkspaceLoadResolver::new(workspace_root.to_path_buf())),
-            Arc::new(RelativeLoadResolver),
-        ])))
+        .set_file_provider(file_provider)
+        .set_load_resolver(load_resolver)
 }
 
 /// Evaluate `file` and return a [`Schematic`].
@@ -58,8 +62,11 @@ pub fn run(file: &Path) -> WithDiagnostics<Schematic> {
         .canonicalize()
         .expect("failed to canonicalise input path");
 
+    // Create a file provider for finding workspace root
+    let file_provider = DefaultFileProvider;
+
     // Find the workspace root by looking for pcb.toml
-    let workspace_root = load::find_workspace_root(&abs_path)
+    let workspace_root = find_workspace_root(&file_provider, &abs_path)
         .unwrap_or_else(|| abs_path.parent().unwrap().to_path_buf());
 
     let ctx = create_eval_context(&workspace_root);

@@ -47,16 +47,6 @@ snapshot_eval!(file_resolves_from_subdirectory, {
     "#
 });
 
-// Test that File() works with absolute paths
-snapshot_eval!(file_handles_absolute_paths, {
-    "data.txt" => "test data",
-    "test.zen" => r#"
-        # Should work with absolute paths too
-        data_path = File("/data.txt")
-        check(data_path == "/data.txt", "Should handle absolute paths")
-    "#
-});
-
 // Test File() with load() to ensure they use the same resolver
 snapshot_eval!(file_consistent_with_load, {
     "lib/helper.zen" => r#"

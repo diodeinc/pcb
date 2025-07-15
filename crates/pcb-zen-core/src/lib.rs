@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     error::Error as StdError,
     fmt::Display,
     path::{Path, PathBuf},
@@ -383,6 +384,19 @@ impl FileProvider for DefaultFileProvider {
     }
 }
 
+/// Abstraction for fetching remote resources (packages, GitHub repos, etc.)
+/// This allows pcb-zen-core to handle all resolution logic while delegating
+/// the actual network/filesystem operations to the implementor.
+pub trait RemoteFetcher: Send + Sync {
+    /// Fetch a remote resource and return the local path where it was materialized.
+    /// This could involve downloading, caching, unpacking, etc.
+    fn fetch_remote(
+        &self,
+        spec: &LoadSpec,
+        workspace_root: Option<&Path>,
+    ) -> Result<PathBuf, anyhow::Error>;
+}
+
 /// Abstraction for resolving load() paths to file contents
 pub trait LoadResolver: Send + Sync {
     /// Resolve a LoadSpec to an absolute file path
@@ -553,6 +567,75 @@ impl LoadResolver for WorkspaceLoadResolver {
     }
 }
 
+/// RelativeLoadResolver is a LoadResolver that handles relative paths from the current file's directory.
+/// This resolver is useful for simple relative imports like `load("./utils.zen", ...)`.
+#[derive(Debug, Clone)]
+pub struct RelativeLoadResolver;
+
+impl RelativeLoadResolver {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for RelativeLoadResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LoadResolver for RelativeLoadResolver {
+    fn resolve_spec(
+        &self,
+        file_provider: &dyn FileProvider,
+        spec: &LoadSpec,
+        current_file: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
+        // RelativeLoadResolver only handles local paths
+        match spec {
+            LoadSpec::Path { path } | LoadSpec::WorkspacePath { path } => {
+                // Only handle relative paths
+                if path.is_absolute() {
+                    return Err(anyhow::anyhow!(
+                        "RelativeLoadResolver cannot handle absolute paths"
+                    ));
+                }
+
+                // If it's a workspace path (starts with //), we don't handle it
+                if path.to_str().map(|s| s.starts_with("//")).unwrap_or(false) {
+                    return Err(anyhow::anyhow!(
+                        "RelativeLoadResolver cannot handle workspace paths"
+                    ));
+                }
+
+                // Get the directory of the current file
+                let current_dir = current_file
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
+
+                // Resolve the path relative to the current file's directory
+                let resolved_path = current_dir.join(path);
+
+                // Canonicalize the resolved path to handle .. and symlinks
+                let canonical_path = file_provider.canonicalize(&resolved_path)?;
+
+                if file_provider.exists(&canonical_path) {
+                    Ok(canonical_path)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "File not found: {}",
+                        canonical_path.display()
+                    ))
+                }
+            }
+            _ => Err(anyhow::anyhow!(
+                "RelativeLoadResolver can only handle local paths, not {}",
+                spec.to_load_string()
+            )),
+        }
+    }
+}
+
 /// File extension constants and utilities
 pub mod file_extensions {
     use std::ffi::OsStr;
@@ -581,5 +664,207 @@ pub mod file_extensions {
             .and_then(OsStr::to_str)
             .map(|ext| ext.eq_ignore_ascii_case(KICAD_SYMBOL_EXTENSION))
             .unwrap_or(false)
+    }
+}
+
+/// Workspace-related utilities
+pub mod workspace {
+    use super::FileProvider;
+    use std::path::{Path, PathBuf};
+
+    /// Walk up the directory tree starting at `start` until a directory containing
+    /// `pcb.toml` is found. Returns `Some(PathBuf)` pointing at that directory or
+    /// `None` if we reach the filesystem root without finding one.
+    pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Option<PathBuf> {
+        let mut current = if !file_provider.is_directory(start) {
+            // For files we search from their parent directory.
+            start.parent().map(|p| p.to_path_buf())
+        } else {
+            Some(start.to_path_buf())
+        };
+
+        while let Some(dir) = current {
+            let pcb_toml = dir.join("pcb.toml");
+            if file_provider.exists(&pcb_toml) {
+                return Some(dir);
+            }
+            current = dir.parent().map(|p| p.to_path_buf());
+        }
+        None
+    }
+}
+
+/// Core load resolver that handles all path resolution logic.
+/// This resolver handles workspace paths, relative paths, and delegates
+/// remote fetching to a RemoteFetcher implementation.
+pub struct CoreLoadResolver {
+    file_provider: Arc<dyn FileProvider>,
+    remote_fetcher: Arc<dyn RemoteFetcher>,
+    workspace_root: Option<PathBuf>,
+}
+
+impl CoreLoadResolver {
+    /// Create a new CoreLoadResolver with the given file provider and remote fetcher.
+    pub fn new(
+        file_provider: Arc<dyn FileProvider>,
+        remote_fetcher: Arc<dyn RemoteFetcher>,
+        workspace_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            file_provider,
+            remote_fetcher,
+            workspace_root,
+        }
+    }
+
+    /// Create a CoreLoadResolver for a specific file, automatically finding the workspace root.
+    pub fn for_file(
+        file_provider: Arc<dyn FileProvider>,
+        remote_fetcher: Arc<dyn RemoteFetcher>,
+        file: &Path,
+    ) -> Self {
+        let workspace_root = workspace::find_workspace_root(file_provider.as_ref(), file);
+        Self {
+            file_provider,
+            remote_fetcher,
+            workspace_root,
+        }
+    }
+
+    /// Read package aliases from pcb.toml in the workspace root.
+    fn read_workspace_aliases(&self) -> HashMap<String, String> {
+        let mut aliases = LoadSpec::default_package_aliases();
+
+        if let Some(workspace_root) = &self.workspace_root {
+            let toml_path = workspace_root.join("pcb.toml");
+            if let Ok(contents) = self.file_provider.read_file(&toml_path) {
+                // Parse only the [packages] section
+                #[derive(Debug, serde::Deserialize)]
+                struct PkgRoot {
+                    packages: Option<HashMap<String, String>>,
+                }
+
+                if let Ok(parsed) = toml::from_str::<PkgRoot>(&contents) {
+                    if let Some(pkgs) = parsed.packages {
+                        // User's aliases override defaults
+                        aliases.extend(pkgs);
+                    }
+                }
+            }
+        }
+
+        aliases
+    }
+}
+
+impl LoadResolver for CoreLoadResolver {
+    fn resolve_spec(
+        &self,
+        file_provider: &dyn FileProvider,
+        spec: &LoadSpec,
+        current_file: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
+        // First, resolve any package aliases
+        let (resolved_spec, is_from_alias) = if let LoadSpec::Package { .. } = spec {
+            let workspace_aliases = self.read_workspace_aliases();
+            let resolved =
+                spec.resolve(self.workspace_root.as_deref(), Some(&workspace_aliases))?;
+            // Check if the resolution changed the spec type (indicating it was an alias)
+            let from_alias = !matches!(&resolved, LoadSpec::Package { .. });
+            (resolved, from_alias)
+        } else {
+            (spec.clone(), false)
+        };
+
+        match &resolved_spec {
+            // Remote specs need to be fetched
+            LoadSpec::Package { .. } | LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self
+                .remote_fetcher
+                .fetch_remote(&resolved_spec, self.workspace_root.as_deref()),
+
+            // Workspace-relative paths (starts with //)
+            LoadSpec::WorkspacePath { path } => {
+                let workspace_root = self.workspace_root.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Cannot resolve workspace path '{}' without a workspace root",
+                        path.display()
+                    )
+                })?;
+
+                let canonical_root = file_provider.canonicalize(workspace_root)?;
+                let resolved_path = canonical_root.join(path);
+
+                // Canonicalize the resolved path to handle .. and symlinks
+                let canonical_path = file_provider.canonicalize(&resolved_path)?;
+
+                if file_provider.exists(&canonical_path) {
+                    Ok(canonical_path)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "File not found: {}",
+                        canonical_path.display()
+                    ))
+                }
+            }
+
+            // Regular paths (relative or absolute)
+            LoadSpec::Path { path } => {
+                if path.is_absolute() {
+                    // Absolute paths are used as-is
+                    let canonical_path = file_provider.canonicalize(path)?;
+
+                    if file_provider.exists(&canonical_path) {
+                        Ok(canonical_path)
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "File not found: {}",
+                            canonical_path.display()
+                        ))
+                    }
+                } else if is_from_alias {
+                    // If this path came from an alias resolution, treat it as workspace-relative
+                    let workspace_root = self.workspace_root.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Cannot resolve alias path '{}' without a workspace root",
+                            path.display()
+                        )
+                    })?;
+
+                    let canonical_root = file_provider.canonicalize(workspace_root)?;
+                    let resolved_path = canonical_root.join(path);
+
+                    // Canonicalize the resolved path to handle .. and symlinks
+                    let canonical_path = file_provider.canonicalize(&resolved_path)?;
+
+                    if file_provider.exists(&canonical_path) {
+                        Ok(canonical_path)
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "File not found: {}",
+                            canonical_path.display()
+                        ))
+                    }
+                } else {
+                    // Regular relative paths are resolved from the current file's directory
+                    let current_dir = current_file
+                        .parent()
+                        .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
+
+                    let resolved_path = current_dir.join(path);
+
+                    // Canonicalize the resolved path to handle .. and symlinks
+                    let canonical_path = file_provider.canonicalize(&resolved_path)?;
+
+                    if file_provider.exists(&canonical_path) {
+                        Ok(canonical_path)
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "File not found: {}",
+                            canonical_path.display()
+                        ))
+                    }
+                }
+            }
+        }
     }
 }

@@ -203,7 +203,7 @@ impl LoadSpec {
     }
 
     /// Default package aliases that are always available
-    fn default_package_aliases() -> HashMap<String, String> {
+    pub fn default_package_aliases() -> HashMap<String, String> {
         let mut map = HashMap::new();
         map.insert(
             "kicad-symbols".to_string(),

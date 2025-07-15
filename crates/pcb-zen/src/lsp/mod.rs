@@ -8,9 +8,9 @@ use lsp_types::{
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
+use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{
-    CompoundLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
-    RelativeLoadResolver, WorkspaceLoadResolver,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::load::RemoteLoadResolver;
+use crate::load::DefaultRemoteFetcher;
 use pcb_zen_core::convert::ToSchematic;
 
 /// Wrapper around EvalContext that implements LspContext
@@ -30,12 +30,16 @@ pub struct LspEvalContext {
 }
 
 /// Helper function to create a standard load resolver with remote and workspace support
-fn create_standard_load_resolver(workspace_root: &Path) -> Arc<CompoundLoadResolver> {
-    Arc::new(CompoundLoadResolver::new(vec![
-        Arc::new(RemoteLoadResolver),
-        Arc::new(WorkspaceLoadResolver::new(workspace_root.to_path_buf())),
-        Arc::new(RelativeLoadResolver),
-    ]))
+fn create_standard_load_resolver(
+    file_provider: Arc<dyn FileProvider>,
+    workspace_root: &Path,
+) -> Arc<CoreLoadResolver> {
+    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+    Arc::new(CoreLoadResolver::new(
+        file_provider,
+        remote_fetcher,
+        Some(workspace_root.to_path_buf()),
+    ))
 }
 
 impl Default for LspEvalContext {
@@ -191,11 +195,12 @@ impl LspContext for LspEvalContext {
                 // Determine workspace root from the file path
                 let workspace_root = path
                     .parent()
-                    .and_then(crate::load::find_workspace_root)
+                    .and_then(|parent| find_workspace_root(self.file_provider.as_ref(), parent))
                     .unwrap_or_else(|| path.parent().unwrap_or(path).to_path_buf());
 
                 // Create a load resolver for this file
-                let load_resolver = create_standard_load_resolver(&workspace_root);
+                let load_resolver =
+                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
 
                 // Parse and analyze the file with the load resolver set
                 let result = self
@@ -238,7 +243,8 @@ impl LspContext for LspEvalContext {
                 // Determine workspace root from current file
                 let workspace_root = current_path.parent().unwrap_or(current_path).to_path_buf();
 
-                let load_resolver = create_standard_load_resolver(&workspace_root);
+                let load_resolver =
+                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
                 let resolved =
                     load_resolver.resolve_path(self.file_provider.as_ref(), path, current_path)?;
                 Ok(LspUrl::File(resolved))
@@ -283,7 +289,8 @@ impl LspContext for LspEvalContext {
                 // Try to resolve as a file path
                 let workspace_root = current_path.parent().unwrap_or(current_path).to_path_buf();
 
-                let load_resolver = create_standard_load_resolver(&workspace_root);
+                let load_resolver =
+                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
                 if let Ok(resolved) =
                     load_resolver.resolve_path(self.file_provider.as_ref(), literal, current_path)
                 {
@@ -410,7 +417,8 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let workspace_root = current_path.parent().unwrap_or(current_path).to_path_buf();
 
-                let load_resolver = create_standard_load_resolver(&workspace_root);
+                let load_resolver =
+                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
                 if let Ok(resolved) =
                     load_resolver.resolve_path(self.file_provider.as_ref(), load_path, current_path)
                 {
@@ -533,7 +541,10 @@ impl LspContext for LspEvalContext {
 
                             let ctx = EvalContext::new()
                                 .set_file_provider(self.file_provider.clone())
-                                .set_load_resolver(create_standard_load_resolver(&workspace_root));
+                                .set_load_resolver(create_standard_load_resolver(
+                                    self.file_provider.clone(),
+                                    &workspace_root,
+                                ));
 
                             let eval_result = if let Some(contents) = maybe_contents {
                                 ctx.set_source_path(path_buf.clone())

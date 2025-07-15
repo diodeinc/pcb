@@ -2,4 +2,4 @@
 source: crates/pcb-zen/tests/module_loading.rs
 expression: netlist
 ---
-Error: [TEMP_DIR]test.zen:3:17-49 Failed to resolve module path '@missing/something.zen': File not found: [TEMP_DIR]@missing/something.zen
+Error: [TEMP_DIR]test.zen:3:17-49 Failed to resolve module path '@missing/something.zen': File not found: [TEMP_DIR]does_not_exist/something.zen
