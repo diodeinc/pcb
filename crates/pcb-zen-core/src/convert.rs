@@ -1,3 +1,4 @@
+use crate::lang::symbol::SymbolValue;
 use crate::{FrozenComponentValue, FrozenModuleValue, FrozenNetValue, NetId};
 use pcb_sch::Net;
 use pcb_sch::NetKind;
@@ -476,14 +477,14 @@ impl ModuleConverter {
         // Add symbol information if the component has a symbol
         let symbol_value = component.symbol();
         if !symbol_value.is_none() {
-            if let Some(symbol) =
-                symbol_value.downcast_ref::<crate::lang::symbol::FrozenSymbolValue>()
-            {
+            if let Some(symbol) = symbol_value.downcast_ref::<SymbolValue>() {
                 // Add symbol_name for backwards compatibility
-                comp_inst.add_attribute(
-                    "symbol_name".to_string(),
-                    AttributeValue::String(symbol.name().to_string()),
-                );
+                if let Some(name) = symbol.name() {
+                    comp_inst.add_attribute(
+                        "symbol_name".to_string(),
+                        AttributeValue::String(name.to_string()),
+                    );
+                }
 
                 // Add symbol_path for backwards compatibility
                 if let Some(path) = symbol.source_path() {
@@ -495,43 +496,61 @@ impl ModuleConverter {
 
                 // Add the raw s-expression if available
                 let raw_sexp = symbol.raw_sexp();
-                if !raw_sexp.is_none() {
+                if let Some(sexp_string) = raw_sexp {
                     // The raw_sexp is stored as a string value in the SymbolValue
-                    if let Some(sexp_string) = raw_sexp.to_value().unpack_str() {
-                        comp_inst.add_attribute(
-                            "__symbol_value".to_string(),
-                            AttributeValue::String(sexp_string.to_string()),
-                        );
-                    }
+                    comp_inst.add_attribute(
+                        "__symbol_value".to_string(),
+                        AttributeValue::String(sexp_string.to_string()),
+                    );
                 }
             }
         }
 
         comp_inst.set_reference_designator(self.next_refdes(component.prefix()));
 
-        // Add pin children.
-        for (pin_name, pin_val) in component.pins().iter() {
-            let pin_inst_ref = instance_ref.append(pin_name.clone());
-            let mut pin_inst = Instance::port(comp_type_ref.clone());
+        // Get the symbol from the component to access pin mappings
+        let symbol = component.symbol();
+        if let Some(symbol_value) = symbol.downcast_ref::<SymbolValue>() {
+            // First, group pads by signal name
+            let mut signal_to_pads: HashMap<String, Vec<String>> = HashMap::new();
 
-            if let Some(pad_str) = pin_val.downcast_frozen_str() {
-                pin_inst.add_attribute("pad", AttributeValue::String(pad_str.to_string()));
+            for (pad_number, signal_val) in symbol_value.pad_to_signal().iter() {
+                signal_to_pads
+                    .entry(signal_val.to_string())
+                    .or_default()
+                    .push(pad_number.clone());
             }
 
-            self.schematic.add_instance(pin_inst_ref.clone(), pin_inst);
-            comp_inst.add_child(pin_name.clone(), pin_inst_ref.clone());
+            // Now create one port per signal
+            for (signal_name, pads) in signal_to_pads.iter() {
+                // Create a unique instance reference using the signal name
+                let pin_inst_ref = instance_ref.append(signal_name.to_string());
+                let mut pin_inst = Instance::port(comp_type_ref.clone());
 
-            // If the pin is connected, record it in net_map
-            if let Some(net_val) = component.connections().get(pin_name) {
-                let net = net_val
-                    .downcast_ref::<FrozenNetValue>()
-                    .ok_or(anyhow::anyhow!(
-                        "Expected net value for pin '{}', found '{}'",
-                        pin_name,
-                        net_val
-                    ))?;
+                pin_inst.add_attribute(
+                    "pads",
+                    AttributeValue::Array(
+                        pads.iter()
+                            .map(|p| AttributeValue::String(p.clone()))
+                            .collect(),
+                    ),
+                );
 
-                self.update_net(net, &pin_inst_ref);
+                self.schematic.add_instance(pin_inst_ref.clone(), pin_inst);
+                comp_inst.add_child(signal_name.clone(), pin_inst_ref.clone());
+
+                // If this signal is connected, record it in net_map
+                if let Some(net_val) = component.connections().get(signal_name) {
+                    let net = net_val
+                        .downcast_ref::<FrozenNetValue>()
+                        .ok_or(anyhow::anyhow!(
+                            "Expected net value for pin '{}', found '{}'",
+                            signal_name,
+                            net_val
+                        ))?;
+
+                    self.update_net(net, &pin_inst_ref);
+                }
             }
         }
 

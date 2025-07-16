@@ -118,17 +118,30 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
             };
 
             // Fetch pad number from port instance attributes.
-            let pad = sch
+            let pads: Vec<String> = sch
                 .instances
                 .get(port_ref)
-                .and_then(|inst| inst.attributes.get("pad"))
+                .and_then(|inst| inst.attributes.get("pads"))
                 .and_then(|av| match av {
-                    AttributeValue::String(s) => Some(s.clone()),
+                    AttributeValue::Array(arr) => Some(arr),
                     _ => None,
                 })
-                .unwrap_or_else(|| "?".to_owned());
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|av| match av {
+                            AttributeValue::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
 
-            info.nodes.push(Node { refdes, pad });
+            for pad in pads {
+                info.nodes.push(Node {
+                    refdes: refdes.clone(),
+                    pad,
+                });
+            }
         }
 
         nets.insert(info.name.clone(), info);
@@ -365,13 +378,17 @@ fn collect_pins_for_component(
     for child_ref in comp_inst.children.values() {
         let child_inst = sch.instances.get(child_ref)?;
         if child_inst.kind == InstanceKind::Port {
-            if let Some(AttributeValue::String(pad)) = child_inst.attributes.get("pad") {
-                let pin_name = child_ref
-                    .instance_path
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| pad.clone());
-                pins.push((pad.clone(), pin_name));
+            if let Some(AttributeValue::Array(pads)) = child_inst.attributes.get("pads") {
+                for pad in pads {
+                    if let AttributeValue::String(pad) = pad {
+                        let pin_name = child_ref
+                            .instance_path
+                            .last()
+                            .cloned()
+                            .unwrap_or_else(|| pad.clone());
+                        pins.push((pad.clone(), pin_name));
+                    }
+                }
             }
         }
     }

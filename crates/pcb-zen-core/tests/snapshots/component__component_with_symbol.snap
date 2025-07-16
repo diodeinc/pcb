@@ -11,20 +11,6 @@ Module {
                 name: "I2C_Device",
                 footprint: "SOIC-8",
                 prefix: "U",
-                pins: {
-                    "GND": FrozenValue(
-                        "4",
-                    ),
-                    "SCL": FrozenValue(
-                        "1",
-                    ),
-                    "SDA": FrozenValue(
-                        "2",
-                    ),
-                    "VDD": FrozenValue(
-                        "3",
-                    ),
-                },
                 connections: {
                     "GND": FrozenValue(
                         Net {
@@ -70,20 +56,14 @@ Module {
                 },
                 symbol: FrozenValue(
                     Symbol {
-                        name: "I2C",
+                        name: Some(
+                            "I2C",
+                        ),
                         pins: {
-                            "1": FrozenValue(
-                                "SCL",
-                            ),
-                            "2": FrozenValue(
-                                "SDA",
-                            ),
-                            "3": FrozenValue(
-                                "VDD",
-                            ),
-                            "4": FrozenValue(
-                                "GND",
-                            ),
+                            "1": "SCL",
+                            "2": "SDA",
+                            "3": "VDD",
+                            "4": "GND",
                         },
                     },
                 ),

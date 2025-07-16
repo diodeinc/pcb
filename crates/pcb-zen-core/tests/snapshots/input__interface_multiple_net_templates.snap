@@ -12,17 +12,6 @@ Module {
                 type: "mcu",
                 footprint: "QFN:32",
                 prefix: "U",
-                pins: {
-                    "EN": FrozenValue(
-                        "3",
-                    ),
-                    "GND": FrozenValue(
-                        "2",
-                    ),
-                    "VCC": FrozenValue(
-                        "1",
-                    ),
-                },
                 connections: {
                     "EN": FrozenValue(
                         Net {
@@ -53,7 +42,14 @@ Module {
                     ),
                 },
                 symbol: FrozenValue(
-                    NoneType,
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "VCC",
+                            "2": "GND",
+                            "3": "EN",
+                        },
+                    },
                 ),
             },
         ),
@@ -63,17 +59,6 @@ Module {
                 type: "sensor",
                 footprint: "SOT:23-6",
                 prefix: "U",
-                pins: {
-                    "ENABLE": FrozenValue(
-                        "3",
-                    ),
-                    "VDD": FrozenValue(
-                        "1",
-                    ),
-                    "VSS": FrozenValue(
-                        "2",
-                    ),
-                },
                 connections: {
                     "ENABLE": FrozenValue(
                         Net {
@@ -104,7 +89,14 @@ Module {
                     ),
                 },
                 symbol: FrozenValue(
-                    NoneType,
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "VDD",
+                            "2": "VSS",
+                            "3": "ENABLE",
+                        },
+                    },
                 ),
             },
         ),

@@ -12,20 +12,6 @@ Module {
                 type: "usb_connector",
                 footprint: "USB:TYPE-C",
                 prefix: "U",
-                pins: {
-                    "D+": FrozenValue(
-                        "2",
-                    ),
-                    "D-": FrozenValue(
-                        "3",
-                    ),
-                    "GND": FrozenValue(
-                        "4",
-                    ),
-                    "VBUS": FrozenValue(
-                        "1",
-                    ),
-                },
                 connections: {
                     "D+": FrozenValue(
                         Net {
@@ -65,7 +51,15 @@ Module {
                     ),
                 },
                 symbol: FrozenValue(
-                    NoneType,
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "VBUS",
+                            "2": "D+",
+                            "3": "D-",
+                            "4": "GND",
+                        },
+                    },
                 ),
             },
         ),

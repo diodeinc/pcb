@@ -741,6 +741,7 @@ impl EvalContext {
                 None,
                 Some(dir),
                 file_provider.as_ref(),
+                self,
             ) {
                 Ok(factory) => {
                     let val = heap.alloc(factory);
