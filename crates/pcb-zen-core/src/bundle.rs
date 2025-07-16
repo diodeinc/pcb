@@ -80,13 +80,30 @@ impl BundleLoadResolver {
 impl LoadResolver for BundleLoadResolver {
     fn resolve_spec(
         &self,
-        file_provider: &dyn FileProvider,
+        _file_provider: &dyn FileProvider,
         spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf> {
-        // For bundles, we need to convert the spec back to a string
-        // since the bundle manifest uses string keys
-        let load_path = spec.to_load_string();
-        self.resolve_path(file_provider, &load_path, current_file)
+        // Convert current_file to a string key for the load map
+        let current_file_str = current_file.to_string_lossy().to_string();
+
+        // Convert the spec to a load string to use as the inner key
+        let load_spec_str = spec.to_load_string();
+
+        // Look up in the bundle's load map
+        if let Some(file_map) = self.bundle.manifest.load_map.get(&current_file_str) {
+            if let Some(resolved_path_str) = file_map.get(&load_spec_str) {
+                // The resolved path is relative to the bundle directory
+                let resolved_path = self.bundle.bundle_path.join(resolved_path_str);
+                return Ok(resolved_path);
+            }
+        }
+
+        // If not found in the load map, return an error
+        Err(anyhow::anyhow!(
+            "Load spec '{}' from file '{}' not found in bundle manifest",
+            load_spec_str,
+            current_file_str
+        ))
     }
 }
