@@ -3,7 +3,7 @@ use std::{
     error::Error as StdError,
     fmt::Display,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use serde::ser::SerializeStruct;
@@ -694,6 +694,26 @@ pub mod workspace {
     }
 }
 
+/// Normalize a path by resolving .. and . components
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::Normal(name) => {
+                components.push(name);
+            }
+            std::path::Component::CurDir => {
+                // Skip current directory
+            }
+            _ => {}
+        }
+    }
+    components.iter().collect()
+}
+
 /// Core load resolver that handles all path resolution logic.
 /// This resolver handles workspace paths, relative paths, and delegates
 /// remote fetching to a RemoteFetcher implementation.
@@ -701,6 +721,9 @@ pub struct CoreLoadResolver {
     file_provider: Arc<dyn FileProvider>,
     remote_fetcher: Arc<dyn RemoteFetcher>,
     workspace_root: Option<PathBuf>,
+    /// Maps resolved paths to their original LoadSpecs
+    /// This allows us to resolve relative paths from remote files correctly
+    path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
 }
 
 impl CoreLoadResolver {
@@ -714,6 +737,7 @@ impl CoreLoadResolver {
             file_provider,
             remote_fetcher,
             workspace_root,
+            path_to_spec: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -728,6 +752,7 @@ impl CoreLoadResolver {
             file_provider,
             remote_fetcher,
             workspace_root,
+            path_to_spec: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -764,6 +789,111 @@ impl LoadResolver for CoreLoadResolver {
         spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
+        // Check if the current file is a cached remote file
+        let current_file_spec = self.path_to_spec.lock().unwrap().get(current_file).cloned();
+
+        // If we're resolving from a remote file, we need to handle relative and workspace paths specially
+        if let Some(remote_spec) = current_file_spec {
+            match spec {
+                LoadSpec::Path { path } if !path.is_absolute() => {
+                    // Relative path from a remote file - resolve it relative to the remote spec
+                    match &remote_spec {
+                        LoadSpec::Github {
+                            user,
+                            repo,
+                            rev,
+                            path: remote_path,
+                        } => {
+                            // Get the directory of the remote file
+                            let remote_dir = remote_path.parent().unwrap_or(Path::new(""));
+                            // Join with the relative path and normalize
+                            let new_path = normalize_path(&remote_dir.join(path));
+                            // Create a new GitHub spec with the resolved path
+                            let new_spec = LoadSpec::Github {
+                                user: user.clone(),
+                                repo: repo.clone(),
+                                rev: rev.clone(),
+                                path: new_path,
+                            };
+                            // Recursively resolve this new spec
+                            return self.resolve_spec(file_provider, &new_spec, current_file);
+                        }
+                        LoadSpec::Gitlab {
+                            project_path,
+                            rev,
+                            path: remote_path,
+                        } => {
+                            let remote_dir = remote_path.parent().unwrap_or(Path::new(""));
+                            let new_path = normalize_path(&remote_dir.join(path));
+                            let new_spec = LoadSpec::Gitlab {
+                                project_path: project_path.clone(),
+                                rev: rev.clone(),
+                                path: new_path,
+                            };
+                            return self.resolve_spec(file_provider, &new_spec, current_file);
+                        }
+                        LoadSpec::Package {
+                            package,
+                            tag,
+                            path: remote_path,
+                        } => {
+                            let remote_dir = remote_path.parent().unwrap_or(Path::new(""));
+                            let new_path = normalize_path(&remote_dir.join(path));
+                            let new_spec = LoadSpec::Package {
+                                package: package.clone(),
+                                tag: tag.clone(),
+                                path: new_path,
+                            };
+                            return self.resolve_spec(file_provider, &new_spec, current_file);
+                        }
+                        _ => {
+                            // For other types, fall through to normal handling
+                        }
+                    }
+                }
+                LoadSpec::WorkspacePath { path } => {
+                    // Workspace path from a remote file - resolve it relative to the remote root
+                    match &remote_spec {
+                        LoadSpec::Github {
+                            user, repo, rev, ..
+                        } => {
+                            let new_spec = LoadSpec::Github {
+                                user: user.clone(),
+                                repo: repo.clone(),
+                                rev: rev.clone(),
+                                path: path.clone(),
+                            };
+                            return self.resolve_spec(file_provider, &new_spec, current_file);
+                        }
+                        LoadSpec::Gitlab {
+                            project_path, rev, ..
+                        } => {
+                            let new_spec = LoadSpec::Gitlab {
+                                project_path: project_path.clone(),
+                                rev: rev.clone(),
+                                path: path.clone(),
+                            };
+                            return self.resolve_spec(file_provider, &new_spec, current_file);
+                        }
+                        LoadSpec::Package { package, tag, .. } => {
+                            let new_spec = LoadSpec::Package {
+                                package: package.clone(),
+                                tag: tag.clone(),
+                                path: path.clone(),
+                            };
+                            return self.resolve_spec(file_provider, &new_spec, current_file);
+                        }
+                        _ => {
+                            // For other types, fall through to normal handling
+                        }
+                    }
+                }
+                _ => {
+                    // Other spec types proceed normally
+                }
+            }
+        }
+
         // First, resolve any package aliases
         let (resolved_spec, is_from_alias) = if let LoadSpec::Package { .. } = spec {
             let workspace_aliases = self.read_workspace_aliases();
@@ -778,9 +908,19 @@ impl LoadResolver for CoreLoadResolver {
 
         match &resolved_spec {
             // Remote specs need to be fetched
-            LoadSpec::Package { .. } | LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self
-                .remote_fetcher
-                .fetch_remote(&resolved_spec, self.workspace_root.as_deref()),
+            LoadSpec::Package { .. } | LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => {
+                let resolved_path = self
+                    .remote_fetcher
+                    .fetch_remote(&resolved_spec, self.workspace_root.as_deref())?;
+
+                // Store the mapping from resolved path to original spec
+                self.path_to_spec
+                    .lock()
+                    .unwrap()
+                    .insert(resolved_path.clone(), resolved_spec.clone());
+
+                Ok(resolved_path)
+            }
 
             // Workspace-relative paths (starts with //)
             LoadSpec::WorkspacePath { path } => {
@@ -868,3 +1008,6 @@ impl LoadResolver for CoreLoadResolver {
         }
     }
 }
+
+#[cfg(test)]
+mod core_load_resolver_tests;

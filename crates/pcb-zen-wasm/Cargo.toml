@@ -29,6 +29,7 @@ toml = { workspace = true }
 zip = { workspace = true }
 console_log = { workspace = true }
 log = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = { workspace = true }

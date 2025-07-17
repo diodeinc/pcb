@@ -2498,6 +2498,7 @@ dependencies = [
  "serde_json",
  "starlark",
  "toml",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",

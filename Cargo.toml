@@ -92,6 +92,7 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 flate2 = "1.0.34"
 openssl-sys = { version = "0.9", features = ["vendored"] }
 openssl = { version = "0.10", features = ["vendored"] }
+wasm-bindgen-futures = "0.4"
 
 # The profile that 'dist' will build with
 [profile.dist]
