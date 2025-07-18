@@ -1001,7 +1001,10 @@ export class SchematicLayoutEngine {
         if (portName === "~" && pinEndpoint.number) {
           const childNames = Object.keys(instance.children || {});
           const pinNumberMatch = childNames.find((name) => {
-            return name.toLowerCase() === `p${pinEndpoint.number}`;
+            return (
+              name.toLowerCase() === `${pinEndpoint.number}` ||
+              name.toLowerCase() === `p${pinEndpoint.number}`
+            );
           });
 
           if (pinNumberMatch) {
