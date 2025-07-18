@@ -200,7 +200,7 @@ macro_rules! snapshot_eval {
         #[cfg(not(target_os = "windows"))]
         fn $name() {
             use std::sync::Arc;
-            use pcb_zen_core::{EvalContext, InputMap, WorkspaceLoadResolver};
+            use pcb_zen_core::{EvalContext, InputMap, CoreLoadResolver, NoopRemoteFetcher};
             use $crate::common::InMemoryFileProvider;
 
             let mut files = std::collections::HashMap::new();
@@ -214,8 +214,10 @@ macro_rules! snapshot_eval {
             let main_file = file_list.last().unwrap().0.clone();
 
             let file_provider = Arc::new(InMemoryFileProvider::new(files));
-            let load_resolver = Arc::new(WorkspaceLoadResolver::new(
-                std::path::PathBuf::from("/"),
+            let load_resolver = Arc::new(CoreLoadResolver::new(
+                file_provider.clone(),
+                Arc::new(NoopRemoteFetcher::default()),
+                Some(std::path::PathBuf::from("/")),
             ));
 
 
