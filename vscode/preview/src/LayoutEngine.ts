@@ -1073,57 +1073,10 @@ export class SchematicLayoutEngine {
           snappedY = nodeHeight;
         }
 
-        // // Calculate label text and dimensions
-        // const labelText =
-        //   pinEndpoint.name === "~" ? pinEndpoint.number || "~" : portName;
-
-        // const baseDimensions = calculateTextDimensions(labelText, 10);
-
-        // // For vertical ports (NORTH/SOUTH), text is rotated 90 degrees, so swap width/height
         const isVertical = side === "NORTH" || side === "SOUTH";
-        // const labelWidth = isVertical
-        //   ? baseDimensions.height
-        //   : baseDimensions.width;
-        // const labelHeight = isVertical
-        //   ? baseDimensions.width
-        //   : baseDimensions.height;
 
         // Prepare port labels
         const portLabels: ElkLabel[] = [];
-
-        // // Add pin name/number label if configured
-        // if (this.config.visual.showPortLabels) {
-        //   // Calculate label position based on port side
-        //   let labelX: number, labelY: number;
-        //   const labelOffset = 5; // Distance from port
-
-        //   switch (side) {
-        //     case "WEST":
-        //       labelX = -labelWidth - labelOffset;
-        //       labelY = -labelHeight / 2;
-        //       break;
-        //     case "EAST":
-        //       labelX = labelOffset;
-        //       labelY = -labelHeight / 2;
-        //       break;
-        //     case "NORTH":
-        //       labelX = -labelWidth / 2;
-        //       labelY = -labelHeight - labelOffset;
-        //       break;
-        //     case "SOUTH":
-        //       labelX = -labelWidth / 2;
-        //       labelY = labelOffset;
-        //       break;
-        //   }
-
-        //   portLabels.push({
-        //     text: labelText,
-        //     x: labelX,
-        //     y: labelY,
-        //     width: labelWidth,
-        //     height: labelHeight,
-        //   });
-        // }
 
         // Check if this port is connected to a net and add net label
         const netId = this._findNetForPort(portRef);
@@ -1402,100 +1355,6 @@ export class SchematicLayoutEngine {
     }
 
     return node;
-  }
-
-  /**
-   * Create a simple net reference node for a net
-   */
-  private _netReferenceNode(
-    ref_id: string,
-    netName: string,
-    side: "NORTH" | "WEST" | "SOUTH" | "EAST" = "WEST"
-  ): ElkNode {
-    // Calculate label dimensions
-    const labelDimensions = calculateTextDimensions(netName, 12);
-
-    // Use configured size for net reference, but expand for label
-    const baseWidth = this.config.nodeSizes.netReference.width;
-    const baseHeight = this.config.nodeSizes.netReference.height;
-    const nodeWidth = Math.max(baseWidth, labelDimensions.width + 20);
-    const nodeHeight = Math.max(baseHeight, 20);
-
-    // Calculate port position based on side
-    let portX = 0;
-    let portY = nodeHeight / 2;
-
-    switch (side) {
-      case "EAST":
-        portX = nodeWidth;
-        break;
-      case "WEST":
-        portX = 0;
-        break;
-      case "NORTH":
-        portX = nodeWidth / 2;
-        portY = 0;
-        break;
-      case "SOUTH":
-        portX = nodeWidth / 2;
-        portY = nodeHeight;
-        break;
-    }
-
-    return {
-      id: ref_id,
-      type: NodeType.NET_REFERENCE,
-      width: nodeWidth,
-      height: nodeHeight,
-      netId: netName,
-      // Apply position and rotation if provided
-      ...(this._nodePositions[ref_id] && {
-        x: this._nodePositions[ref_id].x,
-        y: this._nodePositions[ref_id].y,
-        rotation: this._nodePositions[ref_id].rotation || 0,
-      }),
-      labels: [
-        {
-          text: netName,
-          x:
-            side === "EAST"
-              ? -labelDimensions.width - 5
-              : side === "WEST"
-              ? nodeWidth + 5
-              : 10,
-          y:
-            side === "NORTH" || side === "SOUTH"
-              ? -labelDimensions.height - 5
-              : (nodeHeight - labelDimensions.height) / 2,
-          width: labelDimensions.width,
-          height: labelDimensions.height,
-          textAlign: "center" as const,
-        },
-      ],
-      ports: [
-        {
-          id: `${ref_id}.port`,
-          x: portX,
-          y: portY,
-          width: 0,
-          height: 0,
-          properties: {
-            "port.side": side,
-            "port.alignment": "CENTER",
-          },
-        },
-      ],
-      properties: {
-        "elk.portConstraints": "FIXED_POS",
-        "elk.nodeSize.constraints": "MINIMUM_SIZE",
-        "elk.nodeSize.minimum": `(${nodeWidth}, ${nodeHeight})`,
-        // Mark as fixed if position is provided
-        ...(this._nodePositions[ref_id] && {
-          "elk.position": `(${this._nodePositions[ref_id].x},${this._nodePositions[ref_id].y})`,
-          "elk.fixed": "true",
-        }),
-      },
-    };
   }
 
   /**
@@ -1985,39 +1844,6 @@ export class SchematicLayoutEngine {
   }
 
   /**
-   * Find port info including absolute position
-   */
-  private _findPortInfo(
-    portId: string,
-    nodes: ElkNode[]
-  ): { x: number; y: number } | null {
-    for (const node of nodes) {
-      if (!node.ports || node.x === undefined || node.y === undefined) continue;
-
-      for (const port of node.ports) {
-        if (port.id === portId) {
-          const portX = (port.x || 0) + node.x;
-          const portY = (port.y || 0) + node.y;
-          return { x: portX, y: portY };
-        }
-      }
-
-      // Check children recursively
-      if (node.children) {
-        const childResult = this._findPortInfo(portId, node.children);
-        if (childResult) {
-          return {
-            x: childResult.x + (node.x || 0),
-            y: childResult.y + (node.y || 0),
-          };
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
    * Find which node owns a given port
    */
   private _findNodeOwningPort(portId: string, nodes: ElkNode[]): string {
@@ -2405,29 +2231,5 @@ export class SchematicLayoutEngine {
         }
       }
     }
-  }
-
-  /**
-   * Check if a net has a symbol value and extract it
-   */
-  private _getNetSymbolValue(netId: string): string | null {
-    const net = this.netlist.nets[netId];
-    if (!net) return null;
-
-    const symbolValueAttr = net.attributes?.__symbol_value;
-    if (!symbolValueAttr) return null;
-
-    // Extract the string value from AttributeValue
-    if (typeof symbolValueAttr === "string") {
-      return symbolValueAttr;
-    } else if (
-      symbolValueAttr &&
-      typeof symbolValueAttr === "object" &&
-      "String" in symbolValueAttr
-    ) {
-      return (symbolValueAttr as any).String;
-    }
-
-    return null;
   }
 }

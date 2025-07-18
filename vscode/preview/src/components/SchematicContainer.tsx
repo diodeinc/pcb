@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import ReactFlowSchematicViewer from "./ReactFlowSchematicViewer";
 import SchematicSidebar from "./SchematicSidebar";
 import "./ReactFlowSchematicViewer.css";
@@ -267,16 +267,19 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
   }, [currentFile, selectedModule]);
 
   // Handle component selection
-  const handleComponentSelect = (componentId: string | null) => {
+  const handleComponentSelect = useCallback((componentId: string | null) => {
     if (componentId) {
       setSelectedModule(componentId);
     }
-  };
+  }, []);
 
   // Handle errors
-  const handleError = (message: string) => {
-    setError(message);
-  };
+  const handleError = useCallback(
+    (message: string) => {
+      setError(message);
+    },
+    [setError]
+  );
 
   // Extract module name from file path for display
   const moduleName = React.useMemo(() => {
