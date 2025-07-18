@@ -70,3 +70,5 @@ layout_test!("simple", "MyBoard");
 
 layout_test!("module_layout", "Main");
 layout_test!("component_side_sync", "Board");
+
+layout_test!("multi_pads", "MultiPads");

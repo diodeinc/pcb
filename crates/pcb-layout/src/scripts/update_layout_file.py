@@ -269,13 +269,17 @@ class JsonNetlistParser:
 
                     # Get the pad number from the port
                     port_instance = data["instances"].get(port_ref, {})
-                    pad_num = (
-                        port_instance.get("attributes", {})
-                        .get("pad", {})
-                        .get("String", "1")
-                    )
+                    pad_nums = [
+                        pad.get("String", "1")
+                        for pad in (
+                            port_instance.get("attributes", {})
+                            .get("pads", {})
+                            .get("Array", [])
+                        )
+                    ]
 
-                    nodes.append((ref_des, pad_num, net_name))
+                    for pad_num in pad_nums:
+                        nodes.append((ref_des, pad_num, net_name))
 
             if nodes:
                 net = JsonNetlistParser.Net(net_name, nodes)
