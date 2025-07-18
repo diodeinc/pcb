@@ -464,24 +464,11 @@ export class SchematicLayoutEngine {
       // Skip ELK layout - use existing positions
       console.log("All nodes have positions, skipping ELK layout");
       layoutedGraph = graph;
-
-      // Apply existing positions to nodes
-      this._applyExistingPositions(layoutedGraph, nodePositions);
     }
 
-    // Build connectivity for routing - use clustering (ignoreClusters=false) for efficient routing
-    connectivityInfo = this._buildConnectivity(layoutedGraph, false);
+    // Apply existing positions to nodes
+    this._applyExistingPositions(layoutedGraph, nodePositions);
 
-    // Remove net labels from ports that have edges
-    this._removePortNetLabels(layoutedGraph, connectivityInfo.portsWithEdges);
-
-    // Store the ELK edges for later use
-    layoutedGraph.edges = connectivityInfo.elkEdges;
-
-    // Initialize extracted node positions early since we'll add junction nodes
-    const extractedNodePositions: NodePositions = {};
-
-    // Apply grid snapping if enabled - do this before creating obstacles for libavoid
     if (this.config.layout.gridSnap.enabled) {
       const gridSize = this.config.layout.gridSnap.size;
 
@@ -495,6 +482,18 @@ export class SchematicLayoutEngine {
         }
       }
     }
+
+    // Build connectivity for routing - use clustering (ignoreClusters=false) for efficient routing
+    connectivityInfo = this._buildConnectivity(layoutedGraph, false);
+
+    // Remove net labels from ports that have edges
+    this._removePortNetLabels(layoutedGraph, connectivityInfo.portsWithEdges);
+
+    // Store the ELK edges for later use
+    layoutedGraph.edges = connectivityInfo.elkEdges;
+
+    // Initialize extracted node positions early since we'll add junction nodes
+    const extractedNodePositions: NodePositions = {};
 
     // Convert nodes to obstacles for libavoid
     const obstacles: Obstacle[] = [];
@@ -599,9 +598,9 @@ export class SchematicLayoutEngine {
       }
 
       // Add junction nodes to the graph
-      if (layoutedGraph.children) {
-        layoutedGraph.children.push(...junctionNodes);
-      }
+      // if (layoutedGraph.children) {
+      //   layoutedGraph.children.push(...junctionNodes);
+      // }
 
       // Convert the point-to-point edges from libavoid to ELK edges
       // We no longer need to create a map since we pass context through routing

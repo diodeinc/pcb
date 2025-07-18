@@ -102,11 +102,10 @@ interface SchematicViewerState {
   clearComponentData: () => void;
 
   // Change handlers
-  onNodesChange: (
-    changes: NodeChange[],
-    gridSnapEnabled?: boolean,
-    gridSize?: number
-  ) => { hasPositionChanges: boolean; updatedPositions: NodePositions };
+  onNodesChange: (changes: NodeChange[]) => {
+    hasPositionChanges: boolean;
+    updatedPositions: NodePositions;
+  };
   onEdgesChange: (changes: EdgeChange[]) => void;
 }
 
@@ -417,8 +416,12 @@ export const useSchematicViewerStore = create(
           });
         },
 
-        onNodesChange: (changes, gridSnapEnabled = true, gridSize = 12.7) => {
+        onNodesChange: (changes) => {
           const state = get();
+
+          // Get grid snap settings from config
+          const gridSnapEnabled = state.config?.layout.gridSnap.enabled ?? true;
+          const gridSize = state.config?.layout.gridSnap.size ?? 12.7;
 
           // Apply grid snapping to position changes if enabled
           let processedChanges = changes;
