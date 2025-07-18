@@ -1,0 +1,240 @@
+.schematic-sidebar {
+  width: 320px;
+  height: 100%;
+  background-color: var(--vscode-editor-background, #ffffff);
+  border-right: 1px solid var(--vscode-panel-border, #e0e0e0);
+  overflow-y: auto;
+  color: var(--vscode-editor-foreground, #333333);
+}
+
+.sidebar-content {
+  padding: 16px;
+}
+
+.module-header {
+  margin-bottom: 16px;
+}
+
+.module-name {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  color: var(--vscode-editor-foreground, #333333);
+}
+
+.module-path {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #666666);
+  margin: 0;
+}
+
+/* Error Alert */
+.error-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 16px;
+  background-color: var(--vscode-inputValidation-errorBackground, #fee);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #f44);
+  border-radius: 4px;
+}
+
+.error-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--vscode-errorForeground, #f44);
+}
+
+.error-message {
+  font-size: 12px;
+  color: var(--vscode-errorForeground, #f44);
+  line-height: 1.4;
+}
+
+/* Configuration Section */
+.configuration-section {
+  margin-bottom: 20px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.section-label {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--vscode-descriptionForeground, #666666);
+}
+
+.evaluating-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #666666);
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Parameters List */
+.parameters-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.parameter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parameter-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.parameter-name {
+  font-size: 14px;
+  font-weight: normal;
+  color: var(--vscode-editor-foreground, #333333);
+}
+
+.parameter-type {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--vscode-descriptionForeground, #666666);
+  opacity: 0.6;
+}
+
+/* Input Controls */
+.parameter-input,
+.parameter-select {
+  height: 32px;
+  padding: 0 8px;
+  font-size: 14px;
+  font-family: monospace;
+  background-color: var(--vscode-input-background, #ffffff);
+  color: var(--vscode-input-foreground, #333333);
+  border: 1px solid var(--vscode-input-border, #ddd);
+  border-radius: 2px;
+  outline: none;
+}
+
+.parameter-input:focus,
+.parameter-select:focus {
+  border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.parameter-checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.parameter-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.parameter-checkbox-label {
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--vscode-editor-foreground, #333333);
+}
+
+/* Diagnostics Section */
+.diagnostics-section {
+  margin-top: 16px;
+}
+
+.error-label {
+  color: var(--vscode-errorForeground, #f44);
+}
+
+.diagnostics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.diagnostic-item {
+  padding: 8px;
+  background-color: var(--vscode-inputValidation-errorBackground, #fee);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #f44);
+  border-radius: 4px;
+}
+
+.diagnostic-message {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vscode-errorForeground, #f44);
+}
+
+.diagnostic-location {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--vscode-descriptionForeground, #666666);
+  margin-top: 4px;
+}
+
+.diagnostic-child {
+  margin-top: 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--vscode-inputValidation-errorBorder, #f44);
+  opacity: 0.8;
+}
+
+.diagnostic-child-message {
+  font-size: 12px;
+  color: var(--vscode-errorForeground, #f44);
+  opacity: 0.8;
+}
+
+/* Dark theme support */
+@media (prefers-color-scheme: dark) {
+  .schematic-sidebar {
+    background-color: var(--vscode-editor-background, #1e1e1e);
+    border-right-color: var(--vscode-panel-border, #333333);
+  }
+
+  .module-name {
+    color: var(--vscode-editor-foreground, #cccccc);
+  }
+
+  .parameter-input,
+  .parameter-select {
+    background-color: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #cccccc);
+    border-color: var(--vscode-input-border, #555555);
+  }
+
+  .parameter-checkbox-label {
+    color: var(--vscode-editor-foreground, #cccccc);
+  }
+} 
