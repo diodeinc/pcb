@@ -1,5 +1,4 @@
 use log::debug;
-use pcb_sch::Schematic;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
 use serde::{Deserialize, Serialize};
@@ -247,7 +246,7 @@ impl pcb_zen_core::FileProvider for WasmFileProvider {
             } else {
                 // Cache the loaded file for future use
                 if let Ok(mut provider) = self.inner.lock() {
-                    // provider.add_file(path, content.clone());
+                    provider.add_file(path, content.clone());
                 }
 
                 Ok(content)

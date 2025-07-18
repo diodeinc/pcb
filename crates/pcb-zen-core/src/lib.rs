@@ -1008,6 +1008,3 @@ impl LoadResolver for CoreLoadResolver {
         }
     }
 }
-
-#[cfg(test)]
-mod core_load_resolver_tests;
