@@ -48,7 +48,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /Applications/KiCad
-          key: ${{ runner.os }}-kicad-9.0.0
+          key: ${{ runner.os }}-kicad-9.0
 
       - name: Install KiCad (macOS)
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
@@ -61,12 +61,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\Program Files\KiCad
-          key: ${{ runner.os }}-kicad-9.0
+          key: ${{ runner.os }}-kicad-9.0.3
 
       - name: Install KiCad (Windows)
         if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
         run: |
-          choco install kicad --version 9.0.0 -y
+          choco install kicad --version 9.0.3 -y
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
