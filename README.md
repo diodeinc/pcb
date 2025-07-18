@@ -47,14 +47,14 @@ cd pcb
 
 ### 1. Create Your First Design
 
-Create a file called `blinky.star`:
+Create a file called `blinky.zen`:
 
 ```python
 # Load standard library
-load("@github/diodeinc/stdlib:main/properties.star", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
-Resistor = Module("@github/diodeinc/stdlib:main/generics/Resistor.star")
-Led = Module("@github/diodeinc/stdlib:main/generics/Led.star")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 # Define power nets
 vcc = Net("VCC")
@@ -85,27 +85,27 @@ Layout("layout", "layout/")
 
 ```bash
 # Compile the design and check for errors
-pcb build blinky.star
+pcb build blinky.zen
 
 # Output:
-# ✓ blinky.star (2 components)
+# ✓ blinky.zen (2 components)
 ```
 
 ### 3. Generate Layout
 
 ```bash
 # Generate PCB layout files
-pcb layout blinky.star
+pcb layout blinky.zen
 
 # Output:
-# ✓ blinky.star (layout/blinky.kicad_pcb)
+# ✓ blinky.zen (layout/blinky.kicad_pcb)
 ```
 
 ### 4. Open in KiCad
 
 ```bash
 # Open the generated layout
-pcb open blinky.star
+pcb open blinky.zen
 ```
 
 ## Core Concepts
@@ -168,10 +168,10 @@ SPIInterface = interface(
 
 ### Modules
 
-Modules enable hierarchical design and reusability. A module is a `.star` file that defines configuration parameters and IO interfaces:
+Modules enable hierarchical design and reusability. A module is a `.zen` file that defines configuration parameters and IO interfaces:
 
 ```python
-# power_supply.star
+# power_supply.zen
 # Configuration parameters
 input_voltage = config("input_voltage", float, default = 12.0)
 output_voltage = config("output_voltage", float, default = 3.3)
@@ -189,8 +189,8 @@ Regulator(
     # ... component configuration
 )
 
-# main.star
-PowerSupply = Module("power_supply.star")
+# main.zen
+PowerSupply = Module("power_supply.zen")
 
 PowerSupply(
     name = "PSU1",
@@ -206,7 +206,7 @@ PowerSupply(
 The `config()` function defines configuration parameters at the module level:
 
 ```python
-# sensor_module.star
+# sensor_module.zen
 # Required configuration
 i2c_address = config("i2c_address", int)
 
@@ -227,7 +227,7 @@ package_type = config("package", Package, convert = Package)
 The `io()` function defines input/output interfaces at the module level:
 
 ```python
-# uart_bridge.star
+# uart_bridge.zen
 # Define IO interfaces
 uart_in = io("uart_in", UARTInterface)
 uart_out = io("uart_out", UARTInterface)
@@ -253,21 +253,21 @@ Bridge(
 
 ### `pcb build`
 
-Build and validate PCB designs from `.star` files.
+Build and validate PCB designs from `.zen` files.
 
 ```bash
 pcb build [PATHS...]
 
 Arguments:
-  [PATHS...]     One or more .star files or directories containing .star files
-                 When omitted, all .star files in the current directory are built
+  [PATHS...]     One or more .zen files or directories containing .zen files
+                 When omitted, all .zen files in the current directory are built
                  Directories are scanned non-recursively
 
 Examples:
-  pcb build                    # Build all .star files in current directory
-  pcb build board.star         # Build specific file
-  pcb build designs/           # Build all .star files in designs/ directory (non-recursive)
-  pcb build a.star b.star      # Build multiple specific files
+  pcb build                    # Build all .zen files in current directory
+  pcb build board.zen         # Build specific file
+  pcb build designs/           # Build all .zen files in designs/ directory (non-recursive)
+  pcb build a.zen b.zen      # Build multiple specific files
 ```
 
 The build command:
@@ -279,7 +279,7 @@ The build command:
 
 ### `pcb layout`
 
-Generate PCB layout files from `.star` designs.
+Generate PCB layout files from `.zen` designs.
 
 ```bash
 pcb layout [OPTIONS] [PATHS...]
@@ -290,19 +290,19 @@ Options:
   -h, --help        Show help information
 
 Arguments:
-  [PATHS...]        One or more .star files to process for layout generation
-                    When omitted, all .star files in the current directory are processed
+  [PATHS...]        One or more .zen files to process for layout generation
+                    When omitted, all .zen files in the current directory are processed
 
 Examples:
-  pcb layout                   # Generate layouts for all .star files
-  pcb layout board.star        # Generate layout for specific file
+  pcb layout                   # Generate layouts for all .zen files
+  pcb layout board.zen        # Generate layout for specific file
   pcb layout --no-open         # Generate without opening in KiCad
   pcb layout -s                # Force layout selection prompt
 ```
 
 The layout command:
 
-- First builds the .star file (same as `pcb build`)
+- First builds the .zen file (same as `pcb build`)
 - Generates KiCad PCB layout files if a `Layout()` directive exists
 - Shows warnings for files without layout directives
 - Opens the generated layout in KiCad by default (unless `--no-open`)
@@ -316,25 +316,25 @@ Open existing PCB layout files in KiCad.
 pcb open [PATHS...]
 
 Arguments:
-  [PATHS...]     One or more .star files to find and open layouts for
+  [PATHS...]     One or more .zen files to find and open layouts for
                  When omitted, searches current directory for .kicad_pcb files
 
 Examples:
   pcb open                     # Open layout files in current directory
-  pcb open board.star          # Open layout associated with board.star
-  pcb open *.star              # Open layouts for all .star files
+  pcb open board.zen          # Open layout associated with board.zen
+  pcb open *.zen              # Open layouts for all .zen files
 ```
 
 The open command:
 
-- Builds .star files to find their associated layout paths
-- Falls back to searching for .kicad_pcb files if no .star files specified
+- Builds .zen files to find their associated layout paths
+- Falls back to searching for .kicad_pcb files if no .zen files specified
 - Prompts for selection when multiple layouts are found
 - Opens the selected layout in your system's default PCB editor (typically KiCad)
 
 ### `pcb fmt`
 
-Format `.zen` and `.star` files using the bundled buildifier formatter.
+Format `.zen` and `.zen` files using the bundled buildifier formatter.
 
 ```bash
 pcb fmt [OPTIONS] [PATHS...]
@@ -345,15 +345,15 @@ Options:
   -h, --help      Show help information
 
 Arguments:
-  [PATHS...]      One or more .zen/.star files or directories containing such files
-                  When omitted, all .zen/.star files in the current directory are formatted
+  [PATHS...]      One or more .zen/.zen files or directories containing such files
+                  When omitted, all .zen/.zen files in the current directory are formatted
 
 Examples:
-  pcb fmt                      # Format all .zen/.star files in current directory
-  pcb fmt design.star          # Format specific file
+  pcb fmt                      # Format all .zen/.zen files in current directory
+  pcb fmt design.zen          # Format specific file
   pcb fmt src/                 # Format all files in src/ directory
   pcb fmt --check              # Check formatting without making changes
-  pcb fmt --diff main.star     # Show what would change
+  pcb fmt --diff main.zen     # Show what would change
 ```
 
 The fmt command:
@@ -385,16 +385,16 @@ A typical Zener project structure:
 
 ```
 my-pcb-project/
-├── main.star              # Main board definition
+├── main.zen              # Main board definition
 ├── components/            # Reusable components
-│   ├── mcu.star
-│   ├── power.star
-│   └── connectors.star
+│   ├── mcu.zen
+│   ├── power.zen
+│   └── connectors.zen
 ├── modules/               # Reusable modules
-│   ├── usb_interface.star
-│   └── power_supply.star
+│   ├── usb_interface.zen
+│   └── power_supply.zen
 ├── libs/                  # External libraries
-│   └── stdlib.star
+│   └── stdlib.zen
 ├── eda/                   # KiCad symbols and footprints
 │   ├── symbols/
 │   └── footprints/
@@ -435,11 +435,11 @@ Zener is built as a modular Rust workspace with specialized crates:
 ### Simple LED Circuit
 
 ```python
-load("@github/diodeinc/stdlib:main/properties.star", "Layout")
+load("@stdlib/properties.zen", "Layout")
 
-Resistor = Module("@github/diodeinc/stdlib:main/generics/Resistor.star")
-LED = Module("@github/diodeinc/stdlib:main/generics/LED.star")
-Capacitor = Module("@github/diodeinc/stdlib:main/generics/Capacitor.star")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+LED = Module("@stdlib/generics/LED.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 vcc = Net("VCC")
 gnd = Net("GND")
@@ -478,7 +478,7 @@ Layout("layout", "layout/")
 ### Module with Configuration
 
 ```python
-# voltage_regulator.star
+# voltage_regulator.zen
 input_voltage = config("input_voltage", float)
 output_voltage = config("output_voltage", float, default = 3.3)
 max_current = config("max_current", float, default = 1.0)
@@ -512,9 +512,9 @@ Component(
     }
 )
 
-# main.star
-load("@github/diodeinc/stdlib:main/interfaces.star", "Power")
-VoltageRegulator = Module("voltage_regulator.star")
+# main.zen
+load("@stdlib/interfaces.zen", "Power")
+VoltageRegulator = Module("voltage_regulator.zen")
 
 # Define power rails
 input_power = Power("VIN")
@@ -535,13 +535,13 @@ VoltageRegulator(
 ### Complex System with Multiple Modules
 
 ```python
-load("@github/diodeinc/stdlib:main/properties.star", "Layout")
-load("@github/diodeinc/stdlib:main/interfaces.star", "Power", "SPI", "I2C")
+load("@stdlib/properties.zen", "Layout")
+load("@stdlib/interfaces.zen", "Power", "SPI", "I2C")
 
 # Load modules
-MCU = Module("stm32f4.star")
-Sensor = Module("bmi270.star")
-Flash = Module("w25q128.star")
+MCU = Module("stm32f4.zen")
+Sensor = Module("bmi270.zen")
+Flash = Module("w25q128.zen")
 
 # Power distribution
 system_power = Power("3V3")
