@@ -530,9 +530,6 @@ class VirtualFootprint(VirtualItem):
     def _copy_kicad_properties(self, source: Any, target: Any) -> None:
         """Copy position, orientation, etc from source to target KiCad object."""
         if hasattr(source, "GetPosition") and hasattr(target, "SetPosition"):
-            target.SetPosition(source.GetPosition())
-            target.SetOrientation(source.GetOrientation())
-
             # Handle layer and flipping
             source_layer = source.GetLayer()
             target_layer = target.GetLayer()
@@ -553,6 +550,9 @@ class VirtualFootprint(VirtualItem):
             # Set the layer after flipping (flipping changes the layer)
             target.SetLayer(source_layer)
             target.SetLayerSet(source.GetLayerSet())
+
+            target.SetPosition(source.GetPosition())
+            target.SetOrientation(source.GetOrientation())
 
             # Copy reference designator position/attributes
             if hasattr(source, "Reference") and hasattr(target, "Reference"):
