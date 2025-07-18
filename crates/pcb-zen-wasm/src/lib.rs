@@ -1,7 +1,7 @@
-use anyhow;
-use log::{debug, error};
+use log::debug;
+use pcb_sch::Schematic;
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::{lang::type_info::TypeInfo, EvalContext, FileProvider, InputMap, InputValue};
+use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -48,46 +48,16 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
         spec: &pcb_zen_core::LoadSpec,
         _workspace_root: Option<&Path>,
     ) -> Result<PathBuf, anyhow::Error> {
-        debug!(
-            "WasmRemoteFetcher::fetch_remote - Fetching spec: {:?}",
-            spec
-        );
+        debug!("WasmRemoteFetcher::fetch_remote - Fetching spec: {spec:?}");
 
         match spec {
             pcb_zen_core::LoadSpec::Package { package, tag, path } => {
-                debug!(
-                    "WasmRemoteFetcher::fetch_remote - Fetching package: {}/{} path: {}",
-                    package,
-                    tag,
-                    path.display()
-                );
-
-                // Check if the file already exists in our file provider
-                if let Ok(provider) = self.file_provider.lock() {
-                    if provider.exists(path) {
-                        debug!(
-                            "WasmRemoteFetcher::fetch_remote - File already exists in memory: {}",
-                            path.display()
-                        );
-                        return Ok(path.clone());
-                    }
-                }
-
-                let mut req = FetchRequest::new();
-                req.spec_type = "package".to_string();
-                req.package = Some(package.to_string());
-                req.version = Some(tag.to_string());
-                req.path = Some(path.to_string_lossy().to_string());
-
-                // Fetch the content
-                let content = self.fetch_with_request(req).unwrap();
-
-                // Store in the file provider
-                if let Ok(mut provider) = self.file_provider.lock() {
-                    provider.add_file(path.clone(), content);
-                }
-
-                Ok(path.clone())
+                self.fetch_and_cache(path, |req| {
+                    req.spec_type = "package".to_string();
+                    req.package = Some(package.to_string());
+                    req.version = Some(tag.to_string());
+                    req.path = Some(path.to_string_lossy().to_string());
+                })
             }
 
             pcb_zen_core::LoadSpec::Github {
@@ -95,107 +65,28 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
                 repo,
                 rev,
                 path,
-            } => {
-                debug!(
-                    "WasmRemoteFetcher::fetch_remote - Fetching GitHub: {}/{} ref: {} path: {}",
-                    user,
-                    repo,
-                    rev,
-                    path.display()
-                );
-
-                // Check if the file already exists in our file provider
-                if let Ok(provider) = self.file_provider.lock() {
-                    if provider.exists(path) {
-                        debug!(
-                            "WasmRemoteFetcher::fetch_remote - File already exists in memory: {}",
-                            path.display()
-                        );
-                        return Ok(path.clone());
-                    } else {
-                        error!("File does not exist in file provider");
-                    }
-                } else {
-                    error!("Failed to lock file provider");
-                }
-
-                let mut req = FetchRequest::new();
+            } => self.fetch_and_cache(path, |req| {
                 req.spec_type = "github".to_string();
                 req.owner = Some(user.to_string());
                 req.repo = Some(repo.to_string());
                 req.git_ref = Some(rev.to_string());
                 req.path = Some(path.to_string_lossy().to_string());
-
-                // Fetch the content
-                let content = self.fetch_with_request(req).unwrap();
-
-                // Store in the file provider
-                if let Ok(mut provider) = self.file_provider.lock() {
-                    provider.add_file(path.clone(), content);
-                }
-
-                Ok(path.clone())
-            }
+            }),
 
             pcb_zen_core::LoadSpec::Gitlab {
                 project_path,
                 rev,
                 path,
-            } => {
-                debug!(
-                    "WasmRemoteFetcher::fetch_remote - Fetching GitLab: {} ref: {} path: {}",
-                    project_path,
-                    rev,
-                    path.display()
-                );
-
-                // Check if the file already exists in our file provider
-                if let Ok(provider) = self.file_provider.lock() {
-                    if provider.exists(path) {
-                        debug!(
-                            "WasmRemoteFetcher::fetch_remote - File already exists in memory: {}",
-                            path.display()
-                        );
-                        return Ok(path.clone());
-                    } else {
-                        error!("File does not exist in file provider");
-                    }
-                } else {
-                    error!("Failed to lock file provider");
-                }
-
-                let mut req = FetchRequest::new();
+            } => self.fetch_and_cache(path, |req| {
                 req.spec_type = "gitlab".to_string();
                 req.owner = Some(project_path.to_string());
                 req.git_ref = Some(rev.to_string());
                 req.path = Some(path.to_string_lossy().to_string());
+            }),
 
-                // Fetch the content
-                let content = self.fetch_with_request(req).unwrap();
-
-                // Store in the file provider
-                if let Ok(mut provider) = self.file_provider.lock() {
-                    provider.add_file(path.clone(), content);
-                }
-
-                Ok(path.clone())
-            }
-
-            pcb_zen_core::LoadSpec::Path { path } => {
+            pcb_zen_core::LoadSpec::Path { path }
+            | pcb_zen_core::LoadSpec::WorkspacePath { path } => {
                 // Regular path - just return it
-                debug!(
-                    "WasmRemoteFetcher::fetch_remote - Regular path: {}",
-                    path.display()
-                );
-                Ok(path.clone())
-            }
-
-            pcb_zen_core::LoadSpec::WorkspacePath { path } => {
-                // Workspace path - just return it
-                debug!(
-                    "WasmRemoteFetcher::fetch_remote - Workspace path: {}",
-                    path.display()
-                );
                 Ok(path.clone())
             }
         }
@@ -203,46 +94,62 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
 }
 
 impl WasmRemoteFetcher {
-    fn fetch_with_request(
+    fn fetch_and_cache<F>(
         &self,
-        fetch_request: FetchRequest,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+        path: &Path,
+        configure_request: F,
+    ) -> Result<PathBuf, anyhow::Error>
+    where
+        F: FnOnce(&mut FetchRequest),
+    {
         debug!(
-            "WasmRemoteFetcher::fetch_with_request - Fetching with request: {:?}",
-            fetch_request.spec_type
+            "WasmRemoteFetcher::fetch_and_cache - Fetching file: {}",
+            path.display()
+        );
+        debug!(
+            "WasmRemoteFetcher::fetch_and_cache - Existing files: {:?}",
+            self.file_provider.lock().unwrap().files().keys()
         );
 
+        // Check if the file already exists in our file provider
+        if let Ok(provider) = self.file_provider.lock() {
+            if provider.exists(path) {
+                return Ok(path.to_path_buf());
+            }
+        }
+
+        // Build the fetch request
+        let mut req = FetchRequest::new();
+        configure_request(&mut req);
+
+        // Fetch the content
+        let content = self.fetch_with_request(req)?;
+
+        // Store in the file provider
+        if let Ok(mut provider) = self.file_provider.lock() {
+            provider.add_file(path.to_path_buf(), content);
+        }
+
+        Ok(path.to_path_buf())
+    }
+
+    fn fetch_with_request(&self, fetch_request: FetchRequest) -> Result<String, anyhow::Error> {
         // Convert to JsValue
-        let js_request = serde_wasm_bindgen::to_value(&fetch_request).map_err(|e| {
-            debug!(
-                "WasmRemoteFetcher::fetch_with_request - Failed to serialize fetch request: {}",
-                e
-            );
-            format!("Failed to serialize fetch request: {}", e)
-        })?;
+        let js_request = serde_wasm_bindgen::to_value(&fetch_request)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize fetch request: {}", e))?;
 
         // Call JavaScript to fetch the remote file
-        debug!("WasmRemoteFetcher::fetch_with_request - Calling js_fetch_remote_file");
         let result = js_fetch_remote_file(js_request);
 
         if let Some(content) = result.as_string() {
             if content.starts_with("ERROR:") {
                 let error_msg = content.trim_start_matches("ERROR:");
-                debug!(
-                    "WasmRemoteFetcher::fetch_with_request - Remote fetch returned error: {}",
-                    error_msg
-                );
-                Err(error_msg.into())
+                Err(anyhow::anyhow!("{}", error_msg))
             } else {
-                debug!(
-                    "WasmRemoteFetcher::fetch_with_request - Remote fetch successful, {} bytes",
-                    content.len()
-                );
                 Ok(content)
             }
         } else {
-            debug!("WasmRemoteFetcher::fetch_with_request - Invalid response from JavaScript (not a string)");
-            Err("Invalid response from JavaScript".into())
+            Err(anyhow::anyhow!("Invalid response from JavaScript"))
         }
     }
 }
@@ -254,24 +161,31 @@ pub struct FetchRequest {
     /// Type of the load spec (package, github, gitlab)
     #[wasm_bindgen(getter_with_clone)]
     pub spec_type: String,
+
     /// Package name (for package specs)
     #[wasm_bindgen(getter_with_clone)]
     pub package: Option<String>,
+
     /// Version (for package specs)
     #[wasm_bindgen(getter_with_clone)]
     pub version: Option<String>,
+
     /// Owner (for github/gitlab specs)
     #[wasm_bindgen(getter_with_clone)]
     pub owner: Option<String>,
+
     /// Repo (for github/gitlab specs)
     #[wasm_bindgen(getter_with_clone)]
     pub repo: Option<String>,
+
     /// Ref (for github/gitlab specs)
     #[wasm_bindgen(getter_with_clone)]
     pub git_ref: Option<String>,
+
     /// Path within the repo (for github/gitlab specs)
     #[wasm_bindgen(getter_with_clone)]
     pub path: Option<String>,
+
     /// Workspace root path (if available)
     #[wasm_bindgen(getter_with_clone)]
     pub workspace_root: Option<String>,
@@ -309,16 +223,11 @@ impl WasmFileProvider {
 impl pcb_zen_core::FileProvider for WasmFileProvider {
     fn read_file(&self, path: &Path) -> Result<String, pcb_zen_core::FileProviderError> {
         let path_str = path.to_string_lossy();
-        debug!("WasmFileProvider::read_file - Reading file: {}", path_str);
 
         // Try the inner provider first
         if let Ok(provider) = self.inner.lock() {
             match provider.read_file(path) {
                 Ok(content) => {
-                    debug!(
-                        "WasmFileProvider::read_file - Found in memory: {}",
-                        path_str
-                    );
                     return Ok(content);
                 }
                 Err(_) => {
@@ -328,36 +237,22 @@ impl pcb_zen_core::FileProvider for WasmFileProvider {
         }
 
         // For files not in memory, call JavaScript to load them
-        debug!(
-            "WasmFileProvider::read_file - Loading file via js_load_file: {}",
-            path_str
-        );
         let result = js_load_file(&path_str);
 
         if let Some(content) = result.as_string() {
             if content.starts_with("ERROR:") {
-                debug!(
-                    "WasmFileProvider::read_file - File load returned error: {}",
-                    content
-                );
                 Err(pcb_zen_core::FileProviderError::NotFound(
                     path.to_path_buf(),
                 ))
             } else {
-                debug!(
-                    "WasmFileProvider::read_file - File load successful, {} bytes",
-                    content.len()
-                );
-
                 // Cache the loaded file for future use
                 if let Ok(mut provider) = self.inner.lock() {
-                    provider.add_file(path, content.clone());
+                    // provider.add_file(path, content.clone());
                 }
 
                 Ok(content)
             }
         } else {
-            debug!("WasmFileProvider::read_file - Invalid response from JavaScript (not a string)");
             Err(pcb_zen_core::FileProviderError::IoError(
                 "Invalid response from JavaScript".to_string(),
             ))
@@ -419,23 +314,6 @@ fn json_to_input_value(json: &serde_json::Value) -> Option<InputValue> {
             values.map(InputValue::List)
         }
         serde_json::Value::Object(obj) => {
-            // Check if this is a special typed object
-            if let Some(type_field) = obj.get("__type") {
-                if let Some(type_str) = type_field.as_str() {
-                    if type_str == "Net" {
-                        if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
-                            // For WASM, we'll use a simple counter for net IDs
-                            // In production, this would need proper ID generation
-                            return Some(InputValue::Net {
-                                id: 1, // Placeholder ID
-                                name: name.to_string(),
-                                properties: starlark::collections::SmallMap::new(),
-                            });
-                        }
-                    }
-                }
-            }
-
             // Regular dict
             let mut map = HashMap::new();
             for (k, v) in obj {
@@ -473,11 +351,9 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
 #[wasm_bindgen]
 pub struct Module {
     id: String,
-    files: HashMap<String, String>,
     main_file: String,
     module_name: String,
     file_provider: Arc<WasmFileProvider>,
-    remote_fetcher: Arc<WasmRemoteFetcher>,
     load_resolver: Arc<pcb_zen_core::CoreLoadResolver>,
 }
 
@@ -486,11 +362,6 @@ impl Module {
     /// Create a module from a single file path
     #[wasm_bindgen(js_name = fromPath)]
     pub fn from_path(file_path: &str) -> Result<Module, JsValue> {
-        debug!(
-            "Module::from_path - Creating module from path: '{}'",
-            file_path
-        );
-
         // Extract module name from the file path
         let path = PathBuf::from(file_path);
         let module_name = path
@@ -499,15 +370,8 @@ impl Module {
             .unwrap_or("module")
             .to_string();
 
-        debug!(
-            "Module::from_path - Extracted module name: '{}'",
-            module_name
-        );
-
         // Generate unique ID
         let id = format!("module_{}", uuid::Uuid::new_v4());
-
-        debug!("Module::from_path - Created module with ID: {}", id);
 
         // Create shared inner provider
         let inner_provider = Arc::new(Mutex::new(pcb_zen_core::InMemoryFileProvider::new(
@@ -527,11 +391,9 @@ impl Module {
 
         Ok(Module {
             id,
-            files: HashMap::new(), // Empty files map - will use file loading mechanism
             main_file: file_path.to_string(),
             module_name,
             file_provider,
-            remote_fetcher,
             load_resolver,
         })
     }
@@ -543,29 +405,11 @@ impl Module {
         main_file: &str,
         module_name: &str,
     ) -> Result<Module, JsValue> {
-        debug!(
-            "Module::from_files - Creating module with main_file: '{}', module_name: '{}'",
-            main_file, module_name
-        );
-
         let files: std::collections::HashMap<String, String> = serde_json::from_str(files_json)
-            .map_err(|e| {
-                debug!("Module::from_files - Failed to parse files JSON: {}", e);
-                JsValue::from_str(&format!("Failed to parse files JSON: {e}"))
-            })?;
-
-        debug!(
-            "Module::from_files - Parsed {} files from JSON",
-            files.len()
-        );
-        for (path, _) in &files {
-            debug!("Module::from_files - File included: {}", path);
-        }
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse files JSON: {e}")))?;
 
         // Generate unique ID
         let id = format!("module_{}", uuid::Uuid::new_v4());
-
-        debug!("Module::from_files - Created module with ID: {}", id);
 
         // Create shared inner provider with the provided files
         let inner_provider = Arc::new(Mutex::new(pcb_zen_core::InMemoryFileProvider::new(
@@ -585,135 +429,21 @@ impl Module {
 
         Ok(Module {
             id,
-            files,
             main_file: main_file.to_string(),
             module_name: module_name.to_string(),
             file_provider,
-            remote_fetcher,
             load_resolver,
-        })
-    }
-
-    /// Introspect the module to get its parameters
-    #[wasm_bindgen]
-    pub fn introspect(&self, partial_inputs_json: Option<String>) -> Result<String, JsValue> {
-        debug!(
-            "Module::introspect - Starting introspection for module: {} ({})",
-            self.id, self.module_name
-        );
-
-        // Parse partial inputs if provided
-        let mut input_map = InputMap::new();
-        if let Some(json) = partial_inputs_json {
-            debug!("Module::introspect - Parsing partial inputs");
-            let inputs: HashMap<String, serde_json::Value> =
-                serde_json::from_str(&json).map_err(|e| {
-                    debug!("Module::introspect - Failed to parse partial inputs: {}", e);
-                    JsValue::from_str(&format!("Failed to parse inputs JSON: {e}"))
-                })?;
-
-            debug!(
-                "Module::introspect - Partial inputs: {:?}",
-                inputs.keys().collect::<Vec<_>>()
-            );
-
-            // Convert JSON inputs to InputValue
-            for (key, value) in inputs {
-                if let Some(input_value) = json_to_input_value(&value) {
-                    input_map.insert(key, input_value);
-                }
-            }
-        } else {
-            debug!("Module::introspect - No partial inputs provided");
-        }
-
-        // Create evaluation context using the stored providers
-        debug!("Module::introspect - Creating evaluation context");
-        let ctx = EvalContext::new()
-            .set_file_provider(self.file_provider.clone())
-            .set_load_resolver(self.load_resolver.clone());
-
-        // Use the typed introspection API
-        let main_path = PathBuf::from(&self.main_file);
-        debug!(
-            "Module::introspect - Using introspect_module_typed with main path: {}",
-            main_path.display()
-        );
-        let introspection_result = ctx.introspect_module_typed(&main_path, &self.module_name);
-
-        debug!(
-            "Module::introspect - Introspection complete, success: {}",
-            introspection_result.output.is_some()
-        );
-        debug!(
-            "Module::introspect - Diagnostics count: {}",
-            introspection_result.diagnostics.len()
-        );
-
-        let (parameters, diagnostics) = match introspection_result.output {
-            Some(param_infos) => {
-                debug!(
-                    "Module::introspect - Extracting {} parameters from introspection result",
-                    param_infos.len()
-                );
-                let params: Vec<Parameter> = param_infos
-                    .into_iter()
-                    .map(|param_info| {
-                        // Extract enum values if this is an enum type
-                        let (is_enum, enum_values) = match &param_info.type_info {
-                            TypeInfo::Enum { variants, .. } => (true, Some(variants.clone())),
-                            _ => (false, None),
-                        };
-
-                        debug!(
-                            "Module::introspect - Parameter '{}': required={}, type={:?}",
-                            param_info.name, param_info.required, param_info.type_info
-                        );
-
-                        Parameter {
-                            name: param_info.name.clone(),
-                            param_type: format!("{:?}", param_info.type_info), // For backward compatibility
-                            required: param_info.required,
-                            is_config: param_info.is_config(),
-                            is_enum,
-                            enum_values,
-                            type_info: param_info.type_info,
-                        }
-                    })
-                    .collect();
-                (Some(params), introspection_result.diagnostics)
-            }
-            None => (None, introspection_result.diagnostics),
-        };
-
-        let result = IntrospectionResult {
-            success: parameters.is_some(),
-            parameters,
-            diagnostics: diagnostics
-                .into_iter()
-                .map(|d| diagnostic_to_json(&d))
-                .collect(),
-        };
-
-        debug!("Module::introspect - Serializing introspection result");
-        serde_json::to_string(&result).map_err(|e| {
-            debug!("Module::introspect - Failed to serialize result: {}", e);
-            JsValue::from_str(&format!("Failed to serialize result: {e}"))
         })
     }
 
     /// Evaluate the module with the given inputs
     #[wasm_bindgen]
-    pub fn evaluate(&self, inputs_json: &str) -> Result<String, JsValue> {
+    pub fn evaluate(&self, inputs_json: &str) -> Result<JsValue, JsValue> {
         // Parse inputs
         let inputs: HashMap<String, serde_json::Value> = serde_json::from_str(inputs_json)
-            .map_err(|e| {
-                debug!("Module::evaluate - Failed to parse inputs JSON: {}", e);
-                JsValue::from_str(&format!("Failed to parse inputs JSON: {e}"))
-            })?;
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs JSON: {e}")))?;
 
         // Create evaluation context using the stored providers
-        debug!("Module::evaluate - Creating evaluation context");
         let ctx = EvalContext::new()
             .set_file_provider(self.file_provider.clone())
             .set_load_resolver(self.load_resolver.clone());
@@ -721,70 +451,60 @@ impl Module {
         // Convert inputs to InputMap
         let mut input_map = InputMap::new();
         for (key, value) in inputs {
-            debug!(
-                "Module::evaluate - Converting input '{}' of type {:?}",
-                key, value
-            );
-            let input_value = json_to_input_value(&value).ok_or_else(|| {
-                debug!(
-                    "Module::evaluate - Failed to convert input '{}': invalid type",
-                    key
-                );
-                JsValue::from_str(&format!("Invalid input type for '{}'", key))
-            })?;
+            let input_value = json_to_input_value(&value)
+                .ok_or_else(|| JsValue::from_str(&format!("Invalid input type for '{key}'")))?;
             input_map.insert(key, input_value);
         }
 
         // Evaluate the module
         let main_path = PathBuf::from(&self.main_file);
-        debug!(
-            "Module::evaluate - Evaluating module with main path: {}",
-            main_path.display()
-        );
         let result = ctx
             .set_source_path(main_path)
             .set_module_name(self.module_name.clone())
             .set_inputs(input_map)
             .eval();
 
-        debug!(
-            "Module::evaluate - Evaluation complete, success: {}",
-            result.output.is_some()
-        );
-        debug!(
-            "Module::evaluate - Diagnostics count: {}",
-            result.diagnostics.len()
-        );
-
         // Extract schematic from the result
-        let schematic = if let Some(ref output) = result.output {
-            // Convert the frozen module to a schematic
-            match output.sch_module.to_schematic() {
-                Ok(schematic) => {
-                    debug!("Module::evaluate - Successfully converted to schematic");
-                    // Serialize the schematic to JSON
-                    match serde_json::to_value(schematic) {
-                        Ok(json) => Some(json),
-                        Err(e) => {
-                            debug!("Module::evaluate - Failed to serialize schematic: {}", e);
-                            None
+        let schematic = result
+            .output
+            .as_ref()
+            .and_then(|output| output.sch_module.to_schematic().ok());
+
+        let parameters = result.output.as_ref().map(|output| {
+            output
+                .signature
+                .iter()
+                .map(|(name, param_info)| Parameter {
+                    name: name.clone(),
+                    param_type: format!("{:?}", param_info.type_info),
+                    required: param_info.required,
+                    is_config: param_info.is_config(),
+                    is_enum: matches!(
+                        param_info.type_info,
+                        pcb_zen_core::lang::type_info::TypeInfo::Enum { .. }
+                    ),
+                    enum_values: match &param_info.type_info {
+                        pcb_zen_core::lang::type_info::TypeInfo::Enum { variants, .. } => {
+                            Some(variants.clone())
                         }
-                    }
-                }
-                Err(e) => {
-                    debug!("Module::evaluate - Failed to convert to schematic: {}", e);
-                    None
-                }
-            }
-        } else {
-            debug!("Module::evaluate - No output, evaluation failed");
-            None
-        };
+                        _ => None,
+                    },
+                    type_info: param_info.type_info.clone(),
+                })
+                .collect()
+        });
 
         // Build evaluation result
         let evaluation_result = EvaluationResult {
             success: result.output.is_some(),
-            schematic,
+            parameters,
+            schematic: schematic.and_then(|s| match serde_json::to_string(&s) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    log::error!("Failed to serialize schematic to JSON: {e}");
+                    None
+                }
+            }),
             diagnostics: result
                 .diagnostics
                 .into_iter()
@@ -792,11 +512,8 @@ impl Module {
                 .collect(),
         };
 
-        debug!("Module::evaluate - Serializing evaluation result");
-        serde_json::to_string(&evaluation_result).map_err(|e| {
-            debug!("Module::evaluate - Failed to serialize result: {}", e);
-            JsValue::from_str(&format!("Failed to serialize result: {e}"))
-        })
+        serde_wasm_bindgen::to_value(&evaluation_result)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
     }
 
     #[wasm_bindgen(getter)]
@@ -850,7 +567,7 @@ pub struct Parameter {
     is_config: bool,                  // true for config params, false for io params
     is_enum: bool,                    // true if this is an enum type
     enum_values: Option<Vec<String>>, // possible enum values if available
-    type_info: TypeInfo,              // Full structured type information
+    type_info: pcb_zen_core::lang::type_info::TypeInfo, // Full structured type information
 }
 
 #[derive(Serialize, Deserialize)]
@@ -863,15 +580,9 @@ pub struct DiagnosticInfo {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct IntrospectionResult {
-    pub success: bool,
-    pub parameters: Option<Vec<Parameter>>,
-    pub diagnostics: Vec<DiagnosticInfo>,
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct EvaluationResult {
     pub success: bool,
-    pub schematic: Option<serde_json::Value>,
+    pub parameters: Option<Vec<Parameter>>,
+    pub schematic: Option<String>,
     pub diagnostics: Vec<DiagnosticInfo>,
 }
