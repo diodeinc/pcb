@@ -407,34 +407,34 @@ impl ModuleConverter {
             }
 
             // Add symbol information if present
-            // let symbol_value = net.symbol();
-            // if !symbol_value.is_none() {
-            //     if let Some(symbol) =
-            //         symbol_value.downcast_ref::<crate::lang::symbol::FrozenSymbolValue>()
-            //     {
-            //         props_map.insert(
-            //             "symbol_name".to_string(),
-            //             AttributeValue::String(symbol.name().to_string()),
-            //         );
-            //         if let Some(path) = symbol.source_path() {
-            //             props_map.insert(
-            //                 "symbol_path".to_string(),
-            //                 AttributeValue::String(path.to_string()),
-            //             );
-            //         }
-            //         // Add the raw s-expression if available
-            //         let raw_sexp = symbol.raw_sexp();
-            //         if !raw_sexp.is_none() {
-            //             // The raw_sexp is stored as a string value in the SymbolValue
-            //             if let Some(sexp_string) = raw_sexp.to_value().unpack_str() {
-            //                 props_map.insert(
-            //                     "__symbol_value".to_string(),
-            //                     AttributeValue::String(sexp_string.to_string()),
-            //                 );
-            //             }
-            //         }
-            // }
-            // }
+            let symbol_value = net.symbol();
+            if !symbol_value.is_none() {
+                if let Some(symbol) =
+                    symbol_value.downcast_ref::<crate::lang::symbol::FrozenSymbolValue>()
+                {
+                    props_map.insert(
+                        "symbol_name".to_string(),
+                        AttributeValue::String(symbol.name().to_string()),
+                    );
+                    if let Some(path) = symbol.source_path() {
+                        props_map.insert(
+                            "symbol_path".to_string(),
+                            AttributeValue::String(path.to_string()),
+                        );
+                    }
+                    // Add the raw s-expression if available
+                    let raw_sexp = symbol.raw_sexp();
+                    if !raw_sexp.is_none() {
+                        // The raw_sexp is stored as a string value in the SymbolValue
+                        if let Some(sexp_string) = raw_sexp.to_value().unpack_str() {
+                            props_map.insert(
+                                "__symbol_value".to_string(),
+                                AttributeValue::String(sexp_string.to_string()),
+                            );
+                        }
+                    }
+                }
+            }
 
             props_map
         });

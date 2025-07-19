@@ -30,8 +30,8 @@ if add_input_filter:
     input_filter_type = config("filter_type", FilterType, default = "265kHz")
 
 # External IO
-VDD = io("VDD", Net, default = Net("VDD"))
-GND = io("GND", Net, default = Net("GND"))
+VDD = io("VDD", Net, default = Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
+GND = io("GND", Net, default = Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
 AIN_P = io("AIN+", Net, default = Net("AIN+"))
 AIN_N = io("AIN-", Net, default = Net("AIN-"))
 spi = io("SPI", Spi, default = Spi("SPI"))
@@ -139,3 +139,5 @@ if power_on_delay.value != "0ms":
 # pcb:sch R_AINP.R x=-127.0000 y=165.1000 rot=270
 # pcb:sch R_PDRST.R x=812.8000 y=215.9000 rot=180
 # pcb:sch R_PULLUP.R x=723.9000 y=88.9000 rot=180
+# pcb:sch VDD.1 x=190.5000 y=63.5000 rot=0
+# pcb:sch GND.1 x=406.4000 y=533.4000 rot=0

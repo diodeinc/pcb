@@ -57,6 +57,8 @@ export function createSchematicNode(
       ...(elkNode.type === NodeType.SYMBOL && netlist ? { netlist } : {}),
       // Ensure rotation is included in data
       rotation: elkNode.rotation || 0,
+      // Include isNetSymbol flag if present
+      isNetSymbol: elkNode.properties?.isNetSymbol === "true",
     },
     position: { x: elkNode.x || 0, y: elkNode.y || 0 },
     type: elkNode.type,
@@ -700,28 +702,52 @@ const SymbolNode = React.memo(function SymbolNode({
         setIsRendering(true);
         const canvas = canvasRef.current;
 
-        // Get the symbol content from the __symbol_value attribute
-        const instance = netlist.instances[data.id];
-        const symbolValueAttr = instance?.attributes?.__symbol_value;
-
-        // Extract the string value from AttributeValue
         let symbolContent: string | undefined;
-        if (typeof symbolValueAttr === "string") {
-          symbolContent = symbolValueAttr;
-        } else if (
-          symbolValueAttr &&
-          typeof symbolValueAttr === "object" &&
-          "String" in symbolValueAttr
-        ) {
-          symbolContent = symbolValueAttr.String;
-        }
 
-        if (!symbolContent) {
-          setRenderError(
-            "Symbol content not found in __symbol_value attribute"
-          );
-          setIsRendering(false);
-          return;
+        // Check if this is a net symbol
+        if ((data as any).isNetSymbol && data.netId) {
+          // For net symbols, get the symbol content from the net
+          const net = netlist.nets[data.netId];
+          const symbolValueAttr = net?.properties?.__symbol_value;
+
+          if (typeof symbolValueAttr === "string") {
+            symbolContent = symbolValueAttr;
+          } else if (
+            symbolValueAttr &&
+            typeof symbolValueAttr === "object" &&
+            "String" in symbolValueAttr
+          ) {
+            symbolContent = symbolValueAttr.String;
+          }
+
+          if (!symbolContent) {
+            setRenderError("Symbol content not found in net properties");
+            setIsRendering(false);
+            return;
+          }
+        } else {
+          // For component symbols, get the symbol content from the instance
+          const instance = netlist.instances[data.id];
+          const symbolValueAttr = instance?.attributes?.__symbol_value;
+
+          // Extract the string value from AttributeValue
+          if (typeof symbolValueAttr === "string") {
+            symbolContent = symbolValueAttr;
+          } else if (
+            symbolValueAttr &&
+            typeof symbolValueAttr === "object" &&
+            "String" in symbolValueAttr
+          ) {
+            symbolContent = symbolValueAttr.String;
+          }
+
+          if (!symbolContent) {
+            setRenderError(
+              "Symbol content not found in __symbol_value attribute"
+            );
+            setIsRendering(false);
+            return;
+          }
         }
 
         // First, get the symbol info to know its natural size
@@ -784,7 +810,15 @@ const SymbolNode = React.memo(function SymbolNode({
     };
 
     renderSymbol();
-  }, [data.width, data.height, data.id, netlist.instances, selected]);
+  }, [
+    data.width,
+    data.height,
+    data.id,
+    data.netId,
+    netlist.instances,
+    netlist.nets,
+    selected,
+  ]);
 
   return (
     <div
