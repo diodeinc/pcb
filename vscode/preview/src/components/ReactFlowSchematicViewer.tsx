@@ -1,22 +1,11 @@
-import React, {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useMemo,
-} from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import ELK from "elkjs/lib/elk.bundled.js";
-import type { ELK as ELKType } from "elkjs/lib/elk-api";
 import {
   ReactFlow,
   Controls,
   Position,
-  useNodesState,
-  useEdgesState,
   Handle,
   type Node,
-  useOnSelectionChange,
   ReactFlowProvider,
   Panel,
   Background,
@@ -25,21 +14,15 @@ import {
 import type { Edge, EdgeProps, EdgeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./ReactFlowSchematicViewer.css";
-import {
-  NodeType,
-  SchematicLayoutEngine,
-  DEFAULT_CONFIG,
-} from "../LayoutEngine";
+import { NodeType, DEFAULT_CONFIG } from "../LayoutEngine";
 import type {
   ElkEdge,
   ElkNode,
   SchematicConfig,
   NodePositions,
 } from "../LayoutEngine";
-
-// import { PDFSchematicRenderer } from "../PDFSchematicRenderer";
+import { useSchematicViewerStore } from "./schematicViewerStore";
 import type { Netlist } from "../types/NetlistTypes";
-import { debounce } from "lodash";
 import { Settings } from "react-feather";
 import {
   renderKicadSymbol,
@@ -51,44 +34,18 @@ import {
   renderGlobalLabel,
   type LabelDirection,
 } from "../renderer/kicad_global_label";
-// import { Color } from "../third_party/kicanvas/base/color";
-
-// Utility function for grid snapping
-function snapToGrid(value: number, gridSize: number): number {
-  return Math.round(value / gridSize) * gridSize;
-}
-
-function snapPosition(
-  x: number,
-  y: number,
-  gridSize: number
-): { x: number; y: number } {
-  return {
-    x: snapToGrid(x, gridSize),
-    y: snapToGrid(y, gridSize),
-  };
-}
-
-type SelectionState = {
-  selectedNetId: string | null;
-  hoveredNetId: string | null;
-};
 
 type SchematicNodeData = ElkNode & {
   componentType: NodeType;
-  selectionState: SelectionState;
 } & Record<string, unknown>;
 
-type SchematicEdgeData = ElkEdge & {
-  selectionState: SelectionState;
-} & Record<string, unknown>;
+type SchematicEdgeData = ElkEdge & Record<string, unknown>;
 
-type SchematicNode = Node<SchematicNodeData, NodeType>;
-type SchematicEdge = Edge<SchematicEdgeData>;
+export type SchematicNode = Node<SchematicNodeData, NodeType>;
+export type SchematicEdge = Edge<SchematicEdgeData>;
 
-function createSchematicNode(
+export function createSchematicNode(
   elkNode: ElkNode,
-  selectionState: SelectionState,
   netlist?: Netlist
 ): SchematicNode {
   // Note: positions should already be snapped by the layout engine
@@ -96,11 +53,12 @@ function createSchematicNode(
     id: elkNode.id,
     data: {
       componentType: elkNode.type,
-      selectionState,
       ...elkNode,
       ...(elkNode.type === NodeType.SYMBOL && netlist ? { netlist } : {}),
       // Ensure rotation is included in data
       rotation: elkNode.rotation || 0,
+      // Include isNetSymbol flag if present
+      isNetSymbol: elkNode.properties?.isNetSymbol === "true",
     },
     position: { x: elkNode.x || 0, y: elkNode.y || 0 },
     type: elkNode.type,
@@ -127,13 +85,10 @@ function createSchematicNode(
   };
 }
 
-function createSchematicEdge(
-  elkEdge: ElkEdge,
-  selectionState: SelectionState
-): SchematicEdge {
+export function createSchematicEdge(elkEdge: ElkEdge): SchematicEdge {
   return {
     id: elkEdge.id,
-    data: { ...elkEdge, selectionState },
+    data: { ...elkEdge },
     source: elkEdge.sourceComponentRef,
     target: elkEdge.targetComponentRef,
     sourceHandle: `${elkEdge.sources[0]}-source`,
@@ -143,9 +98,6 @@ function createSchematicEdge(
 }
 
 // Common color for electrical components
-// const electricalComponentColor = "var(--vscode-editor-foreground, #666)";
-// const edgeColor = "var(--vscode-editorLineNumber-dimmedForeground, #666)";
-// const accentColor = "var(--vscode-activityBarBadge-background, #666)";
 const electricalComponentColor = DEFAULT_THEME.component_outline.to_css();
 const edgeColor = DEFAULT_THEME.wire.to_css();
 const backgroundColor = DEFAULT_THEME.background.to_css();
@@ -167,30 +119,6 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
   // Find the original component to determine its type
   const isModule = data.componentType === NodeType.MODULE;
 
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const shouldDim =
-    selectionState?.selectedNetId || selectionState?.hoveredNetId;
-  const isConnectedToHighlightedNet =
-    shouldDim &&
-    data.ports?.some((port) => {
-      const netId = port.netId;
-      return (
-        netId === selectionState.selectedNetId ||
-        netId === selectionState.hoveredNetId
-      );
-    });
-  const moduleOpacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
-
-  // Function to determine port label opacity
-  const getPortLabelOpacity = (port: any) => {
-    if (!shouldDim) return 1;
-    const isPortHighlighted =
-      port.netId === selectionState.selectedNetId ||
-      port.netId === selectionState.hoveredNetId;
-    return isPortHighlighted ? 1 : 0.2;
-  };
-
   // Get rotation from data
   const rotation = data.rotation || 0;
 
@@ -202,7 +130,7 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
       ? backgroundColor
       : `color-mix(in srgb, ${electricalComponentColor} 5%, ${backgroundColor})`,
     border: `1px solid ${electricalComponentColor}`,
-    opacity: moduleOpacity,
+    opacity: 1,
     cursor: "move",
     pointerEvents: "auto",
     borderRadius: "0px",
@@ -278,7 +206,7 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
                 maxWidth: position === "right" ? "150px" : "70px", // Add maxWidth to prevent extreme stretching
                 right: position === "right" ? "0px" : "auto", // Position from right edge for right-side labels
                 left: position === "right" ? "auto" : undefined, // Don't set left for right-side labels
-                opacity: getPortLabelOpacity(port), // Add opacity based on net connection
+                opacity: 1,
               };
 
               // Position label based on port side
@@ -363,508 +291,6 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
   );
 };
 
-// Define a node specifically for capacitors with authentic schematic symbol
-const CapacitorNode = ({ data }: { data: any }) => {
-  // Calculate center point for drawing the symbol
-  const centerX = data.width / 2;
-
-  // Size of the capacitor symbol
-  const symbolSize = 20;
-
-  // Gap between capacitor plates
-  const plateGap = 6;
-
-  // Line length (distance from port to capacitor plate)
-  const lineLength = 8; // Shorter lines than before
-
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const shouldDim =
-    selectionState?.selectedNetId || selectionState?.hoveredNetId;
-  const isConnectedToHighlightedNet =
-    shouldDim &&
-    data.ports?.some((port: any) => {
-      const netId = port.netId;
-      return (
-        netId === selectionState.selectedNetId ||
-        netId === selectionState.hoveredNetId
-      );
-    });
-  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
-
-  return (
-    <div
-      className="react-flow-capacitor-node"
-      style={{
-        width: data.width,
-        height: data.height,
-        backgroundColor: "transparent",
-        border: "none",
-        cursor: "default",
-        pointerEvents: "none",
-        position: "relative",
-        transform: "translate(-0.7px, 0.7px)",
-        opacity: opacity,
-      }}
-    >
-      {/* Capacitor Symbol */}
-      <div
-        className="capacitor-symbol"
-        style={{
-          position: "absolute",
-          width: data.width,
-          height: data.height,
-        }}
-      >
-        {/* Top vertical line connecting port to top plate */}
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: centerX,
-            width: "1.5px",
-            height: lineLength,
-            backgroundColor: electricalComponentColor,
-          }}
-        />
-
-        {/* Top capacitor plate */}
-        <div
-          style={{
-            position: "absolute",
-            top: lineLength,
-            left: centerX - symbolSize / 2,
-            width: symbolSize,
-            height: "2px",
-            backgroundColor: electricalComponentColor,
-          }}
-        />
-
-        {/* Bottom capacitor plate */}
-        <div
-          style={{
-            position: "absolute",
-            top: lineLength + plateGap, // Gap between plates
-            left: centerX - symbolSize / 2,
-            width: symbolSize,
-            height: "2px",
-            backgroundColor: electricalComponentColor,
-          }}
-        />
-
-        {/* Bottom vertical line connecting bottom plate to port */}
-        <div
-          style={{
-            position: "absolute",
-            top: lineLength + plateGap + 2, // Position after bottom plate
-            left: centerX,
-            width: "1.5px",
-            height: lineLength,
-            backgroundColor: electricalComponentColor,
-          }}
-        />
-
-        {/* Component Labels */}
-        {data.labels?.map((label: any, index: number) => (
-          <div
-            key={index}
-            style={{
-              position: "absolute",
-              left: label.x,
-              top: label.y,
-              fontSize: "12px",
-              color: electricalComponentColor,
-              whiteSpace: "pre-line",
-              width: label.width,
-              height: label.height,
-              textAlign: label.textAlign || "left",
-              alignItems: "center",
-              fontWeight: "600",
-            }}
-          >
-            {label.text}
-          </div>
-        ))}
-      </div>
-
-      {/* Hidden port connections with no visible dots */}
-      <div className="component-ports">
-        {/* Port 1 - Top */}
-        <div
-          key={data.ports[0].id}
-          className="component-port"
-          style={{
-            position: "absolute",
-            left: centerX,
-            top: 0,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-          data-port-id={data.ports[0].id}
-        >
-          <Handle
-            type="source"
-            position={Position.Top}
-            id={`${data.ports[0].id}-source`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-          <Handle
-            type="target"
-            position={Position.Top}
-            id={`${data.ports[0].id}-target`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-        </div>
-
-        {/* Port 2 - Bottom */}
-        <div
-          key={data.ports[1].id}
-          className="component-port"
-          style={{
-            position: "absolute",
-            left: centerX,
-            top: data.height,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-          data-port-id={data.ports[1].id}
-        >
-          <Handle
-            type="source"
-            position={Position.Bottom}
-            id={`${data.ports[1].id}-source`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-          <Handle
-            type="target"
-            position={Position.Bottom}
-            id={`${data.ports[1].id}-target`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Define a node specifically for resistors with authentic schematic symbol
-const ResistorNode = ({ data }: { data: any }) => {
-  // Calculate center point for drawing the symbol
-  const centerX = data.width / 2;
-
-  // Resistor dimensions
-  const resistorHeight = 28;
-  const resistorWidth = 12;
-
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const shouldDim =
-    selectionState?.selectedNetId || selectionState?.hoveredNetId;
-  const isConnectedToHighlightedNet =
-    shouldDim &&
-    data.ports?.some((port: any) => {
-      const netId = port.netId;
-      return (
-        netId === selectionState.selectedNetId ||
-        netId === selectionState.hoveredNetId
-      );
-    });
-  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
-
-  return (
-    <div
-      className="react-flow-resistor-node"
-      style={{
-        width: data.width,
-        height: data.height,
-        backgroundColor: "transparent",
-        border: "none",
-        cursor: "default",
-        pointerEvents: "none",
-        position: "relative",
-        opacity: opacity,
-        transform: "translate(-1.5px, -1.3px)",
-      }}
-    >
-      {/* Resistor Symbol */}
-      <div
-        className="resistor-symbol"
-        style={{
-          position: "absolute",
-          width: data.width,
-          height: data.height,
-        }}
-      >
-        {/* Resistor body (rectangle) */}
-        <div
-          style={{
-            position: "absolute",
-            top: data.height / 2 - resistorHeight / 2,
-            left: centerX - resistorWidth / 2,
-            width: resistorWidth,
-            height: resistorHeight,
-            backgroundColor: "transparent",
-            border: `1.5px solid ${electricalComponentColor}`,
-          }}
-        />
-
-        {/* Component Labels */}
-        {data.labels?.map((label: any, index: number) => (
-          <div
-            key={index}
-            style={{
-              position: "absolute",
-              left: label.x,
-              top: label.y,
-              fontSize: "12px",
-              color: electricalComponentColor,
-              whiteSpace: "pre-line",
-              width: label.width,
-              height: label.height,
-              textAlign: label.textAlign || "left",
-              fontWeight: "600",
-            }}
-          >
-            {label.text}
-          </div>
-        ))}
-      </div>
-
-      {/* Hidden port connections with no visible dots */}
-      <div className="component-ports">
-        {/* Port 1 - Top */}
-        <div
-          key={data.ports[0].id}
-          className="component-port"
-          style={{
-            position: "absolute",
-            left: centerX,
-            top: 0,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-          data-port-id={data.ports[0].id}
-        >
-          <Handle
-            type="source"
-            position={Position.Top}
-            id={`${data.ports[0].id}-source`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-          <Handle
-            type="target"
-            position={Position.Top}
-            id={`${data.ports[0].id}-target`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-        </div>
-
-        {/* Port 2 - Bottom */}
-        <div
-          key={data.ports[1].id}
-          className="component-port"
-          style={{
-            position: "absolute",
-            left: centerX,
-            top: data.height,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-          data-port-id={data.ports[1].id}
-        >
-          <Handle
-            type="source"
-            position={Position.Bottom}
-            id={`${data.ports[1].id}-source`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-          <Handle
-            type="target"
-            position={Position.Bottom}
-            id={`${data.ports[1].id}-target`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Define a node specifically for inductors with authentic schematic symbol
-const InductorNode = ({ data }: { data: SchematicNodeData }) => {
-  // Calculate center point for drawing the symbol
-  const centerX = (data.width || 0) / 2;
-  const height = data.height || 100; // Default height if undefined
-
-  // Size of the inductor symbol
-  const inductorHeight = 40;
-  const numArcs = 4;
-  const arcRadius = inductorHeight / (2 * numArcs);
-
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const shouldDim =
-    selectionState?.selectedNetId || selectionState?.hoveredNetId;
-  const isConnectedToHighlightedNet =
-    shouldDim &&
-    data.ports?.some((port) => {
-      const netId = port.netId;
-      return (
-        netId === selectionState.selectedNetId ||
-        netId === selectionState.hoveredNetId
-      );
-    });
-  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
-
-  return (
-    <div
-      className="react-flow-inductor-node"
-      style={{
-        width: data.width,
-        height: height,
-        backgroundColor: "transparent",
-        border: "none",
-        cursor: "default",
-        pointerEvents: "none",
-        position: "relative",
-        opacity: opacity,
-        transform: "translate(-0.2px, 0)",
-      }}
-    >
-      {/* Inductor Symbol */}
-      <div
-        className="inductor-symbol"
-        style={{
-          position: "absolute",
-          width: data.width,
-          height: height,
-        }}
-      >
-        {/* Inductor arcs */}
-        <svg
-          style={{
-            position: "absolute",
-            top: height / 2 - inductorHeight / 2,
-            left: 0,
-            width: data.width,
-            height: inductorHeight,
-          }}
-        >
-          <path
-            d={`M ${centerX} 0 ${Array.from(
-              { length: numArcs },
-              (_, i) =>
-                `A ${arcRadius} ${arcRadius} 0 0 0 ${centerX} ${
-                  (i + 1) * 2 * arcRadius
-                }`
-            ).join(" ")}`}
-            fill="none"
-            stroke={electricalComponentColor}
-            strokeWidth="1.5"
-          />
-        </svg>
-
-        {/* Component Labels */}
-        {data.labels?.map((label: any, index: number) => (
-          <div
-            key={index}
-            style={{
-              position: "absolute",
-              left: label.x,
-              top: label.y,
-              fontSize: "12px",
-              color: electricalComponentColor,
-              whiteSpace: "pre-line",
-              width: label.width,
-              height: label.height,
-              textAlign: label.textAlign || "left",
-              alignItems: "center",
-              fontWeight: "600",
-            }}
-          >
-            {label.text}
-          </div>
-        ))}
-      </div>
-
-      {/* Hidden port connections with no visible dots */}
-      <div className="component-ports">
-        {/* Port 1 - Top */}
-        <div
-          key={data.ports?.[0]?.id}
-          className="component-port"
-          style={{
-            position: "absolute",
-            left: centerX,
-            top: 0,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-          data-port-id={data.ports?.[0]?.id}
-        >
-          <Handle
-            type="source"
-            position={Position.Top}
-            id={`${data.ports?.[0]?.id}-source`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-          <Handle
-            type="target"
-            position={Position.Top}
-            id={`${data.ports?.[0]?.id}-target`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-        </div>
-
-        {/* Port 2 - Bottom */}
-        <div
-          key={data.ports?.[1]?.id}
-          className="component-port"
-          style={{
-            position: "absolute",
-            left: centerX,
-            top: height,
-            width: 1,
-            height: 1,
-            opacity: 0,
-            zIndex: 10,
-            pointerEvents: "auto",
-          }}
-          data-port-id={data.ports?.[1]?.id}
-        >
-          <Handle
-            type="source"
-            position={Position.Bottom}
-            id={`${data.ports?.[1]?.id}-source`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-          <Handle
-            type="target"
-            position={Position.Bottom}
-            id={`${data.ports?.[1]?.id}-target`}
-            style={{ ...portHandleStyle, opacity: 0 }}
-          />
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // Define a node specifically for net references with an open circle symbol or ground/VDD symbol
 const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
   // const isGround = data.netReferenceType === NetReferenceType.GROUND;
@@ -885,16 +311,6 @@ const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
     ? (data.width || 0) - circleRadius * 2
     : circleRadius * 2;
   const circleY = (data.height || 0) / 2;
-
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const isSelected = data.netId === selectionState?.selectedNetId;
-  const isHovered = data.netId === selectionState?.hoveredNetId;
-  const shouldDim =
-    (selectionState?.selectedNetId || selectionState?.hoveredNetId) &&
-    !isSelected &&
-    !isHovered;
-  const opacity = shouldDim ? 0.2 : 1;
 
   // Ground symbol dimensions
   const groundSymbolWidth = symbolSize;
@@ -922,7 +338,7 @@ const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
         cursor: "default",
         pointerEvents: "none",
         position: "relative",
-        opacity: opacity,
+        opacity: 1,
       }}
     >
       {/* Net Reference Symbol - Either Ground Symbol, VDD Symbol, or Open Circle */}
@@ -1074,21 +490,6 @@ const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
 
 // Define a node specifically for net junctions - a small dot at wire intersections
 const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const shouldDim =
-    selectionState?.selectedNetId || selectionState?.hoveredNetId;
-  const isConnectedToHighlightedNet =
-    shouldDim &&
-    data.ports?.some((port) => {
-      const netId = port.netId;
-      return (
-        netId === selectionState.selectedNetId ||
-        netId === selectionState.hoveredNetId
-      );
-    });
-  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
-
   return (
     <div
       className="react-flow-net-junction-node"
@@ -1100,7 +501,7 @@ const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
         cursor: "default",
         pointerEvents: "none",
         position: "relative",
-        opacity: opacity,
+        opacity: 1,
       }}
     >
       {/* Junction dot */}
@@ -1134,122 +535,6 @@ const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
     </div>
   );
 };
-
-// Utility to get a CSS variable and convert to Color
-// function getVSCodeColor(varName: string, fallback: string): Color {
-//   const cssValue = getComputedStyle(document.documentElement)
-//     .getPropertyValue(varName)
-//     .trim();
-//   try {
-//     return Color.from_css(cssValue || fallback);
-//   } catch {
-//     // fallback if parsing fails
-//     return Color.from_css(fallback);
-//   }
-// }
-
-// Utility to build a SchematicTheme from VSCode theme variables
-// function getVSCodeSchematicTheme(): Partial<
-//   import("../third_party/kicanvas/kicad/theme").SchematicTheme
-// > {
-//   return {
-//     background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-//     component_outline: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-//     component_body: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-//     pin: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-//     pin_name: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-//     pin_number: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-//     reference: getVSCodeColor(
-//       "--vscode-editorLineNumber-foreground",
-//       "#666666"
-//     ),
-//     value: getVSCodeColor("--vscode-editorLineNumber-foreground", "#666666"),
-//     fields: getVSCodeColor("--vscode-editorLineNumber-foreground", "#666666"),
-//     wire: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#666666"
-//     ),
-//     bus: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#666666"
-//     ),
-//     junction: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#666666"
-//     ),
-//     label_local: getVSCodeColor("--vscode-foreground", "#000000"),
-//     label_global: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#666666"
-//     ),
-//     label_hier: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#666666"
-//     ),
-//     no_connect: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#666666"
-//     ),
-//     note: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#666666"
-//     ),
-//     sheet_background: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-//     sheet: getVSCodeColor("--vscode-editor-foreground", "#666666"),
-//     sheet_label: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#666666"
-//     ),
-//     sheet_fields: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#666666"
-//     ),
-//     sheet_filename: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#666666"
-//     ),
-//     sheet_name: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#666666"
-//     ),
-//     erc_warning: getVSCodeColor("--vscode-editorWarning-foreground", "#FFA500"),
-//     erc_error: getVSCodeColor("--vscode-editorError-foreground", "#FF0000"),
-//     grid: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#cccccc"
-//     ),
-//     grid_axes: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#cccccc"
-//     ),
-//     hidden: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#cccccc"
-//     ),
-//     brightened: getVSCodeColor(
-//       "--vscode-activityBarBadge-background",
-//       "#ff00ff"
-//     ),
-//     worksheet: getVSCodeColor("--vscode-editor-background", "#ffffff"),
-//     cursor: getVSCodeColor("--vscode-editorCursor-foreground", "#000000"),
-//     aux_items: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#666666"
-//     ),
-//     anchor: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#0000ff"
-//     ),
-//     shadow: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "rgba(128,128,128,0.5)"
-//     ),
-//     bus_junction: getVSCodeColor(
-//       "--vscode-editorLineNumber-dimmedForeground",
-//       "#008000"
-//     ),
-//   };
-// }
 
 // Component to render net reference labels using KiCanvas
 const NetReferenceLabel = React.memo(function NetReferenceLabel({
@@ -1399,21 +684,6 @@ const SymbolNode = React.memo(function SymbolNode({
   const [isRendering, setIsRendering] = useState(true);
   const [renderError, setRenderError] = useState<string | null>(null);
 
-  // Determine if this node should be dimmed based on selection state
-  const selectionState = data.selectionState;
-  const shouldDim =
-    selectionState?.selectedNetId || selectionState?.hoveredNetId;
-  const isConnectedToHighlightedNet =
-    shouldDim &&
-    data.ports?.some((port) => {
-      const netId = port.netId;
-      return (
-        netId === selectionState.selectedNetId ||
-        netId === selectionState.hoveredNetId
-      );
-    });
-  const opacity = shouldDim && !isConnectedToHighlightedNet ? 0.2 : 1;
-
   // Get rotation from data
   const rotation = data.rotation || 0;
 
@@ -1432,28 +702,52 @@ const SymbolNode = React.memo(function SymbolNode({
         setIsRendering(true);
         const canvas = canvasRef.current;
 
-        // Get the symbol content from the __symbol_value attribute
-        const instance = netlist.instances[data.id];
-        const symbolValueAttr = instance?.attributes?.__symbol_value;
-
-        // Extract the string value from AttributeValue
         let symbolContent: string | undefined;
-        if (typeof symbolValueAttr === "string") {
-          symbolContent = symbolValueAttr;
-        } else if (
-          symbolValueAttr &&
-          typeof symbolValueAttr === "object" &&
-          "String" in symbolValueAttr
-        ) {
-          symbolContent = symbolValueAttr.String;
-        }
 
-        if (!symbolContent) {
-          setRenderError(
-            "Symbol content not found in __symbol_value attribute"
-          );
-          setIsRendering(false);
-          return;
+        // Check if this is a net symbol
+        if ((data as any).isNetSymbol && data.netId) {
+          // For net symbols, get the symbol content from the net
+          const net = netlist.nets[data.netId];
+          const symbolValueAttr = net?.properties?.__symbol_value;
+
+          if (typeof symbolValueAttr === "string") {
+            symbolContent = symbolValueAttr;
+          } else if (
+            symbolValueAttr &&
+            typeof symbolValueAttr === "object" &&
+            "String" in symbolValueAttr
+          ) {
+            symbolContent = symbolValueAttr.String;
+          }
+
+          if (!symbolContent) {
+            setRenderError("Symbol content not found in net properties");
+            setIsRendering(false);
+            return;
+          }
+        } else {
+          // For component symbols, get the symbol content from the instance
+          const instance = netlist.instances[data.id];
+          const symbolValueAttr = instance?.attributes?.__symbol_value;
+
+          // Extract the string value from AttributeValue
+          if (typeof symbolValueAttr === "string") {
+            symbolContent = symbolValueAttr;
+          } else if (
+            symbolValueAttr &&
+            typeof symbolValueAttr === "object" &&
+            "String" in symbolValueAttr
+          ) {
+            symbolContent = symbolValueAttr.String;
+          }
+
+          if (!symbolContent) {
+            setRenderError(
+              "Symbol content not found in __symbol_value attribute"
+            );
+            setIsRendering(false);
+            return;
+          }
         }
 
         // First, get the symbol info to know its natural size
@@ -1516,7 +810,7 @@ const SymbolNode = React.memo(function SymbolNode({
     };
 
     renderSymbol();
-  }, [data.width, data.height, data.id, netlist.instances, selected]);
+  }, [data, netlist.instances, netlist.nets, selected]);
 
   return (
     <div
@@ -1526,7 +820,7 @@ const SymbolNode = React.memo(function SymbolNode({
         height: data.height,
         pointerEvents: "none",
         position: "relative",
-        opacity: opacity,
+        opacity: 1,
         // Apply rotation transform
         transform: rotation !== 0 ? `rotate(${rotation}deg)` : undefined,
         transformOrigin: "center",
@@ -1713,18 +1007,11 @@ const ElectricalEdge = ({
     pathData += ` L${points[i].x},${points[i].y}`;
   }
 
-  // Determine if this edge should be dimmed based on selection state
-  const selectionState = data?.selectionState;
-  const isSelected = data?.netId === selectionState?.selectedNetId;
-  const isHovered = data?.netId === selectionState?.hoveredNetId;
-  const shouldDim =
-    (selectionState?.selectedNetId || selectionState?.hoveredNetId) &&
-    !isSelected &&
-    !isHovered;
-  const opacity = shouldDim ? 0.2 : 1;
-
   // Get junction points from edge data
   const junctionPoints = data?.junctionPoints || [];
+
+  // Get edge labels
+  const edgeLabels = data?.labels || [];
 
   return (
     <>
@@ -1735,7 +1022,7 @@ const ElectricalEdge = ({
           stroke: edgeColor,
           pointerEvents: "none",
           ...style,
-          opacity: opacity,
+          opacity: 1,
         }}
         className="react-flow__edge-path electrical-edge straight-line"
         d={pathData}
@@ -1757,9 +1044,26 @@ const ElectricalEdge = ({
           cy={point.y}
           r={3}
           fill={edgeColor}
-          opacity={opacity}
+          opacity={1}
           className="electrical-edge-junction"
         />
+      ))}
+
+      {/* Render edge labels */}
+      {edgeLabels.map((label, index) => (
+        <text
+          key={`${id}-label-${index}`}
+          x={(label.x || 0) + (label.width || 0) / 2}
+          y={(label.y || 0) + (label.height || 0) / 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize="10px"
+          fill={labelColor}
+          fontFamily="Newstroke, 'Courier New', monospace"
+          className="electrical-edge-label"
+        >
+          {label.text}
+        </text>
       ))}
     </>
   );
@@ -1774,9 +1078,6 @@ const edgeTypes: EdgeTypes = {
 const nodeTypes = {
   module: ModuleNode,
   component: ModuleNode,
-  capacitor: CapacitorNode,
-  resistor: ResistorNode,
-  inductor: InductorNode,
   net_reference: NetReferenceNode,
   net_junction: NetJunctionNode,
   symbol: SymbolNode,
@@ -1814,14 +1115,20 @@ const Visualizer = ({
   onPositionsChange?: (componentId: string, positions: NodePositions) => void;
   loadPositions?: (componentId: string) => Promise<NodePositions | null>;
 }) => {
-  const [nodes, setNodes, onNodesChange] = useNodesState<SchematicNode>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<SchematicEdge>([]);
-  const [layoutError, setLayoutError] = useState<string | null>(null);
-  const [nodePositions, setNodePositions] = useState<NodePositions>({});
-  const [selectionState, setSelectionState] = useState<SelectionState>({
-    selectedNetId: null,
-    hoveredNetId: null,
-  });
+  // Use Zustand store for nodes and edges
+  const {
+    nodes,
+    edges,
+    onNodesChange,
+    onEdgesChange,
+    rotateNodes,
+    handleNodeClick,
+    clearSelection,
+    initializeViewer,
+    deleteNetSymbolNodes,
+    createNetSymbolNode,
+  } = useSchematicViewerStore();
+
   const [prevComponent, setPrevComponent] = useState<string | null>(null);
   const [showDebugPane, setShowDebugPane] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<SchematicConfig>({
@@ -1840,302 +1147,44 @@ const Visualizer = ({
       ...config?.visual,
     },
   });
-  const elkInstance = useRef<ELKType | null>(null);
   const reactFlowInstance = useRef<any>(null);
 
-  // Debounced callback for position changes
-  const debouncedOnPositionsChange = useMemo(
-    () =>
-      debounce((componentId: string, positions: NodePositions) => {
-        console.log(
-          `[ReactFlow] Debounced position change fired for component: ${componentId}`
-        );
-        console.log(
-          `[ReactFlow] Sending ${
-            Object.keys(positions).length
-          } positions to parent`
-        );
-        if (onPositionsChange) {
-          onPositionsChange(componentId, positions);
-        }
-      }, 500), // 500ms debounce for persistence
-    [onPositionsChange]
-  );
-
-  // Create separate debounced functions for each state field
-  const debouncedSetSelectedNet = useMemo(
-    () =>
-      debounce((selectedNetId: string | null) => {
-        setSelectionState((prev) => ({
-          ...prev,
-          selectedNetId,
-        }));
-      }, 200), // Slightly longer debounce for selection
-    []
-  );
-
-  const debouncedSetHoveredNet = useMemo(
-    () =>
-      debounce((hoveredNetId: string | null) => {
-        setSelectionState((prev) => ({
-          ...prev,
-          hoveredNetId,
-        }));
-      }, 100), // Shorter debounce for hover to feel more responsive
-    []
-  );
-
-  // Function to update both nodes and edges after drag
-  // This is separate from the main layout effect to avoid triggering fitView
-  const updateLayoutAfterDrag = useCallback(
-    async (updatedPositions: NodePositions) => {
-      if (!selectedComponent) return;
-
-      console.log("Updating layout after drag: ", updatedPositions);
-
-      try {
-        const renderer = new SchematicLayoutEngine(netlist, currentConfig);
-
-        // Use the unified layout method with updated positions
-        const layoutResult = await renderer.layout(
-          selectedComponent,
-          updatedPositions
-        );
-
-        // Get current nodes to preserve selection state
-        const currentNodes = reactFlowInstance.current?.getNodes() || [];
-        const selectedNodeIds = new Set(
-          currentNodes.filter((n: any) => n.selected).map((n: any) => n.id)
-        );
-
-        // Update both nodes and edges from the layout result
-        const newNodes = (layoutResult.children || []).map((elkNode) => {
-          const node = createSchematicNode(elkNode, selectionState, netlist);
-          // Preserve selection state
-          node.selected = selectedNodeIds.has(node.id);
-          return node;
-        });
-
-        setNodes(newNodes);
-
-        // Update edges as well
-        const newEdges = layoutResult.edges.map((elkEdge) =>
-          createSchematicEdge(elkEdge, selectionState)
-        );
-
-        setEdges(newEdges);
-
-        // Update the stored node positions
-        setNodePositions(layoutResult.nodePositions);
-
-        // Notify about position changes
-        if (selectedComponent && onPositionsChange) {
-          debouncedOnPositionsChange(
-            selectedComponent,
-            layoutResult.nodePositions
-          );
-        }
-      } catch (error) {
-        console.error("Error updating nodes and edges:", error);
-      }
-    },
-    [
-      netlist,
+  // Use the new initializeViewer function to set all context at once
+  useEffect(() => {
+    initializeViewer({
       selectedComponent,
-      currentConfig,
-      selectionState,
-      setNodes,
-      setEdges,
-      debouncedOnPositionsChange,
+      netlist,
+      config: currentConfig,
       onPositionsChange,
-    ]
-  );
-
-  // Cleanup debounced functions on unmount
-  useEffect(() => {
-    return () => {
-      debouncedSetSelectedNet.cancel();
-      debouncedSetHoveredNet.cancel();
-      debouncedOnPositionsChange.cancel();
-    };
+      loadPositions,
+    });
   }, [
-    debouncedSetSelectedNet,
-    debouncedSetHoveredNet,
-    debouncedOnPositionsChange,
-  ]);
-
-  // Initialize ELK engine
-  useEffect(() => {
-    elkInstance.current = new ELK();
-  }, []);
-
-  // Main layout effect - runs when component changes or is first loaded
-  // This effect handles fitView to center the schematic
-  useEffect(() => {
-    async function render() {
-      console.log("Running main render effect: ", selectedComponent);
-      if (selectedComponent) {
-        try {
-          // Determine if we should animate based on whether the component changed
-          const isNewComponent = prevComponent !== selectedComponent;
-
-          // If switching to a new component, load saved positions or clear
-          let currentNodePositions = nodePositions;
-          if (isNewComponent && prevComponent !== null) {
-            // Try to load saved positions for this component
-            if (loadPositions) {
-              console.log(
-                `[ReactFlow] Loading saved positions for component: ${selectedComponent}`
-              );
-              const savedPos = await loadPositions(selectedComponent);
-              if (savedPos) {
-                console.log(
-                  `[ReactFlow] Found ${
-                    Object.keys(savedPos).length
-                  } saved positions`
-                );
-                currentNodePositions = savedPos;
-                setNodePositions(currentNodePositions);
-              } else {
-                console.log(
-                  `[ReactFlow] No saved positions found, clearing positions`
-                );
-                // Clear positions when switching components without saved positions
-                setNodePositions({});
-                currentNodePositions = {};
-              }
-            } else {
-              console.log(
-                `[ReactFlow] No loadPositions function provided, clearing positions`
-              );
-              // Clear positions when no load function provided
-              setNodePositions({});
-              currentNodePositions = {};
-            }
-          } else if (isNewComponent && loadPositions) {
-            // First time loading, check for saved positions
-            console.log(
-              `[ReactFlow] First time loading, checking for saved positions`
-            );
-            const savedPos = await loadPositions(selectedComponent);
-            if (savedPos) {
-              console.log(
-                `[ReactFlow] Found ${
-                  Object.keys(savedPos).length
-                } saved positions for initial load`
-              );
-              currentNodePositions = savedPos;
-              setNodePositions(currentNodePositions);
-            }
-          }
-
-          const renderer = new SchematicLayoutEngine(netlist, currentConfig);
-
-          const layoutResult = await renderer.layout(
-            selectedComponent,
-            currentNodePositions
-          );
-
-          setPrevComponent(selectedComponent);
-
-          // Update node positions with the layout result
-          setNodePositions(layoutResult.nodePositions);
-
-          const nodes = (layoutResult.children || []).map((elkNode) =>
-            createSchematicNode(elkNode, selectionState, netlist)
-          );
-          const edges = layoutResult.edges.map((elkEdge) =>
-            createSchematicEdge(elkEdge, selectionState)
-          );
-
-          setNodes(nodes);
-          setEdges(edges);
-
-          // Center the view after new component is rendered
-          setTimeout(() => {
-            reactFlowInstance.current?.fitView({
-              padding: 0.2,
-              duration: 200,
-            });
-          }, 10);
-        } catch (error) {
-          console.error("Error rendering component: ", error);
-          setLayoutError(
-            error instanceof Error ? error.message : "Unknown error"
-          );
-        }
-      }
-    }
-
-    render();
-    // TODO: fix
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    netlist,
     selectedComponent,
-    prevComponent,
+    netlist,
     currentConfig,
-    selectionState,
-    setEdges,
-    setNodes,
+    onPositionsChange,
     loadPositions,
+    initializeViewer,
   ]);
 
-  // Handle node click to select a component - only if the component is clickable (modules)
-  const handleNodeClick = useCallback(
-    (event: React.MouseEvent, node: Node) => {
-      // Don't prevent default - let React Flow handle selection
-
-      // Check if the node is a module (which should be clickable for navigation)
-      const nodeData = node.data as SchematicNodeData;
-      if (nodeData.componentType === NodeType.MODULE) {
-        // Only navigate if it's a double-click or some other interaction
-        // Single click should just select the node
-        if (event.detail === 2) {
-          // Double click
-          onComponentSelect(node.id);
-        }
-      }
-
-      // For all nodes, ensure selection is handled properly
-      if (reactFlowInstance.current) {
-        const currentNodes = reactFlowInstance.current.getNodes();
-        const isMultiSelect = event.shiftKey || event.metaKey || event.ctrlKey;
-
-        const updatedNodes = currentNodes.map((n: any) => ({
-          ...n,
-          selected: isMultiSelect
-            ? n.id === node.id
-              ? !n.selected
-              : n.selected
-            : n.id === node.id,
-        }));
-
-        reactFlowInstance.current.setNodes(updatedNodes);
-      }
-    },
-    [onComponentSelect]
-  );
-
-  // Track dragging state
-  const [isDragging, setIsDragging] = useState(false);
-  const [pendingPositions, setPendingPositions] = useState<NodePositions>({});
-
-  // Create a debounced version of updateLayoutAfterDrag for real-time updates
-  const debouncedUpdateLayout = useMemo(
-    () =>
-      debounce((positions: NodePositions) => {
-        updateLayoutAfterDrag(positions);
-      }, 50), // 50ms debounce for smooth real-time updates
-    [updateLayoutAfterDrag]
-  );
-
-  // Cleanup debounced layout update on unmount
   useEffect(() => {
-    return () => {
-      debouncedUpdateLayout.cancel();
-    };
-  }, [debouncedUpdateLayout]);
+    if (!selectedComponent) return;
+
+    const isNewComponent = prevComponent !== selectedComponent;
+    if (!isNewComponent) return;
+
+    console.log(`[ReactFlow] Component changed to: ${selectedComponent}`);
+    setPrevComponent(selectedComponent);
+
+    // Center the view after component change
+    // The layout and position loading is handled by the store
+    setTimeout(() => {
+      reactFlowInstance.current?.fitView({
+        padding: 0.2,
+        duration: 200,
+      });
+    }, 100);
+  }, [selectedComponent, prevComponent]);
 
   // Add keyboard event handler for rotation
   useEffect(() => {
@@ -2144,82 +1193,42 @@ const Visualizer = ({
       if (event.key.toLowerCase() === "r") {
         console.log("[Rotation] R key pressed");
 
-        // Get the currently selected nodes from React Flow
-        const selectedNodes = reactFlowInstance.current
-          ?.getNodes()
-          .filter((node: any) => node.selected);
+        // Get the currently selected nodes from the store
+        const selectedNodeIds = Array.from(
+          useSchematicViewerStore.getState().getSelectedNodeIds()
+        );
 
-        console.log("[Rotation] Selected nodes:", selectedNodes);
+        console.log("[Rotation] Selected nodes:", selectedNodeIds);
 
-        if (selectedNodes && selectedNodes.length > 0) {
-          // Update rotation for each selected node
-          const updatedPositions = { ...nodePositions };
-          let hasChanges = false;
-
-          selectedNodes.forEach((node: any) => {
-            const currentPosition = nodePositions[node.id];
-            console.log(
-              `[Rotation] Current position for ${node.id}:`,
-              currentPosition
-            );
-
-            if (currentPosition) {
-              // Rotate by 90 degrees clockwise
-              const currentRotation = currentPosition.rotation || 0;
-              const newRotation = (currentRotation + 90) % 360;
-
-              console.log(
-                `[Rotation] Rotating ${node.id} from ${currentRotation} to ${newRotation} degrees`
-              );
-
-              updatedPositions[node.id] = {
-                ...currentPosition,
-                rotation: newRotation,
-              };
-              hasChanges = true;
-            } else {
-              console.log(
-                `[Rotation] No position found for ${node.id}, creating new position`
-              );
-              // If no position exists yet, create one with just rotation
-              updatedPositions[node.id] = {
-                x: node.position.x,
-                y: node.position.y,
-                rotation: 90,
-              };
-              hasChanges = true;
-            }
-          });
-
-          if (hasChanges) {
-            console.log("[Rotation] Updated positions:", updatedPositions);
-            // Update positions and trigger layout update
-            setNodePositions(updatedPositions);
-            updateLayoutAfterDrag(updatedPositions);
-
-            // Preserve selection after rotation by re-selecting the nodes
-            setTimeout(() => {
-              if (reactFlowInstance.current) {
-                // Get the current nodes
-                const currentNodes = reactFlowInstance.current.getNodes();
-
-                // Update the selected nodes to maintain selection
-                const updatedNodes = currentNodes.map((node: any) => {
-                  const wasSelected = selectedNodes.some(
-                    (selected: any) => selected.id === node.id
-                  );
-                  return {
-                    ...node,
-                    selected: wasSelected,
-                  };
-                });
-
-                reactFlowInstance.current.setNodes(updatedNodes);
-              }
-            }, 100); // Small delay to ensure layout update has completed
-          }
+        if (selectedNodeIds.length > 0) {
+          console.log("[Rotation] Rotating nodes:", selectedNodeIds);
+          rotateNodes(selectedNodeIds);
         } else {
           console.log("[Rotation] No nodes selected");
+        }
+      }
+
+      // Check if Delete or Backspace key is pressed
+      if (event.key === "Delete" || event.key === "Backspace") {
+        console.log("[Delete] Delete/Backspace key pressed");
+
+        // Prevent default behavior if we're not in an input field
+        const target = event.target as HTMLElement;
+        if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+          event.preventDefault();
+
+          // Get the currently selected nodes from the store
+          const selectedNodeIds = Array.from(
+            useSchematicViewerStore.getState().getSelectedNodeIds()
+          );
+
+          if (selectedNodeIds.length > 0) {
+            console.log(
+              "[Delete] Attempting to delete nodes:",
+              selectedNodeIds
+            );
+            deleteNetSymbolNodes(selectedNodeIds);
+          }
         }
       }
     };
@@ -2231,168 +1240,7 @@ const Visualizer = ({
     return () => {
       window.removeEventListener("keydown", handleKeyPress);
     };
-  }, [
-    nodePositions,
-    updateLayoutAfterDrag,
-    selectedComponent,
-    onPositionsChange,
-    debouncedOnPositionsChange,
-  ]);
-
-  // Custom handler for node changes to capture position updates
-  const handleNodesChange = useCallback(
-    (changes: any[]) => {
-      // Apply snapping to position changes before they're applied
-      if (currentConfig.layout.gridSnap.enabled) {
-        const gridSize = currentConfig.layout.gridSnap.size;
-
-        changes = changes.map((change) => {
-          if (change.type === "position" && change.position) {
-            // Snap the position immediately
-            const snapped = snapPosition(
-              change.position.x,
-              change.position.y,
-              gridSize
-            );
-            return {
-              ...change,
-              position: snapped,
-            };
-          }
-          return change;
-        });
-      }
-
-      // First, apply the changes using the default handler
-      onNodesChange(changes);
-
-      // Check if any position changes occurred
-      const positionChanges = changes.filter(
-        (change) => change.type === "position" && change.position
-      );
-
-      if (positionChanges.length > 0) {
-        // Update node positions based on the changes
-        const updatedPositions = { ...nodePositions };
-        let hasActualChanges = false;
-
-        positionChanges.forEach((change) => {
-          if (change.position) {
-            const currentPos = nodePositions[change.id];
-            // Only update if position actually changed
-            if (
-              !currentPos ||
-              Math.abs(currentPos.x - change.position.x) > 0.01 ||
-              Math.abs(currentPos.y - change.position.y) > 0.01
-            ) {
-              hasActualChanges = true;
-              updatedPositions[change.id] = {
-                x: change.position.x,
-                y: change.position.y,
-                // Preserve existing width/height/rotation if they exist
-                ...(currentPos && {
-                  width: currentPos.width,
-                  height: currentPos.height,
-                  rotation: currentPos.rotation,
-                }),
-              };
-            }
-          }
-        });
-
-        // Only update if there were actual changes
-        if (hasActualChanges) {
-          // Update positions immediately
-          setNodePositions(updatedPositions);
-          setPendingPositions(updatedPositions);
-
-          // Notify about position changes
-          if (selectedComponent && onPositionsChange) {
-            console.log(
-              `[ReactFlow] Notifying position changes for component: ${selectedComponent}`
-            );
-            console.log(`[ReactFlow] Updated positions:`, updatedPositions);
-            debouncedOnPositionsChange(selectedComponent, updatedPositions);
-          }
-
-          // If we're dragging, update layout with debouncing
-          if (isDragging) {
-            debouncedUpdateLayout(updatedPositions);
-          } else {
-            // Not dragging, update positions immediately (e.g., programmatic moves)
-            updateLayoutAfterDrag(updatedPositions);
-          }
-        }
-      }
-    },
-    [
-      onNodesChange,
-      nodePositions,
-      updateLayoutAfterDrag,
-      isDragging,
-      debouncedUpdateLayout,
-      currentConfig,
-      selectedComponent,
-      onPositionsChange,
-      debouncedOnPositionsChange,
-    ]
-  );
-
-  // Handle node drag start
-  const handleNodeDragStart = useCallback(
-    (event: React.MouseEvent, node: Node) => {
-      setIsDragging(true);
-
-      // Select the node when dragging starts
-      if (reactFlowInstance.current) {
-        const currentNodes = reactFlowInstance.current.getNodes();
-
-        // Update nodes to select only the dragged node (unless shift/cmd is held)
-        const isMultiSelect = event.shiftKey || event.metaKey || event.ctrlKey;
-
-        const updatedNodes = currentNodes.map((n: any) => ({
-          ...n,
-          selected: isMultiSelect
-            ? n.id === node.id
-              ? true
-              : n.selected
-            : n.id === node.id,
-        }));
-
-        reactFlowInstance.current.setNodes(updatedNodes);
-      }
-    },
-    []
-  );
-
-  // Handle node drag stop - finalize the drag operation
-  const handleNodeDragStop = useCallback(() => {
-    setIsDragging(false);
-
-    // Cancel any pending debounced updates
-    debouncedUpdateLayout.cancel();
-
-    // If we have pending positions from the drag, do a final update
-    if (Object.keys(pendingPositions).length > 0) {
-      // Do a final update to ensure we have the exact final positions
-      updateLayoutAfterDrag(pendingPositions);
-      setPendingPositions({});
-    }
-  }, [pendingPositions, updateLayoutAfterDrag, debouncedUpdateLayout]);
-
-  useOnSelectionChange({
-    onChange: useCallback(
-      ({ nodes, edges }) => {
-        let selectedNetId =
-          edges.length > 0 ? (edges[0].data?.netId as string) : null;
-
-        if (selectedNetId !== selectionState.selectedNetId) {
-          debouncedSetSelectedNet(selectedNetId);
-        }
-      },
-      [selectionState.selectedNetId, debouncedSetSelectedNet]
-    ),
-  });
+  }, [rotateNodes, deleteNetSymbolNodes]);
 
   const updateConfig = useCallback((updates: Partial<SchematicConfig>) => {
     setCurrentConfig((prev) => ({
@@ -2415,23 +1263,6 @@ const Visualizer = ({
 
   return (
     <div className="schematic-viewer">
-      {layoutError && (
-        <div
-          className="error-message"
-          style={{
-            color: DEFAULT_THEME.erc_error.to_css(),
-            backgroundColor: backgroundColor,
-            border: `1px solid ${DEFAULT_THEME.erc_error.to_css()}`,
-            padding: "10px",
-            margin: "10px",
-            borderRadius: "4px",
-          }}
-        >
-          <h3>Layout Error</h3>
-          <p>{layoutError}</p>
-        </div>
-      )}
-
       <div
         className="react-flow-schematic-viewer"
         style={{
@@ -2446,7 +1277,7 @@ const Visualizer = ({
           proOptions={{ hideAttribution: true }}
           nodes={nodes}
           edges={edges}
-          onNodesChange={handleNodesChange}
+          onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
@@ -2454,31 +1285,20 @@ const Visualizer = ({
           onInit={(instance) => {
             reactFlowInstance.current = instance;
           }}
-          onNodeClick={handleNodeClick}
-          onNodeDragStart={handleNodeDragStart}
-          onNodeDragStop={handleNodeDragStop}
+          onNodeClick={(event, node) => {
+            handleNodeClick(
+              node.id,
+              event.shiftKey || event.metaKey || event.ctrlKey
+            );
+          }}
+          onNodeDoubleClick={(event, node) => {
+            if ((node.data as any).isNetSymbol) {
+              createNetSymbolNode(node.id);
+            }
+          }}
           onPaneClick={() => {
             // Clear selection when clicking on background
-            if (reactFlowInstance.current) {
-              const currentNodes = reactFlowInstance.current.getNodes();
-              const updatedNodes = currentNodes.map((n: any) => ({
-                ...n,
-                selected: false,
-              }));
-              reactFlowInstance.current.setNodes(updatedNodes);
-            }
-          }}
-          onEdgeMouseEnter={(_event, edge) => {
-            if (
-              edge.data?.netId &&
-              edge.data?.netId !== selectionState.selectedNetId &&
-              edge.data?.netId !== selectionState.hoveredNetId
-            ) {
-              debouncedSetHoveredNet(edge.data?.netId);
-            }
-          }}
-          onEdgeMouseLeave={() => {
-            debouncedSetHoveredNet(null);
+            clearSelection();
           }}
           defaultEdgeOptions={{
             type: "electrical",

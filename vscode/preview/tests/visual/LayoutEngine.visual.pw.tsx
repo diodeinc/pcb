@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/experimental-ct-react";
 import React from "react";
-import SchematicContainer from "../../src/components/SchematicContainer";
+import SchematicWithPositions from "./SchematicWithPositions";
 import type { Netlist } from "../../src/types/NetlistTypes";
+import type { NodePositions } from "../../src/LayoutEngine";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
@@ -9,16 +10,44 @@ import { execSync } from "child_process";
 test.describe("Schematic Visual Tests", () => {
   const examplesDir = path.join(__dirname, "../../../../examples");
 
+  // Helper function to parse saved positions from a zen file
+  function parseSavedPositions(zenFilePath: string): NodePositions {
+    const positions: NodePositions = {};
+    const fileContent = fs.readFileSync(zenFilePath, "utf-8");
+    const lines = fileContent.split("\n");
+
+    // Pattern to match position comments: # pcb:sch <id> x=<x> y=<y> rot=<rotation>
+    const positionPattern =
+      /^#\s*pcb:sch\s+(\S+)\s+x=([^\s]+)\s+y=([^\s]+)\s+rot=([^\s]+)/;
+
+    for (const line of lines) {
+      const match = line.match(positionPattern);
+      if (match) {
+        const [, id, x, y, rotation] = match;
+        positions[id] = {
+          x: parseFloat(x),
+          y: parseFloat(y),
+          rotation: parseFloat(rotation),
+        };
+      }
+    }
+
+    return positions;
+  }
+
   // Helper function to build netlist from example
   async function buildNetlistFromExample(
     exampleName: string
-  ): Promise<Netlist> {
+  ): Promise<{ netlist: Netlist; positions: NodePositions }> {
     const examplePath = path.join(examplesDir, exampleName);
     const starFile = path.join(examplePath, `${exampleName}.zen`);
 
     if (!fs.existsSync(starFile)) {
       throw new Error(`Example file not found: ${starFile}`);
     }
+
+    // Parse saved positions from the zen file
+    const positions = parseSavedPositions(starFile);
 
     // Run cargo to build netlist
     try {
@@ -29,7 +58,9 @@ test.describe("Schematic Visual Tests", () => {
       });
 
       // Parse the output directly from stdout
-      return JSON.parse(output) as Netlist;
+      const netlist = JSON.parse(output) as Netlist;
+
+      return { netlist, positions };
     } catch (error: any) {
       console.error(
         `Failed to build netlist for ${exampleName}:`,
@@ -79,7 +110,7 @@ test.describe("Schematic Visual Tests", () => {
         console.error(error.stack);
       });
 
-      const netlist = await buildNetlistFromExample(exampleName);
+      const { netlist, positions } = await buildNetlistFromExample(exampleName);
 
       // Mount the component
       const component = await mount(
@@ -121,11 +152,7 @@ test.describe("Schematic Visual Tests", () => {
               width: 100% !important;
             }
           `}</style>
-          <SchematicContainer
-            netlistData={netlist}
-            currentFile={netlist.root_ref.split(":")[0]}
-            selectedModule={netlist.root_ref}
-          />
+          <SchematicWithPositions netlist={netlist} positions={positions} />
         </>
       );
 
@@ -186,7 +213,9 @@ test.describe("Schematic Visual Tests", () => {
       console.error(error.stack);
     });
 
-    const netlist = await buildNetlistFromExample("VoltageDivider");
+    const { netlist, positions } = await buildNetlistFromExample(
+      "VoltageDivider"
+    );
 
     // Mount the component
     const component = await mount(
@@ -228,11 +257,7 @@ test.describe("Schematic Visual Tests", () => {
             width: 100% !important;
           }
         `}</style>
-        <SchematicContainer
-          netlistData={netlist}
-          currentFile={netlist.root_ref.split(":")[0]}
-          selectedModule={netlist.root_ref}
-        />
+        <SchematicWithPositions netlist={netlist} positions={positions} />
       </>
     );
 

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import ReactFlowSchematicViewer from "./ReactFlowSchematicViewer";
+import SchematicSidebar from "./SchematicSidebar";
 import "./ReactFlowSchematicViewer.css";
 import { type Netlist } from "../types/NetlistTypes";
 import "@vscode-elements/elements/dist/bundled.js";
@@ -136,6 +137,35 @@ const StyleInjector = (): React.ReactElement => {
   return null;
 };
 
+// Add parameter types that match the sidebar component
+interface Parameter {
+  name: string;
+  param_type: string;
+  required: boolean;
+  is_config: boolean;
+  is_enum: boolean;
+  enum_values?: string[];
+  type_info: {
+    kind: string;
+    name?: string;
+    variants?: string[];
+    element?: any;
+    key?: any;
+    value?: any;
+    fields?: Record<string, any>;
+    pins?: Record<string, any>;
+    type_name?: string;
+  };
+}
+
+interface DiagnosticInfo {
+  level: string;
+  message: string;
+  file?: string;
+  line?: number;
+  child?: DiagnosticInfo;
+}
+
 interface SchematicContainerProps {
   netlistData: Netlist;
   currentFile: string;
@@ -143,6 +173,15 @@ interface SchematicContainerProps {
   showBreadcrumbs?: boolean;
   onPositionsChange?: (componentId: string, positions: any) => void;
   loadPositions?: (componentId: string) => Promise<any>;
+  // New props for sidebar
+  showSidebar?: boolean;
+  parameters?: Parameter[];
+  diagnostics?: DiagnosticInfo[];
+  sidebarError?: string | null;
+  isEvaluating?: boolean;
+  initialInputs?: Record<string, string>;
+  onInputChange?: (paramName: string, value: string) => void;
+  onInputsChange?: (inputs: Record<string, string>) => void;
 }
 
 const Breadcrumbs = ({
@@ -197,6 +236,15 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
   showBreadcrumbs = false,
   onPositionsChange,
   loadPositions,
+  // New props with defaults
+  showSidebar = false,
+  parameters = [],
+  diagnostics = [],
+  sidebarError = null,
+  isEvaluating = false,
+  initialInputs = {},
+  onInputChange,
+  onInputsChange,
 }) => {
   console.log("schematic container with currentFile", currentFile);
   const [error, setError] = useState<string | null>(null);
@@ -219,27 +267,45 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
   }, [currentFile, selectedModule]);
 
   // Handle component selection
-  const handleComponentSelect = (componentId: string | null) => {
+  const handleComponentSelect = useCallback((componentId: string | null) => {
     if (componentId) {
       setSelectedModule(componentId);
     }
-  };
+  }, []);
 
   // Handle errors
-  const handleError = (message: string) => {
-    setError(message);
-  };
+  const handleError = useCallback(
+    (message: string) => {
+      setError(message);
+    },
+    [setError]
+  );
+
+  // Extract module name from file path for display
+  const moduleName = React.useMemo(() => {
+    const parts = currentFile.split("/");
+    const fileName = parts[parts.length - 1];
+    return fileName.replace(/\.(zen|star|bzl)$/, "");
+  }, [currentFile]);
 
   return (
     <div className="schematic-layout">
       <StyleInjector />
 
-      {/* <Sidebar
-        netlist={netlistData}
-        selectModule={handleComponentSelect}
-        selectedModule={selectedModule}
-        currentFile={currentFile}
-      /> */}
+      {/* Sidebar - conditionally render based on showSidebar prop */}
+      {showSidebar && (
+        <SchematicSidebar
+          moduleName={moduleName}
+          filePath={currentFile}
+          parameters={parameters}
+          diagnostics={diagnostics}
+          error={sidebarError}
+          isEvaluating={isEvaluating}
+          initialValues={initialInputs}
+          onInputChange={onInputChange}
+          onInputsChange={onInputsChange}
+        />
+      )}
 
       {/* Main Schematic Viewer */}
       <div className="schematic-viewer-container">

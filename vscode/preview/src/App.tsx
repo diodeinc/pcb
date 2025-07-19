@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import "./App.css";
 import SchematicContainer from "./components/SchematicContainer";
 import demoData from "./data/demo.json";
@@ -228,72 +228,82 @@ function App() {
   };
 
   // Handle position changes from the schematic viewer
-  const handlePositionsChange = (componentId: string, positions: any) => {
-    console.log(`[App] Position change for component: ${componentId}`);
-    console.log(`[App] Number of positions:`, Object.keys(positions).length);
-    if (vscode) {
-      vscode.postMessage({
-        command: "updatePositions",
-        componentId,
-        positions,
-      });
-      console.log(`[App] Sent updatePositions message to VS Code`);
-    } else {
-      console.log(`[App] Not in VS Code environment, skipping position update`);
-    }
-  };
+  const handlePositionsChange = useCallback(
+    (componentId: string, positions: any) => {
+      console.log(`[App] Position change for component: ${componentId}`);
+      console.log(`[App] Number of positions:`, Object.keys(positions).length);
+      if (vscode) {
+        vscode.postMessage({
+          command: "updatePositions",
+          componentId,
+          positions,
+        });
+        console.log(`[App] Sent updatePositions message to VS Code`);
+      } else {
+        console.log(
+          `[App] Not in VS Code environment, skipping position update`
+        );
+      }
+    },
+    []
+  );
 
   // Load positions for a component
-  const loadPositions = async (componentId: string): Promise<any> => {
-    console.log(`[App] Loading positions for component: ${componentId}`);
+  const loadPositions = useCallback(
+    async (componentId: string): Promise<any> => {
+      console.log(`[App] Loading positions for component: ${componentId}`);
 
-    if (!vscode) {
-      console.log(`[App] Not in VS Code environment, returning null`);
-      return null;
-    }
+      if (!vscode) {
+        console.log(`[App] Not in VS Code environment, returning null`);
+        return null;
+      }
 
-    // Create a unique request ID
-    const requestId = `load-positions-${Date.now()}`;
-    console.log(`[App] Created request ID: ${requestId}`);
+      // Create a unique request ID
+      const requestId = `load-positions-${Date.now()}`;
+      console.log(`[App] Created request ID: ${requestId}`);
 
-    return new Promise((resolve) => {
-      // Set up a one-time listener for the response
-      const handler = (event: MessageEvent) => {
-        const message = event.data;
-        if (
-          message.command === "positionsLoaded" &&
-          message.requestId === requestId
-        ) {
+      return new Promise((resolve) => {
+        // Set up a one-time listener for the response
+        const handler = (event: MessageEvent) => {
+          const message = event.data;
+          if (
+            message.command === "positionsLoaded" &&
+            message.requestId === requestId
+          ) {
+            console.log(
+              `[App] Received positionsLoaded response for request: ${requestId}`
+            );
+            console.log(`[App] Positions received:`, message.positions);
+            window.removeEventListener("message", handler);
+            resolve(message.positions || null);
+          }
+        };
+
+        window.addEventListener("message", handler);
+
+        // Send the request
+        console.log(`[App] Sending loadPositions request to VS Code`);
+        console.log(`[App] vscode API available:`, !!vscode);
+        const message = {
+          command: "loadPositions",
+          componentId,
+          requestId,
+        };
+        console.log(`[App] Message to send:`, message);
+        vscode.postMessage(message);
+
+        // Timeout after 5 seconds
+        setTimeout(() => {
           console.log(
-            `[App] Received positionsLoaded response for request: ${requestId}`
+            `[App] loadPositions request timed out for: ${requestId}`
           );
-          console.log(`[App] Positions received:`, message.positions);
           window.removeEventListener("message", handler);
-          resolve(message.positions || null);
-        }
-      };
-
-      window.addEventListener("message", handler);
-
-      // Send the request
-      console.log(`[App] Sending loadPositions request to VS Code`);
-      console.log(`[App] vscode API available:`, !!vscode);
-      const message = {
-        command: "loadPositions",
-        componentId,
-        requestId,
-      };
-      console.log(`[App] Message to send:`, message);
-      vscode.postMessage(message);
-
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        console.log(`[App] loadPositions request timed out for: ${requestId}`);
-        window.removeEventListener("message", handler);
-        resolve(null);
-      }, 5000);
-    });
-  };
+          resolve(null);
+        }, 5000);
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     if (vscode) {

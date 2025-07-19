@@ -1,7 +1,7 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ELK as ELKType } from "elkjs/lib/elk-api";
 import { InstanceKind } from "./types/NetlistTypes";
-import type { Netlist, AttributeValue } from "./types/NetlistTypes";
+import type { Netlist, AttributeValue, Net } from "./types/NetlistTypes";
 import { createCanvas } from "canvas";
 import { getKicadSymbolInfo } from "./renderer/kicad_sym";
 import * as LZString from "lz-string";
@@ -373,6 +373,10 @@ export class SchematicLayoutEngine {
       }
     }
 
+    // Add net symbol nodes
+    const netSymbolNodes = this._createNetSymbolNodes();
+    nodes.push(...netSymbolNodes);
+
     // Create the graph without edges initially
     const graph: ElkGraph = {
       id: instance_ref,
@@ -464,24 +468,11 @@ export class SchematicLayoutEngine {
       // Skip ELK layout - use existing positions
       console.log("All nodes have positions, skipping ELK layout");
       layoutedGraph = graph;
-
-      // Apply existing positions to nodes
-      this._applyExistingPositions(layoutedGraph, nodePositions);
     }
 
-    // Build connectivity for routing - use clustering (ignoreClusters=false) for efficient routing
-    connectivityInfo = this._buildConnectivity(layoutedGraph, false);
+    // Apply existing positions to nodes (including net symbol nodes)
+    this._applyExistingPositions(layoutedGraph, nodePositions);
 
-    // Remove net labels from ports that have edges
-    this._removePortNetLabels(layoutedGraph, connectivityInfo.portsWithEdges);
-
-    // Store the ELK edges for later use
-    layoutedGraph.edges = connectivityInfo.elkEdges;
-
-    // Initialize extracted node positions early since we'll add junction nodes
-    const extractedNodePositions: NodePositions = {};
-
-    // Apply grid snapping if enabled - do this before creating obstacles for libavoid
     if (this.config.layout.gridSnap.enabled) {
       const gridSize = this.config.layout.gridSnap.size;
 
@@ -495,6 +486,18 @@ export class SchematicLayoutEngine {
         }
       }
     }
+
+    // Build connectivity for routing - use clustering (ignoreClusters=false) for efficient routing
+    connectivityInfo = this._buildConnectivity(layoutedGraph, false);
+
+    // Remove net labels from ports that have edges
+    this._removePortNetLabels(layoutedGraph, connectivityInfo.portsWithEdges);
+
+    // Store the ELK edges for later use
+    layoutedGraph.edges = connectivityInfo.elkEdges;
+
+    // Initialize extracted node positions early since we'll add junction nodes
+    const extractedNodePositions: NodePositions = {};
 
     // Convert nodes to obstacles for libavoid
     const obstacles: Obstacle[] = [];
@@ -567,47 +570,17 @@ export class SchematicLayoutEngine {
         decomposedHyperedges
       );
 
-      // Create junction nodes from the routing results
-      const junctionNodes: ElkNode[] = [];
-      const junctionNodeMap = new Map<string, ElkNode>(); // Map junction ID to node
-
-      for (const junction of routingResult.junctions) {
-        const junctionNode: ElkNode = {
-          id: junction.id,
-          type: NodeType.NET_JUNCTION,
-          x: junction.x, // Center the 10x10 junction
-          y: junction.y,
-          width: 1,
-          height: 1,
-          ports: [
-            {
-              id: `${junction.id}.port`,
-              x: 0, // Center of junction
-              y: 0,
-              width: 0,
-              height: 0,
-            },
-          ],
-          labels: [],
-          properties: {},
-        };
-
-        junctionNodes.push(junctionNode);
-        junctionNodeMap.set(junction.id, junctionNode);
-
-        // Don't add junction nodes to nodePositions - they are dynamically created
-      }
-
-      // Add junction nodes to the graph
-      if (layoutedGraph.children) {
-        layoutedGraph.children.push(...junctionNodes);
-      }
-
-      // Convert the point-to-point edges from libavoid to ELK edges
-      // We no longer need to create a map since we pass context through routing
-
       // Simple 1:1 mapping - each libavoid edge becomes one ELK edge
       const newEdges: ElkEdge[] = [];
+
+      // Group edges by their original hyperedge (MST)
+      const edgesByMST = new Map<
+        string,
+        Array<{
+          routedEdge: any;
+          elkEdge: ElkEdge;
+        }>
+      >();
 
       for (const routedEdge of routingResult.edges) {
         // Use context directly instead of trying to parse edge IDs
@@ -664,7 +637,7 @@ export class SchematicLayoutEngine {
           targets: [targetId],
           sourceComponentRef: sourceComponentRef,
           targetComponentRef: targetComponentRef,
-          labels: [], // Start with empty labels, could be enhanced later
+          labels: [], // Start with empty labels, will add once per MST
           sections: [
             {
               id: `${routedEdge.id}_section`,
@@ -678,7 +651,90 @@ export class SchematicLayoutEngine {
           },
         };
 
-        newEdges.push(elkEdge);
+        // Group edges by their original hyperedge/cluster
+        // Use the context to determine which cluster this edge belongs to
+        const mstId =
+          routedEdge.context.originalHyperedgeId || routedEdge.context.netId;
+
+        // Group edges by MST
+        if (!edgesByMST.has(mstId)) {
+          edgesByMST.set(mstId, []);
+        }
+        edgesByMST.get(mstId)!.push({ routedEdge, elkEdge });
+      }
+
+      // Now process each MST to add a single label on the longest segment
+      for (const [, mstEdges] of edgesByMST) {
+        // Find the longest segment across all edges in this MST
+        let longestSegmentInfo: {
+          edge: ElkEdge;
+          position: {
+            x: number;
+            y: number;
+            isHorizontal: boolean;
+            segmentLength: number;
+          };
+        } | null = null;
+
+        for (const { routedEdge, elkEdge } of mstEdges) {
+          const labelPosition = this._findLongestSegmentMidpoint(
+            routedEdge.points
+          );
+          if (labelPosition) {
+            if (
+              !longestSegmentInfo ||
+              labelPosition.segmentLength >
+                longestSegmentInfo.position.segmentLength
+            ) {
+              longestSegmentInfo = {
+                edge: elkEdge,
+                position: labelPosition,
+              };
+            }
+          }
+        }
+
+        // Add label to the edge with the longest segment
+        if (
+          longestSegmentInfo &&
+          longestSegmentInfo.position.segmentLength > 50
+        ) {
+          const netName = longestSegmentInfo.edge.properties?.netName || "";
+          const labelDimensions = calculateTextDimensions(netName, 10);
+
+          // For horizontal segments, label goes above; for vertical, label goes to the side
+          const labelOffset = 10;
+          let labelX = longestSegmentInfo.position.x;
+          let labelY = longestSegmentInfo.position.y;
+
+          if (longestSegmentInfo.position.isHorizontal) {
+            // Center label horizontally, place above the line
+            labelX -= labelDimensions.width / 2;
+            labelY -= labelDimensions.height / 2 + labelOffset;
+          } else {
+            // Center label vertically, place to the right of the line
+            labelX += labelOffset;
+            labelY -= labelDimensions.height / 2;
+          }
+
+          longestSegmentInfo.edge.labels = [
+            {
+              text: netName,
+              x: labelX,
+              y: labelY,
+              width: labelDimensions.width,
+              height: labelDimensions.height,
+              properties: {
+                labelType: "netName",
+              },
+            },
+          ];
+        }
+
+        // Add all edges from this MST to the results
+        for (const { elkEdge } of mstEdges) {
+          newEdges.push(elkEdge);
+        }
       }
 
       // Replace the edges with the new routed edges
@@ -782,7 +838,35 @@ export class SchematicLayoutEngine {
       return true;
     };
 
-    return checkNodes(graph.children);
+    // Check regular nodes
+    const regularNodesHavePositions = checkNodes(graph.children);
+
+    // Also check if net symbol nodes have positions
+    for (const [netId, net] of Object.entries(this.netlist.nets)) {
+      if (net.properties?.__symbol_value) {
+        const netName = net.name || netId;
+
+        // Look for all net symbol nodes in nodePositions for this net
+        const netSymbolPattern = new RegExp(
+          `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+        );
+        let hasAtLeastOneSymbol = false;
+
+        for (const nodeId of Object.keys(nodePositions)) {
+          if (netSymbolPattern.test(nodeId)) {
+            hasAtLeastOneSymbol = true;
+            break;
+          }
+        }
+
+        // If this net should have symbols but none are positioned, return false
+        if (!hasAtLeastOneSymbol) {
+          return false;
+        }
+      }
+    }
+
+    return regularNodesHavePositions;
   }
 
   /**
@@ -1002,7 +1086,10 @@ export class SchematicLayoutEngine {
         if (portName === "~" && pinEndpoint.number) {
           const childNames = Object.keys(instance.children || {});
           const pinNumberMatch = childNames.find((name) => {
-            return name.toLowerCase() === `p${pinEndpoint.number}`;
+            return (
+              name.toLowerCase() === `${pinEndpoint.number}` ||
+              name.toLowerCase() === `p${pinEndpoint.number}`
+            );
           });
 
           if (pinNumberMatch) {
@@ -1073,57 +1160,10 @@ export class SchematicLayoutEngine {
           snappedY = nodeHeight;
         }
 
-        // // Calculate label text and dimensions
-        // const labelText =
-        //   pinEndpoint.name === "~" ? pinEndpoint.number || "~" : portName;
-
-        // const baseDimensions = calculateTextDimensions(labelText, 10);
-
-        // // For vertical ports (NORTH/SOUTH), text is rotated 90 degrees, so swap width/height
         const isVertical = side === "NORTH" || side === "SOUTH";
-        // const labelWidth = isVertical
-        //   ? baseDimensions.height
-        //   : baseDimensions.width;
-        // const labelHeight = isVertical
-        //   ? baseDimensions.width
-        //   : baseDimensions.height;
 
         // Prepare port labels
         const portLabels: ElkLabel[] = [];
-
-        // // Add pin name/number label if configured
-        // if (this.config.visual.showPortLabels) {
-        //   // Calculate label position based on port side
-        //   let labelX: number, labelY: number;
-        //   const labelOffset = 5; // Distance from port
-
-        //   switch (side) {
-        //     case "WEST":
-        //       labelX = -labelWidth - labelOffset;
-        //       labelY = -labelHeight / 2;
-        //       break;
-        //     case "EAST":
-        //       labelX = labelOffset;
-        //       labelY = -labelHeight / 2;
-        //       break;
-        //     case "NORTH":
-        //       labelX = -labelWidth / 2;
-        //       labelY = -labelHeight - labelOffset;
-        //       break;
-        //     case "SOUTH":
-        //       labelX = -labelWidth / 2;
-        //       labelY = labelOffset;
-        //       break;
-        //   }
-
-        //   portLabels.push({
-        //     text: labelText,
-        //     x: labelX,
-        //     y: labelY,
-        //     width: labelWidth,
-        //     height: labelHeight,
-        //   });
-        // }
 
         // Check if this port is connected to a net and add net label
         const netId = this._findNetForPort(portRef);
@@ -1405,100 +1445,6 @@ export class SchematicLayoutEngine {
   }
 
   /**
-   * Create a simple net reference node for a net
-   */
-  private _netReferenceNode(
-    ref_id: string,
-    netName: string,
-    side: "NORTH" | "WEST" | "SOUTH" | "EAST" = "WEST"
-  ): ElkNode {
-    // Calculate label dimensions
-    const labelDimensions = calculateTextDimensions(netName, 12);
-
-    // Use configured size for net reference, but expand for label
-    const baseWidth = this.config.nodeSizes.netReference.width;
-    const baseHeight = this.config.nodeSizes.netReference.height;
-    const nodeWidth = Math.max(baseWidth, labelDimensions.width + 20);
-    const nodeHeight = Math.max(baseHeight, 20);
-
-    // Calculate port position based on side
-    let portX = 0;
-    let portY = nodeHeight / 2;
-
-    switch (side) {
-      case "EAST":
-        portX = nodeWidth;
-        break;
-      case "WEST":
-        portX = 0;
-        break;
-      case "NORTH":
-        portX = nodeWidth / 2;
-        portY = 0;
-        break;
-      case "SOUTH":
-        portX = nodeWidth / 2;
-        portY = nodeHeight;
-        break;
-    }
-
-    return {
-      id: ref_id,
-      type: NodeType.NET_REFERENCE,
-      width: nodeWidth,
-      height: nodeHeight,
-      netId: netName,
-      // Apply position and rotation if provided
-      ...(this._nodePositions[ref_id] && {
-        x: this._nodePositions[ref_id].x,
-        y: this._nodePositions[ref_id].y,
-        rotation: this._nodePositions[ref_id].rotation || 0,
-      }),
-      labels: [
-        {
-          text: netName,
-          x:
-            side === "EAST"
-              ? -labelDimensions.width - 5
-              : side === "WEST"
-              ? nodeWidth + 5
-              : 10,
-          y:
-            side === "NORTH" || side === "SOUTH"
-              ? -labelDimensions.height - 5
-              : (nodeHeight - labelDimensions.height) / 2,
-          width: labelDimensions.width,
-          height: labelDimensions.height,
-          textAlign: "center" as const,
-        },
-      ],
-      ports: [
-        {
-          id: `${ref_id}.port`,
-          x: portX,
-          y: portY,
-          width: 0,
-          height: 0,
-          properties: {
-            "port.side": side,
-            "port.alignment": "CENTER",
-          },
-        },
-      ],
-      properties: {
-        "elk.portConstraints": "FIXED_POS",
-        "elk.nodeSize.constraints": "MINIMUM_SIZE",
-        "elk.nodeSize.minimum": `(${nodeWidth}, ${nodeHeight})`,
-        // Mark as fixed if position is provided
-        ...(this._nodePositions[ref_id] && {
-          "elk.position": `(${this._nodePositions[ref_id].x},${this._nodePositions[ref_id].y})`,
-          "elk.fixed": "true",
-        }),
-      },
-    };
-  }
-
-  /**
    * Recursively collect nodes from a module, auto-exploding single-child modules
    */
   private _collectNodesWithAutoExplode(instance_ref: string): ElkNode[] {
@@ -1610,7 +1556,9 @@ export class SchematicLayoutEngine {
       result.push({
         id: `${hyperedge.id}_mst_${i}`,
         ports: [ports[edge.from], ports[edge.to]],
-        context: hyperedge.context, // Preserve context from original hyperedge
+        context: {
+          ...hyperedge.context, // Preserve all context including originalHyperedgeId
+        },
       });
     }
 
@@ -1657,89 +1605,222 @@ export class SchematicLayoutEngine {
       const netInfo = this.netlist.nets[netId];
       const netName = netInfo?.name || netId;
 
-      // Find clusters of nearby ports
-      const clusters = this._findNetClusters(
-        netId,
-        graph.children || [],
-        ignoreClusters
-      );
+      // Check if this net has a symbol
+      const netHasSymbol = netInfo?.properties?.__symbol_value;
 
-      // Create hyperedges for each cluster
-      for (const cluster of clusters) {
-        const edgeId = `net_${netId}_cluster_${edgeCounter++}`;
+      if (netHasSymbol) {
+        // For nets with symbols, create edges from each port to the closest net symbol
+        const netName = netInfo?.name || netId;
 
-        // Collect all ports in the cluster with their positions and visibility directions
-        const ports: Port[] = cluster.map(({ node, port, position }) => ({
-          id: port.id,
-          x: position.x,
-          y: position.y,
-          visibilityDirection: this._getPortVisibilityDirection(
-            port,
-            node.rotation
-          ),
-        }));
+        // Find all net symbol nodes for this net
+        const netSymbolPattern = new RegExp(
+          `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+        );
+        const symbolNodes: ElkNode[] = [];
 
-        // Create hyperedge for libavoid with context
-        const hyperedge: Hyperedge = {
-          id: edgeId,
-          ports: ports,
-          context: {
-            netId: netId,
-            netName: netName,
-            // Store any other context we might need
-          },
-        };
-        hyperedges.push(hyperedge);
-
-        // Decompose hyperedge into MST edges and create binary ELK edges
-        const mstEdges = this._decomposeHyperedgeToMST(hyperedge);
-        for (const mstEdge of mstEdges) {
-          // Each MST edge should have exactly 2 ports
-          if (mstEdge.ports.length !== 2) {
-            console.warn(
-              `MST edge ${mstEdge.id} has ${mstEdge.ports.length} ports, expected 2`
-            );
-            continue;
+        for (const node of graph.children || []) {
+          if (netSymbolPattern.test(node.id)) {
+            symbolNodes.push(node);
           }
-
-          const sourcePort = mstEdge.ports[0];
-          const targetPort = mstEdge.ports[1];
-
-          // Find the nodes that own these ports
-          const sourceNode = cluster.find(
-            (c) => c.port.id === sourcePort.id
-          )?.node;
-          const targetNode = cluster.find(
-            (c) => c.port.id === targetPort.id
-          )?.node;
-
-          if (!sourceNode || !targetNode) {
-            console.warn(
-              `Could not find nodes for ports ${sourcePort.id} and ${targetPort.id}`
-            );
-            continue;
-          }
-
-          // Create binary ELK edge
-          const elkEdge: ElkEdge = {
-            id: mstEdge.id,
-            netId: netId,
-            sources: [sourcePort.id],
-            targets: [targetPort.id],
-            sourceComponentRef: sourceNode.id,
-            targetComponentRef: targetNode.id,
-            labels: [],
-            properties: {
-              netName: netName,
-              originalHyperedge: edgeId,
-            },
-          };
-
-          elkEdges.push(elkEdge);
         }
 
-        // Track that these ports have edges
-        cluster.forEach(({ port }) => portsWithEdges.add(port.id));
+        if (symbolNodes.length === 0) {
+          console.warn(`No net symbol nodes found for net ${netId}`);
+          continue;
+        }
+
+        // Find all ports connected to this net
+        const connectedPorts: Array<{ node: ElkNode; port: ElkPort }> = [];
+        for (const node of graph.children || []) {
+          if (symbolNodes.some((sn) => sn.id === node.id)) continue; // Skip the symbol nodes themselves
+          if (!node.ports) continue;
+
+          for (const port of node.ports) {
+            if (port.netId === netId) {
+              connectedPorts.push({ node, port });
+            }
+          }
+        }
+
+        // For each connected port, find the closest net symbol and create an edge
+        for (const { node, port } of connectedPorts) {
+          const portPosition = this._getPortPosition(node, port);
+          if (!portPosition) continue;
+
+          // Find the closest symbol node
+          let closestSymbol: ElkNode | null = null;
+          let closestDistance = Infinity;
+          let closestSymbolPort: ElkPort | null = null;
+
+          for (const symbolNode of symbolNodes) {
+            // For each port on the symbol node, calculate distance
+            for (const symbolPort of symbolNode.ports || []) {
+              const symbolPortPosition = this._getPortPosition(
+                symbolNode,
+                symbolPort
+              );
+              if (symbolPortPosition) {
+                const distance = this._calculateDistance(
+                  portPosition,
+                  symbolPortPosition
+                );
+                if (distance < closestDistance) {
+                  closestDistance = distance;
+                  closestSymbol = symbolNode;
+                  closestSymbolPort = symbolPort;
+                }
+              }
+            }
+          }
+
+          if (!closestSymbol || !closestSymbolPort) {
+            console.warn(`Could not find closest symbol for port ${port.id}`);
+            continue;
+          }
+
+          const edgeId = `net_${netId}_edge_${edgeCounter++}`;
+          const symbolPortPosition = this._getPortPosition(
+            closestSymbol,
+            closestSymbolPort
+          );
+
+          if (symbolPortPosition) {
+            // Create hyperedge for libavoid
+            const hyperedge: Hyperedge = {
+              id: edgeId,
+              ports: [
+                {
+                  id: port.id,
+                  x: portPosition.x,
+                  y: portPosition.y,
+                  visibilityDirection: this._getPortVisibilityDirection(
+                    port,
+                    node.rotation
+                  ),
+                },
+                {
+                  id: closestSymbolPort.id,
+                  x: symbolPortPosition.x,
+                  y: symbolPortPosition.y,
+                  visibilityDirection: this._getPortVisibilityDirection(
+                    closestSymbolPort,
+                    closestSymbol.rotation
+                  ),
+                },
+              ],
+              context: {
+                netId: netId,
+                netName: netName,
+              },
+            };
+            hyperedges.push(hyperedge);
+
+            // Create corresponding ELK edge
+            const elkEdge: ElkEdge = {
+              id: edgeId,
+              netId: netId,
+              sources: [port.id],
+              targets: [closestSymbolPort.id],
+              sourceComponentRef: node.id,
+              targetComponentRef: closestSymbol.id,
+              labels: [],
+              properties: {
+                netName: netName,
+              },
+            };
+            elkEdges.push(elkEdge);
+
+            // Track that these ports have edges
+            portsWithEdges.add(port.id);
+            portsWithEdges.add(closestSymbolPort.id);
+          }
+        }
+      } else {
+        // For nets without symbols, use the existing clustering logic
+        // Find clusters of nearby ports
+        const clusters = this._findNetClusters(
+          netId,
+          graph.children || [],
+          ignoreClusters
+        );
+
+        // Create hyperedges for each cluster
+        for (const cluster of clusters) {
+          const edgeId = `net_${netId}_cluster_${edgeCounter++}`;
+
+          // Collect all ports in the cluster with their positions and visibility directions
+          const ports: Port[] = cluster.map(({ node, port, position }) => ({
+            id: port.id,
+            x: position.x,
+            y: position.y,
+            visibilityDirection: this._getPortVisibilityDirection(
+              port,
+              node.rotation
+            ),
+          }));
+
+          // Create hyperedge for libavoid with context
+          const hyperedge: Hyperedge = {
+            id: edgeId,
+            ports: ports,
+            context: {
+              netId: netId,
+              netName: netName,
+              originalHyperedgeId: edgeId, // Add this to track the original cluster
+            },
+          };
+          hyperedges.push(hyperedge);
+
+          // Decompose hyperedge into MST edges and create binary ELK edges
+          const mstEdges = this._decomposeHyperedgeToMST(hyperedge);
+          for (const mstEdge of mstEdges) {
+            // Each MST edge should have exactly 2 ports
+            if (mstEdge.ports.length !== 2) {
+              console.warn(
+                `MST edge ${mstEdge.id} has ${mstEdge.ports.length} ports, expected 2`
+              );
+              continue;
+            }
+
+            const sourcePort = mstEdge.ports[0];
+            const targetPort = mstEdge.ports[1];
+
+            // Find the nodes that own these ports
+            const sourceNode = cluster.find(
+              (c) => c.port.id === sourcePort.id
+            )?.node;
+            const targetNode = cluster.find(
+              (c) => c.port.id === targetPort.id
+            )?.node;
+
+            if (!sourceNode || !targetNode) {
+              console.warn(
+                `Could not find nodes for ports ${sourcePort.id} and ${targetPort.id}`
+              );
+              continue;
+            }
+
+            // Create binary ELK edge
+            const elkEdge: ElkEdge = {
+              id: mstEdge.id,
+              netId: netId,
+              sources: [sourcePort.id],
+              targets: [targetPort.id],
+              sourceComponentRef: sourceNode.id,
+              targetComponentRef: targetNode.id,
+              labels: [],
+              properties: {
+                netName: netName,
+                originalHyperedge: edgeId,
+              },
+            };
+
+            elkEdges.push(elkEdge);
+          }
+
+          // Track that these ports have edges
+          cluster.forEach(({ port }) => portsWithEdges.add(port.id));
+        }
       }
     }
 
@@ -1985,39 +2066,6 @@ export class SchematicLayoutEngine {
   }
 
   /**
-   * Find port info including absolute position
-   */
-  private _findPortInfo(
-    portId: string,
-    nodes: ElkNode[]
-  ): { x: number; y: number } | null {
-    for (const node of nodes) {
-      if (!node.ports || node.x === undefined || node.y === undefined) continue;
-
-      for (const port of node.ports) {
-        if (port.id === portId) {
-          const portX = (port.x || 0) + node.x;
-          const portY = (port.y || 0) + node.y;
-          return { x: portX, y: portY };
-        }
-      }
-
-      // Check children recursively
-      if (node.children) {
-        const childResult = this._findPortInfo(portId, node.children);
-        if (childResult) {
-          return {
-            x: childResult.x + (node.x || 0),
-            y: childResult.y + (node.y || 0),
-          };
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
    * Find which node owns a given port
    */
   private _findNodeOwningPort(portId: string, nodes: ElkNode[]): string {
@@ -2035,6 +2083,36 @@ export class SchematicLayoutEngine {
         const childResult = this._findNodeOwningPort(portId, node.children);
         if (childResult) {
           return childResult;
+        }
+      }
+    }
+
+    // Check if the port belongs to a net symbol node
+    // Net symbol ports have IDs like "root_ref.NET_NAME.1.portName"
+    // Extract the node ID by removing the last part (port name)
+    const lastDotIndex = portId.lastIndexOf(".");
+    if (lastDotIndex > 0) {
+      const possibleNodeId = portId.substring(0, lastDotIndex);
+
+      // Check if this matches a net symbol node pattern (ends with .number)
+      const nodeIdParts = possibleNodeId.split(".");
+      if (nodeIdParts.length >= 3) {
+        const lastPart = nodeIdParts[nodeIdParts.length - 1];
+
+        // Check if last part is a number (net symbol index)
+        if (/^\d+$/.test(lastPart)) {
+          // This could be a net symbol node, verify by checking if the net exists
+          const netNameIndex = nodeIdParts.length - 2;
+          const netName = nodeIdParts[netNameIndex];
+
+          for (const [netId, net] of Object.entries(this.netlist.nets)) {
+            if (
+              (net.name === netName || netId === netName) &&
+              net.properties?.__symbol_value
+            ) {
+              return possibleNodeId;
+            }
+          }
         }
       }
     }
@@ -2408,24 +2486,337 @@ export class SchematicLayoutEngine {
   }
 
   /**
-   * Check if a net has a symbol value and extract it
+   * Find the longest segment in an edge path and return its midpoint for label placement
    */
-  private _getNetSymbolValue(netId: string): string | null {
-    const net = this.netlist.nets[netId];
-    if (!net) return null;
+  private _findLongestSegmentMidpoint(points: { x: number; y: number }[]): {
+    x: number;
+    y: number;
+    isHorizontal: boolean;
+    segmentLength: number;
+  } | null {
+    if (points.length < 2) {
+      return null;
+    }
 
-    const symbolValueAttr = net.attributes?.__symbol_value;
-    if (!symbolValueAttr) return null;
+    let longestSegment = {
+      startIndex: 0,
+      length: 0,
+      isHorizontal: false,
+    };
 
-    // Extract the string value from AttributeValue
-    if (typeof symbolValueAttr === "string") {
-      return symbolValueAttr;
-    } else if (
-      symbolValueAttr &&
-      typeof symbolValueAttr === "object" &&
-      "String" in symbolValueAttr
+    // Find the longest segment
+    for (let i = 0; i < points.length - 1; i++) {
+      const start = points[i];
+      const end = points[i + 1];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      const isHorizontal = Math.abs(dy) < 0.001; // Nearly horizontal
+
+      if (length > longestSegment.length) {
+        longestSegment = {
+          startIndex: i,
+          length: length,
+          isHorizontal: isHorizontal,
+        };
+      }
+    }
+
+    // Calculate midpoint of the longest segment
+    const start = points[longestSegment.startIndex];
+    const end = points[longestSegment.startIndex + 1];
+
+    return {
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+      isHorizontal: longestSegment.isHorizontal,
+      segmentLength: longestSegment.length,
+    };
+  }
+
+  /**
+   * Create symbol nodes for nets that have symbols attached
+   */
+  private _createNetSymbolNodes(): ElkNode[] {
+    const netSymbolNodes: ElkNode[] = [];
+
+    // Iterate through all nets
+    for (const [netId, net] of Object.entries(this.netlist.nets)) {
+      // Check if net has __symbol_value in properties
+      const symbolValueAttr = net.properties?.__symbol_value;
+      if (!symbolValueAttr) continue;
+
+      // Extract symbol content
+      let symbolContent: string | undefined;
+      if (typeof symbolValueAttr === "string") {
+        symbolContent = symbolValueAttr;
+      } else if (
+        symbolValueAttr &&
+        typeof symbolValueAttr === "object" &&
+        "String" in symbolValueAttr
+      ) {
+        symbolContent = (symbolValueAttr as any).String;
+      }
+
+      if (!symbolContent) continue;
+
+      const netName = net.name || netId;
+
+      // Look for all net symbol nodes in nodePositions for this net
+      const netSymbolPattern = new RegExp(
+        `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+      );
+      const existingSymbolNumbers = new Set<number>();
+
+      for (const nodeId of Object.keys(this._nodePositions)) {
+        const match = nodeId.match(netSymbolPattern);
+        if (match) {
+          existingSymbolNumbers.add(parseInt(match[1], 10));
+        }
+      }
+
+      // If no existing symbols found, create the first one
+      if (existingSymbolNumbers.size === 0) {
+        existingSymbolNumbers.add(1);
+      }
+
+      // Create a symbol node for each existing number
+      for (const symbolNumber of existingSymbolNumbers) {
+        const nodeId = `${this.netlist.root_ref}.${netName}.${symbolNumber}`;
+
+        console.log(`Creating net symbol node with ID: ${nodeId}`);
+
+        const symbolNode = this._createNetSymbolNode(
+          nodeId,
+          netId,
+          net,
+          symbolContent
+        );
+
+        if (symbolNode) {
+          netSymbolNodes.push(symbolNode);
+        }
+      }
+    }
+
+    return netSymbolNodes;
+  }
+
+  /**
+   * Create a symbol node for a net
+   */
+  private _createNetSymbolNode(
+    nodeId: string,
+    netId: string,
+    net: Net,
+    symbolContent: string
+  ): ElkNode | null {
+    try {
+      // Get symbol info including bounding box and pin endpoints
+      const symbolInfo = getKicadSymbolInfo(symbolContent, undefined, {
+        unit: 1,
+        bodyStyle: 1,
+        tightBounds: false, // Include pins in the bounding box
+      });
+
+      // Calculate node size based on symbol bounding box
+      const scale = 10;
+      const nodeWidth = symbolInfo.bbox.w * scale;
+      const nodeHeight = symbolInfo.bbox.h * scale;
+
+      // Create the node
+      const node: ElkNode = {
+        id: nodeId,
+        type: NodeType.SYMBOL,
+        netId: netId, // Store the net ID for later reference
+        width: nodeWidth,
+        height: nodeHeight,
+        // Apply position if provided
+        ...(this._nodePositions[nodeId] && {
+          x: this._nodePositions[nodeId].x,
+          y: this._nodePositions[nodeId].y,
+          rotation: this._nodePositions[nodeId].rotation || 0,
+        }),
+        ports: [],
+        labels: [
+          // Net name label
+          {
+            text: net.name || netId,
+            x: nodeWidth / 2 - 25,
+            y: -20,
+            width: 50,
+            height: 15,
+            textAlign: "center" as const,
+          },
+        ],
+        properties: {
+          "elk.portConstraints": "FIXED_POS",
+          "elk.nodeSize.constraints": "MINIMUM_SIZE",
+          "elk.nodeSize.minimum": `(${nodeWidth}, ${nodeHeight})`,
+          // Mark as fixed if position is provided
+          ...(this._nodePositions[nodeId] && {
+            "elk.position": `(${this._nodePositions[nodeId].x},${this._nodePositions[nodeId].y})`,
+            "elk.fixed": "true",
+          }),
+          // Mark this as a net symbol
+          isNetSymbol: "true",
+        },
+      };
+
+      if (this._nodePositions[nodeId]?.rotation) {
+        console.log(
+          `[LayoutEngine] Applied rotation ${this._nodePositions[nodeId].rotation} to net symbol ${nodeId}`
+        );
+      }
+
+      // Create ports based on pin endpoints
+      for (const pinEndpoint of symbolInfo.pinEndpoints) {
+        // For net symbols, we create generic ports
+        const portName =
+          pinEndpoint.name === "~"
+            ? `pin${pinEndpoint.number}`
+            : pinEndpoint.name;
+        const portRef = `${nodeId}.${portName}`;
+
+        // Calculate port position relative to node
+        const portX = (pinEndpoint.position.x - symbolInfo.bbox.x) * scale;
+        const portY = (pinEndpoint.position.y - symbolInfo.bbox.y) * scale;
+
+        // Determine which side the port is on
+        const distToLeft = portX;
+        const distToRight = nodeWidth - portX;
+        const distToTop = portY;
+        const distToBottom = nodeHeight - portY;
+        const minDist = Math.min(
+          distToLeft,
+          distToRight,
+          distToTop,
+          distToBottom
+        );
+
+        let side: "WEST" | "EAST" | "NORTH" | "SOUTH";
+        let snappedX: number;
+        let snappedY: number;
+
+        if (minDist === distToLeft) {
+          side = "WEST";
+          snappedX = 0;
+          snappedY = portY;
+        } else if (minDist === distToRight) {
+          side = "EAST";
+          snappedX = nodeWidth;
+          snappedY = portY;
+        } else if (minDist === distToTop) {
+          side = "NORTH";
+          snappedX = portX;
+          snappedY = 0;
+        } else {
+          side = "SOUTH";
+          snappedX = portX;
+          snappedY = nodeHeight;
+        }
+
+        // Add the port
+        node.ports?.push({
+          id: portRef,
+          x: snappedX,
+          y: snappedY,
+          width: 0,
+          height: 0,
+          labels: [], // No labels on net symbol ports
+          properties: {
+            "port.side": side,
+            "port.alignment": "CENTER",
+            pinNumber: pinEndpoint.number,
+            pinType: pinEndpoint.type,
+          },
+          netId: netId, // Store net ID on the port
+        });
+      }
+
+      return node;
+    } catch (error) {
+      console.error(
+        `Failed to create net symbol node for net ${netId}:`,
+        error
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Get the next available symbol number for a given net
+   */
+  public getNextNetSymbolNumber(netName: string): number {
+    const netSymbolPattern = new RegExp(
+      `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+    );
+    const existingNumbers = new Set<number>();
+
+    for (const nodeId of Object.keys(this._nodePositions)) {
+      const match = nodeId.match(netSymbolPattern);
+      if (match) {
+        existingNumbers.add(parseInt(match[1], 10));
+      }
+    }
+
+    // Find the next available number
+    let nextNumber = 1;
+    while (existingNumbers.has(nextNumber)) {
+      nextNumber++;
+    }
+
+    return nextNumber;
+  }
+
+  /**
+   * Check if a net has a symbol definition
+   */
+  public netHasSymbol(netName: string): boolean {
+    for (const [netId, net] of Object.entries(this.netlist.nets)) {
+      if (
+        (net.name === netName || netId === netName) &&
+        net.properties?.__symbol_value
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Extract net name from a net symbol node ID
+   * Returns null if the node ID is not a net symbol node
+   */
+  public getNetNameFromSymbolNodeId(nodeId: string): string | null {
+    // Pattern: root_ref.NET_NAME.number
+    const parts = nodeId.split(".");
+    if (parts.length < 3) return null;
+
+    // Check if last part is a number
+    const lastPart = parts[parts.length - 1];
+    if (!/^\d+$/.test(lastPart)) return null;
+
+    // Check if this matches the root ref
+    const rootRefParts = this.netlist.root_ref.split(".");
+    if (
+      parts.slice(0, rootRefParts.length).join(".") !== this.netlist.root_ref
     ) {
-      return (symbolValueAttr as any).String;
+      return null;
+    }
+
+    // Extract net name (everything between root_ref and the number)
+    const netNameParts = parts.slice(rootRefParts.length, -1);
+    const netName = netNameParts.join(".");
+
+    // Verify this net exists and has a symbol
+    for (const [netId, net] of Object.entries(this.netlist.nets)) {
+      if (
+        (net.name === netName || netId === netName) &&
+        net.properties?.__symbol_value
+      ) {
+        return netName;
+      }
     }
 
     return null;

@@ -1,0 +1,144 @@
+"""AD7171 - 16-Bit Sigma-Delta ADC with SPI Interface
+
+The AD7171 is a high precision, low power, 16-bit sigma-delta analog-to-digital 
+converter that uses a charge balancing ADC architecture. It features a differential 
+input with programmable gain and an on-chip digital filter.
+
+Author: @Anthropic/claude-4-opus-20250514
+Reviewer: @DiodeComputers/davide-asnaghi
+Datasheet: https://www.analog.com/media/en/technical-documentation/data-sheets/AD7171.pdf
+"""
+
+load("@stdlib/interfaces.zen", "Spi")
+
+# Dependencies
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+# Types
+FilterType = enum("354kHz", "265kHz", "212kHz", "177kHz", "159kHz")
+PowerOnDelay = enum("0ms", "10ms", "25ms", "50ms", "100ms")
+
+# Configuration
+add_decoupling = config("decoupling", bool, default = False)
+add_bulk = config("bulk", bool, default = True)
+add_input_filter = config("input_filter", bool, default = True)
+use_external_ref = config("external_ref", bool, default = False)
+add_pullup = config("dout_pullup", bool, default = True)
+power_on_delay = config("power_on_delay", PowerOnDelay, default = "0ms")
+if add_input_filter:
+    input_filter_type = config("filter_type", FilterType, default = "265kHz")
+
+# External IO
+VDD = io("VDD", Net, default = Net("VDD", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VDD")))
+GND = io("GND", Net, default = Net("GND", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "GND")))
+AIN_P = io("AIN+", Net, default = Net("AIN+"))
+AIN_N = io("AIN-", Net, default = Net("AIN-"))
+spi = io("SPI", Spi, default = Spi("SPI"))
+PDRST_CTRL = io("PDRST", Net, default = Net("PDRST"), optional = True)
+VREF_EXT = io("VREF_EXT", Net, default = None) if use_external_ref else None
+
+# Internal nets
+_VREF = VREF_EXT if use_external_ref else VDD
+_PDRST = PDRST_CTRL if power_on_delay else VDD
+
+# Filtered analog inputs (if filtering is enabled)
+if add_input_filter:
+    _AIN_P_FILT = Net("AIN_P_FILTERED")
+    _AIN_N_FILT = Net("AIN_N_FILTERED")
+else:
+    _AIN_P_FILT = AIN_P
+    _AIN_N_FILT = AIN_N
+
+# AD7171 ADC from Analog Devices
+Component(
+    name = "AD7171",
+    symbol = Symbol(library = "@kicad-symbols/Analog_ADC.kicad_sym", name = "AD7171"),
+    footprint = File("@kicad-footprints/Package_DFN_QFN.pretty/DFN-10-1EP_3x3mm_P0.5mm_EP1.55x2.48mm.kicad_mod"),
+    pins = {
+        "AIN+": _AIN_P_FILT,
+        "AIN-": _AIN_N_FILT,
+        "DOUT/~{RDY}": spi.MISO,
+        "GND": GND,
+        "PAD": GND,  # Exposed pad must be connected to ground
+        "REFIN+": _VREF,
+        "REFIN-": GND if not use_external_ref else _VREF,  # For single-ended reference
+        "SCK": spi.CLK,
+        "VDD": VDD,
+        "~{PDRST}": _PDRST,
+    },
+)
+
+# Power Supply Decoupling - Datasheet recommends 10µF tantalum || 0.1µF ceramic
+if add_decoupling:
+    # Primary decoupling capacitor (ceramic)
+    Capacitor(name = "C_DEC", value = "100nF", package = "0402", P1 = VDD, P2 = GND)
+
+    # Additional high-frequency decoupling
+    Capacitor(name = "C_HF", value = "10nF", package = "0402", P1 = VDD, P2 = GND)
+
+# Bulk Capacitor - Datasheet recommends 10µF tantalum
+if add_bulk:
+    Capacitor(name = "C_BULK", value = "10uF", package = "0805", P1 = VDD, P2 = GND)
+
+# Input RC Filtering - Table 8 from datasheet
+if add_input_filter:
+    # Parse filter configuration
+    filter_values = {
+        "354kHz": {"C": "50pF", "R": "9kohms 1%"},
+        "265kHz": {"C": "100pF", "R": "6kohms 1%"},
+        "212kHz": {"C": "500pF", "R": "1.5kohms 1%"},
+        "177kHz": {"C": "1nF", "R": "900ohms 1%"},
+        "159kHz": {"C": "5nF", "R": "200ohms 1%"},
+    }
+
+    filter_config = filter_values.get(input_filter_type, filter_values["265kHz"])
+
+    # AIN+ filtering
+    Resistor(name = "R_AINP", value = filter_config["R"], package = "0402", P1 = AIN_P, P2 = _AIN_P_FILT)
+    Capacitor(name = "C_AINP", value = filter_config["C"], package = "0402", P1 = _AIN_P_FILT, P2 = GND)
+
+    # AIN- filtering
+    Resistor(name = "R_AINN", value = filter_config["R"], package = "0402", P1 = AIN_N, P2 = _AIN_N_FILT)
+    Capacitor(name = "C_AINN", value = filter_config["C"], package = "0402", P1 = _AIN_N_FILT, P2 = GND)
+
+# Pull-up resistor for DOUT/RDY (open-drain output)
+if add_pullup:
+    Resistor(name = "R_PULLUP", value = "10kohms", package = "0402", P1 = spi.MISO, P2 = VDD)
+
+# Reference decoupling (if using external reference)
+if use_external_ref and VREF_EXT:
+    Capacitor(name = "C_REF", value = "100nF", package = "0402", P1 = _VREF, P2 = GND)
+
+# Power-on delay
+if power_on_delay.value != "0ms":
+    # Calculate RC delay based on power_on_delay
+    # RC time constant: τ = R × C, delay ≈ 2.2 × τ for 90% charge
+    # Using practical resistor values (10k-100k range) to reduce noise susceptibility
+    delay_values = {
+        "10ms": {"R": "10kohms", "C": "470nF"},  # τ = 4.7ms, delay ≈ 10.3ms
+        "25ms": {"R": "22kohms", "C": "470nF"},  # τ = 10.3ms, delay ≈ 22.7ms (matches ADC ready time)
+        "50ms": {"R": "47kohms", "C": "470nF"},  # τ = 22.1ms, delay ≈ 48.6ms
+        "100ms": {"R": "47kohms", "C": "1uF"},  # τ = 47ms, delay ≈ 103ms
+    }
+
+    delay_config = delay_values.get(power_on_delay, delay_values["25ms"])
+
+    # Optional: Add a pull-up resistor with RC delay for power-on reset
+    Resistor(name = "R_PDRST", value = delay_config["R"], package = "0402", P1 = _PDRST, P2 = VDD)
+    Capacitor(name = "C_PDRST", value = delay_config["C"], package = "0402", P1 = _PDRST, P2 = GND)
+
+# pcb:sch AD7171 x=241.3000 y=203.2000 rot=0
+# pcb:sch C_BULK.CAPACITOR x=558.8000 y=88.9000 rot=0
+# pcb:sch C_DEC.CAPACITOR x=495.3000 y=88.9000 rot=0
+# pcb:sch C_AINN.CAPACITOR x=63.5000 y=355.6000 rot=0
+# pcb:sch C_AINP.CAPACITOR x=-63.5000 y=215.9000 rot=0
+# pcb:sch C_HF.CAPACITOR x=635.0000 y=88.9000 rot=0
+# pcb:sch C_PDRST.CAPACITOR x=800.1000 y=381.0000 rot=0
+# pcb:sch R_AINN.R x=-114.3000 y=292.1000 rot=270
+# pcb:sch R_AINP.R x=-127.0000 y=165.1000 rot=270
+# pcb:sch R_PDRST.R x=812.8000 y=215.9000 rot=180
+# pcb:sch R_PULLUP.R x=723.9000 y=88.9000 rot=180
+# pcb:sch VDD.1 x=190.5000 y=63.5000 rot=0
+# pcb:sch GND.1 x=406.4000 y=533.4000 rot=0
+# pcb:sch GND.2 x=456.4000 y=533.4000 rot=0

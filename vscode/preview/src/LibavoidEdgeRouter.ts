@@ -133,6 +133,8 @@ export class LibavoidEdgeRouter {
     );
 
     this.isInitialized = true;
+
+    console.log("LibavoidEdgeRouter initialized");
   }
 
   /**
@@ -151,13 +153,6 @@ export class LibavoidEdgeRouter {
     if (!this.isInitialized) {
       await this.initialize();
     }
-
-    console.log(
-      "Starting libavoid routing:",
-      JSON.stringify(obstacles),
-      "*******",
-      JSON.stringify(hyperedges)
-    );
 
     if (!this.avoidLib || !this.router) {
       throw new Error("LibavoidEdgeRouter not initialized");
@@ -212,11 +207,10 @@ export class LibavoidEdgeRouter {
     }
 
     // Register all junctions with the hyperedge rerouter after all connections are created
-    for (const [hyperedgeId, junctionRef] of this.junctions) {
+    for (const [, junctionRef] of this.junctions) {
       this.router
         .hyperedgeRerouter()
         .registerHyperedgeForRerouting(junctionRef);
-      console.log("Registered junction:", hyperedgeId);
     }
 
     // Process routing
@@ -338,13 +332,6 @@ export class LibavoidEdgeRouter {
         }
       }
     }
-
-    console.log(
-      "Libavoid routing results:",
-      JSON.stringify(junctionResults),
-      "*******",
-      JSON.stringify(edgeResults)
-    );
 
     return {
       junctions: junctionResults,
@@ -475,7 +462,6 @@ export class LibavoidEdgeRouter {
       junctionEnd,
       portEnd
     );
-    console.log("Created connector:", port.id, junctionId);
     connector.setRoutingType(this.avoidLib.OrthogonalRouting);
 
     this.connectors.set(connectorId, connector);
