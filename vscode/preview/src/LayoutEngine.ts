@@ -566,47 +566,17 @@ export class SchematicLayoutEngine {
         decomposedHyperedges
       );
 
-      // Create junction nodes from the routing results
-      const junctionNodes: ElkNode[] = [];
-      const junctionNodeMap = new Map<string, ElkNode>(); // Map junction ID to node
-
-      for (const junction of routingResult.junctions) {
-        const junctionNode: ElkNode = {
-          id: junction.id,
-          type: NodeType.NET_JUNCTION,
-          x: junction.x, // Center the 10x10 junction
-          y: junction.y,
-          width: 1,
-          height: 1,
-          ports: [
-            {
-              id: `${junction.id}.port`,
-              x: 0, // Center of junction
-              y: 0,
-              width: 0,
-              height: 0,
-            },
-          ],
-          labels: [],
-          properties: {},
-        };
-
-        junctionNodes.push(junctionNode);
-        junctionNodeMap.set(junction.id, junctionNode);
-
-        // Don't add junction nodes to nodePositions - they are dynamically created
-      }
-
-      // Add junction nodes to the graph
-      // if (layoutedGraph.children) {
-      //   layoutedGraph.children.push(...junctionNodes);
-      // }
-
-      // Convert the point-to-point edges from libavoid to ELK edges
-      // We no longer need to create a map since we pass context through routing
-
       // Simple 1:1 mapping - each libavoid edge becomes one ELK edge
       const newEdges: ElkEdge[] = [];
+
+      // Group edges by their original hyperedge (MST)
+      const edgesByMST = new Map<
+        string,
+        Array<{
+          routedEdge: any;
+          elkEdge: ElkEdge;
+        }>
+      >();
 
       for (const routedEdge of routingResult.edges) {
         // Use context directly instead of trying to parse edge IDs
@@ -663,7 +633,7 @@ export class SchematicLayoutEngine {
           targets: [targetId],
           sourceComponentRef: sourceComponentRef,
           targetComponentRef: targetComponentRef,
-          labels: [], // Start with empty labels, could be enhanced later
+          labels: [], // Start with empty labels, will add once per MST
           sections: [
             {
               id: `${routedEdge.id}_section`,
@@ -677,7 +647,90 @@ export class SchematicLayoutEngine {
           },
         };
 
-        newEdges.push(elkEdge);
+        // Group edges by their original hyperedge/cluster
+        // Use the context to determine which cluster this edge belongs to
+        const mstId =
+          routedEdge.context.originalHyperedgeId || routedEdge.context.netId;
+
+        // Group edges by MST
+        if (!edgesByMST.has(mstId)) {
+          edgesByMST.set(mstId, []);
+        }
+        edgesByMST.get(mstId)!.push({ routedEdge, elkEdge });
+      }
+
+      // Now process each MST to add a single label on the longest segment
+      for (const [, mstEdges] of edgesByMST) {
+        // Find the longest segment across all edges in this MST
+        let longestSegmentInfo: {
+          edge: ElkEdge;
+          position: {
+            x: number;
+            y: number;
+            isHorizontal: boolean;
+            segmentLength: number;
+          };
+        } | null = null;
+
+        for (const { routedEdge, elkEdge } of mstEdges) {
+          const labelPosition = this._findLongestSegmentMidpoint(
+            routedEdge.points
+          );
+          if (labelPosition) {
+            if (
+              !longestSegmentInfo ||
+              labelPosition.segmentLength >
+                longestSegmentInfo.position.segmentLength
+            ) {
+              longestSegmentInfo = {
+                edge: elkEdge,
+                position: labelPosition,
+              };
+            }
+          }
+        }
+
+        // Add label to the edge with the longest segment
+        if (
+          longestSegmentInfo &&
+          longestSegmentInfo.position.segmentLength > 50
+        ) {
+          const netName = longestSegmentInfo.edge.properties?.netName || "";
+          const labelDimensions = calculateTextDimensions(netName, 10);
+
+          // For horizontal segments, label goes above; for vertical, label goes to the side
+          const labelOffset = 10;
+          let labelX = longestSegmentInfo.position.x;
+          let labelY = longestSegmentInfo.position.y;
+
+          if (longestSegmentInfo.position.isHorizontal) {
+            // Center label horizontally, place above the line
+            labelX -= labelDimensions.width / 2;
+            labelY -= labelDimensions.height / 2 + labelOffset;
+          } else {
+            // Center label vertically, place to the right of the line
+            labelX += labelOffset;
+            labelY -= labelDimensions.height / 2;
+          }
+
+          longestSegmentInfo.edge.labels = [
+            {
+              text: netName,
+              x: labelX,
+              y: labelY,
+              width: labelDimensions.width,
+              height: labelDimensions.height,
+              properties: {
+                labelType: "netName",
+              },
+            },
+          ];
+        }
+
+        // Add all edges from this MST to the results
+        for (const { elkEdge } of mstEdges) {
+          newEdges.push(elkEdge);
+        }
       }
 
       // Replace the edges with the new routed edges
@@ -1471,7 +1524,9 @@ export class SchematicLayoutEngine {
       result.push({
         id: `${hyperedge.id}_mst_${i}`,
         ports: [ports[edge.from], ports[edge.to]],
-        context: hyperedge.context, // Preserve context from original hyperedge
+        context: {
+          ...hyperedge.context, // Preserve all context including originalHyperedgeId
+        },
       });
     }
 
@@ -1547,7 +1602,7 @@ export class SchematicLayoutEngine {
           context: {
             netId: netId,
             netName: netName,
-            // Store any other context we might need
+            originalHyperedgeId: edgeId, // Add this to track the original cluster
           },
         };
         hyperedges.push(hyperedge);
@@ -2233,5 +2288,54 @@ export class SchematicLayoutEngine {
         }
       }
     }
+  }
+
+  /**
+   * Find the longest segment in an edge path and return its midpoint for label placement
+   */
+  private _findLongestSegmentMidpoint(points: { x: number; y: number }[]): {
+    x: number;
+    y: number;
+    isHorizontal: boolean;
+    segmentLength: number;
+  } | null {
+    if (points.length < 2) {
+      return null;
+    }
+
+    let longestSegment = {
+      startIndex: 0,
+      length: 0,
+      isHorizontal: false,
+    };
+
+    // Find the longest segment
+    for (let i = 0; i < points.length - 1; i++) {
+      const start = points[i];
+      const end = points[i + 1];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      const isHorizontal = Math.abs(dy) < 0.001; // Nearly horizontal
+
+      if (length > longestSegment.length) {
+        longestSegment = {
+          startIndex: i,
+          length: length,
+          isHorizontal: isHorizontal,
+        };
+      }
+    }
+
+    // Calculate midpoint of the longest segment
+    const start = points[longestSegment.startIndex];
+    const end = points[longestSegment.startIndex + 1];
+
+    return {
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+      isHorizontal: longestSegment.isHorizontal,
+      segmentLength: longestSegment.length,
+    };
   }
 }

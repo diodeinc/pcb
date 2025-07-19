@@ -984,6 +984,9 @@ const ElectricalEdge = ({
   // Get junction points from edge data
   const junctionPoints = data?.junctionPoints || [];
 
+  // Get edge labels
+  const edgeLabels = data?.labels || [];
+
   return (
     <>
       <path
@@ -1018,6 +1021,23 @@ const ElectricalEdge = ({
           opacity={1}
           className="electrical-edge-junction"
         />
+      ))}
+
+      {/* Render edge labels */}
+      {edgeLabels.map((label, index) => (
+        <text
+          key={`${id}-label-${index}`}
+          x={(label.x || 0) + (label.width || 0) / 2}
+          y={(label.y || 0) + (label.height || 0) / 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize="10px"
+          fill={labelColor}
+          fontFamily="Newstroke, 'Courier New', monospace"
+          className="electrical-edge-label"
+        >
+          {label.text}
+        </text>
       ))}
     </>
   );
@@ -1078,11 +1098,7 @@ const Visualizer = ({
     rotateNodes,
     handleNodeClick,
     clearSelection,
-    setSelectedComponent,
-    setNetlist,
-    setConfig,
-    setOnPositionsChange,
-    setLoadPositions,
+    initializeViewer,
   } = useSchematicViewerStore();
 
   const [prevComponent, setPrevComponent] = useState<string | null>(null);
@@ -1105,26 +1121,23 @@ const Visualizer = ({
   });
   const reactFlowInstance = useRef<any>(null);
 
+  // Use the new initializeViewer function to set all context at once
   useEffect(() => {
-    setLoadPositions(loadPositions);
-  }, [loadPositions, setLoadPositions]);
-
-  // Update store context when props change
-  useEffect(() => {
-    setSelectedComponent(selectedComponent);
-  }, [selectedComponent, setSelectedComponent]);
-
-  useEffect(() => {
-    setNetlist(netlist);
-  }, [netlist, setNetlist]);
-
-  useEffect(() => {
-    setConfig(currentConfig);
-  }, [currentConfig, setConfig]);
-
-  useEffect(() => {
-    setOnPositionsChange(onPositionsChange);
-  }, [onPositionsChange, setOnPositionsChange]);
+    initializeViewer({
+      selectedComponent,
+      netlist,
+      config: currentConfig,
+      onPositionsChange,
+      loadPositions,
+    });
+  }, [
+    selectedComponent,
+    netlist,
+    currentConfig,
+    onPositionsChange,
+    loadPositions,
+    initializeViewer,
+  ]);
 
   useEffect(() => {
     if (!selectedComponent) return;

@@ -80,6 +80,15 @@ interface SchematicViewerState {
     callback?: (componentId: string) => Promise<NodePositions | null>
   ) => void;
 
+  // New unified initialization
+  initializeViewer: (params: {
+    selectedComponent: string | null;
+    netlist: Netlist;
+    config: SchematicConfig;
+    onPositionsChange?: (componentId: string, positions: NodePositions) => void;
+    loadPositions?: (componentId: string) => Promise<NodePositions | null>;
+  }) => void;
+
   // Semantic actions
   storeLayoutResult: (
     layoutResult: {
@@ -253,7 +262,6 @@ export const useSchematicViewerStore = create(
 
           // Perform deep comparison to check if netlist actually changed
           if (isEqual(netlist, prevNetlist)) {
-            console.log("[Store] Netlist unchanged, skipping layout update");
             return;
           }
 
@@ -261,7 +269,6 @@ export const useSchematicViewerStore = create(
 
           // Trigger position loading and layout if netlist changed and we have all required data
           if (netlist && state.selectedComponent) {
-            console.log("[Store] Netlist changed, triggering layout update");
             loadPositionsAndLayout(
               state.selectedComponent,
               netlist,
@@ -279,7 +286,6 @@ export const useSchematicViewerStore = create(
 
           // Perform deep comparison to check if config actually changed
           if (isEqual(config, prevConfig)) {
-            console.log("[Store] Config unchanged, skipping layout update");
             return;
           }
 
@@ -287,7 +293,6 @@ export const useSchematicViewerStore = create(
 
           // Trigger position loading and layout if config changed and we have all required data
           if (config && state.selectedComponent && state.netlist) {
-            console.log("[Store] Config changed, triggering layout update");
             loadPositionsAndLayout(
               state.selectedComponent,
               state.netlist,
@@ -301,6 +306,44 @@ export const useSchematicViewerStore = create(
         setOnPositionsChange: (callback) =>
           set({ onPositionsChange: callback }),
         setLoadPositions: (callback) => set({ loadPositions: callback }),
+
+        // New unified initialization
+        initializeViewer: (params) => {
+          const state = get();
+
+          // Check if anything actually changed
+          const hasChanges =
+            params.selectedComponent !== state.selectedComponent ||
+            !isEqual(params.netlist, state.netlist) ||
+            !isEqual(params.config, state.config) ||
+            params.loadPositions !== state.loadPositions ||
+            params.onPositionsChange !== state.onPositionsChange;
+
+          if (!hasChanges) {
+            return;
+          }
+
+          // Set all state at once
+          set({
+            selectedComponent: params.selectedComponent,
+            netlist: params.netlist,
+            config: params.config,
+            onPositionsChange: params.onPositionsChange,
+            loadPositions: params.loadPositions,
+          });
+
+          // Now trigger layout with all the correct state
+          if (params.selectedComponent && params.netlist && params.config) {
+            loadPositionsAndLayout(
+              params.selectedComponent,
+              params.netlist,
+              params.config,
+              params.loadPositions,
+              get().storeLayoutResult,
+              set
+            );
+          }
+        },
 
         // Semantic actions
         storeLayoutResult: (layoutResult, netlist) => {
