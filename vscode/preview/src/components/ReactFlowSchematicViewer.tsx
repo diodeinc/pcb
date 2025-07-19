@@ -810,15 +810,7 @@ const SymbolNode = React.memo(function SymbolNode({
     };
 
     renderSymbol();
-  }, [
-    data.width,
-    data.height,
-    data.id,
-    data.netId,
-    netlist.instances,
-    netlist.nets,
-    selected,
-  ]);
+  }, [data, netlist.instances, netlist.nets, selected]);
 
   return (
     <div
