@@ -96,22 +96,7 @@ export class LibavoidEdgeRouter {
     this.avoidLib = AvoidLib.getInstance();
 
     // Create router with orthogonal routing
-    try {
-      this.router = new this.avoidLib.Router(this.avoidLib.OrthogonalRouting);
-    } catch (error) {
-      console.error(
-        "[libavoid] error creating router, trying to reload.",
-        error
-      );
-      (AvoidLib as any).avoidLib = null;
-      console.log("[libavoid] destroyed instance.");
-      await AvoidLib.load("/wasm/libavoid.wasm");
-      console.log("[libavoid] reloaded instance.");
-      this.avoidLib = AvoidLib.getInstance();
-      console.log("[libavoid] fetched new instance.");
-      this.router = new this.avoidLib.Router(this.avoidLib.OrthogonalRouting);
-      console.log("[libavoid] created router.");
-    }
+    this.router = new this.avoidLib.Router(this.avoidLib.OrthogonalRouting);
 
     // Configure routing penalties for better hyperedge routing
     this.router.setRoutingParameter(this.avoidLib.segmentPenalty, 1);
