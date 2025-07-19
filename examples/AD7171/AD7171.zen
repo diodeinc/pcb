@@ -141,3 +141,4 @@ if power_on_delay.value != "0ms":
 # pcb:sch R_PULLUP.R x=723.9000 y=88.9000 rot=180
 # pcb:sch VDD.1 x=190.5000 y=63.5000 rot=0
 # pcb:sch GND.1 x=406.4000 y=533.4000 rot=0
+# pcb:sch GND.2 x=456.4000 y=533.4000 rot=0

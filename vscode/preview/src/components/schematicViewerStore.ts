@@ -106,6 +106,10 @@ interface SchematicViewerState {
   clearSelection: () => void;
   getSelectedNodeIds: () => Set<string>;
 
+  // Net symbol actions
+  createNetSymbolNode: (originalNodeId: string) => void;
+  deleteNetSymbolNodes: (nodeIds: string[]) => void;
+
   loadSavedPositions: (positions: NodePositions) => void;
 
   clearComponentData: () => void;
@@ -444,6 +448,147 @@ export const useSchematicViewerStore = create(
           return new Set(
             state.nodes.filter((node) => node.selected).map((node) => node.id)
           );
+        },
+
+        createNetSymbolNode: (originalNodeId) => {
+          const state = get();
+          if (!state.netlist || !state.selectedComponent || !state.config)
+            return;
+
+          // Create a LayoutEngine instance to use helper methods
+          const layoutEngine = new SchematicLayoutEngine(
+            state.netlist,
+            state.config
+          );
+
+          // Extract net name from the original node ID
+          const netName =
+            layoutEngine.getNetNameFromSymbolNodeId(originalNodeId);
+          if (!netName) {
+            console.warn(`Node ${originalNodeId} is not a net symbol node`);
+            return;
+          }
+
+          // Find all existing net symbol nodes for this net based on positions
+          const netSymbolPattern = new RegExp(
+            `^${state.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+          );
+          const existingNumbers = new Set<number>();
+
+          for (const nodeId of Object.keys(state.nodePositions)) {
+            const match = nodeId.match(netSymbolPattern);
+            if (match) {
+              existingNumbers.add(parseInt(match[1], 10));
+            }
+          }
+
+          // Find the next available number
+          let nextNumber = 1;
+          while (existingNumbers.has(nextNumber)) {
+            nextNumber++;
+          }
+
+          const newNodeId = `${state.netlist.root_ref}.${netName}.${nextNumber}`;
+
+          // Get the original node position
+          const originalPosition = state.nodePositions[originalNodeId];
+          if (!originalPosition) {
+            console.warn(`No position found for node ${originalNodeId}`);
+            return;
+          }
+
+          // Find the original node to get its width
+          const originalNode = state.nodes.find((n) => n.id === originalNodeId);
+          const nodeWidth = originalNode?.width || 100;
+
+          // Create new position offset by the node width + some spacing
+          const updatedPositions = {
+            ...state.nodePositions,
+            [newNodeId]: {
+              x: originalPosition.x + nodeWidth + 50, // Offset by width + 50px spacing
+              y: originalPosition.y,
+              width: originalPosition.width,
+              height: originalPosition.height,
+              rotation: originalPosition.rotation || 0,
+            },
+          };
+
+          set({ nodePositions: updatedPositions });
+
+          // Trigger layout update with the new positions
+          if (state.selectedComponent && state.netlist && state.config) {
+            debouncedLayoutUpdate(
+              state.selectedComponent,
+              state.netlist,
+              state.config,
+              updatedPositions,
+              get().storeLayoutResult,
+              state.onPositionsChange
+            );
+          }
+        },
+
+        deleteNetSymbolNodes: (nodeIds) => {
+          const state = get();
+          if (!state.netlist || !state.selectedComponent || !state.config)
+            return;
+
+          // Create a LayoutEngine instance to use helper methods
+          const layoutEngine = new SchematicLayoutEngine(
+            state.netlist,
+            state.config
+          );
+
+          const updatedPositions = { ...state.nodePositions };
+          let hasChanges = false;
+
+          for (const nodeId of nodeIds) {
+            // Check if this is a net symbol node
+            const netName = layoutEngine.getNetNameFromSymbolNodeId(nodeId);
+            if (!netName) {
+              console.warn(`Node ${nodeId} is not a net symbol node`);
+              continue;
+            }
+
+            // Find all net symbol nodes for this net based on positions
+            const netSymbolPattern = new RegExp(
+              `^${state.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+            );
+            const allSymbolNodes: string[] = [];
+
+            for (const posNodeId of Object.keys(state.nodePositions)) {
+              if (netSymbolPattern.test(posNodeId)) {
+                allSymbolNodes.push(posNodeId);
+              }
+            }
+
+            // Only delete if there's more than one symbol for this net
+            if (allSymbolNodes.length > 1) {
+              delete updatedPositions[nodeId];
+              hasChanges = true;
+              console.log(`Deleted net symbol node ${nodeId}`);
+            } else {
+              console.warn(
+                `Cannot delete the last net symbol node for net ${netName}`
+              );
+            }
+          }
+
+          if (hasChanges) {
+            set({ nodePositions: updatedPositions });
+
+            // Trigger layout update with the new positions
+            if (state.selectedComponent && state.netlist && state.config) {
+              debouncedLayoutUpdate(
+                state.selectedComponent,
+                state.netlist,
+                state.config,
+                updatedPositions,
+                get().storeLayoutResult,
+                state.onPositionsChange
+              );
+            }
+          }
         },
 
         loadSavedPositions: (positions) => {

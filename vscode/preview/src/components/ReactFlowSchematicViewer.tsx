@@ -1133,6 +1133,8 @@ const Visualizer = ({
     handleNodeClick,
     clearSelection,
     initializeViewer,
+    deleteNetSymbolNodes,
+    createNetSymbolNode,
   } = useSchematicViewerStore();
 
   const [prevComponent, setPrevComponent] = useState<string | null>(null);
@@ -1213,6 +1215,30 @@ const Visualizer = ({
           console.log("[Rotation] No nodes selected");
         }
       }
+
+      // Check if Delete or Backspace key is pressed
+      if (event.key === "Delete" || event.key === "Backspace") {
+        console.log("[Delete] Delete/Backspace key pressed");
+
+        // Prevent default behavior if we're not in an input field
+        const target = event.target as HTMLElement;
+        if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+          event.preventDefault();
+
+          // Get the currently selected nodes from the store
+          const selectedNodeIds = Array.from(
+            useSchematicViewerStore.getState().getSelectedNodeIds()
+          );
+
+          if (selectedNodeIds.length > 0) {
+            console.log(
+              "[Delete] Attempting to delete nodes:",
+              selectedNodeIds
+            );
+            deleteNetSymbolNodes(selectedNodeIds);
+          }
+        }
+      }
     };
 
     // Add event listener
@@ -1222,7 +1248,7 @@ const Visualizer = ({
     return () => {
       window.removeEventListener("keydown", handleKeyPress);
     };
-  }, [rotateNodes]);
+  }, [rotateNodes, deleteNetSymbolNodes]);
 
   const updateConfig = useCallback((updates: Partial<SchematicConfig>) => {
     setCurrentConfig((prev) => ({
@@ -1272,6 +1298,11 @@ const Visualizer = ({
               node.id,
               event.shiftKey || event.metaKey || event.ctrlKey
             );
+          }}
+          onNodeDoubleClick={(event, node) => {
+            if ((node.data as any).isNetSymbol) {
+              createNetSymbolNode(node.id);
+            }
           }}
           onPaneClick={() => {
             // Clear selection when clicking on background

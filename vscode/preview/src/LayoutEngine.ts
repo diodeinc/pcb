@@ -845,9 +845,22 @@ export class SchematicLayoutEngine {
     for (const [netId, net] of Object.entries(this.netlist.nets)) {
       if (net.properties?.__symbol_value) {
         const netName = net.name || netId;
-        const symbolNodeId = `${this.netlist.root_ref}.${netName}.1`;
 
-        if (!nodePositions[symbolNodeId]) {
+        // Look for all net symbol nodes in nodePositions for this net
+        const netSymbolPattern = new RegExp(
+          `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+        );
+        let hasAtLeastOneSymbol = false;
+
+        for (const nodeId of Object.keys(nodePositions)) {
+          if (netSymbolPattern.test(nodeId)) {
+            hasAtLeastOneSymbol = true;
+            break;
+          }
+        }
+
+        // If this net should have symbols but none are positioned, return false
+        if (!hasAtLeastOneSymbol) {
           return false;
         }
       }
@@ -1596,23 +1609,30 @@ export class SchematicLayoutEngine {
       const netHasSymbol = netInfo?.properties?.__symbol_value;
 
       if (netHasSymbol) {
-        // For nets with symbols, create edges from each port to the net symbol
-        const symbolNodeId = `${this.netlist.root_ref}.${netName}.1`;
-        const symbolNode = graph.children?.find(
-          (node) => node.id === symbolNodeId
-        );
+        // For nets with symbols, create edges from each port to the closest net symbol
+        const netName = netInfo?.name || netId;
 
-        if (!symbolNode) {
-          console.warn(
-            `Net symbol node ${symbolNodeId} not found for net ${netId}`
-          );
+        // Find all net symbol nodes for this net
+        const netSymbolPattern = new RegExp(
+          `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+        );
+        const symbolNodes: ElkNode[] = [];
+
+        for (const node of graph.children || []) {
+          if (netSymbolPattern.test(node.id)) {
+            symbolNodes.push(node);
+          }
+        }
+
+        if (symbolNodes.length === 0) {
+          console.warn(`No net symbol nodes found for net ${netId}`);
           continue;
         }
 
         // Find all ports connected to this net
         const connectedPorts: Array<{ node: ElkNode; port: ElkPort }> = [];
         for (const node of graph.children || []) {
-          if (node.id === symbolNodeId) continue; // Skip the symbol node itself
+          if (symbolNodes.some((sn) => sn.id === node.id)) continue; // Skip the symbol nodes themselves
           if (!node.ports) continue;
 
           for (const port of node.ports) {
@@ -1622,30 +1642,49 @@ export class SchematicLayoutEngine {
           }
         }
 
-        // Create edges from each connected port to the net symbol
-        // We'll connect to the first available port on the symbol for now
-        const symbolPorts = symbolNode.ports || [];
-        let symbolPortIndex = 0;
-
+        // For each connected port, find the closest net symbol and create an edge
         for (const { node, port } of connectedPorts) {
-          if (symbolPortIndex >= symbolPorts.length) {
-            console.warn(
-              `Net symbol ${symbolNodeId} has fewer ports than connections`
-            );
-            symbolPortIndex = 0; // Wrap around if needed
+          const portPosition = this._getPortPosition(node, port);
+          if (!portPosition) continue;
+
+          // Find the closest symbol node
+          let closestSymbol: ElkNode | null = null;
+          let closestDistance = Infinity;
+          let closestSymbolPort: ElkPort | null = null;
+
+          for (const symbolNode of symbolNodes) {
+            // For each port on the symbol node, calculate distance
+            for (const symbolPort of symbolNode.ports || []) {
+              const symbolPortPosition = this._getPortPosition(
+                symbolNode,
+                symbolPort
+              );
+              if (symbolPortPosition) {
+                const distance = this._calculateDistance(
+                  portPosition,
+                  symbolPortPosition
+                );
+                if (distance < closestDistance) {
+                  closestDistance = distance;
+                  closestSymbol = symbolNode;
+                  closestSymbolPort = symbolPort;
+                }
+              }
+            }
           }
 
-          const symbolPort = symbolPorts[symbolPortIndex];
-          const edgeId = `net_${netId}_edge_${edgeCounter++}`;
+          if (!closestSymbol || !closestSymbolPort) {
+            console.warn(`Could not find closest symbol for port ${port.id}`);
+            continue;
+          }
 
-          // Get port positions
-          const portPosition = this._getPortPosition(node, port);
+          const edgeId = `net_${netId}_edge_${edgeCounter++}`;
           const symbolPortPosition = this._getPortPosition(
-            symbolNode,
-            symbolPort
+            closestSymbol,
+            closestSymbolPort
           );
 
-          if (portPosition && symbolPortPosition) {
+          if (symbolPortPosition) {
             // Create hyperedge for libavoid
             const hyperedge: Hyperedge = {
               id: edgeId,
@@ -1660,12 +1699,12 @@ export class SchematicLayoutEngine {
                   ),
                 },
                 {
-                  id: symbolPort.id,
+                  id: closestSymbolPort.id,
                   x: symbolPortPosition.x,
                   y: symbolPortPosition.y,
                   visibilityDirection: this._getPortVisibilityDirection(
-                    symbolPort,
-                    symbolNode.rotation
+                    closestSymbolPort,
+                    closestSymbol.rotation
                   ),
                 },
               ],
@@ -1681,9 +1720,9 @@ export class SchematicLayoutEngine {
               id: edgeId,
               netId: netId,
               sources: [port.id],
-              targets: [symbolPort.id],
+              targets: [closestSymbolPort.id],
               sourceComponentRef: node.id,
-              targetComponentRef: symbolNode.id,
+              targetComponentRef: closestSymbol.id,
               labels: [],
               properties: {
                 netName: netName,
@@ -1693,10 +1732,7 @@ export class SchematicLayoutEngine {
 
             // Track that these ports have edges
             portsWithEdges.add(port.id);
-            portsWithEdges.add(symbolPort.id);
-
-            // Move to next symbol port for next connection
-            symbolPortIndex++;
+            portsWithEdges.add(closestSymbolPort.id);
           }
         }
       } else {
@@ -2524,21 +2560,42 @@ export class SchematicLayoutEngine {
 
       if (!symbolContent) continue;
 
-      // Create node ID using root_ref.NET_NAME.1 pattern
       const netName = net.name || netId;
-      const nodeId = `${this.netlist.root_ref}.${netName}.1`;
 
-      console.log(`Creating net symbol node with ID: ${nodeId}`);
-
-      const symbolNode = this._createNetSymbolNode(
-        nodeId,
-        netId,
-        net,
-        symbolContent
+      // Look for all net symbol nodes in nodePositions for this net
+      const netSymbolPattern = new RegExp(
+        `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
       );
+      const existingSymbolNumbers = new Set<number>();
 
-      if (symbolNode) {
-        netSymbolNodes.push(symbolNode);
+      for (const nodeId of Object.keys(this._nodePositions)) {
+        const match = nodeId.match(netSymbolPattern);
+        if (match) {
+          existingSymbolNumbers.add(parseInt(match[1], 10));
+        }
+      }
+
+      // If no existing symbols found, create the first one
+      if (existingSymbolNumbers.size === 0) {
+        existingSymbolNumbers.add(1);
+      }
+
+      // Create a symbol node for each existing number
+      for (const symbolNumber of existingSymbolNumbers) {
+        const nodeId = `${this.netlist.root_ref}.${netName}.${symbolNumber}`;
+
+        console.log(`Creating net symbol node with ID: ${nodeId}`);
+
+        const symbolNode = this._createNetSymbolNode(
+          nodeId,
+          netId,
+          net,
+          symbolContent
+        );
+
+        if (symbolNode) {
+          netSymbolNodes.push(symbolNode);
+        }
       }
     }
 
@@ -2685,5 +2742,83 @@ export class SchematicLayoutEngine {
       );
       return null;
     }
+  }
+
+  /**
+   * Get the next available symbol number for a given net
+   */
+  public getNextNetSymbolNumber(netName: string): number {
+    const netSymbolPattern = new RegExp(
+      `^${this.netlist.root_ref}\\.${netName}\\.(\\d+)$`
+    );
+    const existingNumbers = new Set<number>();
+
+    for (const nodeId of Object.keys(this._nodePositions)) {
+      const match = nodeId.match(netSymbolPattern);
+      if (match) {
+        existingNumbers.add(parseInt(match[1], 10));
+      }
+    }
+
+    // Find the next available number
+    let nextNumber = 1;
+    while (existingNumbers.has(nextNumber)) {
+      nextNumber++;
+    }
+
+    return nextNumber;
+  }
+
+  /**
+   * Check if a net has a symbol definition
+   */
+  public netHasSymbol(netName: string): boolean {
+    for (const [netId, net] of Object.entries(this.netlist.nets)) {
+      if (
+        (net.name === netName || netId === netName) &&
+        net.properties?.__symbol_value
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Extract net name from a net symbol node ID
+   * Returns null if the node ID is not a net symbol node
+   */
+  public getNetNameFromSymbolNodeId(nodeId: string): string | null {
+    // Pattern: root_ref.NET_NAME.number
+    const parts = nodeId.split(".");
+    if (parts.length < 3) return null;
+
+    // Check if last part is a number
+    const lastPart = parts[parts.length - 1];
+    if (!/^\d+$/.test(lastPart)) return null;
+
+    // Check if this matches the root ref
+    const rootRefParts = this.netlist.root_ref.split(".");
+    if (
+      parts.slice(0, rootRefParts.length).join(".") !== this.netlist.root_ref
+    ) {
+      return null;
+    }
+
+    // Extract net name (everything between root_ref and the number)
+    const netNameParts = parts.slice(rootRefParts.length, -1);
+    const netName = netNameParts.join(".");
+
+    // Verify this net exists and has a symbol
+    for (const [netId, net] of Object.entries(this.netlist.nets)) {
+      if (
+        (net.name === netName || netId === netName) &&
+        net.properties?.__symbol_value
+      ) {
+        return netName;
+      }
+    }
+
+    return null;
   }
 }
