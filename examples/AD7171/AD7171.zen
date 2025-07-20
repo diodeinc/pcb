@@ -129,12 +129,12 @@ if power_on_delay.value != "0ms":
     Capacitor(name = "C_PDRST", value = delay_config["C"], package = "0402", P1 = _PDRST, P2 = GND)
 
 # pcb:sch AD7171 x=241.3000 y=203.2000 rot=0
-# pcb:sch C_BULK.CAPACITOR x=558.8000 y=88.9000 rot=0
-# pcb:sch C_DEC.CAPACITOR x=495.3000 y=88.9000 rot=0
-# pcb:sch C_AINN.CAPACITOR x=63.5000 y=355.6000 rot=0
-# pcb:sch C_AINP.CAPACITOR x=-63.5000 y=215.9000 rot=0
-# pcb:sch C_HF.CAPACITOR x=635.0000 y=88.9000 rot=0
-# pcb:sch C_PDRST.CAPACITOR x=800.1000 y=381.0000 rot=0
+# pcb:sch C_BULK.C x=558.8000 y=88.9000 rot=0
+# pcb:sch C_DEC.C x=495.3000 y=88.9000 rot=0
+# pcb:sch C_AINN.C x=63.5000 y=355.6000 rot=0
+# pcb:sch C_AINP.C x=-63.5000 y=215.9000 rot=0
+# pcb:sch C_HF.C x=635.0000 y=88.9000 rot=0
+# pcb:sch C_PDRST.C x=800.1000 y=381.0000 rot=0
 # pcb:sch R_AINN.R x=-114.3000 y=292.1000 rot=270
 # pcb:sch R_AINP.R x=-127.0000 y=165.1000 rot=270
 # pcb:sch R_PDRST.R x=812.8000 y=215.9000 rot=180

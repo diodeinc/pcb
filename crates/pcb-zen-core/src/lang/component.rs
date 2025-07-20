@@ -256,17 +256,41 @@ where
                     pad_to_signal.insert(pad_name, pin_name);
                 }
 
-                // Create a Symbol from pin_defs
-                let mut symbol_pins: SmallMap<String, String> = SmallMap::new();
-                for (pad_name, signal_name) in &pad_to_signal {
-                    symbol_pins.insert(pad_name.clone(), signal_name.clone());
-                }
+                // Check if symbol is also provided - if so, merge the information
+                if let Some(symbol) = &symbol_val {
+                    if symbol.get_type() == "Symbol" {
+                        // Extract the Symbol value
+                        let symbol_value =
+                            symbol.downcast_ref::<SymbolValue>().ok_or_else(|| {
+                                starlark::Error::new_other(anyhow!(
+                                    "Failed to downcast Symbol value"
+                                ))
+                            })?;
 
-                SymbolValue {
-                    name: None,
-                    pad_to_signal: symbol_pins,
-                    source_path: None,
-                    raw_sexp: None,
+                        // Create a new symbol that combines the symbol's metadata with pin_defs overrides
+                        SymbolValue {
+                            name: symbol_value.name.clone(),
+                            pad_to_signal, // Use pin mappings from pin_defs
+                            source_path: symbol_value.source_path.clone(),
+                            raw_sexp: symbol_value.raw_sexp.clone(),
+                        }
+                    } else {
+                        // symbol is not a Symbol type, just use pin_defs
+                        SymbolValue {
+                            name: None,
+                            pad_to_signal,
+                            source_path: None,
+                            raw_sexp: None,
+                        }
+                    }
+                } else {
+                    // No symbol provided, create minimal SymbolValue from pin_defs
+                    SymbolValue {
+                        name: None,
+                        pad_to_signal,
+                        source_path: None,
+                        raw_sexp: None,
+                    }
                 }
             } else if let Some(symbol) = &symbol_val {
                 // New way: symbol provided as a Symbol value
