@@ -233,10 +233,6 @@ macro_rules! snapshot_eval {
             // Format the output similar to the original tests
             let output = if result.is_success() {
                 if let Some(eval_output) = result.output {
-                    // Sort the signature HashMap by keys for deterministic output
-                    let mut sorted_signature: Vec<_> = eval_output.signature.into_iter().collect();
-                    sorted_signature.sort_by(|a, b| a.0.cmp(&b.0));
-
                     let mut output_parts = vec![];
 
                     // Include print output if there was any
@@ -247,7 +243,7 @@ macro_rules! snapshot_eval {
                     }
 
                     output_parts.push(format!("{:#?}", eval_output.sch_module));
-                    output_parts.push(format!("{:#?}", sorted_signature));
+                    output_parts.push(format!("{:#?}", eval_output.signature));
 
                     output_parts.join("\n") + "\n"
                 } else {

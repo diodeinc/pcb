@@ -50,13 +50,10 @@ Module {
     ],
 }
 [
-    (
-        "value",
-        ParameterInfo {
-            name: "value",
-            type_info: String,
-            required: true,
-            default_value: None,
-        },
-    ),
+    ParameterInfo {
+        name: "value",
+        type_info: String,
+        required: true,
+        default_value: None,
+    },
 ]

@@ -36,151 +36,106 @@ Module {
     ],
 }
 [
-    (
-        "bool_config",
-        ParameterInfo {
-            name: "bool_config",
-            type_info: Bool,
-            required: true,
-            default_value: None,
+    ParameterInfo {
+        name: "str_config",
+        type_info: String,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "int_config",
+        type_info: Int,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "float_config",
+        type_info: Float,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "bool_config",
+        type_info: Bool,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_str",
+        type_info: String,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_int",
+        type_info: Int,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_float",
+        type_info: Float,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_bool",
+        type_info: Bool,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_no_default",
+        type_info: String,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "net_io",
+        type_info: Net,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_net_io",
+        type_info: Net,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "power_io",
+        type_info: Interface {
+            name: "Power",
+            pins: {},
         },
-    ),
-    (
-        "bus_io",
-        ParameterInfo {
-            name: "bus_io",
-            type_info: Interface {
-                name: "DataBus",
-                pins: {},
-            },
-            required: true,
-            default_value: None,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "opt_power_io",
+        type_info: Interface {
+            name: "Power",
+            pins: {},
         },
-    ),
-    (
-        "float_config",
-        ParameterInfo {
-            name: "float_config",
-            type_info: Float,
-            required: true,
-            default_value: None,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "bus_io",
+        type_info: Interface {
+            name: "DataBus",
+            pins: {},
         },
-    ),
-    (
-        "int_config",
-        ParameterInfo {
-            name: "int_config",
-            type_info: Int,
-            required: true,
-            default_value: None,
+        required: true,
+        default_value: None,
+    },
+    ParameterInfo {
+        name: "system_io",
+        type_info: Interface {
+            name: "System",
+            pins: {},
         },
-    ),
-    (
-        "net_io",
-        ParameterInfo {
-            name: "net_io",
-            type_info: Net,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_bool",
-        ParameterInfo {
-            name: "opt_bool",
-            type_info: Bool,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_float",
-        ParameterInfo {
-            name: "opt_float",
-            type_info: Float,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_int",
-        ParameterInfo {
-            name: "opt_int",
-            type_info: Int,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_net_io",
-        ParameterInfo {
-            name: "opt_net_io",
-            type_info: Net,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_no_default",
-        ParameterInfo {
-            name: "opt_no_default",
-            type_info: String,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_power_io",
-        ParameterInfo {
-            name: "opt_power_io",
-            type_info: Interface {
-                name: "Power",
-                pins: {},
-            },
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "opt_str",
-        ParameterInfo {
-            name: "opt_str",
-            type_info: String,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "power_io",
-        ParameterInfo {
-            name: "power_io",
-            type_info: Interface {
-                name: "Power",
-                pins: {},
-            },
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "str_config",
-        ParameterInfo {
-            name: "str_config",
-            type_info: String,
-            required: true,
-            default_value: None,
-        },
-    ),
-    (
-        "system_io",
-        ParameterInfo {
-            name: "system_io",
-            type_info: Interface {
-                name: "System",
-                pins: {},
-            },
-            required: true,
-            default_value: None,
-        },
-    ),
+        required: true,
+        default_value: None,
+    },
 ]

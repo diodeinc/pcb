@@ -473,8 +473,8 @@ impl Module {
             output
                 .signature
                 .iter()
-                .map(|(name, param_info)| Parameter {
-                    name: name.clone(),
+                .map(|param_info| Parameter {
+                    name: param_info.name.clone(),
                     param_type: format!("{:?}", param_info.type_info),
                     required: param_info.required,
                     is_config: param_info.is_config(),

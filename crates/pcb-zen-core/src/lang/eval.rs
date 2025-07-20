@@ -121,8 +121,8 @@ pub struct EvalOutput {
     pub ast: AstModule,
     pub star_module: starlark::environment::FrozenModule,
     pub sch_module: FrozenModuleValue,
-    /// Map of parameter names to their full parameter information
-    pub signature: HashMap<String, crate::lang::type_info::ParameterInfo>,
+    /// Ordered list of parameter information
+    pub signature: Vec<crate::lang::type_info::ParameterInfo>,
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
 }
@@ -935,14 +935,12 @@ impl EvalContext {
                             let type_value = frozen_type_value.to_value();
                             let type_info = TypeInfo::from_value(type_value, &heap);
 
-                            let param_info = ParameterInfo {
+                            ParameterInfo {
                                 name: name.clone(),
                                 type_info,
                                 required: true,      // For now, all are required
                                 default_value: None, // We don't have default value info yet
-                            };
-
-                            (name.clone(), param_info)
+                            }
                         })
                         .collect();
 
@@ -985,7 +983,7 @@ impl EvalContext {
                 output
                     .signature
                     .iter()
-                    .map(|(k, v)| (k.clone(), format!("{:?}", v.type_info))) // Use Debug formatting for now
+                    .map(|param| (param.name.clone(), format!("{:?}", param.type_info)))
                     .collect()
             })
     }
@@ -1008,8 +1006,8 @@ impl EvalContext {
 
         match eval_result.output {
             Some(output) => {
-                // Convert the signature HashMap to a Vec of ParameterInfo
-                let parameters: Vec<_> = output.signature.into_values().collect();
+                // The signature is already a Vec of ParameterInfo
+                let parameters = output.signature;
 
                 WithDiagnostics::success(parameters, eval_result.diagnostics)
             }
