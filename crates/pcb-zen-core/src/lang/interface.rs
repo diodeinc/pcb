@@ -11,10 +11,9 @@ use starlark::values::{
     StarlarkValue, Trace, Value, ValueLike,
 };
 use std::sync::Arc;
-use uuid::Uuid;
 
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
-use crate::lang::net::NetValue;
+use crate::lang::net::{generate_net_id, NetValue};
 
 // Interface type data, similar to TyRecordData
 #[derive(Debug, Allocative)]
@@ -160,17 +159,18 @@ where
                     let net_name = if let Some(ref inst_name) = instance_name_opt {
                         make_prefix(inst_name, name)
                     } else {
-                        String::new()
+                        name.to_ascii_uppercase()
                     };
 
                     heap.alloc(NetValue::new(
-                        Uuid::new_v4().as_u64_pair().1,
+                        generate_net_id(),
                         net_name,
                         SmallMap::new(),
                         Value::new_none(),
                     ))
                 } else if spec_type == "Net" {
                     // Net instance - use as template
+                    // Note: Net() with empty name is treated same as Net type for auto-naming
                     let (template_name, template_props, template_symbol) =
                         if let Some(net_val) = spec_value.downcast_ref::<NetValue<'v>>() {
                             (
@@ -202,11 +202,11 @@ where
                             template_name
                         }
                     } else {
-                        // Fall back to standard naming
+                        // Fall back to standard naming - treat Net() same as Net type
                         if let Some(ref inst_name) = instance_name_opt {
                             make_prefix(inst_name, name)
                         } else {
-                            String::new()
+                            name.to_ascii_uppercase()
                         }
                     };
 
@@ -220,7 +220,7 @@ where
                     let copied_symbol = copy_value(template_symbol, heap)?;
 
                     heap.alloc(NetValue::new(
-                        Uuid::new_v4().as_u64_pair().1,
+                        generate_net_id(),
                         net_name,
                         new_props,
                         copied_symbol,
@@ -535,17 +535,18 @@ fn instantiate_interface<'v>(
             let net_name = if let Some(p) = prefix_opt {
                 format!("{}_{}", p, field_name.to_ascii_uppercase())
             } else {
-                String::new()
+                field_name.to_ascii_uppercase()
             };
 
             heap.alloc(NetValue::new(
-                Uuid::new_v4().as_u64_pair().1,
+                generate_net_id(),
                 net_name,
                 SmallMap::new(),
                 Value::new_none(),
             ))
         } else if spec_type == "Net" {
             // Net instance - use as template
+            // Note: Net() with empty name is treated same as Net type for auto-naming
             let (template_name, template_props, template_symbol) =
                 if let Some(net_val) = spec_value.downcast_ref::<NetValue<'v>>() {
                     (
@@ -574,11 +575,11 @@ fn instantiate_interface<'v>(
                     .map(|p| format!("{p}_{template_name}"))
                     .unwrap_or(template_name)
             } else {
-                // Fall back to standard naming
+                // Fall back to standard naming - treat Net() same as Net type
                 let name_suffix = field_name.to_ascii_uppercase();
                 prefix_opt
                     .map(|p| format!("{p}_{name_suffix}"))
-                    .unwrap_or_default()
+                    .unwrap_or_else(|| name_suffix)
             };
 
             // Deep copy the properties
@@ -591,7 +592,7 @@ fn instantiate_interface<'v>(
             let copied_symbol = copy_value(template_symbol, heap)?;
 
             heap.alloc(NetValue::new(
-                Uuid::new_v4().as_u64_pair().1,
+                generate_net_id(),
                 net_name,
                 new_props,
                 copied_symbol,
@@ -736,6 +737,62 @@ system_instance = System()
 assert_eq(sorted(dir(System)), ["data", "power"])
 assert_eq(sorted(dir(system_instance)), ["data", "power"])
 assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
+"#,
+        );
+    }
+
+    #[test]
+    fn interface_net_naming_behavior() {
+        let mut a = Assert::new();
+        a.globals_add(|builder: &mut GlobalsBuilder| {
+            component_globals(builder);
+            interface_globals(builder);
+        });
+
+        // Test 1: Net type should auto-generate name
+        a.pass(
+            r#"
+Power1 = interface(vcc = Net)
+instance1 = Power1()
+assert_eq(instance1.vcc.name, "VCC")
+"#,
+        );
+
+        // Test 2: Net with explicit name should use that name
+        a.pass(
+            r#"
+Power2 = interface(vcc = Net("MY_VCC"))
+instance2 = Power2()
+assert_eq(instance2.vcc.name, "MY_VCC")
+"#,
+        );
+
+        // Test 3: Net() with no name should generate a name (same as Net type)
+        a.pass(
+            r#"
+Power3 = interface(vcc = Net())
+instance3 = Power3()
+# We want Net() to behave the same as Net type
+assert_eq(instance3.vcc.name, "VCC")
+"#,
+        );
+
+        // Test 4: With instance name prefix
+        a.pass(
+            r#"
+Power4 = interface(vcc = Net)
+instance4 = Power4("PWR")
+assert_eq(instance4.vcc.name, "PWR_VCC")
+"#,
+        );
+
+        // Test 5: Net() with instance name prefix should also generate a name
+        a.pass(
+            r#"
+Power5 = interface(vcc = Net())
+instance5 = Power5("PWR")
+# Net() should behave the same as Net type with prefix
+assert_eq(instance5.vcc.name, "PWR_VCC")
 "#,
         );
     }

@@ -20,6 +20,7 @@ expression: netlist
       (property (name "Footprint") (value "C146731:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL"))
       (property (name "LCSC Part") (value "C146731"))
       (property (name "Value") (value "NB3N551DG"))
+      (property (name "symbol_name") (value "NB3N551DG"))
       (property (name "symbol_path") (value "[TEMP_DIR]C146731.kicad_sym"))
     )
   )

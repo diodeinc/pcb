@@ -12,23 +12,6 @@ Module {
                 type: "asic",
                 footprint: "QFN:48",
                 prefix: "U",
-                pins: {
-                    "EN": FrozenValue(
-                        "4",
-                    ),
-                    "RST": FrozenValue(
-                        "5",
-                    ),
-                    "SIG": FrozenValue(
-                        "3",
-                    ),
-                    "VDD": FrozenValue(
-                        "1",
-                    ),
-                    "VSS": FrozenValue(
-                        "2",
-                    ),
-                },
                 connections: {
                     "EN": FrozenValue(
                         Net {
@@ -77,7 +60,16 @@ Module {
                     ),
                 },
                 symbol: FrozenValue(
-                    NoneType,
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "VDD",
+                            "2": "VSS",
+                            "3": "SIG",
+                            "4": "EN",
+                            "5": "RST",
+                        },
+                    },
                 ),
             },
         ),

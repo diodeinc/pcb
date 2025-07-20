@@ -70,3 +70,39 @@ snapshot_eval!(component_with_symbol, {
         )
     "#
 });
+
+snapshot_eval!(component_duplicate_pin_names, {
+    "test_symbol.kicad_sym" => r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "TestSymbol" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+    (property "Reference" "U" (id 0) (at 0 0 0))
+    (symbol "TestSymbol_0_1"
+      (rectangle (start -10.16 10.16) (end 10.16 -10.16))
+    )
+    (symbol "TestSymbol_1_1"
+      (pin input line (at -12.7 2.54 0) (length 2.54)
+        (name "in" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      (pin output line (at 12.7 0 180) (length 2.54)
+        (name "out" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+      (pin input line (at -12.7 -2.54 0) (length 2.54)
+        (name "in" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+)"#,
+    "test.zen" => r#"
+        Component(
+            name = "test_comp",
+            footprint = "test_footprint",
+            symbol = Symbol(library = "./test_symbol.kicad_sym"),
+            pins = {
+                "in": Net("in"),
+                "out": Net("out"),
+            }
+        )
+    "#
+});

@@ -1,7 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
 use allocative::Allocative;
-use itertools::Itertools;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -9,12 +8,12 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        dict::DictRef, starlark_value, Coerce, Freeze, FreezeResult, Heap, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLike,
+        dict::DictRef, starlark_value, Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue,
+        Trace, Value, ValueLike,
     },
 };
 
-use crate::lang::evaluator_ext::EvaluatorExt;
+use crate::{lang::evaluator_ext::EvaluatorExt, EvalContext};
 
 use super::net::NetType;
 use super::symbol::{load_symbols_from_library, SymbolType, SymbolValue};
@@ -29,11 +28,10 @@ pub struct ComponentValueGen<V> {
     ctype: Option<String>,
     footprint: String,
     prefix: String,
-    pins: SmallMap<String, V>,
     connections: SmallMap<String, V>,
     properties: SmallMap<String, V>,
     source_path: String,
-    symbol: V, // The Symbol value if one was provided (None if not)
+    symbol: V,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -50,15 +48,6 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 
         debug.field("footprint", &self.footprint);
         debug.field("prefix", &self.prefix);
-
-        // Sort pins for deterministic output
-        if !self.pins.is_empty() {
-            let mut pins: Vec<_> = self.pins.iter().collect();
-            pins.sort_by_key(|(k, _)| k.as_str());
-            let pins_map: std::collections::BTreeMap<_, _> =
-                pins.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
-            debug.field("pins", &pins_map);
-        }
 
         // Sort connections for deterministic output
         if !self.connections.is_empty() {
@@ -88,13 +77,9 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 starlark_complex_value!(pub ComponentValue);
 
 #[starlark_value(type = "Component")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V> where
+    Self: ProvidesStaticType<'v>
 {
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
-        self.pins.get(attr).map(|v| v.to_value())
-    }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
@@ -104,14 +89,6 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
             .as_deref()
             .unwrap_or(self.ctype.as_deref().unwrap_or("<unknown>"));
         writeln!(f, "Component({name})")?;
-
-        let mut pins: Vec<_> = self.pins.iter().collect();
-        pins.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-        for (pin_name, pin_value) in pins {
-            let pad_str = pin_value.to_value().unpack_str().unwrap_or("<pad>");
-            writeln!(f, "  {pin_name} ({pad_str})")?;
-        }
 
         if !self.properties.is_empty() {
             let mut props: Vec<_> = self.properties.iter().collect();
@@ -139,10 +116,6 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
     /// appropriate symbol when the MPN is not available.
     pub fn ctype(&self) -> Option<&str> {
         self.ctype.as_deref()
-    }
-
-    pub fn pins(&self) -> &SmallMap<String, V> {
-        &self.pins
     }
 
     pub fn footprint(&self) -> &str {
@@ -242,9 +215,6 @@ where
 
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
 
-            // We'll determine pins_str_map later, after we check for symbol
-            let mut pins_str_map: SmallMap<String, String> = SmallMap::new();
-
             let pins_val: Value = param_parser.next()?;
             let conn_dict = DictRef::from_value(pins_val).ok_or_else(|| {
                 starlark::Error::new_other(anyhow!(
@@ -264,24 +234,39 @@ where
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
 
-            // Now determine pins_str_map based on either pin_defs or symbol
-            if let Some(pin_defs) = pin_defs_val {
+            // Get a SymbolValue from the pin_defs or symbol_val
+            let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
                 // Old way: pin_defs provided as a dict
                 let dict_ref = DictRef::from_value(pin_defs).ok_or_else(|| {
                     starlark::Error::new_other(anyhow!("`pin_defs` must be a dict of name -> pad"))
                 })?;
+
+                let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
                 for (k_val, v_val) in dict_ref.iter() {
-                    let name = k_val
+                    let pin_name = k_val
                         .unpack_str()
                         .ok_or_else(|| {
                             starlark::Error::new_other(anyhow!("pin name must be a string"))
                         })?
                         .to_owned();
-                    let pad = v_val
+                    let pad_name = v_val
                         .unpack_str()
                         .ok_or_else(|| starlark::Error::new_other(anyhow!("pad must be a string")))?
                         .to_owned();
-                    pins_str_map.insert(name, pad);
+                    pad_to_signal.insert(pad_name, pin_name);
+                }
+
+                // Create a Symbol from pin_defs
+                let mut symbol_pins: SmallMap<String, String> = SmallMap::new();
+                for (pad_name, signal_name) in &pad_to_signal {
+                    symbol_pins.insert(pad_name.clone(), signal_name.clone());
+                }
+
+                SymbolValue {
+                    name: None,
+                    pad_to_signal: symbol_pins,
+                    source_path: None,
+                    raw_sexp: None,
                 }
             } else if let Some(symbol) = &symbol_val {
                 // New way: symbol provided as a Symbol value
@@ -291,60 +276,54 @@ where
                         starlark::Error::new_other(anyhow!("Failed to downcast Symbol value"))
                     })?;
 
-                    // Convert Symbol pins (pad -> signal) to Component pins (signal -> pad)
-                    for (pad, signal_val) in symbol_value.pins() {
-                        if let Some(signal) = signal_val.unpack_str() {
-                            pins_str_map.insert(signal.to_owned(), pad.clone());
-                        }
-                    }
+                    // Return the existing symbol
+                    symbol_value.clone()
                 } else {
-                    // Old way: symbol is a string path (for backwards compatibility)
-                    // In this case, pin_defs is required
                     return Err(starlark::Error::new_other(anyhow!(
-                        "When `symbol` is a string path, `pin_defs` must be provided"
+                        "Use Symbol(library = \"...\") to load a symbol from a library."
                     )));
                 }
             } else {
-                // Neither pin_defs nor symbol provided
                 return Err(starlark::Error::new_other(anyhow!(
                     "Either `pin_defs` or a Symbol value for `symbol` must be provided"
                 )));
-            }
+            };
 
             // Now handle connections after we have pins_str_map
             let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
             for (k_val, v_val) in conn_dict.iter() {
-                let pin_name = k_val
+                let signal_name = k_val
                     .unpack_str()
                     .ok_or_else(|| {
                         starlark::Error::new_other(anyhow!("pin names must be strings"))
                     })?
                     .to_owned();
-                if !pins_str_map.contains_key(&pin_name) {
+
+                if !final_symbol.signal_names().any(|n| n == signal_name) {
                     return Err(starlark::Error::new_other(anyhow!(format!(
                         "Unknown pin name '{}' (expected one of: {})",
-                        pin_name,
-                        pins_str_map.keys().join(", ")
+                        signal_name,
+                        final_symbol.signal_names().collect::<Vec<_>>().join(", ")
                     ))));
                 }
 
                 if v_val.get_type() != "Net" {
                     return Err(starlark::Error::new_other(anyhow!(format!(
                         "Pin '{}' must be connected to a Net, got {}",
-                        pin_name,
+                        signal_name,
                         v_val.get_type()
                     ))));
                 }
 
-                connections.insert(pin_name, v_val);
+                connections.insert(signal_name, v_val);
             }
 
             // Detect missing pins in connections
-            let mut missing_pins: Vec<String> = pins_str_map
-                .keys()
+            let mut missing_pins: Vec<&str> = final_symbol
+                .signal_names()
                 .filter(|n| !connections.contains_key(*n))
-                .cloned()
                 .collect();
+
             missing_pins.sort();
             if !missing_pins.is_empty() {
                 return Err(starlark::Error::new_other(anyhow!(format!(
@@ -372,27 +351,18 @@ where
             }
 
             // Store the symbol path in properties if the symbol has one
-            if let Some(symbol) = &symbol_val {
-                if symbol.get_type() == "Symbol" {
-                    if let Some(symbol_value) = symbol.downcast_ref::<SymbolValue>() {
-                        if let Some(path) = symbol_value.source_path() {
-                            properties_map.insert(
-                                "symbol_path".to_string(),
-                                eval_ctx.heap().alloc_str(path).to_value(),
-                            );
-                        }
-
-                        properties_map.insert(
-                            "symbol_name".to_string(),
-                            eval_ctx.heap().alloc_str(symbol_value.name()).to_value(),
-                        );
-                    }
-                }
+            if let Some(path) = final_symbol.source_path() {
+                properties_map.insert(
+                    "symbol_path".to_string(),
+                    eval_ctx.heap().alloc_str(path).to_value(),
+                );
             }
 
-            let mut pins_val_map: SmallMap<String, Value<'v>> = SmallMap::new();
-            for (name, pad) in pins_str_map.iter() {
-                pins_val_map.insert(name.clone(), eval_ctx.heap().alloc_str(pad).to_value());
+            if let Some(name) = final_symbol.name() {
+                properties_map.insert(
+                    "symbol_name".to_string(),
+                    eval_ctx.heap().alloc_str(name).to_value(),
+                );
             }
 
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
@@ -401,11 +371,10 @@ where
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
                 prefix,
-                pins: pins_val_map,
                 connections,
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
-                symbol: symbol_val.unwrap_or_else(Value::new_none),
+                symbol: eval_ctx.heap().alloc_complex(final_symbol),
             });
 
             Ok(component)
@@ -437,7 +406,7 @@ pub struct ComponentFactoryValue {
     ctype: Option<String>,
     footprint: String,
     prefix: String,
-    pins: SmallMap<String, String>,
+    symbol: SymbolValue,
     default_properties: SmallMap<String, String>,
 }
 
@@ -464,9 +433,9 @@ impl ComponentFactoryValue {
         &self.prefix
     }
 
-    /// Get the pins map
-    pub fn pins(&self) -> &SmallMap<String, String> {
-        &self.pins
+    /// Get the symbol
+    pub fn symbol(&self) -> &SymbolValue {
+        &self.symbol
     }
 
     /// Get the default properties
@@ -488,7 +457,7 @@ impl std::fmt::Display for ComponentFactoryValue {
 
         ds.field("footprint", &self.footprint)
             .field("prefix", &self.prefix)
-            .field("pins", &self.pins);
+            .field("symbol", &self.symbol);
 
         if !self.default_properties.is_empty() {
             ds.field("default_properties", &self.default_properties);
@@ -545,11 +514,12 @@ where
                         starlark::Error::new_other(anyhow!("pin names must be strings"))
                     })?
                     .to_owned();
-                if !self.pins.contains_key(&pin_name) {
+
+                if !self.symbol.signal_names().any(|n| n == pin_name) {
                     return Err(starlark::Error::new_other(anyhow!(format!(
                         "Unknown pin name '{}' (expected one of: {})",
                         pin_name,
-                        self.pins.keys().join(", ")
+                        self.symbol.signal_names().collect::<Vec<_>>().join(", ")
                     ))));
                 }
 
@@ -565,12 +535,12 @@ where
             }
 
             // Detect any pins missing from the provided dict.
-            let mut missing_pins: Vec<String> = self
-                .pins
-                .keys()
+            let mut missing_pins: Vec<&str> = self
+                .symbol
+                .signal_names()
                 .filter(|n| !connections.contains_key(*n))
-                .cloned()
                 .collect();
+
             missing_pins.sort();
             if !missing_pins.is_empty() {
                 return Err(starlark::Error::new_other(anyhow!(format!(
@@ -665,23 +635,16 @@ where
                 }
             }
 
-            // ------------------- Build pins SmallMap<String, Value> -----------
-            let mut pins_val_map: SmallMap<String, Value<'v>> = SmallMap::new();
-            for (name, pad) in self.pins.iter() {
-                pins_val_map.insert(name.clone(), eval_ctx.heap().alloc_str(pad).to_value());
-            }
-
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: final_mpn,
                 ctype: final_ctype,
                 footprint: final_footprint,
                 prefix: final_prefix,
-                pins: pins_val_map,
                 connections,
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
-                symbol: Value::new_none(), // ComponentFactory doesn't have a symbol
+                symbol: eval_ctx.heap().alloc_complex(self.symbol.clone()),
             });
 
             Ok(component)
@@ -705,6 +668,7 @@ pub(crate) fn build_component_factory_from_symbol(
     footprint_override: Option<&str>,
     base_dir: Option<&std::path::Path>,
     file_provider: &dyn crate::FileProvider,
+    context: &EvalContext,
 ) -> anyhow::Result<ComponentFactoryValue> {
     // Parse all symbols from the library (with caching)
     // Note: Component factories expect single-symbol files, so we load all symbols
@@ -770,7 +734,13 @@ pub(crate) fn build_component_factory_from_symbol(
         ctype: symbol.manufacturer.clone(),
         footprint: final_footprint,
         prefix: "U".to_owned(),
-        pins: pins_map,
+        symbol: SymbolValue::from_args(
+            None,
+            None,
+            Some(abs_symbol_path.to_string_lossy().into_owned()),
+            context,
+        )
+        .map_err(|e| anyhow!("Failed to build symbol: {}", e))?,
         default_properties,
     })
 }
@@ -826,6 +796,7 @@ pub fn component_globals(builder: &mut GlobalsBuilder) {
             footprint.as_deref(),
             base_dir_opt.as_deref(),
             file_provider.as_ref(),
+            eval.eval_context().unwrap(),
         )?;
 
         Ok(eval.heap().alloc(factory))

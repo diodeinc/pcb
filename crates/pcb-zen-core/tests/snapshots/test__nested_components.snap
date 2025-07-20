@@ -21,14 +21,6 @@ Module {
                                         name: "Component",
                                         footprint: "SMD:0805",
                                         prefix: "U",
-                                        pins: {
-                                            "P1": FrozenValue(
-                                                "1",
-                                            ),
-                                            "P2": FrozenValue(
-                                                "2",
-                                            ),
-                                        },
                                         connections: {
                                             "P1": FrozenValue(
                                                 Net {
@@ -50,7 +42,13 @@ Module {
                                             ),
                                         },
                                         symbol: FrozenValue(
-                                            NoneType,
+                                            Symbol {
+                                                name: None,
+                                                pins: {
+                                                    "1": "P1",
+                                                    "2": "P2",
+                                                },
+                                            },
                                         ),
                                     },
                                 ),

@@ -24,6 +24,16 @@ std::thread_local! {
     static NEXT_NET_ID: RefCell<u64> = const { RefCell::new(1) };
 }
 
+/// Generate a new unique net ID using the thread-local counter.
+pub fn generate_net_id() -> NetId {
+    NEXT_NET_ID.with(|counter| {
+        let mut c = counter.borrow_mut();
+        let id = *c;
+        *c += 1;
+        id
+    })
+}
+
 /// Reset the net ID counter to 1. This is only intended for use in tests
 /// to ensure reproducible net IDs across test runs.
 #[cfg(test)]
@@ -75,6 +85,21 @@ where
 {
     fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
         demand.provide_value::<&dyn DeepCopyToHeap>(self);
+    }
+
+    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attribute {
+            "name" => Some(heap.alloc(self.name.clone())),
+            _ => None,
+        }
+    }
+
+    fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
+        matches!(attribute, "name")
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec!["name".to_string()]
     }
 }
 
@@ -224,12 +249,7 @@ where
         // Generate a deterministic, per-thread unique ID for this net. A thread-local
         // counter guarantees deterministic results within a single evaluation and
         // avoids cross-test interference when Rust tests execute in parallel.
-        let net_id = NEXT_NET_ID.with(|counter| {
-            let mut c = counter.borrow_mut();
-            let id = *c;
-            *c += 1;
-            id
-        });
+        let net_id = generate_net_id();
 
         // Use positional name if provided, otherwise use kwarg name
         // Keep name empty when not supplied so that later passes can derive a context-aware
@@ -243,10 +263,9 @@ where
         if let Some(symbol) = symbol_val {
             if let Some(symbol_value) = symbol.downcast_ref::<crate::lang::symbol::SymbolValue>() {
                 // Add symbol_name
-                properties.insert(
-                    "symbol_name".to_string(),
-                    heap.alloc_str(symbol_value.name()).to_value(),
-                );
+                if let Some(name) = symbol_value.name() {
+                    properties.insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
+                }
 
                 // Add symbol_path if available
                 if let Some(path) = symbol_value.source_path() {
@@ -254,10 +273,11 @@ where
                 }
 
                 // Add the raw s-expression if available
-                let raw_sexp = symbol_value.raw_sexp();
-                if !raw_sexp.is_none() {
-                    // The raw_sexp is already a Value, just copy it
-                    properties.insert("__symbol_value".to_string(), *raw_sexp);
+                if let Some(raw_sexp) = symbol_value.raw_sexp() {
+                    properties.insert(
+                        "__symbol_value".to_string(),
+                        heap.alloc_str(raw_sexp).to_value(),
+                    );
                 }
             }
         }

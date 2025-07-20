@@ -16,11 +16,6 @@ Module {
                             name: "comp0",
                             footprint: "TEST:0402",
                             prefix: "U",
-                            pins: {
-                                "V": FrozenValue(
-                                    "1",
-                                ),
-                            },
                             connections: {
                                 "V": FrozenValue(
                                     Net {
@@ -33,7 +28,12 @@ Module {
                                 ),
                             },
                             symbol: FrozenValue(
-                                NoneType,
+                                Symbol {
+                                    name: None,
+                                    pins: {
+                                        "1": "V",
+                                    },
+                                },
                             ),
                         },
                     ),

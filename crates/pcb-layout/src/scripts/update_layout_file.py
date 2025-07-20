@@ -269,13 +269,17 @@ class JsonNetlistParser:
 
                     # Get the pad number from the port
                     port_instance = data["instances"].get(port_ref, {})
-                    pad_num = (
-                        port_instance.get("attributes", {})
-                        .get("pad", {})
-                        .get("String", "1")
-                    )
+                    pad_nums = [
+                        pad.get("String", "1")
+                        for pad in (
+                            port_instance.get("attributes", {})
+                            .get("pads", {})
+                            .get("Array", [])
+                        )
+                    ]
 
-                    nodes.append((ref_des, pad_num, net_name))
+                    for pad_num in pad_nums:
+                        nodes.append((ref_des, pad_num, net_name))
 
             if nodes:
                 net = JsonNetlistParser.Net(net_name, nodes)
@@ -526,9 +530,6 @@ class VirtualFootprint(VirtualItem):
     def _copy_kicad_properties(self, source: Any, target: Any) -> None:
         """Copy position, orientation, etc from source to target KiCad object."""
         if hasattr(source, "GetPosition") and hasattr(target, "SetPosition"):
-            target.SetPosition(source.GetPosition())
-            target.SetOrientation(source.GetOrientation())
-
             # Handle layer and flipping
             source_layer = source.GetLayer()
             target_layer = target.GetLayer()
@@ -549,6 +550,9 @@ class VirtualFootprint(VirtualItem):
             # Set the layer after flipping (flipping changes the layer)
             target.SetLayer(source_layer)
             target.SetLayerSet(source.GetLayerSet())
+
+            target.SetPosition(source.GetPosition())
+            target.SetOrientation(source.GetOrientation())
 
             # Copy reference designator position/attributes
             if hasattr(source, "Reference") and hasattr(target, "Reference"):

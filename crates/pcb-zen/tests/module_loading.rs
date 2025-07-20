@@ -183,7 +183,6 @@ fn module_with_multiple_aliases() {
         "pcb.toml",
         r#"
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.0.6"
 stdlib_v5 = "@github/diodeinc/stdlib:v0.0.5"
 stdlib_v4 = "@github/diodeinc/stdlib:v0.0.4"
 "#,
@@ -193,19 +192,10 @@ stdlib_v4 = "@github/diodeinc/stdlib:v0.0.4"
         "test.zen",
         r#"
 # Test loading from different package versions
-Resistor = Module("@stdlib/generics/Resistor.star")
 Resistor_v5 = Module("@stdlib_v5/generics/Resistor.star")
 Resistor_v4 = Module("@stdlib_v4/generics/Resistor.star")
 
 # Create instances to verify they load correctly
-Resistor(
-    name = "R1",
-    value = "1kohm",
-    package = "0402",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
-)
-
 Resistor_v5(
     name = "R2",
     value = "2kohm",

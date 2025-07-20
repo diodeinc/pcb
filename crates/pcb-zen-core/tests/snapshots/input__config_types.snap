@@ -12,11 +12,6 @@ Module {
                 type: "test_component",
                 footprint: "TEST:FP",
                 prefix: "U",
-                pins: {
-                    "1": FrozenValue(
-                        "1",
-                    ),
-                },
                 connections: {
                     "1": FrozenValue(
                         Net {
@@ -29,7 +24,12 @@ Module {
                     ),
                 },
                 symbol: FrozenValue(
-                    NoneType,
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "1",
+                        },
+                    },
                 ),
             },
         ),

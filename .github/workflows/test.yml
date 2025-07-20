@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  KICAD_VERSION: 9.0.3  # Update container image below when changing this
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,7 +32,7 @@ jobs:
           - name: Ubuntu
             runs-on: ubuntu-latest
             container:
-              image: kicad/kicad:9.0
+              image: kicad/kicad:9.0.3  # Keep in sync with KICAD_VERSION
               options: --user root
     steps:
       - uses: actions/checkout@v3
@@ -48,12 +49,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /Applications/KiCad
-          key: ${{ runner.os }}-kicad-9.0.0
+          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
 
       - name: Install KiCad (macOS)
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
         run: |
-          brew update && brew install --cask kicad && brew upgrade --cask kicad
+          brew update
+          # Uninstall existing KiCad if present to avoid conflicts
+          brew uninstall --cask kicad 2>/dev/null || true
+          # Remove any remaining KiCad installation
+          rm -rf /Applications/KiCad 2>/dev/null || true
+          # Install KiCad fresh
+          brew install --cask kicad
 
       - name: Cache KiCad (Windows)
         if: matrix.config.name == 'Windows'
@@ -61,12 +68,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\Program Files\KiCad
-          key: ${{ runner.os }}-kicad-9.0
+          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
 
       - name: Install KiCad (Windows)
         if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
         run: |
-          choco install kicad --version 9.0.0 -y
+          choco install kicad --version ${{ env.KICAD_VERSION }} -y
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
