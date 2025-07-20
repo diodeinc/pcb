@@ -100,21 +100,7 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for NetValueGen<V> {
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            return write!(f, "Net '{}'", self.name);
-        }
-
-        if self.properties.is_empty() {
-            return write!(f, "Net '{}'", self.name);
-        }
-
-        writeln!(f, "Net '{}':", self.name)?;
-        let mut props: Vec<_> = self.properties.iter().collect();
-        props.sort_by(|(a, _), (b, _)| a.cmp(b));
-        for (key, value) in props {
-            writeln!(f, "  {key}: {value:?}")?;
-        }
-        Ok(())
+        write!(f, "{self:?}")
     }
 }
 
@@ -251,7 +237,30 @@ where
         let net_name = name_pos.or(name_kwarg).unwrap_or_default();
 
         // Initialize with empty properties map
-        let properties = SmallMap::new();
+        let mut properties = SmallMap::new();
+
+        // If a symbol was provided, extract its properties and add them to the net properties
+        if let Some(symbol) = symbol_val {
+            if let Some(symbol_value) = symbol.downcast_ref::<crate::lang::symbol::SymbolValue>() {
+                // Add symbol_name
+                properties.insert(
+                    "symbol_name".to_string(),
+                    heap.alloc_str(symbol_value.name()).to_value(),
+                );
+
+                // Add symbol_path if available
+                if let Some(path) = symbol_value.source_path() {
+                    properties.insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+                }
+
+                // Add the raw s-expression if available
+                let raw_sexp = symbol_value.raw_sexp();
+                if !raw_sexp.is_none() {
+                    // The raw_sexp is already a Value, just copy it
+                    properties.insert("__symbol_value".to_string(), *raw_sexp);
+                }
+            }
+        }
 
         Ok(heap.alloc(NetValue {
             id: net_id,
