@@ -2,8 +2,8 @@
 source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
-Default instance net: Net { name: "INST1_DEFAULT", id: "<ID>", properties: {"symbol_name": Value("DefaultSymbol")}, symbol: Value(Symbol { name: "DefaultSymbol", pins: {"1": Value("A")} }) }
-Override instance net: Net { name: "OVERRIDE", id: "<ID>", properties: {"symbol_name": Value("OverrideSymbol")}, symbol: Value(Symbol { name: "OverrideSymbol", pins: {"2": Value("B")} }) }
+Default instance net: Net { name: "INST1_DEFAULT", id: "<ID>", properties: {"symbol_name": Value("DefaultSymbol")}, symbol: Value(Symbol { name: Some("DefaultSymbol"), pins: {"1": "A"} }) }
+Override instance net: Net { name: "OVERRIDE", id: "<ID>", properties: {"symbol_name": Value("OverrideSymbol")}, symbol: Value(Symbol { name: Some("OverrideSymbol"), pins: {"2": "B"} }) }
 Module {
     name: "<root>",
     source: "test.zen",
