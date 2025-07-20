@@ -2,7 +2,7 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Ground net: Net 'GND'
+Ground net: Net { name: "GND", id: "<ID>", symbol: Value(NoneType) }
 Module {
     name: "<root>",
     source: "test.zen",

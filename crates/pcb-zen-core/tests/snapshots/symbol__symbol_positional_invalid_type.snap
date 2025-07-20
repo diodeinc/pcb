@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/symbol.rs
+expression: output
+---
+Error: test.zen:3:7-18 Positional argument must be a string

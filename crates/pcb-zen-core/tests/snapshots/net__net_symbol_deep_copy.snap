@@ -2,8 +2,8 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Net1: Net 'NET1'
-Net2: Net 'NET2'
+Net1: Net { name: "NET1", id: "<ID>", properties: {"symbol_name": Value("Symbol1")}, symbol: Value(Symbol { name: "Symbol1", pins: {"1": Value("A")} }) }
+Net2: Net { name: "NET2", id: "<ID>", properties: {"symbol_name": Value("Symbol1")}, symbol: Value(Symbol { name: "Symbol1", pins: {"1": Value("A")} }) }
 Module {
     name: "<root>",
     source: "test.zen",

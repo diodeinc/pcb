@@ -161,3 +161,117 @@ snapshot_eval!(symbol_tilde_pin_name, {
         print(sym)
     "#
 });
+
+snapshot_eval!(symbol_positional_library_name, {
+    "power.kicad_sym" => r##"(kicad_symbol_lib
+        (symbol "GND"
+            (property "Reference" "#PWR" (at 0 0 0))
+            (symbol "GND_0_1"
+                (pin power_in line (at 0 0 0) (length 0) hide
+                    (name "GND" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+        (symbol "VCC"
+            (property "Reference" "#PWR" (at 0 0 0))
+            (symbol "VCC_0_1"
+                (pin power_in line (at 0 0 0) (length 0) hide
+                    (name "VCC" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"##,
+    "test.zen" => r#"
+        # Test using positional argument with library:name format
+        gnd = Symbol("power.kicad_sym:GND")
+        print("GND symbol:", gnd)
+        
+        # Also test with VCC
+        vcc = Symbol("power.kicad_sym:VCC")
+        print("VCC symbol:", vcc)
+    "#
+});
+
+snapshot_eval!(symbol_positional_library_only, {
+    "single_symbol.kicad_sym" => r#"(kicad_symbol_lib
+        (symbol "SingleSymbol"
+            (property "Reference" "U" (at 0 0 0))
+            (symbol "SingleSymbol_0_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                    (name "IN" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"#,
+    "test.zen" => r#"
+        # Test using positional argument with just library path (no colon)
+        sym = Symbol("single_symbol.kicad_sym")
+        print("Symbol:", sym)
+    "#
+});
+
+snapshot_eval!(symbol_positional_with_named_conflict, {
+    "test.kicad_sym" => r#"(kicad_symbol_lib
+        (symbol "TestSymbol"
+            (property "Reference" "U" (at 0 0 0))
+            (symbol "TestSymbol_0_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                    (name "A" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"#,
+    "test.zen" => r#"
+        # Test that mixing positional library:name with named parameters causes error
+        sym = Symbol("test.kicad_sym:TestSymbol", name="OtherName")
+    "#
+});
+
+snapshot_eval!(symbol_positional_invalid_type, {
+    "test.zen" => r#"
+        # Test that non-string positional argument causes error
+        sym = Symbol(123)
+    "#
+});
+
+snapshot_eval!(symbol_positional_empty_name, {
+    "test.kicad_sym" => r#"(kicad_symbol_lib
+        (symbol "TestSymbol"
+            (property "Reference" "U" (at 0 0 0))
+            (symbol "TestSymbol_0_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                    (name "A" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"#,
+    "test.zen" => r#"
+        # Test library:name format with empty name after colon
+        sym = Symbol("test.kicad_sym:")
+    "#
+});
+
+snapshot_eval!(symbol_positional_multiple_colons, {
+    "path:with:colons.kicad_sym" => r#"(kicad_symbol_lib
+        (symbol "TestSymbol"
+            (property "Reference" "U" (at 0 0 0))
+            (symbol "TestSymbol_0_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                    (name "A" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"#,
+    "test.zen" => r#"
+        # Test that we use rfind to split on the last colon
+        # This allows library paths to contain colons
+        sym = Symbol("path:with:colons.kicad_sym:TestSymbol")
+        print("Symbol:", sym)
+    "#
+});

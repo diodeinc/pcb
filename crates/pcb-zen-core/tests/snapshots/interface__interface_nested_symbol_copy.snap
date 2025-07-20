@@ -2,8 +2,8 @@
 source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
-Data net: Net 'SYS_DATA_DATA'
-Power net: Net 'SYS_POWER'
+Data net: Net { name: "SYS_DATA_DATA", id: "<ID>", properties: {"symbol_name": Value("DataSymbol")}, symbol: Value(Symbol { name: "DataSymbol", pins: {"1": Value("DATA"), "2": Value("DATA")} }) }
+Power net: Net { name: "SYS_POWER", id: "<ID>", properties: {"symbol_name": Value("PowerSymbol")}, symbol: Value(Symbol { name: "PowerSymbol", pins: {"1": Value("VCC"), "2": Value("GND")} }) }
 Module {
     name: "<root>",
     source: "test.zen",

@@ -2,9 +2,9 @@
 source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
-Template net: Net 'POWER'
-Instance power net: Net 'PWR_POWER'
-Instance ground net: Net 'PWR_GND'
+Template net: Net { name: "POWER", id: "<ID>", properties: {"symbol_name": Value("PowerSymbol")}, symbol: Value(Symbol { name: "PowerSymbol", pins: {"1": Value("VCC"), "2": Value("GND")} }) }
+Instance power net: Net { name: "PWR_POWER", id: "<ID>", properties: {"symbol_name": Value("PowerSymbol")}, symbol: Value(Symbol { name: "PowerSymbol", pins: {"1": Value("VCC"), "2": Value("GND")} }) }
+Instance ground net: Net { name: "PWR_GND", id: "<ID>", symbol: Value(NoneType) }
 Module {
     name: "<root>",
     source: "test.zen",

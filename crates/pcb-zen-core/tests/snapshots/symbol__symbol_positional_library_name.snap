@@ -1,0 +1,11 @@
+---
+source: crates/pcb-zen-core/tests/symbol.rs
+expression: output
+---
+GND symbol: Symbol { name: "GND", pins: { "1": "GND" } }
+VCC symbol: Symbol { name: "VCC", pins: { "1": "VCC" } }
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

@@ -1,0 +1,10 @@
+---
+source: crates/pcb-zen-core/tests/symbol.rs
+expression: output
+---
+Symbol: Symbol { name: "TestSymbol", pins: { "1": "A" } }
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

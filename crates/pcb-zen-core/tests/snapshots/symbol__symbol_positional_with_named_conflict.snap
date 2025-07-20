@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/symbol.rs
+expression: output
+---
+Error: test.zen:3:7-60 Cannot specify both positional 'library:name' argument and named 'library' or 'name' parameters
