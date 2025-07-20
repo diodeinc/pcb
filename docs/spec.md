@@ -131,14 +131,24 @@ op_amp = Symbol(library = "./symbols/LM358.kicad_sym")
 
 # For multi-symbol libraries, specify which symbol
 mcu = Symbol(library = "./symbols/microcontrollers.kicad_sym", name = "STM32F103")
+
+# Shorthand syntax: library path and symbol name in one string
+gnd = Symbol("@kicad-symbols/power.kicad_sym:GND")
+resistor = Symbol("./symbols/passives.kicad_sym:R_0402")
+
+# For single-symbol libraries, the name can be omitted
+op_amp = Symbol("./symbols/LM358.kicad_sym")
 ```
 
 **Type**: `Symbol`  
-**Constructor**: `Symbol(name=None, definition=None, library=None)`
+**Constructor**: `Symbol(library_spec=None, name=None, definition=None, library=None)`
 
-- `name`: Symbol name (required when loading from multi-symbol library)
+- `library_spec`: (positional) String in format "library_path:symbol_name" or just "library_path" for single-symbol libraries
+- `name`: Symbol name (required when loading from multi-symbol library with named parameters)
 - `definition`: List of (signal_name, [pad_numbers]) tuples
 - `library`: Path to KiCad symbol library file
+
+Note: You cannot mix the positional `library_spec` argument with the named `library` or `name` parameters.
 
 ### Component
 
