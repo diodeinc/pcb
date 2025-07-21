@@ -722,13 +722,15 @@ impl LoadResolver for CoreLoadResolver {
                     .remote_fetcher
                     .fetch_remote(&resolved_spec, self.workspace_root.as_deref())?;
 
+                let canonical_resolved_path = file_provider.canonicalize(&resolved_path)?;
+
                 // Store the mapping from resolved path to original spec
                 self.path_to_spec
                     .lock()
                     .unwrap()
-                    .insert(resolved_path.clone(), resolved_spec.clone());
+                    .insert(canonical_resolved_path.clone(), resolved_spec.clone());
 
-                Ok(resolved_path)
+                Ok(canonical_resolved_path)
             }
 
             // Workspace-relative paths (starts with //)

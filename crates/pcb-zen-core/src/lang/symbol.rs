@@ -484,7 +484,11 @@ pub fn load_symbols_from_library(
 
     // Parse library without resolving extends
     let kicad_library = KicadSymbolLibrary::from_string_lazy(&contents).map_err(|e| {
-        starlark::Error::new_other(anyhow!("Failed to parse symbol library: {}", e))
+        starlark::Error::new_other(anyhow!(
+            "Failed to parse symbol library {}: {}",
+            path.display(),
+            e
+        ))
     })?;
 
     // Get all symbols and resolve them eagerly for now (to maintain compatibility)
