@@ -25,7 +25,7 @@ use starlark::{
 use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::input::{convert_from_starlark, InputMap, InputValue};
+use crate::lang::input::{convert_from_starlark, InputMap};
 use crate::Diagnostic;
 use starlark::values::dict::DictRef;
 
