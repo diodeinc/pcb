@@ -469,29 +469,10 @@ impl Module {
             .as_ref()
             .and_then(|output| output.sch_module.to_schematic().ok());
 
-        let parameters = result.output.as_ref().map(|output| {
-            output
-                .signature
-                .iter()
-                .map(|param_info| Parameter {
-                    name: param_info.name.clone(),
-                    param_type: format!("{:?}", param_info.type_info),
-                    required: param_info.required,
-                    is_config: param_info.is_config(),
-                    is_enum: matches!(
-                        param_info.type_info,
-                        pcb_zen_core::lang::type_info::TypeInfo::Enum { .. }
-                    ),
-                    enum_values: match &param_info.type_info {
-                        pcb_zen_core::lang::type_info::TypeInfo::Enum { variants, .. } => {
-                            Some(variants.clone())
-                        }
-                        _ => None,
-                    },
-                    type_info: param_info.type_info.clone(),
-                })
-                .collect()
-        });
+        let parameters = result
+            .output
+            .as_ref()
+            .map(|output| output.signature.clone());
 
         // Build evaluation result
         let evaluation_result = EvaluationResult {
@@ -559,17 +540,6 @@ impl Module {
 // Data structures for serialization
 
 #[derive(Serialize, Deserialize)]
-pub struct Parameter {
-    name: String,
-    param_type: String,
-    required: bool,
-    is_config: bool,                  // true for config params, false for io params
-    is_enum: bool,                    // true if this is an enum type
-    enum_values: Option<Vec<String>>, // possible enum values if available
-    type_info: pcb_zen_core::lang::type_info::TypeInfo, // Full structured type information
-}
-
-#[derive(Serialize, Deserialize)]
 pub struct DiagnosticInfo {
     pub level: String,
     pub message: String,
@@ -581,7 +551,7 @@ pub struct DiagnosticInfo {
 #[derive(Serialize, Deserialize)]
 pub struct EvaluationResult {
     pub success: bool,
-    pub parameters: Option<Vec<Parameter>>,
+    pub parameters: Option<Vec<pcb_zen_core::lang::type_info::ParameterInfo>>,
     pub schematic: Option<String>,
     pub diagnostics: Vec<DiagnosticInfo>,
 }
