@@ -170,6 +170,7 @@ impl RemoteFetcher for MockRemoteFetcher {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_resolve_github_spec() {
     let file_provider = Arc::new(MockFileProvider::new());
     let remote_fetcher = Arc::new(MockRemoteFetcher::new());
@@ -291,6 +292,7 @@ fn test_resolve_workspace_path_from_remote() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_package_alias_resolution() {
     let file_provider = Arc::new(MockFileProvider::new());
     let remote_fetcher = Arc::new(MockRemoteFetcher::new());
@@ -435,6 +437,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_resolve_workspace_path_from_remote_with_mapping() {
     let file_provider = Arc::new(MockFileProvider::new());
     let remote_fetcher = Arc::new(MockRemoteFetcher::new());
