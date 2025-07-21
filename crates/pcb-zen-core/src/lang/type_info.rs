@@ -202,7 +202,8 @@ pub struct ParameterInfo {
     pub name: String,
     pub type_info: TypeInfo,
     pub required: bool,
-    pub default_value: Option<String>,
+    pub default_value: Option<crate::lang::input::InputValue>,
+    pub help: Option<String>,
 }
 
 impl ParameterInfo {

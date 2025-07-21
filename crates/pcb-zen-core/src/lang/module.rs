@@ -9,7 +9,7 @@ use starlark::environment::FrozenModule;
 use starlark::values::enumeration::{EnumType, EnumValue, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::{TypeCompiled, TypeType};
-use starlark::values::{Heap, UnpackValue};
+use starlark::values::{Heap, UnpackValue, ValueLifetimeless};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -25,7 +25,7 @@ use starlark::{
 use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::input::{convert_from_starlark, InputMap};
+use crate::lang::input::{convert_from_starlark, InputMap, InputValue};
 use crate::Diagnostic;
 use starlark::values::dict::DictRef;
 
@@ -40,16 +40,74 @@ pub struct MissingInputError {
     name: String,
 }
 
+/// Metadata for a module parameter (from io() or config() calls)
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct ParameterMetadataGen<V: ValueLifetimeless> {
+    /// Parameter name
+    pub name: String,
+    /// Type value (e.g., Net, str, int, etc.)
+    pub type_value: V,
+    /// Whether the parameter is optional
+    pub optional: bool,
+    /// Default value if provided
+    pub default_value: Option<V>,
+    /// Whether this is a config parameter (vs io parameter)
+    pub is_config: bool,
+    /// Help text describing the parameter
+    pub help: Option<String>,
+}
+
+// Manual because no instance for Option<V>
+unsafe impl<From: Coerce<To> + ValueLifetimeless, To: ValueLifetimeless>
+    Coerce<ParameterMetadataGen<To>> for ParameterMetadataGen<From>
+{
+}
+
+starlark_complex_value!(pub ParameterMetadata);
+
+#[starlark_value(type = "ParameterMetadata")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ParameterMetadataGen<V> where
+    Self: ProvidesStaticType<'v>
+{
+}
+
+impl<'v, V: ValueLike<'v>> std::fmt::Display for ParameterMetadataGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ParameterMetadata({})", self.name)
+    }
+}
+
+impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
+    pub fn new(
+        name: String,
+        type_value: V,
+        optional: bool,
+        default_value: Option<V>,
+        is_config: bool,
+        help: Option<String>,
+    ) -> Self {
+        Self {
+            name,
+            type_value,
+            optional,
+            default_value,
+            is_config,
+            help,
+        }
+    }
+}
+
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct ModuleValueGen<V> {
+pub struct ModuleValueGen<V: ValueLifetimeless> {
     name: String,
     source_path: String,
     inputs: SmallMap<String, V>,
     children: Vec<V>,
     properties: SmallMap<String, V>,
-    /// Ordered list of (parameter_name, type_value) pairs representing the module's signature
-    signature: Vec<(String, V)>,
+    /// Ordered list of parameter metadata representing the module's signature
+    signature: Vec<ParameterMetadataGen<V>>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -146,16 +204,31 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         self.name = name;
     }
 
-    /// Add a parameter to the module's signature.
-    pub fn add_signature_param(&mut self, name: String, type_value: V) {
+    /// Add a parameter to the module's signature with full metadata.
+    pub fn add_parameter_metadata(
+        &mut self,
+        name: String,
+        type_value: V,
+        optional: bool,
+        default_value: Option<V>,
+        is_config: bool,
+        help: Option<String>,
+    ) {
         // Check if this parameter already exists
-        if !self.signature.iter().any(|(n, _)| n == &name) {
-            self.signature.push((name, type_value));
+        if !self.signature.iter().any(|p| p.name == name) {
+            self.signature.push(ParameterMetadataGen::new(
+                name,
+                type_value,
+                optional,
+                default_value,
+                is_config,
+                help,
+            ));
         }
     }
 
     /// Get the module's signature.
-    pub fn signature(&self) -> &Vec<(String, V)> {
+    pub fn signature(&self) -> &Vec<ParameterMetadataGen<V>> {
         &self.signature
     }
 }
@@ -363,7 +436,7 @@ where
                         fctx.module
                             .signature()
                             .iter()
-                            .map(|(name, _)| name.clone())
+                            .map(|param| param.name.clone())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -690,12 +763,20 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = pos)] typ: Value<'v>,
         #[starlark(require = named)] default: Option<Value<'v>>, // explicit default provided by caller
         #[starlark(require = named)] optional: Option<bool>, // if true, the placeholder is not required
+        #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         // Record that this placeholder was referenced in the module's signature
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
-            module.add_signature_param(name.clone(), typ);
+            module.add_parameter_metadata(
+                name.clone(),
+                typ,
+                optional.unwrap_or(false),
+                default,
+                false, // is_config = false for io()
+                help,
+            );
         }
 
         // 1. Value supplied by the parent module.
@@ -782,12 +863,20 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] default: Option<Value<'v>>,
         #[starlark(require = named)] convert: Option<Value<'v>>,
         #[starlark(require = named)] optional: Option<bool>,
+        #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         // Record usage in the module's signature
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
-            module.add_signature_param(name.clone(), typ);
+            module.add_parameter_metadata(
+                name.clone(),
+                typ,
+                optional.unwrap_or(false),
+                default,
+                true, // is_config = true for config()
+                help,
+            );
         }
 
         // 1. Value supplied by the parent module.
@@ -887,9 +976,9 @@ pub fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> M
             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
         {
             // Get the signature from the module
-            for (param_name, param_type) in extra.module.signature().iter() {
-                params.push(param_name.clone());
-                param_types.insert(param_name.clone(), param_type.to_string());
+            for param in extra.module.signature().iter() {
+                params.push(param.name.clone());
+                param_types.insert(param.name.clone(), param.type_value.to_string());
             }
         }
     }

@@ -643,8 +643,8 @@ impl EvalContext {
                             .extra_value()
                             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
                         {
-                            for (param_name, _) in extra.module.signature().iter() {
-                                params.push(param_name.clone());
+                            for param in extra.module.signature().iter() {
+                                params.push(param.name.clone());
                             }
                         }
                         params.sort();
@@ -658,8 +658,9 @@ impl EvalContext {
                             .extra_value()
                             .and_then(|e| e.downcast_ref::<FrozenContextValue>())
                         {
-                            for (param_name, param_type) in extra.module.signature().iter() {
-                                param_types.insert(param_name.clone(), param_type.to_string());
+                            for param in extra.module.signature().iter() {
+                                param_types
+                                    .insert(param.name.clone(), param.type_value.to_string());
                             }
                         }
                         param_types
@@ -928,18 +929,24 @@ impl EvalContext {
                         .module
                         .signature()
                         .iter()
-                        .map(|(name, frozen_type_value)| {
+                        .map(|param| {
                             use crate::lang::type_info::{ParameterInfo, TypeInfo};
 
                             // Convert frozen value to regular value for introspection
-                            let type_value = frozen_type_value.to_value();
+                            let type_value = param.type_value.to_value();
                             let type_info = TypeInfo::from_value(type_value, &heap);
 
+                            // Convert default value to InputValue if present
+                            let default_value = param.default_value.as_ref().map(|v| {
+                                crate::lang::input::convert_from_starlark(v.to_value(), &heap)
+                            });
+
                             ParameterInfo {
-                                name: name.clone(),
+                                name: param.name.clone(),
                                 type_info,
-                                required: true,      // For now, all are required
-                                default_value: None, // We don't have default value info yet
+                                required: !param.optional,
+                                default_value,
+                                help: param.help.clone(),
                             }
                         })
                         .collect();

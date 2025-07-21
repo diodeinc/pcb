@@ -338,11 +338,14 @@ impl ModuleConverter {
         }
 
         // Process the module's signature (io() parameters) and add them as children
-        for (param_name, param_type) in module.signature().iter() {
-            let param_inst_ref = instance_ref.append(param_name.clone());
+        for param in module.signature().iter() {
+            let param_inst_ref = instance_ref.append(param.name.clone());
 
             // Check if this is a Net type
-            if let Some(net) = param_type.downcast_ref::<crate::lang::net::FrozenNetValue>() {
+            if let Some(net) = param
+                .type_value
+                .downcast_ref::<crate::lang::net::FrozenNetValue>()
+            {
                 // Create a port instance for the net
                 let port_inst = Instance::port(type_modref.clone());
 
@@ -352,19 +355,20 @@ impl ModuleConverter {
                 // Add the port instance to the schematic
                 self.schematic
                     .add_instance(param_inst_ref.clone(), port_inst);
-                inst.add_child(param_name.clone(), param_inst_ref);
+                inst.add_child(param.name.clone(), param_inst_ref);
             }
             // Check if this is an Interface type
-            else if let Some(_interface) =
-                param_type.downcast_ref::<crate::lang::interface::FrozenInterfaceValue>()
-            {
+            else if let Some(_interface) = param
+                .type_value
+                .downcast_ref::<crate::lang::interface::FrozenInterfaceValue>(
+            ) {
                 // Create an interface instance
                 let interface_inst = Instance::interface(type_modref.clone());
 
                 // Add the interface instance to the schematic
                 self.schematic
                     .add_instance(param_inst_ref.clone(), interface_inst);
-                inst.add_child(param_name.clone(), param_inst_ref);
+                inst.add_child(param.name.clone(), param_inst_ref);
             }
             // For other types (like enums, records, etc.), we skip them for now
             // as they're not represented in the schematic

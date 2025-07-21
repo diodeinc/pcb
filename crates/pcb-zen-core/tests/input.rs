@@ -540,3 +540,48 @@ snapshot_eval!(config_convert_with_enum, {
         )
     "#
 });
+
+snapshot_eval!(io_config_with_help_text, {
+    "Module.zen" => r#"
+        # Test io() and config() with help parameter
+        
+        # IO with help text
+        power = io("power", Net, help = "Main power supply net")
+        data = io("data", Net, optional = True, help = "Optional data line")
+        
+        # Config with help text
+        baud_rate = config("baud_rate", int, default = 9600, help = "Serial communication baud rate")
+        device_name = config("device_name", str, help = "Human-readable device identifier")
+        
+        # Optional config with help
+        debug_mode = config("debug_mode", bool, optional = True, help = "Enable debug logging")
+        
+        # Config with converter and help
+        def parse_voltage(s):
+            if type(s) == "string" and s.endswith("V"):
+                return float(s[:-1])
+            return s
+        
+        voltage = config("voltage", float, default = 3.3, convert = parse_voltage, help = "Operating voltage in volts")
+        
+        # Add a component to make the module valid
+        Component(
+            name = "test",
+            footprint = "TEST:0402",
+            pin_defs = {"PWR": "1", "GND": "2"},
+            pins = {"PWR": power, "GND": Net("GND")},
+        )
+    "#,
+    "top.zen" => r#"
+        load(".", "Module")
+        
+        # Create module instance with some parameters
+        Module(
+            name = "U1",
+            power = Net("VCC"),
+            baud_rate = 115200,
+            device_name = "TestDevice",
+            voltage = "5V",  # This will be converted to 5.0
+        )
+    "#
+});

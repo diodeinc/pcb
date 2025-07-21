@@ -11,7 +11,7 @@ use std::fmt;
 
 use allocative::Allocative;
 use anyhow::anyhow;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use starlark::collections::SmallMap;
 use starlark::eval::Evaluator;
 use starlark::values::dict::DictRef;
@@ -23,7 +23,7 @@ use super::interface::{FrozenInterfaceFactory, InterfaceFactory};
 
 /// A heap-agnostic representation of a Starlark value that can be recreated on
 /// any heap later.
-#[derive(Debug, Clone, Trace, Allocative, Serialize)]
+#[derive(Debug, Clone, Trace, Allocative, Serialize, Deserialize)]
 #[repr(C)]
 pub enum InputValue {
     None,
