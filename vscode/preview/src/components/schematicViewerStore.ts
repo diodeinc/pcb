@@ -8,11 +8,7 @@ import {
   createSchematicEdge,
 } from "./ReactFlowSchematicViewer";
 import type { NodePositions, SchematicConfig } from "../LayoutEngine";
-import {
-  SchematicLayoutEngine,
-  snapToGrid,
-  snapPosition,
-} from "../LayoutEngine";
+import { SchematicLayoutEngine, snapPosition } from "../LayoutEngine";
 import { debounce, isEqual } from "lodash";
 import type { Netlist } from "../types/NetlistTypes";
 

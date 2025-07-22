@@ -9,17 +9,9 @@ import {
   SExpr,
   SExprString,
   SExprAtom,
-  SExprValue,
 } from "./sexpr";
-import {
-  ElkGraph,
-  ElkNode,
-  ElkEdge,
-  ElkPort,
-  NodeType,
-  snapToGrid,
-} from "./LayoutEngine";
-import { InstanceKind, NetKind } from "./types/NetlistTypes";
+import type { ElkGraph, ElkNode } from "./LayoutEngine";
+import { NodeType, snapToGrid } from "./LayoutEngine";
 import { v5 as uuidv5 } from "uuid";
 
 interface ParsedProperty {
@@ -1140,7 +1132,7 @@ export class KicadSchematicGenerator {
             globalLabel.add(
               property(
                 "Intersheetrefs",
-                "${INTERSHEET_REFS}",
+                "\\${INTERSHEET_REFS}",
                 at(kicadX + intersheetOffsetX, kicadY + intersheetOffsetY, 0),
                 sexpr(
                   "effects",

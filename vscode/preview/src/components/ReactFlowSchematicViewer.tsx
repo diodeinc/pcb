@@ -104,34 +104,7 @@ const edgeColor = DEFAULT_THEME.wire.to_css(); // This is the KiCad green wire c
 const backgroundColor = DEFAULT_THEME.background.to_css();
 const labelColor = DEFAULT_THEME.reference.to_css();
 
-// Helper function to rotate a point around a center
-function rotatePoint(
-  x: number,
-  y: number,
-  centerX: number,
-  centerY: number,
-  angleDegrees: number
-): { x: number; y: number } {
-  const angleRadians = (angleDegrees * Math.PI) / 180;
-  const cos = Math.cos(angleRadians);
-  const sin = Math.sin(angleRadians);
-
-  // Translate point to origin
-  const translatedX = x - centerX;
-  const translatedY = y - centerY;
-
-  // Rotate
-  const rotatedX = translatedX * cos - translatedY * sin;
-  const rotatedY = translatedX * sin + translatedY * cos;
-
-  // Translate back
-  return {
-    x: rotatedX + centerX,
-    y: rotatedY + centerY,
-  };
-}
-
-// Helper function to get text anchor and baseline based on rotation
+// Helper function to get text alignment based on rotation
 function getTextAlignmentForRotation(rotation: number): {
   textAnchor: "start" | "middle" | "end";
   dominantBaseline: "hanging" | "middle" | "baseline";
@@ -955,14 +928,6 @@ const SymbolNode = React.memo(function SymbolNode({
 
         // Get text alignment based on rotation
         const alignment = getTextAlignmentForRotation(rotation);
-
-        // Adjust CSS text-align based on text anchor
-        const cssTextAlign =
-          alignment.textAnchor === "start"
-            ? "left"
-            : alignment.textAnchor === "end"
-            ? "right"
-            : "center";
 
         // For 180° rotation, we want to flip the text both horizontally and vertically
         // This is equivalent to rotating the text by 180° around its center

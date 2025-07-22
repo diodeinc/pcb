@@ -337,7 +337,6 @@ function serializeToString(
   options: Required<SerializeOptions>,
   depth: number
 ): string {
-  const currentIndent = options.pretty ? options.indent.repeat(depth) : "";
   const nextIndent = options.pretty ? options.indent.repeat(depth + 1) : "";
 
   // Check if we should use single-line format

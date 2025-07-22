@@ -6,7 +6,6 @@ import type {
   AttributeValue,
   Net,
   Instance,
-  NetKind,
 } from "./types/NetlistTypes";
 import { getKicadSymbolInfo } from "./renderer/kicad_sym";
 import * as LZString from "lz-string";
