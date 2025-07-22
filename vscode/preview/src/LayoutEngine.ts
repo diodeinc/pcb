@@ -625,6 +625,9 @@ export class SchematicLayoutEngine {
         decomposedHyperedges
       );
 
+      // Helper to create position key
+      const posKey = (x: number, y: number): string => `${x},${y}`;
+
       // Simple 1:1 mapping - each libavoid edge becomes one ELK edge
       const newEdges: ElkEdge[] = [];
 
@@ -684,6 +687,12 @@ export class SchematicLayoutEngine {
           continue;
         }
 
+        // Restore original positions for edge points
+        const restoredPoints = this._restoreOriginalPositions(
+          routedEdge.points,
+          connectivityInfo.positionMapping
+        );
+
         // Create the ELK edge using context information
         const elkEdge: ElkEdge = {
           id: routedEdge.id,
@@ -696,9 +705,9 @@ export class SchematicLayoutEngine {
           sections: [
             {
               id: `${routedEdge.id}_section`,
-              startPoint: routedEdge.points[0],
-              endPoint: routedEdge.points[routedEdge.points.length - 1],
-              bendPoints: routedEdge.points.slice(1, -1),
+              startPoint: restoredPoints[0],
+              endPoint: restoredPoints[restoredPoints.length - 1],
+              bendPoints: restoredPoints.slice(1, -1),
             },
           ],
           properties: {
@@ -732,9 +741,18 @@ export class SchematicLayoutEngine {
         } | null = null;
 
         for (const { routedEdge, elkEdge } of mstEdges) {
-          const labelPosition = this._findLongestSegmentMidpoint(
-            routedEdge.points
-          );
+          // Use the restored points from the ELK edge sections
+          const section = elkEdge.sections?.[0];
+          if (!section) continue;
+
+          const restoredPoints = [
+            section.startPoint,
+            ...(section.bendPoints || []),
+            section.endPoint,
+          ];
+
+          const labelPosition =
+            this._findLongestSegmentMidpoint(restoredPoints);
           if (labelPosition) {
             if (
               !longestSegmentInfo ||
@@ -773,9 +791,11 @@ export class SchematicLayoutEngine {
             labelX -= labelDimensions.width / 2;
             labelY -= labelDimensions.height / 2 + labelOffset;
           } else {
-            // Center label vertically, place to the right of the line
-            labelX += labelOffset;
-            labelY -= labelDimensions.height / 2;
+            // For vertical segments with rotated text:
+            // When text is rotated -90 degrees, its height becomes its visual width
+            // We want to offset the label from the edge by the text height plus some padding
+            labelX -= labelDimensions.height - 5; // Offset by text height (which becomes width when rotated)
+            labelY += labelDimensions.width / 2; // Position at the center of where the rotated text will be
           }
 
           longestSegmentInfo.edge.labels = [
@@ -787,6 +807,9 @@ export class SchematicLayoutEngine {
               height: labelDimensions.height,
               properties: {
                 labelType: "netName",
+                isVertical: !longestSegmentInfo.position.isHorizontal
+                  ? "true"
+                  : "false",
               },
             },
           ];
@@ -1639,11 +1662,16 @@ export class SchematicLayoutEngine {
     hyperedges: Hyperedge[];
     elkEdges: ElkEdge[];
     portsWithEdges: Set<string>;
+    positionMapping: Map<string, { x: number; y: number }>; // Maps "x,y" -> original position
   } {
     // Track which ports have edges so we can optionally hide their labels
     const portsWithEdges = new Set<string>();
     const hyperedges: Hyperedge[] = [];
     const elkEdges: ElkEdge[] = [];
+    const positionMapping = new Map<string, { x: number; y: number }>();
+
+    // Helper to create position key
+    const posKey = (x: number, y: number): string => `${x},${y}`;
 
     // First pass: Add net information to ports
     for (const [netId, net] of this.nets.entries()) {
@@ -1749,27 +1777,53 @@ export class SchematicLayoutEngine {
           );
 
           if (symbolPortPosition) {
+            // Get visibility directions for both ports
+            const portVisDir = this._getPortVisibilityDirection(
+              port,
+              node.rotation
+            );
+            const symbolPortVisDir = this._getPortVisibilityDirection(
+              closestSymbolPort,
+              closestSymbol.rotation
+            );
+
+            // Bump port positions outward by 2px for libavoid
+            const bumpedPortPosition = this._bumpPortPositionOutward(
+              portPosition,
+              portVisDir,
+              2
+            );
+            const bumpedSymbolPortPosition = this._bumpPortPositionOutward(
+              symbolPortPosition,
+              symbolPortVisDir,
+              2
+            );
+
+            // Store mapping from bumped to original positions
+            positionMapping.set(
+              posKey(bumpedPortPosition.x, bumpedPortPosition.y),
+              portPosition
+            );
+            positionMapping.set(
+              posKey(bumpedSymbolPortPosition.x, bumpedSymbolPortPosition.y),
+              symbolPortPosition
+            );
+
             // Create hyperedge for libavoid
             const hyperedge: Hyperedge = {
               id: edgeId,
               ports: [
                 {
                   id: port.id,
-                  x: portPosition.x,
-                  y: portPosition.y,
-                  visibilityDirection: this._getPortVisibilityDirection(
-                    port,
-                    node.rotation
-                  ),
+                  x: bumpedPortPosition.x,
+                  y: bumpedPortPosition.y,
+                  visibilityDirection: portVisDir,
                 },
                 {
                   id: closestSymbolPort.id,
-                  x: symbolPortPosition.x,
-                  y: symbolPortPosition.y,
-                  visibilityDirection: this._getPortVisibilityDirection(
-                    closestSymbolPort,
-                    closestSymbol.rotation
-                  ),
+                  x: bumpedSymbolPortPosition.x,
+                  y: bumpedSymbolPortPosition.y,
+                  visibilityDirection: symbolPortVisDir,
                 },
               ],
               context: {
@@ -1813,15 +1867,29 @@ export class SchematicLayoutEngine {
           const edgeId = `net_${netId}_cluster_${edgeCounter++}`;
 
           // Collect all ports in the cluster with their positions and visibility directions
-          const ports: Port[] = cluster.map(({ node, port, position }) => ({
-            id: port.id,
-            x: position.x,
-            y: position.y,
-            visibilityDirection: this._getPortVisibilityDirection(
+          const ports: Port[] = cluster.map(({ node, port, position }) => {
+            const visDir = this._getPortVisibilityDirection(
               port,
               node.rotation
-            ),
-          }));
+            );
+            // Bump port position outward by 2px for libavoid
+            const bumpedPosition = this._bumpPortPositionOutward(
+              position,
+              visDir,
+              2
+            );
+            // Store mapping from bumped to original position
+            positionMapping.set(
+              posKey(bumpedPosition.x, bumpedPosition.y),
+              position
+            );
+            return {
+              id: port.id,
+              x: bumpedPosition.x,
+              y: bumpedPosition.y,
+              visibilityDirection: visDir,
+            };
+          });
 
           // Create hyperedge for libavoid with context
           const hyperedge: Hyperedge = {
@@ -1888,7 +1956,7 @@ export class SchematicLayoutEngine {
       }
     }
 
-    return { hyperedges, elkEdges, portsWithEdges };
+    return { hyperedges, elkEdges, portsWithEdges, positionMapping };
   }
 
   /**
@@ -2098,6 +2166,40 @@ export class SchematicLayoutEngine {
       x: nodeX + portX,
       y: nodeY + portY,
     };
+  }
+
+  /**
+   * Bump port position outward by a given offset based on its visibility direction
+   */
+  private _bumpPortPositionOutward(
+    position: { x: number; y: number },
+    visibilityDirection:
+      | "NORTH"
+      | "SOUTH"
+      | "EAST"
+      | "WEST"
+      | "ALL"
+      | undefined,
+    offset: number
+  ): { x: number; y: number } {
+    // If no direction or ALL, return original position
+    if (!visibilityDirection || visibilityDirection === "ALL") {
+      return position;
+    }
+
+    // Bump outward based on visibility direction
+    switch (visibilityDirection) {
+      case "NORTH":
+        return { x: position.x, y: position.y - offset };
+      case "SOUTH":
+        return { x: position.x, y: position.y + offset };
+      case "EAST":
+        return { x: position.x + offset, y: position.y };
+      case "WEST":
+        return { x: position.x - offset, y: position.y };
+      default:
+        return position;
+    }
   }
 
   /**
@@ -3260,5 +3362,51 @@ export class SchematicLayoutEngine {
     }
 
     return { minX, minY, maxX, maxY };
+  }
+
+  /**
+   * Add segments from transformed positions back to original positions
+   */
+  private _restoreOriginalPositions(
+    points: { x: number; y: number }[],
+    positionMapping: Map<string, { x: number; y: number }>
+  ): { x: number; y: number }[] {
+    const posKey = (x: number, y: number): string => `${x},${y}`;
+
+    if (points.length < 2) return points;
+
+    const result: { x: number; y: number }[] = [];
+
+    // Process first point
+    const firstKey = posKey(points[0].x, points[0].y);
+    const firstOriginal = positionMapping.get(firstKey);
+
+    if (firstOriginal) {
+      // Add original position first, then the transformed position
+      result.push(firstOriginal);
+      result.push(points[0]);
+    } else {
+      result.push(points[0]);
+    }
+
+    // Add all middle points unchanged
+    for (let i = 1; i < points.length - 1; i++) {
+      result.push(points[i]);
+    }
+
+    // Process last point
+    const lastPoint = points[points.length - 1];
+    const lastKey = posKey(lastPoint.x, lastPoint.y);
+    const lastOriginal = positionMapping.get(lastKey);
+
+    if (lastOriginal) {
+      // Add transformed position first, then the original position
+      result.push(lastPoint);
+      result.push(lastOriginal);
+    } else {
+      result.push(lastPoint);
+    }
+
+    return result;
   }
 }

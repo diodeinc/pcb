@@ -15,7 +15,7 @@
   min-height: 500px;
   position: relative;
   background-color: var(--schematic-background);
-  border-radius: 4px;
+  border-radius: 0;
   padding: 0;
   display: flex;
   justify-content: center;

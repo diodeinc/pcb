@@ -1072,21 +1072,35 @@ const ElectricalEdge = ({
     <>
       {/* Render edge labels first so they appear behind */}
       <g className="electrical-edge-labels-group">
-        {edgeLabels.map((label, index) => (
-          <text
-            key={`${id}-label-${index}`}
-            x={(label.x || 0) + (label.width || 0) / 2}
-            y={(label.y || 0) + (label.height || 0) / 2}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fontSize="12.7px"
-            fill={labelColor}
-            fontFamily="Newstroke, 'Courier New', monospace"
-            className="electrical-edge-label"
-          >
-            {label.text}
-          </text>
-        ))}
+        {edgeLabels.map((label, index) => {
+          const isVertical = label.properties?.isVertical === "true";
+          // For non-rotated labels, center them. For rotated labels, use the position as-is
+          const labelX = isVertical
+            ? label.x || 0
+            : (label.x || 0) + (label.width || 0) / 2;
+          const labelY = isVertical
+            ? label.y || 0
+            : (label.y || 0) + (label.height || 0) / 2;
+
+          return (
+            <text
+              key={`${id}-label-${index}`}
+              x={labelX}
+              y={labelY}
+              textAnchor={isVertical ? "start" : "middle"}
+              dominantBaseline="middle"
+              fontSize="12.7px"
+              fill={labelColor}
+              fontFamily="Newstroke, 'Courier New', monospace"
+              className="electrical-edge-label"
+              transform={
+                isVertical ? `rotate(-90, ${labelX}, ${labelY})` : undefined
+              }
+            >
+              {label.text}
+            </text>
+          );
+        })}
       </g>
 
       {/* Render paths and junctions on top */}

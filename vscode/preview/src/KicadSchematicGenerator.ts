@@ -26,6 +26,7 @@ export class KicadSchematicGenerator {
   private symbolCounter = 0;
   private usedSymbols = new Map<string, string>(); // Map from lib_id to symbol content
   private parsedSymbols = new Map<string, Map<string, ParsedProperty>>(); // Map from lib_id to property map
+  private centeringOffset: { x: number; y: number } | null = null;
 
   // UUID namespace for URL (same as Rust's Uuid::NAMESPACE_URL)
   private static readonly UUID_NAMESPACE_URL =
@@ -312,11 +313,6 @@ export class KicadSchematicGenerator {
           } else {
             symbolExpr.values.unshift(quoted(libId));
           }
-
-          // Remove any pin_names structure
-          symbolExpr.removeWhere((value) => {
-            return value instanceof SExpr && value.name === "pin_names";
-          });
         }
 
         libSymbols.add(symbolExpr);
@@ -333,6 +329,24 @@ export class KicadSchematicGenerator {
 
     // Collect all symbols used in the graph
     this.collectUsedSymbols(graph);
+
+    // Calculate the bounds of all elements
+    const bounds = this.calculateGraphBounds(graph);
+
+    // Calculate centering offset for A4 page
+    // A4 is 297mm x 210mm, but we typically use a centered area
+    // KiCad's default working area is roughly centered with some margins
+    const pageWidth = 297; // A4 width in mm
+    const pageHeight = 210; // A4 height in mm
+    const contentWidth = bounds.maxX - bounds.minX;
+    const contentHeight = bounds.maxY - bounds.minY;
+
+    // Center the content on the page
+    const centerOffsetX = (pageWidth - contentWidth) / 2 - bounds.minX;
+    const centerOffsetY = (pageHeight - contentHeight) / 2 - bounds.minY;
+
+    // Store the centering offset for use in generation methods
+    this.centeringOffset = { x: centerOffsetX, y: centerOffsetY };
 
     // Generate lib_symbols section
     const libSymbols = this.generateLibSymbols();
@@ -357,6 +371,79 @@ export class KicadSchematicGenerator {
     result.push(...globalLabels);
 
     return result;
+  }
+
+  private calculateGraphBounds(graph: ElkGraph): {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  } {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    // Process nodes
+    if (graph.children) {
+      for (const node of graph.children) {
+        if (node.type === NodeType.SYMBOL) {
+          const x = (node.x || 0) + (node.width || 0) / 2;
+          const y = (node.y || 0) + (node.height || 0) / 2;
+
+          // Account for symbol bbox center offset
+          let centerX = x;
+          let centerY = y;
+          if (node.symbolBboxCenter) {
+            const symbolScale = 10;
+            centerX -= node.symbolBboxCenter.x * symbolScale;
+            centerY -= node.symbolBboxCenter.y * symbolScale;
+          }
+
+          // Convert to mm
+          const kicadX = centerX * 0.1;
+          const kicadY = centerY * 0.1;
+
+          // Estimate symbol size (rough approximation)
+          const symbolSize = 10; // mm
+          minX = Math.min(minX, kicadX - symbolSize);
+          minY = Math.min(minY, kicadY - symbolSize);
+          maxX = Math.max(maxX, kicadX + symbolSize);
+          maxY = Math.max(maxY, kicadY + symbolSize);
+        }
+      }
+    }
+
+    // Process edges to include wire endpoints
+    for (const edge of graph.edges) {
+      if (edge.sections) {
+        for (const section of edge.sections) {
+          const points = [
+            section.startPoint,
+            ...(section.bendPoints || []),
+            section.endPoint,
+          ];
+
+          for (const point of points) {
+            const x = point.x * 0.1; // Convert to mm
+            const y = point.y * 0.1;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      }
+    }
+
+    // Add some padding
+    const padding = 10; // mm
+    return {
+      minX: minX - padding,
+      minY: minY - padding,
+      maxX: maxX + padding,
+      maxY: maxY + padding,
+    };
   }
 
   private generateSymbols(graph: ElkGraph): SExpr[] {
@@ -425,8 +512,14 @@ export class KicadSchematicGenerator {
     // KiCad uses mm, where 1mm = 1 unit in the schematic editor
     // So we need to divide by 10 to get back to mm
     const scale = 0.1; // Convert from layout pixels to mm
-    const kicadX = centerX * scale;
-    const kicadY = centerY * scale;
+    let kicadX = centerX * scale;
+    let kicadY = centerY * scale;
+
+    // Apply centering offset if available
+    if (this.centeringOffset) {
+      kicadX += this.centeringOffset.x;
+      kicadY += this.centeringOffset.y;
+    }
 
     // Generate UUID based on hierarchical name (node ID)
     const symbolUuid = this.generateUUID(node.id);
@@ -474,6 +567,10 @@ export class KicadSchematicGenerator {
       const labelX = ((node.x || 0) + rotatedPos.x) * scale;
       const labelY = ((node.y || 0) + rotatedPos.y) * scale;
 
+      // Apply centering offset to label position
+      const offsetLabelX = labelX + (this.centeringOffset?.x || 0);
+      const offsetLabelY = labelY + (this.centeringOffset?.y || 0);
+
       // Labels should always be upright (rotation 0) for readability
       const propAngle = 0;
 
@@ -486,7 +583,12 @@ export class KicadSchematicGenerator {
       refEffects.add(sexpr("justify", atom("left"), atom("top")));
 
       symbol.add(
-        property("Reference", refDes, at(labelX, labelY, propAngle), refEffects)
+        property(
+          "Reference",
+          refDes,
+          at(offsetLabelX, offsetLabelY, propAngle),
+          refEffects
+        )
       );
     } else {
       // Fallback to parsed position or hardcoded
@@ -553,6 +655,10 @@ export class KicadSchematicGenerator {
         const labelX = ((node.x || 0) + rotatedPos.x) * scale;
         const labelY = ((node.y || 0) + rotatedPos.y) * scale;
 
+        // Apply centering offset to label position
+        const offsetLabelX = labelX + (this.centeringOffset?.x || 0);
+        const offsetLabelY = labelY + (this.centeringOffset?.y || 0);
+
         // Labels should always be upright (rotation 0) for readability
         const propAngle = 0;
 
@@ -565,7 +671,12 @@ export class KicadSchematicGenerator {
         valueEffects.add(sexpr("justify", atom("left"), atom("top")));
 
         symbol.add(
-          property("Value", value, at(labelX, labelY, propAngle), valueEffects)
+          property(
+            "Value",
+            value,
+            at(offsetLabelX, offsetLabelY, propAngle),
+            valueEffects
+          )
         );
       } else {
         // Fallback to parsed position or hardcoded
@@ -637,6 +748,10 @@ export class KicadSchematicGenerator {
         const labelX = ((node.x || 0) + rotatedPos.x) * scale;
         const labelY = ((node.y || 0) + rotatedPos.y) * scale;
 
+        // Apply centering offset to label position
+        const offsetLabelX = labelX + (this.centeringOffset?.x || 0);
+        const offsetLabelY = labelY + (this.centeringOffset?.y || 0);
+
         // Labels should always be upright (rotation 0) for readability
         const propAngle = 0;
 
@@ -644,7 +759,7 @@ export class KicadSchematicGenerator {
         const propExpr = property(
           "Footprint",
           transformedFootprint,
-          at(labelX, labelY, propAngle)
+          at(offsetLabelX, offsetLabelY, propAngle)
         );
 
         // Add effects, but don't hide if we have a visible label
@@ -755,8 +870,14 @@ export class KicadSchematicGenerator {
 
     // Convert from pixels to mm (KiCad uses mm)
     const scale = 0.1; // Convert from layout pixels to mm
-    const kicadX = centerX * scale;
-    const kicadY = centerY * scale;
+    let kicadX = centerX * scale;
+    let kicadY = centerY * scale;
+
+    // Apply centering offset if available
+    if (this.centeringOffset) {
+      kicadX += this.centeringOffset.x;
+      kicadY += this.centeringOffset.y;
+    }
 
     // Generate UUID based on node ID
     const symbolUuid = this.generateUUID(node.id);
@@ -848,6 +969,10 @@ export class KicadSchematicGenerator {
       const labelX = ((node.x || 0) + rotatedPos.x) * scale;
       const labelY = ((node.y || 0) + rotatedPos.y) * scale;
 
+      // Apply centering offset to label position
+      const offsetLabelX = labelX + (this.centeringOffset?.x || 0);
+      const offsetLabelY = labelY + (this.centeringOffset?.y || 0);
+
       // Labels should always be upright (rotation 0) for readability
       const propAngle = 0;
 
@@ -860,7 +985,12 @@ export class KicadSchematicGenerator {
       valueEffects.add(sexpr("justify", atom("left"), atom("top")));
 
       symbol.add(
-        property("Value", netName, at(labelX, labelY, propAngle), valueEffects)
+        property(
+          "Value",
+          netName,
+          at(offsetLabelX, offsetLabelY, propAngle),
+          valueEffects
+        )
       );
     } else {
       // Fallback to parsed position or hardcoded
@@ -940,10 +1070,18 @@ export class KicadSchematicGenerator {
             const endPoint = points[i + 1];
 
             // Convert to KiCad coordinates (mm) and snap to grid
-            const startX = snapToGrid(startPoint.x * 0.1, kicadGridSize);
-            const startY = snapToGrid(startPoint.y * 0.1, kicadGridSize);
-            const endX = snapToGrid(endPoint.x * 0.1, kicadGridSize);
-            const endY = snapToGrid(endPoint.y * 0.1, kicadGridSize);
+            let startX = snapToGrid(startPoint.x * 0.1, kicadGridSize);
+            let startY = snapToGrid(startPoint.y * 0.1, kicadGridSize);
+            let endX = snapToGrid(endPoint.x * 0.1, kicadGridSize);
+            let endY = snapToGrid(endPoint.y * 0.1, kicadGridSize);
+
+            // Apply centering offset if available
+            if (this.centeringOffset) {
+              startX += this.centeringOffset.x;
+              startY += this.centeringOffset.y;
+              endX += this.centeringOffset.x;
+              endY += this.centeringOffset.y;
+            }
 
             // Generate UUID for this wire segment
             const wireUuid = this.generateUUID(
@@ -982,8 +1120,14 @@ export class KicadSchematicGenerator {
           const point = edge.junctionPoints[i];
 
           // Convert to KiCad coordinates (mm) and snap to grid
-          const x = snapToGrid(point.x * 0.1, kicadGridSize);
-          const y = snapToGrid(point.y * 0.1, kicadGridSize);
+          let x = snapToGrid(point.x * 0.1, kicadGridSize);
+          let y = snapToGrid(point.y * 0.1, kicadGridSize);
+
+          // Apply centering offset if available
+          if (this.centeringOffset) {
+            x += this.centeringOffset.x;
+            y += this.centeringOffset.y;
+          }
 
           // Generate UUID for junction based on edge ID and index
           const junctionUuid = this.generateUUID(`${edge.id}_junction_${i}`);
@@ -1057,8 +1201,14 @@ export class KicadSchematicGenerator {
             }
 
             // Convert to KiCad coordinates (mm) and snap to grid
-            const kicadX = snapToGrid(absoluteX * 0.1, kicadGridSize);
-            const kicadY = snapToGrid(absoluteY * 0.1, kicadGridSize);
+            let kicadX = snapToGrid(absoluteX * 0.1, kicadGridSize);
+            let kicadY = snapToGrid(absoluteY * 0.1, kicadGridSize);
+
+            // Apply centering offset if available
+            if (this.centeringOffset) {
+              kicadX += this.centeringOffset.x;
+              kicadY += this.centeringOffset.y;
+            }
 
             // Generate UUID for the global label
             const labelUuid = this.generateUUID(`${port.id}_global_label`);

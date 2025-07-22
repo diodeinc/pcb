@@ -136,7 +136,7 @@
   height: 32px;
   padding: 0 8px;
   font-size: 14px;
-  font-family: monospace;
+  font-family: 'CodeSaver', monospace;
   background-color: var(--vscode-input-background, #ffffff);
   color: var(--vscode-input-foreground, #333333);
   border: 1px solid var(--vscode-input-border, #ddd);
@@ -198,7 +198,7 @@
 
 .diagnostic-location {
   font-size: 12px;
-  font-family: monospace;
+  font-family: 'CodeSaver', monospace;
   color: var(--vscode-descriptionForeground, #666666);
   margin-top: 4px;
 }
