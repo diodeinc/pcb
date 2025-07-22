@@ -926,9 +926,6 @@ const SymbolNode = React.memo(function SymbolNode({
         // positioned correctly. We don't need to rotate the anchor point.
         // We only need to adjust text alignment based on rotation.
 
-        // Get text alignment based on rotation
-        const alignment = getTextAlignmentForRotation(rotation);
-
         // For 180° rotation, we want to flip the text both horizontally and vertically
         // This is equivalent to rotating the text by 180° around its center
         const normalizedRotation = ((rotation % 360) + 360) % 360;
