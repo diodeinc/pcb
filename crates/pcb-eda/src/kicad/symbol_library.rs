@@ -274,6 +274,17 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
         _ => return child_sexp.clone(),
     };
 
+    // Get the parent and child symbol names
+    let parent_name = match parent_list.get(1) {
+        Some(Sexpr::Symbol(name) | Sexpr::String(name)) => name.clone(),
+        _ => "Unknown".to_string(),
+    };
+
+    let child_name = match child_list.get(1) {
+        Some(Sexpr::Symbol(name) | Sexpr::String(name)) => name.clone(),
+        _ => "Unknown".to_string(),
+    };
+
     // Start with parent items, but skip the "symbol" and name
     let mut merged_items = vec![
         Sexpr::Symbol("symbol".to_string()),
@@ -335,7 +346,31 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
                     s if s.starts_with("symbol") => {
                         // Skip parent symbol sections if child has any
                         if child_symbols.is_empty() {
-                            merged_items.push(item.clone());
+                            // Rename parent sub-symbol to match child symbol name
+                            if let Sexpr::List(mut symbol_items) = item.clone() {
+                                if let Some(symbol_name_expr) = symbol_items.get_mut(1) {
+                                    match symbol_name_expr {
+                                        Sexpr::Symbol(symbol_name) => {
+                                            // Replace parent name with child name in sub-symbol name
+                                            if symbol_name.starts_with(&parent_name) {
+                                                let suffix = &symbol_name[parent_name.len()..];
+                                                *symbol_name = format!("{child_name}{suffix}");
+                                            }
+                                        }
+                                        Sexpr::String(symbol_name) => {
+                                            // Replace parent name with child name in sub-symbol name
+                                            if symbol_name.starts_with(&parent_name) {
+                                                let suffix = &symbol_name[parent_name.len()..];
+                                                *symbol_name = format!("{child_name}{suffix}");
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                merged_items.push(Sexpr::List(symbol_items));
+                            } else {
+                                merged_items.push(item.clone());
+                            }
                         }
                     }
                     _ => {
@@ -729,5 +764,55 @@ mod tests {
         let arrow = extended.distributors.get("Arrow").unwrap();
         assert_eq!(arrow.part_number, "ARR-789");
         assert_eq!(arrow.url, "https://arrow.com/arr-789");
+    }
+
+    #[test]
+    fn test_extends_renames_sub_symbols() {
+        let content = r#"(kicad_symbol_lib
+            (symbol "BaseIC"
+                (property "Reference" "U" (at 0 0 0))
+                (symbol "BaseIC_0_1"
+                    (rectangle (start -5.08 5.08) (end 5.08 -5.08))
+                )
+                (symbol "BaseIC_1_1"
+                    (pin input line (at -7.62 2.54 0) (length 2.54)
+                        (name "IN" (effects (font (size 1.27 1.27))))
+                        (number "1" (effects (font (size 1.27 1.27))))
+                    )
+                )
+            )
+            (symbol "CustomIC"
+                (extends "BaseIC")
+                (property "Value" "CustomIC" (at 0 0 0))
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        let custom = lib.get_symbol("CustomIC").unwrap();
+
+        // Check that the raw S-expression has renamed sub-symbols
+        if let Some(raw_sexp) = &custom.raw_sexp {
+            let sexp_str = format!("{raw_sexp:?}");
+
+            // Should contain CustomIC_0_1 and CustomIC_1_1, not BaseIC_0_1 and BaseIC_1_1
+            assert!(
+                sexp_str.contains("CustomIC_0_1"),
+                "Should contain CustomIC_0_1"
+            );
+            assert!(
+                sexp_str.contains("CustomIC_1_1"),
+                "Should contain CustomIC_1_1"
+            );
+            assert!(
+                !sexp_str.contains("BaseIC_0_1"),
+                "Should not contain BaseIC_0_1"
+            );
+            assert!(
+                !sexp_str.contains("BaseIC_1_1"),
+                "Should not contain BaseIC_1_1"
+            );
+        } else {
+            panic!("CustomIC should have raw_sexp after extends resolution");
+        }
     }
 }
