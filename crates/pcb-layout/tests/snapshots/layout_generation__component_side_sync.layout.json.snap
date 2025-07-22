@@ -251,7 +251,7 @@ expression: content
       },
       "reference": "R3",
       "uuid": "92e39a7a-1ab5-55d8-aa4d-bc2cc437a287",
-      "value": "SMD 0603 1kOhms +/-10%"
+      "value": "1k"
     },
     {
       "dnp": false,
@@ -500,7 +500,7 @@ expression: content
       },
       "reference": "R1",
       "uuid": "c28e397c-068f-513d-9cce-7ba0992086d6",
-      "value": "SMD 0603 1kOhms +/-10%"
+      "value": "1k"
     },
     {
       "dnp": false,
@@ -749,7 +749,7 @@ expression: content
       },
       "reference": "R4",
       "uuid": "dafe4893-ae73-5768-9a24-8ef0d797be6e",
-      "value": "SMD 0603 1kOhms +/-10%"
+      "value": "1k"
     },
     {
       "dnp": false,
@@ -998,7 +998,7 @@ expression: content
       },
       "reference": "R2",
       "uuid": "fdb381d8-edf9-5208-849a-10b220c35fdd",
-      "value": "SMD 0603 1kOhms +/-10%"
+      "value": "1k"
     }
   ],
   "groups": [
