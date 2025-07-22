@@ -1132,7 +1132,7 @@ export class KicadSchematicGenerator {
             globalLabel.add(
               property(
                 "Intersheetrefs",
-                "$" + "{INTERSHEET_REFS}",
+                `\${INTERSHEET_REFS}`,
                 at(kicadX + intersheetOffsetX, kicadY + intersheetOffsetY, 0),
                 sexpr(
                   "effects",

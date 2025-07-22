@@ -104,47 +104,6 @@ const edgeColor = DEFAULT_THEME.wire.to_css(); // This is the KiCad green wire c
 const backgroundColor = DEFAULT_THEME.background.to_css();
 const labelColor = DEFAULT_THEME.reference.to_css();
 
-// Helper function to get text alignment based on rotation
-function getTextAlignmentForRotation(rotation: number): {
-  textAnchor: "start" | "middle" | "end";
-  dominantBaseline: "hanging" | "middle" | "baseline";
-  transformOrigin: string;
-} {
-  // Normalize rotation to 0-360 range
-  const normalizedRotation = ((rotation % 360) + 360) % 360;
-
-  // Determine text alignment based on which quadrant the rotation falls into
-  if (normalizedRotation < 45 || normalizedRotation >= 315) {
-    // 0° - text drawn from top-left
-    return {
-      textAnchor: "start",
-      dominantBaseline: "hanging",
-      transformOrigin: "left top",
-    };
-  } else if (normalizedRotation < 135) {
-    // 90° - text drawn from top-right
-    return {
-      textAnchor: "end",
-      dominantBaseline: "hanging",
-      transformOrigin: "right top",
-    };
-  } else if (normalizedRotation < 225) {
-    // 180° - text drawn from bottom-right
-    return {
-      textAnchor: "end",
-      dominantBaseline: "baseline",
-      transformOrigin: "right bottom",
-    };
-  } else {
-    // 270° - text drawn from bottom-left
-    return {
-      textAnchor: "start",
-      dominantBaseline: "baseline",
-      transformOrigin: "left bottom",
-    };
-  }
-}
-
 // Common style for all handles - subtle dots on component borders
 const portHandleStyle = {
   background: edgeColor, // KiCad green wire color
