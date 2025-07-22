@@ -103,8 +103,8 @@ export class LibavoidEdgeRouter {
     this.router.setRoutingParameter(this.avoidLib.fixedSharedPathPenalty, 10);
     this.router.setRoutingParameter(this.avoidLib.anglePenalty, 100);
     this.router.setRoutingParameter(this.avoidLib.crossingPenalty, 0);
-    this.router.setRoutingParameter(this.avoidLib.shapeBufferDistance, 15);
-    this.router.setRoutingParameter(this.avoidLib.idealNudgingDistance, 10);
+    this.router.setRoutingParameter(this.avoidLib.shapeBufferDistance, 5);
+    this.router.setRoutingParameter(this.avoidLib.idealNudgingDistance, 12.7);
 
     // Enable hyperedge routing options
     this.router.setRoutingOption(

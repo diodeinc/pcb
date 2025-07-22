@@ -46,7 +46,8 @@ export type SchematicEdge = Edge<SchematicEdgeData>;
 
 export function createSchematicNode(
   elkNode: ElkNode,
-  netlist?: Netlist
+  netlist?: Netlist,
+  readonly: boolean = false
 ): SchematicNode {
   // Note: positions should already be snapped by the layout engine
   return {
@@ -62,16 +63,16 @@ export function createSchematicNode(
     },
     position: { x: elkNode.x || 0, y: elkNode.y || 0 },
     type: elkNode.type,
-    draggable: true,
-    // Make all nodes selectable so they can be rotated
-    selectable: true,
+    draggable: !readonly,
+    // Make all nodes selectable so they can be rotated (unless readonly)
+    selectable: !readonly,
     connectable: false,
     // Add custom styles based on node type
     style: {
       // Prevent hover effects on component nodes
       ...(elkNode.type === NodeType.COMPONENT
         ? {
-            cursor: "move",
+            cursor: readonly ? "default" : "move",
             // Add some !important styles but NOT transform
             backgroundColor: "#f5f5f5 !important",
             border: "1px solid #ddd !important",
@@ -99,14 +100,82 @@ export function createSchematicEdge(elkEdge: ElkEdge): SchematicEdge {
 
 // Common color for electrical components
 const electricalComponentColor = DEFAULT_THEME.component_outline.to_css();
-const edgeColor = DEFAULT_THEME.wire.to_css();
+const edgeColor = DEFAULT_THEME.wire.to_css(); // This is the KiCad green wire color
 const backgroundColor = DEFAULT_THEME.background.to_css();
 const labelColor = DEFAULT_THEME.reference.to_css();
 
+// Helper function to rotate a point around a center
+function rotatePoint(
+  x: number,
+  y: number,
+  centerX: number,
+  centerY: number,
+  angleDegrees: number
+): { x: number; y: number } {
+  const angleRadians = (angleDegrees * Math.PI) / 180;
+  const cos = Math.cos(angleRadians);
+  const sin = Math.sin(angleRadians);
+
+  // Translate point to origin
+  const translatedX = x - centerX;
+  const translatedY = y - centerY;
+
+  // Rotate
+  const rotatedX = translatedX * cos - translatedY * sin;
+  const rotatedY = translatedX * sin + translatedY * cos;
+
+  // Translate back
+  return {
+    x: rotatedX + centerX,
+    y: rotatedY + centerY,
+  };
+}
+
+// Helper function to get text anchor and baseline based on rotation
+function getTextAlignmentForRotation(rotation: number): {
+  textAnchor: "start" | "middle" | "end";
+  dominantBaseline: "hanging" | "middle" | "baseline";
+  transformOrigin: string;
+} {
+  // Normalize rotation to 0-360 range
+  const normalizedRotation = ((rotation % 360) + 360) % 360;
+
+  // Determine text alignment based on which quadrant the rotation falls into
+  if (normalizedRotation < 45 || normalizedRotation >= 315) {
+    // 0° - text drawn from top-left
+    return {
+      textAnchor: "start",
+      dominantBaseline: "hanging",
+      transformOrigin: "left top",
+    };
+  } else if (normalizedRotation < 135) {
+    // 90° - text drawn from top-right
+    return {
+      textAnchor: "end",
+      dominantBaseline: "hanging",
+      transformOrigin: "right top",
+    };
+  } else if (normalizedRotation < 225) {
+    // 180° - text drawn from bottom-right
+    return {
+      textAnchor: "end",
+      dominantBaseline: "baseline",
+      transformOrigin: "right bottom",
+    };
+  } else {
+    // 270° - text drawn from bottom-left
+    return {
+      textAnchor: "start",
+      dominantBaseline: "baseline",
+      transformOrigin: "left bottom",
+    };
+  }
+}
+
 // Common style for all handles - subtle dots on component borders
 const portHandleStyle = {
-  background: edgeColor,
-  border: `1px solid ${edgeColor}`,
+  background: edgeColor, // KiCad green wire color
+  border: `1px solid ${edgeColor}`, // KiCad green wire color
   borderRadius: "50%",
   width: "4px",
   height: "4px",
@@ -122,6 +191,9 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
   // Get rotation from data
   const rotation = data.rotation || 0;
 
+  // Get readonly state from store
+  const readonly = useSchematicViewerStore((state) => state.readonly);
+
   // Different styles for modules vs components
   const nodeStyle: CSSProperties = {
     width: data.width,
@@ -131,7 +203,7 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
       : `color-mix(in srgb, ${electricalComponentColor} 5%, ${backgroundColor})`,
     border: `1px solid ${electricalComponentColor}`,
     opacity: 1,
-    cursor: "move",
+    cursor: readonly ? "default" : "move",
     pointerEvents: "auto",
     borderRadius: "0px",
     // Apply rotation transform
@@ -154,7 +226,7 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
             top: label.y,
             left: label.x,
             padding: "4px",
-            fontSize: "12px",
+            fontSize: "12.7px",
             fontWeight: "bold",
             color: labelColor,
             textAlign: label.textAlign || "left",
@@ -197,7 +269,7 @@ const ModuleNode = ({ data }: { data: SchematicNodeData }) => {
               // Set label position relative to port based on which side it's on
               const labelStyle = {
                 position: "absolute" as const,
-                fontSize: "10px",
+                fontSize: "12.7px",
                 whiteSpace: "nowrap" as const,
                 pointerEvents: "none" as const,
                 transform: "",
@@ -476,7 +548,7 @@ const NetReferenceNode = ({ data }: { data: SchematicNodeData }) => {
             right: isVdd ? "auto" : isEastSide ? circleRadius * 4 : "auto",
             transform: isVdd ? "translateX(-50%)" : "translateY(-50%)",
             textAlign: isVdd ? "center" : isEastSide ? "left" : "right",
-            fontSize: "10px",
+            fontSize: "12.7px",
             fontWeight: "bold",
             color: electricalComponentColor,
           }}
@@ -512,6 +584,7 @@ const NetJunctionNode = ({ data }: { data: SchematicNodeData }) => {
           height: "6px",
           borderRadius: "50%",
           backgroundColor: edgeColor,
+          border: `1px solid ${edgeColor}`,
           top: "2px",
           left: "2px",
         }}
@@ -874,6 +947,67 @@ const SymbolNode = React.memo(function SymbolNode({
         </div>
       )}
 
+      {/* Symbol labels */}
+      {data.labels?.map((label, index) => {
+        // The symbol node div is already rotated, so labels are automatically
+        // positioned correctly. We don't need to rotate the anchor point.
+        // We only need to adjust text alignment based on rotation.
+
+        // Get text alignment based on rotation
+        const alignment = getTextAlignmentForRotation(rotation);
+
+        // Adjust CSS text-align based on text anchor
+        const cssTextAlign =
+          alignment.textAnchor === "start"
+            ? "left"
+            : alignment.textAnchor === "end"
+            ? "right"
+            : "center";
+
+        // For 180° rotation, we want to flip the text both horizontally and vertically
+        // This is equivalent to rotating the text by 180° around its center
+        const normalizedRotation = ((rotation % 360) + 360) % 360;
+
+        let transform = "";
+        let transformOrigin = "left top";
+
+        if (normalizedRotation >= 135 && normalizedRotation < 225) {
+          // At 180°, flip both X and Y axes
+          // This keeps the text at the same position but flips it to be readable
+          transform = "scaleX(-1) scaleY(-1)";
+          transformOrigin = "center";
+        }
+        // For other rotations, we might need different handling
+        // but for now let's focus on the 180° case
+
+        return (
+          <div
+            key={`symbol-label-${index}`}
+            className="symbol-label"
+            style={{
+              position: "absolute",
+              left: label.x || 0,
+              top: label.y || 0,
+              fontSize: "12.7px",
+              fontFamily: "Newstroke, 'Courier New', monospace",
+              color: labelColor,
+              fontWeight: "normal",
+              textAlign: "left",
+              width: label.width || "auto",
+              whiteSpace: "nowrap",
+              pointerEvents: "none",
+              userSelect: "none",
+              WebkitFontSmoothing: "antialiased",
+              MozOsxFontSmoothing: "grayscale",
+              transform: transform || undefined,
+              transformOrigin: transformOrigin,
+            }}
+          >
+            {label.text}
+          </div>
+        );
+      })}
+
       {/* Port connections */}
       <div className="component-ports">
         {data.ports?.map((port) => {
@@ -946,7 +1080,7 @@ const SymbolNode = React.memo(function SymbolNode({
                         position: "absolute",
                         left: portX,
                         top: portY,
-                        fontSize: "10px",
+                        fontSize: "12.7px",
                         whiteSpace: "nowrap",
                         pointerEvents: "none",
                         color: electricalComponentColor,
@@ -1015,6 +1149,26 @@ const ElectricalEdge = ({
 
   return (
     <>
+      {/* Render edge labels first so they appear behind */}
+      <g className="electrical-edge-labels-group">
+        {edgeLabels.map((label, index) => (
+          <text
+            key={`${id}-label-${index}`}
+            x={(label.x || 0) + (label.width || 0) / 2}
+            y={(label.y || 0) + (label.height || 0) / 2}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize="12.7px"
+            fill={labelColor}
+            fontFamily="Newstroke, 'Courier New', monospace"
+            className="electrical-edge-label"
+          >
+            {label.text}
+          </text>
+        ))}
+      </g>
+
+      {/* Render paths and junctions on top */}
       <path
         id={id}
         style={{
@@ -1044,26 +1198,11 @@ const ElectricalEdge = ({
           cy={point.y}
           r={3}
           fill={edgeColor}
+          stroke={edgeColor}
+          strokeWidth={1}
           opacity={1}
           className="electrical-edge-junction"
         />
-      ))}
-
-      {/* Render edge labels */}
-      {edgeLabels.map((label, index) => (
-        <text
-          key={`${id}-label-${index}`}
-          x={(label.x || 0) + (label.width || 0) / 2}
-          y={(label.y || 0) + (label.height || 0) / 2}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fontSize="10px"
-          fill={labelColor}
-          fontFamily="Newstroke, 'Courier New', monospace"
-          className="electrical-edge-label"
-        >
-          {label.text}
-        </text>
       ))}
     </>
   );
@@ -1094,6 +1233,7 @@ interface ReactFlowSchematicViewerProps {
   // Persistence callbacks
   onPositionsChange?: (componentId: string, positions: NodePositions) => void;
   loadPositions?: (componentId: string) => Promise<NodePositions | null>;
+  readonly?: boolean; // Add readonly prop
 }
 
 const Visualizer = ({
@@ -1105,6 +1245,7 @@ const Visualizer = ({
   showDownloadButton = false,
   onPositionsChange,
   loadPositions,
+  readonly = false,
 }: {
   netlist: Netlist;
   onComponentSelect?: (componentId: string | null) => void;
@@ -1114,6 +1255,7 @@ const Visualizer = ({
   showDownloadButton?: boolean;
   onPositionsChange?: (componentId: string, positions: NodePositions) => void;
   loadPositions?: (componentId: string) => Promise<NodePositions | null>;
+  readonly?: boolean;
 }) => {
   // Use Zustand store for nodes and edges
   const {
@@ -1155,6 +1297,7 @@ const Visualizer = ({
       selectedComponent,
       netlist,
       config: currentConfig,
+      readonly,
       onPositionsChange,
       loadPositions,
     });
@@ -1162,6 +1305,7 @@ const Visualizer = ({
     selectedComponent,
     netlist,
     currentConfig,
+    readonly,
     onPositionsChange,
     loadPositions,
     initializeViewer,
@@ -1189,6 +1333,9 @@ const Visualizer = ({
   // Add keyboard event handler for rotation
   useEffect(() => {
     const handleKeyPress = (event: KeyboardEvent) => {
+      // Skip all keyboard interactions in readonly mode
+      if (readonly) return;
+
       // Check if 'R' key is pressed (case insensitive)
       if (event.key.toLowerCase() === "r") {
         console.log("[Rotation] R key pressed");
@@ -1240,7 +1387,7 @@ const Visualizer = ({
     return () => {
       window.removeEventListener("keydown", handleKeyPress);
     };
-  }, [rotateNodes, deleteNetSymbolNodes]);
+  }, [rotateNodes, deleteNetSymbolNodes, readonly]);
 
   const updateConfig = useCallback((updates: Partial<SchematicConfig>) => {
     setCurrentConfig((prev) => ({
@@ -1286,19 +1433,25 @@ const Visualizer = ({
             reactFlowInstance.current = instance;
           }}
           onNodeClick={(event, node) => {
-            handleNodeClick(
-              node.id,
-              event.shiftKey || event.metaKey || event.ctrlKey
-            );
+            // Skip node selection in readonly mode
+            if (!readonly) {
+              handleNodeClick(
+                node.id,
+                event.shiftKey || event.metaKey || event.ctrlKey
+              );
+            }
           }}
           onNodeDoubleClick={(event, node) => {
-            if ((node.data as any).isNetSymbol) {
+            // Skip net symbol creation in readonly mode
+            if (!readonly && (node.data as any).isNetSymbol) {
               createNetSymbolNode(node.id);
             }
           }}
           onPaneClick={() => {
-            // Clear selection when clicking on background
-            clearSelection();
+            // Clear selection when clicking on background (unless readonly)
+            if (!readonly) {
+              clearSelection();
+            }
           }}
           defaultEdgeOptions={{
             type: "electrical",
@@ -1311,10 +1464,10 @@ const Visualizer = ({
           style={{
             backgroundColor: backgroundColor,
           }}
-          nodesDraggable={true}
+          nodesDraggable={!readonly}
           nodesConnectable={false}
-          elementsSelectable={true}
-          selectNodesOnDrag={true}
+          elementsSelectable={!readonly}
+          selectNodesOnDrag={!readonly}
           zoomOnScroll={true}
           panOnScroll={true}
           panOnDrag={true}
@@ -1330,7 +1483,7 @@ const Visualizer = ({
             style={{ opacity: 0.25 }}
           />
           <Controls showInteractive={false} />
-          {(showSettings || showDownloadButton) && (
+          {(showSettings || showDownloadButton) && !readonly && (
             <Panel position="top-right">
               <div
                 style={{ display: "flex", gap: "8px", alignItems: "center" }}
@@ -1582,6 +1735,7 @@ const ReactFlowSchematicViewer = ({
   showDownloadButton = false,
   onPositionsChange,
   loadPositions,
+  readonly = false,
 }: ReactFlowSchematicViewerProps) => {
   return (
     <ReactFlowProvider>
@@ -1594,6 +1748,7 @@ const ReactFlowSchematicViewer = ({
         showDownloadButton={showDownloadButton}
         onPositionsChange={onPositionsChange}
         loadPositions={loadPositions}
+        readonly={readonly}
       />
     </ReactFlowProvider>
   );

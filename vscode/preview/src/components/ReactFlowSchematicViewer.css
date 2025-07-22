@@ -1,17 +1,10 @@
 /* Font declaration for Newstroke */
-@font-face {
-  font-family: 'Newstroke';
-  src: url('../fonts/Newstroke.ttf') format('truetype');
-  font-weight: normal;
-  font-style: normal;
-  font-display: swap;
-}
+/* Font is now loaded via HTML to avoid webview URL issues */
 
 /* CSS Variables for theming */
 :root {
   --schematic-background: #ffffff;
   --schematic-component-outline: #666666;
-  --schematic-edge: #666666;
   --schematic-accent: #666666;
   --schematic-label: #000000;
 }
@@ -55,7 +48,7 @@
   background-color: transparent; /* No background */
   color: var(--schematic-component-outline) !important; /* Use theme color */
   text-align: left;
-  font-size: 12px;
+  font-size: 12.7px;
   z-index: 5;
   font-family: 'Newstroke', 'Courier New', monospace;
 }
@@ -66,7 +59,7 @@
   right: 4px;
   padding: 0;
   font-style: normal; /* Remove italic for Newstroke */
-  font-size: 10px;
+  font-size: 12.7px;
   color: #000; /* Black text */
   font-family: 'Newstroke', 'Courier New', monospace;
 }
@@ -85,7 +78,7 @@
 }
 
 .module-port {
-  font-size: 10px;
+  font-size: 12.7px;
   text-align: center;
   position: relative;
   z-index: 5;
@@ -93,13 +86,12 @@
 
 .port-label {
   color: var(--schematic-accent);
-  font-size: 10px;
+  font-size: 12.7px;
   padding: 0 2px;
   white-space: nowrap;
   font-family: 'Newstroke', 'Courier New', monospace;
   z-index: 10;
   font-weight: normal;
-  font-size: 12px;
 }
 
 /* Resistor Node Styling */
@@ -149,7 +141,7 @@
   top: -16px;
   left: 0;
   padding: 0;
-  font-size: 10px;
+  font-size: 12.7px;
   font-weight: bold;
   color: var(--schematic-component-outline);
   background-color: transparent;
@@ -161,7 +153,7 @@
   bottom: -16px;
   right: 0;
   padding: 0;
-  font-size: 10px;
+  font-size: 12.7px;
   color: var(--schematic-component-outline);
   background-color: transparent;
   z-index: 2;
@@ -268,16 +260,31 @@
 
 /* Edge styling for electrical connections */
 .react-flow__edge-path {
-  stroke: var(--schematic-edge) !important; /* Use theme color */
+  /* stroke color comes from inline styles via KiCad theme */
   stroke-width: 1.5px !important; /* Consistent line width */
 }
 
+/* Ensure edge paths appear above nodes */
+.react-flow__edges {
+  z-index: 1000 !important;
+}
+
 .react-flow__edge {
-  stroke: var(--schematic-edge);
+  z-index: 1000 !important;
+}
+
+/* Keep edge labels behind nodes */
+.electrical-edge-labels-group {
+  z-index: 1 !important; /* Lower than default node z-index */
+}
+
+.electrical-edge-label {
+  z-index: 1 !important; /* Lower than default node z-index */
+  pointer-events: none;
 }
 
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: var(--schematic-edge) !important; /* Keep theme color even when selected */
+  /* stroke color comes from inline styles via KiCad theme */
   stroke-width: 2px !important; /* Just slightly thicker */
 }
 
@@ -326,8 +333,7 @@
 .react-flow__handle {
   width: 4px;
   height: 4px;
-  background-color: var(--schematic-edge); /* Use theme color */
-  border: 1px solid var(--schematic-edge);
+  /* background and border colors come from inline styles via KiCad theme */
   border-radius: 50%; /* Circular connection points */
   opacity: 0.5; /* More subtle appearance */
   transform: translate(-50%, -50%); /* Center perfectly */
@@ -338,7 +344,7 @@
 
 /* Show handles more clearly on hover for user feedback */
 .react-flow__handle:hover {
-  background-color: var(--schematic-edge);
+  /* background color comes from inline styles via KiCad theme */
   opacity: 0.8; /* Less intense highlight for subtle ports */
 }
 
@@ -601,7 +607,7 @@
 }
 
 .net-reference-label {
-  font-size: 10px;
+  font-size: 12.7px;
   font-weight: bold;
 }
 
@@ -622,5 +628,17 @@
   font-family: 'Newstroke', 'Courier New', monospace;
   font-weight: normal;
   fill: var(--schematic-label);
-  font-size: 10px;
+  font-size: 12.7px;
+}
+
+/* Symbol labels - match edge label styling */
+.symbol-label {
+  pointer-events: none;
+  user-select: none;
+  font-family: 'Newstroke', 'Courier New', monospace;
+  font-weight: normal;
+  color: var(--schematic-label);
+  font-size: 12.7px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

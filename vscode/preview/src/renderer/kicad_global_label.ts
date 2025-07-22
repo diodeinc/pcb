@@ -55,6 +55,10 @@ class AlphaCanvas2DRenderer extends Canvas2DRenderer {
     // Don't update canvas size here - we set it manually
     this.ctx2d!.setTransform();
 
+    // Apply device pixel ratio scaling for high DPI displays
+    const dpr = window.devicePixelRatio || 1;
+    this.ctx2d!.scale(dpr, dpr);
+
     // Always clear with transparent background
     this.ctx2d!.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx2d!.lineCap = "round";
@@ -216,9 +220,16 @@ export class KicadGlobalLabelRenderer {
     const canvasWidth = Math.ceil((bbox.w + padding * 2) * scale);
     const canvasHeight = Math.ceil((bbox.h + padding * 2) * scale);
 
-    // Setup canvas
-    this.canvas.width = canvasWidth;
-    this.canvas.height = canvasHeight;
+    // Get device pixel ratio for high DPI displays
+    const dpr = window.devicePixelRatio || 1;
+
+    // Setup canvas with device pixel ratio
+    this.canvas.width = canvasWidth * dpr;
+    this.canvas.height = canvasHeight * dpr;
+
+    // Set CSS size to maintain the same visual size
+    this.canvas.style.width = `${canvasWidth}px`;
+    this.canvas.style.height = `${canvasHeight}px`;
 
     // Update info with actual dimensions
     info.width = canvasWidth;

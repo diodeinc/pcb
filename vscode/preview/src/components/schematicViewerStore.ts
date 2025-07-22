@@ -8,7 +8,11 @@ import {
   createSchematicEdge,
 } from "./ReactFlowSchematicViewer";
 import type { NodePositions, SchematicConfig } from "../LayoutEngine";
-import { SchematicLayoutEngine } from "../LayoutEngine";
+import {
+  SchematicLayoutEngine,
+  snapToGrid,
+  snapPosition,
+} from "../LayoutEngine";
 import { debounce, isEqual } from "lodash";
 import type { Netlist } from "../types/NetlistTypes";
 
@@ -57,10 +61,15 @@ interface SchematicViewerState {
   nodePositions: NodePositions;
   positionsLoaded: boolean;
 
+  // KiCad schematic
+  kicadSchematic: string | null;
+  kicadSchematicFull: string | null;
+
   // Component context
   selectedComponent: string | null;
   netlist: Netlist | null;
   config: SchematicConfig | null;
+  readonly: boolean; // Add readonly state
   onPositionsChange?: (componentId: string, positions: NodePositions) => void;
   loadPositions?: (componentId: string) => Promise<NodePositions | null>;
 
@@ -73,6 +82,7 @@ interface SchematicViewerState {
   setSelectedComponent: (component: string | null) => void;
   setNetlist: (netlist: Netlist) => void;
   setConfig: (config: SchematicConfig) => void;
+  setReadonly: (readonly: boolean) => void; // Add setter for readonly
   setOnPositionsChange: (
     callback?: (componentId: string, positions: NodePositions) => void
   ) => void;
@@ -85,6 +95,7 @@ interface SchematicViewerState {
     selectedComponent: string | null;
     netlist: Netlist;
     config: SchematicConfig;
+    readonly?: boolean; // Add readonly to initialization params
     onPositionsChange?: (componentId: string, positions: NodePositions) => void;
     loadPositions?: (componentId: string) => Promise<NodePositions | null>;
   }) => void;
@@ -95,6 +106,8 @@ interface SchematicViewerState {
       children?: any[];
       edges: any[];
       nodePositions: NodePositions;
+      kicadSchematic?: string;
+      kicadSchematicFull?: string;
     },
     netlist: any
   ) => void;
@@ -120,11 +133,6 @@ interface SchematicViewerState {
     updatedPositions: NodePositions;
   };
   onEdgesChange: (changes: EdgeChange[]) => void;
-}
-
-// Utility function for grid snapping
-function snapToGrid(value: number, gridSize: number): number {
-  return Math.round(value / gridSize) * gridSize;
 }
 
 // Helper function to load positions and trigger layout
@@ -230,9 +238,12 @@ export const useSchematicViewerStore = create(
         edges: [],
         nodePositions: {},
         positionsLoaded: false,
+        kicadSchematic: null,
+        kicadSchematicFull: null,
         selectedComponent: null,
         netlist: null,
         config: null,
+        readonly: false, // Initialize readonly
         onPositionsChange: undefined,
         loadPositions: undefined,
 
@@ -307,6 +318,7 @@ export const useSchematicViewerStore = create(
             );
           }
         },
+        setReadonly: (readonly) => set({ readonly }), // Add setReadonly
         setOnPositionsChange: (callback) =>
           set({ onPositionsChange: callback }),
         setLoadPositions: (callback) => set({ loadPositions: callback }),
@@ -321,7 +333,8 @@ export const useSchematicViewerStore = create(
             !isEqual(params.netlist, state.netlist) ||
             !isEqual(params.config, state.config) ||
             params.loadPositions !== state.loadPositions ||
-            params.onPositionsChange !== state.onPositionsChange;
+            params.onPositionsChange !== state.onPositionsChange ||
+            params.readonly !== state.readonly; // Add readonly to check
 
           if (!hasChanges) {
             return;
@@ -332,6 +345,7 @@ export const useSchematicViewerStore = create(
             selectedComponent: params.selectedComponent,
             netlist: params.netlist,
             config: params.config,
+            readonly: params.readonly ?? false, // Set readonly from params
             onPositionsChange: params.onPositionsChange,
             loadPositions: params.loadPositions,
           });
@@ -351,7 +365,13 @@ export const useSchematicViewerStore = create(
 
         // Semantic actions
         storeLayoutResult: (layoutResult, netlist) => {
-          const { children = [], edges, nodePositions } = layoutResult;
+          const {
+            children = [],
+            edges,
+            nodePositions,
+            kicadSchematic,
+            kicadSchematicFull,
+          } = layoutResult;
           const state = get();
 
           // Preserve selection state from current nodes
@@ -359,9 +379,9 @@ export const useSchematicViewerStore = create(
             state.nodes.filter((node) => node.selected).map((node) => node.id)
           );
 
-          // Create new nodes with preserved selection state
+          // Create new nodes with preserved selection state and readonly flag
           const nodes = children.map((elkNode: any) => {
-            const node = createSchematicNode(elkNode, netlist);
+            const node = createSchematicNode(elkNode, netlist, state.readonly);
             node.selected = selectedNodeIds.has(node.id);
             return node;
           });
@@ -374,6 +394,8 @@ export const useSchematicViewerStore = create(
             nodes,
             edges: schematicEdges,
             nodePositions,
+            kicadSchematic: kicadSchematic || null,
+            kicadSchematicFull: kicadSchematicFull || null,
           });
         },
 
@@ -383,6 +405,7 @@ export const useSchematicViewerStore = create(
 
           nodeIds.forEach((nodeId) => {
             const currentPosition = state.nodePositions[nodeId];
+            const node = state.nodes.find((n) => n.id === nodeId);
 
             if (currentPosition) {
               const currentRotation = currentPosition.rotation || 0;
@@ -392,11 +415,11 @@ export const useSchematicViewerStore = create(
                 ...currentPosition,
                 rotation: newRotation,
               };
-            } else {
-              // Create new position with rotation
+            } else if (node && node.position) {
+              // Create new position with rotation from the node's current position
               updatedPositions[nodeId] = {
-                x: currentPosition.x,
-                y: currentPosition.y,
+                x: node.position.x,
+                y: node.position.y,
                 rotation: 90,
               };
             }
@@ -601,6 +624,8 @@ export const useSchematicViewerStore = create(
             edges: [],
             nodePositions: {},
             positionsLoaded: false,
+            kicadSchematic: null,
+            kicadSchematicFull: null,
           });
         },
 
@@ -615,14 +640,22 @@ export const useSchematicViewerStore = create(
           let processedChanges = changes;
           if (gridSnapEnabled) {
             processedChanges = changes.map((change) => {
-              if (change.type === "position" && change.position) {
-                return {
-                  ...change,
-                  position: {
-                    x: snapToGrid(change.position.x, gridSize),
-                    y: snapToGrid(change.position.y, gridSize),
-                  },
-                };
+              if (change.type === "position" && change.position && change.id) {
+                // Find the node to get its dimensions
+                const node = state.nodes.find((n) => n.id === change.id);
+                if (node) {
+                  const snappedPos = snapPosition(
+                    change.position.x,
+                    change.position.y,
+                    gridSize,
+                    node.width,
+                    node.height
+                  );
+                  return {
+                    ...change,
+                    position: snappedPos,
+                  };
+                }
               }
               return change;
             });

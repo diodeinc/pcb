@@ -168,9 +168,9 @@ class AlphaCanvas2DRenderer extends Canvas2DRenderer {
   override clear_canvas() {
     this.ctx2d!.setTransform();
 
-    // Don't apply device pixel ratio scaling here - let the canvas handle it naturally
-    // This was causing double-scaling in VSCode's webview environment
-    // this.ctx2d!.scale(window.devicePixelRatio, window.devicePixelRatio);
+    // Apply device pixel ratio scaling for high DPI displays
+    const dpr = window.devicePixelRatio || 1;
+    this.ctx2d!.scale(dpr, dpr);
 
     // Clear with transparent background if alpha is 0
     if (this.background_color.a === 0) {
@@ -358,8 +358,16 @@ export class KicadSymRenderer {
     const width = (bbox.w + padding * 2) * scale;
     const height = (bbox.h + padding * 2) * scale;
 
-    this.canvas.width = width;
-    this.canvas.height = height;
+    // Get device pixel ratio for high DPI displays
+    const dpr = window.devicePixelRatio || 1;
+
+    // Set actual canvas size accounting for device pixel ratio
+    this.canvas.width = width * dpr;
+    this.canvas.height = height * dpr;
+
+    // Set CSS size to maintain the same visual size
+    this.canvas.style.width = `${width}px`;
+    this.canvas.style.height = `${height}px`;
 
     // Clear canvas
     if (this.renderer.ctx2d) {

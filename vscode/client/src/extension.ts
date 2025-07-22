@@ -457,15 +457,15 @@ class SchematicPreviewProvider {
     htmlContent = htmlContent
       .replace('<base href="/" />', `<base href="${buildDirUri}/" />`)
       .replace(
-        /(src|href)="\/([^\"]*)"/g,
+        /(src|href)="\/([^"]*)"/g,
         (_m, attr, p) => `${attr}="${buildDirUri}/${p}"`
       )
       .replace(
-        /(src|href)="\.\/([^\"]*)"/g,
+        /(src|href)="\.\/([^"]*)"/g,
         (_m, attr, p) => `${attr}="${buildDirUri}/${p}"`
       )
       .replace(
-        /(manifest|icon|apple-touch-icon|shortcut icon)" href="([^\"]*)"/g,
+        /(manifest|icon|apple-touch-icon|shortcut icon)" href="([^"]*)"/g,
         (_m, rel, p) => `${rel}" href="${buildDirUri}/${p}"`
       );
 

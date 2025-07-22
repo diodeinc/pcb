@@ -3,14 +3,13 @@ import ReactFlowSchematicViewer from "./ReactFlowSchematicViewer";
 import SchematicSidebar from "./SchematicSidebar";
 import "./ReactFlowSchematicViewer.css";
 import { type Netlist } from "../types/NetlistTypes";
-import "@vscode-elements/elements/dist/bundled.js";
 
 // Adjust styles for VSCode-like appearance
 const containerStyles = `
 .schematic-layout {
   display: flex;
   width: 100%;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   font-size: 13px;
@@ -62,7 +61,7 @@ const containerStyles = `
 
 .schematic-viewer-container {
   flex: 1;
-  height: 100vh;
+  height: 100%;
   position: relative;
   background-color: var(--vscode-editor-background, #1e1e1e);
   overflow: hidden;
@@ -123,7 +122,7 @@ const containerStyles = `
 `;
 
 // Create a style element to inject the styles
-const StyleInjector = (): React.ReactElement => {
+const StyleInjector = (): React.ReactElement | null => {
   useEffect(() => {
     const styleEl = document.createElement("style");
     styleEl.innerHTML = containerStyles;
@@ -182,6 +181,7 @@ interface SchematicContainerProps {
   initialInputs?: Record<string, string>;
   onInputChange?: (paramName: string, value: string) => void;
   onInputsChange?: (inputs: Record<string, string>) => void;
+  readonly?: boolean; // Add readonly prop
 }
 
 const Breadcrumbs = ({
@@ -245,6 +245,7 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
   initialInputs = {},
   onInputChange,
   onInputsChange,
+  readonly = false,
 }) => {
   console.log("schematic container with currentFile", currentFile);
   const [error, setError] = useState<string | null>(null);
@@ -330,6 +331,7 @@ const SchematicContainer: React.FC<SchematicContainerProps> = ({
           selectedComponent={selectedModule}
           onPositionsChange={onPositionsChange}
           loadPositions={loadPositions}
+          readonly={readonly}
         />
       </div>
     </div>

@@ -263,3 +263,8 @@ h2 {
   color: #333;
   margin-bottom: 1rem;
 }
+
+
+.schematic-layout {
+  height: 100vh !important;
+}

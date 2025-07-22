@@ -1,8 +1,13 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import type { ELK as ELKType } from "elkjs/lib/elk-api";
 import { InstanceKind } from "./types/NetlistTypes";
-import type { Netlist, AttributeValue, Net } from "./types/NetlistTypes";
-import { createCanvas } from "canvas";
+import type {
+  Netlist,
+  AttributeValue,
+  Net,
+  Instance,
+  NetKind,
+} from "./types/NetlistTypes";
 import { getKicadSymbolInfo } from "./renderer/kicad_sym";
 import * as LZString from "lz-string";
 import {
@@ -11,7 +16,9 @@ import {
   type Port,
   type Hyperedge,
 } from "./LibavoidEdgeRouter";
-
+import { KicadSchematicGenerator } from "./KicadSchematicGenerator";
+import { v5 as uuidv5 } from "uuid";
+import { createCanvas } from "canvas";
 // Re-export all the public types and enums from the old implementation
 export enum NodeType {
   META = "meta",
@@ -38,6 +45,9 @@ export interface NodePositions {
 export interface LayoutResult extends ElkGraph {
   // Additional metadata about the layout
   nodePositions: NodePositions;
+  // KiCad schematic representation
+  kicadSchematic?: string;
+  kicadSchematicFull?: string; // Add full schematic for download
 }
 
 export interface ElkNode {
@@ -55,6 +65,9 @@ export interface ElkNode {
   children?: ElkNode[];
   edges?: ElkEdge[];
   rotation?: number; // Rotation in degrees
+  instance?: Instance; // Reference to the netlist instance
+  net?: Net; // Reference to the net (for net symbol nodes)
+  symbolBboxCenter?: { x: number; y: number }; // Center of the symbol bounding box (for symbol nodes)
 }
 
 export interface ElkPort {
@@ -204,16 +217,16 @@ export const DEFAULT_CONFIG: SchematicConfig = {
 function calculateTextDimensions(
   text: string,
   fontSize: number,
-  fontFamily: string = "monospace",
+  fontFamily: string = "Newstroke, 'Courier New', monospace",
   fontWeight: string = "normal",
-  paddingWidth: number = 15,
-  paddingHeight: number = 5
+  paddingWidth: number = 0,
+  paddingHeight: number = 0
 ): { width: number; height: number } {
   // Create a canvas for text measurement
   const canvas = createCanvas(1, 1);
   const context = canvas.getContext("2d");
 
-  // Set font properties
+  // Set font properties - use Newstroke as default
   context.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
 
   // For multiline text, split by newline and find the widest line
@@ -231,19 +244,67 @@ function calculateTextDimensions(
 }
 
 // Utility functions for grid snapping
-function snapToGrid(value: number, gridSize: number): number {
+export function snapToGrid(value: number, gridSize: number): number {
   return Math.round(value / gridSize) * gridSize;
 }
 
-function snapPosition(
+export function snapPosition(
   x: number,
   y: number,
-  gridSize: number
+  gridSize: number,
+  width?: number,
+  height?: number
 ): { x: number; y: number } {
-  return {
-    x: snapToGrid(x, gridSize),
-    y: snapToGrid(y, gridSize),
+  if (width !== undefined && height !== undefined) {
+    // Snap based on center of node
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    const snappedCenterX = snapToGrid(centerX, gridSize);
+    const snappedCenterY = snapToGrid(centerY, gridSize);
+
+    // Convert back to top-left corner position
+    return {
+      x: snappedCenterX - width / 2,
+      y: snappedCenterY - height / 2,
+    };
+  } else {
+    // Fallback to corner snapping if dimensions not provided
+    return {
+      x: snapToGrid(x, gridSize),
+      y: snapToGrid(y, gridSize),
+    };
+  }
+}
+
+// Utility function to snap all node positions in an ElkGraph
+export function snapGraphNodePositions(
+  graph: ElkGraph,
+  gridSize: number
+): void {
+  if (!graph.children) return;
+
+  const snapNodes = (nodes: ElkNode[]) => {
+    for (const node of nodes) {
+      if (node.x !== undefined && node.y !== undefined) {
+        const snapped = snapPosition(
+          node.x,
+          node.y,
+          gridSize,
+          node.width,
+          node.height
+        );
+        node.x = snapped.x;
+        node.y = snapped.y;
+      }
+
+      // Recursively snap children
+      if (node.children) {
+        snapNodes(node.children);
+      }
+    }
   };
+
+  snapNodes(graph.children);
 }
 
 // Junction detection types
@@ -260,6 +321,10 @@ export class SchematicLayoutEngine {
   nets: Map<string, Set<string>>;
   config: SchematicConfig;
   private _nodePositions: NodePositions;
+
+  // UUID namespace for URL (compatible with Rust's Uuid::NAMESPACE_URL)
+  private static readonly UUID_NAMESPACE_URL =
+    "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
 
   constructor(netlist: Netlist, config: Partial<SchematicConfig> = {}) {
     this.netlist = netlist;
@@ -460,7 +525,7 @@ export class SchematicLayoutEngine {
       };
 
       // Run ELK layout for node placement
-      layoutedGraph = await this.elk.layout(graphWithOptions);
+      layoutedGraph = (await this.elk.layout(graphWithOptions)) as ElkGraph;
 
       // Discard the edges after placement - we'll route them with libavoid
       layoutedGraph.edges = [];
@@ -473,18 +538,9 @@ export class SchematicLayoutEngine {
     // Apply existing positions to nodes (including net symbol nodes)
     this._applyExistingPositions(layoutedGraph, nodePositions);
 
+    // Snap all node positions if grid snap is enabled
     if (this.config.layout.gridSnap.enabled) {
-      const gridSize = this.config.layout.gridSnap.size;
-
-      if (layoutedGraph.children) {
-        for (const node of layoutedGraph.children) {
-          if (node.x !== undefined && node.y !== undefined) {
-            const snapped = snapPosition(node.x, node.y, gridSize);
-            node.x = snapped.x;
-            node.y = snapped.y;
-          }
-        }
-      }
+      snapGraphNodePositions(layoutedGraph, this.config.layout.gridSnap.size);
     }
 
     // Build connectivity for routing - use clustering (ignoreClusters=false) for efficient routing
@@ -695,12 +751,18 @@ export class SchematicLayoutEngine {
         }
 
         // Add label to the edge with the longest segment
+        // Skip labeling if this net has a symbol
+        const netId = longestSegmentInfo?.edge.netId;
+        const netHasSymbol =
+          netId && this.netlist.nets[netId]?.properties?.__symbol_value;
+
         if (
           longestSegmentInfo &&
-          longestSegmentInfo.position.segmentLength > 50
+          longestSegmentInfo.position.segmentLength > 50 &&
+          !netHasSymbol
         ) {
           const netName = longestSegmentInfo.edge.properties?.netName || "";
-          const labelDimensions = calculateTextDimensions(netName, 10);
+          const labelDimensions = calculateTextDimensions(netName, 12.7);
 
           // For horizontal segments, label goes above; for vertical, label goes to the side
           const labelOffset = 10;
@@ -805,11 +867,34 @@ export class SchematicLayoutEngine {
 
     console.log("*** ENDING LAYOUT PASS ***");
 
-    // Ensure the graph has the required properties
+    // Generate KiCad schematic snippet and full file
+    const kicadSchematic = this._generateKicadSchematic(layoutedGraph);
+    const kicadSchematicFull = this._generateKicadSchematicFull(layoutedGraph);
+
     return {
       ...layoutedGraph,
       nodePositions: extractedNodePositions,
+      kicadSchematic,
+      kicadSchematicFull,
     } as LayoutResult;
+  }
+
+  /**
+   * Generate a KiCad schematic snippet from the layout
+   */
+  private _generateKicadSchematic(graph: ElkGraph): string {
+    const generator = new KicadSchematicGenerator();
+    // Generate snippet for copying
+    return generator.generate(graph, false);
+  }
+
+  /**
+   * Generate a full KiCad schematic file from the layout
+   */
+  private _generateKicadSchematicFull(graph: ElkGraph): string {
+    const generator = new KicadSchematicGenerator();
+    // Generate full schematic for download
+    return generator.generate(graph, true);
   }
 
   /**
@@ -888,7 +973,13 @@ export class SchematicLayoutEngine {
         if (position) {
           if (gridSize > 0) {
             // Snap the position when applying
-            const snapped = snapPosition(position.x, position.y, gridSize);
+            const snapped = snapPosition(
+              position.x,
+              position.y,
+              gridSize,
+              node.width || position.width,
+              node.height || position.height
+            );
             node.x = snapped.x;
             node.y = snapped.y;
           } else {
@@ -1001,15 +1092,20 @@ export class SchematicLayoutEngine {
 
       // Get reference designator and value
       const refDes = instance.reference_designator;
-      const value = this._renderValue(instance.attributes.value);
+      // Try both lowercase and uppercase "value/Value"
+      const value = this._renderValue(
+        instance.attributes.value || instance.attributes.Value
+      );
       const footprint = this._getAttributeValue(instance.attributes.package);
 
       // Create the node
       const node: ElkNode = {
         id: instance_ref,
         type: NodeType.SYMBOL,
+        instance: instance, // Store the netlist instance
         width: nodeWidth,
         height: nodeHeight,
+        symbolBboxCenter: symbolInfo.bbox.center, // Add the bbox center
         // Apply position if provided
         ...(this._nodePositions[instance_ref] && {
           x: this._nodePositions[instance_ref].x,
@@ -1017,47 +1113,7 @@ export class SchematicLayoutEngine {
           rotation: this._nodePositions[instance_ref].rotation || 0,
         }),
         ports: [],
-        labels: [
-          // Reference designator
-          ...(refDes
-            ? [
-                {
-                  text: refDes,
-                  x: -20,
-                  y: nodeHeight / 2 - 10,
-                  width: 20,
-                  height: 10,
-                  textAlign: "right" as const,
-                },
-              ]
-            : []),
-          // Value
-          ...(value && this.config.visual.showComponentValues
-            ? [
-                {
-                  text: value,
-                  x: nodeWidth + 5,
-                  y: nodeHeight / 2 - 10,
-                  width: 50,
-                  height: 10,
-                  textAlign: "left" as const,
-                },
-              ]
-            : []),
-          // Footprint
-          ...(footprint && this.config.visual.showFootprints
-            ? [
-                {
-                  text: footprint,
-                  x: nodeWidth / 2 - 25,
-                  y: nodeHeight + 5,
-                  width: 50,
-                  height: 10,
-                  textAlign: "center" as const,
-                },
-              ]
-            : []),
-        ],
+        labels: [], // Will be populated by autoplace
         properties: {
           "elk.portConstraints": "FIXED_POS",
           "elk.nodeSize.constraints": "MINIMUM_SIZE",
@@ -1180,7 +1236,7 @@ export class SchematicLayoutEngine {
           // Calculate net label dimensions and position
           const netLabelDimensions = calculateTextDimensions(
             truncatedLabelText,
-            12
+            12.7
           );
           const netLabelWidth = isVertical
             ? netLabelDimensions.height
@@ -1241,6 +1297,14 @@ export class SchematicLayoutEngine {
         });
       }
 
+      // Autoplace labels after ports are created
+      this._autoplaceSymbolLabels(
+        node,
+        refDes || undefined,
+        value || undefined,
+        footprint || undefined
+      );
+
       return node;
     } catch (error) {
       console.error(`Failed to create symbol node for ${instance_ref}:`, error);
@@ -1263,12 +1327,12 @@ export class SchematicLayoutEngine {
     // Calculate main label dimensions
     const instanceName = instance_ref.split(".").pop() || "";
     const mpn = this._getAttributeValue(instance.attributes.mpn);
-    const mainLabelDimensions = calculateTextDimensions(instanceName, 12);
+    const mainLabelDimensions = calculateTextDimensions(instanceName, 12.7);
     const refDesLabelDimensions = calculateTextDimensions(
       instance.reference_designator || "",
-      12
+      12.7
     );
-    const mpnLabelDimensions = calculateTextDimensions(mpn || "", 12);
+    const mpnLabelDimensions = calculateTextDimensions(mpn || "", 12.7);
 
     // Initialize minimum width and height based on label dimensions
     let minWidth = Math.max(sizes.width, mainLabelDimensions.width + 20);
@@ -1277,6 +1341,7 @@ export class SchematicLayoutEngine {
     const node: ElkNode = {
       id: instance_ref,
       type: NodeType.MODULE,
+      instance: instance, // Store the netlist instance
       // Apply position and rotation if provided
       ...(this._nodePositions[instance_ref] && {
         x: this._nodePositions[instance_ref].x,
@@ -1339,7 +1404,7 @@ export class SchematicLayoutEngine {
 
       if (child_instance.kind === InstanceKind.PORT) {
         const port_ref = `${instance_ref}.${child_name}`;
-        const portLabelDimensions = calculateTextDimensions(child_name, 10);
+        const portLabelDimensions = calculateTextDimensions(child_name, 12.7);
 
         node.ports?.push({
           id: port_ref,
@@ -1363,7 +1428,7 @@ export class SchematicLayoutEngine {
         for (const port_name of Object.keys(child_instance.children)) {
           const full_port_ref = `${instance_ref}.${child_name}.${port_name}`;
           const portLabel = `${child_name}.${port_name}`;
-          const portLabelDimensions = calculateTextDimensions(portLabel, 10);
+          const portLabelDimensions = calculateTextDimensions(portLabel, 12.7);
 
           node.ports?.push({
             id: full_port_ref,
@@ -1937,7 +2002,7 @@ export class SchematicLayoutEngine {
 
             const netLabelDimensions = calculateTextDimensions(
               truncatedLabelText,
-              10
+              12.7
             );
             const netLabelWidth = isVertical
               ? netLabelDimensions.height
@@ -2629,8 +2694,10 @@ export class SchematicLayoutEngine {
         id: nodeId,
         type: NodeType.SYMBOL,
         netId: netId, // Store the net ID for later reference
+        net: net, // Store the net object
         width: nodeWidth,
         height: nodeHeight,
+        symbolBboxCenter: symbolInfo.bbox.center, // Add the bbox center
         // Apply position if provided
         ...(this._nodePositions[nodeId] && {
           x: this._nodePositions[nodeId].x,
@@ -2638,17 +2705,7 @@ export class SchematicLayoutEngine {
           rotation: this._nodePositions[nodeId].rotation || 0,
         }),
         ports: [],
-        labels: [
-          // Net name label
-          {
-            text: net.name || netId,
-            x: nodeWidth / 2 - 25,
-            y: -20,
-            width: 50,
-            height: 15,
-            textAlign: "center" as const,
-          },
-        ],
+        labels: [], // Will be populated by autoplace
         properties: {
           "elk.portConstraints": "FIXED_POS",
           "elk.nodeSize.constraints": "MINIMUM_SIZE",
@@ -2733,6 +2790,15 @@ export class SchematicLayoutEngine {
           netId: netId, // Store net ID on the port
         });
       }
+
+      // Autoplace labels after ports are created
+      // For net symbols, we only show the net name as a label
+      this._autoplaceSymbolLabels(
+        node,
+        net.name || netId,
+        undefined,
+        undefined
+      );
 
       return node;
     } catch (error) {
@@ -2820,5 +2886,380 @@ export class SchematicLayoutEngine {
     }
 
     return null;
+  }
+
+  /**
+   * Generate a deterministic UUID v5 from a hierarchical name
+   * Compatible with Rust's Uuid::new_v5(&Uuid::NAMESPACE_URL, name.as_bytes())
+   */
+  private _generateUUID(hierarchicalName: string): string {
+    return uuidv5(hierarchicalName, SchematicLayoutEngine.UUID_NAMESPACE_URL);
+  }
+
+  /**
+   * Autoplace labels for a symbol node using KiCad-inspired algorithm
+   */
+  private _autoplaceSymbolLabels(
+    node: ElkNode,
+    refDes?: string,
+    value?: string,
+    footprint?: string
+  ): void {
+    if (!node.width || !node.height) return;
+
+    // Collect labels to place
+    interface LabelInfo {
+      text: string;
+      type: "refdes" | "value" | "footprint";
+      dimensions: { width: number; height: number };
+    }
+
+    const labels: LabelInfo[] = [];
+
+    if (refDes) {
+      labels.push({
+        text: refDes,
+        type: "refdes",
+        dimensions: calculateTextDimensions(
+          refDes,
+          12.7,
+          "Newstroke, 'Courier New', monospace",
+          "normal",
+          2,
+          1
+        ),
+      });
+    }
+
+    if (value && this.config.visual.showComponentValues) {
+      labels.push({
+        text: value,
+        type: "value",
+        dimensions: calculateTextDimensions(
+          value,
+          12.7,
+          "Newstroke, 'Courier New', monospace",
+          "normal",
+          2,
+          1
+        ),
+      });
+    }
+
+    if (footprint && this.config.visual.showFootprints) {
+      labels.push({
+        text: footprint,
+        type: "footprint",
+        dimensions: calculateTextDimensions(
+          footprint,
+          12.7,
+          "Newstroke, 'Courier New', monospace",
+          "normal",
+          2,
+          1
+        ),
+      });
+    }
+
+    if (labels.length === 0) return;
+
+    // Constants for label spacing (in pixels)
+    const FIELD_PADDING = 3; // Vertical spacing between labels
+    const HPADDING = 1; // Horizontal padding from component edge
+    const VPADDING = 1; // Vertical padding from component edge
+
+    // Calculate total field box size
+    const maxLabelWidth = Math.max(...labels.map((l) => l.dimensions.width));
+
+    // Calculate total height: sum of all label heights + padding between them
+    let totalHeight = 0;
+    for (let i = 0; i < labels.length; i++) {
+      totalHeight += labels[i].dimensions.height;
+      if (i < labels.length - 1) {
+        totalHeight += FIELD_PADDING;
+      }
+    }
+
+    const fieldBoxWidth = maxLabelWidth;
+    const fieldBoxHeight = totalHeight;
+
+    // Get pin counts per side
+    const pinsPerSide = this._countPinsPerSide(node);
+
+    // Get preferred sides in order
+    const preferredSides = this._getPreferredSides(node, pinsPerSide);
+
+    // Choose the best side
+    const chosenSide = this._chooseBestSide(preferredSides, pinsPerSide);
+
+    // Calculate field box position
+    const fieldBoxPos = this._calculateFieldBoxPosition(
+      node,
+      chosenSide,
+      fieldBoxWidth,
+      fieldBoxHeight,
+      pinsPerSide[chosenSide.side],
+      HPADDING,
+      VPADDING
+    );
+
+    // Place individual labels within the field box
+    // All labels are positioned at their top-left anchor point
+    let currentY = fieldBoxPos.y;
+
+    for (let i = 0; i < labels.length; i++) {
+      const label = labels[i];
+
+      // Always use top-left anchor point
+      const x = fieldBoxPos.x;
+      const y = currentY;
+
+      // Add the label to the node
+      if (!node.labels) {
+        node.labels = [];
+      }
+
+      node.labels.push({
+        text: label.text,
+        x: x,
+        y: y,
+        width: label.dimensions.width,
+        height: label.dimensions.height,
+        textAlign: "left", // Always left-aligned for top-left anchor
+      });
+
+      // Move to next label position
+      currentY += label.dimensions.height;
+
+      // Add padding between labels (but not after the last one)
+      if (i < labels.length - 1) {
+        currentY += FIELD_PADDING;
+      }
+    }
+  }
+
+  /**
+   * Count pins on each side of a symbol node
+   */
+  private _countPinsPerSide(node: ElkNode): {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  } {
+    const counts = { left: 0, right: 0, top: 0, bottom: 0 };
+
+    if (!node.ports) return counts;
+
+    for (const port of node.ports) {
+      const side = port.properties?.["port.side"];
+      switch (side) {
+        case "WEST":
+          counts.left++;
+          break;
+        case "EAST":
+          counts.right++;
+          break;
+        case "NORTH":
+          counts.top++;
+          break;
+        case "SOUTH":
+          counts.bottom++;
+          break;
+      }
+    }
+
+    return counts;
+  }
+
+  /**
+   * Get preferred sides for label placement based on symbol properties
+   */
+  private _getPreferredSides(
+    node: ElkNode,
+    pinsPerSide: { left: number; right: number; top: number; bottom: number }
+  ): Array<{ side: "left" | "right" | "top" | "bottom"; pins: number }> {
+    const width = node.width || 0;
+    const height = node.height || 0;
+    const aspectRatio = width / height;
+
+    // Start with default preference order
+    let sides = [
+      { side: "right" as const, pins: pinsPerSide.right },
+      { side: "top" as const, pins: pinsPerSide.top },
+      { side: "left" as const, pins: pinsPerSide.left },
+      { side: "bottom" as const, pins: pinsPerSide.bottom },
+    ];
+
+    // Adjust preference based on aspect ratio
+    // For very wide symbols, prefer top/bottom
+    if (aspectRatio > 3.0) {
+      sides = [
+        { side: "top" as const, pins: pinsPerSide.top },
+        { side: "bottom" as const, pins: pinsPerSide.bottom },
+        { side: "right" as const, pins: pinsPerSide.right },
+        { side: "left" as const, pins: pinsPerSide.left },
+      ];
+    }
+    // For very tall symbols, keep horizontal preference
+    else if (aspectRatio < 0.33) {
+      // Default order is already good for tall symbols
+    }
+
+    // Note: We do NOT consider rotation here because:
+    // 1. Label positions are calculated relative to the unrotated component
+    // 2. The viewer will rotate the entire component (including labels)
+    // 3. The viewer then applies anchor point transformation to keep text upright
+    // So we always calculate positions as if the component is at 0° rotation
+
+    return sides;
+  }
+
+  /**
+   * Choose the best side for label placement
+   */
+  private _chooseBestSide(
+    preferredSides: Array<{
+      side: "left" | "right" | "top" | "bottom";
+      pins: number;
+    }>,
+    pinsPerSide: { left: number; right: number; top: number; bottom: number }
+  ): { side: "left" | "right" | "top" | "bottom"; pins: number } {
+    // First, try to find a side with no pins
+    for (const side of preferredSides) {
+      if (side.pins === 0) {
+        return side;
+      }
+    }
+
+    // If all sides have pins, choose the side with the fewest pins
+    let bestSide = preferredSides[0];
+    for (const side of preferredSides) {
+      if (side.pins < bestSide.pins) {
+        bestSide = side;
+      }
+    }
+
+    return bestSide;
+  }
+
+  /**
+   * Calculate the position of the field box
+   */
+  private _calculateFieldBoxPosition(
+    node: ElkNode,
+    side: { side: "left" | "right" | "top" | "bottom"; pins: number },
+    fieldBoxWidth: number,
+    fieldBoxHeight: number,
+    pinCount: number,
+    hPadding: number,
+    vPadding: number
+  ): { x: number; y: number } {
+    const nodeWidth = node.width || 0;
+    const nodeHeight = node.height || 0;
+
+    let x = 0;
+    let y = 0;
+
+    if (pinCount === 0) {
+      // No pins on this side - position the field box on the side
+      switch (side.side) {
+        case "left":
+          // Position to the left of the node
+          x = -fieldBoxWidth - hPadding;
+          // Vertically center the field box
+          y = (nodeHeight - fieldBoxHeight) / 2;
+          break;
+        case "right":
+          // Position to the right of the node
+          x = nodeWidth + hPadding;
+          // Vertically center the field box
+          y = (nodeHeight - fieldBoxHeight) / 2;
+          break;
+        case "top":
+          // Position above the node
+          x = (nodeWidth - fieldBoxWidth) / 2;
+          y = -fieldBoxHeight - vPadding;
+          break;
+        case "bottom":
+          // Position below the node
+          x = (nodeWidth - fieldBoxWidth) / 2;
+          y = nodeHeight + vPadding;
+          break;
+      }
+    } else {
+      // Has pins - position to avoid them
+      // Find the bounding box of all pins on this side
+      const pinsBox = this._getPinsBoundingBox(node, side.side);
+
+      switch (side.side) {
+        case "left":
+          // Position to the left of the node
+          x = -fieldBoxWidth - hPadding;
+          // Position below the lowest pin with padding
+          y = pinsBox.maxY + vPadding;
+          break;
+        case "right":
+          // Position to the right of the node
+          x = nodeWidth + hPadding;
+          // Position below the lowest pin with padding
+          y = pinsBox.maxY + vPadding;
+          break;
+        case "top":
+          // Position above the node, to the right of rightmost pin
+          x = pinsBox.maxX + hPadding;
+          y = -fieldBoxHeight - vPadding;
+          break;
+        case "bottom":
+          // Position below the node, to the right of rightmost pin
+          x = pinsBox.maxX + hPadding;
+          y = nodeHeight + vPadding;
+          break;
+      }
+    }
+
+    return { x, y };
+  }
+
+  /**
+   * Get bounding box of all pins on a specific side
+   */
+  private _getPinsBoundingBox(
+    node: ElkNode,
+    side: "left" | "right" | "top" | "bottom"
+  ): { minX: number; minY: number; maxX: number; maxY: number } {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    if (!node.ports) {
+      return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    }
+
+    const sideMapping = {
+      left: "WEST",
+      right: "EAST",
+      top: "NORTH",
+      bottom: "SOUTH",
+    };
+
+    for (const port of node.ports) {
+      if (port.properties?.["port.side"] === sideMapping[side]) {
+        const x = port.x || 0;
+        const y = port.y || 0;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+
+    // Return sensible defaults if no pins found
+    if (minX === Infinity) {
+      return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    }
+
+    return { minX, minY, maxX, maxY };
   }
 }
