@@ -12,7 +12,7 @@ installers = ["shell", "powershell", "npm", "homebrew", "msi"]
 # A GitHub repo to push Homebrew formulas to
 tap = "diodeinc/homebrew-pcb"
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # A namespace to use when publishing this package to the npm registry
 npm-scope = "@diode"
 # Path that installers should place binaries in
@@ -23,3 +23,10 @@ publish-jobs = ["homebrew"]
 install-updater = true
 # Which actions to run on pull requests
 pr-run-mode = "skip"
+# GitHub build setup for Node.js
+github-build-setup = "build-setup.yml"
+
+# Extra artifacts to build and include
+[[dist.extra-artifacts]]
+artifacts = ["zener-vscode-extension.vsix"]
+build = ["bash", "-c", "cd vscode && npm install && cd client && npm install && cd ../preview && npm install && cd .. && npm run compile && npx --yes vsce package && mv zener-*.vsix ../zener-vscode-extension.vsix"]
