@@ -248,12 +248,19 @@ pub fn convert_from_starlark<'v, V: ValueLike<'v>>(value: V, heap: &'v Heap) -> 
     // EnumValue detection – relies on its `to_string()` returning `EnumType("<variant>")`.
     if value.get_type() == "enum" {
         let repr = value.to_string();
-        let variant = repr
-            .strip_prefix("EnumType(\"")
-            .unwrap_or(&repr)
-            .strip_suffix("\")")
-            .unwrap_or(&repr)
-            .to_owned();
+        let variant = if let Some(first_quote) = repr.find('"') {
+            if let Some(last_quote) = repr.rfind('"') {
+                if first_quote < last_quote {
+                    repr[first_quote + 1..last_quote].to_owned()
+                } else {
+                    repr
+                }
+            } else {
+                repr
+            }
+        } else {
+            repr
+        };
 
         return InputValue::Enum { variant };
     }
