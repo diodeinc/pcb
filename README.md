@@ -25,6 +25,13 @@ PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
 ## Installation
 
+### From Installer
+
+
+Follow the instructions [here](https://github.com/diodeinc/pcb/releases/latest)
+to install the latest `pcb`. You can find the `*.vsix` file in the release to
+install language support into VSCode/Cursor/Windsurf/etc.
+
 ### From Source
 
 ```bash
