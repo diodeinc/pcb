@@ -585,3 +585,23 @@ snapshot_eval!(io_config_with_help_text, {
         )
     "#
 });
+
+snapshot_eval!(cfg_enum_value, {
+    "Module.zen" => r#"
+        # Test io() with enum value
+
+        EnumType = enum("A", "B", "C")
+        
+        cfg = config("cfg", EnumType, default = "A")
+        print(cfg)
+    "#,
+    "top.zen" => r#"
+        MyModule = Module("./Module.zen")
+
+        # Create module instance with some parameters
+        MyModule(
+            name = "U1",
+            cfg = MyModule.EnumType("B"),
+        )
+    "#
+});

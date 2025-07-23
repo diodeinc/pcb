@@ -124,12 +124,8 @@ impl InputValue {
                 let typ_val =
                     expected_typ.ok_or_else(|| anyhow!("enum input requires expected_typ"))?;
 
-                // Use get_attr to look up the variant on the EnumType value.
-                match typ_val.get_attr(variant, heap) {
-                    Ok(Some(v)) => Ok(v),
-                    Ok(None) => Err(anyhow!("enum variant '{variant}' not found")),
-                    Err(e) => Err(anyhow!(e.to_string())),
-                }
+                eval.eval_function(typ_val, &[eval.heap().alloc_str(variant).to_value()], &[])
+                    .map_err(|e| anyhow!(e.to_string()))
             }
             InputValue::Record { fields } => {
                 let typ_val =
@@ -249,10 +245,16 @@ pub fn convert_from_starlark<'v, V: ValueLike<'v>>(value: V, heap: &'v Heap) -> 
         }
         return InputValue::Dict(out);
     }
-    // EnumValue detection – relies on its `to_string()` returning `<Enum>.<variant>`.
-    if value.get_type() == "EnumValue" {
+    // EnumValue detection – relies on its `to_string()` returning `EnumType("<variant>")`.
+    if value.get_type() == "enum" {
         let repr = value.to_string();
-        let variant = repr.split('.').next_back().unwrap_or(&repr).to_owned();
+        let variant = repr
+            .strip_prefix("EnumType(\"")
+            .unwrap_or(&repr)
+            .strip_suffix("\")")
+            .unwrap_or(&repr)
+            .to_owned();
+
         return InputValue::Enum { variant };
     }
     if value.get_type() == "record" {
