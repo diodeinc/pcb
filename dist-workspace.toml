@@ -26,7 +26,3 @@ pr-run-mode = "skip"
 # GitHub build setup for Node.js
 github-build-setup = "build-setup.yml"
 
-# Extra artifacts to build and include
-[[dist.extra-artifacts]]
-artifacts = ["zener-vscode-extension.vsix"]
-build = ["bash", "-c", "cd vscode && npm install && cd client && npm install && cd ../preview && npm install && cd .. && npm run compile && npx --yes vsce package && mv zener-*.vsix ../zener-vscode-extension.vsix"]
