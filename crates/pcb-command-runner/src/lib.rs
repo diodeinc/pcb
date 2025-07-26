@@ -124,6 +124,9 @@ where
         command.stdin(Stdio::piped());
     }
 
+    // Log the command being run
+    log::debug!("Running command: {command:?}");
+
     let mut output = CommandOutput::new();
 
     if options.capture_output {
