@@ -7,8 +7,21 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+mod path_helpers {
+    use dirs;
+    pub(crate) fn home_dir_to_string() -> String {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod paths {
+    use crate::path_helpers;
+
     pub(crate) fn python_interpreter() -> String {
         std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_|
             "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3".to_string()).replace("~", dirs::home_dir().unwrap_or_default().to_str().unwrap_or_default())
@@ -38,19 +51,28 @@ mod paths {
             })
             .replace(
                 "~",
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default(),
+                path_helpers::home_dir_to_string().as_str(),
             )
     }
 }
 
 #[cfg(target_os = "windows")]
 mod paths {
+    use std::path::Path;
+    use crate::path_helpers;
+
     pub(crate) fn python_interpreter() -> String {
-        std::env::var("KICAD_PYTHON_INTERPRETER")
-            .unwrap_or_else(|_| r"C:\Program Files\KiCad\9.0\bin\python.exe".to_string())
+        let paths = vec![
+            std::env::var("KICAD_PYTHON_INTERPRETER")
+                .unwrap_or_else(|_| "python.exe".to_string()),
+            r"C:\Program Files\KiCad\9.0\bin\python.exe".to_string(),
+            r"~\AppData\Local\Programs\KiCad\9.0\bin\python.exe".to_string()
+                    .replace("~", path_helpers::home_dir_to_string().as_str())
+        ];
+        paths.iter().find(|p| Path::new(p).exists())
+            .cloned()
+            .unwrap()
+
     }
 
     pub(crate) fn python_site_packages() -> String {
@@ -60,22 +82,31 @@ mod paths {
             })
             .replace(
                 "~",
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default(),
+                path_helpers::home_dir_to_string().as_str(),
             )
     }
 
     pub(crate) fn venv_site_packages() -> String {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".diode")
-            .join("venv")
+        let venv_path = Path::new(python_interpreter().as_str())
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
             .join("Lib")
-            .join("site-packages")
-            .to_string_lossy()
-            .to_string()
+            .join("site-packages");
+
+            if venv_path.exists() {
+                venv_path
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                dirs::home_dir()
+                    .unwrap_or_default()
+                    .join(".diode")
+                    .join("venv")
+                    .join("Lib")
+                    .join("site-packages")
+                    .to_string_lossy()
+                    .to_string()
+            }
     }
 
     pub(crate) fn kicad_cli() -> String {
@@ -86,6 +117,8 @@ mod paths {
 
 #[cfg(target_os = "linux")]
 mod paths {
+    use crate::path_helpers;
+
     pub(crate) fn python_interpreter() -> String {
         std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_| "/usr/bin/python3".to_string())
     }
@@ -155,6 +188,17 @@ fn check_kicad_python() -> Result<()> {
         ));
     }
 
+    let python_venv_site_packages = paths::venv_site_packages();
+    let python_site_packages = paths::python_site_packages();
+    if !Path::new(&python_venv_site_packages).exists() && !Path::new(&python_site_packages).exists() {
+        return Err(anyhow!(
+            "KiCad Python site packages were not found at ({}) or ({}): \n\
+             Please ensure at least one of these locations is valid OR specify a non-standard location by \n\
+             setting the KICAD_PYTHON_SITE_PACKAGES environment variable.",
+            python_venv_site_packages,
+            python_site_packages
+        ));
+    }
     // Try to run python --version to verify it's executable
     match Command::new(&python_path).arg("--version").output() {
         Ok(output) if output.status.success() => Ok(()),
