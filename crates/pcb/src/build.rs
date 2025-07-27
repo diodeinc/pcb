@@ -174,3 +174,5 @@ pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     paths_vec.sort();
     Ok(paths_vec)
 }
+
+

@@ -10,6 +10,8 @@ description = "Schematic handling for PCB design"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+regex = { workspace = true }
 uuid = { workspace = true }
 pathdiff = { workspace = true }
 thiserror = { workspace = true }

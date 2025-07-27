@@ -32,3 +32,4 @@ open = { workspace = true }
 inquire = { workspace = true }
 pcb-ui = { workspace = true }
 pcb-buildifier = { workspace = true }
+comfy-table = { workspace = true }

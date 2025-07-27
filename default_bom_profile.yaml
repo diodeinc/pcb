@@ -1,0 +1,235 @@
+version: 1
+
+rules:
+  - name: "27Ohm 0402"
+    match:
+      value: /^27(Ohm)?$/
+      package: "0402"
+    set:
+      mpn: "ERJ2RKF27R0X"
+      lcsc: "C413051"
+      manufacturer: "Panasonic Electronic Components"
+      value: "27 1%"
+  - name: "110Ohm 0402"
+    match:
+      value: /^110(Ohm)?$/
+      package: "0402"
+    set:
+      mpn: "ERJ2RKF1100X"
+      lcsc: "C413064"
+      manufacturer: "Panasonic Electronic Components"
+      value: "110 1%"
+  - name: "150Ohm 0402"
+    match:
+      value: /^150(Ohm)?$/
+      package: "0402"
+    set:
+      mpn: "ERJ2RKF1500X"
+      lcsc: "C413067"
+      manufacturer: "Panasonic Electronic Components"
+      value: "150 1%"
+  - name: "261Ohm 0402"
+    match:
+      value: /^261(Ohm)?$/
+      package: "0402"
+    set:
+      mpn: "ERJ2RKF2610X"
+      lcsc: "C400618"
+      manufacturer: "Panasonic Electronic Components"
+      value: "261 1%"
+  - name: "5.1kOhm 0402"
+    match:
+      value: /^5.1k(Ohm)?( (1|5)%)?$/
+      package: "0402"
+    set:
+      mpn: "0402WGF5101TCE"
+      lcsc: "C25905"
+      manufacturer: "UNI-ROYAL(Uniroyal Elec)"
+      value: "5.1k 1%"
+  - name: "10kOhm 0402"
+    match:
+      value: /^10k(Ohm)?( 1%)?$/
+      package: "0402"
+    set:
+      mpn: "0402WGF1002TCE"
+      lcsc: "C25744"
+      manufacturer: "UNI-ROYAL(Uniroyal Elec)"
+      value: "10k 1%"
+  - name: "33kOhm 0402"
+    match:
+      value: /^33k(Ohm)?( 1%)?$/
+      package: "0402"
+    set:
+      mpn: "0402WGF3302TCE"
+      lcsc: "C25779"
+      manufacturer: "UNI-ROYAL(Uniroyal Elec)"
+      value: "33k 1%"
+  - name: "47kOhm 0402"
+    match:
+      value: /^47k(Ohm)?( 1%)?$/
+      package: "0402"
+    set:
+      mpn: "0402WGF4702TCE"
+      lcsc: "C25792"
+      manufacturer: "UNI-ROYAL(Uniroyal Elec)"
+      value: "47k 1%"
+  - name: "100nF 0402"
+    match:
+      value: /^100nF$/
+      package: "0402"
+    set:
+      mpn: CL05B104KO5NNNC
+      lcsc: C1525
+      manufacturer: "Samsung Electro-Mechanics"
+      value: "100nF 16V"
+  - name: "1uF 0402"
+    match:
+      value: /^1uF.*(10V)?$/
+      package: "0402"
+    set:
+      mpn: CL05A105KA5NQNC
+      lcsc: C52923
+      manufacturer: "Samsung Electro-Mechanics"
+      value: "1uF 25V"
+  - name: "4.7uF 0402"
+    match:
+      value: /^4.7uF.*(10V)?$/
+      package: "0402"
+    set:
+      mpn: CL05A475MP5NRNC
+      lcsc: C23733
+      manufacturer: "Samsung Electro-Mechanics"
+      value: "4.7uF 10V"
+  - name: "10uF 0603"
+    match:
+      value: /^10uF.*(10V)?$/
+      package: "0603"
+    set:
+      mpn: CL10A106MA8NRNC
+      lcsc: C96446
+      manufacturer: "Samsung Electro-Mechanics"
+      value: "10uF 25V"
+  - name: "Ferrite Bead 220Ohm@100MHz 2A"
+    match:
+      designator: /^FB\d+$/
+      value: "220 2A 100MHz"
+      package: "0603"
+    set:
+      mpn: "BLM18EG221SN1D"
+      lcsc: "C85827"
+      manufacturer: "Murata Electronics"
+  - name: "2x5 1.27mm Header"
+    match:
+      designator: /^J\d+$/
+      value: "5 2 1.27mm Vertical Pin Header"
+    set:
+      mpn: "ZX-PZ1.27-2-5PZZ"
+      lcsc: "C7501289"
+      package: "1.27mm 2x5"
+      manufacturer: "Megastar"
+  - name: "KMR231G LFS Switch"
+    match:
+      mpn: "KMR231G LFS"
+    set:
+      lcsc: "C99271"
+      manufacturer: "C&K"
+  - name: "Vishay LED"
+    match:
+      value: /^VLM.+\-GS08$/
+    set:
+      manufacturer: "Vishay Semiconductor Opto Division"
+      package: "0402"
+  - name: "VLMB1500-GS08"
+    match.mpn: "VLMB1500-GS08"
+    set.lcsc: "C511042"
+  - name: "VLMG1500-GS08"
+    match.mpn: "VLMG1500-GS08"
+    set.lcsc: "C511404"
+  - name: "VLMO1500-GS08"
+    match.mpn: "VLMO1500-GS08"
+    set.lcsc: "C3000857"
+  - name: "VLMS1500-GS08"
+    match.mpn: "VLMS1500-GS08"
+    set.lcsc: "C511370"
+  - name: "SG-210STF 12.0000ML0"
+    match.mpn: "SG-210STF 12.0000ML0"
+    set.lcsc: "C255991"
+  - name: "RP2040"
+    match.mpn: /^SC0914(\(\d+\))?$/
+    set.lcsc: "C2040"
+  - name: "TPD4E05U06QDQARQ1"
+    match.mpn: "TPD4E05U06QDQARQ1"
+    set.lcsc: "C81353"
+  - name: "PESD5V0X1UB,135"
+    match.mpn: "PESD5V0X1UB,135"
+    set.lcsc: "C89285"
+  - name: "261Ohm -> 270Ohm" # temporary substitution for stock issues
+    match.lcsc: "C400618"
+    set.lcsc: "C278588"
+
+outputs:
+  jlc:
+    format: csv
+    file: "bom/{design}/jlc.csv"
+    columns:
+      "Designator": "designator"
+      "Footprint": "package"
+      "Comment": "mpn"
+      "JLCPCB Part #": "lcsc"
+
+  # Quick preview table to terminal
+  preview:
+    format: table
+    file: ""  # stdout
+    columns:
+      "RefDes": "designator"
+      "Qty": "quantity"
+      "Value": "value"
+      "Package": "package"
+      "MPN": "mpn"
+      "Mfg": "manufacturer"
+      "Description": "description"
+
+  # Assembly house format
+  assembly:
+    format: csv
+    file: "bom/{design}/assembly.csv"
+    columns:
+      "RefDes": "designator"
+      "Qty": "quantity"
+      "MPN": "mpn"
+      "Manufacturer": "manufacturer"
+      "Package": "package"
+      "Value": "value"
+      "Description": "description"
+
+  # Engineering review (includes DNP parts)
+  review:
+    format: csv
+    file: "bom/{design}/review.csv"
+    columns:
+      "RefDes": "designator"
+      "Value": "value"
+      "Package": "package"
+      "MPN": "mpn"
+      "Manufacturer": "manufacturer"
+      "Description": "description"
+      "DNP": "dnp"
+      "Qty": "quantity"
+
+  # Sourcing/purchasing format
+  sourcing:
+    format: csv
+    file: "bom/{design}/sourcing.csv"
+    columns:
+      "MPN": "mpn"
+      "Manufacturer": "manufacturer"
+      "Description": "description"
+      "Total Qty": "quantity"
+      "Example RefDes": "designator"
+
+  # Complete data export
+  complete:
+    format: json
+    file: "bom/{design}/complete.json"
+    columns: {}  # all available fields
