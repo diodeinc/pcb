@@ -1,0 +1,31 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Diode Computers, Inc.",
+  "theme": "mint",
+  "logo": {
+    "dark": "logo/logo-green.svg",
+    "light": "logo/logo-black.svg"
+  },
+  "favicon": "favicon.svg",
+  "colors": {
+    "primary": "#0D9373",
+    "light": "#07C983",
+    "dark": "#0D9373"
+  },
+  "topbarLinks": [
+    {
+      "name": "Email Us",
+      "url": "mailto:founders@diode.computer"
+    }
+  ],
+  "tabs": [],
+  "navigation": {
+    "pages": [ "spec" ]
+  },
+  "footerSocials": {
+    "x": "https://x.com/diodeinc",
+    "github": "https://github.com/diodeinc",
+    "linkedin": "https://www.linkedin.com/company/diode-inc"
+  }
+}
+

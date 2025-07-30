@@ -1,3 +1,8 @@
+---
+title: 'Zener Language Specification'
+description: 'Domain-specific language for describing PCB schematics'
+---
+
 # Zener Language Specification
 
 ## Overview
@@ -32,7 +37,7 @@ Each `.zen` file is a Starlark module. It can be used in two ways:
 2. It can be loaded as a schematic module using the `Module()` helper. For
    example, `MyFile = Module("./MyFile.zen")` will import `MyFile.zen` as a
    schematic module, which you can instantiate like so:
-   ```starlark
+   ```python
    MyFile = Module("./MyFile.zen")
    MyFile(
        name = "MyFile",
@@ -44,7 +49,7 @@ Each `.zen` file is a Starlark module. It can be used in two ways:
 
 The `load()` and `Module()` statements support multiple resolution strategies:
 
-```starlark
+```python
 # Local file (relative to current file)
 load("./utils.zen", "helper")
 
@@ -71,7 +76,7 @@ Zener provides built-in package aliases for commonly used libraries:
 
 These can be used directly:
 
-```starlark
+```python
 # Load from stdlib
 load("@stdlib/units.zen", "kohm", "uF")
 
@@ -99,7 +104,7 @@ local-lib = "./path/to/local/lib"
 
 A `Net` represents an electrical connection between component pins.
 
-```starlark
+```python
 # Create a net with optional name
 net1 = Net()
 net2 = Net("VCC")
@@ -114,7 +119,7 @@ net2 = Net("VCC")
 
 A `Symbol` represents a schematic symbol definition with its pins. Symbols can be created manually or loaded from KiCad symbol libraries.
 
-```starlark
+```python
 # Create a symbol from explicit definition
 my_symbol = Symbol(
     name = "MyDevice",
@@ -154,7 +159,7 @@ Note: You cannot mix the positional `library_spec` argument with the named `libr
 
 Components represent physical electronic parts with pins and properties.
 
-```starlark
+```python
 # Using a Symbol for pin definitions
 my_symbol = Symbol(
     definition = [
@@ -200,7 +205,7 @@ Key parameters:
 
 Interfaces define reusable connection patterns as a collection of nets or sub-interfaces.
 
-```starlark
+```python
 # Define an interface type
 PowerInterface = interface(
     vcc = Net,
@@ -239,7 +244,7 @@ resistor = Component(
 
 Modules represent hierarchical subcircuits that can be instantiated multiple times.
 
-```starlark
+```python
 # Load a module from a file
 SubCircuit = Module("./subcircuit.zen")
 
@@ -259,7 +264,7 @@ SubCircuit(
 
 Declares a net or interface input for a module.
 
-```starlark
+```python
 # Required net input
 vcc = io("vcc", Net)
 
@@ -282,7 +287,7 @@ data = io("data", Net, default=Net("DATA"))
 
 Declares a configuration value input for a module.
 
-```starlark
+```python
 # String configuration
 prefix = config("prefix", str, default="U")
 
@@ -309,7 +314,7 @@ debug = config("debug", bool, optional=True)
 
 Resolves a file or directory path using the load resolver.
 
-```starlark
+```python
 # Get absolute path to a file
 config_path = File("./config.json")
 
@@ -321,7 +326,7 @@ stdlib_path = File("@stdlib/components")
 
 Raises a runtime error with the given message.
 
-```starlark
+```python
 if not condition:
     error("Condition failed")
 ```
@@ -330,7 +335,7 @@ if not condition:
 
 Checks a condition and raises an error if false.
 
-```starlark
+```python
 check(voltage > 0, "Voltage must be positive")
 check(len(pins) == 8, "Expected 8 pins")
 ```
@@ -339,7 +344,7 @@ check(len(pins) == 8, "Expected 8 pins")
 
 Adds a property to the current module instance.
 
-```starlark
+```python
 add_property("layout_group", "power_supply")
 add_property("critical", True)
 ```
@@ -350,7 +355,7 @@ add_property("critical", True)
 
 A module is defined by a `.zen` file that declares its inputs and creates components:
 
-```starlark
+```python
 # voltage_divider.zen
 
 # Declare inputs
@@ -391,7 +396,7 @@ Component(
 
 ### Module Instantiation
 
-```starlark
+```python
 # Load the module
 VDivider = Module("./voltage_divider.zen")
 

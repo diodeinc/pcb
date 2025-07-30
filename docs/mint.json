@@ -1,0 +1,42 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Diode PCB Documentation",
+  "logo": {
+    "dark": "logo/logo-green.svg",
+    "light": "logo/logo-black.svg"
+  },
+  "favicon": "favicon.svg",
+  "colors": {
+    "primary": "#0D9373",
+    "light": "#07C983",
+    "dark": "#0D9373",
+    "anchors": {
+      "from": "#0D9373",
+      "to": "#07C983"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "Email Us",
+      "url": "mailto:founders@diode.computer"
+    }
+  ],
+  "tabs": [],
+  "anchors": [],
+  "navigation": [
+    {
+      "group": "Documentation",
+      "pages": [
+        "spec"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "x": "https://x.com/diodeinc",
+    "github": "https://github.com/diodeinc",
+    "linkedin": "https://www.linkedin.com/company/diode-inc"
+  },
+  "integrations": {
+    "intercom": "i5fhr9v1"
+  }
+}
