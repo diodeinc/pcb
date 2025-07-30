@@ -1,0 +1,26 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "top.zen",
+    children: [
+        FrozenValue(
+            Module {
+                name: "test",
+                source: "/Module.zen",
+                properties: {
+                    "sum": "FrozenValue(StarlarkFloat(13.14))",
+                    "v1_type": "FrozenValue(\"float\")",
+                    "v1_value": "FrozenValue(StarlarkFloat(3.14))",
+                    "v2_type": "FrozenValue(\"float\")",
+                    "v2_value": "FrozenValue(StarlarkFloat(10.0))",
+                    "v3_type": "FrozenValue(\"float\")",
+                    "v3_value": "FrozenValue(StarlarkFloat(0.0))",
+                },
+            },
+        ),
+    ],
+}
+[]

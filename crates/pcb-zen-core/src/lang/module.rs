@@ -693,7 +693,22 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 2. Next, if the expected type is an enum, attempt to construct the variant
+    // 2. Try automatic type conversions for common cases
+    let type_str = typ.to_string();
+    match type_str.as_str() {
+        "float" | "Float" => {
+            // Try to convert int to float
+            if let Some(i) = value.unpack_i32() {
+                let float_val = eval.heap().alloc(StarlarkFloat(i as f64));
+                if validate_type(name, float_val, typ, eval.heap()).is_ok() {
+                    return Ok(float_val);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // 3. Next, if the expected type is an enum, attempt to construct the variant
     //    by calling the enum factory with the provided value.
     if let Some(converted) = try_enum_conversion(value, typ, eval)? {
         // Ensure the converted value is of the correct type (it should be, but
@@ -702,7 +717,7 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 3. None of the conversion paths worked – propagate the original validation
+    // 4. None of the conversion paths worked – propagate the original validation
     //    error for a helpful message.
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();

@@ -605,3 +605,66 @@ snapshot_eval!(cfg_enum_value, {
         )
     "#
 });
+
+snapshot_eval!(config_int_to_float_conversion, {
+    "Module.zen" => r#"
+        # Test automatic int to float conversion
+        voltage = config("voltage", float)
+        current = config("current", float, default = 1)  # int default should convert to float
+        power = config("power", float, optional = True)
+        
+        # Verify the values are floats
+        add_property("voltage_value", voltage)
+        add_property("voltage_type", type(voltage))
+        add_property("current_value", current) 
+        add_property("current_type", type(current))
+        
+        # Test arithmetic to ensure they behave as floats
+        add_property("voltage_divided", voltage / 2)
+        add_property("current_multiplied", current * 1.5)
+        
+        # Optional power should be None when not provided
+        add_property("power_is_none", power == None)
+    "#,
+    "top.zen" => r#"
+        MyModule = Module("./Module.zen")
+        
+        # Provide integer values that should be converted to floats
+        m = MyModule(
+            name = "test",
+            voltage = 5,      # int 5 should become float 5.0
+            current = 2,      # int 2 should become float 2.0
+            # power is not provided, should be None
+        )
+    "#
+});
+
+snapshot_eval!(config_mixed_numeric_types, {
+    "Module.zen" => r#"
+        # Test that float values remain floats and int values convert to float
+        voltage1 = config("voltage1", float)
+        voltage2 = config("voltage2", float) 
+        voltage3 = config("voltage3", float, default = 0)  # int default
+        
+        # Verify all are floats
+        add_property("v1_value", voltage1)
+        add_property("v1_type", type(voltage1))
+        add_property("v2_value", voltage2)
+        add_property("v2_type", type(voltage2))
+        add_property("v3_value", voltage3)
+        add_property("v3_type", type(voltage3))
+        
+        # Test that float arithmetic works correctly
+        add_property("sum", voltage1 + voltage2 + voltage3)
+    "#,
+    "top.zen" => r#"
+        MyModule = Module("./Module.zen")
+        
+        m = MyModule(
+            name = "test",
+            voltage1 = 3.14,   # Already a float
+            voltage2 = 10,     # Int that should convert to float
+            # voltage3 uses default int 0 that should convert to float
+        )
+    "#
+});
