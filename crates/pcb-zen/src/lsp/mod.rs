@@ -32,8 +32,13 @@ pub struct LspEvalContext {
 /// Helper function to create a standard load resolver with remote and workspace support
 fn create_standard_load_resolver(
     file_provider: Arc<dyn FileProvider>,
-    workspace_root: &Path,
+    file_path: &Path,
 ) -> Arc<CoreLoadResolver> {
+    let workspace_root = file_path
+        .parent()
+        .and_then(|parent| find_workspace_root(file_provider.as_ref(), parent))
+        .unwrap_or_else(|| file_path.parent().unwrap_or(file_path).to_path_buf());
+
     let remote_fetcher = Arc::new(DefaultRemoteFetcher);
     Arc::new(CoreLoadResolver::new(
         file_provider,
@@ -192,15 +197,9 @@ impl LspContext for LspEvalContext {
     fn parse_file_with_contents(&self, uri: &LspUrl, content: String) -> LspEvalResult {
         match uri {
             LspUrl::File(path) => {
-                // Determine workspace root from the file path
-                let workspace_root = path
-                    .parent()
-                    .and_then(|parent| find_workspace_root(self.file_provider.as_ref(), parent))
-                    .unwrap_or_else(|| path.parent().unwrap_or(path).to_path_buf());
-
                 // Create a load resolver for this file
                 let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
+                    create_standard_load_resolver(self.file_provider.clone(), uri.path());
 
                 // Parse and analyze the file with the load resolver set
                 let result = self
@@ -240,11 +239,8 @@ impl LspContext for LspEvalContext {
         // Use the load resolver from the inner context
         match current_file {
             LspUrl::File(current_path) => {
-                // Determine workspace root from current file
-                let workspace_root = current_path.parent().unwrap_or(current_path).to_path_buf();
-
                 let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
+                    create_standard_load_resolver(self.file_provider.clone(), current_path);
                 let resolved =
                     load_resolver.resolve_path(self.file_provider.as_ref(), path, current_path)?;
                 Ok(LspUrl::File(resolved))
@@ -287,10 +283,8 @@ impl LspContext for LspEvalContext {
         match current_file {
             LspUrl::File(current_path) => {
                 // Try to resolve as a file path
-                let workspace_root = current_path.parent().unwrap_or(current_path).to_path_buf();
-
                 let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
+                    create_standard_load_resolver(self.file_provider.clone(), current_path);
                 if let Ok(resolved) =
                     load_resolver.resolve_path(self.file_provider.as_ref(), literal, current_path)
                 {
@@ -415,10 +409,8 @@ impl LspContext for LspEvalContext {
         // Check if the load path is a directory
         match current_file {
             LspUrl::File(current_path) => {
-                let workspace_root = current_path.parent().unwrap_or(current_path).to_path_buf();
-
                 let load_resolver =
-                    create_standard_load_resolver(self.file_provider.clone(), &workspace_root);
+                    create_standard_load_resolver(self.file_provider.clone(), current_path);
                 if let Ok(resolved) =
                     load_resolver.resolve_path(self.file_provider.as_ref(), load_path, current_path)
                 {
@@ -534,16 +526,11 @@ impl LspContext for LspEvalContext {
                             let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
 
                             // Evaluate the module
-                            let workspace_root = path_buf
-                                .parent()
-                                .unwrap_or(path_buf.as_path())
-                                .to_path_buf();
-
                             let ctx = EvalContext::new()
                                 .set_file_provider(self.file_provider.clone())
                                 .set_load_resolver(create_standard_load_resolver(
                                     self.file_provider.clone(),
-                                    &workspace_root,
+                                    path_buf,
                                 ));
 
                             let eval_result = if let Some(contents) = maybe_contents {
