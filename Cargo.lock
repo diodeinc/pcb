@@ -2246,14 +2246,17 @@ dependencies = [
  "colored",
  "env_logger",
  "inquire",
+ "itertools 0.13.0",
  "log",
  "open",
  "pcb-buildifier",
  "pcb-kicad",
  "pcb-layout",
  "pcb-sch",
+ "pcb-sim",
  "pcb-ui",
  "pcb-zen",
+ "tempfile",
 ]
 
 [[package]]
@@ -2353,6 +2356,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-sim"
+version = "0.2.0-prerelease.2"
+dependencies = [
+ "anyhow",
+ "ariadne",
+ "assert_cmd",
+ "assert_fs",
+ "clap",
+ "colored",
+ "env_logger",
+ "inquire",
+ "insta",
+ "itertools 0.13.0",
+ "log",
+ "open",
+ "paste",
+ "pcb-buildifier",
+ "pcb-kicad",
+ "pcb-layout",
+ "pcb-sch",
+ "pcb-ui",
+ "pcb-zen",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "walkdir",
+ "zip",
+]
+
+[[package]]
 name = "pcb-starlark-lsp"
 version = "0.2.0-prerelease.2"
 dependencies = [
@@ -2414,6 +2447,7 @@ dependencies = [
  "pcb-eda",
  "pcb-kicad",
  "pcb-sch",
+ "pcb-sim",
  "pcb-starlark-lsp",
  "pcb-zen-core",
  "regex",

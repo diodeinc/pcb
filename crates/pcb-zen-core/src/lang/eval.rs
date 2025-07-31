@@ -26,6 +26,7 @@ use starlark::{
 use crate::lang::component::{build_component_factory_from_symbol, component_globals};
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
+use crate::lang::spice_model::model_globals;
 use crate::{file_extensions, lang::assert::assert_globals};
 use crate::{Diagnostic, WithDiagnostics};
 
@@ -379,6 +380,7 @@ impl EvalContext {
         .with(interface_globals)
         .with(assert_globals)
         .with(file_globals)
+        .with(model_globals)
         .build()
     }
 

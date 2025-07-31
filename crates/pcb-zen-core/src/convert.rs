@@ -1,5 +1,8 @@
 use crate::lang::symbol::SymbolValue;
-use crate::{FrozenComponentValue, FrozenModuleValue, FrozenNetValue, NetId};
+use crate::{
+    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
+};
+use itertools::Itertools;
 use pcb_sch::Net;
 use pcb_sch::NetKind;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Schematic};
@@ -17,6 +20,8 @@ pub(crate) struct ModuleConverter {
     net_to_name: HashMap<NetId, String>,
     net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
     refdes_counters: HashMap<String, u32>,
+    // Mapping <ref to component instance> -> <spice model>
+    comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
 }
 
 // Information about a net used during name resolution.
@@ -56,6 +61,7 @@ impl ModuleConverter {
             net_to_name: HashMap::new(),
             net_to_properties: HashMap::new(),
             refdes_counters: HashMap::new(),
+            comp_models: Vec::new(),
         }
     }
 
@@ -273,6 +279,29 @@ impl ModuleConverter {
             self.schematic.add_net(net);
         }
 
+        // Finalize the component models now that we have finalized the net names
+        for (instance_ref, model) in self.comp_models {
+            assert!(self.schematic.instances.contains_key(&instance_ref));
+            let comp_inst: &mut Instance = self.schematic.instances.get_mut(&instance_ref).unwrap();
+            comp_inst.add_attribute("model_def", model.definition.clone());
+            comp_inst.add_attribute("model_name", model.name.clone());
+            let mut net_names = Vec::new();
+            for net in model.nets() {
+                let net_id = net.downcast_ref::<FrozenNetValue>().unwrap().id();
+                assert!(self.net_to_name.contains_key(&net_id));
+                net_names.push(AttributeValue::String(
+                    self.net_to_name.get(&net_id).unwrap().to_string(),
+                ));
+            }
+            comp_inst.add_attribute("model_nets", AttributeValue::Array(net_names));
+            let arg_str = model
+                .args()
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .join(" ");
+            comp_inst.add_attribute("model_args", AttributeValue::String(arg_str));
+        }
+
         Ok(self.schematic)
     }
 
@@ -445,6 +474,11 @@ impl ModuleConverter {
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
             comp_inst.add_attribute(key.clone(), to_attribute_value(*val)?);
+        }
+
+        if let Some(model_val) = component.properties().get("model") {
+            let model = model_val.downcast_ref::<FrozenSpiceModelValue>().unwrap();
+            self.comp_models.push((instance_ref.clone(), model.clone()));
         }
 
         // Add symbol information if the component has a symbol

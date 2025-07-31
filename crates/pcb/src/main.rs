@@ -8,6 +8,7 @@ mod fmt;
 mod layout;
 mod lsp;
 mod open;
+mod sim;
 
 #[derive(Parser)]
 #[command(name = "pcb")]
@@ -40,6 +41,8 @@ enum Commands {
     #[command(alias = "o")]
     Open(open::OpenArgs),
 
+    Sim(sim::SimArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -58,6 +61,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
+        Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");
