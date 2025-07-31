@@ -1,0 +1,24 @@
+---
+source: crates/pcb-zen-core/tests/spice_model.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[
+    ParameterInfo {
+        name: "P1",
+        type_info: Net,
+        required: true,
+        default_value: None,
+        help: None,
+    },
+    ParameterInfo {
+        name: "P2",
+        type_info: Net,
+        required: true,
+        default_value: None,
+        help: None,
+    },
+]

@@ -34,6 +34,7 @@ pub use file_provider::InMemoryFileProvider;
 pub use lang::component::FrozenComponentValue;
 pub use lang::module::FrozenModuleValue;
 pub use lang::net::{FrozenNetValue, NetId};
+pub use lang::spice_model::FrozenSpiceModelValue;
 
 /// A wrapper error type that carries a Diagnostic through the starlark error chain.
 /// This allows us to preserve the full diagnostic information when errors cross

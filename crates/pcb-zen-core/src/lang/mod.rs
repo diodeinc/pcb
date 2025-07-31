@@ -7,6 +7,7 @@ pub(crate) mod interface;
 pub(crate) mod interface_validation;
 pub mod module;
 pub mod net;
+pub mod spice_model;
 pub mod symbol;
 pub mod type_info;
 
