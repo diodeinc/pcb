@@ -1,29 +1,17 @@
 [package]
-name = "pcb"
+name = "pcb-sim"
 version = { workspace = true }
 edition = { workspace = true }
 repository = { workspace = true }
-description = "next-gen tooling for pcb design"
 homepage = { workspace = true }
 authors = { workspace = true }
-
-[package.metadata.wix]
-upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"
-path-guid = "019D9AC1-AFB6-4D44-9FE5-F7BCA676A7DF"
-license = false
-eula = false
-
-[[bin]]
-name = "pcb"
-path = "src/main.rs"
+description = "Spice simulation setup from PCB schematic"
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-pcb-zen = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-layout = { workspace = true }
-pcb-sim = { workspace = true }
 log = { workspace = true }
 ariadne = { workspace = true }
 env_logger = { workspace = true }
@@ -35,3 +23,15 @@ pcb-ui = { workspace = true }
 pcb-buildifier = { workspace = true }
 itertools = { workspace = true }
 tempfile = { workspace = true }
+
+[dev-dependencies]
+assert_fs = { workspace = true }
+assert_cmd = { workspace = true }
+insta = { workspace = true }
+serial_test = { workspace = true }
+paste = { workspace = true }
+walkdir = { workspace = true }
+zip = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+pcb-zen = { workspace = true }

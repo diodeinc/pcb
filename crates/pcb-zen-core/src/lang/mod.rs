@@ -6,6 +6,7 @@ pub mod input;
 pub(crate) mod interface;
 pub mod module;
 pub mod net;
+pub mod spice_model;
 pub mod symbol;
 pub mod type_info;
 
