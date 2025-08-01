@@ -6,7 +6,7 @@
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
 
 `pcb` is a command-line utility for building PCBs. It uses the
-[Zener](https://github.com/diodeinc/pcb/blob/main/docs/spec.md) language to describe
+[Zener](https://github.com/diodeinc/pcb/blob/main/docs/spec.mdx) language to describe
 PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
 > [!WARNING]
