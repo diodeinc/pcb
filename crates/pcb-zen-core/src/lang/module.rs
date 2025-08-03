@@ -25,8 +25,8 @@ use starlark::{
 use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::input::{convert_from_starlark, InputMap};
-use crate::Diagnostic;
+use crate::lang::input::InputMap;
+use crate::{Diagnostic, InputValue};
 use starlark::values::dict::DictRef;
 
 use super::net::{generate_net_id, NetValue};
@@ -56,6 +56,8 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub is_config: bool,
     /// Help text describing the parameter
     pub help: Option<String>,
+    /// The actual value returned by io() or config()
+    pub actual_value: Option<V>,
 }
 
 // Manual because no instance for Option<V>
@@ -94,6 +96,7 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
             default_value,
             is_config,
             help,
+            actual_value: None,
         }
     }
 }
@@ -106,7 +109,6 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     inputs: SmallMap<String, V>,
     children: Vec<V>,
     properties: SmallMap<String, V>,
-    /// Ordered list of parameter metadata representing the module's signature
     signature: Vec<ParameterMetadataGen<V>>,
 }
 
@@ -213,17 +215,20 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         default_value: Option<V>,
         is_config: bool,
         help: Option<String>,
+        actual_value: Option<V>,
     ) {
         // Check if this parameter already exists
         if !self.signature.iter().any(|p| p.name == name) {
-            self.signature.push(ParameterMetadataGen::new(
+            let mut param = ParameterMetadataGen::new(
                 name,
                 type_value,
                 optional,
                 default_value,
                 is_config,
                 help,
-            ));
+            );
+            param.actual_value = actual_value;
+            self.signature.push(param);
         }
     }
 
@@ -320,7 +325,7 @@ where
                         starlark::Error::new_other(anyhow::anyhow!("property keys must be strings"))
                     })?;
 
-                    let iv = convert_from_starlark(v, heap);
+                    let iv = InputValue::from_value(v.to_value());
                     map.insert(key_str.to_string(), iv);
                 }
 
@@ -330,7 +335,7 @@ where
             }
 
             provided_names.insert(arg_name.as_str().to_string());
-            let iv = convert_from_starlark(value, heap);
+            let iv = InputValue::from_value(value.to_value());
             input_map.insert(arg_name.as_str().to_string(), iv);
         }
         // `name` is required when instantiating a module via its loader.  If the
@@ -781,7 +786,71 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
+        // First compute the actual value that will be returned
+        let result_value = {
+            // 1. Value supplied by the parent module.
+            if let Some(provided) = eval.request_input(&name, typ)? {
+                // First try a direct validation.
+                if validate_type(name.as_str(), provided, typ, eval.heap()).is_ok() {
+                    provided
+                } else if let Some(converted) = try_enum_conversion(provided, typ, eval)? {
+                    // If validation failed and `typ` is an enum type, attempt to convert
+                    converted
+                } else {
+                    // Fallback: propagate the original validation error.
+                    validate_type(name.as_str(), provided, typ, eval.heap())?;
+                    unreachable!();
+                }
+            } else {
+                // 2. Determine whether the placeholder is required.
+                let is_optional = optional.unwrap_or(false);
+
+                // 3. If the placeholder is optional and the parent did not supply a value
+                if is_optional {
+                    if let Some(default_val) = default {
+                        // Validate the provided default before using it.
+                        validate_type(name.as_str(), default_val, typ, eval.heap())?;
+                        default_val
+                    } else {
+                        match typ.get_type() {
+                            "NetType" | "InterfaceFactory" => {
+                                // For io() we always materialise a default Net/Interface
+                                default_for_type(eval, typ)?
+                            }
+                            _ => Value::new_none(),
+                        }
+                    }
+                } else {
+                    // 4. Placeholder is required (optional == false).
+                    let strict = eval
+                        .context_value()
+                        .map(|ctx| ctx.strict_io_config())
+                        .unwrap_or(false);
+
+                    if strict {
+                        // Record the missing input so that the parent `ModuleLoader` can surface a helpful
+                        // diagnostic at the call-site.
+                        if let Some(ctx) = eval.context_value() {
+                            ctx.add_missing_input(name.clone());
+                        }
+
+                        return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
+                    }
+
+                    // 5. If the caller supplied an explicit default, always prefer it.
+                    if let Some(default_val) = default {
+                        // Validate the provided default before using it.
+                        validate_type(name.as_str(), default_val, typ, eval.heap())?;
+                        default_val
+                    } else {
+                        default_for_type(eval, typ)?
+                    }
+                }
+            }
+        };
+
         // Record that this placeholder was referenced in the module's signature
+        // along with the actual value that will be returned
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
             module.add_parameter_metadata(
@@ -791,83 +860,11 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 default,
                 false, // is_config = false for io()
                 help,
+                Some(result_value),
             );
         }
 
-        // 1. Value supplied by the parent module.
-        if let Some(provided) = eval.request_input(&name, typ)? {
-            // First try a direct validation.
-            if validate_type(name.as_str(), provided, typ, eval.heap()).is_ok() {
-                return Ok(provided);
-            }
-
-            // If validation failed and `typ` is an enum type, attempt to convert
-            // the provided value into an enum variant by calling the enum factory
-            // function.
-            if let Some(converted) = try_enum_conversion(provided, typ, eval)? {
-                return Ok(converted);
-            }
-
-            // Fallback: propagate the original validation error.
-            validate_type(name.as_str(), provided, typ, eval.heap())?;
-            unreachable!();
-        }
-
-        // 2. Determine whether the placeholder is required.
-        let is_optional = optional.unwrap_or(false);
-
-        // 3. If the placeholder is optional and the parent did not supply a value we use:
-        //    • the caller-provided default (after validation) if present
-        //    • otherwise a synthetic default for Net/Interface types
-        //    • otherwise `None`
-        if is_optional {
-            if let Some(default_val) = default {
-                // Validate the provided default before using it.
-                validate_type(name.as_str(), default_val, typ, eval.heap())?;
-                return Ok(default_val);
-            }
-
-            match typ.get_type() {
-                "NetType" | "InterfaceFactory" => {
-                    // For io() we always materialise a default Net/Interface so Starlark code can
-                    // rely on a valid object even when the dependency is optional.
-                    return default_for_type(eval, typ);
-                }
-                _ => {}
-            }
-
-            return Ok(Value::new_none());
-        }
-
-        // 4. Placeholder is required (optional == false).
-        if !is_optional {
-            let strict = eval
-                .context_value()
-                .map(|ctx| ctx.strict_io_config())
-                .unwrap_or(false);
-
-            if strict {
-                // Record the missing input so that the parent `ModuleLoader` can surface a helpful
-                // diagnostic at the call-site.
-                if let Some(ctx) = eval.context_value() {
-                    ctx.add_missing_input(name.clone());
-                }
-
-                return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
-            }
-        }
-
-        // 5. If the caller supplied an explicit default, always prefer it. Otherwise fall back to a
-        // synthetic default value generated from the requested `typ`.
-        let generated_default = if let Some(default_val) = default {
-            // Validate the provided default before using it.
-            validate_type(name.as_str(), default_val, typ, eval.heap())?;
-            default_val
-        } else {
-            default_for_type(eval, typ)?
-        };
-
-        Ok(generated_default)
+        Ok(result_value)
     }
 
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
@@ -881,7 +878,55 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        // Record usage in the module's signature
+        // First compute the actual value that will be returned
+        let result_value = {
+            // 1. Value supplied by the parent module.
+            if let Some(provided) = eval.request_input(&name, typ)? {
+                validate_or_convert(&name, provided, typ, convert, eval)?
+            } else {
+                // 2. Determine whether the placeholder is required.
+                let is_optional = optional.unwrap_or(false);
+
+                // 3. If the placeholder is optional and no value was supplied by the parent
+                if is_optional {
+                    if let Some(default_val) = default {
+                        let converted_default =
+                            validate_or_convert(&name, default_val, typ, convert, eval)?;
+                        converted_default
+                    } else {
+                        Value::new_none()
+                    }
+                } else {
+                    // 4. Placeholder is required (optional == false).
+                    // Check if we're in strict mode AND there's no default value
+                    let strict = eval
+                        .context_value()
+                        .map(|ctx| ctx.strict_io_config())
+                        .unwrap_or(false);
+
+                    if strict && default.is_none() {
+                        // Only throw MissingInputError if there's no default value
+                        // Record the missing input so that the parent `ModuleLoader` can surface a helpful
+                        // diagnostic at the call-site.
+                        if let Some(ctx) = eval.context_value() {
+                            ctx.add_missing_input(name.clone());
+                        }
+
+                        return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
+                    }
+
+                    // 5. If the caller supplied an explicit default, always prefer it.
+                    if let Some(default_val) = default {
+                        validate_or_convert(&name, default_val, typ, convert, eval)?
+                    } else {
+                        let gen_value = default_for_type(eval, typ)?;
+                        validate_or_convert(&name, gen_value, typ, convert, eval)?
+                    }
+                }
+            }
+        };
+
+        // Record usage in the module's signature along with the actual value
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
             module.add_parameter_metadata(
@@ -891,60 +936,11 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 default,
                 true, // is_config = true for config()
                 help,
+                Some(result_value),
             );
         }
 
-        // 1. Value supplied by the parent module.
-        if let Some(provided) = eval.request_input(&name, typ)? {
-            return validate_or_convert(&name, provided, typ, convert, eval);
-        }
-
-        // 2. Determine whether the placeholder is required.
-        let is_optional = optional.unwrap_or(false);
-
-        // 3. If the placeholder is optional and no value was supplied by the parent we return:
-        //    • the caller-provided default (if any, after conversion)
-        //    • otherwise `None`
-        if is_optional {
-            if let Some(default_val) = default {
-                let converted_default =
-                    validate_or_convert(&name, default_val, typ, convert, eval)?;
-                return Ok(converted_default);
-            }
-
-            return Ok(Value::new_none());
-        }
-
-        // 4. Placeholder is required (optional == false).
-        // Check if we're in strict mode AND there's no default value
-        if !is_optional {
-            let strict = eval
-                .context_value()
-                .map(|ctx| ctx.strict_io_config())
-                .unwrap_or(false);
-
-            if strict && default.is_none() {
-                // Only throw MissingInputError if there's no default value
-                // Record the missing input so that the parent `ModuleLoader` can surface a helpful
-                // diagnostic at the call-site.
-                if let Some(ctx) = eval.context_value() {
-                    ctx.add_missing_input(name.clone());
-                }
-
-                return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
-            }
-        }
-
-        // 5. If the caller supplied an explicit default, always prefer it. Otherwise fall back to a
-        // synthetic default value generated from the requested `typ`.
-        let generated_default = if let Some(default_val) = default {
-            validate_or_convert(&name, default_val, typ, convert, eval)?
-        } else {
-            let gen_value = default_for_type(eval, typ)?;
-            validate_or_convert(&name, gen_value, typ, convert, eval)?
-        };
-
-        Ok(generated_default)
+        Ok(result_value)
     }
 
     fn add_property<'v>(

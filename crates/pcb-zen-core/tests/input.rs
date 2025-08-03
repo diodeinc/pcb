@@ -469,13 +469,13 @@ snapshot_eval!(config_convert_preserves_correct_types, {
         add_property("voltage_unit", voltage.unit)
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        MyModule = Module("./Module.zen")
 
         # Create a proper record value
-        unit_value = Module.UnitType(value = 5.0, unit = "V")
+        unit_value = MyModule.UnitType(value = 5.0, unit = "V")
 
         # Pass the correct type - converter should not be called
-        m = Module(
+        MyModule(
             name = "test",
             voltage = unit_value,
         )

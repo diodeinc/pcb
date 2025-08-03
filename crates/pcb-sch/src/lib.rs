@@ -147,6 +147,7 @@ pub enum AttributeValue {
     Physical(String),
     Port(String),
     Array(Vec<AttributeValue>),
+    Json(serde_json::Value),
 }
 
 impl AttributeValue {

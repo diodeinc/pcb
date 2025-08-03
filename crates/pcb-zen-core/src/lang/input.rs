@@ -15,9 +15,14 @@ use serde::{Deserialize, Serialize};
 use starlark::collections::SmallMap;
 use starlark::eval::Evaluator;
 use starlark::values::dict::DictRef;
+use starlark::values::float::StarlarkFloat;
 use starlark::values::list::ListRef;
-use starlark::values::record::{FrozenRecordType, RecordType};
-use starlark::values::{Heap, Trace, Value, ValueLike};
+use starlark::values::record::{FrozenRecord, FrozenRecordType, Record, RecordType};
+use starlark::values::{Trace, Value, ValueLike};
+
+use crate::lang::interface::{FrozenInterfaceValue, InterfaceValue};
+use crate::lang::net::NetValue;
+use crate::{FrozenNetValue, NetId};
 
 use super::interface::{FrozenInterfaceFactory, InterfaceFactory};
 
@@ -46,7 +51,7 @@ pub enum InputValue {
 
     /// Represents a Net value (name + unique id)
     Net {
-        id: crate::lang::net::NetId,
+        id: NetId,
         name: String,
         properties: SmallMap<String, InputValue>,
     },
@@ -204,113 +209,130 @@ impl InputValue {
             InputValue::Unsupported(s) => Err(anyhow!("unsupported input value type: {s}")),
         }
     }
-}
 
-/// Build an `InputValue` from a Starlark [`Value`].  For complex structures we
-/// attempt a best-effort structural serialisation so the object can be rebuilt
-/// later.
-pub fn convert_from_starlark<'v, V: ValueLike<'v>>(value: V, heap: &'v Heap) -> InputValue {
-    let value = value.to_value();
+    pub fn from_value<'v>(value: Value<'v>) -> InputValue {
+        let value = value.to_value();
 
-    if value.is_none() {
-        return InputValue::None;
-    }
-    if let Some(b) = value.unpack_bool() {
-        return InputValue::Bool(b);
-    }
-    if let Some(i) = value.unpack_i32() {
-        return InputValue::Int(i);
-    }
-    if let Some(s) = value.unpack_str() {
-        return InputValue::String(s.to_owned());
-    }
-    if let Some(f) = value.downcast_ref::<starlark::values::float::StarlarkFloat>() {
-        return InputValue::Float(f.0);
-    }
-    if let Some(list) = ListRef::from_value(value) {
-        let mut out = Vec::new();
-        for item in list.iter() {
-            out.push(convert_from_starlark(item, heap));
+        if value.is_none() {
+            return InputValue::None;
         }
-        return InputValue::List(out);
-    }
-    if let Some(dict) = DictRef::from_value(value) {
-        let mut out = SmallMap::new();
-        for (k, v) in dict.iter() {
-            let key_str = k
-                .unpack_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| k.to_string());
-            out.insert(key_str, convert_from_starlark(v, heap));
+
+        if let Some(b) = value.unpack_bool() {
+            return InputValue::Bool(b);
         }
-        return InputValue::Dict(out);
-    }
-    // EnumValue detection – relies on its `to_string()` returning `EnumType("<variant>")`.
-    if value.get_type() == "enum" {
-        let repr = value.to_string();
-        let variant = if let Some(first_quote) = repr.find('"') {
-            if let Some(last_quote) = repr.rfind('"') {
-                if first_quote < last_quote {
-                    repr[first_quote + 1..last_quote].to_owned()
+
+        if let Some(i) = value.unpack_i32() {
+            return InputValue::Int(i);
+        }
+
+        if let Some(s) = value.unpack_str() {
+            return InputValue::String(s.to_owned());
+        }
+
+        if let Some(f) = value.downcast_ref::<StarlarkFloat>() {
+            return InputValue::Float(f.0);
+        }
+
+        if let Some(list) = ListRef::from_value(value) {
+            let mut out = Vec::new();
+            for item in list.iter() {
+                out.push(InputValue::from_value(item));
+            }
+            return InputValue::List(out);
+        }
+
+        if let Some(dict) = DictRef::from_value(value) {
+            let mut out = SmallMap::new();
+            for (k, v) in dict.iter() {
+                let key_str = k
+                    .unpack_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| k.to_string());
+                out.insert(key_str, InputValue::from_value(v));
+            }
+            return InputValue::Dict(out);
+        }
+
+        // Parse enum from string: `EnumType("<variant>")`.
+        if value.get_type() == "enum" {
+            let repr = value.to_string();
+            let variant = if let Some(first_quote) = repr.find('"') {
+                if let Some(last_quote) = repr.rfind('"') {
+                    if first_quote < last_quote {
+                        repr[first_quote + 1..last_quote].to_owned()
+                    } else {
+                        repr
+                    }
                 } else {
                     repr
                 }
             } else {
                 repr
-            }
-        } else {
-            repr
-        };
+            };
 
-        return InputValue::Enum { variant };
-    }
-    if value.get_type() == "record" {
-        let mut out = SmallMap::new();
-        for name in value.dir_attr() {
-            if let Ok(Some(field_val)) = value.get_attr(name.as_str(), heap) {
-                out.insert(name, convert_from_starlark(field_val, heap));
-            }
+            return InputValue::Enum { variant };
         }
-        return InputValue::Record { fields: out };
-    }
-    if let Some(net) = value.downcast_ref::<crate::lang::net::NetValue>() {
-        let mut prop_map = SmallMap::new();
-        for (k, v) in net.properties().iter() {
-            prop_map.insert(k.clone(), convert_from_starlark(*v, heap));
-        }
-        return InputValue::Net {
-            id: net.id(),
-            name: net.name().to_owned(),
-            properties: prop_map,
-        };
-    }
-    if let Some(net) = value.downcast_ref::<crate::lang::net::FrozenNetValue>() {
-        let mut prop_map = SmallMap::new();
-        for (k, v) in net.properties().iter() {
-            prop_map.insert(k.clone(), convert_from_starlark(*v, heap));
-        }
-        return InputValue::Net {
-            id: net.id(),
-            name: net.name().to_owned(),
-            properties: prop_map,
-        };
-    }
-    if let Some(iface) = value.downcast_ref::<crate::lang::interface::InterfaceValue>() {
-        let mut field_map = SmallMap::new();
-        for (k, v) in iface.fields().iter() {
-            field_map.insert(k.clone(), convert_from_starlark(*v, heap));
-        }
-        return InputValue::Interface { fields: field_map };
-    }
-    if let Some(iface) = value.downcast_ref::<crate::lang::interface::FrozenInterfaceValue>() {
-        let mut field_map = SmallMap::new();
-        for (k, v) in iface.fields().iter() {
-            field_map.insert(k.clone(), convert_from_starlark(*v, heap));
-        }
-        return InputValue::Interface { fields: field_map };
-    }
 
-    InputValue::Unsupported(value.get_type().to_owned())
+        if let Some(record) = value.downcast_ref::<Record>() {
+            return InputValue::Record {
+                fields: record
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), InputValue::from_value(v.to_value())))
+                    .collect(),
+            };
+        }
+
+        if let Some(record) = value.downcast_ref::<FrozenRecord>() {
+            return InputValue::Record {
+                fields: record
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), InputValue::from_value(v.to_value())))
+                    .collect(),
+            };
+        }
+
+        if let Some(net) = value.downcast_ref::<NetValue>() {
+            let mut prop_map = SmallMap::new();
+            for (k, v) in net.properties().iter() {
+                prop_map.insert(k.clone(), InputValue::from_value(v.to_value()));
+            }
+            return InputValue::Net {
+                id: net.id(),
+                name: net.name().to_owned(),
+                properties: prop_map,
+            };
+        }
+
+        if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+            let mut prop_map = SmallMap::new();
+            for (k, v) in net.properties().iter() {
+                prop_map.insert(k.clone(), InputValue::from_value(v.to_value()));
+            }
+            return InputValue::Net {
+                id: net.id(),
+                name: net.name().to_owned(),
+                properties: prop_map,
+            };
+        }
+
+        if let Some(iface) = value.downcast_ref::<InterfaceValue>() {
+            let mut field_map = SmallMap::new();
+            for (k, v) in iface.fields().iter() {
+                field_map.insert(k.clone(), InputValue::from_value(*v));
+            }
+            return InputValue::Interface { fields: field_map };
+        }
+
+        if let Some(iface) = value.downcast_ref::<FrozenInterfaceValue>() {
+            let mut field_map = SmallMap::new();
+            for (k, v) in iface.fields().iter() {
+                field_map.insert(k.clone(), InputValue::from_value(v.to_value()));
+            }
+            return InputValue::Interface { fields: field_map };
+        }
+
+        InputValue::Unsupported(value.get_type().to_owned())
+    }
 }
 
 /// A tiny wrapper that stores the map from input-name to `InputValue`.

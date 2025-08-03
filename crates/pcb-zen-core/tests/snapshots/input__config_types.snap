@@ -133,7 +133,10 @@ Module {
         name: "power_io",
         type_info: Interface {
             name: "Power",
-            pins: {},
+            pins: {
+                "vcc": Net,
+                "gnd": Net,
+            },
         },
         required: true,
         default_value: None,
@@ -143,7 +146,10 @@ Module {
         name: "opt_power_io",
         type_info: Interface {
             name: "Power",
-            pins: {},
+            pins: {
+                "vcc": Net,
+                "gnd": Net,
+            },
         },
         required: false,
         default_value: None,
@@ -153,7 +159,11 @@ Module {
         name: "bus_io",
         type_info: Interface {
             name: "DataBus",
-            pins: {},
+            pins: {
+                "clock": Net,
+                "enable": Net,
+                "data": Net,
+            },
         },
         required: true,
         default_value: None,
@@ -163,7 +173,24 @@ Module {
         name: "system_io",
         type_info: Interface {
             name: "System",
-            pins: {},
+            pins: {
+                "bus": Interface {
+                    name: "DataBus",
+                    pins: {
+                        "data": Net,
+                        "clock": Net,
+                        "enable": Net,
+                    },
+                },
+                "reset": Net,
+                "power": Interface {
+                    name: "Power",
+                    pins: {
+                        "gnd": Net,
+                        "vcc": Net,
+                    },
+                },
+            },
         },
         required: true,
         default_value: None,

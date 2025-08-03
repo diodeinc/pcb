@@ -1,8 +1,10 @@
 use crate::lang::symbol::SymbolValue;
-use crate::{FrozenComponentValue, FrozenModuleValue, FrozenNetValue, NetId};
+use crate::lang::type_info::TypeInfo;
+use crate::{FrozenComponentValue, FrozenModuleValue, FrozenNetValue, InputValue, NetId};
 use pcb_sch::Net;
 use pcb_sch::NetKind;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Schematic};
+use serde::{Deserialize, Serialize};
 use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
@@ -17,6 +19,23 @@ pub(crate) struct ModuleConverter {
     net_to_name: HashMap<NetId, String>,
     net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
     refdes_counters: HashMap<String, u32>,
+}
+
+/// Module signature information to be serialized as JSON
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModuleSignature {
+    parameters: Vec<ParameterInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ParameterInfo {
+    name: String,
+    typ: TypeInfo,
+    optional: bool,
+    has_default: bool,
+    is_config: bool, // true for config(), false for io()
+    help: Option<String>,
+    value: Option<InputValue>,
 }
 
 // Information about a net used during name resolution.
@@ -337,41 +356,31 @@ impl ModuleConverter {
             }
         }
 
-        // Process the module's signature (io() parameters) and add them as children
+        // Build the module signature
+        let mut signature = ModuleSignature {
+            parameters: Vec::new(),
+        };
+
+        // Process the module's signature
         for param in module.signature().iter() {
-            let param_inst_ref = instance_ref.append(param.name.clone());
+            // Add to signature
+            signature.parameters.push(ParameterInfo {
+                name: param.name.clone(),
+                typ: TypeInfo::from_value(param.type_value.to_value()),
+                optional: param.optional,
+                has_default: param.default_value.is_some(),
+                is_config: param.is_config,
+                help: param.help.clone(),
+                value: param
+                    .actual_value
+                    .map(|v| InputValue::from_value(v.to_value())),
+            });
+        }
 
-            // Check if this is a Net type
-            if let Some(net) = param
-                .type_value
-                .downcast_ref::<crate::lang::net::FrozenNetValue>()
-            {
-                // Create a port instance for the net
-                let port_inst = Instance::port(type_modref.clone());
-
-                // Record this net in our tracking
-                self.update_net(net, &param_inst_ref);
-
-                // Add the port instance to the schematic
-                self.schematic
-                    .add_instance(param_inst_ref.clone(), port_inst);
-                inst.add_child(param.name.clone(), param_inst_ref);
-            }
-            // Check if this is an Interface type
-            else if let Some(_interface) = param
-                .type_value
-                .downcast_ref::<crate::lang::interface::FrozenInterfaceValue>(
-            ) {
-                // Create an interface instance
-                let interface_inst = Instance::interface(type_modref.clone());
-
-                // Add the interface instance to the schematic
-                self.schematic
-                    .add_instance(param_inst_ref.clone(), interface_inst);
-                inst.add_child(param.name.clone(), param_inst_ref);
-            }
-            // For other types (like enums, records, etc.), we skip them for now
-            // as they're not represented in the schematic
+        // Add the signature as a JSON attribute
+        if !signature.parameters.is_empty() {
+            let signature_json = serde_json::to_value(&signature).unwrap_or_default();
+            inst.add_attribute("__signature", AttributeValue::Json(signature_json));
         }
 
         // Recurse into children, but don't pass any properties down.

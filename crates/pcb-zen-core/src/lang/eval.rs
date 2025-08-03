@@ -23,9 +23,12 @@ use starlark::{
     PrintHandler,
 };
 
-use crate::lang::component::{build_component_factory_from_symbol, component_globals};
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
+use crate::lang::{
+    component::{build_component_factory_from_symbol, component_globals},
+    type_info::{ParameterInfo, TypeInfo},
+};
 use crate::{file_extensions, lang::assert::assert_globals};
 use crate::{Diagnostic, WithDiagnostics};
 
@@ -922,24 +925,20 @@ impl EvalContext {
                     let mut diagnostics = extra.diagnostics().clone();
                     diagnostics.extend(self.diagnostics.borrow().clone());
 
-                    // Create a heap for type introspection
-                    let heap = Heap::new();
-
                     let signature = extra
                         .module
                         .signature()
                         .iter()
                         .map(|param| {
-                            use crate::lang::type_info::{ParameterInfo, TypeInfo};
-
                             // Convert frozen value to regular value for introspection
                             let type_value = param.type_value.to_value();
-                            let type_info = TypeInfo::from_value(type_value, &heap);
+                            let type_info = TypeInfo::from_value(type_value);
 
                             // Convert default value to InputValue if present
-                            let default_value = param.default_value.as_ref().map(|v| {
-                                crate::lang::input::convert_from_starlark(v.to_value(), &heap)
-                            });
+                            let default_value = param
+                                .default_value
+                                .as_ref()
+                                .map(|v| InputValue::from_value(v.to_value()));
 
                             ParameterInfo {
                                 name: param.name.clone(),

@@ -1,10 +1,11 @@
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
+use crate::lang::net::{NetType, NetValue};
+use crate::FrozenNetValue;
 use serde::{Deserialize, Serialize};
-use starlark::values::dict::DictRef;
 use starlark::values::enumeration::{EnumType, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::TypeType;
-use starlark::values::{Heap, UnpackValue, Value, ValueLike};
+use starlark::values::{UnpackValue, Value, ValueLike};
 use std::collections::HashMap;
 
 /// Structured representation of Starlark types for introspection
@@ -57,7 +58,7 @@ impl TypeInfo {
     }
 
     /// Extract TypeInfo from a Starlark value representing a type
-    pub fn from_value<'v>(value: Value<'v>, heap: &'v Heap) -> Self {
+    pub fn from_value<'v>(value: Value<'v>) -> Self {
         // Get the type name for identification
         let type_name = value.get_type();
 
@@ -102,25 +103,32 @@ impl TypeInfo {
         }
 
         // Check for Net type by type name
-        if type_name == "NetType" {
+        if value.downcast_ref::<NetType>().is_some()
+            || value.downcast_ref::<NetValue>().is_some()
+            || value.downcast_ref::<FrozenNetValue>().is_some()
+        {
             return TypeInfo::Net;
         }
 
         // Check for Interface types by downcasting
-        if value.downcast_ref::<InterfaceFactory>().is_some()
-            || value.downcast_ref::<FrozenInterfaceFactory>().is_some()
-        {
+        if let Some(iface) = value.downcast_ref::<InterfaceFactory>() {
             let mut pins = HashMap::new();
-            // Try to introspect the interface pins
-            if let Ok(Some(pins_value)) = value.get_attr("pins", heap) {
-                if let Some(dict) = DictRef::from_value(pins_value) {
-                    for (key, val) in dict.iter() {
-                        if let Some(key_str) = key.unpack_str() {
-                            pins.insert(key_str.to_string(), Self::from_value(val, heap));
-                        }
-                    }
-                }
+            for (key, val) in iface.children() {
+                pins.insert(key.to_string(), Self::from_value(val.to_value()));
             }
+
+            return TypeInfo::Interface {
+                name: value.to_string(),
+                pins,
+            };
+        }
+
+        if let Some(iface) = value.downcast_ref::<FrozenInterfaceFactory>() {
+            let mut pins = HashMap::new();
+            for (key, val) in iface.children() {
+                pins.insert(key.to_string(), Self::from_value(val.to_value()));
+            }
+
             return TypeInfo::Interface {
                 name: value.to_string(),
                 pins,

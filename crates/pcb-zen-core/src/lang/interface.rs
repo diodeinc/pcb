@@ -342,6 +342,12 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> std::fmt::Display for InterfaceFactor
     }
 }
 
+impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
+    pub fn children(&self) -> Vec<(&str, &V)> {
+        self.fields.iter().map(|(k, v)| (k.as_str(), v)).collect()
+    }
+}
+
 #[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct InterfaceValueGen<V> {
