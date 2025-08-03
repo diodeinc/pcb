@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     println!("cargo::rustc-check-cfg=cfg(external_buildifier)");
     if env::var("BUILDIFIER_BIN").is_ok() {
         println!("cargo:rustc-cfg=external_buildifier");
-        return Ok(())
+        return Ok(());
     }
 
     // Determine the target platform

@@ -99,7 +99,9 @@ impl Buildifier {
     pub fn new() -> Result<Self> {
         #[cfg(external_buildifier)]
         {
-            Ok(Self { binary_path: PathBuf::from(env!("BUILDIFIER_BIN")) })
+            Ok(Self {
+                binary_path: PathBuf::from(env!("BUILDIFIER_BIN")),
+            })
         }
 
         #[cfg(not(external_buildifier))]
