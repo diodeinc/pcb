@@ -11,24 +11,26 @@
 //! The buildtools project can be found at: https://github.com/bazelbuild/buildtools
 
 use anyhow::{Context, Result};
-use once_cell::sync::OnceCell;
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Mutex;
-
-// Include the buildifier binary at compile time
-const BUILDIFIER_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/buildifier"));
-
-// Version of buildifier bundled in this crate (used for cache invalidation)
-const BUILDIFIER_VERSION: &str = "7.3.1";
-
-// Global cache for the buildifier binary path
-static CACHED_BINARY_PATH: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
 /// Get or create the cached buildifier binary path
+#[cfg(not(external_buildifier))]
 fn get_cached_binary_path() -> Result<PathBuf> {
+    use once_cell::sync::OnceCell;
+    use std::fs;
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    // Include the buildifier binary at compile time
+    const BUILDIFIER_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/buildifier"));
+
+    // Version of buildifier bundled in this crate (used for cache invalidation)
+    const BUILDIFIER_VERSION: &str = "7.3.1";
+
+    // Global cache for the buildifier binary path
+    static CACHED_BINARY_PATH: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
+
     let mutex = CACHED_BINARY_PATH.get_or_init(|| Mutex::new(None));
     let mut cache = mutex.lock().unwrap();
 
@@ -95,8 +97,16 @@ pub struct Buildifier {
 impl Buildifier {
     /// Create a new Buildifier instance using the cached binary
     pub fn new() -> Result<Self> {
-        let binary_path = get_cached_binary_path()?;
-        Ok(Self { binary_path })
+        #[cfg(external_buildifier)]
+        {
+            Ok(Self { binary_path: PathBuf::from(env!("BUILDIFIER_BIN")) })
+        }
+
+        #[cfg(not(external_buildifier))]
+        {
+            let binary_path = crate::get_cached_binary_path()?;
+            Ok(Self { binary_path })
+        }
     }
 
     /// Get the path to the buildifier binary

@@ -36,6 +36,12 @@ const CHECKSUMS: &[(&str, &str)] = &[
 ];
 
 fn main() -> Result<()> {
+    println!("cargo::rustc-check-cfg=cfg(external_buildifier)");
+    if env::var("BUILDIFIER_BIN").is_ok() {
+        println!("cargo:rustc-cfg=external_buildifier");
+        return Ok(())
+    }
+
     // Determine the target platform
     let target = env::var("TARGET").unwrap();
     let (platform, arch, extension) = match target.as_str() {
