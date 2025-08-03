@@ -27,6 +27,18 @@
           inherit src;
           strictDeps = true;
           doCheck = false;
+
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.openssl.dev
+          ];
+
+          buildInputs = [
+            pkgs.pkg-config
+            pkgs.openssl
+          ];
+
+          BUILDIFIER_BIN = "${pkgs.bazel-buildtools}/bin/buildifier";
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
