@@ -1310,7 +1310,7 @@ class ImportNetlist(Step):
                     "dnp",
                     "do_not_populate",
                     "exclude_from_bom",
-                ]:
+                ] or prop.name.startswith("_"):
                     fp.SetField(prop.name, prop.value)
                     fp.GetFieldByName(prop.name).SetVisible(False)
 
