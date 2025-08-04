@@ -6,6 +6,7 @@ expression: content
   "footprints": [
     {
       "dnp": false,
+      "exclude_from_bom": false,
       "footprint": "BMI270:BMI270",
       "graphical_items": [
         {
@@ -391,6 +392,7 @@ expression: content
     },
     {
       "dnp": false,
+      "exclude_from_bom": false,
       "footprint": "Capacitor_SMD:C_0402_1005Metric",
       "graphical_items": [
         {

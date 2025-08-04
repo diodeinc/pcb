@@ -1,0 +1,37 @@
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+Resistor(
+    name = "normal",
+    value = "1kohms",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
+)
+
+Resistor(
+    name = "dnp",
+    value = "1kohms",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
+    do_not_populate = True,
+)
+
+Resistor(
+    name = "exclude_from_bom",
+    value = "1kohms",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
+    exclude_from_bom = True,
+)
+
+Resistor(
+    name = "exclude_from_bom_and_dnp",
+    value = "1kohms",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
+    exclude_from_bom = True,
+    do_not_populate = True,
+)
+
+# HACK: Put the layout in build/ so that the snapshot ends up there, which
+# is what the test expects.
+add_property("layout_path", "build/")

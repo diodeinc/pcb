@@ -6,6 +6,7 @@ expression: content
   "footprints": [
     {
       "dnp": false,
+      "exclude_from_bom": false,
       "footprint": "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
       "graphical_items": [
         {
@@ -847,6 +848,7 @@ expression: content
     },
     {
       "dnp": false,
+      "exclude_from_bom": false,
       "footprint": "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias",
       "graphical_items": [
         {

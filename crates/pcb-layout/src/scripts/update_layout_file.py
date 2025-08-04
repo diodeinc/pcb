@@ -1288,14 +1288,29 @@ class ImportNetlist(Step):
             fp.SetPath(
                 pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
             )
-            fp.SetDNP(any(x.name == "dnp" for x in part.properties))
+            # Handle do_not_populate and exclude_from_bom properties
+            fp.SetDNP(
+                any(
+                    x.name.lower() in ["dnp", "do_not_populate"]
+                    for x in part.properties
+                )
+            )
+            fp.SetExcludedFromBOM(
+                any(x.name.lower() == "exclude_from_bom" for x in part.properties)
+            )
 
             fp.GetFieldByName("Value").SetVisible(False)
             fp.GetFieldByName("Path").SetVisible(False)
 
             for prop in part.properties:
-                # Skip value, Reference, and reference properties - these are handled separately
-                if prop.name.lower() not in ["value", "reference"]:
+                # Skip value, Reference, reference, and specially handled properties
+                if prop.name.lower() not in [
+                    "value",
+                    "reference",
+                    "dnp",
+                    "do_not_populate",
+                    "exclude_from_bom",
+                ]:
                     fp.SetField(prop.name, prop.value)
                     fp.GetFieldByName(prop.name).SetVisible(False)
 
@@ -2089,6 +2104,15 @@ class FinalizeBoard(Step):
             # strip any non-ASCII characters.
             "value": "".join(c for c in str(fp.GetValue()) if ord(c) < 128),
             "dnp": fp.IsDNP(),
+            "exclude_from_bom": (
+                fp.IsExcludeFromBOM()
+                if hasattr(fp, "IsExcludeFromBOM")
+                else (
+                    fp.GetFieldByName("exclude_from_bom").GetText() == "true"
+                    if fp.GetFieldByName("exclude_from_bom")
+                    else False
+                )
+            ),
             "pads": [
                 {
                     "name": pad.GetName(),
