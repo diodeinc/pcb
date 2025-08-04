@@ -133,10 +133,16 @@ Module {
         name: "power_io",
         type_info: Interface {
             name: "Power",
-            pins: {
-                "vcc": Net,
-                "gnd": Net,
-            },
+            pins: [
+                (
+                    "vcc",
+                    Net,
+                ),
+                (
+                    "gnd",
+                    Net,
+                ),
+            ],
         },
         required: true,
         default_value: None,
@@ -146,10 +152,16 @@ Module {
         name: "opt_power_io",
         type_info: Interface {
             name: "Power",
-            pins: {
-                "vcc": Net,
-                "gnd": Net,
-            },
+            pins: [
+                (
+                    "vcc",
+                    Net,
+                ),
+                (
+                    "gnd",
+                    Net,
+                ),
+            ],
         },
         required: false,
         default_value: None,
@@ -159,11 +171,20 @@ Module {
         name: "bus_io",
         type_info: Interface {
             name: "DataBus",
-            pins: {
-                "clock": Net,
-                "enable": Net,
-                "data": Net,
-            },
+            pins: [
+                (
+                    "data",
+                    Net,
+                ),
+                (
+                    "clock",
+                    Net,
+                ),
+                (
+                    "enable",
+                    Net,
+                ),
+            ],
         },
         required: true,
         default_value: None,
@@ -173,24 +194,48 @@ Module {
         name: "system_io",
         type_info: Interface {
             name: "System",
-            pins: {
-                "bus": Interface {
-                    name: "DataBus",
-                    pins: {
-                        "data": Net,
-                        "clock": Net,
-                        "enable": Net,
+            pins: [
+                (
+                    "power",
+                    Interface {
+                        name: "Power",
+                        pins: [
+                            (
+                                "vcc",
+                                Net,
+                            ),
+                            (
+                                "gnd",
+                                Net,
+                            ),
+                        ],
                     },
-                },
-                "reset": Net,
-                "power": Interface {
-                    name: "Power",
-                    pins: {
-                        "gnd": Net,
-                        "vcc": Net,
+                ),
+                (
+                    "bus",
+                    Interface {
+                        name: "DataBus",
+                        pins: [
+                            (
+                                "data",
+                                Net,
+                            ),
+                            (
+                                "clock",
+                                Net,
+                            ),
+                            (
+                                "enable",
+                                Net,
+                            ),
+                        ],
                     },
-                },
-            },
+                ),
+                (
+                    "reset",
+                    Net,
+                ),
+            ],
         },
         required: true,
         default_value: None,

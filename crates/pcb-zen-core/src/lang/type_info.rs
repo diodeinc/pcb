@@ -1,6 +1,6 @@
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
 use crate::lang::net::{NetType, NetValue};
-use crate::FrozenNetValue;
+use crate::{FrozenNetValue, InputValue};
 use serde::{Deserialize, Serialize};
 use starlark::values::enumeration::{EnumType, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
@@ -40,7 +40,7 @@ pub enum TypeInfo {
     Interface {
         name: String,
         /// Map of pin/signal names to their types (usually Net or sub-interfaces)
-        pins: HashMap<String, TypeInfo>,
+        pins: Vec<(String, TypeInfo)>,
     },
     /// Unknown or complex type
     Unknown { type_name: String },
@@ -112,9 +112,9 @@ impl TypeInfo {
 
         // Check for Interface types by downcasting
         if let Some(iface) = value.downcast_ref::<InterfaceFactory>() {
-            let mut pins = HashMap::new();
-            for (key, val) in iface.children() {
-                pins.insert(key.to_string(), Self::from_value(val.to_value()));
+            let mut pins = Vec::new();
+            for (key, val) in iface.iter() {
+                pins.push((key.to_string(), Self::from_value(val.to_value())));
             }
 
             return TypeInfo::Interface {
@@ -124,9 +124,9 @@ impl TypeInfo {
         }
 
         if let Some(iface) = value.downcast_ref::<FrozenInterfaceFactory>() {
-            let mut pins = HashMap::new();
-            for (key, val) in iface.children() {
-                pins.insert(key.to_string(), Self::from_value(val.to_value()));
+            let mut pins = Vec::new();
+            for (key, val) in iface.iter() {
+                pins.push((key.to_string(), Self::from_value(val.to_value())));
             }
 
             return TypeInfo::Interface {
@@ -210,7 +210,7 @@ pub struct ParameterInfo {
     pub name: String,
     pub type_info: TypeInfo,
     pub required: bool,
-    pub default_value: Option<crate::lang::input::InputValue>,
+    pub default_value: Option<InputValue>,
     pub help: Option<String>,
 }
 

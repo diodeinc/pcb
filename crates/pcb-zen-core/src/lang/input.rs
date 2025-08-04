@@ -193,9 +193,9 @@ impl InputValue {
                     // factory. We need to handle both the regular and the frozen variants.
                     let expected_field_typ: Option<Value<'v>> =
                         if let Some(fac) = typ_val.downcast_ref::<InterfaceFactory<'v>>() {
-                            fac.fields().get(k).map(|val| val.to_value())
+                            fac.field(k.as_str()).map(|val| val.to_value())
                         } else if let Some(fac) = typ_val.downcast_ref::<FrozenInterfaceFactory>() {
-                            fac.fields().get(k).map(|val| val.to_value())
+                            fac.field(k.as_str()).map(|val| val.to_value())
                         } else {
                             None
                         };

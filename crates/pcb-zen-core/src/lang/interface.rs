@@ -77,7 +77,7 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     #[allocative(skip)]
     #[trace(unsafe_ignore)]
     interface_type_data: V::InterfaceTypeDataOpt,
-    fields: SmallMap<String, V>,
+    fields: Vec<(String, V)>,
     param_spec: ParametersSpec<starlark::values::FrozenValue>,
 }
 
@@ -129,7 +129,7 @@ where
             }
 
             // Then the field values in the order of `fields`.
-            for fld_name in self.fields.keys() {
+            for (fld_name, _) in self.fields.iter() {
                 if let Some(v) = param_parser.next_opt()? {
                     provided_values.insert(fld_name.clone(), v);
                 }
@@ -308,7 +308,7 @@ where
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        self.fields.keys().cloned().collect()
+        self.fields.iter().map(|(k, _)| k.clone()).collect()
     }
 }
 
@@ -343,8 +343,8 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> std::fmt::Display for InterfaceFactor
 }
 
 impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
-    pub fn children(&self) -> Vec<(&str, &V)> {
-        self.fields.iter().map(|(k, v)| (k.as_str(), v)).collect()
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &V)> {
+        self.fields.iter().map(|(k, v)| (k.as_str(), v))
     }
 }
 
@@ -433,7 +433,7 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> DeepCopyToHeap for InterfaceFactoryGe
                 let copied_value = copy_value(v.to_value(), dst)?;
                 Ok((k.clone(), copied_value))
             })
-            .collect::<Result<SmallMap<String, Value<'dst>>, anyhow::Error>>()?;
+            .collect::<Result<Vec<(String, Value<'dst>)>, anyhow::Error>>()?;
 
         // Note: We don't copy the interface_type_data because it will be re-initialized
         // when the interface is exported in the new heap
@@ -452,7 +452,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
         heap: &'v Heap,
     ) -> anyhow::Result<Value<'v>> {
-        let mut fields = SmallMap::new();
+        let mut fields = Vec::new();
 
         // Validate field types
         for (name, v) in &kwargs {
@@ -465,7 +465,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                 || v.downcast_ref::<InterfaceFactory<'v>>().is_some()
                 || v.downcast_ref::<FrozenInterfaceFactory>().is_some()
             {
-                fields.insert(name.clone(), v.to_value());
+                fields.push((name.clone(), v.to_value()));
             } else {
                 return Err(anyhow::anyhow!(
                     "Interface field `{}` must be Net type, Net instance, Interface type, or Interface instance, got `{}`",
@@ -657,8 +657,13 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
     /// interface fields when reconstructing an instance from a serialised
     /// `InputValue`.
     #[inline]
-    pub fn fields(&self) -> &SmallMap<String, V> {
+    pub fn fields(&self) -> &Vec<(String, V)> {
         &self.fields
+    }
+
+    #[inline]
+    pub fn field(&self, name: &str) -> Option<&V> {
+        self.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
     }
 }
 
