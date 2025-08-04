@@ -207,6 +207,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Add a parameter to the module's signature with full metadata.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_parameter_metadata(
         &mut self,
         name: String,
