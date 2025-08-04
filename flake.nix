@@ -21,9 +21,20 @@
         inherit (pkgs) lib;
 
         craneLib = crane.mkLib pkgs;
-        src = craneLib.cleanCargoSource ./.;
+        src = pkgs.lib.cleanSourceWith {
+          src = lib.cleanSource ./.;
+
+          filter = (
+            orig_path: type:
+            pkgs.lib.hasSuffix ".py" (baseNameOf (toString orig_path))
+            || (craneLib.filterCargoSources orig_path type)
+          );
+
+          name = "pcb-source";
+        };
 
         commonArgs = {
+          pname = "pcb";
           inherit src;
           strictDeps = true;
           doCheck = false;
@@ -47,13 +58,7 @@
           commonArgs
           // {
             inherit cargoArtifacts;
-            pname = "pcb";
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-
-            prePatch = ''
-              substituteInPlace crates/pcb-layout/src/lib.rs \
-                --replace-fail "scripts/update_layout_file.py" ${crates/pcb-layout/src/scripts/update_layout_file.py}
-            '';
 
             doCheck = false;
           }
