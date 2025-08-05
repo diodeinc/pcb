@@ -277,7 +277,7 @@ impl ModuleConverter {
                 NetKind::Normal
             };
 
-            let mut net = Net::new(net_kind, unique_name);
+            let mut net = Net::new(net_kind, unique_name, info.id);
             for port in info.ports.iter() {
                 net.add_port(port.clone());
             }

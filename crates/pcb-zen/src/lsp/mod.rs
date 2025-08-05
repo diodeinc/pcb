@@ -8,9 +8,11 @@ use lsp_types::{
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
+use pcb_zen_core::lang::type_info::ParameterInfo;
 use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, InputValue,
+    LoadResolver,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -580,7 +582,176 @@ impl LspContext for LspEvalContext {
             }
         }
 
+        // Handle zener/evaluate requests
+        if req.method == ZenerEvaluateRequest::METHOD {
+            match serde_json::from_value::<ZenerEvaluateParams>(req.params.clone()) {
+                Ok(params) => {
+                    let result = self.evaluate_module(params);
+                    match result {
+                        Ok(response) => {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: Some(serde_json::to_value(response).unwrap()),
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: 0,
+                                    message: format!("Evaluation failed: {e}"),
+                                    data: None,
+                                }),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(ResponseError {
+                            code: 0,
+                            message: format!("Failed to parse params: {e}"),
+                            data: None,
+                        }),
+                    });
+                }
+            }
+        }
+
         None
+    }
+}
+
+impl LspEvalContext {
+    fn evaluate_module(
+        &self,
+        params: ZenerEvaluateParams,
+    ) -> anyhow::Result<ZenerEvaluateResponse> {
+        let path_buf = match &params.uri {
+            LspUrl::File(path) => path,
+            _ => return Err(anyhow::anyhow!("Only file URIs are supported")),
+        };
+
+        // Get contents from memory or disk
+        let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
+
+        // Extract module name from the file path
+        let module_name = path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("module")
+            .to_string();
+
+        // Convert JSON inputs to InputMap
+        let mut input_map = InputMap::new();
+        for (key, value) in params.inputs {
+            let input_value = json_to_input_value(&value)
+                .ok_or_else(|| anyhow::anyhow!("Invalid input type for '{}'", key))?;
+            input_map.insert(key, input_value);
+        }
+
+        // Create evaluation context
+        let ctx = EvalContext::new()
+            .set_file_provider(self.file_provider.clone())
+            .set_load_resolver(create_standard_load_resolver(
+                self.file_provider.clone(),
+                path_buf,
+            ))
+            .set_module_name(module_name)
+            .set_inputs(input_map);
+
+        // Evaluate the module
+        let eval_result = if let Some(contents) = maybe_contents {
+            ctx.set_source_path(path_buf.clone())
+                .set_source_contents(contents)
+                .eval()
+        } else {
+            ctx.set_source_path(path_buf.clone()).eval()
+        };
+
+        // Extract parameters from the result
+        let parameters = eval_result
+            .output
+            .as_ref()
+            .map(|output| output.signature.clone());
+
+        // Generate schematic JSON if evaluation succeeded
+        let schematic =
+            eval_result
+                .output
+                .as_ref()
+                .and_then(|output| match output.sch_module.to_schematic() {
+                    Ok(schematic) => serde_json::to_value(&schematic).ok(),
+                    Err(_) => None,
+                });
+
+        // Convert diagnostics
+        let diagnostics = eval_result
+            .diagnostics
+            .into_iter()
+            .map(|d| diagnostic_to_info(&d))
+            .collect();
+
+        Ok(ZenerEvaluateResponse {
+            success: eval_result.output.is_some(),
+            parameters,
+            schematic,
+            diagnostics,
+        })
+    }
+}
+
+/// Convert serde_json::Value to InputValue
+fn json_to_input_value(json: &JsonValue) -> Option<InputValue> {
+    match json {
+        JsonValue::Null => Some(InputValue::None),
+        JsonValue::Bool(b) => Some(InputValue::Bool(*b)),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(InputValue::Int(i as i32))
+            } else {
+                n.as_f64().map(InputValue::Float)
+            }
+        }
+        JsonValue::String(s) => Some(InputValue::String(s.clone())),
+        JsonValue::Array(arr) => {
+            let values: Option<Vec<_>> = arr.iter().map(json_to_input_value).collect();
+            values.map(InputValue::List)
+        }
+        JsonValue::Object(obj) => {
+            let mut map = HashMap::new();
+            for (k, v) in obj {
+                if let Some(value) = json_to_input_value(v) {
+                    map.insert(k.clone(), value);
+                }
+            }
+            Some(InputValue::Dict(
+                starlark::collections::SmallMap::from_iter(map),
+            ))
+        }
+    }
+}
+
+/// Convert a Diagnostic to DiagnosticInfo
+fn diagnostic_to_info(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
+    let level = match diag.severity {
+        starlark::errors::EvalSeverity::Error => "error",
+        starlark::errors::EvalSeverity::Warning => "warning",
+        starlark::errors::EvalSeverity::Advice => "info",
+        starlark::errors::EvalSeverity::Disabled => "info",
+    }
+    .to_string();
+
+    DiagnosticInfo {
+        level,
+        message: diag.body.clone(),
+        file: Some(diag.path.clone()),
+        line: diag.span.as_ref().map(|s| s.begin.line as u32),
+        child: diag.child.as_ref().map(|c| Box::new(diagnostic_to_info(c))),
     }
 }
 
@@ -602,4 +773,42 @@ struct ViewerGetStateParams {
 #[serde(rename_all = "camelCase")]
 struct ViewerGetStateResponse {
     state: Option<JsonValue>,
+}
+
+// Custom LSP request for zener/evaluate - evaluates a module with given inputs and returns a netlist
+struct ZenerEvaluateRequest;
+impl lsp_types::request::Request for ZenerEvaluateRequest {
+    type Params = ZenerEvaluateParams;
+    type Result = ZenerEvaluateResponse;
+    const METHOD: &'static str = "zener/evaluate";
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ZenerEvaluateParams {
+    uri: LspUrl,
+    inputs: HashMap<String, JsonValue>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ZenerEvaluateResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<Vec<ParameterInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schematic: Option<JsonValue>,
+    diagnostics: Vec<DiagnosticInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct DiagnosticInfo {
+    level: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    child: Option<Box<DiagnosticInfo>>,
 }
