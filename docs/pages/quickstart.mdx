@@ -1,16 +1,40 @@
 ---
-title: "Getting Stared"
-description: "Get started with the `pcb` cli"
+title: "Getting Started"
+description: "Get started with the `pcb` CLI"
 ---
 
 ## Install from a package manager
 
 _Package manager installation coming soon._
 
+## Install from script
+
+Download latest relese from github, instructions available [here](https://github.com/diodeinc/pcb/releases)
+
+<CodeGroup>
+
+```bash bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/diodeinc/pcb/releases/latest/download/pcb-installer.sh | sh
+```
+
+```sh powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/diodeinc/pcb/releases/latest/download/pcb-installer.ps1 | iex"
+```
+
+</CodeGroup>
+
+
 ## Install from source
 
-Clone the [repo](https://github.com/diodeinc/pcb) and run the installation scrip
+Clone the [repo](https://github.com/diodeinc/pcb) and run the install script
 
 ```bash
+# Clone the repo
+git clone https://github.com/diodeinc/pcb
+
+# Move into source folder
+cd pcb
+
+# Run the install script
 ./install.sh
 ```
