@@ -1,16 +1,25 @@
 {
   "$schema": "https://mintlify.com/schema.json",
   "name": "Diode Computers, Inc.",
-  "theme": "mint",
+  "theme": "linden",
   "logo": {
-    "dark": "logo/logo-green.svg",
-    "light": "logo/logo-black.svg"
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
   },
-  "favicon": "favicon.svg",
+  "favicon": "/logo/green.svg",
+  "fonts": {
+    "family": "code-saver"
+  },
   "colors": {
-    "primary": "#0D9373",
-    "light": "#07C983",
-    "dark": "#0D9373"
+    "primary": "#101010",
+    "light": "#F4F4F4",
+    "dark": "#101010"
+  },
+  "background": {
+    "color": {
+      "dark": "#101010",
+      "light": "#F4F4F4"
+    }
   },
   "topbarLinks": [
     {
@@ -20,7 +29,12 @@
   ],
   "tabs": [],
   "navigation": {
-    "pages": [ "spec" ]
+    "groups": [
+      {
+        "group": "Documentation",
+        "pages": ["pages/quickstart", "pages/spec"]
+      }
+    ]
   },
   "footerSocials": {
     "x": "https://x.com/diodeinc",
