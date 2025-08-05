@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Args;
-use pcb_zen::load::{cache_dir, find_workspace_root};
+use pcb_zen::load::cache_dir;
+use pcb_zen_core::DefaultFileProvider;
+use pcb_zen_core::workspace::find_workspace_root;
 
 #[derive(Args, Debug)]
 #[command(about = "Clean generated files")]
@@ -18,7 +20,7 @@ pub struct CleanArgs {
 pub fn execute(args: CleanArgs) -> Result<()> {
     // Find the workspace root starting from current directory
     let current_dir = std::env::current_dir()?;
-    let project_root = find_workspace_root(&current_dir).unwrap_or(current_dir);
+    let project_root = find_workspace_root(&DefaultFileProvider, &current_dir).unwrap_or(current_dir);
 
     // Define the temp directories to clean
     let temp_dirs = vec![project_root.join(".pcb")];

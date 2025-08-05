@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+pcb-zen-core = { workspace = true }
 pcb-zen = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-layout = { workspace = true }
