@@ -154,6 +154,7 @@ impl<'v> ContextValue<'v> {
     }
 
     /// Borrow the underlying `ModuleValue` immutably.
+    #[allow(dead_code)]
     pub(crate) fn module(&self) -> std::cell::Ref<'_, ModuleValue<'v>> {
         self.module.borrow()
     }
