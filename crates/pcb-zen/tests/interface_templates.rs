@@ -81,10 +81,14 @@ Component(
     );
 
     let result = env.eval_netlist("test.zen");
+    if !result.diagnostics.is_empty() {
+        eprintln!("Diagnostics: {:?}", result.diagnostics);
+    }
     assert!(result.output.is_some(), "Should produce output");
     assert!(result.diagnostics.is_empty(), "Should have no errors");
 
     let netlist = result.output.unwrap();
+    println!("netlist:\n{}", netlist);
     assert!(netlist.contains("MCU_3V3"), "Should contain MCU_3V3 net");
     assert!(netlist.contains("MCU_GND"), "Should contain MCU_GND net");
     assert!(
@@ -134,10 +138,14 @@ Component(
     );
 
     let result = env.eval_netlist("test.zen");
+    if !result.diagnostics.is_empty() {
+        eprintln!("Diagnostics: {:?}", result.diagnostics);
+    }
     assert!(result.output.is_some(), "Should produce output");
     assert!(result.diagnostics.is_empty(), "Should have no errors");
 
     let netlist = result.output.unwrap();
+    println!("netlist:\n{}", netlist);
     assert!(
         netlist.contains("MAIN_POWER_VCC"),
         "Should contain MAIN_POWER_VCC net"
@@ -179,8 +187,13 @@ Component(
     );
 
     let result = env.eval_netlist("test.zen");
+    if !result.diagnostics.is_empty() {
+        eprintln!("Diagnostics: {:?}", result.diagnostics);
+    }
     assert!(result.output.is_some(), "Should produce output");
     assert!(result.diagnostics.is_empty(), "Should have no errors");
+    let netlist = result.output.unwrap();
+    println!("netlist:\n{}", netlist);
 }
 
 #[test]

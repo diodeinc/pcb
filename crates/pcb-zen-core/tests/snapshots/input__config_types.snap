@@ -119,14 +119,26 @@ Module {
         name: "net_io",
         type_info: Net,
         required: true,
-        default_value: None,
+        default_value: Some(
+            Net {
+                id: 1,
+                name: "net_io",
+                properties: {},
+            },
+        ),
         help: None,
     },
     ParameterInfo {
         name: "opt_net_io",
         type_info: Net,
         required: false,
-        default_value: None,
+        default_value: Some(
+            Net {
+                id: 2,
+                name: "opt_net_io",
+                properties: {},
+            },
+        ),
         help: None,
     },
     ParameterInfo {
@@ -145,7 +157,22 @@ Module {
             ],
         },
         required: true,
-        default_value: None,
+        default_value: Some(
+            Interface {
+                fields: {
+                    "vcc": Net {
+                        id: 3,
+                        name: "power_io_VCC",
+                        properties: {},
+                    },
+                    "gnd": Net {
+                        id: 4,
+                        name: "power_io_GND",
+                        properties: {},
+                    },
+                },
+            },
+        ),
         help: None,
     },
     ParameterInfo {
@@ -164,7 +191,22 @@ Module {
             ],
         },
         required: false,
-        default_value: None,
+        default_value: Some(
+            Interface {
+                fields: {
+                    "vcc": Net {
+                        id: 5,
+                        name: "opt_power_io_VCC",
+                        properties: {},
+                    },
+                    "gnd": Net {
+                        id: 6,
+                        name: "opt_power_io_GND",
+                        properties: {},
+                    },
+                },
+            },
+        ),
         help: None,
     },
     ParameterInfo {
@@ -187,7 +229,27 @@ Module {
             ],
         },
         required: true,
-        default_value: None,
+        default_value: Some(
+            Interface {
+                fields: {
+                    "data": Net {
+                        id: 7,
+                        name: "bus_io_DATA",
+                        properties: {},
+                    },
+                    "clock": Net {
+                        id: 8,
+                        name: "bus_io_CLOCK",
+                        properties: {},
+                    },
+                    "enable": Net {
+                        id: 9,
+                        name: "bus_io_ENABLE",
+                        properties: {},
+                    },
+                },
+            },
+        ),
         help: None,
     },
     ParameterInfo {
@@ -238,7 +300,50 @@ Module {
             ],
         },
         required: true,
-        default_value: None,
+        default_value: Some(
+            Interface {
+                fields: {
+                    "power": Interface {
+                        fields: {
+                            "vcc": Net {
+                                id: 10,
+                                name: "system_io_POWER_VCC",
+                                properties: {},
+                            },
+                            "gnd": Net {
+                                id: 11,
+                                name: "system_io_POWER_GND",
+                                properties: {},
+                            },
+                        },
+                    },
+                    "bus": Interface {
+                        fields: {
+                            "data": Net {
+                                id: 12,
+                                name: "system_io_BUS_DATA",
+                                properties: {},
+                            },
+                            "clock": Net {
+                                id: 13,
+                                name: "system_io_BUS_CLOCK",
+                                properties: {},
+                            },
+                            "enable": Net {
+                                id: 14,
+                                name: "system_io_BUS_ENABLE",
+                                properties: {},
+                            },
+                        },
+                    },
+                    "reset": Net {
+                        id: 15,
+                        name: "system_io_RESET",
+                        properties: {},
+                    },
+                },
+            },
+        ),
         help: None,
     },
 ]

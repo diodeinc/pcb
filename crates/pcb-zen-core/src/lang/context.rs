@@ -13,6 +13,7 @@ use super::{
     input::InputMap,
     module::{FrozenModuleValue, ModuleValue},
 };
+use super::net::NetId;
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
@@ -160,5 +161,12 @@ impl<'v> ContextValue<'v> {
     /// Borrow the underlying `ModuleValue` mutably.
     pub(crate) fn module_mut(&self) -> std::cell::RefMut<'_, ModuleValue<'v>> {
         self.module.borrow_mut()
+    }
+
+    /// Register a newly created net with this module. Enforces per-module uniqueness of names.
+    pub(crate) fn register_net(&self, id: NetId, local_name: &str) -> anyhow::Result<()> {
+        self.module
+            .borrow_mut()
+            .register_net(id, local_name.to_string())
     }
 }

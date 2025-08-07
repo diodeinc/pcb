@@ -29,7 +29,7 @@ expression: netlist
     )
   )
   (nets
-    (net (code "1") (name "sub.comp0.V")
+    (net (code "1") (name "sub.N4")
       (node (ref "U1") (pin "1") (pintype "stereo"))
     )
   )

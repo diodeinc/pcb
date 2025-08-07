@@ -1,33 +1,36 @@
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
+P1 = Net("P1")
+P2 = Net("P2")
+
 Resistor(
     name = "normal",
     value = "1kohms",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
+    P1 = P1,
+    P2 = P2,
 )
 
 Resistor(
     name = "dnp",
     value = "1kohms",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
+    P1 = P1,
+    P2 = P2,
     do_not_populate = True,
 )
 
 Resistor(
     name = "exclude_from_bom",
     value = "1kohms",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
+    P1 = P1,
+    P2 = P2,
     exclude_from_bom = True,
 )
 
 Resistor(
     name = "exclude_from_bom_and_dnp",
     value = "1kohms",
-    P1 = Net("P1"),
-    P2 = Net("P2"),
+    P1 = P1,
+    P2 = P2,
     exclude_from_bom = True,
     do_not_populate = True,
 )

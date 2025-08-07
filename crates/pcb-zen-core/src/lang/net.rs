@@ -251,9 +251,7 @@ where
         // avoids cross-test interference when Rust tests execute in parallel.
         let net_id = generate_net_id();
 
-        // Use positional name if provided, otherwise use kwarg name
-        // Keep name empty when not supplied so that later passes can derive a context-aware
-        // identifier from the net's connections.
+        // Use positional name if provided, otherwise use kwarg name (may be empty).
         let net_name = name_pos.or(name_kwarg).unwrap_or_default();
 
         // Initialize with empty properties map

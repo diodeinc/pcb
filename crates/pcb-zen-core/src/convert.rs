@@ -9,7 +9,7 @@ use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::{BTreeMap, BTreeSet};
+// removed unused BTree imports after refactor
 use std::path::Path;
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
@@ -36,36 +36,10 @@ struct ParameterInfo {
     is_config: bool, // true for config(), false for io()
     help: Option<String>,
     value: Option<InputValue>,
+    default_value: Option<InputValue>,
 }
 
-// Information about a net used during name resolution.
-#[derive(Clone)]
-struct NetInfo {
-    id: NetId,
-    ports: Vec<InstanceRef>,
-    base_name: String,
-    // Shortest instance path expressed as individual segments. May be empty.
-    path: Vec<String>,
-}
-
-/// Compute the number of leading path segments that all paths in `paths` share.
-fn common_prefix_len(paths: &[&[String]]) -> usize {
-    if paths.is_empty() {
-        return 0;
-    }
-    let mut idx = 0;
-    loop {
-        if paths.iter().any(|p| p.len() <= idx) {
-            break;
-        }
-        let seg = &paths[0][idx];
-        if paths.iter().any(|p| &p[idx] != seg) {
-            break;
-        }
-        idx += 1;
-    }
-    idx
-}
+// Name resolution is now deterministic at net creation time; legacy helpers removed.
 
 impl ModuleConverter {
     pub(crate) fn new() -> Self {
@@ -87,183 +61,36 @@ impl ModuleConverter {
         self.add_module_at(module, &root_instance_ref)?;
         self.schematic.set_root_ref(root_instance_ref);
 
-        // First, collect metadata for every net so that we can perform a
-        // global, deterministic name-assignment pass.
-        let mut nets: Vec<NetInfo> = Vec::with_capacity(self.net_to_ports.len());
-
-        for (net_id, ports) in self.net_to_ports.iter() {
-            // Determine the base name (explicit first, otherwise derived).
-            let explicit = self.net_to_name.get(net_id).cloned().unwrap_or_default();
-
-            let base_name: String = if !explicit.trim().is_empty() {
-                explicit
-            } else {
-                // Derive name from the shortest port path.
-                let derived_path = ports
-                    .iter()
-                    .filter_map(|p| {
-                        if p.instance_path.is_empty() {
-                            None
-                        } else {
-                            Some(p.instance_path.join("."))
-                        }
-                    })
-                    .min_by_key(|p| p.len());
-
-                if let Some(path) = &derived_path {
-                    path.to_string()
-                } else {
-                    format!("N{}", *net_id)
-                }
-            };
-
-            // Also capture the path segments we may need for disambiguation.
-            let shortest_path_segments: Vec<String> = ports
-                .iter()
-                .filter_map(|p| {
-                    if p.instance_path.is_empty() {
-                        None
-                    } else {
-                        Some(p.instance_path.clone())
-                    }
-                })
-                .min_by_key(|p| p.len())
-                .unwrap_or_default();
-
-            nets.push(NetInfo {
-                id: *net_id,
-                ports: ports.clone(),
-                base_name,
-                path: shortest_path_segments,
-            });
+        // Create Net objects directly using the names recorded per-module.
+        // Ensure global uniqueness and stable creation order by sorting names.
+        let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
+        for net_id in self.net_to_ports.keys() {
+            let name = self
+                .net_to_name
+                .get(net_id)
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("N{net_id}"));
+            ids_and_names.push((*net_id, name));
         }
 
-        // Group nets by their base name so we can resolve conflicts inside each group.
-        let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new(); // base_name -> indices into nets
-        for (idx, info) in nets.iter().enumerate() {
-            groups.entry(info.base_name.clone()).or_default().push(idx);
-        }
+        ids_and_names.sort_by(|a, b| a.1.cmp(&b.1));
 
-        // This will hold the final, globally-unique names per net index.
-        let mut final_names: Vec<String> = vec![String::new(); nets.len()];
-
-        // Resolve each group.
-        for (_base_name, indices) in groups.iter() {
-            if indices.len() == 1 {
-                // No conflict, keep the base name as is.
-                let idx = indices[0];
-                final_names[idx] = nets[idx].base_name.clone();
-                continue;
-            }
-
-            // Collect tails after stripping the common prefix.
-            let paths_ref: Vec<&[String]> =
-                indices.iter().map(|&i| nets[i].path.as_slice()).collect();
-            let cp_len = common_prefix_len(&paths_ref);
-
-            // Precompute tails.
-            let tails: Vec<Vec<String>> = indices
-                .iter()
-                .map(|&i| nets[i].path[cp_len..].to_vec())
-                .collect();
-
-            let max_tail_len = tails.iter().map(|t| t.len()).max().unwrap_or(0);
-
-            let mut k = 1;
-            let mut unique_found = false;
-            let mut candidate_names: Vec<String> = vec![String::new(); indices.len()];
-
-            while k <= max_tail_len {
-                let mut seen: BTreeSet<String> = BTreeSet::new();
-                let mut dup = false;
-
-                for (pos, tail) in tails.iter().enumerate() {
-                    let segs = if tail.is_empty() {
-                        Vec::new()
-                    } else {
-                        let take = std::cmp::min(k, tail.len());
-                        tail[..take].to_vec()
-                    };
-
-                    let prefix = if segs.is_empty() {
-                        String::new()
-                    } else {
-                        segs.join(".")
-                    };
-
-                    let cand = if prefix.is_empty() {
-                        nets[indices[pos]].base_name.clone()
-                    } else {
-                        format!("{}.{}", prefix, nets[indices[pos]].base_name)
-                    };
-
-                    if !seen.insert(cand.clone()) {
-                        dup = true;
-                    }
-
-                    candidate_names[pos] = cand;
+        // Guard for uniqueness
+        {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for (_, name) in ids_and_names.iter() {
+                if !seen.insert(name.as_str()) {
+                    return Err(anyhow::anyhow!(
+                        "Internal error: duplicate net name generated: {name}"
+                    ));
                 }
-
-                if !dup {
-                    unique_found = true;
-                    break;
-                }
-
-                k += 1;
-            }
-
-            if !unique_found {
-                // Fallback: use full tail (may be empty) and then handle duplicates via suffixes.
-                let mut name_counts: HashMap<String, usize> = HashMap::new();
-                for (pos, tail) in tails.iter().enumerate() {
-                    let prefix = if tail.is_empty() {
-                        String::new()
-                    } else {
-                        tail.join(".")
-                    };
-                    let mut name = if prefix.is_empty() {
-                        nets[indices[pos]].base_name.clone()
-                    } else {
-                        format!("{}.{}", prefix, nets[indices[pos]].base_name)
-                    };
-
-                    let counter = name_counts.entry(name.clone()).or_insert(0);
-                    if *counter > 0 {
-                        name = format!("{}_{}", name, *counter);
-                    }
-                    *counter += 1;
-
-                    candidate_names[pos] = name;
-                }
-            }
-
-            // Commit the chosen names for this group.
-            for (idx, &net_idx) in indices.iter().enumerate() {
-                final_names[net_idx] = candidate_names[idx].clone();
             }
         }
 
-        // As a last guard, ensure global uniqueness (should already be true).
-        let mut used_names: HashSet<String> = HashSet::new();
-        for name in final_names.iter() {
-            if !used_names.insert(name.clone()) {
-                return Err(anyhow::anyhow!(
-                    "Internal error: duplicate net name generated: {}",
-                    name
-                ));
-            }
-        }
-
-        // Finally, create the Net objects in a stable order (base_name, then full name).
-        let mut creation_order: Vec<usize> = (0..nets.len()).collect();
-        creation_order.sort_by_key(|&i| final_names[i].clone());
-
-        for idx in creation_order {
-            let info = &nets[idx];
-            let unique_name = final_names[idx].clone();
-
+        for (net_id, unique_name) in ids_and_names {
             // Determine net kind from properties.
-            let net_kind = if let Some(props) = self.net_to_properties.get(&info.id) {
+            let net_kind = if let Some(props) = self.net_to_properties.get(&net_id) {
                 if let Some(type_prop) = props.get("type") {
                     match type_prop.string() {
                         Some("ground") => NetKind::Ground,
@@ -277,13 +104,15 @@ impl ModuleConverter {
                 NetKind::Normal
             };
 
-            let mut net = Net::new(net_kind, unique_name, info.id);
-            for port in info.ports.iter() {
-                net.add_port(port.clone());
+            let mut net = Net::new(net_kind, unique_name, net_id);
+            if let Some(ports) = self.net_to_ports.get(&net_id) {
+                for port in ports.iter() {
+                    net.add_port(port.clone());
+                }
             }
 
             // Add properties to the net.
-            if let Some(props) = self.net_to_properties.get(&info.id) {
+            if let Some(props) = self.net_to_properties.get(&net_id) {
                 for (key, value) in props.iter() {
                     net.add_property(key.clone(), value.clone());
                 }
@@ -374,6 +203,9 @@ impl ModuleConverter {
                 value: param
                     .actual_value
                     .map(|v| InputValue::from_value(v.to_value())),
+                default_value: param
+                    .default_value
+                    .map(|v| InputValue::from_value(v.to_value())),
             });
         }
 
@@ -381,6 +213,19 @@ impl ModuleConverter {
         if !signature.parameters.is_empty() {
             let signature_json = serde_json::to_value(&signature).unwrap_or_default();
             inst.add_attribute("__signature", AttributeValue::Json(signature_json));
+        }
+
+        // Record final names for nets introduced by this module using the instance path.
+        // For the root module, no prefix is added.
+        let module_path = instance_ref.instance_path.join(".");
+
+        for (net_id, local_name) in module.introduced_nets().iter() {
+            let final_name = if module_path.is_empty() {
+                local_name.clone()
+            } else {
+                format!("{module_path}.{local_name}")
+            };
+            self.net_to_name.insert(*net_id, final_name);
         }
 
         // Recurse into children, but don't pass any properties down.
@@ -407,7 +252,33 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let entry = self.net_to_ports.entry(net.id()).or_default();
         entry.push(instance_ref.clone());
-        self.net_to_name.insert(net.id(), net.name().to_string());
+        // Honor explicit names on nets encountered during connections unless already set
+        self.net_to_name.entry(net.id()).or_insert_with(|| {
+            let local = net.name();
+            let module_pref = if instance_ref.instance_path.len() >= 2 {
+                let module_segments =
+                    &instance_ref.instance_path[..instance_ref.instance_path.len() - 2];
+                if module_segments.is_empty() {
+                    None
+                } else {
+                    Some(module_segments.join("."))
+                }
+            } else {
+                None
+            };
+
+            if local.is_empty() {
+                if let Some(pref) = module_pref {
+                    format!("{pref}.N{}", net.id())
+                } else {
+                    String::new()
+                }
+            } else if let Some(pref) = module_pref {
+                format!("{pref}.{local}")
+            } else {
+                local.to_string()
+            }
+        });
 
         self.net_to_properties.entry(net.id()).or_insert_with(|| {
             let mut props_map = HashMap::new();
