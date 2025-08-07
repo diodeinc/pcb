@@ -4,7 +4,6 @@ expression: output
 ---
 net1.name: POWER_3V3
 net2.name: GND
-net3.name: 
 Module {
     name: "<root>",
     source: "test.zen",

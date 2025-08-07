@@ -81,9 +81,7 @@ impl ModuleConverter {
             let mut seen: HashSet<&str> = HashSet::new();
             for (_, name) in ids_and_names.iter() {
                 if !seen.insert(name.as_str()) {
-                    return Err(anyhow::anyhow!(
-                        "Internal error: duplicate net name generated: {name}"
-                    ));
+                    return Err(anyhow::anyhow!("Duplicate net name: {name}"));
                 }
             }
         }

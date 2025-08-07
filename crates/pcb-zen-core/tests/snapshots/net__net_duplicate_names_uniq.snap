@@ -1,0 +1,65 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+en1: EN
+en2: EN_2
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "U1",
+                footprint: "TEST:0402",
+                prefix: "U",
+                connections: {
+                    "EN": FrozenValue(
+                        Net {
+                            name: "EN",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "EN",
+                        },
+                    },
+                ),
+            },
+        ),
+        FrozenValue(
+            Component {
+                name: "U2",
+                footprint: "TEST:0402",
+                prefix: "U",
+                connections: {
+                    "EN": FrozenValue(
+                        Net {
+                            name: "EN_2",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "EN",
+                        },
+                    },
+                ),
+            },
+        ),
+    ],
+}
+[]

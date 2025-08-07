@@ -73,16 +73,38 @@ snapshot_eval!(net_name_property_access, {
         # Create nets with different names
         net1 = Net("POWER_3V3")
         net2 = Net("GND")
-        net3 = Net()  # Empty name
         
         # Access and print the name property
         print("net1.name:", net1.name)
         print("net2.name:", net2.name)
-        print("net3.name:", net3.name)
         
         # Verify the name property matches what was passed to Net()
         check(net1.name == "POWER_3V3", "net1.name should be 'POWER_3V3'")
         check(net2.name == "GND", "net2.name should be 'GND'")
-        check(net3.name == "", "net3.name should be empty string")
     "#
+});
+
+snapshot_eval!(net_duplicate_names_uniq, {
+    "test.zen" => r#"
+        # Two same-named nets at the same level should uniquify to EN and EN_2
+        en1 = Net("EN")
+        en2 = Net("EN")
+
+        Component(
+            name = "U1",
+            footprint = "TEST:0402",
+            pin_defs = {"EN": "1"},
+            pins = {"EN": en1},
+        )
+
+        Component(
+            name = "U2",
+            footprint = "TEST:0402",
+            pin_defs = {"EN": "1"},
+            pins = {"EN": en2},
+        )
+
+        print("en1:", en1.name)
+        print("en2:", en2.name)
+    "#,
 });

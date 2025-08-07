@@ -165,9 +165,14 @@ impl<'v> ContextValue<'v> {
     }
 
     /// Register a newly created net with this module. Enforces per-module uniqueness of names.
-    pub(crate) fn register_net(&self, id: NetId, local_name: &str) -> anyhow::Result<()> {
+    pub(crate) fn register_net(&self, id: NetId, local_name: &str) -> anyhow::Result<String> {
         self.module
             .borrow_mut()
             .register_net(id, local_name.to_string())
+    }
+
+    /// Unregister a previously registered net from the current module.
+    pub(crate) fn unregister_net(&self, id: NetId) {
+        self.module.borrow_mut().unregister_net(id)
     }
 }

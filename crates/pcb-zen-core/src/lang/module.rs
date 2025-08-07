@@ -246,31 +246,89 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Record that this module introduced a net with `id` and `local_name`.
-    /// Returns an error if the name is already used for a different net id in the same module.
-    pub fn register_net(&mut self, id: NetId, local_name: String) -> anyhow::Result<()> {
-        let effective_name = if local_name.trim().is_empty() {
+    /// If another net with the same local name already exists in this module,
+    /// generate a unique variant by appending a numeric suffix (e.g. `_2`, `_3`, ...).
+    pub fn register_net(&mut self, id: NetId, local_name: String) -> anyhow::Result<String> {
+        // If this id was already registered, keep the first assignment (idempotent)
+        if self.introduced_nets.get(&id).is_some() {
+            // Return the already-registered name
+            if let Some(name) = self.introduced_nets.get(&id) {
+                return Ok(name.clone());
+            }
+            return Ok(local_name);
+        }
+
+        // If the provided name is empty/whitespace, fall back to a stable placeholder.
+        let base_name = if local_name.trim().is_empty() {
             format!("N{id}")
         } else {
             local_name
         };
 
-        if let Some(existing) = self.net_name_to_id.get(&effective_name) {
-            if *existing != id {
-                anyhow::bail!(
-                    "Duplicate net name '{}' defined within the same module",
-                    effective_name
-                );
+        // Choose a unique name within this module.
+        let unique_name = if let Some(existing_id) = self.net_name_to_id.get(&base_name) {
+            if *existing_id == id {
+                base_name.clone()
+            } else {
+                // Find the next available suffix
+                let mut counter: u32 = 2;
+                let mut candidate = format!("{base_name}_{counter}");
+                while let Some(other_id) = self.net_name_to_id.get(&candidate) {
+                    if *other_id == id {
+                        break;
+                    }
+                    counter += 1;
+                    candidate = format!("{base_name}_{counter}");
+                }
+                candidate
             }
-        }
+        } else {
+            base_name.clone()
+        };
 
-        self.net_name_to_id.insert(effective_name.clone(), id);
-        self.introduced_nets.insert(id, effective_name);
-        Ok(())
+        self.net_name_to_id.insert(unique_name.clone(), id);
+        self.introduced_nets.insert(id, unique_name.clone());
+        Ok(unique_name)
     }
 
     /// Return the map of nets introduced by this module.
     pub fn introduced_nets(&self) -> &starlark::collections::SmallMap<NetId, String> {
         &self.introduced_nets
+    }
+
+    /// Remove a previously registered net from this module. Intended for
+    /// cases where a `Net()` value was used as a template (e.g., inside
+    /// `interface(...)`) and should not count as an introduced net for the
+    /// enclosing module.
+    pub fn unregister_net(&mut self, id: NetId) {
+        // Find the name associated with this id (if any)
+        let mut name_to_remove: Option<String> = None;
+        for (nid, name) in self.introduced_nets.iter() {
+            if *nid == id {
+                name_to_remove = Some(name.clone());
+                break;
+            }
+        }
+
+        if let Some(name) = name_to_remove {
+            // Rebuild introduced_nets without the given id
+            let mut rebuilt_nets = starlark::collections::SmallMap::new();
+            for (nid, n) in self.introduced_nets.iter() {
+                if *nid != id {
+                    rebuilt_nets.insert(*nid, n.clone());
+                }
+            }
+            self.introduced_nets = rebuilt_nets;
+
+            // Rebuild net_name_to_id without the given name
+            let mut rebuilt_lookup = starlark::collections::SmallMap::new();
+            for (k, v) in self.net_name_to_id.iter() {
+                if k != &name {
+                    rebuilt_lookup.insert(k.clone(), *v);
+                }
+            }
+            self.net_name_to_id = rebuilt_lookup;
+        }
     }
 }
 
@@ -890,18 +948,30 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                                 let net_id = generate_net_id();
                                 let net_name = name.clone();
                                 if let Some(ctx) = eval.context_value() {
-                                    ctx.register_net(net_id, &net_name)?;
+                                    let final_name = ctx.register_net(net_id, &net_name)?;
+                                    // Update displayed name to match unique registration
+                                    let generated_default = heap.alloc(NetValue::new(
+                                        net_id,
+                                        final_name,
+                                        starlark::collections::SmallMap::new(),
+                                        Value::new_none(),
+                                    ));
+                                    (
+                                        generated_default.to_value(),
+                                        Some(generated_default.to_value()),
+                                    )
+                                } else {
+                                    let generated_default = heap.alloc(NetValue::new(
+                                        net_id,
+                                        net_name,
+                                        starlark::collections::SmallMap::new(),
+                                        Value::new_none(),
+                                    ));
+                                    (
+                                        generated_default.to_value(),
+                                        Some(generated_default.to_value()),
+                                    )
                                 }
-                                let generated_default = heap.alloc(NetValue::new(
-                                    net_id,
-                                    net_name,
-                                    starlark::collections::SmallMap::new(),
-                                    Value::new_none(),
-                                ));
-                                (
-                                    generated_default.to_value(),
-                                    Some(generated_default.to_value()),
-                                )
                             }
                             // For interfaces, instantiate with the placeholder name as instance prefix
                             "InterfaceFactory" => {
@@ -948,18 +1018,29 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                                 let net_id = generate_net_id();
                                 let net_name = name.clone();
                                 if let Some(ctx) = eval.context_value() {
-                                    ctx.register_net(net_id, &net_name)?;
+                                    let final_name = ctx.register_net(net_id, &net_name)?;
+                                    let generated_default = heap.alloc(NetValue::new(
+                                        net_id,
+                                        final_name,
+                                        starlark::collections::SmallMap::new(),
+                                        Value::new_none(),
+                                    ));
+                                    (
+                                        generated_default.to_value(),
+                                        Some(generated_default.to_value()),
+                                    )
+                                } else {
+                                    let generated_default = heap.alloc(NetValue::new(
+                                        net_id,
+                                        net_name,
+                                        starlark::collections::SmallMap::new(),
+                                        Value::new_none(),
+                                    ));
+                                    (
+                                        generated_default.to_value(),
+                                        Some(generated_default.to_value()),
+                                    )
                                 }
-                                let generated_default = heap.alloc(NetValue::new(
-                                    net_id,
-                                    net_name,
-                                    starlark::collections::SmallMap::new(),
-                                    Value::new_none(),
-                                ));
-                                (
-                                    generated_default.to_value(),
-                                    Some(generated_default.to_value()),
-                                )
                             }
                             "InterfaceFactory" => {
                                 let instance_name = eval.heap().alloc_str(&name).to_value();

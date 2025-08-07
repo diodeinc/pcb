@@ -19,7 +19,7 @@ Module {
                             connections: {
                                 "V": FrozenValue(
                                     Net {
-                                        name: "",
+                                        name: "N4",
                                         id: "<ID>",
                                         symbol: FrozenValue(
                                             NoneType,
