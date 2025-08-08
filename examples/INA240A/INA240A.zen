@@ -24,9 +24,9 @@ Features:
   * CUSTOM: REF pins left unconnected for manual configuration
 """
 
-load("@stdlib:zen/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib:v0.2.0/interfaces.zen", "Power", "Ground", "Analog")
 
-Capacitor = Module("@stdlib:zen/generics/Capacitor.zen")
+Capacitor = Module("@stdlib:v0.2.0/generics/Capacitor.zen")
 
 # Configuration options
 Gain = enum("A1", "A2", "A3", "A4")
