@@ -219,10 +219,8 @@ fn visit_dir_recursive(dir: &Path, out: &mut HashSet<PathBuf>) -> Result<()> {
         let path = entry.path();
         if path.is_dir() {
             visit_dir_recursive(&path, out)?;
-        } else if path.is_file() {
-            if file_extensions::is_starlark_file(path.extension()) {
-                out.insert(path);
-            }
+        } else if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
+            out.insert(path);
         }
     }
     Ok(())
