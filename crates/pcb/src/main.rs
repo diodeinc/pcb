@@ -8,6 +8,7 @@ mod fmt;
 mod layout;
 mod lsp;
 mod open;
+mod upgrade;
 
 #[derive(Parser)]
 #[command(name = "pcb")]
@@ -22,6 +23,10 @@ enum Commands {
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
+
+    /// Upgrade PCB projects
+    #[command(alias = "u")]
+    Upgrade(upgrade::UpgradeArgs),
 
     /// Layout PCB designs
     #[command(alias = "l")]
@@ -53,6 +58,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Build(args) => build::execute(args),
+        Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Clean(args) => clean::execute(args),
         Commands::Fmt(args) => fmt::execute(args),

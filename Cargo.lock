@@ -2246,8 +2246,10 @@ dependencies = [
  "colored",
  "env_logger",
  "inquire",
+ "insta",
  "log",
  "open",
+ "pathdiff",
  "pcb-buildifier",
  "pcb-kicad",
  "pcb-layout",
@@ -2255,6 +2257,9 @@ dependencies = [
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
+ "starlark",
+ "starlark_syntax",
+ "tempfile",
 ]
 
 [[package]]

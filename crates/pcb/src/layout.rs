@@ -5,7 +5,7 @@ use pcb_layout::{process_layout, LayoutError};
 use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
-use crate::build::collect_files;
+use crate::build::{collect_files, collect_files_recursive};
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Generate PCB layout files from .zen files")]
@@ -24,11 +24,19 @@ pub struct LayoutArgs {
     /// When omitted, all .zen files in the current directory are processed.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
+
+    /// Recursively traverse directories to find .zen/.star files
+    #[arg(short = 'r', long = "recursive", default_value_t = false)]
+    pub recursive: bool,
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
     // Collect .zen files to process
-    let zen_paths = collect_files(&args.paths)?;
+    let zen_paths = if args.recursive {
+        collect_files_recursive(&args.paths)?
+    } else {
+        collect_files(&args.paths)?
+    };
 
     if zen_paths.is_empty() {
         let cwd = std::env::current_dir()?;

@@ -33,3 +33,10 @@ open = { workspace = true }
 inquire = { workspace = true }
 pcb-ui = { workspace = true }
 pcb-buildifier = { workspace = true }
+pathdiff = { workspace = true }
+starlark = { workspace = true }
+starlark_syntax = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }

@@ -19,6 +19,10 @@ pub struct BuildArgs {
     /// Print JSON netlist to stdout (undocumented)
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
+
+    /// Recursively traverse directories to find .zen/.star files
+    #[arg(short = 'r', long = "recursive", default_value_t = false)]
+    pub recursive: bool,
 }
 
 /// Evaluate a single Starlark file and print any diagnostics
@@ -45,7 +49,11 @@ pub fn evaluate_zen_file(path: &Path) -> (pcb_zen::WithDiagnostics<pcb_sch::Sche
 
 pub fn execute(args: BuildArgs) -> Result<()> {
     // Determine which .zen files to compile
-    let zen_paths = collect_files(&args.paths)?;
+    let zen_paths = if args.recursive {
+        collect_files_recursive(&args.paths)?
+    } else {
+        collect_files(&args.paths)?
+    };
 
     if zen_paths.is_empty() {
         let cwd = std::env::current_dir()?;
@@ -173,4 +181,49 @@ pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut paths_vec: Vec<_> = unique.into_iter().collect();
     paths_vec.sort();
     Ok(paths_vec)
+}
+
+/// Recursively collect Starlark source files (.zen/.star) from the provided paths.
+/// Mirrors `collect_files` semantics but with recursive directory traversal.
+pub fn collect_files_recursive(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut unique: HashSet<PathBuf> = HashSet::new();
+
+    if !paths.is_empty() {
+        for user_path in paths {
+            let resolved = if user_path.is_absolute() {
+                user_path.clone()
+            } else {
+                std::env::current_dir()?.join(user_path)
+            };
+
+            if resolved.is_file() {
+                if file_extensions::is_starlark_file(resolved.extension()) {
+                    unique.insert(resolved);
+                }
+            } else if resolved.is_dir() {
+                visit_dir_recursive(&resolved, &mut unique)?;
+            }
+        }
+    } else {
+        let cwd = std::env::current_dir()?;
+        visit_dir_recursive(&cwd, &mut unique)?;
+    }
+
+    let mut paths_vec: Vec<_> = unique.into_iter().collect();
+    paths_vec.sort();
+    Ok(paths_vec)
+}
+
+fn visit_dir_recursive(dir: &Path, out: &mut HashSet<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            visit_dir_recursive(&path, out)?;
+        } else if path.is_file() {
+            if file_extensions::is_starlark_file(path.extension()) {
+                out.insert(path);
+            }
+        }
+    }
+    Ok(())
 }
