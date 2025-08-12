@@ -1,5 +1,6 @@
 use log::debug;
 use pcb_zen_core::convert::ToSchematic;
+use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -381,11 +382,15 @@ impl Module {
         let file_provider = Arc::new(WasmFileProvider::new(inner_provider.clone()));
         let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
 
+        // Determine workspace root using pcb.toml discovery
+        let workspace_root = find_workspace_root(file_provider.as_ref(), &path)
+            .unwrap_or_else(|| path.parent().unwrap_or(&path).to_path_buf());
+
         // Create load resolver
         let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
             file_provider.clone(),
             remote_fetcher.clone(),
-            None, // No workspace root in WASM
+            Some(workspace_root),
         ));
 
         Ok(Module {
@@ -419,11 +424,16 @@ impl Module {
         let file_provider = Arc::new(WasmFileProvider::new(inner_provider.clone()));
         let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
 
+        // Determine workspace root using pcb.toml discovery
+        let main_path = PathBuf::from(main_file);
+        let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
+            .unwrap_or_else(|| main_path.parent().unwrap_or(&main_path).to_path_buf());
+
         // Create load resolver
         let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
             file_provider.clone(),
             remote_fetcher.clone(),
-            None, // No workspace root in WASM
+            Some(workspace_root),
         ));
 
         Ok(Module {
