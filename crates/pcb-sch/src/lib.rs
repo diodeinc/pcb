@@ -143,7 +143,7 @@ pub enum InstanceKind {
     Pin,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PhysicalUnit {
     Ohms,
     Volts,
@@ -170,7 +170,7 @@ impl std::fmt::Display for PhysicalUnit {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhysicalValue {
     // Serialize as a string to preserve full precision in JSON
     #[serde(with = "rust_decimal::serde::str")]

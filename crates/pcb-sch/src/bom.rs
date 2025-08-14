@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AttributeValue, Instance, InstanceKind, Schematic};
+use crate::{AttributeValue, InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomEntry {
@@ -24,7 +23,7 @@ pub struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub well_known_module: Option<WellKnownModule>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub voltage: Option<Value<Voltage>>,
+    pub voltage: Option<PhysicalValue>,
     pub dnp: bool,
 }
 
@@ -60,33 +59,17 @@ pub enum WellKnownModule {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Capacitor {
-    pub capacitance: Value<Capacitance>,
+    pub capacitance: PhysicalValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dielectric: Option<Dielectric>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub esr: Option<Value<Resistance>>,
+    pub esr: Option<PhysicalValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Resistor {
-    pub resistance: Value<Resistance>,
+    pub resistance: PhysicalValue,
 }
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Value<U: Unit> {
-    pub value: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tolerance: Option<f64>,
-    #[serde(skip)]
-    pub _unit: std::marker::PhantomData<U>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Voltage;
-#[derive(Debug, Clone, PartialEq)]
-pub struct Capacitance;
-#[derive(Debug, Clone, PartialEq)]
-pub struct Resistance;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Dielectric {
@@ -98,152 +81,6 @@ pub enum Dielectric {
     X7T,
     Y5V,
     Z5U,
-}
-
-pub trait Unit {
-    fn unit_suffix() -> &'static str;
-}
-
-impl Unit for Voltage {
-    fn unit_suffix() -> &'static str {
-        "V"
-    }
-}
-
-impl Unit for Capacitance {
-    fn unit_suffix() -> &'static str {
-        "F"
-    }
-}
-
-impl Unit for Resistance {
-    fn unit_suffix() -> &'static str {
-        "Ohm"
-    }
-}
-
-/// Error type for unit parsing
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnitParseError {
-    pub message: String,
-}
-
-impl std::fmt::Display for UnitParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Unit parse error: {}", self.message)
-    }
-}
-
-impl std::error::Error for UnitParseError {}
-
-/// Parse unit strings like "100kOhm 1%" into Value<T>
-impl<U: Unit> FromStr for Value<U> {
-    type Err = UnitParseError;
-
-    fn from_str(spec: &str) -> Result<Self, Self::Err> {
-        let spec = spec.trim();
-
-        // Split and extract optional tolerance (last token ending with %)
-        let mut tokens: Vec<&str> = spec.split_ascii_whitespace().collect();
-        let mut tolerance = None;
-
-        if let Some(last) = tokens.last() {
-            if let Some(raw) = last.strip_suffix('%') {
-                tolerance = Some(
-                    raw.parse::<f64>().map_err(|_| UnitParseError {
-                        message: format!("invalid tolerance value: '{last}'"),
-                    })? / 100.0,
-                );
-                tokens.pop();
-            }
-        }
-
-        // Join tokens to handle whitespace variants like "10 kOhm" → "10kOhm"
-        let joined: String = tokens.join("");
-
-        // Split numeric part from unit part
-        let num_end = joined.find(|c: char| !(c.is_ascii_digit() || c == '.'));
-
-        let (num_str, unit_str) = if let Some(end) = num_end {
-            joined.split_at(end)
-        } else {
-            // No unit found - entire string is the number, use default multiplier
-            (joined.as_str(), "")
-        };
-
-        let mut numeric = num_str.parse::<f64>().map_err(|_| UnitParseError {
-            message: format!("invalid numeric value: '{num_str}'"),
-        })?;
-
-        if !unit_str.is_empty() {
-            // Unit specified, parse it normally
-            numeric *= get_si_multiplier(unit_str, U::unit_suffix())?;
-        }
-        // If unit_str is empty, no multiplier needed (defaults to base unit)
-
-        Ok(Value {
-            value: numeric,
-            tolerance,
-            _unit: std::marker::PhantomData,
-        })
-    }
-}
-
-/// Get SI prefix multiplier for a unit string
-fn get_si_multiplier(unit_str: &str, expected_suffix: &str) -> Result<f64, UnitParseError> {
-    // Order matters - check longer prefixes first to avoid conflicts
-    let multipliers = [
-        ("Y", 1e24),  // yotta
-        ("Z", 1e21),  // zetta
-        ("E", 1e18),  // exa
-        ("P", 1e15),  // peta
-        ("T", 1e12),  // tera
-        ("G", 1e9),   // giga
-        ("M", 1e6),   // mega
-        ("k", 1e3),   // kilo
-        ("m", 1e-3),  // milli
-        ("u", 1e-6),  // micro
-        ("μ", 1e-6),  // micro (Greek letter)
-        ("n", 1e-9),  // nano
-        ("p", 1e-12), // pico
-        ("f", 1e-15), // femto
-        ("a", 1e-18), // atto
-        ("z", 1e-21), // zepto
-        ("y", 1e-24), // yocto
-        ("", 1.0),    // base unit (check last)
-    ];
-
-    let expected_suffix_lower = expected_suffix.to_lowercase();
-    let unit_lower = unit_str.to_lowercase();
-
-    // First, check if the unit string is exactly a prefix (like "k", "M", etc.)
-    // This handles cases like "5.1k" where there's no explicit unit
-    for (prefix_str, multiplier) in &multipliers {
-        if unit_str == *prefix_str {
-            return Ok(*multiplier);
-        }
-    }
-
-    // Check if the unit ends with the expected suffix
-    if !unit_lower.ends_with(&expected_suffix_lower) {
-        return Err(UnitParseError {
-            message: format!("Expected unit '{expected_suffix}' but got '{unit_str}'"),
-        });
-    }
-
-    // Extract prefix by removing the suffix (case-insensitive)
-    let prefix = &unit_str[..unit_str.len() - expected_suffix.len()];
-
-    // Find matching multiplier (case-sensitive for prefixes)
-    for (prefix_str, multiplier) in &multipliers {
-        if prefix == *prefix_str {
-            return Ok(*multiplier);
-        }
-    }
-
-    Err(UnitParseError {
-        message: format!("Invalid unit prefix: '{prefix}' in '{unit_str}'"),
-    })
 }
 
 /// Generate a Bill of Materials from a schematic
@@ -272,8 +109,7 @@ pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
         let package = get_string_attribute(&instance.attributes, &["Package", "package"]);
         let description =
             get_string_attribute(&instance.attributes, &["Description", "description"]);
-        let voltage = get_string_attribute(&instance.attributes, &["Voltage"])
-            .and_then(|v| v.parse::<Value<Voltage>>().ok());
+        let voltage = get_physical_attribute(&instance.attributes, &["__voltage__"]);
 
         // Determine if component should be populated
         let do_not_populate = get_string_attribute(
@@ -293,10 +129,10 @@ pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
 
         let value = get_string_attribute(&instance.attributes, &["Value"]);
 
-        // Extract alternates from AttributeValue::Array
+        // Extract alternates from structured AttributeValue::Array
         let alternatives = instance
             .attributes
-            .get("Alternatives")
+            .get("__alternatives__")
             .and_then(|attr| match attr {
                 AttributeValue::Array(arr) => Some(
                     arr.iter()
@@ -310,7 +146,7 @@ pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
             })
             .unwrap_or_default();
 
-        let well_known_module = detect_well_known_module(instance, &instance.attributes);
+        let well_known_module = detect_well_known_module(&instance.attributes);
 
         bom_entries.push(BomEntry {
             designators: vec![designator],
@@ -330,27 +166,20 @@ pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
     group_bom_entries(bom_entries)
 }
 
-/// Detect well-known modules based on instance.type_ref
+/// Detect well-known modules based on Type attribute
 fn detect_well_known_module(
-    instance: &Instance,
     attributes: &HashMap<String, AttributeValue>,
 ) -> Option<WellKnownModule> {
-    let source_path = instance.type_ref.source_path.to_string_lossy();
-    let module_name = &instance.type_ref.module_name;
+    let module_type = get_string_attribute(attributes, &["Type"])?;
 
-    // Check for resistor
-    if module_name == "R" && source_path.ends_with("generics/Resistor.zen") {
-        if let Some(resistance_str) = get_string_attribute(attributes, &["Resistance"]) {
-            if let Ok(resistance) = resistance_str.parse::<Value<Resistance>>() {
+    match module_type.to_lowercase().as_str() {
+        "resistor" => {
+            if let Some(resistance) = get_physical_attribute(attributes, &["__resistance__"]) {
                 return Some(WellKnownModule::Resistor(Resistor { resistance }));
             }
         }
-    }
-
-    // Check for capacitor
-    if module_name == "C" && source_path.ends_with("generics/Capacitor.zen") {
-        if let Some(capacitance_str) = get_string_attribute(attributes, &["Capacitance"]) {
-            if let Ok(capacitance) = capacitance_str.parse::<Value<Capacitance>>() {
+        "capacitor" => {
+            if let Some(capacitance) = get_physical_attribute(attributes, &["__capacitance__"]) {
                 let dielectric = get_string_attribute(attributes, &["Dielectric"]).and_then(|d| {
                     match d.as_str() {
                         "C0G" => Some(Dielectric::C0G),
@@ -365,8 +194,7 @@ fn detect_well_known_module(
                     }
                 });
 
-                let esr = get_string_attribute(attributes, &["Esr"])
-                    .and_then(|e| e.parse::<Value<Resistance>>().ok());
+                let esr = get_physical_attribute(attributes, &["__esr__"]);
 
                 return Some(WellKnownModule::Capacitor(Capacitor {
                     capacitance,
@@ -375,6 +203,7 @@ fn detect_well_known_module(
                 }));
             }
         }
+        _ => {}
     }
 
     None
@@ -413,7 +242,20 @@ fn get_string_attribute(
     keys.iter().find_map(|&key| {
         attributes.get(key).and_then(|attr| match attr {
             AttributeValue::String(s) => Some(s.clone()),
-            AttributeValue::Physical(s) => Some(s.clone()),
+            AttributeValue::Physical(pv) => Some(pv.to_string()),
+            _ => None,
+        })
+    })
+}
+
+/// Helper function to extract PhysicalValue from attributes, trying multiple key variations
+fn get_physical_attribute(
+    attributes: &HashMap<String, AttributeValue>,
+    keys: &[&str],
+) -> Option<PhysicalValue> {
+    keys.iter().find_map(|&key| {
+        attributes.get(key).and_then(|attr| match attr {
+            AttributeValue::Physical(pv) => Some(pv.clone()),
             _ => None,
         })
     })
@@ -423,131 +265,58 @@ fn get_string_attribute(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
-    #[test]
-    fn test_unit_parsing() {
-        // Resistance with units
-        let r1: Value<Resistance> = "100Ohm".parse().unwrap();
-        assert_eq!(r1.value, 100.0);
-        assert_eq!(r1.tolerance, None);
-
-        let r2: Value<Resistance> = "4.7kOhm 1%".parse().unwrap();
-        assert_eq!(r2.value, 4700.0);
-        assert_eq!(r2.tolerance, Some(0.01));
-
-        // Capacitance
-        let c1: Value<Capacitance> = "100nF".parse().unwrap();
-        assert!((c1.value - 100e-9).abs() < 1e-15);
-        assert_eq!(c1.tolerance, None);
-
-        // Voltage
-        let v1: Value<Voltage> = "3.3V".parse().unwrap();
-        assert_eq!(v1.value, 3.3);
-        assert_eq!(v1.tolerance, None);
-
-        // Whitespace variants
-        let r3: Value<Resistance> = "10 kOhm".parse().unwrap();
-        assert_eq!(r3.value, 10000.0);
-        assert_eq!(r3.tolerance, None);
-
-        let v2: Value<Voltage> = "12 V 0.5%".parse().unwrap();
-        assert_eq!(v2.value, 12.0);
-        assert_eq!(v2.tolerance, Some(0.005));
-    }
-
-    #[test]
-    fn test_unitless_parsing() {
-        // Resistance values without units (default to ohms)
-        let r1: Value<Resistance> = "150".parse().unwrap();
-        assert_eq!(r1.value, 150.0);
-        assert_eq!(r1.tolerance, None);
-
-        let r2: Value<Resistance> = "27".parse().unwrap();
-        assert_eq!(r2.value, 27.0);
-        assert_eq!(r2.tolerance, None);
-
-        let r3: Value<Resistance> = "261".parse().unwrap();
-        assert_eq!(r3.value, 261.0);
-        assert_eq!(r3.tolerance, None);
-
-        let r4: Value<Resistance> = "110".parse().unwrap();
-        assert_eq!(r4.value, 110.0);
-        assert_eq!(r4.tolerance, None);
-
-        // With tolerance but no unit
-        let r5: Value<Resistance> = "150 5%".parse().unwrap();
-        assert_eq!(r5.value, 150.0);
-        assert_eq!(r5.tolerance, Some(0.05));
-
-        // Capacitance values without units (default to farads)
-        let c1: Value<Capacitance> = "22".parse().unwrap();
-        assert_eq!(c1.value, 22.0);
-        assert_eq!(c1.tolerance, None);
-
-        let c2: Value<Capacitance> = "100".parse().unwrap();
-        assert_eq!(c2.value, 100.0);
-        assert_eq!(c2.tolerance, None);
-
-        // Voltage values without units (default to volts)
-        let v1: Value<Voltage> = "3.3".parse().unwrap();
-        assert_eq!(v1.value, 3.3);
-        assert_eq!(v1.tolerance, None);
-
-        let v2: Value<Voltage> = "12".parse().unwrap();
-        assert_eq!(v2.value, 12.0);
-        assert_eq!(v2.tolerance, None);
-
-        // Mixed cases - prefix with no explicit unit (defaults apply after prefix)
-        let r6: Value<Resistance> = "5.1k".parse().unwrap();
-        assert_eq!(r6.value, 5100.0);
-        assert_eq!(r6.tolerance, None);
-
-        let r7: Value<Resistance> = "10k 1%".parse().unwrap();
-        assert_eq!(r7.value, 10000.0);
-        assert_eq!(r7.tolerance, Some(0.01));
-
-        let r8: Value<Resistance> = "47k".parse().unwrap();
-        assert_eq!(r8.value, 47000.0);
-        assert_eq!(r8.tolerance, None);
-
-        let r9: Value<Resistance> = "33k".parse().unwrap();
-        assert_eq!(r9.value, 33000.0);
-        assert_eq!(r9.tolerance, None);
-    }
-
-    #[test]
-    fn test_parse_errors() {
-        assert!("".parse::<Value<Resistance>>().is_err());
-        assert!("Ohm".parse::<Value<Resistance>>().is_err());
-        assert!("100Ohm %".parse::<Value<Resistance>>().is_err());
-    }
+    use rust_decimal::prelude::FromPrimitive;
+    use rust_decimal::Decimal;
+    use crate::PhysicalUnit;
 
     #[test]
     fn test_detect_well_known_module() {
-        use crate::ModuleRef;
-        use std::path::PathBuf;
-
-        // Create a mock resistor instance
-        let module_ref = ModuleRef::new(
-            PathBuf::from("/path/to/generics/Resistor.zen"),
-            "R".to_string(),
-        );
-        let instance = Instance::component(module_ref);
-
+        // Create a mock resistor with Type attribute
         let mut attributes = HashMap::new();
         attributes.insert(
-            "Resistance".to_string(),
-            AttributeValue::String("10kOhm".to_string()),
+            "Type".to_string(),
+            AttributeValue::String("resistor".to_string()),
+        );
+        attributes.insert(
+            "__resistance__".to_string(),
+            AttributeValue::Physical(PhysicalValue::new(10000.0, 0.01, PhysicalUnit::Ohms)),
         );
 
-        let result = detect_well_known_module(&instance, &attributes);
+        let result = detect_well_known_module(&attributes);
 
         match result {
             Some(WellKnownModule::Resistor(resistor)) => {
-                assert_eq!(resistor.resistance.value, 10000.0);
-                assert_eq!(resistor.resistance.tolerance, None);
+                assert_eq!(resistor.resistance.value, Decimal::from_f64(10000.0).unwrap());
+                assert_eq!(resistor.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
             }
             _ => panic!("Expected resistor module"),
+        }
+
+        // Test capacitor detection
+        let mut capacitor_attributes = HashMap::new();
+        capacitor_attributes.insert(
+            "Type".to_string(),
+            AttributeValue::String("capacitor".to_string()),
+        );
+        capacitor_attributes.insert(
+            "__capacitance__".to_string(),
+            AttributeValue::Physical(PhysicalValue::new(100e-9, 0.2, PhysicalUnit::Farads)),
+        );
+        capacitor_attributes.insert(
+            "Dielectric".to_string(),
+            AttributeValue::String("X7R".to_string()),
+        );
+
+        let result = detect_well_known_module(&capacitor_attributes);
+
+        match result {
+            Some(WellKnownModule::Capacitor(capacitor)) => {
+                let expected_value = Decimal::from_f64(100e-9).unwrap();
+                assert!((capacitor.capacitance.value - expected_value).abs() < Decimal::from_f64(1e-15).unwrap());
+                assert_eq!(capacitor.capacitance.tolerance, Decimal::from_f64(0.2).unwrap());
+                assert_eq!(capacitor.dielectric, Some(Dielectric::X7R));
+            }
+            _ => panic!("Expected capacitor module"),
         }
     }
 
@@ -557,31 +326,30 @@ mod tests {
 
         // Resistor should deserialize when "resistance" field is present
         let resistor_json = r#"{
-            "resistance": {"value": 10000.0, "tolerance": 0.01},
-            "voltage": {"value": 50.0, "tolerance": 0.0}
+            "resistance": {"value": "10000.0", "tolerance": "0.01", "unit": "Ohms"}
         }"#;
 
         let resistor: WellKnownModule = serde_json::from_str(resistor_json).unwrap();
         match resistor {
             WellKnownModule::Resistor(r) => {
-                assert_eq!(r.resistance.value, 10000.0);
-                assert_eq!(r.resistance.tolerance, Some(0.01));
+                assert_eq!(r.resistance.value, Decimal::from_f64(10000.0).unwrap());
+                assert_eq!(r.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
             }
             _ => panic!("Expected Resistor variant"),
         }
 
         // Capacitor should deserialize when "capacitance" field is present
         let capacitor_json = r#"{
-            "capacitance": {"value": 100e-9, "tolerance": 0.2},
-            "voltage": {"value": 16.0, "tolerance": 0.0},
+            "capacitance": {"value": "100e-9", "tolerance": "0.2", "unit": "Farads"},
             "dielectric": "X7R"
         }"#;
 
         let capacitor: WellKnownModule = serde_json::from_str(capacitor_json).unwrap();
         match capacitor {
             WellKnownModule::Capacitor(c) => {
-                assert!((c.capacitance.value - 100e-9).abs() < 1e-15);
-                assert_eq!(c.capacitance.tolerance, Some(0.2));
+                let expected_value = Decimal::from_f64(100e-9).unwrap();
+                assert!((c.capacitance.value - expected_value).abs() < Decimal::from_f64(1e-15).unwrap());
+                assert_eq!(c.capacitance.tolerance, Decimal::from_f64(0.2).unwrap());
                 assert_eq!(c.dielectric, Some(Dielectric::X7R));
             }
             _ => panic!("Expected Capacitor variant"),
@@ -589,15 +357,62 @@ mod tests {
 
         // Test round-trip serialization
         let original_resistor = WellKnownModule::Resistor(Resistor {
-            resistance: Value {
-                value: 1000.0,
-                tolerance: Some(0.05),
-                _unit: std::marker::PhantomData,
-            },
+            resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
         });
 
         let json = serde_json::to_string_pretty(&original_resistor).unwrap();
         let deserialized: WellKnownModule = serde_json::from_str(&json).unwrap();
         assert_eq!(original_resistor, deserialized);
+    }
+
+    #[test]
+    fn test_get_string_attribute() {
+        let mut attributes = HashMap::new();
+        attributes.insert(
+            "Mpn".to_string(),
+            AttributeValue::String("RC0603FR-0710KL".to_string()),
+        );
+        attributes.insert(
+            "__resistance__".to_string(),
+            AttributeValue::Physical(PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms)),
+        );
+
+        // Test string attribute extraction
+        let mpn = get_string_attribute(&attributes, &["MPN", "Mpn", "mpn"]);
+        assert_eq!(mpn, Some("RC0603FR-0710KL".to_string()));
+
+        // Test physical value converted to string
+        let resistance_str = get_string_attribute(&attributes, &["__resistance__"]);
+        assert!(resistance_str.is_some());
+
+        // Test missing attribute
+        let missing = get_string_attribute(&attributes, &["Missing"]);
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn test_get_physical_attribute() {
+        let mut attributes = HashMap::new();
+        let physical_value = PhysicalValue::new(4700.0, 0.01, PhysicalUnit::Ohms);
+        attributes.insert(
+            "__resistance__".to_string(),
+            AttributeValue::Physical(physical_value.clone()),
+        );
+        attributes.insert(
+            "StringValue".to_string(),
+            AttributeValue::String("not physical".to_string()),
+        );
+
+        // Test physical attribute extraction
+        let resistance = get_physical_attribute(&attributes, &["__resistance__"]);
+        assert_eq!(resistance, Some(physical_value));
+
+        // Test non-physical attribute
+        let string_val = get_physical_attribute(&attributes, &["StringValue"]);
+        assert_eq!(string_val, None);
+
+        // Test missing attribute
+        let missing = get_physical_attribute(&attributes, &["Missing"]);
+        assert_eq!(missing, None);
     }
 }
