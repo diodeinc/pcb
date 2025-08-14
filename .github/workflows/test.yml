@@ -110,6 +110,8 @@ jobs:
         run: cargo test --verbose --workspace
 
       - name: Test CLI (E2E)
+        env:
+          RUST_LOG: info,pcb::release=debug,pcb::bom=debug
         run: |
           # Test BOM generation on example project
           cargo run -- bom examples/PhaseDriver/PhaseDriver.zen -f json

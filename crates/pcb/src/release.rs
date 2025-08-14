@@ -3,7 +3,7 @@ use clap::Args;
 
 use log::{debug, info, warn};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
-use pcb_zen::load::DefaultRemoteFetcher;
+use pcb_zen::load::{cache_dir, DefaultRemoteFetcher};
 
 use pcb_sch::generate_bom as generate_bom_entries;
 use pcb_zen_core::convert::ToSchematic;
@@ -265,19 +265,17 @@ fn detect_workspace_root(entry: &Path, tracked: &HashSet<PathBuf>) -> Result<Pat
 
     debug!("No pcb.toml found, falling back to common ancestor calculation");
 
-    // Filter tracked files to only include local source files (not vendor/cache files)
+    // Get canonicalized cache directory for Windows compatibility
+    let cache_root = cache_dir()?.canonicalize()?;
+
+    // Canonicalize and filter tracked files
     let mut paths: Vec<PathBuf> = tracked
         .iter()
-        .filter(|path| {
-            let path_str = path.to_string_lossy();
-            path.extension().is_some_and(|ext| ext == "zen")
-                && !path_str.contains("/Library/Caches/")
-                && !path_str.contains("/.cache/")
-        })
         .filter_map(|p| p.canonicalize().ok())
+        .filter(|path| !path.starts_with(&cache_root))
         .collect();
 
-    paths.push(entry.canonicalize().unwrap_or_else(|_| entry.to_path_buf()));
+    paths.push(entry.canonicalize()?);
 
     debug!(
         "Found {} local zen files for workspace root calculation",
