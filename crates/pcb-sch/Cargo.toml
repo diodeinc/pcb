@@ -17,3 +17,4 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 log = { workspace = true }
 pcb-sexpr = { workspace = true }
+rust_decimal = { workspace = true }

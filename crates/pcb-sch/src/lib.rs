@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use rust_decimal::{prelude::FromPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 
 /// Helper type alias – we map the original Atopile `Symbol` to a plain
@@ -139,12 +140,81 @@ pub enum InstanceKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PhysicalUnit {
+    Ohms,
+    Volts,
+    Amperes,
+    Farads,
+    Henries,
+    Hertz,
+    Seconds,
+    Kelvin,
+}
+
+impl std::fmt::Display for PhysicalUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PhysicalUnit::Ohms => write!(f, "Ω"),
+            PhysicalUnit::Volts => write!(f, "V"),
+            PhysicalUnit::Amperes => write!(f, "A"),
+            PhysicalUnit::Farads => write!(f, "F"),
+            PhysicalUnit::Henries => write!(f, "H"),
+            PhysicalUnit::Hertz => write!(f, "Hz"),
+            PhysicalUnit::Seconds => write!(f, "s"),
+            PhysicalUnit::Kelvin => write!(f, "K"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhysicalValue {
+    // Serialize as a string to preserve full precision in JSON
+    #[serde(with = "rust_decimal::serde::str")]
+    pub value: Decimal,
+    // 0 => no tolerance. Using Decimal to stay in the same domain.
+    #[serde(with = "rust_decimal::serde::str")]
+    pub tolerance: Decimal,
+    pub unit: PhysicalUnit,
+}
+
+impl PhysicalValue {
+    /// Construct from f64s that arrive from Starlark.
+    /// Panics only if the number is out of Decimal's range (~1e28).
+    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
+        Self {
+            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
+            tolerance: Decimal::from_f64(tolerance)
+                .expect("tolerance not representable as Decimal"),
+            unit,
+        }
+    }
+}
+
+impl From<(f64, f64, PhysicalUnit)> for PhysicalValue {
+    fn from((v, t, u): (f64, f64, PhysicalUnit)) -> Self {
+        PhysicalValue::new(v, t, u)
+    }
+}
+
+impl std::fmt::Display for PhysicalValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.tolerance > Decimal::ZERO {
+            // Convert tolerance to percentage and format
+            let pct = (self.tolerance * Decimal::ONE_HUNDRED).round_dp(0);
+            write!(f, "{}{} ±{}%", self.value, self.unit, pct)
+        } else {
+            write!(f, "{}{}", self.value, self.unit)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")] // Match original casing in JSON (String, Number ...)
 pub enum AttributeValue {
     String(String),
     Number(f64),
     Boolean(bool),
-    Physical(String),
+    Physical(PhysicalValue),
     Port(String),
     Array(Vec<AttributeValue>),
     Json(serde_json::Value),

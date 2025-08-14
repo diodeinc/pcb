@@ -234,7 +234,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 AttributeValue::String(s) => s.clone(),
                 AttributeValue::Number(n) => n.to_string(),
                 AttributeValue::Boolean(b) => b.to_string(),
-                AttributeValue::Physical(s) => s.clone(),
+                AttributeValue::Physical(p) => p.to_string(),
                 AttributeValue::Port(s) => s.clone(),
                 AttributeValue::Array(arr) => serde_json::to_string(arr).unwrap_or("[]".to_owned()),
                 AttributeValue::Json(j) => serde_json::to_string(j).unwrap_or("{}".to_owned()),

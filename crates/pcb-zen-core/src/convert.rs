@@ -3,8 +3,13 @@ use crate::lang::type_info::TypeInfo;
 use crate::{FrozenComponentValue, FrozenModuleValue, FrozenNetValue, InputValue, NetId};
 use pcb_sch::Net;
 use pcb_sch::NetKind;
-use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Schematic};
+use pcb_sch::{
+    AttributeValue, Instance, InstanceRef, ModuleRef, PhysicalUnit, PhysicalValue, Schematic,
+};
 use serde::{Deserialize, Serialize};
+use starlark::values::float::StarlarkFloat;
+use starlark::values::list::ListRef;
+use starlark::values::record::FrozenRecord;
 use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
@@ -322,7 +327,8 @@ impl ModuleConverter {
 
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
-            comp_inst.add_attribute(key.clone(), to_attribute_value(*val)?);
+            let attr_value = to_attribute_value(*val)?;
+            comp_inst.add_attribute(key.clone(), attr_value);
         }
 
         // Add symbol information if the component has a symbol
@@ -417,17 +423,98 @@ pub trait ToSchematic {
 }
 
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
+    // Handle scalars first
     if let Some(s) = v.downcast_frozen_str() {
-        Ok(AttributeValue::String(s.to_string()))
+        return Ok(AttributeValue::String(s.to_string()));
     } else if let Some(n) = v.unpack_i32() {
-        Ok(AttributeValue::Number(n as f64))
+        return Ok(AttributeValue::Number(n as f64));
     } else if let Some(b) = v.unpack_bool() {
-        Ok(AttributeValue::Boolean(b))
-    } else {
-        // For now, convert other types to their string representation
-        // This handles floats, lists, and other complex types
-        Ok(AttributeValue::String(v.to_string()))
+        return Ok(AttributeValue::Boolean(b));
     }
+
+    // Handle unit records (Resistance, Capacitance, Voltage, etc.)
+    if let Some(record) = v.downcast_ref::<FrozenRecord>() {
+        let mut record_value = None;
+        let mut record_tolerance = None;
+        let mut record_unit = None;
+
+        // Extract fields from the record
+        for (field_name, field_value) in record.iter() {
+            let field_name_str = field_name.to_string();
+            match field_name_str.as_str() {
+                "value" => {
+                    // Try f64 first, fall back to i32 converted to f64
+                    if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
+                        record_value = Some(f.0);
+                    }
+                }
+                "tolerance" => {
+                    if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
+                        record_tolerance = Some(f.0);
+                    }
+                }
+                "unit" => {
+                    // Unit is an enum like Ohms("Ohms"), parse to PhysicalUnit
+                    let unit_str = field_value.to_string();
+                    // Extract content within parentheses and remove quotes
+                    let unit_name = if let Some(start) = unit_str.find('(') {
+                        if let Some(end) = unit_str.find(')') {
+                            let inner = &unit_str[start + 1..end];
+                            inner.trim_matches('"').to_string()
+                        } else {
+                            unit_str.trim_matches('"').to_string()
+                        }
+                    } else {
+                        unit_str.trim_matches('"').to_string()
+                    };
+
+                    record_unit = match unit_name.as_str() {
+                        "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
+                        "V" | "Volts" => Some(PhysicalUnit::Volts),
+                        "A" | "Amperes" => Some(PhysicalUnit::Amperes),
+                        "F" | "Farads" => Some(PhysicalUnit::Farads),
+                        "H" | "Henries" => Some(PhysicalUnit::Henries),
+                        "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
+                        "s" | "Seconds" => Some(PhysicalUnit::Seconds),
+                        "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
+                        _ => None, // Unknown unit, will fall back to string conversion
+                    };
+                }
+                _ => {} // Ignore other fields like __str__
+            }
+        }
+
+        // If we have all required fields, this is a unit record
+        if let (Some(value), Some(tolerance), Some(unit)) =
+            (record_value, record_tolerance, record_unit)
+        {
+            return Ok(AttributeValue::Physical(PhysicalValue::new(
+                value, tolerance, unit,
+            )));
+        }
+    }
+
+    // Handle lists (no nested list support)
+    if let Some(list) = ListRef::from_value(v.to_value()) {
+        let mut elements = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            let attr = if let Some(s) = item.unpack_str() {
+                AttributeValue::String(s.to_string())
+            } else if let Some(n) = item.unpack_i32() {
+                AttributeValue::Number(n as f64)
+            } else if let Some(b) = item.unpack_bool() {
+                AttributeValue::Boolean(b)
+            } else {
+                // Any nested lists or other types get stringified
+                AttributeValue::String(item.to_string())
+            };
+            elements.push(attr);
+        }
+        return Ok(AttributeValue::Array(elements));
+    }
+
+    // Any other type – fall back to string representation
+    Ok(AttributeValue::String(v.to_string()))
 }
 
 impl ToSchematic for FrozenModuleValue {

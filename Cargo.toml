@@ -93,6 +93,7 @@ flate2 = "1.0.34"
 openssl-sys = { version = "0.9", features = ["vendored"] }
 openssl = { version = "0.10", features = ["vendored"] }
 wasm-bindgen-futures = "0.4"
+rust_decimal = { version = "1", features = ["serde", "serde-with-str"] }
 
 # The profile that 'dist' will build with
 [profile.dist]
