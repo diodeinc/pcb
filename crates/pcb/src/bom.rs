@@ -84,6 +84,7 @@ pub fn write_bom_json<W: Write>(entries: &[BomEntry], writer: W) -> Result<()> {
 fn write_bom_table<W: Write>(entries: &[BomEntry], mut writer: W) -> Result<()> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
+    table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
 
     // Set headers
     table.set_header(vec![
