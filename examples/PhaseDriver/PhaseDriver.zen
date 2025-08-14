@@ -1,7 +1,7 @@
-load("@stdlib:v0.2.0/interfaces.zen", "Gpio", "Analog", "Power", "Ground", "Pwm")
+load("@stdlib:v0.2.2/interfaces.zen", "Gpio", "Analog", "Power", "Ground", "Pwm")
 
-Capacitor = Module("@stdlib:v0.2.0/generics/Capacitor.zen")
-Resistor = Module("@stdlib:v0.2.0/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.2/generics/Capacitor.zen")
+Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
 HighSideCurrentSense = Module("../HighSideCurrentSense/HighSideCurrentSense.zen")
 L6387E = Module("../L6387E/L6387E.zen")
 

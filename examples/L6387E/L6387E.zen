@@ -12,9 +12,9 @@ Features:
 - Interlocking function to prevent simultaneous turn-on
 """
 
-load("@stdlib:v0.2.0/interfaces.zen", "Power", "Ground", "Gpio")
+load("@stdlib:v0.2.2/interfaces.zen", "Power", "Ground", "Gpio")
 
-Capacitor = Module("@stdlib:v0.2.0/generics/Capacitor.zen")
+Capacitor = Module("@stdlib:v0.2.2/generics/Capacitor.zen")
 
 # Configuration options
 ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")

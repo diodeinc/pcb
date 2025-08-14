@@ -2,12 +2,12 @@
 Type: High Side Current Sensor
 Description: High side current sensor using INA240A with 2mohm shunt resistor, 20x V/V gain. 80Vin Max
 """
-load("@stdlib:v0.2.0/interfaces.zen", "Power", "Analog", "Ground")
-load("@stdlib:v0.2.0/units.zen", "Resistance")
-load("@stdlib:v0.2.0/config.zen", "config_unit")
+load("@stdlib:v0.2.2/interfaces.zen", "Power", "Analog", "Ground")
+load("@stdlib:v0.2.2/units.zen", "Resistance")
+load("@stdlib:v0.2.2/config.zen", "config_unit")
 
-Resistor = Module("@stdlib:v0.2.0/generics/Resistor.zen")
-NetTie = Module("@stdlib:v0.2.0/generics/NetTie.zen")
+Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
+NetTie = Module("@stdlib:v0.2.2/generics/NetTie.zen")
 INA240A = Module("../INA240A/INA240A.zen")
 
 
