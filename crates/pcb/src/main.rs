@@ -9,6 +9,8 @@ mod fmt;
 mod layout;
 mod lsp;
 mod open;
+mod release;
+mod tracking_resolver;
 mod upgrade;
 
 #[derive(Parser)]
@@ -49,6 +51,10 @@ enum Commands {
     #[command(alias = "o")]
     Open(open::OpenArgs),
 
+    /// Release PCB project versions
+    #[command(alias = "r")]
+    Release(release::ReleaseArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -69,6 +75,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
+        Commands::Release(args) => release::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");

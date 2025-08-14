@@ -1,0 +1,29 @@
+"""
+A reusable LED module with current limiting resistor.
+Configurable LED color and resistor value.
+"""
+
+load("@stdlib:v0.2.2/interfaces.zen", "Gpio", "Ground", "Power")
+
+Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.2/generics/Led.zen")
+
+# Configuration parameters
+led_color = config("led_color", str, default = "red")
+r_value = config("r_value", str, default = "330Ohm")
+package = config("package", str, default = "0603")
+
+# IO ports
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+CTRL = io("CTRL", Gpio)  # Control signal to enable/disable LED
+
+# Internal nets
+led_anode = Net("LED_ANODE")
+
+# Create the LED circuit
+# Current limiting resistor
+Resistor(name = "R1", value = r_value, package = package, P1 = VCC.NET, P2 = led_anode)
+
+# LED with configurable color
+Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.NET)

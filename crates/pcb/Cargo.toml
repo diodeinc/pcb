@@ -38,6 +38,9 @@ starlark = { workspace = true }
 starlark_syntax = { workspace = true }
 comfy-table = { workspace = true }
 serde_json = { workspace = true }
+walkdir = { workspace = true }
+zip = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

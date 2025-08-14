@@ -112,7 +112,9 @@ jobs:
       - name: Test CLI (E2E)
         run: |
           # Test BOM generation on example project
-          cargo run -p pcb -- bom examples/PhaseDriver/PhaseDriver.zen -f json
+          cargo run -- bom examples/PhaseDriver/PhaseDriver.zen -f json
+          cargo run -- bom crates/pcb/test-workspace/boards/TestBoard.zen
+          cargo run -- release crates/pcb/test-workspace/boards/TestBoard.zen
 
       - name: Test stdlib builds
         shell: bash
