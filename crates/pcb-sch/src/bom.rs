@@ -28,6 +28,29 @@ pub struct BomEntry {
     pub dnp: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GroupKey {
+    mpn: Option<String>,
+    manufacturer: Option<String>,
+    package: Option<String>,
+    value: Option<String>,
+    description: Option<String>,
+    dnp: bool,
+}
+
+impl From<&BomEntry> for GroupKey {
+    fn from(entry: &BomEntry) -> Self {
+        Self {
+            mpn: entry.mpn.clone(),
+            manufacturer: entry.manufacturer.clone(),
+            package: entry.package.clone(),
+            value: entry.value.clone(),
+            description: entry.description.clone(),
+            dnp: entry.dnp,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum WellKnownModule {
@@ -79,16 +102,11 @@ pub enum Dielectric {
 
 pub trait Unit {
     fn unit_suffix() -> &'static str;
-    fn default_multiplier() -> f64;
 }
 
 impl Unit for Voltage {
     fn unit_suffix() -> &'static str {
         "V"
-    }
-
-    fn default_multiplier() -> f64 {
-        1.0 // Default to volts
     }
 }
 
@@ -96,19 +114,11 @@ impl Unit for Capacitance {
     fn unit_suffix() -> &'static str {
         "F"
     }
-
-    fn default_multiplier() -> f64 {
-        1e-12 // Default to picofarads
-    }
 }
 
 impl Unit for Resistance {
     fn unit_suffix() -> &'static str {
         "Ohm"
-    }
-
-    fn default_multiplier() -> f64 {
-        1.0 // Default to ohms
     }
 }
 
@@ -165,13 +175,11 @@ impl<U: Unit> FromStr for Value<U> {
             message: format!("invalid numeric value: '{num_str}'"),
         })?;
 
-        if unit_str.is_empty() {
-            // No unit specified, apply default multiplier for this unit type
-            numeric *= U::default_multiplier();
-        } else {
+        if !unit_str.is_empty() {
             // Unit specified, parse it normally
             numeric *= get_si_multiplier(unit_str, U::unit_suffix())?;
         }
+        // If unit_str is empty, no multiplier needed (defaults to base unit)
 
         Ok(Value {
             value: numeric,
@@ -376,25 +384,10 @@ fn detect_well_known_module(
 fn group_bom_entries(entries: Vec<BomEntry>) -> Vec<BomEntry> {
     use std::collections::HashMap;
 
-    type GroupKey = (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        bool,
-    );
     let mut grouped: HashMap<GroupKey, BomEntry> = HashMap::new();
 
     for entry in entries {
-        let key = (
-            entry.mpn.clone(),
-            entry.manufacturer.clone(),
-            entry.package.clone(),
-            entry.value.clone(),
-            entry.description.clone(),
-            entry.dnp,
-        );
+        let key = GroupKey::from(&entry);
 
         grouped
             .entry(key)
@@ -405,7 +398,6 @@ fn group_bom_entries(entries: Vec<BomEntry>) -> Vec<BomEntry> {
     }
 
     let mut result: Vec<_> = grouped.into_values().collect();
-    // Sort designators within each entry
     for entry in &mut result {
         entry.designators.sort();
     }
@@ -487,13 +479,13 @@ mod tests {
         assert_eq!(r5.value, 150.0);
         assert_eq!(r5.tolerance, Some(0.05));
 
-        // Capacitance values without units (default to picofarads)
+        // Capacitance values without units (default to farads)
         let c1: Value<Capacitance> = "22".parse().unwrap();
-        assert!((c1.value - 22e-12).abs() < 1e-15);
+        assert_eq!(c1.value, 22.0);
         assert_eq!(c1.tolerance, None);
 
         let c2: Value<Capacitance> = "100".parse().unwrap();
-        assert!((c2.value - 100e-12).abs() < 1e-15);
+        assert_eq!(c2.value, 100.0);
         assert_eq!(c2.tolerance, None);
 
         // Voltage values without units (default to volts)
