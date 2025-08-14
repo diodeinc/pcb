@@ -36,6 +36,8 @@ pcb-buildifier = { workspace = true }
 pathdiff = { workspace = true }
 starlark = { workspace = true }
 starlark_syntax = { workspace = true }
+comfy-table = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

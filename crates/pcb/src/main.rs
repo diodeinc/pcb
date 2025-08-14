@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::process::Command;
 
+mod bom;
 mod build;
 mod clean;
 mod fmt;
@@ -27,6 +28,9 @@ enum Commands {
     /// Upgrade PCB projects
     #[command(alias = "u")]
     Upgrade(upgrade::UpgradeArgs),
+
+    /// Generate Bill of Materials (BOM)
+    Bom(bom::BomArgs),
 
     /// Layout PCB designs
     #[command(alias = "l")]
@@ -59,6 +63,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Build(args) => build::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
+        Commands::Bom(args) => bom::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Clean(args) => clean::execute(args),
         Commands::Fmt(args) => fmt::execute(args),

@@ -524,6 +524,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "comfy-table"
+version = "7.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a65ebfec4fb190b6f90e944a817d60499ee0744e582530e2c9900a22e591d9a"
+dependencies = [
+ "crossterm 0.28.1",
+ "unicode-segmentation",
+ "unicode-width 0.2.1",
+]
+
+[[package]]
 name = "concolor"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2339,6 +2350,7 @@ dependencies = [
  "ariadne",
  "clap",
  "colored",
+ "comfy-table",
  "env_logger",
  "inquire",
  "insta",
@@ -2352,6 +2364,7 @@ dependencies = [
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
+ "serde_json",
  "starlark",
  "starlark_syntax",
  "tempfile",

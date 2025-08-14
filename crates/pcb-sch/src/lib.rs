@@ -11,9 +11,13 @@
 //!   stable [`netlist::InstanceRef`].
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
+pub mod bom;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
+
+// Re-export BOM functionality
+pub use bom::{generate_bom, BomEntry};
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
