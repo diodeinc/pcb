@@ -34,6 +34,7 @@ struct GroupKey {
     package: Option<String>,
     value: Option<String>,
     description: Option<String>,
+    alternatives: Vec<String>,
     dnp: bool,
 }
 
@@ -45,6 +46,7 @@ impl From<&BomEntry> for GroupKey {
             package: entry.package.clone(),
             value: entry.value.clone(),
             description: entry.description.clone(),
+            alternatives: entry.alternatives.clone(),
             dnp: entry.dnp,
         }
     }
@@ -264,10 +266,10 @@ fn get_physical_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use crate::PhysicalUnit;
     use rust_decimal::prelude::FromPrimitive;
     use rust_decimal::Decimal;
-    use crate::PhysicalUnit;
+    use std::collections::HashMap;
 
     #[test]
     fn test_detect_well_known_module() {
@@ -286,8 +288,14 @@ mod tests {
 
         match result {
             Some(WellKnownModule::Resistor(resistor)) => {
-                assert_eq!(resistor.resistance.value, Decimal::from_f64(10000.0).unwrap());
-                assert_eq!(resistor.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
+                assert_eq!(
+                    resistor.resistance.value,
+                    Decimal::from_f64(10000.0).unwrap()
+                );
+                assert_eq!(
+                    resistor.resistance.tolerance,
+                    Decimal::from_f64(0.01).unwrap()
+                );
             }
             _ => panic!("Expected resistor module"),
         }
@@ -312,8 +320,14 @@ mod tests {
         match result {
             Some(WellKnownModule::Capacitor(capacitor)) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
-                assert!((capacitor.capacitance.value - expected_value).abs() < Decimal::from_f64(1e-15).unwrap());
-                assert_eq!(capacitor.capacitance.tolerance, Decimal::from_f64(0.2).unwrap());
+                assert!(
+                    (capacitor.capacitance.value - expected_value).abs()
+                        < Decimal::from_f64(1e-15).unwrap()
+                );
+                assert_eq!(
+                    capacitor.capacitance.tolerance,
+                    Decimal::from_f64(0.2).unwrap()
+                );
                 assert_eq!(capacitor.dielectric, Some(Dielectric::X7R));
             }
             _ => panic!("Expected capacitor module"),
@@ -348,7 +362,10 @@ mod tests {
         match capacitor {
             WellKnownModule::Capacitor(c) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
-                assert!((c.capacitance.value - expected_value).abs() < Decimal::from_f64(1e-15).unwrap());
+                assert!(
+                    (c.capacitance.value - expected_value).abs()
+                        < Decimal::from_f64(1e-15).unwrap()
+                );
                 assert_eq!(c.capacitance.tolerance, Decimal::from_f64(0.2).unwrap());
                 assert_eq!(c.dielectric, Some(Dielectric::X7R));
             }
