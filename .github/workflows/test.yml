@@ -109,6 +109,11 @@ jobs:
           RUST_BACKTRACE: full
         run: cargo test --verbose --workspace
 
+      - name: Test CLI (E2E)
+        run: |
+          # Test BOM generation on example project
+          cargo run -p pcb -- bom examples/PhaseDriver/PhaseDriver.zen -f json
+
       - name: Test stdlib builds
         shell: bash
         run: |
