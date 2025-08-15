@@ -51,7 +51,7 @@ Crystal(
     name = "X1",
     frequency = "16MHz",
     load_capacitance = "18pF",
-    package = "5032_4Pin",
+    package = "5032_2Pin",
     XIN = osc_xi.NET,
     XOUT = osc_xo.NET,
     GND = gnd.NET,
