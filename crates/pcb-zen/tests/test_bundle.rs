@@ -372,7 +372,7 @@ Resistor(
 fn bundle_workspace_root_references() {
     let env = TestProject::new();
 
-    env.add_file("pcb.toml", "");
+    env.add_file("pcb.toml", "[workspace]");
 
     env.add_file(
         "common/types.zen",

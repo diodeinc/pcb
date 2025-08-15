@@ -485,8 +485,8 @@ pub mod workspace {
     use std::path::{Path, PathBuf};
 
     /// Walk up the directory tree starting at `start` until a directory containing
-    /// `pcb.toml` is found. If we reach the filesystem root without finding one,
-    /// return the parent directory of `start`.
+    /// `pcb.toml` with a `[workspace]` section is found. If we reach the filesystem root
+    /// without finding one, return the parent directory of `start`.
     pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
         let mut current = if !file_provider.is_directory(start) {
             // For files we search from their parent directory.
@@ -498,7 +498,19 @@ pub mod workspace {
         while let Some(dir) = current {
             let pcb_toml = dir.join("pcb.toml");
             if file_provider.exists(&pcb_toml) {
-                return dir;
+                // Check if the TOML file contains a [workspace] section
+                if let Ok(contents) = file_provider.read_file(&pcb_toml) {
+                    #[derive(serde::Deserialize)]
+                    struct WorkspaceToml {
+                        workspace: Option<toml::Value>,
+                    }
+
+                    if let Ok(parsed) = toml::from_str::<WorkspaceToml>(&contents) {
+                        if parsed.workspace.is_some() {
+                            return dir;
+                        }
+                    }
+                }
             }
             current = dir.parent().map(|p| p.to_path_buf());
         }

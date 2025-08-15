@@ -222,7 +222,7 @@ Resistor_v4(
 fn module_with_workspace_root() {
     let env = TestProject::new();
 
-    env.add_file("pcb.toml", "");
+    env.add_file("pcb.toml", "[workspace]");
 
     env.add_file(
         "submodule.zen",
@@ -417,6 +417,7 @@ output = io("output", Net)
     env.add_file(
         "pcb.toml",
         r#"
+[workspace]
 [packages]
 local = "./modules"
 "#,
