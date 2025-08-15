@@ -58,7 +58,6 @@ enum Commands {
     Release(release::ReleaseArgs),
 
     /// Vendor external dependencies
-    #[command(alias = "v")]
     Vendor(vendor::VendorArgs),
 
     /// External subcommands are forwarded to pcb-<command>
