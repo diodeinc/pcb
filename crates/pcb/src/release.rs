@@ -10,6 +10,7 @@ use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,11 @@ const TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Copying layout files", copy_layout),
     ("Generating unmatched BOM", generate_unmatched_bom),
+    ("Generating gerber files", generate_gerbers),
+    ("Generating drill files", generate_drill_files),
+    ("Generating drill map", generate_drill_map),
+    ("Generating pick-and-place file", generate_cpl),
+    ("Generating assembly drawings", generate_assembly_drawings),
     ("Generating 3D models", generate_3d_models),
     ("Writing release metadata", write_metadata),
     ("Creating release archive", zip_release),
@@ -426,6 +432,197 @@ fn add_directory_to_zip(zip: &mut ZipWriter<fs::File>, dir: &Path, base_path: &P
             zip.start_file(file_name, FileOptions::<()>::default())?;
             std::io::copy(&mut fs::File::open(&path)?, zip)?;
         }
+    }
+    Ok(())
+}
+
+/// Generate gerber files
+fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+
+    // Generate gerber files to a temporary directory
+    let gerbers_dir = manufacturing_dir.join("gerbers_temp");
+    fs::create_dir_all(&gerbers_dir)?;
+
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("gerbers")
+        .arg("--output")
+        .arg(gerbers_dir.to_string_lossy())
+        .arg("--layers")
+        .arg("F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,In1.Cu,In2.Cu,In3.Cu,In4.Cu")
+        .arg("--no-x2")
+        .arg("--use-drill-file-origin")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate gerber files")?;
+
+    // Create gerbers.zip from the temp directory
+    create_gerbers_zip(&gerbers_dir, &manufacturing_dir.join("gerbers.zip"))?;
+
+    // Clean up temp directory
+    fs::remove_dir_all(&gerbers_dir)?;
+
+    Ok(())
+}
+
+/// Generate drill files
+fn generate_drill_files(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("drill")
+        .arg("--output")
+        .arg(manufacturing_dir.to_string_lossy())
+        .arg("--drill-origin")
+        .arg("plot")
+        .arg("--excellon-oval-format")
+        .arg("alternate")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate drill files")?;
+
+    Ok(())
+}
+
+/// Generate drill map PDF
+fn generate_drill_map(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("drill")
+        .arg("--output")
+        .arg(manufacturing_dir.to_string_lossy())
+        .arg("--drill-origin")
+        .arg("plot")
+        .arg("--generate-map")
+        .arg("--map-format")
+        .arg("pdf")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate drill map")?;
+
+    Ok(())
+}
+
+/// Generate pick-and-place file
+fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("pos")
+        .arg("--format")
+        .arg("csv")
+        .arg("--units")
+        .arg("mm")
+        .arg("--use-drill-file-origin")
+        .arg("--output")
+        .arg(manufacturing_dir.join("cpl.csv").to_string_lossy())
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate pick-and-place file")?;
+
+    // Fix CPL CSV header to match expected format
+    fix_cpl_header(&manufacturing_dir.join("cpl.csv"))?;
+
+    Ok(())
+}
+
+/// Generate assembly drawings (front and back PDFs)
+fn generate_assembly_drawings(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+
+    // Generate front assembly drawing
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("pdf")
+        .arg("--output")
+        .arg(
+            manufacturing_dir
+                .join("assembly_front.pdf")
+                .to_string_lossy(),
+        )
+        .arg("--layers")
+        .arg("F.Fab,Edge.Cuts")
+        .arg("--include-border-title")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate front assembly drawing")?;
+
+    // Generate back assembly drawing
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("pdf")
+        .arg("--output")
+        .arg(
+            manufacturing_dir
+                .join("assembly_back.pdf")
+                .to_string_lossy(),
+        )
+        .arg("--layers")
+        .arg("B.Fab,Edge.Cuts")
+        .arg("--mirror")
+        .arg("--include-border-title")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate back assembly drawing")?;
+
+    Ok(())
+}
+
+/// Create a ZIP archive from gerber files directory
+fn create_gerbers_zip(gerbers_dir: &Path, zip_path: &Path) -> Result<()> {
+    let zip_file = fs::File::create(zip_path)?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+
+    for entry in fs::read_dir(gerbers_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let name = path.file_name().unwrap().to_string_lossy();
+            zip.start_file(name, zip::write::FileOptions::<()>::default())?;
+            let content = fs::read(&path)?;
+            zip.write_all(&content)?;
+        }
+    }
+    zip.finish()?;
+    Ok(())
+}
+
+/// Fix the CPL CSV header to match expected format
+fn fix_cpl_header(cpl_path: &Path) -> Result<()> {
+    let content = fs::read_to_string(cpl_path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() > 1 {
+        let fixed_content = format!(
+            "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n{}",
+            lines[1..].join("\n")
+        );
+        fs::write(cpl_path, fixed_content)?;
     }
     Ok(())
 }
