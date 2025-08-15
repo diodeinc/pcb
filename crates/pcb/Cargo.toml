@@ -41,6 +41,9 @@ serde_json = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
 chrono = { workspace = true }
+dir-diff = { workspace = true }
+tempfile = { workspace = true }
+ignore = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

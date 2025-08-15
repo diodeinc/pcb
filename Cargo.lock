@@ -821,6 +821,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dir-diff"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7ad16bf5f84253b50d6557681c58c3ab67c47c77d39fed9aeb56e947290bd10"
+dependencies = [
+ "walkdir",
+]
+
+[[package]]
 name = "dirs"
 version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2362,7 +2371,9 @@ dependencies = [
  "clap",
  "colored",
  "comfy-table",
+ "dir-diff",
  "env_logger",
+ "ignore",
  "inquire",
  "insta",
  "log",

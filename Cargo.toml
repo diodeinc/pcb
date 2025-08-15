@@ -95,6 +95,8 @@ openssl = { version = "0.10", features = ["vendored"] }
 wasm-bindgen-futures = "0.4"
 rust_decimal = { version = "1", features = ["serde", "serde-with-str"] }
 comfy-table = "7.1"
+dir-diff = "0.3"
+ignore = "0.4"
 
 # The profile that 'dist' will build with
 [profile.dist]
