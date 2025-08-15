@@ -152,12 +152,12 @@ impl RemoteFetcher for MockRemoteFetcher {
     fn fetch_remote(
         &self,
         spec: &LoadSpec,
-        workspace_root: Option<&Path>,
+        workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         self.fetch_calls
             .lock()
             .unwrap()
-            .push((spec.clone(), workspace_root.map(|p| p.to_path_buf())));
+            .push((spec.clone(), Some(workspace_root.to_path_buf())));
 
         let spec_str = spec.to_load_string();
         self.fetch_results
@@ -189,7 +189,8 @@ fn test_resolve_github_spec() {
     let resolver = CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher.clone(),
-        Some(PathBuf::from("/workspace")),
+        PathBuf::from("/workspace"),
+        true,
     );
 
     let spec = LoadSpec::Github {
@@ -234,7 +235,8 @@ fn test_resolve_relative_from_github_spec() {
     let resolver = CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher.clone(),
-        Some(PathBuf::from("/workspace")),
+        PathBuf::from("/workspace"),
+        true,
     );
 
     // First, let's test resolving a relative path from the cached Resistor.zen
@@ -277,7 +279,8 @@ fn test_resolve_workspace_path_from_remote() {
     let _resolver = CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher.clone(),
-        Some(PathBuf::from("/workspace")),
+        PathBuf::from("/workspace"),
+        true,
     );
 
     // When resolving a workspace path from a remote file, it should be
@@ -320,7 +323,8 @@ stdlib = "@github/diodeinc/stdlib"
     let resolver = CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher.clone(),
-        Some(workspace_root.clone()),
+        workspace_root.clone(),
+        true,
     );
 
     // Test resolving a package alias
@@ -380,7 +384,8 @@ fn test_resolve_relative_from_remote_with_mapping() {
     let resolver = CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher.clone(),
-        Some(PathBuf::from("/workspace")),
+        PathBuf::from("/workspace"),
+        true,
     );
 
     // First resolve the GitHub spec for Resistor.zen
@@ -464,7 +469,8 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
     let resolver = CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher.clone(),
-        Some(PathBuf::from("/workspace")),
+        PathBuf::from("/workspace"),
+        true,
     );
 
     // Resolve the initial file

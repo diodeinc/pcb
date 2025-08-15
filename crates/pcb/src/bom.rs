@@ -54,7 +54,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Generating BOM")).start();
 
     // Evaluate the design
-    let (eval_result, has_errors) = evaluate_zen_file(&args.file);
+    let (eval_result, has_errors) = evaluate_zen_file(&args.file, false);
 
     if has_errors {
         spinner.error(format!("{file_name}: Build failed"));

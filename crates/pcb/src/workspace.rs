@@ -3,41 +3,16 @@
 use anyhow::{Context, Result};
 use log::{debug, info};
 use pcb_zen::load::{cache_dir, DefaultRemoteFetcher};
+use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap, LoadSpec,
-    WithDiagnostics,
+    normalize_path, CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap,
+    LoadSpec, WithDiagnostics,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::tracking_resolver::TrackingLoadResolver;
-
-/// Normalize a path by resolving .. and . components
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                // Only pop if we have components to pop, otherwise keep the parent dir
-                if components.pop().is_none() {
-                    components.push(std::ffi::OsStr::new(".."));
-                }
-            }
-            std::path::Component::Normal(name) => {
-                components.push(name);
-            }
-            std::path::Component::CurDir => {
-                // Skip current directory
-            }
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                // Preserve prefix and root components (important for Windows)
-                components.push(component.as_os_str());
-            }
-        }
-    }
-    components.iter().collect()
-}
 
 /// Common workspace information used by both vendor and release commands
 pub struct WorkspaceInfo {
@@ -67,12 +42,10 @@ pub fn gather_workspace_info(zen_path: PathBuf) -> Result<WorkspaceInfo> {
     debug!("Starting workspace information gathering");
 
     // Canonicalize the zen path
-    let zen_path = zen_path
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize zen path: {}", zen_path.display()))?;
+    let zen_path = zen_path.canonicalize()?;
 
     // Try to find workspace root by walking up for pcb.toml
-    let initial_workspace_root = find_workspace_root(&zen_path)?;
+    let initial_workspace_root = find_workspace_root(&DefaultFileProvider, &zen_path);
 
     // Evaluate the zen file and track dependencies
     let (tracker, eval_result) = eval_zen_entrypoint(&zen_path, &initial_workspace_root)?;
@@ -93,44 +66,6 @@ pub fn gather_workspace_info(zen_path: PathBuf) -> Result<WorkspaceInfo> {
         workspace_root,
         tracker,
         eval_result,
-    })
-}
-
-/// Find workspace root by walking up from entry file to find pcb.toml
-pub fn find_workspace_root(entry: &Path) -> Result<PathBuf> {
-    let mut current_dir = entry
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize entry path: {}", entry.display()))?;
-
-    // Start from parent directory if entry is a file
-    if current_dir.is_file() {
-        current_dir = current_dir
-            .parent()
-            .context("Entry file has no parent directory")?
-            .to_path_buf();
-    }
-
-    loop {
-        if current_dir.join("pcb.toml").exists() {
-            return Ok(current_dir);
-        }
-        if let Some(parent) = current_dir.parent() {
-            current_dir = parent.to_path_buf();
-        } else {
-            // Reached filesystem root without finding pcb.toml
-            break;
-        }
-    }
-
-    // Fallback: Use entry's parent as initial workspace root
-    let parent = entry
-        .parent()
-        .context("Entry file has no parent directory")?;
-    parent.canonicalize().with_context(|| {
-        format!(
-            "Failed to canonicalize fallback parent: {}",
-            parent.display()
-        )
     })
 }
 
@@ -199,7 +134,8 @@ pub fn eval_zen_entrypoint(
     let base_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
-        Some(workspace_root.to_path_buf()),
+        workspace_root.to_path_buf(),
+        false,
     ));
 
     let tracking_resolver = Arc::new(TrackingLoadResolver::new(
@@ -240,7 +176,7 @@ pub fn loadspec_to_vendor_path(spec: &LoadSpec) -> Result<PathBuf> {
     // Resolve package aliases to canonical git form
     let canonical_spec = match spec {
         LoadSpec::Package { .. } => spec
-            .resolve(None, None)
+            .resolve(None)
             .context("Failed to resolve package alias to canonical form")?,
         _ => spec.clone(),
     };

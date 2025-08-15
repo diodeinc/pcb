@@ -18,7 +18,7 @@ impl Codemod for RemoveDirectoryLoads {
         let file_provider = Arc::new(DefaultFileProvider);
         let remote_fetcher = Arc::new(DefaultRemoteFetcher);
         let resolver =
-            CoreLoadResolver::for_file(file_provider.clone(), remote_fetcher, current_file);
+            CoreLoadResolver::for_file(file_provider.clone(), remote_fetcher, current_file, true);
 
         let ast = match AstModule::parse("<memory>", content.to_owned(), &Dialect::Extended) {
             Ok(a) => a,

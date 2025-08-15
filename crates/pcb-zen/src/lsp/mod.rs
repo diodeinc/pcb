@@ -36,16 +36,14 @@ fn create_standard_load_resolver(
     file_provider: Arc<dyn FileProvider>,
     file_path: &Path,
 ) -> Arc<CoreLoadResolver> {
-    let workspace_root = file_path
-        .parent()
-        .and_then(|parent| find_workspace_root(file_provider.as_ref(), parent))
-        .unwrap_or_else(|| file_path.parent().unwrap_or(file_path).to_path_buf());
+    let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
 
     let remote_fetcher = Arc::new(DefaultRemoteFetcher);
     Arc::new(CoreLoadResolver::new(
         file_provider,
         remote_fetcher,
-        Some(workspace_root.to_path_buf()),
+        workspace_root.to_path_buf(),
+        true,
     ))
 }
 

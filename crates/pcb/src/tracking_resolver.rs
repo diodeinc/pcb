@@ -42,7 +42,7 @@ impl TrackingLoadResolver {
     fn derive_canonical_spec(&self, spec: &LoadSpec, current_file: &Path) -> LoadSpec {
         match spec {
             // Resolve packages to canonical form first
-            LoadSpec::Package { .. } => spec.resolve(None, None).unwrap_or_else(|_| spec.clone()),
+            LoadSpec::Package { .. } => spec.resolve(None).unwrap_or_else(|_| spec.clone()),
 
             // Already canonical
             LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => spec.clone(),

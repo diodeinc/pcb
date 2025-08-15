@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context;
 use serde::ser::SerializeStruct;
 use starlark::{
     codemap::ResolvedSpan,
@@ -393,7 +394,7 @@ pub trait RemoteFetcher: Send + Sync {
     fn fetch_remote(
         &self,
         spec: &LoadSpec,
-        workspace_root: Option<&Path>,
+        workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error>;
 }
 
@@ -403,11 +404,13 @@ pub struct NoopRemoteFetcher;
 impl RemoteFetcher for NoopRemoteFetcher {
     fn fetch_remote(
         &self,
-        _spec: &LoadSpec,
-        _workspace_root: Option<&Path>,
+        spec: &LoadSpec,
+        _workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         Err(anyhow::anyhow!(
-            "NoopRemoteFetcher does not support fetching remote resources"
+            "Remote fetch for {:?} blocked because --offline mode is enabled. \
+            Run 'pcb vendor' to download dependencies locally.",
+            spec
         ))
     }
 }
@@ -482,9 +485,9 @@ pub mod workspace {
     use std::path::{Path, PathBuf};
 
     /// Walk up the directory tree starting at `start` until a directory containing
-    /// `pcb.toml` is found. Returns `Some(PathBuf)` pointing at that directory or
-    /// `None` if we reach the filesystem root without finding one.
-    pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Option<PathBuf> {
+    /// `pcb.toml` is found. If we reach the filesystem root without finding one,
+    /// return the parent directory of `start`.
+    pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
         let mut current = if !file_provider.is_directory(start) {
             // For files we search from their parent directory.
             start.parent().map(|p| p.to_path_buf())
@@ -495,16 +498,16 @@ pub mod workspace {
         while let Some(dir) = current {
             let pcb_toml = dir.join("pcb.toml");
             if file_provider.exists(&pcb_toml) {
-                return Some(dir);
+                return dir;
             }
             current = dir.parent().map(|p| p.to_path_buf());
         }
-        None
+        start.parent().unwrap_or(start).to_path_buf()
     }
 }
 
 /// Normalize a path by resolving .. and . components
-fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path) -> PathBuf {
     let mut components = Vec::new();
     for component in path.components() {
         match component {
@@ -529,10 +532,11 @@ fn normalize_path(path: &Path) -> PathBuf {
 pub struct CoreLoadResolver {
     file_provider: Arc<dyn FileProvider>,
     remote_fetcher: Arc<dyn RemoteFetcher>,
-    workspace_root: Option<PathBuf>,
+    workspace_root: PathBuf,
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
+    use_vendor_dir: bool,
 }
 
 impl CoreLoadResolver {
@@ -540,13 +544,15 @@ impl CoreLoadResolver {
     pub fn new(
         file_provider: Arc<dyn FileProvider>,
         remote_fetcher: Arc<dyn RemoteFetcher>,
-        workspace_root: Option<PathBuf>,
+        workspace_root: PathBuf,
+        use_vendor_dir: bool,
     ) -> Self {
         Self {
             file_provider,
             remote_fetcher,
             workspace_root,
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
+            use_vendor_dir,
         }
     }
 
@@ -555,6 +561,7 @@ impl CoreLoadResolver {
         file_provider: Arc<dyn FileProvider>,
         remote_fetcher: Arc<dyn RemoteFetcher>,
         file: &Path,
+        use_vendor_dir: bool,
     ) -> Self {
         let workspace_root = workspace::find_workspace_root(file_provider.as_ref(), file);
         Self {
@@ -562,6 +569,65 @@ impl CoreLoadResolver {
             remote_fetcher,
             workspace_root,
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
+            use_vendor_dir,
+        }
+    }
+
+    /// Try to resolve a LoadSpec from the vendor directory
+    fn try_resolve_from_vendor(&self, spec: &LoadSpec) -> Result<PathBuf, anyhow::Error> {
+        // Helper to build vendor paths with common logic
+        fn make_vendor_path<I>(root: &str, segments: I, file_path: &Path) -> PathBuf
+        where
+            I: IntoIterator,
+            I::Item: AsRef<Path>,
+        {
+            let mut p = PathBuf::from(root);
+            for s in segments {
+                let segment = s.as_ref();
+                if !segment.as_os_str().is_empty() {
+                    p.push(segment);
+                }
+            }
+            if !file_path.as_os_str().is_empty() && file_path != Path::new(".") {
+                p.push(file_path);
+            }
+            p
+        }
+
+        let vendor_dir = self.workspace_root.join("vendor");
+
+        // Convert spec to vendor directory path
+        let canonical_spec = match spec {
+            LoadSpec::Package { .. } => spec
+                .resolve(None)
+                .context("Failed to resolve package alias to canonical form")?,
+            _ => spec.clone(),
+        };
+
+        let relative_vendor_path = match canonical_spec {
+            LoadSpec::Github {
+                user,
+                repo,
+                rev,
+                path,
+            } => make_vendor_path("github.com", [&user, &repo, &rev], &path),
+            LoadSpec::Gitlab {
+                project_path,
+                rev,
+                path,
+            } => make_vendor_path("gitlab.com", [&project_path, &rev], &path),
+            LoadSpec::Package { package, tag, path } => {
+                make_vendor_path("packages", [&package, &tag], &path)
+            }
+            _ => anyhow::bail!("Local specs not handled in vendor directory"),
+        };
+
+        let full_vendor_path = vendor_dir.join(relative_vendor_path);
+
+        if self.file_provider.exists(&full_vendor_path) {
+            Ok(self.file_provider.canonicalize(&full_vendor_path)?)
+        } else {
+            anyhow::bail!("Not found in vendor directory")
         }
     }
 
@@ -569,20 +635,18 @@ impl CoreLoadResolver {
     fn read_workspace_aliases(&self) -> HashMap<String, String> {
         let mut aliases = LoadSpec::default_package_aliases();
 
-        if let Some(workspace_root) = &self.workspace_root {
-            let toml_path = workspace_root.join("pcb.toml");
-            if let Ok(contents) = self.file_provider.read_file(&toml_path) {
-                // Parse only the [packages] section
-                #[derive(Debug, serde::Deserialize)]
-                struct PkgRoot {
-                    packages: Option<HashMap<String, String>>,
-                }
+        let toml_path = self.workspace_root.join("pcb.toml");
+        if let Ok(contents) = self.file_provider.read_file(&toml_path) {
+            // Parse only the [packages] section
+            #[derive(Debug, serde::Deserialize)]
+            struct PkgRoot {
+                packages: Option<HashMap<String, String>>,
+            }
 
-                if let Ok(parsed) = toml::from_str::<PkgRoot>(&contents) {
-                    if let Some(pkgs) = parsed.packages {
-                        // User's aliases override defaults
-                        aliases.extend(pkgs);
-                    }
+            if let Ok(parsed) = toml::from_str::<PkgRoot>(&contents) {
+                if let Some(pkgs) = parsed.packages {
+                    // User's aliases override defaults
+                    aliases.extend(pkgs);
                 }
             }
         }
@@ -706,8 +770,7 @@ impl LoadResolver for CoreLoadResolver {
         // First, resolve any package aliases
         let (resolved_spec, is_from_alias) = if let LoadSpec::Package { .. } = spec {
             let workspace_aliases = self.read_workspace_aliases();
-            let resolved =
-                spec.resolve(self.workspace_root.as_deref(), Some(&workspace_aliases))?;
+            let resolved = spec.resolve(Some(&workspace_aliases))?;
             // Check if the resolution changed the spec type (indicating it was an alias)
             let from_alias = !matches!(&resolved, LoadSpec::Package { .. });
             (resolved, from_alias)
@@ -718,9 +781,16 @@ impl LoadResolver for CoreLoadResolver {
         match &resolved_spec {
             // Remote specs need to be fetched
             LoadSpec::Package { .. } | LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => {
+                // First try vendor directory if available
+                if self.use_vendor_dir {
+                    if let Ok(vendor_path) = self.try_resolve_from_vendor(&resolved_spec) {
+                        return Ok(vendor_path);
+                    }
+                }
+
                 let resolved_path = self
                     .remote_fetcher
-                    .fetch_remote(&resolved_spec, self.workspace_root.as_deref())?;
+                    .fetch_remote(&resolved_spec, &self.workspace_root)?;
 
                 let canonical_resolved_path = file_provider.canonicalize(&resolved_path)?;
 
@@ -735,14 +805,7 @@ impl LoadResolver for CoreLoadResolver {
 
             // Workspace-relative paths (starts with //)
             LoadSpec::WorkspacePath { path } => {
-                let workspace_root = self.workspace_root.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Cannot resolve workspace path '{}' without a workspace root",
-                        path.display()
-                    )
-                })?;
-
-                let canonical_root = file_provider.canonicalize(workspace_root)?;
+                let canonical_root = file_provider.canonicalize(&self.workspace_root)?;
                 let resolved_path = canonical_root.join(path);
 
                 // Canonicalize the resolved path to handle .. and symlinks
@@ -774,14 +837,7 @@ impl LoadResolver for CoreLoadResolver {
                     }
                 } else if is_from_alias {
                     // If this path came from an alias resolution, treat it as workspace-relative
-                    let workspace_root = self.workspace_root.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Cannot resolve alias path '{}' without a workspace root",
-                            path.display()
-                        )
-                    })?;
-
-                    let canonical_root = file_provider.canonicalize(workspace_root)?;
+                    let canonical_root = file_provider.canonicalize(&self.workspace_root)?;
                     let resolved_path = canonical_root.join(path);
 
                     // Canonicalize the resolved path to handle .. and symlinks

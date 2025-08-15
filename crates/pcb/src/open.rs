@@ -58,7 +58,7 @@ fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         // Evaluate the zen file
-        let (eval_result, has_errors) = evaluate_zen_file(&zen_path);
+        let (eval_result, has_errors) = evaluate_zen_file(&zen_path, false);
 
         if has_errors {
             eprintln!("Skipping {file_name} due to build errors");

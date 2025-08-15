@@ -47,7 +47,7 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
     fn fetch_remote(
         &self,
         spec: &pcb_zen_core::LoadSpec,
-        _workspace_root: Option<&Path>,
+        _workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         debug!("WasmRemoteFetcher::fetch_remote - Fetching spec: {spec:?}");
 
@@ -384,14 +384,14 @@ impl Module {
         let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
 
         // Determine workspace root using pcb.toml discovery
-        let workspace_root = find_workspace_root(file_provider.as_ref(), &path)
-            .unwrap_or_else(|| path.parent().unwrap_or(&path).to_path_buf());
+        let workspace_root = find_workspace_root(file_provider.as_ref(), &path);
 
         // Create load resolver
         let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
             file_provider.clone(),
             remote_fetcher.clone(),
-            Some(workspace_root),
+            workspace_root,
+            true,
         ));
 
         Ok(Module {
@@ -427,14 +427,14 @@ impl Module {
 
         // Determine workspace root using pcb.toml discovery
         let main_path = PathBuf::from(main_file);
-        let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
-            .unwrap_or_else(|| main_path.parent().unwrap_or(&main_path).to_path_buf());
+        let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path);
 
         // Create load resolver
         let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
             file_provider.clone(),
             remote_fetcher.clone(),
-            Some(workspace_root),
+            workspace_root,
+            true,
         ));
 
         Ok(Module {

@@ -230,8 +230,7 @@ pub fn create_bundle(input_path: &Path, output_path: &Path) -> Result<()> {
     let file_provider = Arc::new(DefaultFileProvider);
 
     // Find the workspace root by looking for pcb.toml, fall back to source dir if not found
-    let workspace_root = find_workspace_root(file_provider.as_ref(), &canonical_input)
-        .unwrap_or_else(|| source_dir.clone());
+    let workspace_root = find_workspace_root(file_provider.as_ref(), &canonical_input);
 
     // Create a temporary directory for the bundle
     let temp_dir = tempfile::tempdir()?;
@@ -256,7 +255,8 @@ pub fn create_bundle(input_path: &Path, output_path: &Path) -> Result<()> {
     let base_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
-        Some(workspace_root),
+        workspace_root,
+        true,
     ));
 
     // Create a tracking resolver that wraps the base resolver

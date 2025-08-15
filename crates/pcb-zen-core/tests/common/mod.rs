@@ -217,7 +217,8 @@ macro_rules! snapshot_eval {
             let load_resolver = Arc::new(CoreLoadResolver::new(
                 file_provider.clone(),
                 Arc::new(NoopRemoteFetcher::default()),
-                Some(std::path::PathBuf::from("/")),
+                std::path::PathBuf::from("/"),
+                true,
             ));
 
 

@@ -21,7 +21,7 @@ pub fn execute(args: CleanArgs) -> Result<()> {
     // Find the workspace root starting from current directory
     let current_dir = std::env::current_dir()?;
     let file_provider = DefaultFileProvider;
-    let project_root = find_workspace_root(&file_provider, &current_dir).unwrap_or(current_dir);
+    let project_root = find_workspace_root(&file_provider, &current_dir);
 
     // Define the temp directories to clean
     let temp_dirs = vec![project_root.join(".pcb")];

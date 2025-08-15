@@ -23,15 +23,22 @@ pub struct BuildArgs {
     /// Recursively traverse directories to find .zen/.star files
     #[arg(short = 'r', long = "recursive", default_value_t = false)]
     pub recursive: bool,
+
+    /// Disable network access (offline mode) - only use vendored dependencies
+    #[arg(long = "offline")]
+    pub offline: bool,
 }
 
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
-pub fn evaluate_zen_file(path: &Path) -> (pcb_zen::WithDiagnostics<pcb_sch::Schematic>, bool) {
+pub fn evaluate_zen_file(
+    path: &Path,
+    offline: bool,
+) -> (pcb_zen::WithDiagnostics<pcb_sch::Schematic>, bool) {
     debug!("Compiling Zener file: {}", path.display());
 
     // Evaluate the design
-    let eval_result = pcb_zen::run(path);
+    let eval_result = pcb_zen::run(path, offline);
     let mut has_errors = false;
 
     // Print diagnostics
@@ -73,7 +80,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
         // Evaluate the design
-        let eval_result = pcb_zen::run(&zen_path);
+        let eval_result = pcb_zen::run(&zen_path, args.offline);
 
         // Check if we have diagnostics to print
         if !eval_result.diagnostics.is_empty() {

@@ -19,10 +19,6 @@ pub struct VendorArgs {
     /// If none specified, will auto-discover all .zen files in the workspace.
     pub zen_paths: Vec<PathBuf>,
 
-    /// Clean vendor directory before copying
-    #[arg(long)]
-    pub clean: bool,
-
     /// Check if vendor directory is up-to-date (useful for CI)
     #[arg(long)]
     pub check: bool,
@@ -84,17 +80,8 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         }
     }
 
-    // Clean vendor directory if requested
-    if args.clean {
-        let clean_spinner = Spinner::builder("Cleaning vendor directory").start();
-        if vendor_info.vendor_dir.exists() {
-            fs::remove_dir_all(&vendor_info.vendor_dir)?;
-        }
-        clean_spinner.finish();
-        println!("{} Vendor directory cleaned", "✓".green());
-    }
-
     // Create vendor directory
+    let _ = fs::remove_dir_all(&vendor_info.vendor_dir);
     fs::create_dir_all(&vendor_info.vendor_dir)?;
 
     // Copy vendor dependencies

@@ -17,7 +17,7 @@ pub use pcb_zen_core::load_spec::{DEFAULT_GITHUB_REV, DEFAULT_GITLAB_REV, DEFAUL
 /// by the CoreLoadResolver before reaching this function.
 ///
 /// The returned path is guaranteed to exist on success.
-fn materialise_remote(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyhow::Result<PathBuf> {
+fn materialise_remote(spec: &LoadSpec, workspace_root: &Path) -> anyhow::Result<PathBuf> {
     match spec {
         LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
             // Local specs should not reach here
@@ -47,9 +47,7 @@ fn materialise_remote(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyhow:
             }
 
             // Expose in .pcb for direct package reference
-            if let Some(root) = workspace_root {
-                let _ = expose_alias_symlink(root, package, path, &local_path);
-            }
+            let _ = expose_alias_symlink(workspace_root, package, path, &local_path);
 
             Ok(local_path)
         }
@@ -73,18 +71,16 @@ fn materialise_remote(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyhow:
                     path.display()
                 );
             }
-            if let Some(root) = workspace_root {
-                let folder_name = format!(
-                    "github{}{}{}{}{}",
-                    std::path::MAIN_SEPARATOR,
-                    user,
-                    std::path::MAIN_SEPARATOR,
-                    repo,
-                    std::path::MAIN_SEPARATOR
-                );
-                let folder_name = format!("{folder_name}{rev}");
-                let _ = expose_alias_symlink(root, &folder_name, path, &local_path);
-            }
+            let folder_name = format!(
+                "github{}{}{}{}{}",
+                std::path::MAIN_SEPARATOR,
+                user,
+                std::path::MAIN_SEPARATOR,
+                repo,
+                std::path::MAIN_SEPARATOR
+            );
+            let folder_name = format!("{folder_name}{rev}");
+            let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
             Ok(local_path)
         }
         LoadSpec::Gitlab {
@@ -106,16 +102,14 @@ fn materialise_remote(spec: &LoadSpec, workspace_root: Option<&Path>) -> anyhow:
                     path.display()
                 );
             }
-            if let Some(root) = workspace_root {
-                let folder_name = format!(
-                    "gitlab{}{}{}",
-                    std::path::MAIN_SEPARATOR,
-                    project_path,
-                    std::path::MAIN_SEPARATOR
-                );
-                let folder_name = format!("{folder_name}{rev}");
-                let _ = expose_alias_symlink(root, &folder_name, path, &local_path);
-            }
+            let folder_name = format!(
+                "gitlab{}{}{}",
+                std::path::MAIN_SEPARATOR,
+                project_path,
+                std::path::MAIN_SEPARATOR
+            );
+            let folder_name = format!("{folder_name}{rev}");
+            let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
             Ok(local_path)
         }
     }
@@ -580,7 +574,7 @@ impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
     fn fetch_remote(
         &self,
         spec: &LoadSpec,
-        workspace_root: Option<&Path>,
+        workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         // Use the existing materialise_load function
         materialise_remote(spec, workspace_root)

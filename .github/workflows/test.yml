@@ -125,6 +125,7 @@ jobs:
           cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
           cargo run -- release test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
           cargo run -- vendor test-workspaces/with-pcb-toml
+          cargo run -- build test-workspaces/with-pcb-toml/boards --offline
 
       - name: Test stdlib builds
         shell: bash

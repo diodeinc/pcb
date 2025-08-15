@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Default tag that is assumed when the caller does not specify one in a
 /// package spec, e.g. `@mypkg/utils.zen`.
@@ -229,14 +229,12 @@ impl LoadSpec {
     ///
     /// # Arguments
     /// * `spec` - The LoadSpec to resolve
-    /// * `workspace_root` - Optional workspace root path for alias lookup
     /// * `workspace_aliases` - Optional workspace-specific aliases (overrides defaults)
     ///
     /// # Returns
     /// A resolved LoadSpec, which may be the same as the input or a new spec based on alias resolution.
     pub fn resolve(
         &self,
-        _workspace_root: Option<&Path>,
         workspace_aliases: Option<&HashMap<String, String>>,
     ) -> Result<LoadSpec, anyhow::Error> {
         match self {
@@ -851,7 +849,7 @@ mod tests {
                 path: PathBuf::from("math.zen"),
             };
 
-            let resolved = spec.resolve(None, None).unwrap();
+            let resolved = spec.resolve(None).unwrap();
             assert_eq!(resolved, spec); // Should return unchanged
         }
 
@@ -863,7 +861,7 @@ mod tests {
                 path: PathBuf::from("math.zen"),
             };
 
-            let resolved = spec.resolve(None, None).unwrap();
+            let resolved = spec.resolve(None).unwrap();
 
             // Should resolve to GitHub spec based on default alias
             assert_eq!(
@@ -885,7 +883,7 @@ mod tests {
                 path: PathBuf::from("math.zen"),
             };
 
-            let resolved = spec.resolve(None, None).unwrap();
+            let resolved = spec.resolve(None).unwrap();
 
             // Should resolve to GitHub spec with custom tag overriding default
             assert_eq!(
@@ -913,7 +911,7 @@ mod tests {
                 "@github/myorg/custom-lib:main".to_string(),
             );
 
-            let resolved = spec.resolve(None, Some(&workspace_aliases)).unwrap();
+            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
 
             assert_eq!(
                 resolved,
@@ -940,7 +938,7 @@ mod tests {
                 "@github/myorg/my-stdlib:v2.0.0".to_string(),
             );
 
-            let resolved = spec.resolve(None, Some(&workspace_aliases)).unwrap();
+            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
 
             // Workspace alias should override default
             assert_eq!(
@@ -962,7 +960,7 @@ mod tests {
                 path: PathBuf::from("Device.kicad_sym"),
             };
 
-            let resolved = spec.resolve(None, None).unwrap();
+            let resolved = spec.resolve(None).unwrap();
 
             // Should resolve to GitLab spec based on default alias
             assert_eq!(
@@ -986,7 +984,7 @@ mod tests {
             let mut workspace_aliases = HashMap::new();
             workspace_aliases.insert("local-lib".to_string(), "./local/lib".to_string());
 
-            let resolved = spec.resolve(None, Some(&workspace_aliases)).unwrap();
+            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
 
             assert_eq!(
                 resolved,
@@ -1010,7 +1008,7 @@ mod tests {
                 "//libs/workspace-lib".to_string(),
             );
 
-            let resolved = spec.resolve(None, Some(&workspace_aliases)).unwrap();
+            let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
 
             assert_eq!(
                 resolved,
@@ -1028,7 +1026,7 @@ mod tests {
                 path: PathBuf::new(),
             };
 
-            let resolved = spec.resolve(None, None).unwrap();
+            let resolved = spec.resolve(None).unwrap();
 
             // Should resolve without adding path
             assert_eq!(
@@ -1056,7 +1054,7 @@ mod tests {
                 "./local/lib".to_string(), // Path-based alias
             );
 
-            let result = spec.resolve(None, Some(&workspace_aliases));
+            let result = spec.resolve(Some(&workspace_aliases));
 
             // Should error because we can't apply tags to path-based aliases
             assert!(result.is_err());
@@ -1077,7 +1075,7 @@ mod tests {
                 "@".to_string(), // Invalid load spec - just @ with nothing after
             );
 
-            let result = spec.resolve(None, Some(&workspace_aliases));
+            let result = spec.resolve(Some(&workspace_aliases));
 
             // Should error because alias target is invalid
             assert!(result.is_err());
@@ -1110,7 +1108,7 @@ mod tests {
             ];
 
             for spec in specs {
-                let resolved = spec.resolve(None, None).unwrap();
+                let resolved = spec.resolve(None).unwrap();
                 assert_eq!(resolved, spec); // Should return unchanged
             }
         }

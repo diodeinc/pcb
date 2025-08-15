@@ -13,7 +13,9 @@ use crate::load::DefaultRemoteFetcher;
 use pcb_sch::Schematic;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::workspace::find_workspace_root;
-use pcb_zen_core::{CoreLoadResolver, DefaultFileProvider, EvalContext, InputMap};
+use pcb_zen_core::{
+    CoreLoadResolver, DefaultFileProvider, EvalContext, InputMap, NoopRemoteFetcher,
+};
 use starlark::errors::EvalMessage;
 
 pub use diagnostics::render_diagnostic;
@@ -39,16 +41,24 @@ pub use starlark::errors::EvalSeverity;
 /// use pcb_zen::create_eval_context;
 ///
 /// let workspace = Path::new("/path/to/my/project");
-/// let ctx = create_eval_context(workspace);
+/// let ctx = create_eval_context(workspace, false);
 /// // Now Module() calls within evaluated files will support all import types
 /// ```
-pub fn create_eval_context(workspace_root: &Path) -> EvalContext {
+pub fn create_eval_context(workspace_root: &Path, offline: bool) -> EvalContext {
     let file_provider = Arc::new(DefaultFileProvider);
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+
+    // Choose remote fetcher based on offline mode
+    let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if offline {
+        Arc::new(NoopRemoteFetcher)
+    } else {
+        Arc::new(DefaultRemoteFetcher)
+    };
+
     let load_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
-        Some(workspace_root.to_path_buf()),
+        workspace_root.to_path_buf(),
+        true,
     ));
 
     EvalContext::new()
@@ -57,7 +67,7 @@ pub fn create_eval_context(workspace_root: &Path) -> EvalContext {
 }
 
 /// Evaluate `file` and return a [`Schematic`].
-pub fn run(file: &Path) -> WithDiagnostics<Schematic> {
+pub fn run(file: &Path, offline: bool) -> WithDiagnostics<Schematic> {
     let abs_path = file
         .canonicalize()
         .expect("failed to canonicalise input path");
@@ -65,11 +75,10 @@ pub fn run(file: &Path) -> WithDiagnostics<Schematic> {
     // Create a file provider for finding workspace root
     let file_provider = DefaultFileProvider;
 
-    // Find the workspace root by looking for pcb.toml
-    let workspace_root = find_workspace_root(&file_provider, &abs_path)
-        .unwrap_or_else(|| abs_path.parent().unwrap().to_path_buf());
+    // Simple workspace detection: look for pcb.toml, fallback to parent
+    let workspace_root = find_workspace_root(&file_provider, &abs_path);
 
-    let ctx = create_eval_context(&workspace_root);
+    let ctx = create_eval_context(&workspace_root, offline);
 
     // For now we don't inject any external inputs.
     let inputs = InputMap::new();

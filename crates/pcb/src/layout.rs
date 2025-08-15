@@ -28,6 +28,10 @@ pub struct LayoutArgs {
     /// Recursively traverse directories to find .zen/.star files
     #[arg(short = 'r', long = "recursive", default_value_t = false)]
     pub recursive: bool,
+
+    /// Disable network access (offline mode) - only use vendored dependencies
+    #[arg(long = "offline")]
+    pub offline: bool,
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
@@ -57,7 +61,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         let mut spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
         // Evaluate the design
-        let eval_result = pcb_zen::run(&zen_path);
+        let eval_result = pcb_zen::run(&zen_path, args.offline);
 
         // Check if we have diagnostics to print
         if !eval_result.diagnostics.is_empty() {

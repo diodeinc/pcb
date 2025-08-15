@@ -79,7 +79,7 @@ impl TestProject {
     /// when a test already has a full path (e.g. returned from [`Self::add_file`]).
     pub fn eval_netlist_from_absolute(&self, top_path: &Path) -> WithDiagnostics<String> {
         use pcb_sch::kicad_netlist::to_kicad_netlist;
-        pcb_zen::run(top_path).map(|s| to_kicad_netlist(&s))
+        pcb_zen::run(top_path, false).map(|s| to_kicad_netlist(&s))
     }
 
     /// Parse a single text blob that contains multiple files and write them into
