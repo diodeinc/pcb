@@ -436,48 +436,72 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
     fs::create_dir_all(&models_dir)?;
 
     let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
-    // Generate STEP model
-    KiCadCliBuilder::new()
+    // Generate STEP model - KiCad CLI has platform-specific exit code issues
+    let step_path = models_dir.join("model.step");
+    let step_result = KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
         .subcommand("step")
         .arg("--subst-models")
         .arg("--force")
         .arg("--output")
-        .arg(models_dir.join("model.step").to_string_lossy())
+        .arg(step_path.to_string_lossy())
         .arg("--no-dnp")
         .arg("--no-unspecified")
         .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate STEP model")?;
+        .run();
 
-    // Generate VRML model
-    KiCadCliBuilder::new()
+    if let Err(e) = step_result {
+        if step_path.exists() {
+            warn!("KiCad CLI reported error but STEP file was created: {e}");
+        } else {
+            return Err(e).context("Failed to generate STEP model");
+        }
+    }
+
+    // Generate VRML model - KiCad CLI has platform-specific exit code issues
+    let wrl_path = models_dir.join("model.wrl");
+    let wrl_result = KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
         .subcommand("vrml")
         .arg("--output")
-        .arg(models_dir.join("model.wrl").to_string_lossy())
+        .arg(wrl_path.to_string_lossy())
         .arg("--units")
         .arg("mm")
         .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate VRML model")?;
+        .run();
 
-    // Generate SVG rendering
-    KiCadCliBuilder::new()
+    if let Err(e) = wrl_result {
+        if wrl_path.exists() {
+            warn!("KiCad CLI reported error but VRML file was created: {e}");
+        } else {
+            return Err(e).context("Failed to generate VRML model");
+        }
+    }
+
+    // Generate SVG rendering - KiCad CLI has platform-specific exit code issues
+    let svg_path = models_dir.join("model.svg");
+    let svg_result = KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
         .subcommand("svg")
         .arg("--output")
-        .arg(models_dir.join("model.svg").to_string_lossy())
+        .arg(svg_path.to_string_lossy())
         .arg("--layers")
         .arg("F.Cu,B.Cu,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts")
         .arg("--page-size-mode")
         .arg("2") // Board area only
         .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate SVG rendering")?;
+        .run();
+
+    if let Err(e) = svg_result {
+        if svg_path.exists() {
+            warn!("KiCad CLI reported error but SVG file was created: {e}");
+        } else {
+            return Err(e).context("Failed to generate SVG rendering");
+        }
+    }
 
     Ok(())
 }
