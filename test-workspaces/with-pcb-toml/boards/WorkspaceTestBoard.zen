@@ -1,0 +1,40 @@
+"""
+Test board demonstrating workspace-relative paths (// syntax).
+This board uses modules referenced via // paths to test that workspace 
+root detection works correctly with pcb.toml files.
+"""
+
+load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power")
+
+# Use workspace-relative paths for modules - this tests // path resolution
+PowerSupplyModule = Module("//modules/PowerSupplyModule.zen")
+LedIndicatorModule = Module("//modules/LedIndicatorModule.zen")
+
+add_property("layout_path", "build/WorkspaceTestBoard")
+
+# Power rails
+vcc_3v3 = Power("VCC_3V3")
+gnd = Ground("GND")
+
+# Internal power domains
+filtered_vcc = Power("FILTERED_VCC")
+
+# Power supply with filtering (uses // path)
+PowerSupplyModule(
+    name="PS1",
+    filter_cap_value="100nF",
+    pullup_value="10kOhm",
+    VCC=vcc_3v3,
+    GND=gnd,
+    FILTERED_VCC=filtered_vcc.NET,
+)
+
+# Status indicator (also uses // path)
+LedIndicatorModule(
+    name="STATUS1",
+    led_color="green",
+    current_limit_value="220Ohm",
+    VCC=filtered_vcc,
+    GND=gnd,
+    ENABLE=gnd.NET,  # Always on
+)

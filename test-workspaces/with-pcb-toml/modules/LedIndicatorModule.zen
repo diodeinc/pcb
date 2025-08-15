@@ -1,0 +1,39 @@
+"""
+LED indicator module for status signaling.
+Simple module to demonstrate // path usage between modules.
+"""
+
+load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power")
+
+Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.2/generics/Led.zen")
+
+# Configuration
+led_color = config("led_color", str, default="green")
+current_limit_value = config("current_limit_value", str, default="220Ohm")
+
+# IO ports
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+ENABLE = io("ENABLE", Net)
+
+# Internal nets
+led_anode = Net("LED_ANODE")
+
+# Current limiting resistor
+Resistor(
+    name="R_LIMIT",
+    value=current_limit_value,
+    package="0402",
+    P1=VCC.NET,
+    P2=led_anode,
+)
+
+# Status LED
+Led(
+    name="D_STATUS",
+    color=led_color,
+    package="0603",
+    A=led_anode,
+    K=ENABLE,
+)

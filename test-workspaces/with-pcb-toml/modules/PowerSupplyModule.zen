@@ -1,0 +1,38 @@
+"""
+Power supply filtering module demonstrating workspace-relative paths.
+Uses // path syntax to reference other modules in the workspace.
+"""
+
+load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power")
+
+Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.2/generics/Capacitor.zen")
+
+# Configuration
+filter_cap_value = config("filter_cap_value", str, default="100nF")
+pullup_value = config("pullup_value", str, default="10kOhm")
+
+# IO ports
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+FILTERED_VCC = io("FILTERED_VCC", Net)
+
+# Power supply filtering
+Capacitor(
+    name="C_FILTER",
+    value=filter_cap_value,
+    package="0402",
+    voltage="16V",
+    dielectric="X7R",
+    P1=VCC.NET,
+    P2=GND.NET,
+)
+
+# Pull-up resistor
+Resistor(
+    name="R_PULLUP", 
+    value=pullup_value,
+    package="0603",
+    P1=VCC.NET,
+    P2=FILTERED_VCC,
+)

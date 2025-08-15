@@ -115,8 +115,14 @@ jobs:
         run: |
           # Test BOM generation on example project
           cargo run -- bom examples/PhaseDriver/PhaseDriver.zen -f json
-          cargo run -- bom crates/pcb/test-workspace/boards/TestBoard.zen
-          cargo run -- release crates/pcb/test-workspace/boards/TestBoard.zen
+
+          # Test simple workspace (no pcb.toml)
+          cargo run -- bom test-workspaces/simple/boards/TestBoard.zen
+          cargo run -- release test-workspaces/simple/boards/TestBoard.zen
+
+          # Test workspace with pcb.toml and workspace-relative loads
+          cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
+          cargo run -- release test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
 
       - name: Test stdlib builds
         shell: bash

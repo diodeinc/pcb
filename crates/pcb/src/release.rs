@@ -106,11 +106,22 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
         .canonicalize()
         .with_context(|| format!("Failed to canonicalize zen path: {}", zen_path.display()))?;
 
-    // Evaluate the zen file and track dependencies
-    let (tracker, eval) = eval_zen_entrypoint(&zen_path)?;
+    // Try to find workspace root by walking up for pcb.toml
+    let initial_workspace_root = find_workspace_root(&zen_path)?;
 
-    // Determine workspace root from tracked files
-    let workspace_root = detect_workspace_root(&zen_path, &tracker.files())?;
+    // Evaluate the zen file and track dependencies
+    let (tracker, eval) = eval_zen_entrypoint(&zen_path, &initial_workspace_root)?;
+
+    // Refine workspace root based on tracked files if no pcb.toml was found
+    let workspace_root = if initial_workspace_root.join("pcb.toml").exists() {
+        initial_workspace_root
+    } else {
+        // No pcb.toml found, use common ancestor of tracked files
+        detect_workspace_root_from_files(&zen_path, &tracker.files())?
+    };
+
+    // Log workspace root info for debugging
+    info!("Using workspace root: {}", workspace_root.display());
 
     // Get version from git
     let version = git_describe(&workspace_root)?;
@@ -199,21 +210,69 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     })
 }
 
+/// Find workspace root by walking up from entry file to find pcb.toml
+fn find_workspace_root(entry: &Path) -> Result<PathBuf> {
+    let mut current_dir = entry.parent().unwrap_or(entry);
+    loop {
+        if current_dir.join("pcb.toml").exists() {
+            return Ok(current_dir.to_path_buf());
+        }
+        if let Some(parent) = current_dir.parent() {
+            current_dir = parent;
+        } else {
+            // Reached filesystem root without finding pcb.toml
+            break;
+        }
+    }
+
+    // Fallback: Use entry's parent as initial workspace root
+    let parent = entry
+        .parent()
+        .context("Entry file has no parent directory")?;
+    Ok(parent.to_path_buf())
+}
+
+/// Detect workspace root from tracked files when no pcb.toml is found
+fn detect_workspace_root_from_files(entry: &Path, tracked: &HashSet<PathBuf>) -> Result<PathBuf> {
+    let cache_root = cache_dir()?.canonicalize()?;
+
+    let mut paths: Vec<PathBuf> = tracked
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .filter(|p| !p.starts_with(&cache_root))
+        .collect();
+
+    paths.push(entry.canonicalize()?);
+
+    let root = paths
+        .into_iter()
+        .reduce(|a, b| {
+            a.components()
+                .zip(b.components())
+                .take_while(|(x, y)| x == y)
+                .map(|(c, _)| c.as_os_str())
+                .collect()
+        })
+        .context("No paths found for workspace root calculation")?;
+
+    Ok(root)
+}
+
 /// Run the Starlark interpreter once and return both the tracker (for copying)
 /// and the evaluation output (for KiCad extraction).
 fn eval_zen_entrypoint(
     entry: &Path,
+    workspace_root: &Path,
 ) -> Result<(Arc<TrackingLoadResolver>, WithDiagnostics<EvalOutput>)> {
     debug!("Starting zen file evaluation: {}", entry.display());
 
     let file_provider = Arc::new(DefaultFileProvider);
-    let initial_workspace_root = entry.parent().unwrap_or(entry).to_path_buf();
 
     let remote_fetcher = Arc::new(DefaultRemoteFetcher);
     let base_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
-        Some(initial_workspace_root),
+        Some(workspace_root.to_path_buf()),
     ));
 
     let tracking_resolver = Arc::new(TrackingLoadResolver::new(
@@ -247,55 +306,6 @@ fn eval_zen_entrypoint(
 
     info!("Zen file evaluation completed successfully");
     Ok((tracking_resolver, eval_result))
-}
-
-/// Detect workspace root by looking for pcb.toml, fallback to lowest-level common directory
-fn detect_workspace_root(entry: &Path, tracked: &HashSet<PathBuf>) -> Result<PathBuf> {
-    debug!("Finding workspace root starting from {}", entry.display());
-
-    // First, try to find pcb.toml by walking up from the zen file
-    let mut current_dir = entry.parent().unwrap_or(entry);
-    while let Some(parent) = current_dir.parent() {
-        if current_dir.join("pcb.toml").exists() {
-            info!("Found pcb.toml at: {}", current_dir.display());
-            return Ok(current_dir.to_path_buf());
-        }
-        current_dir = parent;
-    }
-
-    debug!("No pcb.toml found, falling back to common ancestor calculation");
-
-    // Get canonicalized cache directory for Windows compatibility
-    let cache_root = cache_dir()?.canonicalize()?;
-
-    // Canonicalize and filter tracked files
-    let mut paths: Vec<PathBuf> = tracked
-        .iter()
-        .filter_map(|p| p.canonicalize().ok())
-        .filter(|path| !path.starts_with(&cache_root))
-        .collect();
-
-    paths.push(entry.canonicalize()?);
-
-    debug!(
-        "Found {} local zen files for workspace root calculation",
-        paths.len()
-    );
-
-    // Find common ancestor using fold
-    let root = paths
-        .into_iter()
-        .reduce(|acc, path| {
-            acc.components()
-                .zip(path.components())
-                .take_while(|(a, b)| a == b)
-                .map(|(c, _)| c.as_os_str())
-                .collect()
-        })
-        .unwrap_or_else(|| entry.parent().unwrap_or(entry).to_path_buf());
-
-    info!("Detected workspace root: {}", root.display());
-    Ok(root)
 }
 
 /// Determine release version using clean git-based logic:
