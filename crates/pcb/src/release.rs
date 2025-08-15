@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use log::{debug, info, warn};
-use pcb_kicad::KiCadCliBuilder;
+use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_sch::generate_bom;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::convert::ToSchematic;
@@ -35,6 +35,8 @@ pub struct ReleaseInfo {
     pub workspace: WorkspaceInfo,
     /// Release version (from git or fallback)
     pub version: String,
+    /// Git commit hash (for variable substitution)
+    pub git_hash: String,
     /// Path to the staging directory where release will be assembled
     pub staging_dir: PathBuf,
     /// Path to the layout directory containing KiCad files
@@ -48,6 +50,7 @@ type TaskFn = fn(&ReleaseInfo) -> Result<()>;
 const TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Copying layout files", copy_layout),
+    ("Substituting version variables", substitute_variables),
     ("Generating unmatched BOM", generate_unmatched_bom),
     ("Generating gerber files", generate_gerbers),
     ("Generating drill files", generate_drill_files),
@@ -106,8 +109,8 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
     // Use common workspace info gathering
     let workspace = gather_workspace_info(zen_path)?;
 
-    // Get version from git
-    let version = git_describe(&workspace.workspace_root)?;
+    // Get version and git hash from git
+    let (version, git_hash) = git_version_and_hash(&workspace.workspace_root)?;
 
     // Create release staging directory in workspace root:
     // Structure: {workspace_root}/.pcb/releases/{relative_path_to_zen}/{board_name}/{version}
@@ -147,6 +150,7 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
     Ok(ReleaseInfo {
         workspace,
         version,
+        git_hash,
         staging_dir,
         layout_path,
         schematic,
@@ -194,6 +198,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         },
         "git": {
             "describe": info.version.clone(),
+            "hash": info.git_hash.clone(),
             "workspace": info.workspace.workspace_root.display().to_string()
         }
     })
@@ -203,7 +208,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 /// - If working directory is dirty: {commit_hash}-dirty
 /// - If current commit has a tag: {tag_name}
 /// - If clean but no tag: {commit_hash}
-fn git_describe(path: &Path) -> Result<String> {
+fn git_version_and_hash(path: &Path) -> Result<(String, String)> {
     debug!("Getting git version from: {}", path.display());
 
     // Check if working directory is dirty
@@ -221,8 +226,8 @@ fn git_describe(path: &Path) -> Result<String> {
         .output()?;
 
     if !commit_out.status.success() {
-        warn!("Not a git repository, using 'unknown' as version");
-        return Ok("unknown".into());
+        warn!("Not a git repository, using 'unknown' as version and hash");
+        return Ok(("unknown".into(), "unknown".into()));
     }
 
     let commit_hash = String::from_utf8(commit_out.stdout)?.trim().to_owned();
@@ -231,7 +236,7 @@ fn git_describe(path: &Path) -> Result<String> {
     if is_dirty {
         let version = format!("{commit_hash}-dirty");
         info!("Git version (dirty): {version}");
-        return Ok(version);
+        return Ok((version, commit_hash.clone()));
     }
 
     // Check if current commit is tagged
@@ -249,14 +254,14 @@ fn git_describe(path: &Path) -> Result<String> {
             if !tag.is_empty() {
                 let version = tag.to_string();
                 info!("Git version (tag): {version}");
-                return Ok(version);
+                return Ok((version, commit_hash.clone()));
             }
         }
     }
 
     // Not dirty and not tagged, use commit hash
     info!("Git version (commit): {commit_hash}");
-    Ok(commit_hash)
+    Ok((commit_hash.clone(), commit_hash))
 }
 
 /// Extract layout path from zen evaluation result
@@ -380,6 +385,41 @@ fn copy_layout(info: &ReleaseInfo) -> Result<()> {
             fs::copy(entry.path(), layout_staging_dir.join(filename))?;
         }
     }
+    Ok(())
+}
+
+/// Substitute version and git hash variables in KiCad PCB files
+fn substitute_variables(info: &ReleaseInfo) -> Result<()> {
+    debug!("Substituting version variables in KiCad files");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    // Create a Python script to substitute variables
+    let script = format!(
+        r#"
+import sys
+import pcbnew
+
+# Load the board
+board = pcbnew.LoadBoard(sys.argv[1])
+
+# Get text variables
+text_vars = board.GetProperties()
+
+# Update variables
+text_vars['PCB_VERSION'] = '{version}'
+text_vars['PCB_GIT_HASH'] = '{git_hash}'
+
+# Save the board
+board.Save(sys.argv[1])
+print("Text variables updated successfully")
+"#,
+        version = info.version.replace('\'', "\\'"), // Escape single quotes
+        git_hash = info.git_hash.replace('\'', "\\'")  // Escape single quotes
+    );
+
+    PythonScriptBuilder::new(script)
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()?;
+    debug!("Updated variables in: {}", kicad_pcb_path.display());
     Ok(())
 }
 
