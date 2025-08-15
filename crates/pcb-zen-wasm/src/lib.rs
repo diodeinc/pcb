@@ -1,4 +1,5 @@
 use log::debug;
+use pcb_sch::generate_bom;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
@@ -474,7 +475,7 @@ impl Module {
             .eval();
 
         // Extract schematic from the result
-        let schematic = result
+        let schematic_opt = result
             .output
             .as_ref()
             .and_then(|output| output.sch_module.to_schematic().ok());
@@ -484,17 +485,30 @@ impl Module {
             .as_ref()
             .map(|output| output.signature.clone());
 
+        // Generate BOM JSON if schematic is available
+        let bom_json = schematic_opt.as_ref().and_then(|schematic| {
+            let entries = generate_bom(schematic);
+            match serde_json::to_string(&entries) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    log::error!("Failed to serialize BOM to JSON: {e}");
+                    None
+                }
+            }
+        });
+
         // Build evaluation result
         let evaluation_result = EvaluationResult {
             success: result.output.is_some(),
             parameters,
-            schematic: schematic.and_then(|s| match serde_json::to_string(&s) {
+            schematic: schematic_opt.and_then(|s| match serde_json::to_string(&s) {
                 Ok(json) => Some(json),
                 Err(e) => {
                     log::error!("Failed to serialize schematic to JSON: {e}");
                     None
                 }
             }),
+            bom: bom_json,
             diagnostics: result
                 .diagnostics
                 .into_iter()
@@ -563,5 +577,6 @@ pub struct EvaluationResult {
     pub success: bool,
     pub parameters: Option<Vec<pcb_zen_core::lang::type_info::ParameterInfo>>,
     pub schematic: Option<String>,
+    pub bom: Option<String>,
     pub diagnostics: Vec<DiagnosticInfo>,
 }

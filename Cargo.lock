@@ -925,7 +925,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ed2bc011db9c93fbc2b6cdb341a53737a55bafb46dbb74cf6764fc33a2fbf9c"
 dependencies = [
- "dupe_derive 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dupe_derive 0.9.1",
 ]
 
 [[package]]
@@ -933,7 +933,7 @@ name = "dupe"
 version = "0.9.1"
 source = "git+https://github.com/LK/starlark-rust?rev=5d994c5c#5d994c5c83c6b08640079adf39d3bf8e8a2454dc"
 dependencies = [
- "dupe_derive 0.9.1 (git+https://github.com/LK/starlark-rust?rev=5d994c5c)",
+ "dupe_derive 0.9.1",
 ]
 
 [[package]]
@@ -2474,7 +2474,7 @@ dependencies = [
  "anyhow",
  "derivative",
  "derive_more",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dupe 0.9.1",
  "itertools 0.13.0",
  "lsp-server",
  "lsp-types",
@@ -2513,8 +2513,8 @@ dependencies = [
  "debugserver-types",
  "derive_more",
  "dirs 6.0.0",
- "display_container 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "display_container 0.9.0",
+ "dupe 0.9.1",
  "either",
  "flate2",
  "globset",
@@ -2563,7 +2563,7 @@ dependencies = [
  "debugserver-types",
  "derive_more",
  "dirs 6.0.0",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dupe 0.9.1",
  "either",
  "flate2",
  "getrandom 0.2.16",
@@ -3579,8 +3579,8 @@ dependencies = [
  "debugserver-types",
  "derivative",
  "derive_more",
- "display_container 0.9.0 (git+https://github.com/LK/starlark-rust?rev=5d994c5c)",
- "dupe 0.9.1 (git+https://github.com/LK/starlark-rust?rev=5d994c5c)",
+ "display_container 0.9.0",
+ "dupe 0.9.1",
  "either",
  "erased-serde",
  "hashbrown 0.14.5",
@@ -3611,7 +3611,7 @@ name = "starlark_derive"
 version = "0.13.0"
 source = "git+https://github.com/LK/starlark-rust?rev=5d994c5c#5d994c5c83c6b08640079adf39d3bf8e8a2454dc"
 dependencies = [
- "dupe 0.9.1 (git+https://github.com/LK/starlark-rust?rev=5d994c5c)",
+ "dupe 0.9.1",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -3623,7 +3623,7 @@ version = "0.13.0"
 source = "git+https://github.com/LK/starlark-rust?rev=5d994c5c#5d994c5c83c6b08640079adf39d3bf8e8a2454dc"
 dependencies = [
  "allocative",
- "dupe 0.9.1 (git+https://github.com/LK/starlark-rust?rev=5d994c5c)",
+ "dupe 0.9.1",
  "equivalent",
  "fxhash",
  "hashbrown 0.14.5",
@@ -3641,7 +3641,7 @@ dependencies = [
  "anyhow",
  "derivative",
  "derive_more",
- "dupe 0.9.1 (git+https://github.com/LK/starlark-rust?rev=5d994c5c)",
+ "dupe 0.9.1",
  "lalrpop",
  "lalrpop-util",
  "logos",
