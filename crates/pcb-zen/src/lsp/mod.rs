@@ -164,13 +164,31 @@ impl LspEvalContext {
             starlark::errors::EvalSeverity::Disabled => DiagnosticSeverity::INFORMATION,
         };
 
+        // Build a full-chain message: primary message followed by any child messages
+        // prefixed with "Caused by:" on new lines for clarity in editors.
+        let mut full_chain_lines: Vec<String> = Vec::new();
+        {
+            let mut current_opt: Option<&pcb_zen_core::Diagnostic> = Some(diag);
+            let mut is_first = true;
+            while let Some(current) = current_opt {
+                if is_first {
+                    full_chain_lines.push(current.body.clone());
+                    is_first = false;
+                } else {
+                    full_chain_lines.push(format!("Caused by: {}", current.body));
+                }
+                current_opt = current.child.as_deref();
+            }
+        }
+        let full_message = full_chain_lines.join("\n");
+
         lsp_types::Diagnostic {
             range,
             severity: Some(severity),
             code: None,
             code_description: None,
             source: Some("diode-star".to_string()),
-            message: diag.body.clone(),
+            message: full_message,
             related_information: if related.is_empty() {
                 None
             } else {
