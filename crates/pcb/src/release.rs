@@ -283,6 +283,24 @@ fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> R
 fn copy_sources(info: &ReleaseInfo) -> Result<()> {
     let mut vendor_files = HashSet::new();
 
+    // Copy pcb.toml from workspace root if it exists
+    let pcb_toml_path = info.workspace.workspace_root.join("pcb.toml");
+    if pcb_toml_path.exists() {
+        let dest_path = info.staging_dir.join("src").join("pcb.toml");
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create parent directory: {}", parent.display())
+            })?;
+        }
+        fs::copy(&pcb_toml_path, &dest_path).with_context(|| {
+            format!(
+                "Failed to copy pcb.toml: {} -> {}",
+                pcb_toml_path.display(),
+                dest_path.display()
+            )
+        })?;
+    }
+
     for path in info.workspace.tracker.files() {
         match classify_file(
             &info.workspace.workspace_root,
