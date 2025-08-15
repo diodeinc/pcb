@@ -29,8 +29,8 @@ pub struct VendorInfo {
 }
 
 pub fn execute(args: VendorArgs) -> Result<()> {
-    let workspace_root =
-        find_workspace_root(&DefaultFileProvider, &args.zen_path).canonicalize()?;
+    let zen_path = args.zen_path.canonicalize()?;
+    let workspace_root = find_workspace_root(&DefaultFileProvider, &zen_path).canonicalize()?;
     if !workspace_root.join("pcb.toml").exists() {
         anyhow::bail!(
             "No pcb.toml found in workspace. \
@@ -40,7 +40,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
 
     // Discover zen files to process
     let discovery_spinner = Spinner::builder("Discovering zen files").start();
-    let zen_files = discover_zen_files(&args.zen_path)?;
+    let zen_files = discover_zen_files(&zen_path)?;
     discovery_spinner.finish();
     println!(
         "{} Found {} zen files to analyze",
