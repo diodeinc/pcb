@@ -126,15 +126,17 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
     // Get version from git
     let version = git_describe(&workspace_root)?;
 
-    // Create board-specific release staging directory local to the target zen file:
-    // Structure: {zen_parent}/.pcb/releases/{board_name}/{version}
-    // Example: boards/.pcb/releases/TestBoard/f20ac95-dirty
-    let zen_parent = zen_path
+    // Create release staging directory in workspace root:
+    // Structure: {workspace_root}/.pcb/releases/{relative_path_to_zen}/{board_name}/{version}
+    // Example: /workspace/.pcb/releases/boards/TestBoard/TestBoard/f20ac95-dirty
+    let zen_relative_path = zen_path.strip_prefix(&workspace_root)?;
+    let zen_dir = zen_relative_path
         .parent()
         .context("Zen file must have a parent directory")?;
     let board_name = zen_path.file_stem().context("Zen file must have a name")?;
-    let staging_dir = zen_parent
+    let staging_dir = workspace_root
         .join(".pcb/releases")
+        .join(zen_dir)
         .join(board_name)
         .join(&version);
 
