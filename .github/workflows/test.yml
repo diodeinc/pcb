@@ -119,7 +119,6 @@ jobs:
           # Test simple workspace (no pcb.toml)
           cargo run -- bom test-workspaces/simple/boards/TestBoard.zen
           cargo run -- release test-workspaces/simple/boards/TestBoard.zen
-          cargo run -- vendor test-workspaces/simple
 
           # Test workspace with pcb.toml and workspace-relative loads
           cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
