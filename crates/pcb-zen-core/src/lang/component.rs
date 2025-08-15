@@ -389,9 +389,20 @@ where
                 );
             }
 
+            // Determine final MPN: explicit kwarg takes precedence; otherwise, use properties["mpn"/"MPN"/"Mpn"] if a string
+            let final_mpn: Option<String> = if let Some(v) = mpn {
+                v.unpack_str().map(|s| s.to_owned())
+            } else {
+                ["mpn", "MPN", "Mpn"].iter().find_map(|k| {
+                    properties_map
+                        .get(*k)
+                        .and_then(|vv| vv.unpack_str().map(|s| s.to_owned()))
+                })
+            };
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
-                mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                mpn: final_mpn,
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
                 prefix,
@@ -608,18 +619,6 @@ where
             };
 
             let mpn_val: Option<Value> = param_parser.next_opt()?;
-            let final_mpn = if let Some(m_val) = mpn_val {
-                Some(
-                    m_val
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!("`mpn` must be a string"))
-                        })?
-                        .to_owned(),
-                )
-            } else {
-                self.mpn.clone()
-            };
 
             let ctype_val: Option<Value> = param_parser.next_opt()?;
             let final_ctype = if let Some(c_val) = ctype_val {
@@ -658,6 +657,27 @@ where
                     )));
                 }
             }
+
+            // Determine final MPN: explicit kwarg takes precedence; otherwise, use properties["mpn"/"MPN"/"Mpn"] if present; fallback to factory default
+            let final_mpn = if let Some(m_val) = mpn_val {
+                Some(
+                    m_val
+                        .unpack_str()
+                        .ok_or_else(|| {
+                            starlark::Error::new_other(anyhow!("`mpn` must be a string"))
+                        })?
+                        .to_owned(),
+                )
+            } else {
+                ["mpn", "MPN", "Mpn"]
+                    .iter()
+                    .find_map(|k| {
+                        properties_map
+                            .get(*k)
+                            .and_then(|vv| vv.unpack_str().map(|s| s.to_owned()))
+                    })
+                    .or_else(|| self.mpn.clone())
+            };
 
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,

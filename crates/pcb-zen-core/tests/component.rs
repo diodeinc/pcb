@@ -106,3 +106,41 @@ snapshot_eval!(component_duplicate_pin_names, {
         )
     "#
 });
+
+snapshot_eval!(component_mpn_from_properties, {
+    "test.zen" => r#"
+        Component(
+            name = "U1",
+            footprint = "test_footprint",
+            mpn = "1234567890",
+            pins = {
+                "in": Net("in"),
+                "out": Net("out"),
+            },
+            pin_defs = {"in": "1", "out": "2"},
+        )
+
+        Component(
+            name = "U2",
+            footprint = "test_footprint",
+            properties = {"mpn": "1234567890"},
+            pins = {
+                "in": Net("in"),
+                "out": Net("out"),
+            },
+            pin_defs = {"in": "1", "out": "2"},
+        )
+
+        Component(
+            name = "U3",
+            footprint = "test_footprint",
+            mpn = "1234567890",
+            properties = {"mpn": "WRONG"},
+            pins = {
+                "in": Net("in"),
+                "out": Net("out"),
+            },
+            pin_defs = {"in": "1", "out": "2"},
+        )
+    "#
+});
