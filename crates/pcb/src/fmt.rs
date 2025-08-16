@@ -52,7 +52,13 @@ fn format_file(buildifier: &Buildifier, file_path: &Path, args: &FmtArgs) -> Res
 fn collect_files_recursive(dir: &Path, files: &mut HashSet<PathBuf>, hidden: bool) -> Result<()> {
     for entry in fs::read_dir(dir)?.flatten() {
         let path = entry.path();
-        if !hidden && path.file_name().and_then(|n| n.to_str()).unwrap_or("").starts_with('.') {
+        if !hidden
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .starts_with('.')
+        {
             continue;
         }
         if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
