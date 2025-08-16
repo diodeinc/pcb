@@ -24,6 +24,10 @@ pub struct FmtArgs {
     /// Show diffs instead of writing files
     #[arg(long)]
     pub diff: bool,
+
+    /// Include hidden files and directories
+    #[arg(long)]
+    pub hidden: bool,
 }
 
 /// Format a single file using buildifier
@@ -45,21 +49,24 @@ fn format_file(buildifier: &Buildifier, file_path: &Path, args: &FmtArgs) -> Res
 }
 
 /// Recursively collect .zen and .star files from a directory
-fn collect_files_recursive(dir: &Path, files: &mut HashSet<PathBuf>) -> Result<()> {
+fn collect_files_recursive(dir: &Path, files: &mut HashSet<PathBuf>, hidden: bool) -> Result<()> {
     for entry in fs::read_dir(dir)?.flatten() {
         let path = entry.path();
+        if !hidden && path.file_name().and_then(|n| n.to_str()).unwrap_or("").starts_with('.') {
+            continue;
+        }
         if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
             files.insert(path);
         } else if path.is_dir() {
             // Recursively traverse subdirectories
-            collect_files_recursive(&path, files)?;
+            collect_files_recursive(&path, files, hidden)?;
         }
     }
     Ok(())
 }
 
 /// Collect .zen and .star files from the provided paths
-pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+pub fn collect_files(paths: &[PathBuf], hidden: bool) -> Result<Vec<PathBuf>> {
     let mut unique: HashSet<PathBuf> = HashSet::new();
 
     if !paths.is_empty() {
@@ -78,13 +85,13 @@ pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
                 }
             } else if resolved.is_dir() {
                 // Recursively collect files from the directory
-                collect_files_recursive(&resolved, &mut unique)?;
+                collect_files_recursive(&resolved, &mut unique, hidden)?;
             }
         }
     } else {
         // Fallback: find all Starlark files in the current directory tree (recursive)
         let cwd = std::env::current_dir()?;
-        collect_files_recursive(&cwd, &mut unique)?;
+        collect_files_recursive(&cwd, &mut unique, hidden)?;
     }
 
     // Convert to vec and keep deterministic ordering
@@ -106,7 +113,7 @@ pub fn execute(args: FmtArgs) -> Result<()> {
     );
 
     // Determine which files to format
-    let starlark_paths = collect_files(&args.paths)?;
+    let starlark_paths = collect_files(&args.paths, args.hidden)?;
 
     if starlark_paths.is_empty() {
         let cwd = std::env::current_dir()?;
