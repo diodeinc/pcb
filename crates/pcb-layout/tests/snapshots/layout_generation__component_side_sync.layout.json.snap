@@ -1021,7 +1021,8 @@ expression: content
         "fdb381d8-edf9-5208-849a-10b220c35fdd"
       ],
       "locked": false,
-      "name": "MyModule"
+      "name": "MyModule",
+      "zones": []
     }
   ],
   "zones": []

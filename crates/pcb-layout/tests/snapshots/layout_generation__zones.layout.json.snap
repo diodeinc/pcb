@@ -1008,27 +1008,27 @@ expression: content
   "groups": [
     {
       "bounding_box": {
-        "bottom": 108280750,
-        "left": 141110000,
-        "right": 154863250,
-        "top": 100942500
+        "bottom": 108300000,
+        "left": 143660000,
+        "right": 157300000,
+        "top": 101700000
       },
       "drawings": [
         {
           "angle": null,
           "end": {
-            "x": 152410000,
-            "y": 107242500
+            "x": 157000000,
+            "y": 108000000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 141410000,
-            "y": 101242500
+            "x": 146000000,
+            "y": 102000000
           },
           "shape": 1,
           "start": {
-            "x": 141410000,
-            "y": 101242500
+            "x": 146000000,
+            "y": 102000000
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -1042,63 +1042,64 @@ expression: content
         "fdb381d8-edf9-5208-849a-10b220c35fdd"
       ],
       "locked": false,
-      "name": "MyModule"
+      "name": "MyModule",
+      "zones": [
+        {
+          "filled": true,
+          "hatch_style": 2,
+          "layer": "F.Cu",
+          "locked": false,
+          "min_thickness": 250000,
+          "name": "",
+          "net_name": "BOARD_P1",
+          "points": [
+            {
+              "x": 147000000,
+              "y": 103000000
+            },
+            {
+              "x": 151000000,
+              "y": 103000000
+            },
+            {
+              "x": 151000000,
+              "y": 107000000
+            },
+            {
+              "x": 147000000,
+              "y": 107000000
+            }
+          ]
+        },
+        {
+          "filled": true,
+          "hatch_style": 2,
+          "layer": "F.Cu",
+          "locked": false,
+          "min_thickness": 250000,
+          "name": "",
+          "net_name": "BOARD_P2",
+          "points": [
+            {
+              "x": 152000000,
+              "y": 103000000
+            },
+            {
+              "x": 156000000,
+              "y": 103000000
+            },
+            {
+              "x": 156000000,
+              "y": 107000000
+            },
+            {
+              "x": 152000000,
+              "y": 107000000
+            }
+          ]
+        }
+      ]
     }
   ],
-  "zones": [
-    {
-      "filled": true,
-      "hatch_style": 2,
-      "layer": "F.Cu",
-      "locked": false,
-      "min_thickness": 250000,
-      "name": "",
-      "net_name": "BOARD_P1",
-      "points": [
-        {
-          "x": 142410000,
-          "y": 102242500
-        },
-        {
-          "x": 146410000,
-          "y": 102242500
-        },
-        {
-          "x": 146410000,
-          "y": 106242500
-        },
-        {
-          "x": 142410000,
-          "y": 106242500
-        }
-      ]
-    },
-    {
-      "filled": true,
-      "hatch_style": 2,
-      "layer": "F.Cu",
-      "locked": false,
-      "min_thickness": 250000,
-      "name": "",
-      "net_name": "BOARD_P2",
-      "points": [
-        {
-          "x": 147410000,
-          "y": 102242500
-        },
-        {
-          "x": 151410000,
-          "y": 102242500
-        },
-        {
-          "x": 151410000,
-          "y": 106242500
-        },
-        {
-          "x": 147410000,
-          "y": 106242500
-        }
-      ]
-    }
-  ]
+  "zones": []
 }

@@ -1019,7 +1019,8 @@ expression: content
         "97ccdd0c-2200-5d3f-bd14-419837002afe"
       ],
       "locked": false,
-      "name": "MODULE1"
+      "name": "MODULE1",
+      "zones": []
     },
     {
       "bounding_box": {
@@ -1034,7 +1035,8 @@ expression: content
         "f477dd7b-832a-54cb-9b52-5e966c141b63"
       ],
       "locked": false,
-      "name": "MODULE2"
+      "name": "MODULE2",
+      "zones": []
     }
   ],
   "zones": []

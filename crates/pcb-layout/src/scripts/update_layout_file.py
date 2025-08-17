@@ -1734,6 +1734,13 @@ class SyncLayouts(Step):
         """
         zones_synced = 0
 
+        # Find the group to add zones to
+        target_group = None
+        for group in target_board.Groups():
+            if group.GetName() == group_name:
+                target_group = group
+                break
+
         for source_zone in source_board.Zones():
             # Create a new zone
             new_zone = pcbnew.ZONE(target_board)
@@ -1795,6 +1802,12 @@ class SyncLayouts(Step):
 
             # Add to target board
             target_board.Add(new_zone)
+
+            # Add to group if found
+            if target_group:
+                target_group.AddItem(new_zone)
+                logger.debug(f"    Added zone to group {group_name}")
+
             zones_synced += 1
 
             logger.debug(f"    Synced zone: {source_zone.GetZoneName() or 'unnamed'} on layer {source_zone.GetLayerName()}")
@@ -1816,6 +1829,13 @@ class SyncLayouts(Step):
             Number of graphics items synced
         """
         graphics_synced = 0
+
+        # Find the group to add graphics to
+        target_group = None
+        for group in target_board.Groups():
+            if group.GetName() == group_name:
+                target_group = group
+                break
 
         # Get all drawings from the source board
         for drawing in source_board.GetDrawings():
@@ -1909,6 +1929,12 @@ class SyncLayouts(Step):
 
                 # Add to target board
                 target_board.Add(new_drawing)
+
+                # Add to group if found
+                if target_group:
+                    target_group.AddItem(new_drawing)
+                    logger.debug(f"    Added graphics item to group {group_name}")
+
                 graphics_synced += 1
 
             except Exception as e:
@@ -2434,6 +2460,14 @@ class FinalizeBoard(Step):
                 ],
                 key=lambda g: (g["position"]["x"], g["position"]["y"]),
             ),
+            "zones": sorted(
+                [
+                    self._get_zone_data(item)
+                    for item in get_group_items(group)
+                    if isinstance(item, pcbnew.ZONE)
+                ],
+                key=lambda z: (z["layer"], z["net_name"], str(z["points"])),
+            ),
             "locked": group.IsLocked(),
             "name": group.GetName(),
         }
@@ -2457,6 +2491,13 @@ class FinalizeBoard(Step):
 
     def _export_layout_snapshot(self):
         """Export a JSON snapshot of the board layout."""
+        # Collect all zones that belong to groups
+        zones_in_groups = []
+        for group in self.board.Groups():
+            for item in get_group_items(group):
+                if isinstance(item, pcbnew.ZONE):
+                    zones_in_groups.append(item)
+
         # Sort footprints by UUID and groups by name for deterministic ordering
         snapshot = {
             "footprints": [
@@ -2476,6 +2517,7 @@ class FinalizeBoard(Step):
                 for zone in sorted(
                     self.board.Zones(), key=lambda z: z.GetZoneName() or ""
                 )
+                if zone not in zones_in_groups  # Only include zones not in groups
             ],
         }
 

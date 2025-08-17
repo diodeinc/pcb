@@ -655,7 +655,8 @@ expression: content
         "394660df-0570-5ff9-815b-abf03e6c9830"
       ],
       "locked": false,
-      "name": "BMI270"
+      "name": "BMI270",
+      "zones": []
     }
   ],
   "zones": []
