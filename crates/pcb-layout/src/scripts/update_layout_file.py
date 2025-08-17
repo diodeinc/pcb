@@ -479,7 +479,8 @@ class VirtualFootprint(VirtualItem):
         # Update the actual KiCad object
         if self.kicad_footprint and hasattr(self.kicad_footprint, "SetPosition"):
             pos = self.kicad_footprint.GetPosition()
-            self.kicad_footprint.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
+            new_pos = pcbnew.VECTOR2I(pos.x + dx, pos.y + dy)
+            self.kicad_footprint.SetPosition(new_pos)
 
         # Update cached bbox
         if self._bbox:
@@ -595,6 +596,9 @@ class VirtualGroup(VirtualItem):
         self.children: List[VirtualItem] = []
         self.synced = False  # Whether this group has been synced from a layout file
         self._cached_bbox: Optional[VirtualBoundingBox] = None
+        self.kicad_group: Optional[Any] = (
+            None  # Reference to the KiCad PCB_GROUP if this represents one
+        )
 
     @property
     def added(self) -> bool:
@@ -643,11 +647,36 @@ class VirtualGroup(VirtualItem):
             self.children.remove(child)
             self._cached_bbox = None  # Invalidate cache
 
-    def move_by(self, dx: int, dy: int) -> None:
-        """Move all children by a relative offset."""
+    def move_by(self, dx: int, dy: int, move_group_items: bool = True) -> None:
+        """Move all children by a relative offset.
+
+        Args:
+            dx: X offset
+            dy: Y offset
+            move_group_items: Whether to also move group items like zones, graphics, text 
+                            (should be False during packing to keep group layout intact)
+        """
         # Move all children
         for child in self.children:
-            child.move_by(dx, dy)
+            if isinstance(child, VirtualGroup):
+                child.move_by(dx, dy, move_group_items)
+            else:
+                child.move_by(dx, dy)
+
+        # If this is a synced group with a KiCad group reference, also move non-footprint items
+        # But only if move_group_items is True (not during packing phase)
+        if self.synced and self.kicad_group and move_group_items:
+            # Move all non-footprint items in the KiCad group (zones, graphics, text, etc.)
+            try:
+                for item in get_group_items(self.kicad_group):
+                    item_type = item.__class__.__name__
+                    # Skip footprints - they're handled as VirtualFootprint children
+                    if item_type != "FOOTPRINT":
+                        # Move zones, graphics, text, and other board items
+                        item.Move(pcbnew.VECTOR2I(dx, dy))
+                        logger.debug(f"Moved {item_type} in group {self.name} by ({dx}, {dy})")
+            except Exception as e:
+                logger.warning(f"Failed to move group items in {self.name}: {e}")
 
         # Invalidate our cached bbox and parent caches
         self._cached_bbox = None
@@ -1636,12 +1665,56 @@ class SyncLayouts(Step):
         unmatched_target = []
         unmatched_source = []
 
+        # Calculate the offset BEFORE modifying any footprints
+        # Use the first matched footprint to determine the offset
+        # If the target footprints are at origin (not placed yet), don't apply offset
+        offset_x, offset_y = 0, 0
+        offset_calculated = False
+        for rel_path, target_fp in target_by_path.items():
+            if rel_path in source_by_path:
+                source_fp = source_by_path[rel_path]
+                if source_fp.kicad_footprint and target_fp.kicad_footprint:
+                    source_pos = source_fp.kicad_footprint.GetPosition()
+                    target_pos = target_fp.kicad_footprint.GetPosition()
+
+                    # Check if the target footprint has been placed (not at origin)
+                    # If it's at origin, the footprints haven't been placed yet
+                    if target_pos.x != 0 or target_pos.y != 0:
+                        offset_x = target_pos.x - source_pos.x
+                        offset_y = target_pos.y - source_pos.y
+                        offset_calculated = True
+                        logger.debug(
+                            f"  Calculated offset from matched footprint '{rel_path}': ({offset_x}, {offset_y})"
+                        )
+                    else:
+                        # Target footprints are at origin - they haven't been placed yet
+                        # Don't apply any offset; zones will move with the footprints later
+                        logger.debug(
+                            f"  Target footprints are at origin - will sync zones without offset"
+                        )
+                    break
+
+        if not offset_calculated:
+            logger.debug(f"  No offset calculated - syncing zones at source positions")
+
         # Try to match each target footprint by path only
         for rel_path, target_fp in target_by_path.items():
             if rel_path in source_by_path:
                 # Found a match - sync the footprint
                 source_fp = source_by_path[rel_path]
-                target_fp.replace_with(source_fp)
+                # For newly added groups, keep source positions (don't restore target)
+                # For existing groups, restore target position
+                if group.added:
+                    # Keep source position for newly added groups
+                    target_fp.replace_with(source_fp)
+                else:
+                    # Store the target position before replacing
+                    if target_fp.kicad_footprint:
+                        target_pos = target_fp.kicad_footprint.GetPosition()
+                    target_fp.replace_with(source_fp)
+                    # Restore the target position after replacing
+                    if target_fp.kicad_footprint:
+                        target_fp.kicad_footprint.SetPosition(target_pos)
                 matched += 1
                 logger.debug(f"  Matched and synced: {target_fp.name}")
             else:
@@ -1676,38 +1749,31 @@ class SyncLayouts(Step):
 
         # Sync zones and graphics only if we matched at least one footprint
         if matched > 0:
-            # Calculate the offset between source and target positions
-            # Use the first matched footprint to determine the offset
-            offset_x, offset_y = 0, 0
-            for rel_path, target_fp in target_by_path.items():
-                if rel_path in source_by_path:
-                    source_fp = source_by_path[rel_path]
-                    if source_fp.kicad_footprint and target_fp.kicad_footprint:
-                        source_pos = source_fp.kicad_footprint.GetPosition()
-                        target_pos = target_fp.kicad_footprint.GetPosition()
-                        offset_x = target_pos.x - source_pos.x
-                        offset_y = target_pos.y - source_pos.y
-                        logger.debug(
-                            f"  Calculated offset from matched footprint: ({offset_x}, {offset_y})"
-                        )
-                        break
 
             # Sync zones from the layout
-            zones_synced = self._sync_zones(
-                layout_board, self.board, offset_x, offset_y, group.id
-            )
+            # For newly added groups, don't apply offset (items will move with the group later)
+            zones_synced = self._sync_zones(layout_board, self.board, 0, 0, group.id)
 
-            # Sync graphics from the layout
+            # Sync graphics from the layout  
+            # For newly added groups, don't apply offset (items will move with the group later)
             graphics_synced = self._sync_graphics(
-                layout_board, self.board, offset_x, offset_y, group.id
+                layout_board, self.board, 0, 0, group.id
             )
 
             logger.info(
                 f"  Synced {zones_synced} zones and {graphics_synced} graphics items"
             )
 
-            # Mark the group as synced
+            # Mark the group as synced and store KiCad group reference
             group.synced = True
+
+            # Find and store the KiCad group reference
+            for kicad_group in self.board.Groups():
+                if kicad_group.GetName() == group.id:
+                    group.kicad_group = kicad_group
+                    logger.info(f"  Linked virtual group to KiCad group: {group.id}")
+                    break
+
             logger.info(f"  Marked group {group.id} as synced")
 
     def _get_footprints_in_group(self, group: VirtualGroup) -> List[VirtualFootprint]:
@@ -1798,7 +1864,13 @@ class SyncLayouts(Step):
                 new_outline.NewOutline()
                 for j in range(source_contour.PointCount()):
                     pt = source_contour.CPoint(j)
-                    new_outline.Append(pt.x + offset_x, pt.y + offset_y)
+                    new_x = pt.x + offset_x
+                    new_y = pt.y + offset_y
+                    if j == 0:  # Log first point for debugging
+                        logger.info(
+                            f"    Zone point transformation: ({pt.x}, {pt.y}) -> ({new_x}, {new_y})"
+                        )
+                    new_outline.Append(new_x, new_y)
 
             # Add to target board
             target_board.Add(new_zone)
@@ -2055,6 +2127,18 @@ class PlaceComponents(Step):
         if not items_with_bbox:
             return
 
+        # Don't pack synced groups - they should maintain their internal layout
+        # Only pack if there are multiple non-synced items
+        synced_items = [
+            item
+            for item in items_with_bbox
+            if isinstance(item, VirtualGroup) and item.synced
+        ]
+        if len(synced_items) == len(items_with_bbox):
+            # All items are synced groups, don't repack them
+            logger.info("Skipping packing - all items are synced groups")
+            return
+
         # Sort by area (largest first) for better packing, then by name for determinism
         items_with_bbox.sort(key=lambda item: (-item.bbox.area, item.name, item.id))
 
@@ -2071,7 +2155,11 @@ class PlaceComponents(Step):
 
             if i == 0:
                 # First item serves as anchor at origin
-                item.move_to(0, 0)
+                # Don't move group items during packing
+                if isinstance(item, VirtualGroup):
+                    item.move_by(-item.bbox.left, -item.bbox.top, move_group_items=False)
+                else:
+                    item.move_to(0, 0)
                 placed_items.append(item)
                 # Add its corners as placement points
                 placement_pts.extend(
@@ -2096,7 +2184,15 @@ class PlaceComponents(Step):
 
                     # Move item's bottom-left corner to this placement point
                     # Since move_to uses top-left, we need to adjust
-                    item.move_to(pt_x, pt_y - item.bbox.height)
+                    # Don't move group items during packing (they'll move with the group later)
+                    if isinstance(item, VirtualGroup):
+                        # For groups, use move_to which internally calls move_by
+                        # We need to ensure group items don't move during packing
+                        dx = pt_x - item.bbox.left
+                        dy = (pt_y - item.bbox.height) - item.bbox.top
+                        item.move_by(dx, dy, move_group_items=False)
+                    else:
+                        item.move_to(pt_x, pt_y - item.bbox.height)
 
                     # Check for collisions with placed items
                     collision = False
@@ -2134,7 +2230,13 @@ class PlaceComponents(Step):
 
                 if best_pt:
                     # Move to the best position found
-                    item.move_to(best_pt[0], best_pt[1])
+                    # Don't move group items during packing
+                    if isinstance(item, VirtualGroup):
+                        dx = best_pt[0] - item.bbox.left
+                        dy = best_pt[1] - item.bbox.top
+                        item.move_by(dx, dy, move_group_items=False)
+                    else:
+                        item.move_to(best_pt[0], best_pt[1])
                     placed_items.append(item)
 
                     logger.info(f"Placed {item.name} at {best_pt}")
@@ -2317,6 +2419,7 @@ class PlaceComponents(Step):
         # Move all items in the sparse tree
         # move_by will recursively move children and update parent bboxes
         for item in top_level_added:
+            logger.debug(f"Moving item {item.name} by offset ({offset_x}, {offset_y})")
             item.move_by(offset_x, offset_y)
 
         logger.info(f"Positioned new content with offset ({offset_x}, {offset_y})")
@@ -2491,6 +2594,7 @@ class FinalizeBoard(Step):
 
     def _export_layout_snapshot(self):
         """Export a JSON snapshot of the board layout."""
+
         # Collect all zones that belong to groups
         zones_in_groups = []
         for group in self.board.Groups():
