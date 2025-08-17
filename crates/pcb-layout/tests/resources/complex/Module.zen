@@ -21,4 +21,20 @@ Resistor(
     P2 = P2,
 )
 
+Resistor(
+    name = "R3",
+    value = "1kohm",
+    package = "0603",
+    P1 = P1,
+    P2 = P2,
+)
+
+Resistor(
+    name = "R4",
+    value = "1kohm",
+    package = "0603",
+    P1 = P1,
+    P2 = P2,
+)
+
 Layout(name = "Module", path = "module/")

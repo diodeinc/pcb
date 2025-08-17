@@ -1,0 +1,1378 @@
+(kicad_pcb
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(general
+		(thickness 1.6)
+		(legacy_teardrops no)
+	)
+	(paper "A4")
+	(layers
+		(0 "F.Cu" signal)
+		(2 "B.Cu" signal)
+		(9 "F.Adhes" user "F.Adhesive")
+		(11 "B.Adhes" user "B.Adhesive")
+		(13 "F.Paste" user)
+		(15 "B.Paste" user)
+		(5 "F.SilkS" user "F.Silkscreen")
+		(7 "B.SilkS" user "B.Silkscreen")
+		(1 "F.Mask" user)
+		(3 "B.Mask" user)
+		(17 "Dwgs.User" user "User.Drawings")
+		(19 "Cmts.User" user "User.Comments")
+		(21 "Eco1.User" user "User.Eco1")
+		(23 "Eco2.User" user "User.Eco2")
+		(25 "Edge.Cuts" user)
+		(27 "Margin" user)
+		(31 "F.CrtYd" user "F.Courtyard")
+		(29 "B.CrtYd" user "B.Courtyard")
+		(35 "F.Fab" user)
+		(33 "B.Fab" user)
+		(39 "User.1" user)
+		(41 "User.2" user)
+		(43 "User.3" user)
+		(45 "User.4" user)
+	)
+	(setup
+		(pad_to_mask_clearance 0)
+		(allow_soldermask_bridges_in_footprints no)
+		(tenting front back)
+		(pcbplotparams
+			(layerselection 0x00000000_00000000_55555555_5755f5ff)
+			(plot_on_all_layers_selection 0x00000000_00000000_00000000_00000000)
+			(disableapertmacros no)
+			(usegerberextensions no)
+			(usegerberattributes yes)
+			(usegerberadvancedattributes yes)
+			(creategerberjobfile yes)
+			(dashed_line_dash_ratio 12.000000)
+			(dashed_line_gap_ratio 3.000000)
+			(svgprecision 4)
+			(plotframeref no)
+			(mode 1)
+			(useauxorigin no)
+			(hpglpennumber 1)
+			(hpglpenspeed 20)
+			(hpglpendiameter 15.000000)
+			(pdf_front_fp_property_popups yes)
+			(pdf_back_fp_property_popups yes)
+			(pdf_metadata yes)
+			(pdf_single_document no)
+			(dxfpolygonmode yes)
+			(dxfimperialunits yes)
+			(dxfusepcbnewfont yes)
+			(psnegative no)
+			(psa4output no)
+			(plot_black_and_white yes)
+			(sketchpadsonfab no)
+			(plotpadnumbers no)
+			(hidednponfab no)
+			(sketchdnponfab yes)
+			(crossoutdnponfab yes)
+			(subtractmaskfromsilk no)
+			(outputformat 1)
+			(mirror no)
+			(drillshape 1)
+			(scaleselection 1)
+			(outputdirectory "")
+		)
+	)
+	(net 0 "")
+	(net 1 "P1")
+	(net 2 "P2")
+	(footprint "R_0603_1608Metric:R_0603_1608Metric"
+		(layer "F.Cu")
+		(uuid "8985227b-1984-48c9-a364-f9e8c11a32a9")
+		(at 148.5 104.245)
+		(descr "Resistor SMD 0603 (1608 Metric), square (rectangular) end terminal, IPC_7351 nominal, (Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf), generated with kicad-footprint-generator")
+		(tags "resistor")
+		(property "Reference" "R2"
+			(at 0 -1.43 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "ea6f8130-fd31-4c07-8079-a19097e192d6")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "1k"
+			(at 0 1.43 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "d03c96d0-a842-4996-b875-1386c29847ac")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "06607cca-fbb2-4d1e-ad14-cabb307be9ba")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "14d7f9ca-1f0a-491f-a3e8-67f8baec83b7")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Path" "R2.R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "555afd05-e605-454a-9154-0e1c94cdf233")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "c8d532d2-1cf3-4e36-9b02-10185cc69cc8")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_name" "R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "e08c8a66-423b-4a8f-8b0a-ab48581fdc33")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Package" "0603"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "3e599937-419c-4fb1-83ff-95cd0b0182d3")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "prefix" "R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "63ea114a-99f2-4d01-83b6-af95ce7bfb74")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Type" "resistor"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "68dcff35-a0ba-4959-a632-c0ae9eca4cb4")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "__symbol_value" "(symbol\n  \"R\"\n  (pin_numbers\n    (hide yes)\n  )\n  (pin_names\n    (offset 0)\n  )\n  (exclude_from_sim no)\n  (in_bom yes)\n  (on_board yes)\n  (property\n    \"Reference\"\n    \"R\"\n    (at 2.032 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Value\"\n    \"R\"\n    (at 0 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Footprint\"\n    \"\"\n    (at -1.778 0 90)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Datasheet\"\n    \"~\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Description\"\n    \"Resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_keywords\"\n    \"R res resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_fp_filters\"\n    \"R_*\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (symbol\n    \"R_0_1\"\n    (rectangle\n      (start\n        -1.016\n        -2.54\n      )\n      (end\n        1.016\n        2.54\n      )\n      (stroke\n        (width 0.254)\n        (type default)\n      )\n      (fill\n        (type none)\n      )\n    )\n  )\n  (symbol\n    \"R_1_1\"\n    (pin\n      passive\n      line\n      (at 0 3.81 270)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"1\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n    (pin\n      passive\n      line\n      (at 0 -3.81 90)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"2\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n  )\n  (embedded_fonts no)\n)"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "4034332b-4f7c-4aee-973a-c7e78b72a1be")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Resistance" "1k"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "63041594-c084-41f0-89b8-4ee73ec2c39b")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/cda8dfca-6e8a-59fd-87a2-5ff0162348de/cda8dfca-6e8a-59fd-87a2-5ff0162348de")
+		(attr smd)
+		(fp_line
+			(start -0.237258 -0.5225)
+			(end 0.237258 -0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "654b4a22-568c-41d4-b945-070cc957256e")
+		)
+		(fp_line
+			(start -0.237258 0.5225)
+			(end 0.237258 0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "4b166e83-2011-477b-a938-817e5f33ba70")
+		)
+		(fp_line
+			(start -1.48 -0.73)
+			(end 1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "5c7490fd-1857-4af0-a6b8-634b500cb4bc")
+		)
+		(fp_line
+			(start -1.48 0.73)
+			(end -1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "65a849cd-a65b-408c-aebd-121d80e60c04")
+		)
+		(fp_line
+			(start 1.48 -0.73)
+			(end 1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "1badcb19-ed2a-4aa2-8039-4d3a29908f0d")
+		)
+		(fp_line
+			(start 1.48 0.73)
+			(end -1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "0232c5df-aee6-400a-9da2-c3fd6f2726f4")
+		)
+		(fp_line
+			(start -0.8 -0.4125)
+			(end 0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "25b36652-7293-49e9-9478-cc91f8382361")
+		)
+		(fp_line
+			(start -0.8 0.4125)
+			(end -0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "1e4ba7c7-2d18-4d56-bcea-1d970c60b7f9")
+		)
+		(fp_line
+			(start 0.8 -0.4125)
+			(end 0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "92dcc9a0-e45c-4533-bdbb-f6731e85181e")
+		)
+		(fp_line
+			(start 0.8 0.4125)
+			(end -0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "2fa6c0c2-5413-453a-8b62-7059251af46b")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(uuid "1edda287-1289-45f5-8137-2228ada970bf")
+			(effects
+				(font
+					(size 0.4 0.4)
+					(thickness 0.06)
+				)
+			)
+		)
+		(pad "1" smd roundrect
+			(at -0.825 0)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 1 "P1")
+			(uuid "92ae9960-7685-4780-a1e4-9f30a688a09d")
+		)
+		(pad "2" smd roundrect
+			(at 0.825 0)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 2 "P2")
+			(uuid "1faaed53-47c4-40e8-a3e4-68df1561d724")
+		)
+		(embedded_fonts no)
+		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(footprint "R_0603_1608Metric:R_0603_1608Metric"
+		(layer "F.Cu")
+		(uuid "b3c019ed-5771-4a47-b0de-4eb603a66a3d")
+		(at 153.91 105.01 90)
+		(descr "Resistor SMD 0603 (1608 Metric), square (rectangular) end terminal, IPC_7351 nominal, (Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf), generated with kicad-footprint-generator")
+		(tags "resistor")
+		(property "Reference" "R4"
+			(at 0 -1.43 90)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "612e3739-60d2-420b-ba82-6c4c972d39b0")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "1k"
+			(at 0 1.43 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "9d52bd32-0da8-4041-94bb-a7e05dd7ce1e")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 90)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "ed6fac02-1fe5-4025-8b1b-bd40170d10f1")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 90)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "18ebb03b-1589-4159-81f8-793d11d45c45")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Path" "R4.R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "461d593c-3c65-4b08-845f-933f07929a96")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Package" "0603"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "878ea188-9669-4c75-95f8-53bd9a0a4019")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Resistance" "1k"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "984453ef-80b4-4cb8-9693-82c1c04afb58")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Type" "resistor"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "e4d5f0ef-933e-4368-b374-8cf1440cdd8c")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "__symbol_value" "(symbol\n  \"R\"\n  (pin_numbers\n    (hide yes)\n  )\n  (pin_names\n    (offset 0)\n  )\n  (exclude_from_sim no)\n  (in_bom yes)\n  (on_board yes)\n  (property\n    \"Reference\"\n    \"R\"\n    (at 2.032 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Value\"\n    \"R\"\n    (at 0 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Footprint\"\n    \"\"\n    (at -1.778 0 90)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Datasheet\"\n    \"~\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Description\"\n    \"Resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_keywords\"\n    \"R res resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_fp_filters\"\n    \"R_*\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (symbol\n    \"R_0_1\"\n    (rectangle\n      (start\n        -1.016\n        -2.54\n      )\n      (end\n        1.016\n        2.54\n      )\n      (stroke\n        (width 0.254)\n        (type default)\n      )\n      (fill\n        (type none)\n      )\n    )\n  )\n  (symbol\n    \"R_1_1\"\n    (pin\n      passive\n      line\n      (at 0 3.81 270)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"1\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n    (pin\n      passive\n      line\n      (at 0 -3.81 90)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"2\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n  )\n  (embedded_fonts no)\n)"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "1bd2a5cd-eaeb-4681-8565-262199223f3f")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "prefix" "R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "57e6bd08-6ec8-44f2-9c38-5dabc07fcf8e")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "c1894801-5da8-47fb-b92a-a9536406f764")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_name" "R"
+			(at 0 0 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "d1d860f1-45b6-4cec-ba39-e63ce7024bf9")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/30febd0f-ae2d-52b9-98ec-b3745c488391/30febd0f-ae2d-52b9-98ec-b3745c488391")
+		(attr smd)
+		(fp_line
+			(start -0.237258 -0.5225)
+			(end 0.237258 -0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "30a7289b-304b-4124-92b1-66ae79895110")
+		)
+		(fp_line
+			(start -0.237258 0.5225)
+			(end 0.237258 0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "b574e72d-37b2-47c1-9f09-130cadd244b3")
+		)
+		(fp_line
+			(start 1.48 -0.73)
+			(end 1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "9691b592-6ce2-49d8-b1e2-2dfe89957938")
+		)
+		(fp_line
+			(start -1.48 -0.73)
+			(end 1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "9cdbbe6b-e606-406a-9271-6d18d30302e6")
+		)
+		(fp_line
+			(start 1.48 0.73)
+			(end -1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "7cdbafa1-b267-46c7-92a3-5fe3f6ef1dab")
+		)
+		(fp_line
+			(start -1.48 0.73)
+			(end -1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "113c1119-76f3-41f8-8c20-d7b81badbdf3")
+		)
+		(fp_line
+			(start 0.8 -0.4125)
+			(end 0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "2c41ff0f-7656-4fe2-aead-65d6131e302c")
+		)
+		(fp_line
+			(start -0.8 -0.4125)
+			(end 0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "6fea5888-6766-4303-b507-22dacc0d1294")
+		)
+		(fp_line
+			(start 0.8 0.4125)
+			(end -0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "b8a919af-0b9a-4561-b757-3e88992d40fa")
+		)
+		(fp_line
+			(start -0.8 0.4125)
+			(end -0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "d6793b2c-3de1-488c-91cb-e5731854991d")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 90)
+			(layer "F.Fab")
+			(uuid "03dfac6e-a796-460d-ab5f-9a048f328464")
+			(effects
+				(font
+					(size 0.4 0.4)
+					(thickness 0.06)
+				)
+			)
+		)
+		(pad "1" smd roundrect
+			(at -0.825 0 90)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 1 "P1")
+			(uuid "4f5a6944-0403-4cc3-8dd5-6cdbc173106a")
+		)
+		(pad "2" smd roundrect
+			(at 0.825 0 90)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.25)
+			(net 2 "P2")
+			(uuid "00ec2a0d-6582-451e-b784-343fa97594bb")
+		)
+		(embedded_fonts no)
+		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(footprint "R_0603_1608Metric:R_0603_1608Metric"
+		(layer "B.Cu")
+		(uuid "649df35b-ccf8-4318-bc77-ad3d1534201c")
+		(at 155.42 105.01 90)
+		(descr "Resistor SMD 0603 (1608 Metric), square (rectangular) end terminal, IPC_7351 nominal, (Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf), generated with kicad-footprint-generator")
+		(tags "resistor")
+		(property "Reference" "R3"
+			(at 0 1.43 90)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "43cf34fb-8103-46a0-886a-109e8e00eefc")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Value" "1k"
+			(at 0 -1.43 90)
+			(layer "B.Fab")
+			(hide yes)
+			(uuid "19b10976-e57f-4ec1-b719-4a7842d15e0f")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 270)
+			(unlocked yes)
+			(layer "B.Fab")
+			(hide yes)
+			(uuid "c2d70908-7b9a-4de4-9160-22162fd9b588")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 270)
+			(unlocked yes)
+			(layer "B.Fab")
+			(hide yes)
+			(uuid "73df7579-544f-4ca1-93e2-a6e31fd0cc97")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Path" "R3.R"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "ae03cca5-24ab-4fb8-a604-45c68e247628")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "prefix" "R"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "3aaf915b-da0b-4d9a-82f4-12c17216bd75")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "d60099bd-cb9f-4827-a74b-223e5cb5067d")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Package" "0603"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "b6b3836e-7b3f-44e6-aaa3-4f0512a8f06a")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_name" "R"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "42da7ead-6d15-48a0-b1f1-3e2e4a49aef4")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "__symbol_value" "(symbol\n  \"R\"\n  (pin_numbers\n    (hide yes)\n  )\n  (pin_names\n    (offset 0)\n  )\n  (exclude_from_sim no)\n  (in_bom yes)\n  (on_board yes)\n  (property\n    \"Reference\"\n    \"R\"\n    (at 2.032 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Value\"\n    \"R\"\n    (at 0 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Footprint\"\n    \"\"\n    (at -1.778 0 90)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Datasheet\"\n    \"~\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Description\"\n    \"Resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_keywords\"\n    \"R res resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_fp_filters\"\n    \"R_*\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (symbol\n    \"R_0_1\"\n    (rectangle\n      (start\n        -1.016\n        -2.54\n      )\n      (end\n        1.016\n        2.54\n      )\n      (stroke\n        (width 0.254)\n        (type default)\n      )\n      (fill\n        (type none)\n      )\n    )\n  )\n  (symbol\n    \"R_1_1\"\n    (pin\n      passive\n      line\n      (at 0 3.81 270)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"1\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n    (pin\n      passive\n      line\n      (at 0 -3.81 90)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"2\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n  )\n  (embedded_fonts no)\n)"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "0f6aba8c-e82d-4ecb-a505-63be8104e209")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Resistance" "1k"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "794f6d44-e5e6-42c9-96f1-3a584477f9ec")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Type" "resistor"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "d54fdd9e-8736-4f57-af2c-1b8bdc818f08")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/ea192552-2289-5a86-b9dd-34d3ddb7fbc7/ea192552-2289-5a86-b9dd-34d3ddb7fbc7")
+		(attr smd)
+		(fp_line
+			(start -0.237258 -0.5225)
+			(end 0.237258 -0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "B.SilkS")
+			(uuid "9a1c2a21-f632-42ae-8c2f-3ae6b405b91e")
+		)
+		(fp_line
+			(start -0.237258 0.5225)
+			(end 0.237258 0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "B.SilkS")
+			(uuid "cb78f556-2082-44ef-8278-bc916fa271e9")
+		)
+		(fp_line
+			(start 1.48 -0.73)
+			(end -1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "cf9aad91-01c5-4a13-bdfb-d508d6f7f29a")
+		)
+		(fp_line
+			(start -1.48 -0.73)
+			(end -1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "952f175b-eaf9-4327-9757-b26b5cb6bc13")
+		)
+		(fp_line
+			(start 1.48 0.73)
+			(end 1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "c7694acc-bf40-48fa-9d36-d7e93139f3b1")
+		)
+		(fp_line
+			(start -1.48 0.73)
+			(end 1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "b72e605b-40f5-4c08-84d8-2fd5ecb5e5d0")
+		)
+		(fp_line
+			(start 0.8 -0.4125)
+			(end -0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "797551a6-6861-4f2b-b5fe-b88d119b7091")
+		)
+		(fp_line
+			(start -0.8 -0.4125)
+			(end -0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "b09b5ea8-9ed1-4166-8904-a6ac1ba3c486")
+		)
+		(fp_line
+			(start 0.8 0.4125)
+			(end 0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "1b1f6c17-24ba-4cd6-8fc3-5ade84d88e54")
+		)
+		(fp_line
+			(start -0.8 0.4125)
+			(end 0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "b27ac1ca-1dc6-4525-b6fd-e8bf99a1376d")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 90)
+			(layer "B.Fab")
+			(uuid "868bec17-f3c8-4390-b94f-a3e8988a4105")
+			(effects
+				(font
+					(size 0.4 0.4)
+					(thickness 0.06)
+				)
+				(justify mirror)
+			)
+		)
+		(pad "1" smd roundrect
+			(at -0.825 0 90)
+			(size 0.8 0.95)
+			(layers "B.Cu" "B.Mask" "B.Paste")
+			(roundrect_rratio 0.25)
+			(net 1 "P1")
+			(uuid "1836c5c3-b6b5-4a31-8398-aa932878a4b9")
+		)
+		(pad "2" smd roundrect
+			(at 0.825 0 90)
+			(size 0.8 0.95)
+			(layers "B.Cu" "B.Mask" "B.Paste")
+			(roundrect_rratio 0.25)
+			(net 2 "P2")
+			(uuid "8b462dda-32ae-4183-b11a-7cb2d0e32be9")
+		)
+		(embedded_fonts no)
+		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(footprint "R_0603_1608Metric:R_0603_1608Metric"
+		(layer "B.Cu")
+		(uuid "b4348631-462e-477f-bbb9-7190db41b065")
+		(at 148.5 105.755)
+		(descr "Resistor SMD 0603 (1608 Metric), square (rectangular) end terminal, IPC_7351 nominal, (Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf), generated with kicad-footprint-generator")
+		(tags "resistor")
+		(property "Reference" "R1"
+			(at 0 1.43 180)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "15ac0cc1-5351-42d7-a2c4-0246c6cfce7d")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Value" "1k"
+			(at 0 -1.43 180)
+			(layer "B.Fab")
+			(hide yes)
+			(uuid "dc32db6f-db56-462a-9073-363767ec42ac")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 180)
+			(unlocked yes)
+			(layer "B.Fab")
+			(hide yes)
+			(uuid "854fc8f2-cd3d-46be-8bc8-ad3d36445d03")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 180)
+			(unlocked yes)
+			(layer "B.Fab")
+			(hide yes)
+			(uuid "af2d7c61-d5f4-4ea7-9f69-27281dc9eba9")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Path" "R1.R"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "83c5d042-eefc-4130-b046-93caf7b25196")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "prefix" "R"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "a692ef92-d71c-4166-9f36-4b143c38c1ba")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Package" "0603"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "9c864bc9-61ce-499b-9615-fff1ccce69a0")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Resistance" "1k"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "56a66514-8d74-4a48-8ace-04144d49e282")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_name" "R"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "e1d381c4-980c-4854-b821-4f4a31fea8b6")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "__symbol_value" "(symbol\n  \"R\"\n  (pin_numbers\n    (hide yes)\n  )\n  (pin_names\n    (offset 0)\n  )\n  (exclude_from_sim no)\n  (in_bom yes)\n  (on_board yes)\n  (property\n    \"Reference\"\n    \"R\"\n    (at 2.032 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Value\"\n    \"R\"\n    (at 0 0 90)\n    (effects\n      (font (size 1.27 1.27))\n    )\n  )\n  (property\n    \"Footprint\"\n    \"\"\n    (at -1.778 0 90)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Datasheet\"\n    \"~\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"Description\"\n    \"Resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_keywords\"\n    \"R res resistor\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (property\n    \"ki_fp_filters\"\n    \"R_*\"\n    (at 0 0 0)\n    (effects\n      (font (size 1.27 1.27))\n      (hide yes)\n    )\n  )\n  (symbol\n    \"R_0_1\"\n    (rectangle\n      (start\n        -1.016\n        -2.54\n      )\n      (end\n        1.016\n        2.54\n      )\n      (stroke\n        (width 0.254)\n        (type default)\n      )\n      (fill\n        (type none)\n      )\n    )\n  )\n  (symbol\n    \"R_1_1\"\n    (pin\n      passive\n      line\n      (at 0 3.81 270)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"1\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n    (pin\n      passive\n      line\n      (at 0 -3.81 90)\n      (length 1.27)\n      (name\n        \"~\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n      (number\n        \"2\"\n        (effects\n          (font (size 1.27 1.27))\n        )\n      )\n    )\n  )\n  (embedded_fonts no)\n)"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "630077ee-370d-4c26-9e7c-ed4418534912")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Type" "resistor"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "aa0b1368-37b4-4187-99ce-b92d0be34702")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+			(at 0 0 0)
+			(layer "B.SilkS")
+			(hide yes)
+			(uuid "dc176e3c-3a0a-4f2a-9d62-7399dadc5e0b")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/d527c2b8-3606-5386-bbed-5a45ed7b31a6/d527c2b8-3606-5386-bbed-5a45ed7b31a6")
+		(attr smd)
+		(fp_line
+			(start -0.237258 -0.5225)
+			(end 0.237258 -0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "B.SilkS")
+			(uuid "670376ee-9df0-47e9-befc-432691f0cc50")
+		)
+		(fp_line
+			(start -0.237258 0.5225)
+			(end 0.237258 0.5225)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "B.SilkS")
+			(uuid "646479ba-8d6b-4965-bbff-66a8de3b8bd4")
+		)
+		(fp_line
+			(start -1.48 -0.73)
+			(end -1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "1c3bdf2c-52fc-4528-89e7-b764ecb868fb")
+		)
+		(fp_line
+			(start -1.48 0.73)
+			(end 1.48 0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "3ab9018d-0b6e-4b02-84a8-51e2b9e93467")
+		)
+		(fp_line
+			(start 1.48 -0.73)
+			(end -1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "beda75a9-c593-4400-8571-73408a0d736b")
+		)
+		(fp_line
+			(start 1.48 0.73)
+			(end 1.48 -0.73)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "B.CrtYd")
+			(uuid "26102436-ea3c-4928-9abe-1bfc2d9ef793")
+		)
+		(fp_line
+			(start -0.8 -0.4125)
+			(end -0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "75f26549-6faf-4a63-96a9-14fc4028587c")
+		)
+		(fp_line
+			(start -0.8 0.4125)
+			(end 0.8 0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "91493138-0372-4d88-b832-d8efff6820c8")
+		)
+		(fp_line
+			(start 0.8 -0.4125)
+			(end -0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "747ee16b-03ef-46e0-bfcf-779edc61eab0")
+		)
+		(fp_line
+			(start 0.8 0.4125)
+			(end 0.8 -0.4125)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "B.Fab")
+			(uuid "f9aaece1-ffc5-4b6a-986a-0c37f354d56f")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 180)
+			(layer "B.Fab")
+			(uuid "65a6a5b4-5b22-4b1f-9080-35978513cda2")
+			(effects
+				(font
+					(size 0.4 0.4)
+					(thickness 0.06)
+				)
+				(justify mirror)
+			)
+		)
+		(pad "1" smd roundrect
+			(at -0.825 0)
+			(size 0.8 0.95)
+			(layers "B.Cu" "B.Mask" "B.Paste")
+			(roundrect_rratio 0.25)
+			(net 1 "P1")
+			(uuid "8e9a5bd9-d2ee-476e-842c-dcb188731114")
+		)
+		(pad "2" smd roundrect
+			(at 0.825 0)
+			(size 0.8 0.95)
+			(layers "B.Cu" "B.Mask" "B.Paste")
+			(roundrect_rratio 0.25)
+			(net 2 "P2")
+			(uuid "f6be646c-430c-4faf-9c60-3dfd1dc5d945")
+		)
+		(embedded_fonts no)
+		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(gr_rect
+		(start 146 102)
+		(end 157 108)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "b6c0eba7-b550-4acd-a51b-3291befed8ae")
+	)
+	(zone
+		(net 1)
+		(net_name "P1")
+		(layer "F.Cu")
+		(uuid "ce17ce9b-7b4e-4670-b14e-4df4020aa78b")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0.5)
+		)
+		(min_thickness 0.25)
+		(filled_areas_thickness no)
+		(fill yes
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+		)
+		(polygon
+			(pts
+				(xy 147 103) (xy 151 103) (xy 151 107) (xy 147 107)
+			)
+		)
+		(filled_polygon
+			(layer "F.Cu")
+			(pts
+				(xy 150.943039 103.019685) (xy 150.988794 103.072489) (xy 151 103.124) (xy 151 106.876) (xy 150.980315 106.943039)
+				(xy 150.927511 106.988794) (xy 150.876 107) (xy 147.124 107) (xy 147.056961 106.980315) (xy 147.011206 106.927511)
+				(xy 147 106.876) (xy 147 105.270675) (xy 147.019685 105.203636) (xy 147.072489 105.157881) (xy 147.141647 105.147937)
+				(xy 147.178271 105.161029) (xy 147.178762 105.15994) (xy 147.185603 105.163019) (xy 147.347894 105.21359)
+				(xy 147.347893 105.21359) (xy 147.418408 105.219998) (xy 147.418426 105.219999) (xy 147.424999 105.219998)
+				(xy 147.425 105.219998) (xy 147.425 103.27) (xy 147.925 103.27) (xy 147.925 105.219999) (xy 147.931581 105.219999)
+				(xy 148.002102 105.213591) (xy 148.002107 105.21359) (xy 148.164396 105.163018) (xy 148.309877 105.075072)
+				(xy 148.309878 105.075071) (xy 148.411963 104.972985) (xy 148.473286 104.939499) (xy 148.542977 104.944483)
+				(xy 148.587326 104.972984) (xy 148.689811 105.075469) (xy 148.689813 105.07547) (xy 148.689815 105.075472)
+				(xy 148.835394 105.163478) (xy 148.997804 105.214086) (xy 149.068384 105.2205) (xy 149.068387 105.2205)
+				(xy 149.581613 105.2205) (xy 149.581616 105.2205) (xy 149.652196 105.214086) (xy 149.814606 105.163478)
+				(xy 149.960185 105.075472) (xy 150.080472 104.955185) (xy 150.168478 104.809606) (xy 150.219086 104.647196)
+				(xy 150.2255 104.576616) (xy 150.2255 103.913384) (xy 150.219086 103.842804) (xy 150.168478 103.680394)
+				(xy 150.080472 103.534815) (xy 150.08047 103.534813) (xy 150.080469 103.534811) (xy 149.960188 103.41453)
+				(xy 149.814606 103.326522) (xy 149.799301 103.321753) (xy 149.652196 103.275914) (xy 149.652194 103.275913)
+				(xy 149.652192 103.275913) (xy 149.602778 103.271423) (xy 149.581616 103.2695) (xy 149.068384 103.2695)
+				(xy 149.049145 103.271248) (xy 148.997807 103.275913) (xy 148.835393 103.326522) (xy 148.689811 103.41453)
+				(xy 148.68981 103.414531) (xy 148.587327 103.517015) (xy 148.526004 103.5505) (xy 148.456312 103.545516)
+				(xy 148.411965 103.517015) (xy 148.309877 103.414927) (xy 148.164395 103.32698) (xy 148.164396 103.32698)
+				(xy 148.002105 103.276409) (xy 148.002106 103.276409) (xy 147.931572 103.27) (xy 147.925 103.27)
+				(xy 147.425 103.27) (xy 147.424999 103.269999) (xy 147.418436 103.27) (xy 147.418417 103.270001)
+				(xy 147.347897 103.276408) (xy 147.347892 103.276409) (xy 147.185601 103.326981) (xy 147.178762 103.33006)
+				(xy 147.177901 103.328149) (xy 147.120584 103.343277) (xy 147.054112 103.321753) (xy 147.009829 103.267708)
+				(xy 147 103.219324) (xy 147 103.124) (xy 147.019685 103.056961) (xy 147.072489 103.011206) (xy 147.124 103)
+				(xy 150.876 103)
+			)
+		)
+	)
+	(zone
+		(net 2)
+		(net_name "P2")
+		(layer "B.Cu")
+		(uuid "cc977a9e-c95d-4947-a864-1b2ba4a6171b")
+		(hatch edge 0.5)
+		(priority 1)
+		(connect_pads
+			(clearance 0.5)
+		)
+		(min_thickness 0.25)
+		(filled_areas_thickness no)
+		(fill yes
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+		)
+		(polygon
+			(pts
+				(xy 152 103) (xy 156 103) (xy 156 107) (xy 152 107)
+			)
+		)
+		(filled_polygon
+			(layer "B.Cu")
+			(pts
+				(xy 155.943039 103.019685) (xy 155.988794 103.072489) (xy 156 103.124) (xy 156 103.178322) (xy 155.980315 103.245361)
+				(xy 155.927511 103.291116) (xy 155.858353 103.30106) (xy 155.839114 103.296709) (xy 155.822103 103.291409)
+				(xy 155.751572 103.285) (xy 155.67 103.285) (xy 155.67 104.061) (xy 155.650315 104.128039) (xy 155.597511 104.173794)
+				(xy 155.546 104.185) (xy 155.42 104.185) (xy 155.42 104.311) (xy 155.400315 104.378039) (xy 155.347511 104.423794)
+				(xy 155.296 104.435) (xy 154.445001 104.435) (xy 154.445001 104.441582) (xy 154.451408 104.512102)
+				(xy 154.451409 104.512107) (xy 154.501981 104.674396) (xy 154.589927 104.819877) (xy 154.692015 104.921965)
+				(xy 154.7255 104.983288) (xy 154.720516 105.05298) (xy 154.692015 105.097327) (xy 154.589531 105.19981)
+				(xy 154.58953 105.199811) (xy 154.501522 105.345393) (xy 154.450913 105.507807) (xy 154.4445 105.578386)
+				(xy 154.4445 106.091613) (xy 154.450913 106.162192) (xy 154.501522 106.324606) (xy 154.58953 106.470188)
+				(xy 154.709811 106.590469) (xy 154.709813 106.59047) (xy 154.709815 106.590472) (xy 154.855394 106.678478)
+				(xy 155.017804 106.729086) (xy 155.088384 106.7355) (xy 155.088387 106.7355) (xy 155.751613 106.7355)
+				(xy 155.751616 106.7355) (xy 155.822196 106.729086) (xy 155.839111 106.723814) (xy 155.908968 106.722663)
+				(xy 155.968361 106.759463) (xy 155.99843 106.822531) (xy 156 106.8422) (xy 156 106.876) (xy 155.980315 106.943039)
+				(xy 155.927511 106.988794) (xy 155.876 107) (xy 152.124 107) (xy 152.056961 106.980315) (xy 152.011206 106.927511)
+				(xy 152 106.876) (xy 152 103.928427) (xy 154.445 103.928427) (xy 154.445 103.935) (xy 155.17 103.935)
+				(xy 155.17 103.285) (xy 155.169999 103.284999) (xy 155.088417 103.285) (xy 155.017897 103.291408)
+				(xy 155.017892 103.291409) (xy 154.855603 103.341981) (xy 154.710122 103.429927) (xy 154.589927 103.550122)
+				(xy 154.50198 103.695604) (xy 154.451409 103.857893) (xy 154.445 103.928427) (xy 152 103.928427)
+				(xy 152 103.124) (xy 152.019685 103.056961) (xy 152.072489 103.011206) (xy 152.124 103) (xy 155.876 103)
+			)
+		)
+	)
+	(embedded_fonts no)
+)
