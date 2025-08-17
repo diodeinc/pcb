@@ -558,15 +558,19 @@ class VirtualFootprint(VirtualItem):
             if hasattr(source, "Reference") and hasattr(target, "Reference"):
                 source_ref = source.Reference()
                 target_ref = target.Reference()
-                target_ref.SetPosition(source_ref.GetPosition())
-                target_ref.SetAttributes(source_ref.GetAttributes())
+                if hasattr(source_ref, 'GetPosition') and hasattr(target_ref, 'SetPosition'):
+                    target_ref.SetPosition(source_ref.GetPosition())
+                if hasattr(source_ref, 'GetAttributes') and hasattr(target_ref, 'SetAttributes'):
+                    target_ref.SetAttributes(source_ref.GetAttributes())
 
             # Copy value field position/attributes
             if hasattr(source, "Value") and hasattr(target, "Value"):
                 source_val = source.Value()
                 target_val = target.Value()
-                target_val.SetPosition(source_val.GetPosition())
-                target_val.SetAttributes(source_val.GetAttributes())
+                if hasattr(source_val, 'GetPosition') and hasattr(target_val, 'SetPosition'):
+                    target_val.SetPosition(source_val.GetPosition())
+                if hasattr(source_val, 'GetAttributes') and hasattr(target_val, 'SetAttributes'):
+                    target_val.SetAttributes(source_val.GetAttributes())
 
     def render_tree(self, indent: int = 0) -> str:
         """Render this footprint as a string."""
@@ -1598,7 +1602,7 @@ class SyncLayouts(Step):
         self.netlist = netlist
 
     def _sync_group_layout(self, group: VirtualGroup, layout_file: Path):
-        """Sync footprints in a group from a layout file."""
+        """Sync footprints, zones, and graphics in a group from a layout file."""
         # Load the layout file into a virtual board
         layout_board = pcbnew.LoadBoard(str(layout_file))
         layout_vboard = build_virtual_dom_from_board(layout_board)
@@ -1654,7 +1658,7 @@ class SyncLayouts(Step):
             if src_path not in matched_sources:
                 unmatched_source.append(src_path)
 
-                # Log results
+        # Log results
         logger.info(f"  Synced {matched} footprints")
         if unmatched_target:
             logger.warning(
@@ -1670,8 +1674,39 @@ class SyncLayouts(Step):
             for fp in unmatched_source:
                 logger.info(f"    - {fp}")
 
-        # Mark the group as synced if we matched at least one footprint
+        # Sync zones and graphics only if we matched at least one footprint
         if matched > 0:
+            # Calculate the offset between source and target positions
+            # Use the first matched footprint to determine the offset
+            offset_x, offset_y = 0, 0
+            for rel_path, target_fp in target_by_path.items():
+                if rel_path in source_by_path:
+                    source_fp = source_by_path[rel_path]
+                    if source_fp.kicad_footprint and target_fp.kicad_footprint:
+                        source_pos = source_fp.kicad_footprint.GetPosition()
+                        target_pos = target_fp.kicad_footprint.GetPosition()
+                        offset_x = target_pos.x - source_pos.x
+                        offset_y = target_pos.y - source_pos.y
+                        logger.debug(
+                            f"  Calculated offset from matched footprint: ({offset_x}, {offset_y})"
+                        )
+                        break
+
+            # Sync zones from the layout
+            zones_synced = self._sync_zones(
+                layout_board, self.board, offset_x, offset_y, group.id
+            )
+
+            # Sync graphics from the layout
+            graphics_synced = self._sync_graphics(
+                layout_board, self.board, offset_x, offset_y, group.id
+            )
+
+            logger.info(
+                f"  Synced {zones_synced} zones and {graphics_synced} graphics items"
+            )
+
+            # Mark the group as synced
             group.synced = True
             logger.info(f"  Marked group {group.id} as synced")
 
@@ -1682,6 +1717,205 @@ class SyncLayouts(Step):
     def _get_all_footprints(self, root: VirtualGroup) -> List[VirtualFootprint]:
         """Get all footprints in a virtual board."""
         return root.find_all_footprints()
+
+    def _sync_zones(self, source_board: pcbnew.BOARD, target_board: pcbnew.BOARD, 
+                    offset_x: int, offset_y: int, group_name: str) -> int:
+        """Copy zones from source board to target board with position offset.
+        
+        Args:
+            source_board: The source layout board
+            target_board: The target board to copy zones to
+            offset_x: X offset to apply when copying
+            offset_y: Y offset to apply when copying
+            group_name: Name of the group being synced (for logging)
+            
+        Returns:
+            Number of zones synced
+        """
+        zones_synced = 0
+
+        for source_zone in source_board.Zones():
+            # Create a new zone
+            new_zone = pcbnew.ZONE(target_board)
+
+            # Copy properties
+            new_zone.SetLayer(source_zone.GetLayer())
+            new_zone.SetLayerSet(source_zone.GetLayerSet())
+            new_zone.SetNetCode(source_zone.GetNetCode())
+            if hasattr(source_zone, "GetZoneName") and hasattr(new_zone, "SetZoneName"):
+                new_zone.SetZoneName(source_zone.GetZoneName())
+            if hasattr(source_zone, "GetAssignedPriority") and hasattr(
+                new_zone, "SetAssignedPriority"
+            ):
+                new_zone.SetAssignedPriority(source_zone.GetAssignedPriority())
+            if hasattr(source_zone, "GetFillMode") and hasattr(new_zone, "SetFillMode"):
+                new_zone.SetFillMode(source_zone.GetFillMode())
+            if hasattr(source_zone, "GetHatchStyle") and hasattr(
+                new_zone, "SetHatchStyle"
+            ):
+                new_zone.SetHatchStyle(source_zone.GetHatchStyle())
+            if hasattr(source_zone, "GetHatchGap") and hasattr(new_zone, "SetHatchGap"):
+                new_zone.SetHatchGap(source_zone.GetHatchGap())
+            if hasattr(source_zone, "GetHatchOrientation") and hasattr(
+                new_zone, "SetHatchOrientation"
+            ):
+                new_zone.SetHatchOrientation(source_zone.GetHatchOrientation())
+            if hasattr(source_zone, "GetHatchThickness") and hasattr(
+                new_zone, "SetHatchThickness"
+            ):
+                new_zone.SetHatchThickness(source_zone.GetHatchThickness())
+            if hasattr(source_zone, "GetMinThickness") and hasattr(
+                new_zone, "SetMinThickness"
+            ):
+                new_zone.SetMinThickness(source_zone.GetMinThickness())
+            if hasattr(source_zone, "IsFilled") and hasattr(new_zone, "SetIsFilled"):
+                new_zone.SetIsFilled(source_zone.IsFilled())
+            if hasattr(source_zone, "GetThermalReliefGap") and hasattr(
+                new_zone, "SetThermalReliefGap"
+            ):
+                new_zone.SetThermalReliefGap(source_zone.GetThermalReliefGap())
+            if hasattr(source_zone, "GetThermalReliefSpokeWidth") and hasattr(
+                new_zone, "SetThermalReliefSpokeWidth"
+            ):
+                new_zone.SetThermalReliefSpokeWidth(
+                    source_zone.GetThermalReliefSpokeWidth()
+                )
+
+            # Copy and offset the outline
+            source_outline = source_zone.Outline()
+            new_outline = new_zone.Outline()
+            new_outline.RemoveAllContours()  # Clear any default contours
+
+            for i in range(source_outline.OutlineCount()):
+                source_contour = source_outline.COutline(i)
+                new_outline.NewOutline()
+                for j in range(source_contour.PointCount()):
+                    pt = source_contour.CPoint(j)
+                    new_outline.Append(pt.x + offset_x, pt.y + offset_y)
+
+            # Add to target board
+            target_board.Add(new_zone)
+            zones_synced += 1
+
+            logger.debug(f"    Synced zone: {source_zone.GetZoneName() or 'unnamed'} on layer {source_zone.GetLayerName()}")
+
+        return zones_synced
+
+    def _sync_graphics(self, source_board: pcbnew.BOARD, target_board: pcbnew.BOARD,
+                       offset_x: int, offset_y: int, group_name: str) -> int:
+        """Copy graphics items (text, lines, rectangles, etc.) from source board to target board.
+        
+        Args:
+            source_board: The source layout board
+            target_board: The target board to copy graphics to
+            offset_x: X offset to apply when copying
+            offset_y: Y offset to apply when copying
+            group_name: Name of the group being synced (for logging)
+            
+        Returns:
+            Number of graphics items synced
+        """
+        graphics_synced = 0
+
+        # Get all drawings from the source board
+        for drawing in source_board.GetDrawings():
+            # Skip items that are part of footprints (they're handled separately)
+            if drawing.GetParent() and isinstance(drawing.GetParent(), pcbnew.FOOTPRINT):
+                continue
+
+            item_type = drawing.GetClass()
+
+            try:
+                if item_type == "PCB_TEXT":
+                    # Create new text item
+                    new_drawing = pcbnew.PCB_TEXT(target_board)
+                    new_drawing.SetText(drawing.GetText())
+                    new_drawing.SetTextSize(drawing.GetTextSize())
+                    new_drawing.SetTextThickness(drawing.GetTextThickness())
+                    new_drawing.SetTextAngle(drawing.GetTextAngle())
+                    new_drawing.SetItalic(drawing.IsItalic())
+                    new_drawing.SetBold(drawing.IsBold())
+                    new_drawing.SetMirrored(drawing.IsMirrored())
+                    new_drawing.SetHorizJustify(drawing.GetHorizJustify())
+                    new_drawing.SetVertJustify(drawing.GetVertJustify())
+                    new_drawing.SetLayer(drawing.GetLayer())
+
+                    # Set position with offset
+                    pos = drawing.GetPosition()
+                    new_drawing.SetPosition(pcbnew.VECTOR2I(pos.x + offset_x, pos.y + offset_y))
+
+                    logger.debug(f"    Synced text: '{drawing.GetText()}' on layer {drawing.GetLayerName()}")
+
+                elif item_type == "PCB_SHAPE":
+                    # Create new shape item
+                    new_drawing = pcbnew.PCB_SHAPE(target_board)
+                    new_drawing.SetShape(drawing.GetShape())
+                    new_drawing.SetLayer(drawing.GetLayer())
+                    new_drawing.SetWidth(drawing.GetWidth())
+                    new_drawing.SetFilled(drawing.IsFilled())
+
+                    shape_type = drawing.GetShape()
+
+                    # Handle different shape types
+                    if shape_type in [pcbnew.SHAPE_T_SEGMENT, pcbnew.SHAPE_T_RECT]:
+                        # For lines and rectangles
+                        start = drawing.GetStart()
+                        end = drawing.GetEnd()
+                        new_drawing.SetStart(pcbnew.VECTOR2I(start.x + offset_x, start.y + offset_y))
+                        new_drawing.SetEnd(pcbnew.VECTOR2I(end.x + offset_x, end.y + offset_y))
+
+                    elif shape_type == pcbnew.SHAPE_T_CIRCLE:
+                        # For circles
+                        center = drawing.GetCenter()
+                        new_drawing.SetCenter(pcbnew.VECTOR2I(center.x + offset_x, center.y + offset_y))
+                        new_drawing.SetRadius(drawing.GetRadius())
+
+                    elif shape_type == pcbnew.SHAPE_T_ARC:
+                        # For arcs
+                        center = drawing.GetCenter()
+                        start = drawing.GetStart()
+                        new_drawing.SetCenter(pcbnew.VECTOR2I(center.x + offset_x, center.y + offset_y))
+                        new_drawing.SetStart(pcbnew.VECTOR2I(start.x + offset_x, start.y + offset_y))
+                        new_drawing.SetArcAngleAndEnd(drawing.GetArcAngle(), False)
+
+                    elif shape_type == pcbnew.SHAPE_T_POLY:
+                        # For polygons
+                        source_poly = drawing.GetPolyShape()
+                        new_poly = new_drawing.GetPolyShape()
+                        new_poly.RemoveAllContours()
+
+                        for i in range(source_poly.OutlineCount()):
+                            outline = source_poly.COutline(i)
+                            new_poly.NewOutline()
+                            for j in range(outline.PointCount()):
+                                pt = outline.CPoint(j)
+                                new_poly.Append(pt.x + offset_x, pt.y + offset_y)
+
+                    shape_map = {
+                        pcbnew.SHAPE_T_SEGMENT: "segment",
+                        pcbnew.SHAPE_T_RECT: "rectangle",
+                        pcbnew.SHAPE_T_ARC: "arc",
+                        pcbnew.SHAPE_T_CIRCLE: "circle",
+                        pcbnew.SHAPE_T_POLY: "polygon",
+                        pcbnew.SHAPE_T_BEZIER: "bezier"
+                    }
+                    shape_name = shape_map.get(shape_type, "unknown")
+                    logger.debug(f"    Synced {shape_name} on layer {drawing.GetLayerName()}")
+
+                else:
+                    # Skip unknown types
+                    logger.debug(f"    Skipping unknown graphics type: {item_type}")
+                    continue
+
+                # Add to target board
+                target_board.Add(new_drawing)
+                graphics_synced += 1
+
+            except Exception as e:
+                logger.warning(f"    Failed to sync graphics item {item_type}: {e}")
+                continue
+
+        return graphics_synced
 
     def run(self):
         """Find groups that are marked as 'added' and have layout_path, then sync them."""
