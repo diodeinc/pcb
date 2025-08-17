@@ -75,3 +75,5 @@ layout_test!("component_side_sync", "Board");
 layout_test!("multi_pads", "MultiPads");
 
 layout_test!("dnp", "MyBoard");
+
+layout_test!("zones", "Board");
