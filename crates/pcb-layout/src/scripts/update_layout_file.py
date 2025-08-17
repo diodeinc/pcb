@@ -1754,7 +1754,7 @@ class SyncLayouts(Step):
             # For newly added groups, don't apply offset (items will move with the group later)
             zones_synced = self._sync_zones(layout_board, self.board, 0, 0, group.id)
 
-            # Sync graphics from the layout  
+            # Sync graphics from the layout
             # For newly added groups, don't apply offset (items will move with the group later)
             graphics_synced = self._sync_graphics(
                 layout_board, self.board, 0, 0, group.id
@@ -1787,14 +1787,14 @@ class SyncLayouts(Step):
     def _sync_zones(self, source_board: pcbnew.BOARD, target_board: pcbnew.BOARD, 
                     offset_x: int, offset_y: int, group_name: str) -> int:
         """Copy zones from source board to target board with position offset.
-        
+
         Args:
             source_board: The source layout board
             target_board: The target board to copy zones to
             offset_x: X offset to apply when copying
             offset_y: Y offset to apply when copying
             group_name: Name of the group being synced (for logging)
-            
+
         Returns:
             Number of zones synced
         """
@@ -1807,6 +1807,44 @@ class SyncLayouts(Step):
                 target_group = group
                 break
 
+        # Build a net name mapping from module-level to board-level
+        # by examining the footprints in the target group
+        net_name_map = {}
+        if target_group:
+            logger.debug(f"  Building net name mapping for group {group_name}")
+            # Get all footprints in the group
+            for item in target_group.GetItems():
+                if isinstance(item, pcbnew.FOOTPRINT):
+                    # Check each pad's net
+                    for pad in item.Pads():
+                        module_net_name = None
+                        board_net_name = pad.GetNetname()
+
+                        if board_net_name:
+                            # Try to find the corresponding net in the source board
+                            # by matching footprint reference and pad number
+                            ref = item.GetReference()
+                            pad_num = pad.GetPadName()
+
+                            # Find the same footprint in source board
+                            source_fp = source_board.FindFootprintByReference(ref)
+                            if source_fp:
+                                source_pad = source_fp.FindPadByNumber(pad_num)
+                                if source_pad:
+                                    module_net_name = source_pad.GetNetname()
+
+                                    if (
+                                        module_net_name
+                                        and module_net_name not in net_name_map
+                                    ):
+                                        net_name_map[module_net_name] = board_net_name
+                                        logger.debug(
+                                            f"    Mapped module net '{module_net_name}' -> board net '{board_net_name}'"
+                                        )
+
+        if not net_name_map:
+            logger.debug(f"  No net name mapping found for group {group_name}")
+
         for source_zone in source_board.Zones():
             # Create a new zone
             new_zone = pcbnew.ZONE(target_board)
@@ -1814,7 +1852,34 @@ class SyncLayouts(Step):
             # Copy properties
             new_zone.SetLayer(source_zone.GetLayer())
             new_zone.SetLayerSet(source_zone.GetLayerSet())
-            new_zone.SetNetCode(source_zone.GetNetCode())
+
+            # Map net by name, using the module->board net name mapping if available
+            source_net_name = source_zone.GetNetname()
+            if source_net_name:
+                # Check if we have a mapping for this module-level net name
+                target_net_name = net_name_map.get(source_net_name, source_net_name)
+
+                # Find the net in the target board by the mapped name
+                target_net = target_board.FindNet(target_net_name)
+                if target_net:
+                    new_zone.SetNetCode(target_net.GetNetCode())
+                    if target_net_name != source_net_name:
+                        logger.debug(
+                            f"    Mapped zone net '{source_net_name}' -> '{target_net_name}' (code {target_net.GetNetCode()})"
+                        )
+                    else:
+                        logger.debug(
+                            f"    Set zone net '{source_net_name}' (code {target_net.GetNetCode()})"
+                        )
+                else:
+                    logger.warning(
+                        f"    Could not find net '{target_net_name}' in target board for zone (source net: '{source_net_name}')"
+                    )
+                    # Keep zone with no net (0 is typically the no-net code)
+                    new_zone.SetNetCode(0)
+            else:
+                # No net on source zone
+                new_zone.SetNetCode(0)
             if hasattr(source_zone, "GetZoneName") and hasattr(new_zone, "SetZoneName"):
                 new_zone.SetZoneName(source_zone.GetZoneName())
             if hasattr(source_zone, "GetAssignedPriority") and hasattr(
