@@ -10,6 +10,8 @@ load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power")
 PowerSupplyModule = Module("//modules/PowerSupplyModule.zen")
 LedIndicatorModule = Module("//modules/LedIndicatorModule.zen")
 
+ULSM12 = Module("@registry/reference/ULSM12_5MD48NMC/ULSM12_5MD48NMC.zen")
+
 add_property("layout_path", "build/WorkspaceTestBoard")
 
 # Power rails
@@ -37,4 +39,11 @@ LedIndicatorModule(
     VCC=filtered_vcc,
     GND=gnd,
     ENABLE=gnd.NET,  # Always on
+)
+
+ULSM12(
+    name = "DcDc",
+    vin = vcc_3v3,
+    vout = Power(),
+    gnd = gnd,
 )
