@@ -4,13 +4,13 @@ This board uses modules referenced via // paths to test that workspace
 root detection works correctly with pcb.toml files.
 """
 
-load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power")
+load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power", "Spi")
 
 # Use workspace-relative paths for modules - this tests // path resolution
 PowerSupplyModule = Module("//modules/PowerSupplyModule.zen")
 LedIndicatorModule = Module("//modules/LedIndicatorModule.zen")
 
-ULSM12 = Module("@registry/reference/ULSM12_5MD48NMC/ULSM12_5MD48NMC.zen")
+Flash = Module("@kicad/Memory_Flash/W25Q128JVE.zen")
 
 add_property("layout_path", "build/WorkspaceTestBoard")
 
@@ -41,9 +41,10 @@ LedIndicatorModule(
     ENABLE=gnd.NET,  # Always on
 )
 
-ULSM12(
-    name = "DcDc",
-    vin = vcc_3v3,
-    vout = Power(),
-    gnd = gnd,
+Flash(
+    name = "FLASH",
+    VCC = vcc_3v3.NET,
+    GND = gnd.NET,
+    HOLD = Net(),
+    spi = Spi(),
 )
