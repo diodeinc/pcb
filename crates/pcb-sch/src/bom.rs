@@ -53,7 +53,7 @@ impl From<&BomEntry> for GroupKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "component_type")]
 pub enum WellKnownModule {
     Capacitor(Capacitor),
     Resistor(Resistor),
@@ -335,11 +335,12 @@ mod tests {
     }
 
     #[test]
-    fn test_untagged_serde() {
-        // Test that serde can distinguish between modules based on field presence
+    fn test_tagged_serde() {
+        // Test that serde can distinguish between modules using component_type tag
 
-        // Resistor should deserialize when "resistance" field is present
+        // Resistor should deserialize with component_type tag
         let resistor_json = r#"{
+            "component_type": "Resistor",
             "resistance": {"value": "10000.0", "tolerance": "0.01", "unit": "Ohms"}
         }"#;
 
@@ -352,8 +353,9 @@ mod tests {
             _ => panic!("Expected Resistor variant"),
         }
 
-        // Capacitor should deserialize when "capacitance" field is present
+        // Capacitor should deserialize with component_type tag
         let capacitor_json = r#"{
+            "component_type": "Capacitor",
             "capacitance": {"value": "100e-9", "tolerance": "0.2", "unit": "Farads"},
             "dielectric": "X7R"
         }"#;
