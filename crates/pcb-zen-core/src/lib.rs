@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error as StdError,
     fmt::Display,
     path::{Path, PathBuf},
@@ -548,6 +548,8 @@ pub struct CoreLoadResolver {
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
+    /// Tracks all local files that have been resolved (for vendor/release commands)
+    tracked_local_files: Arc<Mutex<HashSet<PathBuf>>>,
     use_vendor_dir: bool,
 }
 
@@ -564,6 +566,7 @@ impl CoreLoadResolver {
             remote_fetcher,
             workspace_root,
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
+            tracked_local_files: Arc::new(Mutex::new(HashSet::new())),
             use_vendor_dir,
         }
     }
@@ -581,6 +584,7 @@ impl CoreLoadResolver {
             remote_fetcher,
             workspace_root,
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
+            tracked_local_files: Arc::new(Mutex::new(HashSet::new())),
             use_vendor_dir,
         }
     }
@@ -616,28 +620,32 @@ impl CoreLoadResolver {
             _ => spec.clone(),
         };
 
-        let relative_vendor_path = match canonical_spec {
+        let relative_vendor_path = match &canonical_spec {
             LoadSpec::Github {
                 user,
                 repo,
                 rev,
                 path,
-            } => make_vendor_path("github.com", [&user, &repo, &rev], &path),
+            } => make_vendor_path("github.com", [&user, &repo, &rev], path),
             LoadSpec::Gitlab {
                 project_path,
                 rev,
                 path,
-            } => make_vendor_path("gitlab.com", [&project_path, &rev], &path),
+            } => make_vendor_path("gitlab.com", [&project_path, &rev], path),
             LoadSpec::Package { package, tag, path } => {
-                make_vendor_path("packages", [&package, &tag], &path)
+                make_vendor_path("packages", [&package, &tag], path)
             }
             _ => anyhow::bail!("Local specs not handled in vendor directory"),
         };
 
         let full_vendor_path = vendor_dir.join(relative_vendor_path);
-
         if self.file_provider.exists(&full_vendor_path) {
-            Ok(self.file_provider.canonicalize(&full_vendor_path)?)
+            let canonical_path = self.file_provider.canonicalize(&full_vendor_path)?;
+            self.path_to_spec
+                .lock()
+                .unwrap()
+                .insert(canonical_path.clone(), canonical_spec);
+            Ok(canonical_path)
         } else {
             anyhow::bail!("Not found in vendor directory")
         }
@@ -664,6 +672,29 @@ impl CoreLoadResolver {
         }
 
         aliases
+    }
+
+    /// Get all files that have been resolved through this resolver
+    pub fn get_tracked_files(&self) -> HashSet<PathBuf> {
+        let mut files = self
+            .path_to_spec
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        files.extend(self.tracked_local_files.lock().unwrap().iter().cloned());
+        files
+    }
+
+    /// Get the LoadSpec for a specific resolved file path
+    pub fn get_load_spec_for_path(&self, path: &Path) -> Option<LoadSpec> {
+        self.path_to_spec.lock().unwrap().get(path).cloned()
+    }
+
+    /// Manually track a file (useful for entry points)
+    pub fn track_file(&self, path: PathBuf) {
+        self.tracked_local_files.lock().unwrap().insert(path);
     }
 }
 
@@ -824,6 +855,11 @@ impl LoadResolver for CoreLoadResolver {
                 let canonical_path = file_provider.canonicalize(&resolved_path)?;
 
                 if file_provider.exists(&canonical_path) {
+                    // Track local file
+                    self.tracked_local_files
+                        .lock()
+                        .unwrap()
+                        .insert(canonical_path.clone());
                     Ok(canonical_path)
                 } else {
                     Err(anyhow::anyhow!(
@@ -840,6 +876,11 @@ impl LoadResolver for CoreLoadResolver {
                     let canonical_path = file_provider.canonicalize(path)?;
 
                     if file_provider.exists(&canonical_path) {
+                        // Track local file
+                        self.tracked_local_files
+                            .lock()
+                            .unwrap()
+                            .insert(canonical_path.clone());
                         Ok(canonical_path)
                     } else {
                         Err(anyhow::anyhow!(
@@ -856,6 +897,11 @@ impl LoadResolver for CoreLoadResolver {
                     let canonical_path = file_provider.canonicalize(&resolved_path)?;
 
                     if file_provider.exists(&canonical_path) {
+                        // Track local file
+                        self.tracked_local_files
+                            .lock()
+                            .unwrap()
+                            .insert(canonical_path.clone());
                         Ok(canonical_path)
                     } else {
                         Err(anyhow::anyhow!(
@@ -875,6 +921,11 @@ impl LoadResolver for CoreLoadResolver {
                     let canonical_path = file_provider.canonicalize(&resolved_path)?;
 
                     if file_provider.exists(&canonical_path) {
+                        // Track local file
+                        self.tracked_local_files
+                            .lock()
+                            .unwrap()
+                            .insert(canonical_path.clone());
                         Ok(canonical_path)
                     } else {
                         Err(anyhow::anyhow!(

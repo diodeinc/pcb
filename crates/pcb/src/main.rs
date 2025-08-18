@@ -10,7 +10,6 @@ mod layout;
 mod lsp;
 mod open;
 mod release;
-mod tracking_resolver;
 mod upgrade;
 mod vendor;
 mod workspace;

@@ -314,11 +314,11 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
         })?;
     }
 
-    for path in info.workspace.tracker.files() {
+    for path in info.workspace.resolver.get_tracked_files() {
         match classify_file(
             &info.workspace.workspace_root,
             &path,
-            &info.workspace.tracker,
+            &info.workspace.resolver,
         ) {
             FileClassification::Local(rel) => {
                 let dest_path = info.staging_dir.join("src").join(rel);

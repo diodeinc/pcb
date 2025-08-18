@@ -12,16 +12,14 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::tracking_resolver::TrackingLoadResolver;
-
 /// Common workspace information used by both vendor and release commands
 pub struct WorkspaceInfo {
     /// Canonical path to the .zen file being processed
     pub zen_path: PathBuf,
     /// Root directory of the workspace
     pub workspace_root: PathBuf,
-    /// Dependency tracker for finding all referenced files
-    pub tracker: Arc<TrackingLoadResolver>,
+    /// Core resolver that tracked all file dependencies during evaluation
+    pub resolver: Arc<CoreLoadResolver>,
     /// Evaluation result containing the parsed zen file
     pub eval_result: WithDiagnostics<EvalOutput>,
 }
@@ -48,14 +46,14 @@ pub fn gather_workspace_info(zen_path: PathBuf) -> Result<WorkspaceInfo> {
     let initial_workspace_root = find_workspace_root(&DefaultFileProvider, &zen_path);
 
     // Evaluate the zen file and track dependencies
-    let (tracker, eval_result) = eval_zen_entrypoint(&zen_path, &initial_workspace_root)?;
+    let (resolver, eval_result) = eval_zen_entrypoint(&zen_path, &initial_workspace_root)?;
 
     // Refine workspace root based on tracked files if no pcb.toml was found
     let workspace_root = if initial_workspace_root.join("pcb.toml").exists() {
         initial_workspace_root
     } else {
         // No pcb.toml found, use common ancestor of tracked files
-        detect_workspace_root_from_files(&zen_path, &tracker.files())?
+        detect_workspace_root_from_files(&zen_path, &resolver.get_tracked_files())?
     };
 
     // Log workspace root info for debugging
@@ -64,7 +62,7 @@ pub fn gather_workspace_info(zen_path: PathBuf) -> Result<WorkspaceInfo> {
     Ok(WorkspaceInfo {
         zen_path,
         workspace_root,
-        tracker,
+        resolver,
         eval_result,
     })
 }
@@ -121,34 +119,29 @@ pub fn common_ancestor(a: &Path, b: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Evaluate zen file and track dependencies
+/// Evaluate zen file and track dependencies using CoreLoadResolver directly
 pub fn eval_zen_entrypoint(
     entry: &Path,
     workspace_root: &Path,
-) -> Result<(Arc<TrackingLoadResolver>, WithDiagnostics<EvalOutput>)> {
+) -> Result<(Arc<CoreLoadResolver>, WithDiagnostics<EvalOutput>)> {
     debug!("Starting zen file evaluation: {}", entry.display());
 
     let file_provider = Arc::new(DefaultFileProvider);
-
     let remote_fetcher = Arc::new(DefaultRemoteFetcher);
-    let base_resolver = Arc::new(CoreLoadResolver::new(
+
+    let core_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
         workspace_root.to_path_buf(),
         false,
     ));
 
-    let tracking_resolver = Arc::new(TrackingLoadResolver::new(
-        base_resolver,
-        file_provider.clone(),
-    ));
-
-    // Pre-seed with the entrypoint itself
-    tracking_resolver.track(entry.to_path_buf());
+    // Track the entrypoint (though it won't have a LoadSpec, which is fine)
+    core_resolver.track_file(entry.to_path_buf());
 
     let eval_context = EvalContext::new()
         .set_file_provider(file_provider.clone())
-        .set_load_resolver(tracking_resolver.clone())
+        .set_load_resolver(core_resolver.clone())
         .set_source_path(entry.to_path_buf())
         .set_inputs(InputMap::new());
 
@@ -168,7 +161,7 @@ pub fn eval_zen_entrypoint(
     }
 
     info!("Zen file evaluation completed successfully");
-    Ok((tracking_resolver, eval_result))
+    Ok((core_resolver, eval_result))
 }
 
 /// Convert LoadSpec to vendor path
@@ -238,7 +231,7 @@ pub fn loadspec_to_vendor_path(spec: &LoadSpec) -> Result<PathBuf> {
 pub fn classify_file<'a>(
     workspace_root: &Path,
     path: &'a Path,
-    tracker: &TrackingLoadResolver,
+    resolver: &CoreLoadResolver,
 ) -> FileClassification<'a> {
     let ext = path
         .extension()
@@ -260,9 +253,9 @@ pub fn classify_file<'a>(
         } else {
             FileClassification::Irrelevant
         }
-    } else if let Some(load_spec) = tracker.get_load_spec(path) {
+    } else if let Some(load_spec) = resolver.get_load_spec_for_path(path) {
         debug!("Classified as vendor: {}", path.display());
-        FileClassification::Vendor(load_spec.clone())
+        FileClassification::Vendor(load_spec)
     } else {
         debug!(
             "Classified as irrelevant: {} (outside workspace, no LoadSpec)",
@@ -276,10 +269,10 @@ pub fn classify_file<'a>(
 pub fn is_vendor_dependency(
     workspace_root: &Path,
     path: &Path,
-    tracker: &TrackingLoadResolver,
+    resolver: &CoreLoadResolver,
 ) -> bool {
     matches!(
-        classify_file(workspace_root, path, tracker),
+        classify_file(workspace_root, path, resolver),
         FileClassification::Vendor(_)
     )
 }

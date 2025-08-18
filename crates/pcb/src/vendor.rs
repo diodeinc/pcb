@@ -207,19 +207,15 @@ fn gather_vendor_info(zen_files: Vec<PathBuf>, workspace_root: PathBuf) -> Resul
     for zen_file in &zen_files {
         let workspace_info = gather_workspace_info(zen_file.clone())?;
 
-        for path in workspace_info.tracker.files() {
-            if is_vendor_dependency(&workspace_root, &path, &workspace_info.tracker) {
-                let load_spec = workspace_info
-                    .tracker
-                    .get_load_spec(&path)
-                    .context("Vendor file must have LoadSpec")?
-                    .clone();
+        for path in workspace_info.resolver.get_tracked_files() {
+            if is_vendor_dependency(&workspace_root, &path, &workspace_info.resolver) {
+                if let Some(load_spec) = workspace_info.resolver.get_load_spec_for_path(&path) {
+                    let vendor_path = loadspec_to_vendor_path(&load_spec)?;
 
-                let vendor_path = loadspec_to_vendor_path(&load_spec)?;
-
-                dependencies
-                    .entry(vendor_path)
-                    .or_insert(path.to_path_buf());
+                    dependencies
+                        .entry(vendor_path)
+                        .or_insert(path.to_path_buf());
+                }
             }
         }
     }
