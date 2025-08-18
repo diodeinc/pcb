@@ -185,7 +185,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         "release": {
             "version": info.version,
             "created_at": rfc3339_timestamp,
-            "zen_file": info.workspace.zen_path,
+            "zen_file": info.workspace.zen_path.strip_prefix(&info.workspace.workspace_root).expect("zen_file must be within workspace_root"),
             "workspace_root": info.workspace.workspace_root,
             "staging_directory": info.staging_dir,
             "layout_path": info.layout_path
