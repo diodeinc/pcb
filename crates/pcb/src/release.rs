@@ -78,6 +78,7 @@ const TASKS: &[(&str, TaskFn)] = &[
     ("Generating drill map", generate_drill_map),
     ("Generating pick-and-place file", generate_cpl),
     ("Generating assembly drawings", generate_assembly_drawings),
+    ("Generating ODB++ files", generate_odb),
     ("Generating 3D models", generate_3d_models),
     ("Writing release metadata", write_metadata),
     ("Creating release archive", zip_release),
@@ -708,6 +709,33 @@ fn fix_cpl_header(cpl_path: &Path) -> Result<()> {
         );
         fs::write(cpl_path, fixed_content)?;
     }
+    Ok(())
+}
+
+/// Generate ODB++ files
+fn generate_odb(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let odb_path = manufacturing_dir.join("board.odb++");
+
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("odb")
+        .arg("--output")
+        .arg(odb_path.to_string_lossy())
+        .arg("--units")
+        .arg("mm")
+        .arg("--precision")
+        .arg("2")
+        .arg("--compression")
+        .arg("zip")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate ODB++ files")?;
+
     Ok(())
 }
 
