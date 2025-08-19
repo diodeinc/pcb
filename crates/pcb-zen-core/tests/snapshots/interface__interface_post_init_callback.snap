@@ -1,0 +1,27 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Validating power interface: MAIN_VCC
+Power validation: PASS
+Validating power interface: CPU_VCC
+Power validation: PASS
+--- Serialized JSON ---
+{
+  "Interface": {
+    "fields": {
+      "net": {
+        "Net": {
+          "id": 2,
+          "name": "MAIN_VCC",
+          "properties": {}
+        }
+      }
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

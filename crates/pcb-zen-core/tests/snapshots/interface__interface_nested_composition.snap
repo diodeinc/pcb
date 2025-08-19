@@ -1,0 +1,104 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+UART TX: MCU_UART_UART_TX
+UART RX: MCU_UART_UART_RX
+USART embedded UART TX: MCU_USART_UART_UART_TX
+USART embedded UART RX: MCU_USART_UART_UART_RX
+USART CK: MCU_USART_USART_CK
+USART RTS: MCU_USART_USART_RTS
+USART CTS: MCU_USART_USART_CTS
+Enhanced UART TX: ENHANCED_UART_UART_TX
+Enhanced clock_source: internal
+Enhanced baud_rate: 115200
+Enhanced flow_control: True
+--- USART Serialized JSON ---
+{
+  "Interface": {
+    "fields": {
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 10,
+                "name": "MCU_USART_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 11,
+                "name": "MCU_USART_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          }
+        }
+      },
+      "CK": {
+        "Net": {
+          "id": 12,
+          "name": "MCU_USART_USART_CK",
+          "properties": {}
+        }
+      },
+      "RTS": {
+        "Net": {
+          "id": 13,
+          "name": "MCU_USART_USART_RTS",
+          "properties": {}
+        }
+      },
+      "CTS": {
+        "Net": {
+          "id": 14,
+          "name": "MCU_USART_USART_CTS",
+          "properties": {}
+        }
+      }
+    }
+  }
+}
+--- Enhanced USART Serialized JSON ---
+{
+  "Interface": {
+    "fields": {
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 17,
+                "name": "ENHANCED_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 18,
+                "name": "ENHANCED_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          }
+        }
+      },
+      "clock_source": {
+        "String": "internal"
+      },
+      "baud_rate": {
+        "Int": 115200
+      },
+      "flow_control": {
+        "Bool": true
+      }
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

@@ -1,0 +1,36 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Config1 enable: True
+Config1 count: 42
+Config1 label: Default Config
+Config1 ratio: 3.14
+Config2 enable: False
+Config2 count: 100
+Config2 label: Default Config
+Config2 ratio: 2.71
+--- Serialized JSON ---
+{
+  "Interface": {
+    "fields": {
+      "enable": {
+        "Bool": true
+      },
+      "count": {
+        "Int": 42
+      },
+      "label": {
+        "String": "Default Config"
+      },
+      "ratio": {
+        "Float": 3.14
+      }
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

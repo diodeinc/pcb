@@ -5,6 +5,7 @@ use starlark::environment::GlobalsBuilder;
 use starlark::eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam};
 use starlark::starlark_complex_value;
 use starlark::starlark_module;
+use starlark::values::types::record::field::FieldGen;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
     starlark_value, Coerce, Freeze, FreezeResult, Heap, NoSerialize, ProvidesStaticType,
@@ -15,6 +16,23 @@ use std::sync::Arc;
 use crate::lang::context::ContextValue;
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::net::{generate_net_id, NetValue};
+
+/// Build a consistent parameter spec for interface factories, excluding reserved field names
+fn build_interface_param_spec<'v, V: ValueLike<'v>>(
+    fields: &SmallMap<String, V>,
+) -> ParametersSpec<starlark::values::FrozenValue> {
+    ParametersSpec::new_parts(
+        "InterfaceInstance",
+        std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
+        [("name", ParametersSpecParam::Optional)],
+        false,
+        fields
+            .iter()
+            .filter(|(k, _)| k.as_str() != "name") // Exclude reserved "name" field
+            .map(|(k, _)| (k.as_str(), ParametersSpecParam::Optional)),
+        false,
+    )
+}
 
 // Interface type data, similar to TyRecordData
 #[derive(Debug, Allocative)]
@@ -78,7 +96,8 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     #[allocative(skip)]
     #[trace(unsafe_ignore)]
     interface_type_data: V::InterfaceTypeDataOpt,
-    fields: Vec<(String, V)>,
+    fields: SmallMap<String, V>,
+    post_init_fn: Option<V>,
     param_spec: ParametersSpec<starlark::values::FrozenValue>,
 }
 
@@ -94,6 +113,7 @@ impl Freeze for InterfaceFactory<'_> {
             id: self.id,
             interface_type_data: self.interface_type_data.into_inner(),
             fields: self.fields.freeze(freezer)?,
+            post_init_fn: self.post_init_fn.freeze(freezer)?,
             param_spec: self.param_spec,
         })
     }
@@ -114,8 +134,7 @@ where
     ) -> starlark::Result<Value<'v>> {
         let heap = eval.heap();
 
-        // Collect provided `name` (optional) and field values using the
-        // cached parameter spec.
+        // Collect provided `name` (optional) and field values using the cached parameter spec.
         let mut provided_values: SmallMap<String, Value<'v>> =
             SmallMap::with_capacity(self.fields.len());
         let mut instance_name_opt: Option<String> = None;
@@ -155,16 +174,17 @@ where
                 let spec_value = field_spec.to_value();
                 let spec_type = spec_value.get_type();
 
-                if spec_type == "NetType" {
-                    // For backwards compatibility: Net type becomes an empty net
-                    let net_name = if let Some(ref inst_name) = instance_name_opt {
-                        make_prefix(inst_name, name)
-                    } else {
-                        name.to_ascii_uppercase()
-                    };
-
+                if spec_type == "field" {
+                    // Handle field() specifications - extract default value
+                    let field_obj = spec_value.downcast_ref::<FieldGen<Value<'v>>>().unwrap();
+                    field_obj.default().unwrap().to_value()
+                } else if spec_type == "NetType" {
+                    // Auto-generate fresh Net from Net type
+                    let net_name = instance_name_opt
+                        .as_ref()
+                        .map(|p| make_prefix(p, name))
+                        .unwrap_or_else(|| name.to_ascii_uppercase());
                     let net_id = generate_net_id();
-                    // Register with current module for duplicate detection and get final name.
                     let final_name = if let Some(ctx) = eval
                         .module()
                         .extra_value()
@@ -176,7 +196,6 @@ where
                     } else {
                         net_name.clone()
                     };
-
                     heap.alloc(NetValue::new(
                         net_id,
                         final_name,
@@ -184,8 +203,7 @@ where
                         Value::new_none(),
                     ))
                 } else if spec_type == "Net" {
-                    // Net instance - use as template
-                    // Note: Net() with empty name is treated same as Net type for auto-naming
+                    // Clone Net template with naming rules
                     let (template_name, template_props, template_symbol) =
                         if let Some(net_val) = spec_value.downcast_ref::<NetValue<'v>>() {
                             (
@@ -195,48 +213,29 @@ where
                             )
                         } else {
                             // Handle frozen net by copying first
-                            let copied_template = copy_value(spec_value, heap)?;
-                            if let Some(net_val) = copied_template.downcast_ref::<NetValue<'v>>() {
-                                (
-                                    net_val.name().to_string(),
-                                    net_val.properties().clone(),
-                                    net_val.symbol().to_value(),
-                                )
-                            } else {
-                                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                                    "Failed to extract properties from net template"
-                                )));
-                            }
+                            let copied_template =
+                                copy_value(spec_value, heap).map_err(starlark::Error::new_other)?;
+                            let net_val = copied_template.downcast_ref::<NetValue<'v>>().unwrap();
+                            (
+                                net_val.name().to_string(),
+                                net_val.properties().clone(),
+                                net_val.symbol().to_value(),
+                            )
                         };
 
-                    // Create new net with template name and properties
-                    // Treat auto-generated placeholder names like "N123" as "no template name".
                     let is_placeholder = template_name.starts_with('N')
                         && template_name[1..].chars().all(|c| c.is_ascii_digit());
-
                     let net_name = if !template_name.is_empty() && !is_placeholder {
-                        if let Some(ref inst_name) = instance_name_opt {
-                            format!("{inst_name}_{template_name}")
-                        } else {
-                            template_name
-                        }
+                        instance_name_opt
+                            .as_ref()
+                            .map(|p| format!("{p}_{template_name}"))
+                            .unwrap_or(template_name)
                     } else {
-                        // Fall back to standard naming - treat Net() same as Net type
-                        if let Some(ref inst_name) = instance_name_opt {
-                            make_prefix(inst_name, name)
-                        } else {
-                            name.to_ascii_uppercase()
-                        }
+                        instance_name_opt
+                            .as_ref()
+                            .map(|p| make_prefix(p, name))
+                            .unwrap_or_else(|| name.to_ascii_uppercase())
                     };
-
-                    // Deep copy the properties
-                    let mut new_props = SmallMap::new();
-                    for (k, v) in template_props.iter() {
-                        new_props.insert(k.clone(), copy_value(v.to_value(), heap)?);
-                    }
-
-                    // Deep copy the symbol
-                    let copied_symbol = copy_value(template_symbol, heap)?;
 
                     let net_id = generate_net_id();
                     let final_name = if let Some(ctx) = eval
@@ -250,53 +249,64 @@ where
                     } else {
                         net_name.clone()
                     };
-                    heap.alloc(NetValue::new(net_id, final_name, new_props, copied_symbol))
-                } else if spec_value.downcast_ref::<InterfaceFactory<'v>>().is_some()
-                    || spec_value
-                        .downcast_ref::<FrozenInterfaceFactory>()
-                        .is_some()
-                {
-                    // Interface factory - instantiate it
-                    let child_prefix = instance_name_opt.as_ref().map(|p| make_prefix(p, name));
-                    instantiate_interface(spec_value, child_prefix.as_deref(), heap, eval)?
-                } else if spec_type == "InterfaceValue" {
-                    // Interface instance - use as template
-                    let factory_val = if let Some(interface_val) =
-                        spec_value.downcast_ref::<InterfaceValue<'v>>()
-                    {
-                        interface_val.factory.to_value()
-                    } else {
-                        // Handle frozen interface
-                        let copied_template = copy_value(spec_value, heap)?;
-                        if let Some(interface_val) =
-                            copied_template.downcast_ref::<InterfaceValue<'v>>()
-                        {
-                            interface_val.factory.to_value()
-                        } else {
-                            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                                "Failed to extract factory from interface template"
-                            )));
-                        }
-                    };
 
-                    let child_prefix = instance_name_opt.as_ref().map(|p| make_prefix(p, name));
-                    instantiate_interface(factory_val, child_prefix.as_deref(), heap, eval)?
+                    // Copy properties and symbol
+                    let mut new_props = SmallMap::new();
+                    for (k, v) in template_props.iter() {
+                        new_props.insert(
+                            k.clone(),
+                            copy_value(v.to_value(), heap).map_err(starlark::Error::new_other)?,
+                        );
+                    }
+                    let copied_symbol =
+                        copy_value(template_symbol, heap).map_err(starlark::Error::new_other)?;
+
+                    heap.alloc(NetValue::new(net_id, final_name, new_props, copied_symbol))
+                } else if spec_type == "InterfaceValue" {
+                    // Interface instance - extract factory and instantiate
+                    let interface_val = spec_value.downcast_ref::<InterfaceValue<'v>>().unwrap();
+                    let factory_val = interface_val.factory.to_value();
+                    instantiate_interface(
+                        factory_val,
+                        instance_name_opt
+                            .as_ref()
+                            .map(|p| make_prefix(p, name))
+                            .as_deref(),
+                        heap,
+                        eval,
+                    )?
                 } else {
-                    return Err(starlark::Error::new_other(anyhow::anyhow!(
-                        "Invalid field type: {} for field {}",
-                        spec_type,
-                        name
-                    )));
+                    // Interface factories - delegate to instantiate_interface
+                    instantiate_interface(
+                        spec_value,
+                        instance_name_opt
+                            .as_ref()
+                            .map(|p| make_prefix(p, name))
+                            .as_deref(),
+                        heap,
+                        eval,
+                    )?
                 }
             };
 
             fields.insert(name.clone(), field_value);
         }
 
-        Ok(heap.alloc(InterfaceValue {
+        // Create the interface instance
+        let interface_instance = heap.alloc(InterfaceValue {
             fields,
             factory: _me,
-        }))
+        });
+
+        // Execute __post_init__ if present
+        if let Some(post_init_fn) = self.post_init_fn.as_ref() {
+            let post_init_val = post_init_fn.to_value();
+            if !post_init_val.is_none() {
+                eval.eval_function(post_init_val, &[interface_instance], &[])?;
+            }
+        }
+
+        Ok(interface_instance)
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
@@ -319,16 +329,7 @@ where
             Ok(Arc::new(InterfaceTypeData {
                 name: variable_name.to_owned(),
                 id: self.id,
-                parameter_spec: ParametersSpec::new_parts(
-                    variable_name,
-                    std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
-                    [("name", ParametersSpecParam::Optional)],
-                    false,
-                    self.fields
-                        .iter()
-                        .map(|(k, _)| (k.as_str(), ParametersSpecParam::Optional)),
-                    false,
-                ),
+                parameter_spec: build_interface_param_spec(&self.fields),
             }))
         })
     }
@@ -404,14 +405,14 @@ where
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut keys: Vec<_> = self.fields.keys().collect();
-        keys.sort();
+        let mut items: Vec<_> = self.fields.iter().collect();
+        items.sort_by_key(|(k, _)| *k);
         write!(f, "Interface(")?;
-        for (i, k) in keys.iter().enumerate() {
+        for (i, (k, v)) in items.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{k}")?;
+            write!(f, "{}={}", k, v.to_value())?;
         }
         write!(f, ")")
     }
@@ -459,7 +460,7 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> DeepCopyToHeap for InterfaceFactoryGe
                 let copied_value = copy_value(v.to_value(), dst)?;
                 Ok((k.clone(), copied_value))
             })
-            .collect::<Result<Vec<(String, Value<'dst>)>, anyhow::Error>>()?;
+            .collect::<Result<SmallMap<String, Value<'dst>>, anyhow::Error>>()?;
 
         // Note: We don't copy the interface_type_data because it will be re-initialized
         // when the interface is exported in the new heap
@@ -467,6 +468,12 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> DeepCopyToHeap for InterfaceFactoryGe
             id: self.id,
             interface_type_data: OnceCell::new(),
             fields,
+            post_init_fn: self
+                .post_init_fn
+                .as_ref()
+                .map(|f| copy_value(f.to_value(), dst))
+                .transpose()
+                .map_err(|e| anyhow::anyhow!(e))?,
             param_spec: self.param_spec.clone(),
         }))
     }
@@ -479,61 +486,65 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
-        let mut fields = Vec::new();
+        let mut fields = SmallMap::new();
+        let mut post_init_fn = None;
 
-        // Validate field types
+        // Process field specifications and validate reserved names
         for (name, v) in &kwargs {
-            let type_str = v.get_type();
+            if name == "__post_init__" {
+                // Handle __post_init__ as direct function assignment
+                post_init_fn = Some(v.to_value());
+            } else if name == "name" {
+                // Reject "name" as field name to avoid conflict with implicit parameter
+                return Err(anyhow::anyhow!(
+                    "Field name 'name' is reserved (conflicts with implicit name parameter)"
+                ));
+            } else {
+                let type_str = v.get_type();
 
-            // Accept Net type, Net instance, Interface factory, or Interface instance
-            if type_str == "NetType"
-                || type_str == "Net"
-                || type_str == "InterfaceValue"
-                || v.downcast_ref::<InterfaceFactory<'v>>().is_some()
-                || v.downcast_ref::<FrozenInterfaceFactory>().is_some()
-            {
-                // If a Net instance literal was provided as a template field,
-                // unregister it from the current module so it does not count as
-                // an introduced net of this module. It will be (re)registered
-                // when an interface instance is created.
-                if type_str == "Net" {
-                    if let Some(net_val) = v.downcast_ref::<NetValue<'v>>() {
-                        if let Some(ctx) = eval
-                            .module()
-                            .extra_value()
-                            .and_then(|e| e.downcast_ref::<ContextValue>())
-                        {
-                            ctx.unregister_net(net_val.id());
+                // Accept Net type, Net instance, Interface factory, Interface instance, or field() specs
+                if type_str == "NetType"
+                    || type_str == "Net"
+                    || type_str == "InterfaceValue"
+                    || type_str == "field"
+                    || v.downcast_ref::<InterfaceFactory<'v>>().is_some()
+                    || v.downcast_ref::<FrozenInterfaceFactory>().is_some()
+                {
+                    // If a Net instance literal was provided as a template field,
+                    // unregister it from the current module so it does not count as
+                    // an introduced net of this module. It will be (re)registered
+                    // when an interface instance is created.
+                    if type_str == "Net" {
+                        if let Some(net_val) = v.downcast_ref::<NetValue<'v>>() {
+                            if let Some(ctx) = eval
+                                .module()
+                                .extra_value()
+                                .and_then(|e| e.downcast_ref::<ContextValue>())
+                            {
+                                ctx.unregister_net(net_val.id());
+                            }
                         }
                     }
+                    fields.insert(name.clone(), v.to_value());
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, or field() specification, got `{}`",
+                        name,
+                        type_str
+                    ));
                 }
-                fields.push((name.clone(), v.to_value()));
-            } else {
-                return Err(anyhow::anyhow!(
-                    "Interface field `{}` must be Net type, Net instance, Interface type, or Interface instance, got `{}`",
-                    name,
-                    type_str
-                ));
             }
         }
 
         // Build parameter spec: optional first positional/named `name`, then
         // all interface fields as optional named‑only parameters.
-        let param_spec = ParametersSpec::new_parts(
-            "InterfaceInstance",
-            std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
-            [("name", ParametersSpecParam::Optional)].into_iter(),
-            false,
-            fields
-                .iter()
-                .map(|(k, _)| (k.as_str(), ParametersSpecParam::Optional)),
-            false,
-        );
+        let param_spec = build_interface_param_spec(&fields);
 
         Ok(heap.alloc(InterfaceFactory {
             id: TypeInstanceId::r#gen(),
             interface_type_data: OnceCell::new(),
             fields,
+            post_init_fn,
             param_spec,
         }))
     }
@@ -719,13 +730,13 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
     /// interface fields when reconstructing an instance from a serialised
     /// `InputValue`.
     #[inline]
-    pub fn fields(&self) -> &Vec<(String, V)> {
+    pub fn fields(&self) -> &SmallMap<String, V> {
         &self.fields
     }
 
     #[inline]
     pub fn field(&self, name: &str) -> Option<&V> {
-        self.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        self.fields.get(name)
     }
 }
 

@@ -10,11 +10,11 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-starlark = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
-starlark_map = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
-starlark_derive = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
-starlark_syntax = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
-allocative = { git = "https://github.com/LK/starlark-rust", rev = "5d994c5c" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
 
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
@@ -102,3 +102,11 @@ ignore = "0.4"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Use local fork of starlark deps in ../starlark-rust
+# [patch."https://github.com/diodeinc/starlark-rust"]
+# starlark = { path = "../starlark-rust/starlark" }
+# starlark_map = { path = "../starlark-rust/starlark_map" }
+# starlark_derive = { path = "../starlark-rust/starlark_derive" }
+# starlark_syntax = { path = "../starlark-rust/starlark_syntax" }
+# allocative = { path = "../starlark-rust/allocative/allocative" }

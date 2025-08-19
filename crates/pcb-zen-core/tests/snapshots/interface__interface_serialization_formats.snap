@@ -1,0 +1,70 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+=== Simple Net ===
+{
+  "Net": {
+    "id": 1,
+    "name": "SIMPLE_NET",
+    "properties": {}
+  }
+}
+=== Simple Interface ===
+{
+  "Interface": {
+    "fields": {
+      "NET": {
+        "Net": {
+          "id": 3,
+          "name": "PWR_VCC",
+          "properties": {}
+        }
+      }
+    }
+  }
+}
+=== Complex Interface ===
+{
+  "Interface": {
+    "fields": {
+      "enable": {
+        "Bool": false
+      },
+      "mode": {
+        "String": "auto"
+      },
+      "count": {
+        "Int": 10
+      }
+    }
+  }
+}
+=== Nested Interface ===
+{
+  "Interface": {
+    "fields": {
+      "power": {
+        "Interface": {
+          "fields": {
+            "NET": {
+              "Net": {
+                "id": 5,
+                "name": "SYS_POWER_VCC",
+                "properties": {}
+              }
+            }
+          }
+        }
+      },
+      "debug": {
+        "Bool": false
+      }
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

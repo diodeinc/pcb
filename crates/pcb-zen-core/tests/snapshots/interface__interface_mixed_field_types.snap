@@ -1,0 +1,16 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Mixed power: CTRL_VCC
+Mixed ground: CTRL_GND
+Mixed enable_pin: CTRL_ENABLE_PIN
+Mixed debug_mode: False
+Mixed voltage_level: 3.3V
+Alt power: CUSTOM_VCC
+Alt debug_mode: True
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]
