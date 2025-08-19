@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Args;
+use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
@@ -23,10 +23,31 @@ use crate::workspace::{
     WorkspaceInfo,
 };
 
+#[derive(ValueEnum, Debug, Clone, Default)]
+pub enum ReleaseOutputFormat {
+    #[default]
+    #[value(name = "human")]
+    Human,
+    Json,
+}
+
+impl std::fmt::Display for ReleaseOutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReleaseOutputFormat::Human => write!(f, "human"),
+            ReleaseOutputFormat::Json => write!(f, "json"),
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct ReleaseArgs {
     /// Path to .zen file to release
     pub zen_path: PathBuf,
+
+    /// Output format
+    #[arg(short, long, value_enum, default_value_t = ReleaseOutputFormat::Human)]
+    pub format: ReleaseOutputFormat,
 }
 
 /// All information gathered during the release preparation phase
@@ -63,27 +84,40 @@ const TASKS: &[(&str, TaskFn)] = &[
 ];
 
 pub fn execute(args: ReleaseArgs) -> Result<()> {
-    // Gather all release information
-    let info_spinner = Spinner::builder("Gathering release information").start();
-    let release_info = gather_release_info(args.zen_path)?;
-    info_spinner.finish();
-    println!("{} Release information gathered", "✓".green());
+    let using_human = matches!(args.format, ReleaseOutputFormat::Human);
 
-    display_release_info(&release_info);
+    // Gather all release information
+    let release_info = if using_human {
+        let info_spinner = Spinner::builder("Gathering release information").start();
+        let info = gather_release_info(args.zen_path)?;
+        info_spinner.finish();
+        println!("{} Release information gathered", "✓".green());
+        display_release_info(&info);
+        info
+    } else {
+        gather_release_info(args.zen_path)?
+    };
 
     // Execute release tasks
-    for (name, task) in TASKS {
-        let spinner = Spinner::builder(*name).start();
-        match task(&release_info) {
-            Ok(()) => {
-                spinner.finish();
-                println!("{} {name}", "✓".green());
+    if using_human {
+        for (name, task) in TASKS {
+            let spinner = Spinner::builder(*name).start();
+            match task(&release_info) {
+                Ok(()) => {
+                    spinner.finish();
+                    println!("{} {name}", "✓".green());
+                }
+                Err(e) => {
+                    spinner.finish();
+                    println!("{} {name} failed", "✗".red());
+                    return Err(e.context(format!("{name} failed")));
+                }
             }
-            Err(e) => {
-                spinner.finish();
-                println!("{} {name} failed", "✗".red());
-                return Err(e.context(format!("{name} failed")));
-            }
+        }
+    } else {
+        for (_, task) in TASKS {
+            // Run tasks silently in JSON mode
+            task(&release_info)?;
         }
     }
 
@@ -91,13 +125,23 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     let zip_path = format!("{}.zip", release_info.staging_dir.display());
 
     info!("Release {} staged successfully", release_info.version);
-    println!();
-    println!(
-        "{} {}",
-        "✓".green().bold(),
-        format!("Release {} staged successfully", release_info.version).bold()
-    );
-    println!("Archive: {}", zip_path.with_style(Style::Cyan));
+
+    if using_human {
+        println!();
+        println!(
+            "{} {}",
+            "✓".green().bold(),
+            format!("Release {} staged successfully", release_info.version).bold()
+        );
+        println!("Archive: {}", zip_path.with_style(Style::Cyan));
+    } else {
+        let output = serde_json::json!({
+            "archive": zip_path,
+            "staging_directory": release_info.staging_dir,
+            "version": release_info.version,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
 
     Ok(())
 }
