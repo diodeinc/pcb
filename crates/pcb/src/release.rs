@@ -526,7 +526,7 @@ fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
 
     // Generate gerber files to a temporary directory
     let gerbers_dir = manufacturing_dir.join("gerbers_temp");
@@ -560,7 +560,7 @@ fn generate_drill_files(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
 
     KiCadCliBuilder::new()
         .command("pcb")
@@ -584,7 +584,7 @@ fn generate_drill_map(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
 
     KiCadCliBuilder::new()
         .command("pcb")
@@ -609,7 +609,7 @@ fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
 
     KiCadCliBuilder::new()
         .command("pcb")
@@ -637,7 +637,7 @@ fn generate_assembly_drawings(info: &ReleaseInfo) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
 
     // Generate front assembly drawing
     KiCadCliBuilder::new()
@@ -744,7 +744,7 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
     // Generate STEP model - KiCad CLI has platform-specific exit code issues
     let step_path = models_dir.join("model.step");
     let step_result = KiCadCliBuilder::new()
