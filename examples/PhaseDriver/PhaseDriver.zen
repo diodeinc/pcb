@@ -37,8 +37,8 @@ L6387E(
     gnd = P_GROUND,
     VBOOT = vboot_net,
     OUT = PHASE_OUT,
-    lin = PWM_LOW,
-    hin = PWM_HIGH,
+    lin = Gpio(NET = PWM_LOW.NET),
+    hin = Gpio(NET = PWM_HIGH.NET),
     LVG = low_side_gate_p1,
     HVG = high_side_gate_p1,
 )
