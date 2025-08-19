@@ -718,7 +718,7 @@ fn generate_odb(info: &ReleaseInfo) -> Result<()> {
     fs::create_dir_all(&manufacturing_dir)?;
 
     let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
-    let odb_path = manufacturing_dir.join("board.odb++");
+    let odb_path = manufacturing_dir.join("odb.zip");
 
     KiCadCliBuilder::new()
         .command("pcb")
