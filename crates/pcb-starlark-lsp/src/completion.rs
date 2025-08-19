@@ -34,7 +34,6 @@ use starlark::docs::markdown::render_doc_param;
 use starlark::docs::DocItem;
 use starlark::docs::DocMember;
 use starlark_syntax::codemap::ResolvedPos;
-use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
 
 use crate::definition::Definition;
@@ -77,7 +76,7 @@ impl<T: LspContext> Backend<T> {
         document: &LspModule,
         line: u32,
         character: u32,
-        workspace_root: Option<&Path>,
+        _workspace_root: Option<&Path>,
     ) -> impl Iterator<Item = CompletionItem> + '_ + use<'_, T> {
         let cursor_position = ResolvedPos {
             line: line as usize,
@@ -85,7 +84,7 @@ impl<T: LspContext> Backend<T> {
         };
 
         // Scan through current document
-        let mut symbols: HashMap<_, _> = find_symbols_at_location(
+        let symbols: HashMap<_, _> = find_symbols_at_location(
             document.ast.codemap(),
             document.ast.statement(),
             cursor_position,
@@ -142,41 +141,6 @@ impl<T: LspContext> Backend<T> {
             })
         })
         .collect();
-
-        // Discover exported symbols from other documents
-        let docs = self.last_valid_parse.read().unwrap();
-        if docs.len() > 1 {
-            // Find the position of the last load in the current file.
-            let mut last_load = None;
-            let mut loads = HashMap::new();
-            document.ast.statement().visit_stmt(|node| {
-                if let StmtP::Load(load) = &node.node {
-                    last_load = Some(node.span);
-                    loads.insert(load.module.node.clone(), (load.args.clone(), node.span));
-                }
-            });
-            let last_load = last_load.map(|span| document.ast.codemap().resolve_span(span));
-
-            symbols.extend(
-                self.get_all_exported_symbols(
-                    Some(document_uri),
-                    &symbols,
-                    workspace_root,
-                    document_uri,
-                    |module, symbol| {
-                        Self::get_load_text_edit(
-                            module,
-                            symbol,
-                            document,
-                            last_load,
-                            loads.get(module),
-                        )
-                    },
-                )
-                .into_iter()
-                .map(|item| (item.label.clone(), item)),
-            );
-        }
 
         symbols
             .into_values()

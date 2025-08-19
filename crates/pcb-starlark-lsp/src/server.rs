@@ -18,7 +18,7 @@
 //! Based on the reference lsp-server example at <https://github.com/rust-analyzer/lsp-server/blob/master/examples/goto_def.rs>.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
+
 use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,7 +29,6 @@ use derivative::Derivative;
 use derive_more::Display;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
-use itertools::Itertools;
 use lsp_server::Connection;
 use lsp_server::Message;
 use lsp_server::Notification;
@@ -69,13 +68,11 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::MessageType;
 use lsp_types::OneOf;
-use lsp_types::Position;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::ServerCapabilities;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
-use lsp_types::TextEdit;
 use lsp_types::Url;
 use lsp_types::WorkDoneProgressOptions;
 use lsp_types::WorkspaceFolder;
@@ -93,8 +90,6 @@ use starlark::docs::DocMember;
 use starlark::docs::DocModule;
 use starlark::syntax::AstModule;
 use starlark_syntax::codemap::ResolvedPos;
-use starlark_syntax::syntax::ast::AstPayload;
-use starlark_syntax::syntax::ast::LoadArgP;
 use starlark_syntax::syntax::module::AstModuleFields;
 
 pub use lsp_server::Request;
@@ -943,96 +938,6 @@ impl<T: LspContext> Backend<T> {
         Ok(CompletionResponse::Array(symbols.unwrap_or_default()))
     }
 
-    /// Using all currently loaded documents, gather a list of known exported
-    /// symbols. This list contains both the symbols exported from the loaded
-    /// files, as well as symbols loaded in the open files. Symbols that are
-    /// loaded from modules that are open are deduplicated.
-    pub(crate) fn get_all_exported_symbols<F, S>(
-        &self,
-        except_from: Option<&LspUrl>,
-        symbols: &HashMap<String, S>,
-        workspace_root: Option<&Path>,
-        current_document: &LspUrl,
-        format_text_edit: F,
-    ) -> Vec<CompletionItem>
-    where
-        F: Fn(&str, &str) -> TextEdit,
-    {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-
-        let all_documents = self.last_valid_parse.read().unwrap();
-
-        for (doc_uri, doc) in all_documents
-            .iter()
-            .filter(|&(doc_uri, _)| match except_from {
-                Some(uri) => doc_uri != uri,
-                None => true,
-            })
-        {
-            let Ok(load_path) =
-                self.context
-                    .render_as_load(doc_uri, current_document, workspace_root)
-            else {
-                continue;
-            };
-
-            for symbol in doc
-                .get_exported_symbols()
-                .into_iter()
-                .filter(|symbol| !symbols.contains_key(&symbol.name))
-            {
-                seen.insert(format!("{load_path}:{}", &symbol.name));
-
-                let text_edits = Some(vec![format_text_edit(&load_path, &symbol.name)]);
-                let mut completion_item: CompletionItem = symbol.into();
-                completion_item.detail = Some(format!("Load from {load_path}"));
-                completion_item.additional_text_edits = text_edits;
-
-                result.push(completion_item)
-            }
-        }
-
-        for (doc_uri, symbol) in all_documents
-            .iter()
-            .filter(|&(doc_uri, _)| match except_from {
-                Some(uri) => doc_uri != uri,
-                None => true,
-            })
-            .flat_map(|(doc_uri, doc)| {
-                doc.get_loaded_symbols()
-                    .into_iter()
-                    .map(move |symbol| (doc_uri, symbol))
-            })
-            .filter(|(_, symbol)| !symbols.contains_key(symbol.name))
-        {
-            let Ok(url) = self
-                .context
-                .resolve_load(symbol.loaded_from, doc_uri, workspace_root)
-            else {
-                continue;
-            };
-            let Ok(load_path) = self
-                .context
-                .render_as_load(&url, current_document, workspace_root)
-            else {
-                continue;
-            };
-
-            if seen.insert(format!("{}:{}", &load_path, symbol.name)) {
-                result.push(CompletionItem {
-                    label: symbol.name.to_owned(),
-                    detail: Some(format!("Load from {}", &load_path)),
-                    kind: Some(CompletionItemKind::CONSTANT),
-                    additional_text_edits: Some(vec![format_text_edit(&load_path, symbol.name)]),
-                    ..Default::default()
-                })
-            }
-        }
-
-        result
-    }
-
     pub(crate) fn get_global_symbol_completion_items(
         &self,
         current_document: &LspUrl,
@@ -1054,68 +959,6 @@ impl<T: LspContext> Backend<T> {
                 })),
                 ..Default::default()
             })
-    }
-
-    pub(crate) fn get_load_text_edit<P>(
-        module: &str,
-        symbol: &str,
-        ast: &LspModule,
-        last_load: Option<ResolvedSpan>,
-        existing_load: Option<&(Vec<LoadArgP<P>>, Span)>,
-    ) -> TextEdit
-    where
-        P: AstPayload,
-    {
-        match existing_load {
-            Some((previously_loaded_symbols, load_span)) => {
-                // We're already loading a symbol from this module path, construct
-                // a text edit that amends the existing load.
-                let load_span = ast.ast.codemap().resolve_span(*load_span);
-                let mut load_args: Vec<(&str, &str)> = previously_loaded_symbols
-                    .iter()
-                    .map(|LoadArgP { local, their, .. }| {
-                        (local.ident.as_str(), their.node.as_str())
-                    })
-                    .collect();
-                load_args.push((symbol, symbol));
-                load_args.sort_by(|(_, a), (_, b)| a.cmp(b));
-
-                TextEdit::new(
-                    load_span.into(),
-                    format!(
-                        "load(\"{module}\", {})",
-                        load_args
-                            .into_iter()
-                            .map(|(assign, import)| {
-                                if assign == import {
-                                    format!("\"{import}\"")
-                                } else {
-                                    format!("{assign} = \"{import}\"")
-                                }
-                            })
-                            .join(", ")
-                    ),
-                )
-            }
-            None => {
-                // We're not yet loading from this module, construct a text edit that
-                // inserts a new load statement after the last one we found.
-                TextEdit::new(
-                    match last_load {
-                        Some(span) => Range::new(
-                            Position::new(span.end.line as u32, span.end.column as u32),
-                            Position::new(span.end.line as u32, span.end.column as u32),
-                        ),
-                        None => Range::new(Position::new(0, 0), Position::new(0, 0)),
-                    },
-                    format!(
-                        "{}load(\"{module}\", \"{symbol}\"){}",
-                        if last_load.is_some() { "\n" } else { "" },
-                        if last_load.is_some() { "" } else { "\n\n" },
-                    ),
-                )
-            }
-        }
     }
 
     /// Get completion items for each language keyword.
