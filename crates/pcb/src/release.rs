@@ -757,6 +757,9 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg(step_path.to_string_lossy())
         .arg("--no-dnp")
         .arg("--no-unspecified")
+        .arg("--include-pads")
+        .arg("--include-silkscreen")
+        .arg("--include-soldermask")
         .arg(kicad_pcb_path.to_string_lossy())
         .run();
 
