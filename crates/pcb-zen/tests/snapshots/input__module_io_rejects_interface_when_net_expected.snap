@@ -15,4 +15,4 @@ expression: netlist
   )
 )
 Error: [TEMP_DIR]parent.zen:8:1-36 Error instantiating `child`
-Error: [TEMP_DIR]child.zen:2:10-27 Type mismatch: expected Net, received Interface
+Error: [TEMP_DIR]child.zen:2:10-27 Expected 'Net', received: [SingleNet]

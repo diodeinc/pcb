@@ -21,6 +21,9 @@ expression: output
           "properties": {}
         }
       }
+    },
+    "promotion_by_type": {
+      "Power": ""
     }
   }
 }
@@ -37,6 +40,9 @@ expression: output
       "count": {
         "Int": 10
       }
+    },
+    "promotion_by_type": {
+      "Config": ""
     }
   }
 }
@@ -54,12 +60,18 @@ expression: output
                 "properties": {}
               }
             }
+          },
+          "promotion_by_type": {
+            "Power": ""
           }
         }
       },
       "debug": {
         "Bool": false
       }
+    },
+    "promotion_by_type": {
+      "System": ""
     }
   }
 }

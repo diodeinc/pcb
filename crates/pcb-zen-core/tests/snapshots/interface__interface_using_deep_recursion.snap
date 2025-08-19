@@ -1,0 +1,54 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+=== Level3 Factory ===
+{
+  "Unsupported": "InterfaceFactory"
+}
+=== Level3 Instance ===
+{
+  "Interface": {
+    "fields": {
+      "level2": {
+        "Interface": {
+          "fields": {
+            "level1": {
+              "Interface": {
+                "fields": {
+                  "net": {
+                    "Net": {
+                      "id": 2,
+                      "name": "LEVEL1",
+                      "properties": {}
+                    }
+                  }
+                },
+                "promotion_by_type": {
+                  "Net": "net",
+                  "Level1": ""
+                }
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Level1": "level1",
+            "Net": "level1.net",
+            "Level2": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Level2": "level2",
+      "Level1": "level2.level1",
+      "Net": "level2.level1.net",
+      "Level3": ""
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

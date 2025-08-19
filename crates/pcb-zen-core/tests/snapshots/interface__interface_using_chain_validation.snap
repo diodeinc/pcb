@@ -1,0 +1,119 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+=== Complete using() Chain ===
+{
+  "Interface": {
+    "fields": {
+      "power": {
+        "Interface": {
+          "fields": {
+            "NET": {
+              "Net": {
+                "id": 10,
+                "name": "COMPLETE_POWER_VCC",
+                "properties": {}
+              }
+            },
+            "voltage": {
+              "String": "3.3V"
+            }
+          },
+          "promotion_by_type": {
+            "Net": "NET",
+            "Power": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 11,
+                "name": "COMPLETE_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 12,
+                "name": "COMPLETE_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Power": "power",
+      "Net": "power.NET",
+      "Uart": "uart",
+      "CompleteChain": ""
+    }
+  }
+}
+=== Broken Chain (regular field) ===
+{
+  "Interface": {
+    "fields": {
+      "power": {
+        "Interface": {
+          "fields": {
+            "NET": {
+              "Net": {
+                "id": 13,
+                "name": "BROKEN_POWER_VCC",
+                "properties": {}
+              }
+            },
+            "voltage": {
+              "String": "3.3V"
+            }
+          },
+          "promotion_by_type": {
+            "Net": "NET",
+            "Power": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 14,
+                "name": "BROKEN_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 15,
+                "name": "BROKEN_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Uart": "uart",
+      "BrokenChain": ""
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

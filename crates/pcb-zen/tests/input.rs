@@ -119,9 +119,12 @@ pdm = io("pdm", PdmMic)
 
 # --- top.zen
 # Load the `sub` module from the current directory.
-load(".", Sub = "sub")
+load("./sub.zen", "PdmMic")
+Sub = Module("./sub.zen")
 
-pdm = Sub.PdmMic("PDM")
+print(PdmMic)
+pdm = PdmMic("PDM")
+print(pdm)
 Sub(name = "sub", pdm = pdm)
 "#,
     );

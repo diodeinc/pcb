@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Error: test.zen:24:11-40 Expected 'Power', received: [Uart, Usart]

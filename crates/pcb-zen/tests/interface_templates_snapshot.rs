@@ -216,3 +216,75 @@ Component(
 
     star_snapshot!(env, "test.zen");
 }
+
+#[test]
+fn interface_using_promotion_targets() {
+    let env = TestProject::new();
+
+    env.add_file(
+        "test.zen",
+        r#"
+# Test using() promotion target serialization
+Power = interface(
+    NET = using(Net("VCC")),
+    voltage = field(str, "3.3V"),
+)
+
+Uart = interface(
+    TX = Net("UART_TX"),
+    RX = Net("UART_RX"),
+)
+
+Usart = interface(
+    uart = using(Uart()),
+    CK = Net("USART_CK"),
+    RTS = Net("USART_RTS"),
+    CTS = Net("USART_CTS"),
+)
+
+# Create instances to trigger serialization
+power = Power("MAIN")
+uart = Uart("DEBUG") 
+usart = Usart("COMM")
+
+# Print serialized forms to capture promotion_by_type
+print("=== Serialized Interface Data ===")
+print("Power serialized:")
+print(serialize(power))
+print("UART serialized:")
+print(serialize(uart))
+print("USART serialized:")
+print(serialize(usart))
+print("=== End Serialized Data ===")
+
+# Use in components to generate serialization
+Component(
+    name = "U1",
+    type = "regulator", 
+    pin_defs = {"VIN": "1", "VOUT": "2", "GND": "3"},
+    footprint = "SOT:23-5",
+    pins = {
+        "VOUT": power.NET,
+        "GND": Net("GND"),
+        "VIN": Net("VIN"),
+    }
+)
+
+Component(
+    name = "U2", 
+    type = "mcu",
+    pin_defs = {"TX": "1", "RX": "2", "CK": "3", "RTS": "4", "CTS": "5"},
+    footprint = "QFN:32",
+    pins = {
+        "TX": usart.uart.TX,
+        "RX": usart.uart.RX, 
+        "CK": usart.CK,
+        "RTS": usart.RTS,
+        "CTS": usart.CTS,
+    }
+)
+"#,
+    );
+
+    star_snapshot!(env, "test.zen");
+}

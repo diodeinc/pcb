@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Error: test.zen:5:10-7:2 Anonymous interfaces are not allowed. All interfaces must be assigned to a variable (e.g., MyInterface = interface(...))

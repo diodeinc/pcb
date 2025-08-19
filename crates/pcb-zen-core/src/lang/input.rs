@@ -20,7 +20,7 @@ use starlark::values::list::ListRef;
 use starlark::values::record::{FrozenRecord, FrozenRecordType, Record, RecordType};
 use starlark::values::{Trace, Value, ValueLike};
 
-use crate::lang::interface::{FrozenInterfaceValue, InterfaceValue};
+use crate::lang::interface::{get_promotion_map, FrozenInterfaceValue, InterfaceValue};
 use crate::lang::net::NetValue;
 use crate::{FrozenNetValue, NetId};
 
@@ -59,6 +59,7 @@ pub enum InputValue {
     /// Represents an Interface instance (recursively stores its field values).
     Interface {
         fields: SmallMap<String, InputValue>,
+        promotion_by_type: SmallMap<String, String>,
     },
 
     /// Fallback for unsupported / complex values.
@@ -87,7 +88,25 @@ impl fmt::Display for InputValue {
                     write!(f, "Net({name}, {} properties)", properties.len())
                 }
             }
-            InputValue::Interface { .. } => write!(f, "Interface(...)"),
+            InputValue::Interface {
+                fields,
+                promotion_by_type,
+            } => {
+                if promotion_by_type.is_empty() {
+                    write!(f, "Interface(fields={})", fields.len())
+                } else {
+                    write!(
+                        f,
+                        "Interface(fields={}, using=[{}])",
+                        fields.len(),
+                        promotion_by_type
+                            .values()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                }
+            }
             InputValue::Unsupported(s) => write!(f, "Unsupported({s})"),
         }
     }
@@ -174,15 +193,34 @@ impl InputValue {
                     ))
                     .to_value())
             }
-            InputValue::Interface { fields } => {
+            InputValue::Interface {
+                fields,
+                promotion_by_type,
+            } => {
                 // We rely on expected_typ (InterfaceFactory) to build a new instance.
                 let typ_val =
                     expected_typ.ok_or_else(|| anyhow!("interface input requires expected_typ"))?;
 
-                if typ_val.downcast_ref::<InterfaceFactory>().is_none()
-                    && typ_val.downcast_ref::<FrozenInterfaceFactory>().is_none()
-                {
-                    return Err(anyhow!("Type mismatch: expected Net, received Interface"));
+                // Check if the expected type is a promotion target
+                let expected_type_name = crate::lang::interface::get_promotion_key(typ_val)?;
+                let promotion_path =
+                    promotion_by_type.get(&expected_type_name).ok_or_else(|| {
+                        let available_targets: Vec<String> =
+                            promotion_by_type.keys().cloned().collect();
+                        anyhow!(
+                            "Expected '{}', received: [{}]",
+                            expected_type_name,
+                            available_targets.join(", ")
+                        )
+                    })?;
+                if !promotion_path.is_empty() {
+                    let field = promotion_path.split('.').next().ok_or_else(|| {
+                        anyhow!("Failed to resolve promotion path '{}'", promotion_path)
+                    })?;
+                    let field_value = fields.get(field).ok_or_else(|| {
+                        anyhow!("Failed to resolve promotion path '{}'", promotion_path)
+                    })?;
+                    return field_value.to_value(eval, Some(typ_val));
                 }
 
                 // Convert each stored field recursively, passing down the expected type if we can
@@ -190,15 +228,43 @@ impl InputValue {
                 let mut named: Vec<(&str, Value<'v>)> = Vec::with_capacity(fields.len());
                 for (k, v) in fields.iter() {
                     // Look up the expected type for this field (if available) on the interface
-                    // factory. We need to handle both the regular and the frozen variants.
-                    let expected_field_typ: Option<Value<'v>> =
-                        if let Some(fac) = typ_val.downcast_ref::<InterfaceFactory<'v>>() {
-                            fac.field(k.as_str()).map(|val| val.to_value())
-                        } else if let Some(fac) = typ_val.downcast_ref::<FrozenInterfaceFactory>() {
-                            fac.field(k.as_str()).map(|val| val.to_value())
-                        } else {
-                            None
-                        };
+                    // factory. We need to handle both the regular and the frozen variants.]
+                    // TODO: this is quite ugly, simplify this somehow.
+                    let expected_field_typ: Option<Value<'v>> = if let Some(fac) =
+                        typ_val.downcast_ref::<InterfaceFactory<'v>>()
+                    {
+                        fac.field(k.as_str()).map(|val| {
+                            // Unwrap using() wrapper if present to get the actual expected type
+                            let unwrapped = crate::lang::interface::unwrap_using(val.to_value());
+                            // If the unwrapped value is an interface instance, get its factory for type checking
+                            if let Some(instance) = unwrapped.downcast_ref::<InterfaceValue<'v>>() {
+                                instance.factory().to_value()
+                            } else if let Some(instance) =
+                                unwrapped.downcast_ref::<FrozenInterfaceValue>()
+                            {
+                                instance.factory().to_value()
+                            } else {
+                                unwrapped
+                            }
+                        })
+                    } else if let Some(fac) = typ_val.downcast_ref::<FrozenInterfaceFactory>() {
+                        fac.field(k.as_str()).map(|val| {
+                            // Unwrap using() wrapper if present to get the actual expected type
+                            let unwrapped = crate::lang::interface::unwrap_using(val.to_value());
+                            // If the unwrapped value is an interface instance, get its factory for type checking
+                            if let Some(instance) = unwrapped.downcast_ref::<InterfaceValue<'v>>() {
+                                instance.factory().to_value()
+                            } else if let Some(instance) =
+                                unwrapped.downcast_ref::<FrozenInterfaceValue>()
+                            {
+                                instance.factory().to_value()
+                            } else {
+                                unwrapped
+                            }
+                        })
+                    } else {
+                        None
+                    };
 
                     named.push((k.as_str(), v.to_value(eval, expected_field_typ)?));
                 }
@@ -320,7 +386,15 @@ impl InputValue {
             for (k, v) in iface.fields().iter() {
                 field_map.insert(k.clone(), InputValue::from_value(*v));
             }
-            return InputValue::Interface { fields: field_map };
+
+            // Extract promotion information from the factory using get_promotion_map
+            // which includes the interface's own type name if available
+            let promotion_by_type = get_promotion_map(iface.factory().to_value());
+
+            return InputValue::Interface {
+                fields: field_map,
+                promotion_by_type,
+            };
         }
 
         if let Some(iface) = value.downcast_ref::<FrozenInterfaceValue>() {
@@ -328,7 +402,15 @@ impl InputValue {
             for (k, v) in iface.fields().iter() {
                 field_map.insert(k.clone(), InputValue::from_value(v.to_value()));
             }
-            return InputValue::Interface { fields: field_map };
+
+            // Extract promotion information from the factory using get_promotion_map
+            // which includes the interface's own type name if available
+            let promotion_by_type = get_promotion_map(iface.factory().to_value());
+
+            return InputValue::Interface {
+                fields: field_map,
+                promotion_by_type,
+            };
         }
 
         InputValue::Unsupported(value.get_type().to_owned())

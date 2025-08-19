@@ -1,0 +1,128 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+=== Control Interface ===
+{
+  "Interface": {
+    "fields": {
+      "reset": {
+        "Net": {
+          "id": 8,
+          "name": "CTRL_RESET",
+          "properties": {}
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Net": "reset",
+      "Control": ""
+    }
+  }
+}
+=== Power Interface (with transitive to Control and Net) ===
+{
+  "Interface": {
+    "fields": {
+      "NET": {
+        "Net": {
+          "id": 9,
+          "name": "PWR_VCC",
+          "properties": {}
+        }
+      },
+      "voltage": {
+        "String": "3.3V"
+      }
+    },
+    "promotion_by_type": {
+      "Net": "NET",
+      "Power": ""
+    }
+  }
+}
+=== UART Interface (no promotions) ===
+{
+  "Interface": {
+    "fields": {
+      "TX": {
+        "Net": {
+          "id": 10,
+          "name": "UART_UART_TX",
+          "properties": {}
+        }
+      },
+      "RX": {
+        "Net": {
+          "id": 11,
+          "name": "UART_UART_RX",
+          "properties": {}
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Uart": ""
+    }
+  }
+}
+=== System Interface (multiple transitive paths) ===
+{
+  "Interface": {
+    "fields": {
+      "power": {
+        "Interface": {
+          "fields": {
+            "NET": {
+              "Net": {
+                "id": 12,
+                "name": "SYS_POWER_VCC",
+                "properties": {}
+              }
+            },
+            "voltage": {
+              "String": "3.3V"
+            }
+          },
+          "promotion_by_type": {
+            "Net": "NET",
+            "Power": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 13,
+                "name": "SYS_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 14,
+                "name": "SYS_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Power": "power",
+      "Net": "power.NET",
+      "Uart": "uart",
+      "ValidSystem": ""
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

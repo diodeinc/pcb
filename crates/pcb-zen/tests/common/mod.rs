@@ -70,6 +70,7 @@ impl TestProject {
     /// Evaluate the Starlark project starting from `top_rel_path` (relative to the
     /// project root) and return the generated KiCad netlist as a string suitable
     /// for snapshot testing.
+    #[allow(dead_code)]
     pub fn eval_netlist(&self, top_rel_path: impl AsRef<Path>) -> WithDiagnostics<String> {
         let top_path = self.root().join(top_rel_path);
         self.eval_netlist_from_absolute(&top_path)
@@ -77,6 +78,7 @@ impl TestProject {
 
     /// Same as [`Self::eval_netlist`] but accepts an absolute path.  This is useful
     /// when a test already has a full path (e.g. returned from [`Self::add_file`]).
+    #[allow(dead_code)]
     pub fn eval_netlist_from_absolute(&self, top_path: &Path) -> WithDiagnostics<String> {
         use pcb_sch::kicad_netlist::to_kicad_netlist;
         pcb_zen::run(top_path, false).map(|s| to_kicad_netlist(&s))

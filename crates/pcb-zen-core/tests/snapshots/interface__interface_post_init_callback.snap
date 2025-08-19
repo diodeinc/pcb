@@ -17,6 +17,9 @@ Power validation: PASS
           "properties": {}
         }
       }
+    },
+    "promotion_by_type": {
+      "PowerInterface": ""
     }
   }
 }

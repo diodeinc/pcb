@@ -1,0 +1,161 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+=== Power Interface (Net promotion) ===
+{
+  "Interface": {
+    "fields": {
+      "NET": {
+        "Net": {
+          "id": 11,
+          "name": "MAIN_VCC",
+          "properties": {}
+        }
+      },
+      "voltage": {
+        "String": "3.3V"
+      }
+    },
+    "promotion_by_type": {
+      "Net": "NET",
+      "Power": ""
+    }
+  }
+}
+=== UART Interface (no promotion) ===
+{
+  "Interface": {
+    "fields": {
+      "TX": {
+        "Net": {
+          "id": 12,
+          "name": "DEBUG_UART_TX",
+          "properties": {}
+        }
+      },
+      "RX": {
+        "Net": {
+          "id": 13,
+          "name": "DEBUG_UART_RX",
+          "properties": {}
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Uart": ""
+    }
+  }
+}
+=== USART Interface (Interface promotion) ===
+{
+  "Interface": {
+    "fields": {
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 14,
+                "name": "COMM_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 15,
+                "name": "COMM_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      },
+      "CK": {
+        "Net": {
+          "id": 16,
+          "name": "COMM_USART_CK",
+          "properties": {}
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Uart": "uart",
+      "Usart": ""
+    }
+  }
+}
+=== Complex Interface (multiple promotions) ===
+{
+  "Interface": {
+    "fields": {
+      "uart_field": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 17,
+                "name": "COMPLEX_UART_FIELD_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 18,
+                "name": "COMPLEX_UART_FIELD_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      },
+      "power_field": {
+        "Interface": {
+          "fields": {
+            "NET": {
+              "Net": {
+                "id": 19,
+                "name": "COMPLEX_POWER_FIELD_VCC",
+                "properties": {}
+              }
+            },
+            "voltage": {
+              "String": "3.3V"
+            }
+          },
+          "promotion_by_type": {
+            "Net": "NET",
+            "Power": ""
+          }
+        }
+      },
+      "regular_net": {
+        "Net": {
+          "id": 20,
+          "name": "COMPLEX_REGULAR",
+          "properties": {}
+        }
+      },
+      "config": {
+        "String": "default"
+      }
+    },
+    "promotion_by_type": {
+      "Uart": "uart_field",
+      "Power": "power_field",
+      "Net": "power_field.NET",
+      "ComplexInterface": ""
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

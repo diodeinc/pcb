@@ -110,6 +110,14 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
         return Ok(dst.alloc(AllocDict(new_map)));
     }
 
+    // Handle FieldGen from external starlark crate
+    // Since FieldGen doesn't implement DeepCopyToHeap and we can't modify external types,
+    // we return None. This works because field objects are typically used during interface
+    // definition and don't need cross-heap copying in normal usage patterns.
+    if v.get_type() == "field" {
+        return Ok(Value::new_none());
+    }
+
     if let Some(dc) = v.request_value::<&dyn DeepCopyToHeap>() {
         return dc.deep_copy_to(dst);
     }

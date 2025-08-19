@@ -26,6 +26,9 @@ Config2 ratio: 2.71
       "ratio": {
         "Float": 3.14
       }
+    },
+    "promotion_by_type": {
+      "ConfigInterface": ""
     }
   }
 }

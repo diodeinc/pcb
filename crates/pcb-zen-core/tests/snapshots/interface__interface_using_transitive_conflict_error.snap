@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Error: test.zen:7:21-10:2 Interface has conflicting promotion paths to type 'Net': 'power.NET' and 'direct_net'

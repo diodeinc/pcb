@@ -1,0 +1,271 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+=== Original Deep Instance ===
+{
+  "Interface": {
+    "fields": {
+      "level2": {
+        "Interface": {
+          "fields": {
+            "level1": {
+              "Interface": {
+                "fields": {
+                  "net": {
+                    "Net": {
+                      "id": 2,
+                      "name": "LEVEL1",
+                      "properties": {}
+                    }
+                  }
+                },
+                "promotion_by_type": {
+                  "Net": "net",
+                  "Level1": ""
+                }
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Level1": "level1",
+            "Net": "level1.net",
+            "Level2": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 8,
+                "name": "DEEP_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 9,
+                "name": "DEEP_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Level2": "level2",
+      "Level1": "level2.level1",
+      "Net": "level2.level1.net",
+      "Uart": "uart",
+      "Level3": ""
+    }
+  }
+}
+=== Deserialized Deep Instance ===
+{
+  "Interface": {
+    "fields": {
+      "level2": {
+        "Interface": {
+          "fields": {
+            "level1": {
+              "Interface": {
+                "fields": {
+                  "net": {
+                    "Net": {
+                      "id": 2,
+                      "name": "LEVEL1",
+                      "properties": {}
+                    }
+                  }
+                },
+                "promotion_by_type": {
+                  "Net": "net",
+                  "Level1": ""
+                }
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Level1": "level1",
+            "Net": "level1.net",
+            "Level2": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 8,
+                "name": "DEEP_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 9,
+                "name": "DEEP_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Level2": "level2",
+      "Level1": "level2.level1",
+      "Net": "level2.level1.net",
+      "Uart": "uart",
+      "Level3": ""
+    }
+  }
+}
+=== Verification ===
+Original display: Level3(level2=using(Level2(level1=using(Level1(net=using(Net { name: "LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))), uart=using(Uart(RX=Net { name: "DEEP_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "DEEP_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Deserialized display: Level3(level2=using(Level2(level1=using(Level1(net=using(Net { name: "LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))), uart=using(Uart(RX=Net { name: "DEEP_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "DEEP_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+=== Factory Integrity Check ===
+New from original: {
+  "Interface": {
+    "fields": {
+      "level2": {
+        "Interface": {
+          "fields": {
+            "level1": {
+              "Interface": {
+                "fields": {
+                  "net": {
+                    "Net": {
+                      "id": 2,
+                      "name": "LEVEL1",
+                      "properties": {}
+                    }
+                  }
+                },
+                "promotion_by_type": {
+                  "Net": "net",
+                  "Level1": ""
+                }
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Level1": "level1",
+            "Net": "level1.net",
+            "Level2": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 10,
+                "name": "NEW_FROM_ORIGINAL_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 11,
+                "name": "NEW_FROM_ORIGINAL_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Level2": "level2",
+      "Level1": "level2.level1",
+      "Net": "level2.level1.net",
+      "Uart": "uart",
+      "Level3": ""
+    }
+  }
+}
+New from deserialized: {
+  "Interface": {
+    "fields": {
+      "level2": {
+        "Interface": {
+          "fields": {
+            "level1": {
+              "Interface": {
+                "fields": {
+                  "net": {
+                    "Net": {
+                      "id": 2,
+                      "name": "LEVEL1",
+                      "properties": {}
+                    }
+                  }
+                },
+                "promotion_by_type": {
+                  "Net": "net",
+                  "Level1": ""
+                }
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Level1": "level1",
+            "Net": "level1.net",
+            "Level2": ""
+          }
+        }
+      },
+      "uart": {
+        "Interface": {
+          "fields": {
+            "TX": {
+              "Net": {
+                "id": 12,
+                "name": "NEW_FROM_DESERIALIZED_UART_UART_TX",
+                "properties": {}
+              }
+            },
+            "RX": {
+              "Net": {
+                "id": 13,
+                "name": "NEW_FROM_DESERIALIZED_UART_UART_RX",
+                "properties": {}
+              }
+            }
+          },
+          "promotion_by_type": {
+            "Uart": ""
+          }
+        }
+      }
+    },
+    "promotion_by_type": {
+      "Level2": "level2",
+      "Level1": "level2.level1",
+      "Net": "level2.level1.net",
+      "Uart": "uart",
+      "Level3": ""
+    }
+  }
+}
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

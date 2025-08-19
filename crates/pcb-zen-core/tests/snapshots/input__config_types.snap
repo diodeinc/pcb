@@ -171,6 +171,9 @@ Module {
                         properties: {},
                     },
                 },
+                promotion_by_type: {
+                    "Power": "",
+                },
             },
         ),
         help: None,
@@ -204,6 +207,9 @@ Module {
                         name: "opt_power_io_GND",
                         properties: {},
                     },
+                },
+                promotion_by_type: {
+                    "Power": "",
                 },
             },
         ),
@@ -247,6 +253,9 @@ Module {
                         name: "bus_io_ENABLE",
                         properties: {},
                     },
+                },
+                promotion_by_type: {
+                    "DataBus": "",
                 },
             },
         ),
@@ -316,6 +325,9 @@ Module {
                                 properties: {},
                             },
                         },
+                        promotion_by_type: {
+                            "Power": "",
+                        },
                     },
                     "bus": Interface {
                         fields: {
@@ -335,12 +347,18 @@ Module {
                                 properties: {},
                             },
                         },
+                        promotion_by_type: {
+                            "DataBus": "",
+                        },
                     },
                     "reset": Net {
                         id: 15,
                         name: "system_io_RESET",
                         properties: {},
                     },
+                },
+                promotion_by_type: {
+                    "System": "",
                 },
             },
         ),

@@ -1,0 +1,19 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Basic Net promotion - Power -> Net: Net { name: "VCC", id: "<ID>", symbol: Value(NoneType) }
+Deep promotion test - Level3 instance: Level3(level2=using(Level2(extra=42, level1=using(Level1(meta="level1", net=using(Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }))))))
+Deep Net promotion - Level3 -> Net: Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }
+Intermediate promotions:
+  Level3 -> Level2: Level2(extra=42, level1=using(Level1(meta="level1", net=using(Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }))))
+  Level3 -> Level1: Level1(meta="level1", net=using(Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }))
+Net consistency check:
+  Direct from Level3: Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }
+  Via Level2: Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }
+  Via Level1: Net { name: "DEEP", id: "<ID>", symbol: Value(NoneType) }
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

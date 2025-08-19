@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Error: test.zen:3:16-6:2 Interface has conflicting promotion paths to type 'Net': 'net1' and 'net2'
