@@ -102,11 +102,3 @@ ignore = "0.4"
 [profile.dist]
 inherits = "release"
 lto = "thin"
-
-# Use local fork of starlark deps in ../starlark-rust
-# [patch."https://github.com/diodeinc/starlark-rust"]
-# starlark = { path = "../starlark-rust/starlark" }
-# starlark_map = { path = "../starlark-rust/starlark_map" }
-# starlark_derive = { path = "../starlark-rust/starlark_derive" }
-# starlark_syntax = { path = "../starlark-rust/starlark_syntax" }
-# allocative = { path = "../starlark-rust/allocative/allocative" }
