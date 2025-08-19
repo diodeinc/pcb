@@ -17,6 +17,7 @@ mod workspace;
 #[derive(Parser)]
 #[command(name = "pcb")]
 #[command(about = "PCB tool with build and layout capabilities", long_about = None)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
