@@ -266,6 +266,9 @@ pub fn discover_boards(
         }
     }
 
+    // Sort boards alphabetically
+    boards.sort_by(|a, b| a.name.cmp(&b.name));
+
     Ok(DiscoveryResult { boards, errors })
 }
 
@@ -292,9 +295,24 @@ pub fn get_workspace_info(
     // Discover boards
     let discovery = discover_boards(file_provider, &workspace_root, &workspace_config)?;
 
+    // If no default_board is configured and we have boards, set the first one as default
+    let mut final_config = workspace_config;
+    if let Some(config) = &mut final_config {
+        if config.default_board.is_none() && !discovery.boards.is_empty() {
+            config.default_board = Some(discovery.boards[0].name.clone());
+        }
+    } else if !discovery.boards.is_empty() {
+        // Create a minimal workspace config with the first board as default
+        final_config = Some(WorkspaceConfig {
+            name: None,
+            members: default_members(),
+            default_board: Some(discovery.boards[0].name.clone()),
+        });
+    }
+
     Ok(WorkspaceInfo {
         root: workspace_root,
-        config: workspace_config,
+        config: final_config,
         boards: discovery.boards,
         errors: discovery.errors,
     })
