@@ -358,11 +358,56 @@ pub struct Module {
     load_resolver: Arc<pcb_zen_core::CoreLoadResolver>,
 }
 
+fn make_load_resolver(
+    file_provider: Arc<WasmFileProvider>,
+    inner_provider: Arc<Mutex<pcb_zen_core::InMemoryFileProvider>>,
+    workspace_root: PathBuf,
+    use_vendor_dir: bool,
+    offline: bool,
+) -> Arc<pcb_zen_core::CoreLoadResolver> {
+    let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if offline {
+        Arc::new(pcb_zen_core::NoopRemoteFetcher)
+    } else {
+        Arc::new(WasmRemoteFetcher::new(inner_provider))
+    };
+
+    Arc::new(pcb_zen_core::CoreLoadResolver::new(
+        file_provider,
+        remote_fetcher,
+        workspace_root,
+        use_vendor_dir,
+    ))
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ModuleConfig {
+    use_vendor_dir: Option<bool>,
+    offline: Option<bool>,
+}
+
+fn parse_flags(config: &JsValue) -> (bool, bool) {
+    // Defaults match current behavior: vendor on, remote allowed
+    let default_use_vendor = true;
+    let default_offline = false;
+
+    if config.is_undefined() || config.is_null() {
+        return (default_use_vendor, default_offline);
+    }
+    if let Ok(cfg) = serde_wasm_bindgen::from_value::<ModuleConfig>(config.clone()) {
+        let use_vendor = cfg.use_vendor_dir.unwrap_or(default_use_vendor);
+        let offline = cfg.offline.unwrap_or(default_offline);
+        (use_vendor, offline)
+    } else {
+        (default_use_vendor, default_offline)
+    }
+}
+
 #[wasm_bindgen]
 impl Module {
     /// Create a module from a single file path
     #[wasm_bindgen(js_name = fromPath)]
-    pub fn from_path(file_path: &str) -> Result<Module, JsValue> {
+    pub fn from_path(file_path: &str, config: JsValue) -> Result<Module, JsValue> {
         // Extract module name from the file path
         let path = PathBuf::from(file_path);
         let module_name = path
@@ -379,20 +424,22 @@ impl Module {
             HashMap::new(),
         )));
 
-        // Create file provider and remote fetcher that share the same inner provider
+        // Create file provider
         let file_provider = Arc::new(WasmFileProvider::new(inner_provider.clone()));
-        let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
 
         // Determine workspace root using pcb.toml discovery
         let workspace_root = find_workspace_root(file_provider.as_ref(), &path);
 
-        // Create load resolver
-        let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
+        let (use_vendor_dir, offline) = parse_flags(&config);
+
+        // Create load resolver with parsed flags
+        let load_resolver = make_load_resolver(
             file_provider.clone(),
-            remote_fetcher.clone(),
+            inner_provider,
             workspace_root,
-            true,
-        ));
+            use_vendor_dir,
+            offline,
+        );
 
         Ok(Module {
             id,
@@ -409,6 +456,7 @@ impl Module {
         files_json: &str,
         main_file: &str,
         module_name: &str,
+        config: JsValue,
     ) -> Result<Module, JsValue> {
         let files: std::collections::HashMap<String, String> = serde_json::from_str(files_json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse files JSON: {e}")))?;
@@ -421,21 +469,23 @@ impl Module {
             files.clone(),
         )));
 
-        // Create file provider and remote fetcher that share the same inner provider
+        // Create file provider
         let file_provider = Arc::new(WasmFileProvider::new(inner_provider.clone()));
-        let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
 
         // Determine workspace root using pcb.toml discovery
         let main_path = PathBuf::from(main_file);
         let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path);
 
-        // Create load resolver
-        let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
+        let (use_vendor_dir, offline) = parse_flags(&config);
+
+        // Create load resolver with parsed flags
+        let load_resolver = make_load_resolver(
             file_provider.clone(),
-            remote_fetcher.clone(),
+            inner_provider,
             workspace_root,
-            true,
-        ));
+            use_vendor_dir,
+            offline,
+        );
 
         Ok(Module {
             id,
