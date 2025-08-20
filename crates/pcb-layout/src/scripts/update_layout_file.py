@@ -1749,8 +1749,31 @@ class SyncLayouts(Step):
 
         # Sync zones and graphics only if we matched at least one footprint
         if matched > 0:
-            # Build net mapping using netlist information
-            net_mapping = self._build_net_mapping_for_group(group.id)
+            # Build net mapping using matched footprints: map module pad net -> board pad net
+            net_mapping: Dict[str, str] = {}
+            for rel_path, target_fp in target_by_path.items():
+                if rel_path in source_by_path:
+                    source_fp = source_by_path[rel_path]
+                    if (
+                        source_fp.kicad_footprint is not None
+                        and target_fp.kicad_footprint is not None
+                    ):
+                        try:
+                            for target_pad in target_fp.kicad_footprint.Pads():
+                                pad_num = target_pad.GetPadName()
+                                source_pad = source_fp.kicad_footprint.FindPadByNumber(
+                                    pad_num
+                                )
+                                if source_pad is None:
+                                    continue
+                                src_net = source_pad.GetNetname()
+                                dst_net = target_pad.GetNetname()
+                                if src_net and dst_net and src_net not in net_mapping:
+                                    net_mapping[src_net] = dst_net
+                        except Exception as e:
+                            logger.debug(
+                                f"  Skipping pad-based net mapping for {rel_path} due to error: {e}"
+                            )
 
             # Sync zones from the layout
             # For newly added groups, don't apply offset (items will move with the group later)
@@ -1985,16 +2008,76 @@ class SyncLayouts(Step):
             new_zone.SetLayer(source_zone.GetLayer())
             new_zone.SetLayerSet(source_zone.GetLayerSet())
 
-            # Map net by name, using the module->board net name mapping if available
+            # Decide the target net for this zone.
+            # Strategy: infer from pads contained within the zone in the target group.
+            # Fallback to name mapping from source zone if inference fails.
+            def _point_in_polygon(px: int, py: int, pts: list[tuple[int, int]]) -> bool:
+                # Ray casting algorithm for integer coords
+                inside = False
+                n = len(pts)
+                if n < 3:
+                    return False
+                xj, yj = pts[-1]
+                for i in range(n):
+                    xi, yi = pts[i]
+                    # Check if point is between yi and yj in Y, and to the left of edge
+                    intersect = ((yi > py) != (yj > py)) and (
+                        px < (xj - xi) * (py - yi) / (yj - yi + 1e-9) + xi
+                    )
+                    if intersect:
+                        inside = not inside
+                    xj, yj = xi, yi
+                return inside
+
+            def _infer_net_from_group_pads(
+                zone: pcbnew.ZONE, group: Optional[pcbnew.PCB_GROUP]
+            ) -> Optional[str]:
+                if not group:
+                    return None
+                # Collect polygon points (first outline)
+                try:
+                    outline = zone.Outline().COutline(0)
+                except Exception:
+                    return None
+                pts = [(p.x, p.y) for p in outline.CPoints()]
+                if not pts:
+                    return None
+                # Quick bbox for early reject
+                min_x = min(x for x, _ in pts)
+                max_x = max(x for x, _ in pts)
+                min_y = min(y for _, y in pts)
+                max_y = max(y for _, y in pts)
+                counts: Dict[str, int] = {}
+                for item in get_group_items(group):
+                    if isinstance(item, pcbnew.FOOTPRINT):
+                        for pad in item.Pads():
+                            pos = pad.GetPosition()
+                            if (
+                                pos.x < min_x
+                                or pos.x > max_x
+                                or pos.y < min_y
+                                or pos.y > max_y
+                            ):
+                                continue
+                            if _point_in_polygon(pos.x, pos.y, pts):
+                                net_name = pad.GetNetname()
+                                if net_name:
+                                    counts[net_name] = counts.get(net_name, 0) + 1
+                if counts:
+                    # Choose the most frequent net among pads contained in the polygon
+                    inferred = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+                    return inferred
+                return None
+
+            # Prefer mapping based on source zone net name using module->board mapping
+            applied_net = False
             source_net_name = source_zone.GetNetname()
             if source_net_name:
-                # Check if we have a mapping for this module-level net name
                 target_net_name = net_name_map.get(source_net_name, source_net_name)
-
-                # Find the net in the target board by the mapped name
                 target_net = target_board.FindNet(target_net_name)
                 if target_net:
                     new_zone.SetNetCode(target_net.GetNetCode())
+                    applied_net = True
                     if target_net_name != source_net_name:
                         logger.debug(
                             f"    Mapped zone net '{source_net_name}' -> '{target_net_name}' (code {target_net.GetNetCode()})"
@@ -2007,10 +2090,25 @@ class SyncLayouts(Step):
                     logger.warning(
                         f"    Could not find net '{target_net_name}' in target board for zone (source net: '{source_net_name}')"
                     )
-                    # Keep zone with no net (0 is typically the no-net code)
-                    new_zone.SetNetCode(0)
-            else:
-                # No net on source zone
+
+            if not applied_net:
+                # Fallback: infer from pads within the zone polygon
+                inferred_net_name = _infer_net_from_group_pads(new_zone, target_group)
+                if inferred_net_name:
+                    target_net = target_board.FindNet(inferred_net_name)
+                    if target_net:
+                        new_zone.SetNetCode(target_net.GetNetCode())
+                        applied_net = True
+                        logger.debug(
+                            f"    Inferred zone net '{inferred_net_name}' (code {target_net.GetNetCode()})"
+                        )
+                    else:
+                        logger.warning(
+                            f"    Inferred net '{inferred_net_name}' not found on target board"
+                        )
+
+            if not applied_net:
+                # No mapping or inference available
                 new_zone.SetNetCode(0)
             if hasattr(source_zone, "GetZoneName") and hasattr(new_zone, "SetZoneName"):
                 new_zone.SetZoneName(source_zone.GetZoneName())
