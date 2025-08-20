@@ -734,3 +734,67 @@ snapshot_eval!(interface_comprehensive_net_promotion, {
         print("  Via Level1:", l1_net)
     "#
 });
+
+snapshot_eval!(interface_field_validation_errors, {
+    "test.zen" => r#"
+        # Test interface field validation error messages
+        
+        Ground = interface(
+            NET = Net("GND")
+        )
+        
+        Power = interface(
+            NET = Net("VCC")
+        )
+        
+        Gpio = interface(
+            NET = Net("GPIO")
+        )
+        
+        Uart = interface(
+            TX = Net("TX"),
+            RX = Net("RX"),
+        )
+        
+        System = interface(
+            power = Ground(),
+            uart = Uart(),
+        )
+        
+        # Valid cases first
+        gnd = Ground("MAIN_GND")
+        gpio_valid = Gpio("GPIO1", NET=gnd.NET)  # Net -> Net: valid
+        print("Valid case:", gpio_valid.NET.name)
+        
+        system_valid = System("SYS1", power=gnd)  # Ground -> Ground: valid
+        print("Valid system:", system_valid.power.NET.name)
+        
+        # Test error case: Interface where Net expected
+        bad_gpio = Gpio("BAD", NET=gnd)  # Ground -> Net: error
+    "#
+});
+
+snapshot_eval!(interface_field_validation_mixed_types, {
+    "test.zen" => r#"
+        # Test validation: string where Net expected
+        
+        Gpio = interface(NET = Net("GPIO"))
+        
+        # This should error: string where Net expected  
+        bad_gpio = Gpio("BAD", NET="not_a_net")
+    "#
+});
+
+snapshot_eval!(interface_field_validation_net_to_interface, {
+    "test.zen" => r#"
+        # Test error when Net provided where Interface expected
+        
+        Ground = interface(NET = Net("GND"))
+        System = interface(power = Ground())
+        
+        net = Net("SOME_NET")
+        
+        # This should error: Net where Ground interface expected
+        bad_system = System("BAD", power=net)
+    "#
+});

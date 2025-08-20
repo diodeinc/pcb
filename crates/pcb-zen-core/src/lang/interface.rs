@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::lang::context::ContextValue;
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
+use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::{generate_net_id, NetValue};
 
 /// Get promotion key for any value
@@ -500,7 +501,9 @@ where
 
         for (name, field_spec) in self.fields.iter() {
             let field_value: Value<'v> = if let Some(v) = provided_values.get(name) {
-                // Value supplied by the caller.
+                // Value supplied by the caller - validate it matches the expected field type
+                ensure_field_compat(field_spec.to_value(), *v, name)
+                    .map_err(starlark::Error::new_other)?;
                 v.to_value()
             } else {
                 // Use the field spec to create a value

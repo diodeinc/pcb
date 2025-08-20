@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+Error: test.zen:10:14-38 Interface field 'power' expects Ground, got Net
