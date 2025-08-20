@@ -24,13 +24,11 @@ jobs:
       matrix:
         config:
           - name: Windows
-            runs-on: windows-latest
+            runs-on: windows-large
           - name: macOS
-            runs-on: macos-latest
-          - name: macOS 14
-            runs-on: macos-14
+            runs-on: macos-15-xlarge
           - name: Ubuntu
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-large
             container:
               image: kicad/kicad:9.0.3  # Keep in sync with KICAD_VERSION
               options: --user root
