@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::load::DefaultRemoteFetcher;
 use pcb_sch::Schematic;
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, InputMap, NoopRemoteFetcher,
 };

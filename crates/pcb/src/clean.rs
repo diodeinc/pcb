@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use pcb_zen::load::cache_dir;
-use pcb_zen_core::workspace::find_workspace_root;
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::DefaultFileProvider;
 
 #[derive(Args, Debug)]

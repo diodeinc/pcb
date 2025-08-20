@@ -1,0 +1,3 @@
+[board]
+name = "MainBoard"
+path = "main_board.zen"
