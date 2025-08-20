@@ -43,7 +43,7 @@ import json
 import sys
 import uuid
 from dataclasses import dataclass
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from enum import Enum
 from typing import Any
 
@@ -1749,10 +1749,14 @@ class SyncLayouts(Step):
 
         # Sync zones and graphics only if we matched at least one footprint
         if matched > 0:
+            # Build net mapping using netlist information
+            net_mapping = self._build_net_mapping_for_group(group.id)
 
             # Sync zones from the layout
             # For newly added groups, don't apply offset (items will move with the group later)
-            zones_synced = self._sync_zones(layout_board, self.board, 0, 0, group.id)
+            zones_synced = self._sync_zones(
+                layout_board, self.board, 0, 0, group.id, net_mapping
+            )
 
             # Sync graphics from the layout
             # For newly added groups, don't apply offset (items will move with the group later)
@@ -1784,8 +1788,132 @@ class SyncLayouts(Step):
         """Get all footprints in a virtual board."""
         return root.find_all_footprints()
 
-    def _sync_zones(self, source_board: pcbnew.BOARD, target_board: pcbnew.BOARD, 
-                    offset_x: int, offset_y: int, group_name: str) -> int:
+    def _build_net_mapping_for_group(self, group_name: str) -> Dict[str, str]:
+        """Build net name mapping for a group using connectivity information.
+
+        This maps module nets to board nets by looking at actual component connectivity,
+        not naming conventions.
+
+        Args:
+            group_name: The name of the group (e.g., "M1", "M2", "MyModule")
+
+        Returns:
+            Dict mapping source net names to target net names
+        """
+        net_mapping = {}
+
+        # Try to get the module's layout file to load its netlist
+        module = self.netlist.modules.get(group_name)
+        if module and module.layout_path:
+            # Resolve the layout path
+            layout_path = Path(module.layout_path)
+            if not layout_path.is_absolute():
+                layout_path = Path(self.board.GetFileName()).parent / layout_path
+
+            # Load the module's netlist if it exists
+            module_netlist_path = layout_path / "netlist.json"
+            if module_netlist_path.exists():
+                try:
+                    with open(module_netlist_path, "r") as f:
+                        module_data = json.load(f)
+
+                    # Build a map of component+pad -> net for the module
+                    module_pad_to_net = {}  # (ref, pad) -> module_net_name
+                    for module_net_name, module_net_data in module_data.get(
+                        "nets", {}
+                    ).items():
+                        for port_ref in module_net_data.get("ports", []):
+                            # Parse the port reference to get component and pad
+                            # Format is like: ".../Module.zen:<root>.R1.R.P1"
+                            # Split by ":<root>" first to isolate the instance path
+                            if ":<root>" in port_ref:
+                                _, instance_path = port_ref.split(":<root>", 1)
+                                # Remove leading dot if present
+                                if instance_path.startswith("."):
+                                    instance_path = instance_path[1:]
+
+                                # Split the instance path into parts
+                                path_parts = instance_path.split(".")
+
+                                # The structure is typically: ComponentRef.ComponentType.PadRef
+                                # e.g., "R1.R.P1" where R1 is ref, R is type, P1 is pad
+                                if len(path_parts) >= 3:
+                                    comp_ref = path_parts[0]  # e.g., "R1"
+                                    pad_ref = path_parts[-1]  # e.g., "P1"
+
+                                    # Map pad reference to pad number
+                                    if pad_ref == "P1":
+                                        pad_num = "1"
+                                    elif pad_ref == "P2":
+                                        pad_num = "2"
+                                    else:
+                                        # Try to extract number from pad ref
+                                        import re
+
+                                        match = re.search(r"\d+", pad_ref)
+                                        pad_num = match.group() if match else pad_ref
+
+                                    module_pad_to_net[(comp_ref, pad_num)] = (
+                                        module_net_name
+                                    )
+
+                    logger.debug(f"  Module pad to net mapping: {module_pad_to_net}")
+
+                    # Now look at the board's netlist to find which board nets
+                    # connect to the same component+pad combinations
+                    for board_net in self.netlist.nets:
+                        board_net_name = board_net.name
+
+                        for ref, pad_num, _ in board_net.nodes:
+                            # Check if this component belongs to our group
+                            for part in self.netlist.parts:
+                                if part.ref == ref:
+                                    path = part.sheetpath.names
+                                    if (
+                                        path.startswith(group_name + ".")
+                                        or path == group_name
+                                    ):
+                                        # This component is in our group
+                                        # Extract the local reference within the module
+                                        # e.g., "MyModule.R1" -> "R1"
+                                        local_ref = ref
+
+                                        # Check if this pad exists in the module
+                                        key = (local_ref, pad_num)
+                                        if key in module_pad_to_net:
+                                            module_net_name = module_pad_to_net[key]
+                                            if module_net_name not in net_mapping:
+                                                net_mapping[module_net_name] = (
+                                                    board_net_name
+                                                )
+                                                logger.debug(
+                                                    f"    Mapped module net '{module_net_name}' -> board net '{board_net_name}' "
+                                                    f"(via {local_ref} pad {pad_num})"
+                                                )
+                                        break
+
+                except Exception as e:
+                    logger.warning(
+                        f"  Could not load module netlist from {module_netlist_path}: {e}"
+                    )
+
+        # If we still don't have a mapping, we can't map the nets
+        if not net_mapping:
+            logger.warning(
+                f"  Could not build net mapping for group {group_name} - zones will have no nets"
+            )
+
+        return net_mapping
+
+    def _sync_zones(
+        self,
+        source_board: pcbnew.BOARD,
+        target_board: pcbnew.BOARD,
+        offset_x: int,
+        offset_y: int,
+        group_name: str,
+        net_mapping: Optional[Dict[str, str]] = None,
+    ) -> int:
         """Copy zones from source board to target board with position offset.
 
         Args:
@@ -1794,6 +1922,7 @@ class SyncLayouts(Step):
             offset_x: X offset to apply when copying
             offset_y: Y offset to apply when copying
             group_name: Name of the group being synced (for logging)
+            net_mapping: Optional pre-computed net name mapping
 
         Returns:
             Number of zones synced
@@ -1807,13 +1936,16 @@ class SyncLayouts(Step):
                 target_group = group
                 break
 
-        # Build a net name mapping from module-level to board-level
-        # by examining the footprints in the target group
-        net_name_map = {}
-        if target_group:
-            logger.debug(f"  Building net name mapping for group {group_name}")
+        # Use provided net mapping or build one from footprints
+        net_name_map = net_mapping if net_mapping is not None else {}
+
+        # If no mapping was provided, try to build one from footprints in the group
+        if not net_name_map and target_group:
+            logger.debug(
+                f"  Building net name mapping from footprints for group {group_name}"
+            )
             # Get all footprints in the group
-            for item in target_group.GetItems():
+            for item in get_group_items(target_group):
                 if isinstance(item, pcbnew.FOOTPRINT):
                     # Check each pad's net
                     for pad in item.Pads():
@@ -1839,11 +1971,11 @@ class SyncLayouts(Step):
                                     ):
                                         net_name_map[module_net_name] = board_net_name
                                         logger.debug(
-                                            f"    Mapped module net '{module_net_name}' -> board net '{board_net_name}'"
+                                            f"    Mapped module net '{module_net_name}' -> board net '{board_net_name}' (from footprints)"
                                         )
 
         if not net_name_map:
-            logger.debug(f"  No net name mapping found for group {group_name}")
+            logger.warning(f"  No net name mapping found for group {group_name}")
 
         for source_zone in source_board.Zones():
             # Create a new zone
@@ -2476,8 +2608,8 @@ class PlaceComponents(Step):
             sheet_width = 297000000  # 297mm
             sheet_height = 210000000  # 210mm
             # Center the added content on the sheet
-            target_x = sheet_width // 2
-            target_y = sheet_height // 2
+            target_x = 0
+            target_y = 0
             offset_x = target_x - added_bbox.center_x
             offset_y = target_y - added_bbox.center_y
 
