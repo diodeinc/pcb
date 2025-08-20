@@ -43,7 +43,7 @@ import json
 import sys
 import uuid
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from enum import Enum
 from typing import Any
 
@@ -479,8 +479,7 @@ class VirtualFootprint(VirtualItem):
         # Update the actual KiCad object
         if self.kicad_footprint and hasattr(self.kicad_footprint, "SetPosition"):
             pos = self.kicad_footprint.GetPosition()
-            new_pos = pcbnew.VECTOR2I(pos.x + dx, pos.y + dy)
-            self.kicad_footprint.SetPosition(new_pos)
+            self.kicad_footprint.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
 
         # Update cached bbox
         if self._bbox:
@@ -559,19 +558,15 @@ class VirtualFootprint(VirtualItem):
             if hasattr(source, "Reference") and hasattr(target, "Reference"):
                 source_ref = source.Reference()
                 target_ref = target.Reference()
-                if hasattr(source_ref, 'GetPosition') and hasattr(target_ref, 'SetPosition'):
-                    target_ref.SetPosition(source_ref.GetPosition())
-                if hasattr(source_ref, 'GetAttributes') and hasattr(target_ref, 'SetAttributes'):
-                    target_ref.SetAttributes(source_ref.GetAttributes())
+                target_ref.SetPosition(source_ref.GetPosition())
+                target_ref.SetAttributes(source_ref.GetAttributes())
 
             # Copy value field position/attributes
             if hasattr(source, "Value") and hasattr(target, "Value"):
                 source_val = source.Value()
                 target_val = target.Value()
-                if hasattr(source_val, 'GetPosition') and hasattr(target_val, 'SetPosition'):
-                    target_val.SetPosition(source_val.GetPosition())
-                if hasattr(source_val, 'GetAttributes') and hasattr(target_val, 'SetAttributes'):
-                    target_val.SetAttributes(source_val.GetAttributes())
+                target_val.SetPosition(source_val.GetPosition())
+                target_val.SetAttributes(source_val.GetAttributes())
 
     def render_tree(self, indent: int = 0) -> str:
         """Render this footprint as a string."""
@@ -596,9 +591,6 @@ class VirtualGroup(VirtualItem):
         self.children: List[VirtualItem] = []
         self.synced = False  # Whether this group has been synced from a layout file
         self._cached_bbox: Optional[VirtualBoundingBox] = None
-        self.kicad_group: Optional[Any] = (
-            None  # Reference to the KiCad PCB_GROUP if this represents one
-        )
 
     @property
     def added(self) -> bool:
@@ -647,36 +639,11 @@ class VirtualGroup(VirtualItem):
             self.children.remove(child)
             self._cached_bbox = None  # Invalidate cache
 
-    def move_by(self, dx: int, dy: int, move_group_items: bool = True) -> None:
-        """Move all children by a relative offset.
-
-        Args:
-            dx: X offset
-            dy: Y offset
-            move_group_items: Whether to also move group items like zones, graphics, text 
-                            (should be False during packing to keep group layout intact)
-        """
+    def move_by(self, dx: int, dy: int) -> None:
+        """Move all children by a relative offset."""
         # Move all children
         for child in self.children:
-            if isinstance(child, VirtualGroup):
-                child.move_by(dx, dy, move_group_items)
-            else:
-                child.move_by(dx, dy)
-
-        # If this is a synced group with a KiCad group reference, also move non-footprint items
-        # But only if move_group_items is True (not during packing phase)
-        if self.synced and self.kicad_group and move_group_items:
-            # Move all non-footprint items in the KiCad group (zones, graphics, text, etc.)
-            try:
-                for item in get_group_items(self.kicad_group):
-                    item_type = item.__class__.__name__
-                    # Skip footprints - they're handled as VirtualFootprint children
-                    if item_type != "FOOTPRINT":
-                        # Move zones, graphics, text, and other board items
-                        item.Move(pcbnew.VECTOR2I(dx, dy))
-                        logger.debug(f"Moved {item_type} in group {self.name} by ({dx}, {dy})")
-            except Exception as e:
-                logger.warning(f"Failed to move group items in {self.name}: {e}")
+            child.move_by(dx, dy)
 
         # Invalidate our cached bbox and parent caches
         self._cached_bbox = None
@@ -1631,7 +1598,7 @@ class SyncLayouts(Step):
         self.netlist = netlist
 
     def _sync_group_layout(self, group: VirtualGroup, layout_file: Path):
-        """Sync footprints, zones, and graphics in a group from a layout file."""
+        """Sync footprints in a group from a layout file."""
         # Load the layout file into a virtual board
         layout_board = pcbnew.LoadBoard(str(layout_file))
         layout_vboard = build_virtual_dom_from_board(layout_board)
@@ -1665,56 +1632,12 @@ class SyncLayouts(Step):
         unmatched_target = []
         unmatched_source = []
 
-        # Calculate the offset BEFORE modifying any footprints
-        # Use the first matched footprint to determine the offset
-        # If the target footprints are at origin (not placed yet), don't apply offset
-        offset_x, offset_y = 0, 0
-        offset_calculated = False
-        for rel_path, target_fp in target_by_path.items():
-            if rel_path in source_by_path:
-                source_fp = source_by_path[rel_path]
-                if source_fp.kicad_footprint and target_fp.kicad_footprint:
-                    source_pos = source_fp.kicad_footprint.GetPosition()
-                    target_pos = target_fp.kicad_footprint.GetPosition()
-
-                    # Check if the target footprint has been placed (not at origin)
-                    # If it's at origin, the footprints haven't been placed yet
-                    if target_pos.x != 0 or target_pos.y != 0:
-                        offset_x = target_pos.x - source_pos.x
-                        offset_y = target_pos.y - source_pos.y
-                        offset_calculated = True
-                        logger.debug(
-                            f"  Calculated offset from matched footprint '{rel_path}': ({offset_x}, {offset_y})"
-                        )
-                    else:
-                        # Target footprints are at origin - they haven't been placed yet
-                        # Don't apply any offset; zones will move with the footprints later
-                        logger.debug(
-                            f"  Target footprints are at origin - will sync zones without offset"
-                        )
-                    break
-
-        if not offset_calculated:
-            logger.debug(f"  No offset calculated - syncing zones at source positions")
-
         # Try to match each target footprint by path only
         for rel_path, target_fp in target_by_path.items():
             if rel_path in source_by_path:
                 # Found a match - sync the footprint
                 source_fp = source_by_path[rel_path]
-                # For newly added groups, keep source positions (don't restore target)
-                # For existing groups, restore target position
-                if group.added:
-                    # Keep source position for newly added groups
-                    target_fp.replace_with(source_fp)
-                else:
-                    # Store the target position before replacing
-                    if target_fp.kicad_footprint:
-                        target_pos = target_fp.kicad_footprint.GetPosition()
-                    target_fp.replace_with(source_fp)
-                    # Restore the target position after replacing
-                    if target_fp.kicad_footprint:
-                        target_fp.kicad_footprint.SetPosition(target_pos)
+                target_fp.replace_with(source_fp)
                 matched += 1
                 logger.debug(f"  Matched and synced: {target_fp.name}")
             else:
@@ -1731,7 +1654,7 @@ class SyncLayouts(Step):
             if src_path not in matched_sources:
                 unmatched_source.append(src_path)
 
-        # Log results
+                # Log results
         logger.info(f"  Synced {matched} footprints")
         if unmatched_target:
             logger.warning(
@@ -1747,60 +1670,9 @@ class SyncLayouts(Step):
             for fp in unmatched_source:
                 logger.info(f"    - {fp}")
 
-        # Sync zones and graphics only if we matched at least one footprint
+        # Mark the group as synced if we matched at least one footprint
         if matched > 0:
-            # Build net mapping using matched footprints: map module pad net -> board pad net
-            net_mapping: Dict[str, str] = {}
-            for rel_path, target_fp in target_by_path.items():
-                if rel_path in source_by_path:
-                    source_fp = source_by_path[rel_path]
-                    if (
-                        source_fp.kicad_footprint is not None
-                        and target_fp.kicad_footprint is not None
-                    ):
-                        try:
-                            for target_pad in target_fp.kicad_footprint.Pads():
-                                pad_num = target_pad.GetPadName()
-                                source_pad = source_fp.kicad_footprint.FindPadByNumber(
-                                    pad_num
-                                )
-                                if source_pad is None:
-                                    continue
-                                src_net = source_pad.GetNetname()
-                                dst_net = target_pad.GetNetname()
-                                if src_net and dst_net and src_net not in net_mapping:
-                                    net_mapping[src_net] = dst_net
-                        except Exception as e:
-                            logger.debug(
-                                f"  Skipping pad-based net mapping for {rel_path} due to error: {e}"
-                            )
-
-            # Sync zones from the layout
-            # For newly added groups, don't apply offset (items will move with the group later)
-            zones_synced = self._sync_zones(
-                layout_board, self.board, 0, 0, group.id, net_mapping
-            )
-
-            # Sync graphics from the layout
-            # For newly added groups, don't apply offset (items will move with the group later)
-            graphics_synced = self._sync_graphics(
-                layout_board, self.board, 0, 0, group.id
-            )
-
-            logger.info(
-                f"  Synced {zones_synced} zones and {graphics_synced} graphics items"
-            )
-
-            # Mark the group as synced and store KiCad group reference
             group.synced = True
-
-            # Find and store the KiCad group reference
-            for kicad_group in self.board.Groups():
-                if kicad_group.GetName() == group.id:
-                    group.kicad_group = kicad_group
-                    logger.info(f"  Linked virtual group to KiCad group: {group.id}")
-                    break
-
             logger.info(f"  Marked group {group.id} as synced")
 
     def _get_footprints_in_group(self, group: VirtualGroup) -> List[VirtualFootprint]:
@@ -1810,505 +1682,6 @@ class SyncLayouts(Step):
     def _get_all_footprints(self, root: VirtualGroup) -> List[VirtualFootprint]:
         """Get all footprints in a virtual board."""
         return root.find_all_footprints()
-
-    def _build_net_mapping_for_group(self, group_name: str) -> Dict[str, str]:
-        """Build net name mapping for a group using connectivity information.
-
-        This maps module nets to board nets by looking at actual component connectivity,
-        not naming conventions.
-
-        Args:
-            group_name: The name of the group (e.g., "M1", "M2", "MyModule")
-
-        Returns:
-            Dict mapping source net names to target net names
-        """
-        net_mapping = {}
-
-        # Try to get the module's layout file to load its netlist
-        module = self.netlist.modules.get(group_name)
-        if module and module.layout_path:
-            # Resolve the layout path
-            layout_path = Path(module.layout_path)
-            if not layout_path.is_absolute():
-                layout_path = Path(self.board.GetFileName()).parent / layout_path
-
-            # Load the module's netlist if it exists
-            module_netlist_path = layout_path / "netlist.json"
-            if module_netlist_path.exists():
-                try:
-                    with open(module_netlist_path, "r") as f:
-                        module_data = json.load(f)
-
-                    # Build a map of component+pad -> net for the module
-                    module_pad_to_net = {}  # (ref, pad) -> module_net_name
-                    for module_net_name, module_net_data in module_data.get(
-                        "nets", {}
-                    ).items():
-                        for port_ref in module_net_data.get("ports", []):
-                            # Parse the port reference to get component and pad
-                            # Format is like: ".../Module.zen:<root>.R1.R.P1"
-                            # Split by ":<root>" first to isolate the instance path
-                            if ":<root>" in port_ref:
-                                _, instance_path = port_ref.split(":<root>", 1)
-                                # Remove leading dot if present
-                                if instance_path.startswith("."):
-                                    instance_path = instance_path[1:]
-
-                                # Split the instance path into parts
-                                path_parts = instance_path.split(".")
-
-                                # The structure is typically: ComponentRef.ComponentType.PadRef
-                                # e.g., "R1.R.P1" where R1 is ref, R is type, P1 is pad
-                                if len(path_parts) >= 3:
-                                    comp_ref = path_parts[0]  # e.g., "R1"
-                                    pad_ref = path_parts[-1]  # e.g., "P1"
-
-                                    # Map pad reference to pad number
-                                    if pad_ref == "P1":
-                                        pad_num = "1"
-                                    elif pad_ref == "P2":
-                                        pad_num = "2"
-                                    else:
-                                        # Try to extract number from pad ref
-                                        import re
-
-                                        match = re.search(r"\d+", pad_ref)
-                                        pad_num = match.group() if match else pad_ref
-
-                                    module_pad_to_net[(comp_ref, pad_num)] = (
-                                        module_net_name
-                                    )
-
-                    logger.debug(f"  Module pad to net mapping: {module_pad_to_net}")
-
-                    # Now look at the board's netlist to find which board nets
-                    # connect to the same component+pad combinations
-                    for board_net in self.netlist.nets:
-                        board_net_name = board_net.name
-
-                        for ref, pad_num, _ in board_net.nodes:
-                            # Check if this component belongs to our group
-                            for part in self.netlist.parts:
-                                if part.ref == ref:
-                                    path = part.sheetpath.names
-                                    if (
-                                        path.startswith(group_name + ".")
-                                        or path == group_name
-                                    ):
-                                        # This component is in our group
-                                        # Extract the local reference within the module
-                                        # e.g., "MyModule.R1" -> "R1"
-                                        local_ref = ref
-
-                                        # Check if this pad exists in the module
-                                        key = (local_ref, pad_num)
-                                        if key in module_pad_to_net:
-                                            module_net_name = module_pad_to_net[key]
-                                            if module_net_name not in net_mapping:
-                                                net_mapping[module_net_name] = (
-                                                    board_net_name
-                                                )
-                                                logger.debug(
-                                                    f"    Mapped module net '{module_net_name}' -> board net '{board_net_name}' "
-                                                    f"(via {local_ref} pad {pad_num})"
-                                                )
-                                        break
-
-                except Exception as e:
-                    logger.warning(
-                        f"  Could not load module netlist from {module_netlist_path}: {e}"
-                    )
-
-        # If we still don't have a mapping, we can't map the nets
-        if not net_mapping:
-            logger.warning(
-                f"  Could not build net mapping for group {group_name} - zones will have no nets"
-            )
-
-        return net_mapping
-
-    def _sync_zones(
-        self,
-        source_board: pcbnew.BOARD,
-        target_board: pcbnew.BOARD,
-        offset_x: int,
-        offset_y: int,
-        group_name: str,
-        net_mapping: Optional[Dict[str, str]] = None,
-    ) -> int:
-        """Copy zones from source board to target board with position offset.
-
-        Args:
-            source_board: The source layout board
-            target_board: The target board to copy zones to
-            offset_x: X offset to apply when copying
-            offset_y: Y offset to apply when copying
-            group_name: Name of the group being synced (for logging)
-            net_mapping: Optional pre-computed net name mapping
-
-        Returns:
-            Number of zones synced
-        """
-        zones_synced = 0
-
-        # Find the group to add zones to
-        target_group = None
-        for group in target_board.Groups():
-            if group.GetName() == group_name:
-                target_group = group
-                break
-
-        # Use provided net mapping or build one from footprints
-        net_name_map = net_mapping if net_mapping is not None else {}
-
-        # If no mapping was provided, try to build one from footprints in the group
-        if not net_name_map and target_group:
-            logger.debug(
-                f"  Building net name mapping from footprints for group {group_name}"
-            )
-            # Get all footprints in the group
-            for item in get_group_items(target_group):
-                if isinstance(item, pcbnew.FOOTPRINT):
-                    # Check each pad's net
-                    for pad in item.Pads():
-                        module_net_name = None
-                        board_net_name = pad.GetNetname()
-
-                        if board_net_name:
-                            # Try to find the corresponding net in the source board
-                            # by matching footprint reference and pad number
-                            ref = item.GetReference()
-                            pad_num = pad.GetPadName()
-
-                            # Find the same footprint in source board
-                            source_fp = source_board.FindFootprintByReference(ref)
-                            if source_fp:
-                                source_pad = source_fp.FindPadByNumber(pad_num)
-                                if source_pad:
-                                    module_net_name = source_pad.GetNetname()
-
-                                    if (
-                                        module_net_name
-                                        and module_net_name not in net_name_map
-                                    ):
-                                        net_name_map[module_net_name] = board_net_name
-                                        logger.debug(
-                                            f"    Mapped module net '{module_net_name}' -> board net '{board_net_name}' (from footprints)"
-                                        )
-
-        if not net_name_map:
-            logger.warning(f"  No net name mapping found for group {group_name}")
-
-        for source_zone in source_board.Zones():
-            # Create a new zone
-            new_zone = pcbnew.ZONE(target_board)
-
-            # Copy properties
-            new_zone.SetLayer(source_zone.GetLayer())
-            new_zone.SetLayerSet(source_zone.GetLayerSet())
-
-            # Decide the target net for this zone.
-            # Strategy: infer from pads contained within the zone in the target group.
-            # Fallback to name mapping from source zone if inference fails.
-            def _point_in_polygon(px: int, py: int, pts: list[tuple[int, int]]) -> bool:
-                # Ray casting algorithm for integer coords
-                inside = False
-                n = len(pts)
-                if n < 3:
-                    return False
-                xj, yj = pts[-1]
-                for i in range(n):
-                    xi, yi = pts[i]
-                    # Check if point is between yi and yj in Y, and to the left of edge
-                    intersect = ((yi > py) != (yj > py)) and (
-                        px < (xj - xi) * (py - yi) / (yj - yi + 1e-9) + xi
-                    )
-                    if intersect:
-                        inside = not inside
-                    xj, yj = xi, yi
-                return inside
-
-            def _infer_net_from_group_pads(
-                zone: pcbnew.ZONE, group: Optional[pcbnew.PCB_GROUP]
-            ) -> Optional[str]:
-                if not group:
-                    return None
-                # Collect polygon points (first outline)
-                try:
-                    outline = zone.Outline().COutline(0)
-                except Exception:
-                    return None
-                pts = [(p.x, p.y) for p in outline.CPoints()]
-                if not pts:
-                    return None
-                # Quick bbox for early reject
-                min_x = min(x for x, _ in pts)
-                max_x = max(x for x, _ in pts)
-                min_y = min(y for _, y in pts)
-                max_y = max(y for _, y in pts)
-                counts: Dict[str, int] = {}
-                for item in get_group_items(group):
-                    if isinstance(item, pcbnew.FOOTPRINT):
-                        for pad in item.Pads():
-                            pos = pad.GetPosition()
-                            if (
-                                pos.x < min_x
-                                or pos.x > max_x
-                                or pos.y < min_y
-                                or pos.y > max_y
-                            ):
-                                continue
-                            if _point_in_polygon(pos.x, pos.y, pts):
-                                net_name = pad.GetNetname()
-                                if net_name:
-                                    counts[net_name] = counts.get(net_name, 0) + 1
-                if counts:
-                    # Choose the most frequent net among pads contained in the polygon
-                    inferred = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
-                    return inferred
-                return None
-
-            # Prefer mapping based on source zone net name using module->board mapping
-            applied_net = False
-            source_net_name = source_zone.GetNetname()
-            if source_net_name:
-                target_net_name = net_name_map.get(source_net_name, source_net_name)
-                target_net = target_board.FindNet(target_net_name)
-                if target_net:
-                    new_zone.SetNetCode(target_net.GetNetCode())
-                    applied_net = True
-                    if target_net_name != source_net_name:
-                        logger.debug(
-                            f"    Mapped zone net '{source_net_name}' -> '{target_net_name}' (code {target_net.GetNetCode()})"
-                        )
-                    else:
-                        logger.debug(
-                            f"    Set zone net '{source_net_name}' (code {target_net.GetNetCode()})"
-                        )
-                else:
-                    logger.warning(
-                        f"    Could not find net '{target_net_name}' in target board for zone (source net: '{source_net_name}')"
-                    )
-
-            if not applied_net:
-                # Fallback: infer from pads within the zone polygon
-                inferred_net_name = _infer_net_from_group_pads(new_zone, target_group)
-                if inferred_net_name:
-                    target_net = target_board.FindNet(inferred_net_name)
-                    if target_net:
-                        new_zone.SetNetCode(target_net.GetNetCode())
-                        applied_net = True
-                        logger.debug(
-                            f"    Inferred zone net '{inferred_net_name}' (code {target_net.GetNetCode()})"
-                        )
-                    else:
-                        logger.warning(
-                            f"    Inferred net '{inferred_net_name}' not found on target board"
-                        )
-
-            if not applied_net:
-                # No mapping or inference available
-                new_zone.SetNetCode(0)
-            if hasattr(source_zone, "GetZoneName") and hasattr(new_zone, "SetZoneName"):
-                new_zone.SetZoneName(source_zone.GetZoneName())
-            if hasattr(source_zone, "GetAssignedPriority") and hasattr(
-                new_zone, "SetAssignedPriority"
-            ):
-                new_zone.SetAssignedPriority(source_zone.GetAssignedPriority())
-            if hasattr(source_zone, "GetFillMode") and hasattr(new_zone, "SetFillMode"):
-                new_zone.SetFillMode(source_zone.GetFillMode())
-            if hasattr(source_zone, "GetHatchStyle") and hasattr(
-                new_zone, "SetHatchStyle"
-            ):
-                new_zone.SetHatchStyle(source_zone.GetHatchStyle())
-            if hasattr(source_zone, "GetHatchGap") and hasattr(new_zone, "SetHatchGap"):
-                new_zone.SetHatchGap(source_zone.GetHatchGap())
-            if hasattr(source_zone, "GetHatchOrientation") and hasattr(
-                new_zone, "SetHatchOrientation"
-            ):
-                new_zone.SetHatchOrientation(source_zone.GetHatchOrientation())
-            if hasattr(source_zone, "GetHatchThickness") and hasattr(
-                new_zone, "SetHatchThickness"
-            ):
-                new_zone.SetHatchThickness(source_zone.GetHatchThickness())
-            if hasattr(source_zone, "GetMinThickness") and hasattr(
-                new_zone, "SetMinThickness"
-            ):
-                new_zone.SetMinThickness(source_zone.GetMinThickness())
-            if hasattr(source_zone, "IsFilled") and hasattr(new_zone, "SetIsFilled"):
-                new_zone.SetIsFilled(source_zone.IsFilled())
-            if hasattr(source_zone, "GetThermalReliefGap") and hasattr(
-                new_zone, "SetThermalReliefGap"
-            ):
-                new_zone.SetThermalReliefGap(source_zone.GetThermalReliefGap())
-            if hasattr(source_zone, "GetThermalReliefSpokeWidth") and hasattr(
-                new_zone, "SetThermalReliefSpokeWidth"
-            ):
-                new_zone.SetThermalReliefSpokeWidth(
-                    source_zone.GetThermalReliefSpokeWidth()
-                )
-
-            # Copy and offset the outline
-            source_outline = source_zone.Outline()
-            new_outline = new_zone.Outline()
-            new_outline.RemoveAllContours()  # Clear any default contours
-
-            for i in range(source_outline.OutlineCount()):
-                source_contour = source_outline.COutline(i)
-                new_outline.NewOutline()
-                for j in range(source_contour.PointCount()):
-                    pt = source_contour.CPoint(j)
-                    new_x = pt.x + offset_x
-                    new_y = pt.y + offset_y
-                    if j == 0:  # Log first point for debugging
-                        logger.info(
-                            f"    Zone point transformation: ({pt.x}, {pt.y}) -> ({new_x}, {new_y})"
-                        )
-                    new_outline.Append(new_x, new_y)
-
-            # Add to target board
-            target_board.Add(new_zone)
-
-            # Add to group if found
-            if target_group:
-                target_group.AddItem(new_zone)
-                logger.debug(f"    Added zone to group {group_name}")
-
-            zones_synced += 1
-
-            logger.debug(f"    Synced zone: {source_zone.GetZoneName() or 'unnamed'} on layer {source_zone.GetLayerName()}")
-
-        return zones_synced
-
-    def _sync_graphics(self, source_board: pcbnew.BOARD, target_board: pcbnew.BOARD,
-                       offset_x: int, offset_y: int, group_name: str) -> int:
-        """Copy graphics items (text, lines, rectangles, etc.) from source board to target board.
-        
-        Args:
-            source_board: The source layout board
-            target_board: The target board to copy graphics to
-            offset_x: X offset to apply when copying
-            offset_y: Y offset to apply when copying
-            group_name: Name of the group being synced (for logging)
-            
-        Returns:
-            Number of graphics items synced
-        """
-        graphics_synced = 0
-
-        # Find the group to add graphics to
-        target_group = None
-        for group in target_board.Groups():
-            if group.GetName() == group_name:
-                target_group = group
-                break
-
-        # Get all drawings from the source board
-        for drawing in source_board.GetDrawings():
-            # Skip items that are part of footprints (they're handled separately)
-            if drawing.GetParent() and isinstance(drawing.GetParent(), pcbnew.FOOTPRINT):
-                continue
-
-            item_type = drawing.GetClass()
-
-            try:
-                if item_type == "PCB_TEXT":
-                    # Create new text item
-                    new_drawing = pcbnew.PCB_TEXT(target_board)
-                    new_drawing.SetText(drawing.GetText())
-                    new_drawing.SetTextSize(drawing.GetTextSize())
-                    new_drawing.SetTextThickness(drawing.GetTextThickness())
-                    new_drawing.SetTextAngle(drawing.GetTextAngle())
-                    new_drawing.SetItalic(drawing.IsItalic())
-                    new_drawing.SetBold(drawing.IsBold())
-                    new_drawing.SetMirrored(drawing.IsMirrored())
-                    new_drawing.SetHorizJustify(drawing.GetHorizJustify())
-                    new_drawing.SetVertJustify(drawing.GetVertJustify())
-                    new_drawing.SetLayer(drawing.GetLayer())
-
-                    # Set position with offset
-                    pos = drawing.GetPosition()
-                    new_drawing.SetPosition(pcbnew.VECTOR2I(pos.x + offset_x, pos.y + offset_y))
-
-                    logger.debug(f"    Synced text: '{drawing.GetText()}' on layer {drawing.GetLayerName()}")
-
-                elif item_type == "PCB_SHAPE":
-                    # Create new shape item
-                    new_drawing = pcbnew.PCB_SHAPE(target_board)
-                    new_drawing.SetShape(drawing.GetShape())
-                    new_drawing.SetLayer(drawing.GetLayer())
-                    new_drawing.SetWidth(drawing.GetWidth())
-                    new_drawing.SetFilled(drawing.IsFilled())
-
-                    shape_type = drawing.GetShape()
-
-                    # Handle different shape types
-                    if shape_type in [pcbnew.SHAPE_T_SEGMENT, pcbnew.SHAPE_T_RECT]:
-                        # For lines and rectangles
-                        start = drawing.GetStart()
-                        end = drawing.GetEnd()
-                        new_drawing.SetStart(pcbnew.VECTOR2I(start.x + offset_x, start.y + offset_y))
-                        new_drawing.SetEnd(pcbnew.VECTOR2I(end.x + offset_x, end.y + offset_y))
-
-                    elif shape_type == pcbnew.SHAPE_T_CIRCLE:
-                        # For circles
-                        center = drawing.GetCenter()
-                        new_drawing.SetCenter(pcbnew.VECTOR2I(center.x + offset_x, center.y + offset_y))
-                        new_drawing.SetRadius(drawing.GetRadius())
-
-                    elif shape_type == pcbnew.SHAPE_T_ARC:
-                        # For arcs
-                        center = drawing.GetCenter()
-                        start = drawing.GetStart()
-                        new_drawing.SetCenter(pcbnew.VECTOR2I(center.x + offset_x, center.y + offset_y))
-                        new_drawing.SetStart(pcbnew.VECTOR2I(start.x + offset_x, start.y + offset_y))
-                        new_drawing.SetArcAngleAndEnd(drawing.GetArcAngle(), False)
-
-                    elif shape_type == pcbnew.SHAPE_T_POLY:
-                        # For polygons
-                        source_poly = drawing.GetPolyShape()
-                        new_poly = new_drawing.GetPolyShape()
-                        new_poly.RemoveAllContours()
-
-                        for i in range(source_poly.OutlineCount()):
-                            outline = source_poly.COutline(i)
-                            new_poly.NewOutline()
-                            for j in range(outline.PointCount()):
-                                pt = outline.CPoint(j)
-                                new_poly.Append(pt.x + offset_x, pt.y + offset_y)
-
-                    shape_map = {
-                        pcbnew.SHAPE_T_SEGMENT: "segment",
-                        pcbnew.SHAPE_T_RECT: "rectangle",
-                        pcbnew.SHAPE_T_ARC: "arc",
-                        pcbnew.SHAPE_T_CIRCLE: "circle",
-                        pcbnew.SHAPE_T_POLY: "polygon",
-                        pcbnew.SHAPE_T_BEZIER: "bezier"
-                    }
-                    shape_name = shape_map.get(shape_type, "unknown")
-                    logger.debug(f"    Synced {shape_name} on layer {drawing.GetLayerName()}")
-
-                else:
-                    # Skip unknown types
-                    logger.debug(f"    Skipping unknown graphics type: {item_type}")
-                    continue
-
-                # Add to target board
-                target_board.Add(new_drawing)
-
-                # Add to group if found
-                if target_group:
-                    target_group.AddItem(new_drawing)
-                    logger.debug(f"    Added graphics item to group {group_name}")
-
-                graphics_synced += 1
-
-            except Exception as e:
-                logger.warning(f"    Failed to sync graphics item {item_type}: {e}")
-                continue
-
-        return graphics_synced
 
     def run(self):
         """Find groups that are marked as 'added' and have layout_path, then sync them."""
@@ -2422,18 +1795,6 @@ class PlaceComponents(Step):
         if not items_with_bbox:
             return
 
-        # Don't pack synced groups - they should maintain their internal layout
-        # Only pack if there are multiple non-synced items
-        synced_items = [
-            item
-            for item in items_with_bbox
-            if isinstance(item, VirtualGroup) and item.synced
-        ]
-        if len(synced_items) == len(items_with_bbox):
-            # All items are synced groups, don't repack them
-            logger.info("Skipping packing - all items are synced groups")
-            return
-
         # Sort by area (largest first) for better packing, then by name for determinism
         items_with_bbox.sort(key=lambda item: (-item.bbox.area, item.name, item.id))
 
@@ -2450,11 +1811,7 @@ class PlaceComponents(Step):
 
             if i == 0:
                 # First item serves as anchor at origin
-                # Don't move group items during packing
-                if isinstance(item, VirtualGroup):
-                    item.move_by(-item.bbox.left, -item.bbox.top, move_group_items=False)
-                else:
-                    item.move_to(0, 0)
+                item.move_to(0, 0)
                 placed_items.append(item)
                 # Add its corners as placement points
                 placement_pts.extend(
@@ -2479,15 +1836,7 @@ class PlaceComponents(Step):
 
                     # Move item's bottom-left corner to this placement point
                     # Since move_to uses top-left, we need to adjust
-                    # Don't move group items during packing (they'll move with the group later)
-                    if isinstance(item, VirtualGroup):
-                        # For groups, use move_to which internally calls move_by
-                        # We need to ensure group items don't move during packing
-                        dx = pt_x - item.bbox.left
-                        dy = (pt_y - item.bbox.height) - item.bbox.top
-                        item.move_by(dx, dy, move_group_items=False)
-                    else:
-                        item.move_to(pt_x, pt_y - item.bbox.height)
+                    item.move_to(pt_x, pt_y - item.bbox.height)
 
                     # Check for collisions with placed items
                     collision = False
@@ -2525,13 +1874,7 @@ class PlaceComponents(Step):
 
                 if best_pt:
                     # Move to the best position found
-                    # Don't move group items during packing
-                    if isinstance(item, VirtualGroup):
-                        dx = best_pt[0] - item.bbox.left
-                        dy = best_pt[1] - item.bbox.top
-                        item.move_by(dx, dy, move_group_items=False)
-                    else:
-                        item.move_to(best_pt[0], best_pt[1])
+                    item.move_to(best_pt[0], best_pt[1])
                     placed_items.append(item)
 
                     logger.info(f"Placed {item.name} at {best_pt}")
@@ -2706,15 +2049,14 @@ class PlaceComponents(Step):
             sheet_width = 297000000  # 297mm
             sheet_height = 210000000  # 210mm
             # Center the added content on the sheet
-            target_x = 0
-            target_y = 0
+            target_x = sheet_width // 2
+            target_y = sheet_height // 2
             offset_x = target_x - added_bbox.center_x
             offset_y = target_y - added_bbox.center_y
 
         # Move all items in the sparse tree
         # move_by will recursively move children and update parent bboxes
         for item in top_level_added:
-            logger.debug(f"Moving item {item.name} by offset ({offset_x}, {offset_y})")
             item.move_by(offset_x, offset_y)
 
         logger.info(f"Positioned new content with offset ({offset_x}, {offset_y})")
@@ -2858,14 +2200,6 @@ class FinalizeBoard(Step):
                 ],
                 key=lambda g: (g["position"]["x"], g["position"]["y"]),
             ),
-            "zones": sorted(
-                [
-                    self._get_zone_data(item)
-                    for item in get_group_items(group)
-                    if isinstance(item, pcbnew.ZONE)
-                ],
-                key=lambda z: (z["layer"], z["net_name"], str(z["points"])),
-            ),
             "locked": group.IsLocked(),
             "name": group.GetName(),
         }
@@ -2889,14 +2223,6 @@ class FinalizeBoard(Step):
 
     def _export_layout_snapshot(self):
         """Export a JSON snapshot of the board layout."""
-
-        # Collect all zones that belong to groups
-        zones_in_groups = []
-        for group in self.board.Groups():
-            for item in get_group_items(group):
-                if isinstance(item, pcbnew.ZONE):
-                    zones_in_groups.append(item)
-
         # Sort footprints by UUID and groups by name for deterministic ordering
         snapshot = {
             "footprints": [
@@ -2916,7 +2242,6 @@ class FinalizeBoard(Step):
                 for zone in sorted(
                     self.board.Zones(), key=lambda z: z.GetZoneName() or ""
                 )
-                if zone not in zones_in_groups  # Only include zones not in groups
             ],
         }
 
