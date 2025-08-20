@@ -33,7 +33,7 @@ jobs:
               image: kicad/kicad:9.0.3  # Keep in sync with KICAD_VERSION
               options: --user root
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
 
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
@@ -74,11 +74,8 @@ jobs:
           choco install kicad --version ${{ env.KICAD_VERSION }} -y
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
           components: rustfmt, clippy
 
       - name: Cache Cargo
