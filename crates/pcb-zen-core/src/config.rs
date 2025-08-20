@@ -208,10 +208,33 @@ pub fn discover_boards(
     }
 
     let glob_set = builder.build()?;
-    let mut boards = Vec::new();
+    let mut boards_by_name = std::collections::HashMap::new();
     let mut errors = Vec::new();
+    let mut visited_directories = std::collections::HashSet::new();
 
-    // Walk the workspace directory
+    // Helper function to insert boards and handle duplicates
+    fn insert_board(
+        boards_by_name: &mut std::collections::HashMap<String, BoardInfo>,
+        errors: &mut Vec<DiscoveryError>,
+        board: BoardInfo,
+        culprit_path: PathBuf,
+        legacy: bool,
+    ) {
+        if boards_by_name.contains_key(&board.name) {
+            errors.push(DiscoveryError {
+                path: culprit_path,
+                error: format!(
+                    "Duplicate board name: '{}'{}",
+                    board.name,
+                    if legacy { " (legacy discovery)" } else { "" }
+                ),
+            });
+        } else {
+            boards_by_name.insert(board.name.clone(), board);
+        }
+    }
+
+    // Primary pass: Walk the workspace directory for pcb.toml files
     for entry in WalkDir::new(workspace_root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -232,26 +255,20 @@ pub fn discover_boards(
                     match PcbToml::from_file(file_provider, &pcb_toml_path) {
                         Ok(config) => {
                             if let Some(board_config) = config.board {
-                                // Check for duplicate board names
-                                if boards
-                                    .iter()
-                                    .any(|b: &BoardInfo| b.name == board_config.name)
-                                {
-                                    errors.push(DiscoveryError {
-                                        path: pcb_toml_path.clone(),
-                                        error: format!(
-                                            "Duplicate board name: '{}'",
-                                            board_config.name
-                                        ),
-                                    });
-                                } else {
-                                    boards.push(BoardInfo {
-                                        name: board_config.name,
-                                        zen_path: board_config.path,
-                                        description: board_config.description,
-                                        directory: path.to_path_buf(),
-                                    });
-                                }
+                                visited_directories.insert(path.to_path_buf());
+                                let board = BoardInfo {
+                                    name: board_config.name,
+                                    zen_path: board_config.path,
+                                    description: board_config.description,
+                                    directory: path.to_path_buf(),
+                                };
+                                insert_board(
+                                    &mut boards_by_name,
+                                    &mut errors,
+                                    board,
+                                    pcb_toml_path,
+                                    false,
+                                );
                             }
                         }
                         Err(e) => {
@@ -266,7 +283,69 @@ pub fn discover_boards(
         }
     }
 
-    // Sort boards alphabetically
+    // Secondary pass: Look for legacy boards directly under boards/
+    let boards_dir = workspace_root.join("boards");
+    if file_provider.exists(&boards_dir) {
+        // Use FileProvider for consistency
+        let entries = match std::fs::read_dir(&boards_dir) {
+            Ok(entries) => entries,
+            Err(_) => {
+                return Ok(DiscoveryResult {
+                    boards: Vec::new(),
+                    errors,
+                })
+            }
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+
+            // Skip if not a directory or already visited
+            if !path.is_dir() || visited_directories.contains(&path) {
+                continue;
+            }
+
+            // Find .zen files in this directory
+            if let Ok(zen_entries) = std::fs::read_dir(&path) {
+                let zen_files: Vec<_> = zen_entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "zen")
+                    })
+                    .collect();
+
+                // Only consider directories with exactly one .zen file
+                if zen_files.len() == 1 {
+                    let zen_file = &zen_files[0];
+                    let zen_filename = zen_file.file_name();
+                    let zen_path_str = zen_filename.to_string_lossy();
+
+                    // Board name is the filename without extension
+                    let board_name = zen_path_str
+                        .strip_suffix(".zen")
+                        .unwrap_or(&zen_path_str)
+                        .to_string();
+
+                    let board = BoardInfo {
+                        name: board_name,
+                        zen_path: zen_path_str.to_string(),
+                        description: String::new(),
+                        directory: path.to_path_buf(),
+                    };
+                    insert_board(
+                        &mut boards_by_name,
+                        &mut errors,
+                        board,
+                        zen_file.path(),
+                        true,
+                    );
+                }
+            }
+        }
+    }
+
+    // Convert to sorted Vec
+    let mut boards: Vec<_> = boards_by_name.into_values().collect();
     boards.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(DiscoveryResult { boards, errors })
@@ -295,18 +374,18 @@ pub fn get_workspace_info(
     // Discover boards
     let discovery = discover_boards(file_provider, &workspace_root, &workspace_config)?;
 
-    // If no default_board is configured and we have boards, set the first one as default
+    // If no default_board is configured and we have boards, set the last one as default
     let mut final_config = workspace_config;
     if let Some(config) = &mut final_config {
         if config.default_board.is_none() && !discovery.boards.is_empty() {
-            config.default_board = Some(discovery.boards[0].name.clone());
+            config.default_board = Some(discovery.boards.last().unwrap().name.clone());
         }
     } else if !discovery.boards.is_empty() {
-        // Create a minimal workspace config with the first board as default
+        // Create a minimal workspace config with the last board as default
         final_config = Some(WorkspaceConfig {
             name: None,
             members: default_members(),
-            default_board: Some(discovery.boards[0].name.clone()),
+            default_board: Some(discovery.boards.last().unwrap().name.clone()),
         });
     }
 
