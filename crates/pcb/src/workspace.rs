@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use log::{debug, info};
 use pcb_zen::load::DefaultRemoteFetcher;
-use pcb_zen_core::workspace::find_workspace_root;
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::{
     normalize_path, CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap,
     LoadSpec, WithDiagnostics,

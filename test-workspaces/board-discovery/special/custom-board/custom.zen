@@ -1,0 +1,8 @@
+load("@stdlib/interfaces.zen", "Ground", "Power")
+
+Led = Module("@stdlib/generics/Led.zen")
+
+vcc = Power("3V3")
+gnd = Ground("GND")
+
+Led("D1", color="blue", package="0603", A=vcc.NET, K=gnd.NET)

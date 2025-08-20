@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use pcb_zen_core::bundle::{Bundle, BundleManifest};
-use pcb_zen_core::workspace::find_workspace_root;
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, LoadResolver,
 };

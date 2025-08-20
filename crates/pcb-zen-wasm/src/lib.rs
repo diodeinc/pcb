@@ -1,7 +1,7 @@
 use log::debug;
 use pcb_sch::generate_bom;
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

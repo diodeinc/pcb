@@ -6,6 +6,7 @@ mod bom;
 mod build;
 mod clean;
 mod fmt;
+mod info;
 mod layout;
 mod lsp;
 mod open;
@@ -35,6 +36,9 @@ enum Commands {
 
     /// Generate Bill of Materials (BOM)
     Bom(bom::BomArgs),
+
+    /// Display workspace and board information
+    Info(info::InfoArgs),
 
     /// Layout PCB designs
     #[command(alias = "l")]
@@ -75,6 +79,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Build(args) => build::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Bom(args) => bom::execute(args),
+        Commands::Info(args) => info::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Clean(args) => clean::execute(args),
         Commands::Fmt(args) => fmt::execute(args),

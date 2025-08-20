@@ -8,8 +8,8 @@ use lsp_types::{
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::lang::type_info::ParameterInfo;
-use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, InputValue,
     LoadResolver,

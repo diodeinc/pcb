@@ -1,5 +1,6 @@
-[module]
-name = "test_board"
+[board]
+name = "WorkspaceTestBoard"
+path = "WorkspaceTestBoard.zen"
 
 [packages]
 kicad = "@github/diodeinc/kicad"

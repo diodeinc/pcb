@@ -1,0 +1,8 @@
+load("@stdlib/interfaces.zen", "Ground", "Power")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+vcc = Power("3V3")
+gnd = Ground("GND")
+
+Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)

@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use log::{debug, info};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
-use pcb_zen_core::{workspace::find_workspace_root, DefaultFileProvider};
+use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

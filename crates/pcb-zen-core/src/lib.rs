@@ -15,12 +15,14 @@ use starlark::{
 };
 
 pub mod bundle;
+pub mod config;
 pub mod convert;
 mod file_provider;
 pub mod lang;
 pub mod load_spec;
 
 // Re-export commonly used types
+pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;
@@ -479,45 +481,6 @@ pub mod file_extensions {
     }
 }
 
-/// Workspace-related utilities
-pub mod workspace {
-    use super::FileProvider;
-    use std::path::{Path, PathBuf};
-
-    /// Walk up the directory tree starting at `start` until a directory containing
-    /// `pcb.toml` with a `[workspace]` section is found. If we reach the filesystem root
-    /// without finding one, return the parent directory of `start`.
-    pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
-        let mut current = if !file_provider.is_directory(start) {
-            // For files we search from their parent directory.
-            start.parent().map(|p| p.to_path_buf())
-        } else {
-            Some(start.to_path_buf())
-        };
-
-        while let Some(dir) = current {
-            let pcb_toml = dir.join("pcb.toml");
-            if file_provider.exists(&pcb_toml) {
-                // Check if the TOML file contains a [workspace] section
-                if let Ok(contents) = file_provider.read_file(&pcb_toml) {
-                    #[derive(serde::Deserialize)]
-                    struct WorkspaceToml {
-                        workspace: Option<toml::Value>,
-                    }
-
-                    if let Ok(parsed) = toml::from_str::<WorkspaceToml>(&contents) {
-                        if parsed.workspace.is_some() {
-                            return dir;
-                        }
-                    }
-                }
-            }
-            current = dir.parent().map(|p| p.to_path_buf());
-        }
-        start.parent().unwrap_or(start).to_path_buf()
-    }
-}
-
 /// Normalize a path by resolving .. and . components
 pub fn normalize_path(path: &Path) -> PathBuf {
     let mut components = Vec::new();
@@ -536,22 +499,6 @@ pub fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     components.iter().collect()
-}
-
-/// Helper to parse package aliases from TOML content
-fn parse_package_aliases_from_toml(content: &str) -> HashMap<String, String> {
-    #[derive(Debug, serde::Deserialize)]
-    struct PkgRoot {
-        packages: Option<HashMap<String, String>>,
-    }
-
-    match toml::from_str::<PkgRoot>(content) {
-        Ok(parsed) => parsed.packages.unwrap_or_default(),
-        Err(e) => {
-            log::warn!("Failed to parse pcb.toml: {e}");
-            HashMap::new()
-        }
-    }
 }
 
 /// Core load resolver that handles all path resolution logic.
@@ -602,7 +549,7 @@ impl CoreLoadResolver {
         file: &Path,
         use_vendor_dir: bool,
     ) -> Self {
-        let workspace_root = workspace::find_workspace_root(file_provider.as_ref(), file);
+        let workspace_root = config::find_workspace_root(file_provider.as_ref(), file);
         Self::new(
             file_provider,
             remote_fetcher,
@@ -739,7 +686,7 @@ impl CoreLoadResolver {
             .into_iter()
             .map(|p| {
                 let content = self.file_provider.read_file(&p)?;
-                let toml_aliases = parse_package_aliases_from_toml(&content);
+                let toml_aliases = config::PcbToml::parse(&content)?.packages;
                 Ok::<_, anyhow::Error>(toml_aliases)
             })
             .collect::<Result<Vec<_>, _>>()?
