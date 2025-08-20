@@ -203,42 +203,132 @@ Key parameters:
 
 ### Interface
 
-Interfaces define reusable connection patterns as a collection of nets or sub-interfaces.
+Interfaces define reusable connection patterns with field specifications, type validation, and promotion semantics.
+
+#### Basic Syntax
 
 ```python
-# Define an interface type
-PowerInterface = interface(
-    vcc = Net,
-    gnd = Net
-)
-
-# Create an interface instance
-power = PowerInterface("MAIN")  # Creates MAIN_VCC and MAIN_GND nets
-
-# Interfaces can contain other interfaces
-SystemInterface = interface(
-    power = PowerInterface,
-    data = Net,
-    clock = Net
-)
-
-# Access interface members
-system = SystemInterface()
-resistor = Component(
-    name = "R1",
-    footprint = "0402",
-    pin_defs = {"1": "1", "2": "2"},
-    pins = {
-        "1": system.power.vcc,
-        "2": system.power.gnd
-    }
+InterfaceName = interface(
+    field_name = field_specification,
+    __post_init__ = callback_function,  # Optional
 )
 ```
+
+#### Field Types
+
+**Net Instances**: Use the provided Net instance as the default template
+```python
+NET = Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VCC"))
+SDA = Net("I2C_SDA")
+```
+
+**Interface Instances**: Use the provided interface instance for composition
+```python
+uart = Uart(TX=Net("UART_TX"), RX=Net("UART_RX"))
+power = Power(NET=Net("VDD"))
+```
+
+**field() Specifications**: Enforce type checking with explicit defaults
+```python
+voltage = field(Voltage, unit("3.3V", Voltage))
+freqs = field(list[str], ["100kHz", "400kHz"])
+count = field(int, 42)
+```
+
+**using() Specifications**: Mark fields as promotion targets for automatic type conversion
+```python
+NET = using(Net("VCC"))
+uart = using(Uart())
+```
+
+#### Interface Instantiation
+
+```python
+InterfaceName([name], field1=value1, field2=value2, ...)
+```
+
+- **Optional name**: First positional argument sets the interface instance name
+- **Field overrides**: Named parameters override defaults
+- **Type validation**: Values must match field specifications
+
+#### Examples
+
+```python
+# Define interfaces
+Power = interface(
+    NET = using(Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VCC"))),
+    voltage = field(Voltage, unit("3.3V", Voltage)),
+)
+
+Uart = interface(
+    TX = Net("UART_TX"),
+    RX = Net("UART_RX"),
+)
+
+SystemInterface = interface(
+    power = using(Power()),
+    uart = using(Uart()),
+    debug = field(bool, False),
+)
+
+# Create instances
+power = Power()                                      # All defaults
+vcc = Power("VCC_3V3")                               # Named instance
+custom = Power("MAIN", voltage=unit("5V", Voltage))  # Named with override
+
+system = SystemInterface("MAIN", debug=True)
+```
+
+#### Promotion Semantics
+
+Fields marked with `using()` enable automatic type promotion when passing interfaces across module boundaries:
+
+**Rules:**
+- **Unique promotion targets**: Only one `using()` field per type per interface - duplicate promotion targets to the same type are not allowed
+- **Cross-module promotion**: Automatic conversion when crossing module boundaries
+- **Same-module access**: Explicit field access required within same module
+- **Type safety**: Promotion only occurs when target type exactly matches the expected type
+
+```python
+# Valid: Single promotion target per type
+Power = interface(
+    NET = using(Net("VCC")),        # Only Net promotion target
+    voltage = field(Voltage, ...),
+)
+
+# Invalid: Multiple promotion targets for same type
+InvalidInterface = interface(
+    NET1 = using(Net("VCC")),       # Error: duplicate Net promotion target
+    NET2 = using(Net("GND")),       # Error: duplicate Net promotion target
+)
+
+# Automatic promotion when passed to modules
+Resistor("R1", "10kOhm", "0603", P1=power, P2=gnd)  # power promotes to power.NET
+
+# Explicit access within same module
+net = power.NET  # Must use .NET explicitly
+```
+
+#### Post-Initialization Callbacks
+
+```python
+def _power_post_init(self):
+    if self.voltage.value <= 0:
+        error("Power voltage must be positive")
+
+Power = interface(
+    NET = using(Net("VCC")),
+    voltage = field(Voltage, unit("3.3V", Voltage)),
+    __post_init__ = _power_post_init,
+)
+```
+
+Callbacks receive `self` and cannot be overridden during instantiation.
 
 **Type**: `interface`  
 **Constructor**: `interface(**fields)`
 
-- Fields can be `Net` types, `Net` instances (templates), or other interface types/instances
+- Fields can be Net instances, interface instances, `field()` specifications, or `using()` specifications
 
 ### Module
 
