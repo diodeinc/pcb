@@ -812,8 +812,9 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
     fn using<'v>(value: Value<'v>, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
         let value_type = value.get_type();
 
-        // Validate that only Net or Interface instances can be wrapped
+        // Validate that only Net types/instances or Interface types/instances can be wrapped
         if value_type == "Net"
+            || value_type == "NetType"
             || value_type == "InterfaceValue"
             || value.downcast_ref::<InterfaceFactory<'v>>().is_some()
             || value.downcast_ref::<FrozenInterfaceFactory>().is_some()
@@ -821,7 +822,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
             Ok(eval.heap().alloc(Using { value }))
         } else {
             Err(anyhow::anyhow!(
-                "using() can only wrap Net or Interface instances, got {}",
+                "using() can only wrap Net or Interface types/instances, got {}",
                 value_type
             ))
         }
@@ -1165,9 +1166,12 @@ assert_eq(instance5.vcc.name, "PWR_VCC")
         // Test using() function availability and basic usage
         a.pass(
             r#"
-# Test using() with Net - just verify it works
+# Test using() with Net instance - just verify it works
 net = Net("TEST")
 using_net = using(net)
+
+# Test using() with Net type - should work now
+using_net_type = using(Net)
 
 # Test using() in interface definition
 Power = interface(
@@ -1177,6 +1181,33 @@ Power = interface(
 
 power = Power()
 assert_eq(power.NET.name, "VCC")
+"#,
+        );
+    }
+
+    #[test]
+    fn using_net_type_functionality() {
+        let mut a = Assert::new();
+        a.globals_add(|builder: &mut GlobalsBuilder| {
+            component_globals(builder);
+            interface_globals(builder);
+        });
+
+        // Test that using(Net) behaves correctly in interface definitions
+        a.pass(
+            r#"
+# Interface using Net type instead of Net instance
+Power = interface(
+    NET = using(Net),  # Should work like using(Net()) 
+)
+
+# Create instance with prefix
+power = Power("VCC")
+assert_eq(power.NET.name, "VCC_NET")
+
+# Create instance without prefix
+power_default = Power()
+assert_eq(power_default.NET.name, "NET")
 "#,
         );
     }
@@ -1192,7 +1223,7 @@ assert_eq(power.NET.name, "VCC")
         // Test using() validation - should error with invalid types
         a.fail(
             r#"using("invalid")"#,
-            "using() can only wrap Net or Interface instances",
+            "using() can only wrap Net or Interface types/instances",
         );
     }
 
