@@ -50,7 +50,10 @@ fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
         if let Some(name) = &config.name {
             println!("Name: {name}");
         }
-        println!("Members: {}", config.members.join(", "));
+        // Only show members if not default value
+        if config.members != vec!["boards/*".to_string()] {
+            println!("Members: {}", config.members.join(", "));
+        }
     } else {
         println!("No workspace configuration found");
     }
@@ -70,26 +73,14 @@ fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
         println!("No boards discovered");
         println!("Searched for pcb.toml files with [board] sections");
         if let Some(config) = &info.config {
-            println!("Members: {}", config.members.join(", "));
-        } else {
-            println!("Members: boards/* (default)");
+            // Only show members if not default value
+            if config.members != vec!["boards/*".to_string()] {
+                println!("Members: {}", config.members.join(", "));
+            }
         }
     } else {
-        // Sort boards to put default first
+        // Get default board for marking
         let default_board = info.config.as_ref().and_then(|c| c.default_board.as_ref());
-        let mut sorted_boards = info.boards.clone();
-        sorted_boards.sort_by(|a, b| match (default_board, &a.name, &b.name) {
-            (Some(default), name_a, name_b) => {
-                if name_a == default {
-                    std::cmp::Ordering::Less
-                } else if name_b == default {
-                    std::cmp::Ordering::Greater
-                } else {
-                    name_a.cmp(name_b)
-                }
-            }
-            _ => a.name.cmp(&b.name),
-        });
 
         println!(
             "{} ({})",
@@ -97,7 +88,7 @@ fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
             info.boards.len()
         );
 
-        for board in &sorted_boards {
+        for board in &info.boards {
             let name_display = if default_board.map(|s| s.as_str()) == Some(board.name.as_str()) {
                 format!(
                     "{} {}",
