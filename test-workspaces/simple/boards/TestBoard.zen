@@ -43,7 +43,7 @@ LedModule(
     package = "0603",
     VCC = vcc_3v3,
     GND = gnd,
-    CTRL = gnd,  # Always on indicator
+    CTRL = Gpio(NET = gnd.NET),  # Always on indicator
 )
 
 # Crystal oscillator circuit
