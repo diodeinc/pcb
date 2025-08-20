@@ -523,3 +523,283 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
         _ => panic!("Expected GitHub spec for utils.zen"),
     }
 }
+
+// ===== HIERARCHICAL ALIAS RESOLUTION TESTS =====
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_hierarchical_alias_workspace_only() {
+    let file_provider = Arc::new(MockFileProvider::new());
+    let remote_fetcher = Arc::new(MockRemoteFetcher::new());
+
+    // Set up workspace with pcb.toml
+    let workspace_root = PathBuf::from("/workspace");
+    file_provider.add_directory(&workspace_root);
+    file_provider.add_file(
+        workspace_root.join("pcb.toml"),
+        r#"
+[workspace]
+name = "test"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v1.0.0"
+"#,
+    );
+
+    let resolver = CoreLoadResolver::new(
+        file_provider.clone(),
+        remote_fetcher.clone(),
+        workspace_root.clone(),
+        true,
+    );
+
+    // Test resolving package from workspace root directory
+    let spec = LoadSpec::Package {
+        package: "stdlib".to_string(),
+        tag: "latest".to_string(),
+        path: PathBuf::from("units.zen"),
+    };
+
+    let current_file = workspace_root.join("main.zen");
+
+    // Set up expected resolution
+    let cache_path = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/units.zen");
+    remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v1.0.0/units.zen", &cache_path);
+    file_provider.add_file(&cache_path, "# Units");
+
+    let resolved = resolver
+        .resolve_spec(file_provider.as_ref(), &spec, &current_file)
+        .unwrap();
+
+    assert_eq!(resolved, cache_path);
+
+    // Test passed - hierarchical alias resolution working correctly
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_hierarchical_alias_nested_override() {
+    let file_provider = Arc::new(MockFileProvider::new());
+    let remote_fetcher = Arc::new(MockRemoteFetcher::new());
+
+    // Set up workspace hierarchy
+    let workspace_root = PathBuf::from("/workspace");
+    let modules_dir = workspace_root.join("modules");
+
+    file_provider.add_directory(&workspace_root);
+    file_provider.add_directory(&modules_dir);
+
+    // Workspace pcb.toml
+    file_provider.add_file(
+        workspace_root.join("pcb.toml"),
+        r#"
+[workspace]
+name = "test"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v1.0.0"
+custom = "@github/workspace/custom"
+"#,
+    );
+
+    // Module-level pcb.toml that overrides stdlib but adds new alias
+    file_provider.add_file(
+        modules_dir.join("pcb.toml"),
+        r#"
+[module]
+name = "modules"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v2.0.0"
+local = "./local"
+"#,
+    );
+
+    let resolver = CoreLoadResolver::new(
+        file_provider.clone(),
+        remote_fetcher.clone(),
+        workspace_root.clone(),
+        true,
+    );
+
+    // Test from workspace root - should use v1.0.0
+    let spec_workspace = LoadSpec::Package {
+        package: "stdlib".to_string(),
+        tag: "latest".to_string(),
+        path: PathBuf::from("units.zen"),
+    };
+
+    let workspace_file = workspace_root.join("main.zen");
+    let workspace_cache =
+        PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/v1/units.zen");
+    remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v1.0.0/units.zen", &workspace_cache);
+    file_provider.add_file(&workspace_cache, "# Units v1");
+
+    let resolved_workspace = resolver
+        .resolve_spec(file_provider.as_ref(), &spec_workspace, &workspace_file)
+        .unwrap();
+    assert_eq!(resolved_workspace, workspace_cache);
+
+    // Test from modules directory - should use v2.0.0
+    let spec_modules = LoadSpec::Package {
+        package: "stdlib".to_string(),
+        tag: "latest".to_string(),
+        path: PathBuf::from("units.zen"),
+    };
+
+    let modules_file = modules_dir.join("module.zen");
+    let modules_cache = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/v2/units.zen");
+    remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v2.0.0/units.zen", &modules_cache);
+    file_provider.add_file(&modules_cache, "# Units v2");
+
+    let resolved_modules = resolver
+        .resolve_spec(file_provider.as_ref(), &spec_modules, &modules_file)
+        .unwrap();
+    assert_eq!(resolved_modules, modules_cache);
+
+    // Test custom alias from workspace (should work from modules too)
+    let spec_custom = LoadSpec::Package {
+        package: "custom".to_string(),
+        tag: "latest".to_string(),
+        path: PathBuf::from("lib.zen"),
+    };
+
+    let custom_cache = PathBuf::from("/home/user/.cache/pcb/github/workspace/custom/lib.zen");
+    remote_fetcher.add_fetch_result("@github/workspace/custom/lib.zen", &custom_cache);
+    file_provider.add_file(&custom_cache, "# Custom lib");
+
+    let resolved_custom = resolver
+        .resolve_spec(file_provider.as_ref(), &spec_custom, &modules_file)
+        .unwrap();
+    assert_eq!(resolved_custom, custom_cache);
+
+    // Test local alias only available in modules - this would resolve to a path spec
+    // We can't easily test path resolution here as it would require actual filesystem setup
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_malformed_toml_graceful_handling() {
+    let file_provider = Arc::new(MockFileProvider::new());
+    let remote_fetcher = Arc::new(MockRemoteFetcher::new());
+
+    // Set up workspace with malformed pcb.toml
+    let workspace_root = PathBuf::from("/workspace");
+    let modules_dir = workspace_root.join("modules");
+
+    file_provider.add_directory(&workspace_root);
+    file_provider.add_directory(&modules_dir);
+
+    // Good workspace pcb.toml
+    file_provider.add_file(
+        workspace_root.join("pcb.toml"),
+        r#"
+[workspace]
+name = "test"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib"
+"#,
+    );
+
+    // Malformed modules pcb.toml (bad TOML syntax)
+    file_provider.add_file(
+        modules_dir.join("pcb.toml"),
+        r#"
+[module]
+name = "modules"
+
+[packages
+stdlib = "@github/invalid
+"#,
+    );
+
+    let resolver = CoreLoadResolver::new(
+        file_provider.clone(),
+        remote_fetcher.clone(),
+        workspace_root.clone(),
+        true,
+    );
+
+    let spec = LoadSpec::Package {
+        package: "stdlib".to_string(),
+        tag: "latest".to_string(),
+        path: PathBuf::from("units.zen"),
+    };
+
+    let modules_file = modules_dir.join("module.zen");
+    let cache_path = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/units.zen");
+    remote_fetcher.add_fetch_result("@github/diodeinc/stdlib/units.zen", &cache_path);
+    file_provider.add_file(&cache_path, "# Units");
+
+    // Should fall back to workspace aliases when module toml is malformed
+    let resolved = resolver
+        .resolve_spec(file_provider.as_ref(), &spec, &modules_file)
+        .unwrap();
+
+    assert_eq!(resolved, cache_path);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_concurrent_alias_resolution() {
+    use std::thread;
+
+    let file_provider = Arc::new(MockFileProvider::new());
+    let remote_fetcher = Arc::new(MockRemoteFetcher::new());
+
+    // Set up workspace
+    let workspace_root = PathBuf::from("/workspace");
+    file_provider.add_directory(&workspace_root);
+    file_provider.add_file(
+        workspace_root.join("pcb.toml"),
+        r#"
+[workspace]
+name = "test"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib"
+"#,
+    );
+
+    let resolver = Arc::new(CoreLoadResolver::new(
+        file_provider.clone(),
+        remote_fetcher.clone(),
+        workspace_root.clone(),
+        true,
+    ));
+
+    let spec = LoadSpec::Package {
+        package: "stdlib".to_string(),
+        tag: "latest".to_string(),
+        path: PathBuf::from("units.zen"),
+    };
+
+    let cache_path = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/units.zen");
+    remote_fetcher.add_fetch_result("@github/diodeinc/stdlib/units.zen", &cache_path);
+    file_provider.add_file(&cache_path, "# Units");
+
+    // Spawn multiple threads resolving from the same directory
+    let handles: Vec<_> = (0..4)
+        .map(|i| {
+            let resolver = resolver.clone();
+            let file_provider = file_provider.clone();
+            let spec = spec.clone();
+            let workspace_root = workspace_root.clone();
+
+            thread::spawn(move || {
+                let file = workspace_root.join(format!("file{i}.zen"));
+                resolver
+                    .resolve_spec(file_provider.as_ref(), &spec, &file)
+                    .unwrap()
+            })
+        })
+        .collect();
+
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+    // All threads should get the same result
+    for result in &results {
+        assert_eq!(*result, cache_path);
+    }
+}

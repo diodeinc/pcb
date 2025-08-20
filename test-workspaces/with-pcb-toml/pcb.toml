@@ -2,4 +2,4 @@
 name = "zener"
 
 [packages]
-kicad = "@github/diodeinc/kicad"
+kicad = "@github/foobar"

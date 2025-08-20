@@ -1,1 +1,5 @@
-# empty pcb.toml
+[module]
+name = "test_board"
+
+[packages]
+kicad = "@github/diodeinc/kicad"
