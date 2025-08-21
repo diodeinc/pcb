@@ -717,7 +717,7 @@ impl CoreLoadResolver {
             .ancestors()
             .take_while(|p| p.starts_with(&alias_root))
             .map(|p| p.join("pcb.toml"))
-            .filter(|p| p.exists())
+            .filter(|p| self.file_provider.exists(p))
             .collect::<Vec<_>>();
 
         // Add all discovered pcb.toml files to path_to_spec mapping
