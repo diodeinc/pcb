@@ -567,8 +567,7 @@ pub struct CoreLoadResolver {
     /// Tracks all local files that have been resolved (for vendor/release commands)
     tracked_local_files: Arc<Mutex<HashSet<PathBuf>>>,
     use_vendor_dir: bool,
-
-    // Hierarchical alias resolution cache
+    /// Hierarchical alias resolution cache
     alias_cache: RwLock<HashMap<PathBuf, HashMap<String, String>>>,
 }
 
@@ -698,38 +697,28 @@ impl CoreLoadResolver {
             self.workspace_root.clone()
         } else {
             // For remote files, find repo root using existing LoadSpec mapping
-            if let Some(spec) = self.path_to_spec.lock().unwrap().get(&file).cloned() {
-                match spec {
-                    LoadSpec::Github {
-                        path: spec_path, ..
-                    }
-                    | LoadSpec::Gitlab {
-                        path: spec_path, ..
-                    }
-                    | LoadSpec::Package {
-                        path: spec_path, ..
-                    } => {
-                        // Walk up from file by the number of components in spec_path
-                        let mut root = file.clone();
-                        for _ in 0..spec_path.components().count() {
-                            root = root.parent().unwrap_or(Path::new("")).to_path_buf();
-                        }
-                        log::debug!("  Using remote repo root: {}", root.display());
-                        root
-                    }
-                    _ => {
-                        log::debug!("  File has non-remote LoadSpec, using defaults");
-                        return Ok(LoadSpec::default_package_aliases());
-                    }
-                }
-            } else {
-                log::debug!("  File not in path_to_spec mapping, using defaults");
-                return Ok(LoadSpec::default_package_aliases());
+            let spec = self
+                .path_to_spec
+                .lock()
+                .unwrap()
+                .get(&file)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("File not in path_to_spec mapping: {}", file.display())
+                })?;
+
+            // Walk up from file by the number of components in spec_path
+            let spec_path = spec.path();
+            let mut root = file.clone();
+            for _ in 0..spec_path.components().count() {
+                root = root.parent().unwrap_or(Path::new("")).to_path_buf();
             }
+            log::debug!("  Using remote repo root: {}", root.display());
+            root
         };
 
         // Iterate in reverse to prioritize the deepest (closest to leaf) pcb.toml files
-        let aliases: HashMap<String, String> = file
+        let pcb_toml_files = file
             .ancestors()
             .take_while(|p| p.starts_with(&alias_root))
             .map(|p| p.join("pcb.toml"))
@@ -737,15 +726,16 @@ impl CoreLoadResolver {
             .map(|p| {
                 let content = self.file_provider.read_file(&p)?;
                 let toml_aliases = parse_package_aliases_from_toml(&content);
-                Ok::<_, anyhow::Error>(toml_aliases)
+                Ok::<_, anyhow::Error>((p, toml_aliases))
             })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .rev()
-            .fold(LoadSpec::default_package_aliases(), |mut acc, aliases| {
+            .collect::<Result<Vec<_>, _>>()?;
+        let aliases: HashMap<String, String> = pcb_toml_files.into_iter().rev().fold(
+            LoadSpec::default_package_aliases(),
+            |mut acc, (_, aliases)| {
                 acc.extend(aliases);
                 acc
-            });
+            },
+        );
 
         let mut alias_cache = self.alias_cache.write().unwrap();
         log::debug!(
@@ -795,7 +785,7 @@ impl LoadResolver for CoreLoadResolver {
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
         // Check if the current file is a cached remote file
-        let current_file_spec = self.path_to_spec.lock().unwrap().get(current_file).cloned();
+        let current_file_spec = self.get_load_spec_for_path(current_file);
 
         // If we're resolving from a remote file, we need to handle relative and workspace paths specially
         if let Some(remote_spec) = current_file_spec {

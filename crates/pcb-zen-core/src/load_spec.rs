@@ -39,6 +39,48 @@ pub enum LoadSpec {
 }
 
 impl LoadSpec {
+    /// Get the path from this LoadSpec.
+    pub fn path(&self) -> &PathBuf {
+        match self {
+            LoadSpec::Package { path, .. } => path,
+            LoadSpec::Github { path, .. } => path,
+            LoadSpec::Gitlab { path, .. } => path,
+            LoadSpec::Path { path } => path,
+            LoadSpec::WorkspacePath { path } => path,
+        }
+    }
+
+    /// Create a new LoadSpec pointing to a different file in the same repository.
+    ///
+    /// This preserves the repository identity (GitHub user/repo, GitLab project, package name/tag)
+    /// while changing only the file path within that repository.
+    pub fn with_path(&self, new_path: PathBuf) -> LoadSpec {
+        match self {
+            LoadSpec::Github {
+                user, repo, rev, ..
+            } => LoadSpec::Github {
+                user: user.clone(),
+                repo: repo.clone(),
+                rev: rev.clone(),
+                path: new_path,
+            },
+            LoadSpec::Gitlab {
+                project_path, rev, ..
+            } => LoadSpec::Gitlab {
+                project_path: project_path.clone(),
+                rev: rev.clone(),
+                path: new_path,
+            },
+            LoadSpec::Package { package, tag, .. } => LoadSpec::Package {
+                package: package.clone(),
+                tag: tag.clone(),
+                path: new_path,
+            },
+            LoadSpec::Path { .. } => LoadSpec::Path { path: new_path },
+            LoadSpec::WorkspacePath { .. } => LoadSpec::WorkspacePath { path: new_path },
+        }
+    }
+
     /// Parse the raw string passed to `load()` into a [`LoadSpec`].
     ///
     /// The supported grammar is:

@@ -237,7 +237,14 @@ pub fn classify_file<'a>(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default();
-    if !matches!(ext, "zen" | "kicad_mod" | "kicad_sym") && !ext.starts_with("kicad_") {
+    let filename = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or_default();
+    if !matches!(ext, "zen" | "kicad_mod" | "kicad_sym")
+        && !ext.starts_with("kicad_")
+        && filename != "pcb.toml"
+    {
         return FileClassification::Irrelevant;
     }
 
