@@ -1,0 +1,29 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: output
+---
+Command: pcb help
+Exit Code: 0
+
+--- STDOUT ---
+PCB tool with build and layout capabilities
+
+Usage: pcb <COMMAND>
+
+Commands:
+  build    Build PCB projects
+  upgrade  Upgrade PCB projects
+  bom      Generate Bill of Materials (BOM)
+  layout   Layout PCB designs
+  clean    Clean PCB build artifacts
+  fmt      Format .zen and .star files
+  lsp      Language Server Protocol support
+  open     Open PCB layout files
+  release  Release PCB project versions
+  vendor   Vendor external dependencies
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+--- STDERR ---

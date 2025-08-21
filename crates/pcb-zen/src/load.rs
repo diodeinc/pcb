@@ -146,7 +146,7 @@ fn download_and_unpack_package(_package: &str, _tag: &str, _dest_dir: &Path) -> 
     anyhow::bail!("Package file download not yet implemented")
 }
 
-fn download_and_unpack_github_repo(
+pub fn download_and_unpack_github_repo(
     user: &str,
     repo: &str,
     rev: &str,
@@ -329,7 +329,7 @@ fn download_and_unpack_github_repo(
     Ok(())
 }
 
-fn download_and_unpack_gitlab_repo(
+pub fn download_and_unpack_gitlab_repo(
     project_path: &str,
     rev: &str,
     dest_dir: &Path,

@@ -6,36 +6,9 @@
 //!   Review changes: `cargo insta review`
 
 use ignore::WalkBuilder;
-use insta::Settings;
 use std::{fs, io::Read, path::Path};
 
-/// Snapshot directory with defaults.
-pub fn assert_dir_snapshot(root: impl AsRef<Path>) {
-    assert_dir_snapshot_with(root, &[], None)
-}
-
-/// Snapshot directory with insta filters and optional custom name.
-/// - `filters`: regex replacements applied before assertion, e.g. [ (r"\b[0-9a-f]{40}\b", "<SHA>") ]
-/// - `name`: optional custom name for the snapshot file
-pub fn assert_dir_snapshot_with(
-    root: impl AsRef<Path>,
-    filters: &[(&str, &str)],
-    name: Option<&str>,
-) {
-    let manifest = build_manifest(root.as_ref());
-    let mut settings = Settings::clone_current();
-    for &(re, rep) in filters {
-        settings.add_filter(re, rep);
-    }
-    if let Some(name) = name {
-        settings.set_snapshot_suffix(name);
-    }
-    settings.bind(|| {
-        insta::assert_snapshot!(manifest);
-    });
-}
-
-fn build_manifest(root: &Path) -> String {
+pub fn build_manifest(root: &Path) -> String {
     let base = fs::canonicalize(root).expect("failed to canonicalize root path");
 
     // Gitignore-aware file walker, but deterministic and confined to `base`

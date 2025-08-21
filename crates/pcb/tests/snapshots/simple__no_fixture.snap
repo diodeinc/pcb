@@ -1,0 +1,22 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: output
+---
+Command: pcb build boards/TestBoard.zen
+Exit Code: 1
+
+--- STDOUT ---
+Error: error sending request for url (https://codeload.github.com/nonexistent/repo/tar.gz/main)
+   ╭─[ <TEMP_DIR>/boards/TestBoard.zen:2:1 ]
+   │
+ 2 │ load("@github/nonexistent/repo:main/interfaces.zen", "Gpio", "Ground", "Power")
+   │ ───────────────────────────────────────┬───────────────────────────────────────  
+   │                                        ╰───────────────────────────────────────── error sending request for url (https://codeload.github.com/nonexistent/repo/tar.gz/main)
+───╯
+✗ TestBoard.zen: Build failed
+--- STDERR ---
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/boards/TestBoard.zen:2:1 (error sending request for url (https://codeload.github.com/nonexistent/repo/tar.gz/main))
+
+Error: Build failed with errors

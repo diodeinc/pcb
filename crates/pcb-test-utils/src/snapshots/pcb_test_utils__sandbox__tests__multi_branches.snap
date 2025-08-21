@@ -1,6 +1,6 @@
 ---
-source: crates/pcb-test-utils/src/snapdir.rs
-expression: manifest
+source: crates/pcb-test-utils/src/sandbox.rs
+expression: "sb.snapshot_dir(\".\")"
 ---
 === cloned-main/version.txt
 ref=main

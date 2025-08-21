@@ -15,7 +15,7 @@
 //! use std::path::Path;
 //! use pcb_test_utils::sandbox::Sandbox;
 //!
-//! let sb = Sandbox::new();
+//! let mut sb = Sandbox::new();
 //!
 //! // Create a fake GitHub remote and seed it
 //! let fx = sb.git_fixture("https://github.com/foo/bar.git");
@@ -32,9 +32,9 @@
 //!
 //! assert_eq!(fs::read_to_string(sb.root_path().join("clone/README.md")).unwrap(), "hello");
 //!
-//! // Run a cargo binary (cwd is relative to sandbox root)
-//! let output = sb.run("my-binary", ["--help"], Some(Path::new("clone"))).unwrap();
-//! println!("Binary output: {}", output);
+//! // Run a cargo binary and snapshot the output
+//! let output = sb.wd("clone").snapshot_run("my-binary", ["--help"]);
+//! pcb_test_utils::assert_snapshot!("help", output);
 //! ```
 
 use assert_fs::fixture::PathChild;
@@ -42,9 +42,22 @@ use assert_fs::TempDir;
 use duct::Expression;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+/// Macro to create a snapshot assertion with a clean interface
+#[macro_export]
+macro_rules! assert_snapshot {
+    ($name:expr, $content:expr) => {
+        insta::assert_snapshot!($name, $content)
+    };
+}
+
+const STDLIB_GIT_URL: &str = "https://github.com/diodeinc/stdlib";
+const KICAD_SYMBOLS_GIT_URL: &str = "https://gitlab.com/kicad/libraries/kicad-symbols";
+const KICAD_FOOTPRINTS_GIT_URL: &str = "https://gitlab.com/kicad/libraries/kicad-footprints";
 
 pub struct Sandbox {
     root: TempDir,
@@ -60,6 +73,20 @@ pub struct Sandbox {
 impl Default for Sandbox {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+enum SupportedGitForge {
+    GitHub,
+    GitLab,
+}
+
+impl fmt::Display for SupportedGitForge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SupportedGitForge::GitHub => write!(f, "github"),
+            SupportedGitForge::GitLab => write!(f, "gitlab"),
+        }
     }
 }
 
@@ -105,9 +132,9 @@ impl Sandbox {
         &self.default_cwd
     }
 
-    /// Set the default working directory for commands. Path is relative to sandbox root if not absolute.
+    /// Set the working directory for commands. Path is relative to sandbox root if not absolute.
     /// Creates the directory if it doesn't exist.
-    pub fn set_default_cwd<P: AsRef<Path>>(&mut self, cwd: P) -> &mut Self {
+    pub fn cwd<P: AsRef<Path>>(&mut self, cwd: P) -> &mut Self {
         let cwd = cwd.as_ref();
         self.default_cwd = if cwd.is_absolute() {
             cwd.to_path_buf()
@@ -126,6 +153,11 @@ impl Sandbox {
         self.root.path()
     }
 
+    pub fn leak_root(&mut self) {
+        let temp_dir = std::mem::replace(&mut self.root, TempDir::new().unwrap());
+        self.root = temp_dir.into_persistent();
+    }
+
     /// Write/overwrite a file relative to the sandbox root.
     pub fn write<P: AsRef<Path>, S: AsRef<[u8]>>(&mut self, rel: P, contents: S) -> &mut Self {
         let p = self.root_path().join(rel);
@@ -136,19 +168,17 @@ impl Sandbox {
         self
     }
 
-    /// Take a directory snapshot with a descriptive name.
+    /// Take a directory snapshot and return the manifest content.
     /// Path is relative to current working directory if not absolute.
-    pub fn snapshot_dir<P: AsRef<Path>>(&self, path: P, name: &str) {
-        use crate::snapdir::assert_dir_snapshot_with;
-
+    pub fn snapshot_dir<P: AsRef<Path>>(&self, path: P) -> String {
         let path = path.as_ref();
-        let snapshot_path = if path.is_absolute() {
+        let dir_path = if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.default_cwd.join(path)
         };
 
-        assert_dir_snapshot_with(snapshot_path, &[], Some(name));
+        crate::snapdir::build_manifest(&dir_path)
     }
 
     /// Create and initialize a git fixture for a given GitHub/GitLab URL.
@@ -228,10 +258,10 @@ impl Sandbox {
         self.inject_env(expr)
     }
 
-    /// Run a cargo binary inside this sandbox and return stdout as String.
-    /// Uses `cargo_bin!()` to locate the binary. Errors if the process exits with non-zero status.
+    /// Run a cargo binary inside this sandbox and return the formatted output for snapshotting.
+    /// Uses `cargo_bin!()` to locate the binary.
     /// For system binaries, use `cmd()` method instead.
-    pub fn run<I>(&self, program: &str, args: I, cwd: Option<&Path>) -> Result<String, String>
+    pub fn snapshot_run<I>(&mut self, program: &str, args: I) -> String
     where
         I: IntoIterator,
         I::Item: AsRef<OsStr>,
@@ -244,22 +274,44 @@ impl Sandbox {
             .map(|arg| arg.as_ref().to_string_lossy().to_string())
             .collect();
 
-        let mut expr = duct::cmd(&cargo_bin_path, args);
-
-        let working_dir = if let Some(dir) = cwd {
-            if dir.is_absolute() {
-                dir.to_path_buf()
-            } else {
-                self.root_path().join(dir)
-            }
-        } else {
-            self.default_cwd.clone()
-        };
-        expr = expr.dir(working_dir);
-
+        let mut expr = duct::cmd(&cargo_bin_path, args.clone());
+        expr = expr.dir(&self.default_cwd);
         expr = self.inject_env(expr);
 
-        expr.read().map_err(|e| format!("command failed: {e}"))
+        // Capture both stdout and stderr to prevent terminal output during tests
+        let output = expr
+            .stderr_capture()
+            .stdout_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+
+        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Sanitize temp paths to make snapshots deterministic
+        let sanitized_stdout = self.sanitize_temp_paths(&stdout);
+        let sanitized_stderr = self.sanitize_temp_paths(&stderr);
+
+        format!(
+            "Command: {} {}\nExit Code: {}\n\n--- STDOUT ---\n{}\n--- STDERR ---\n{}",
+            program,
+            args.join(" "),
+            exit_code,
+            sanitized_stdout.trim_end(),
+            sanitized_stderr.trim_end()
+        )
+    }
+
+    /// Sanitize temporary paths in output to make snapshots deterministic
+    fn sanitize_temp_paths(&self, content: &str) -> String {
+        use regex::Regex;
+
+        // Replace temp directory paths with a placeholder - matches macOS temp paths
+        let temp_pattern =
+            Regex::new(r"/private/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
+        temp_pattern.replace_all(content, "<TEMP_DIR>").to_string()
     }
 
     fn write_gitconfig(&self) {
@@ -323,6 +375,68 @@ impl Sandbox {
         expr = expr.full_env(&env_map);
 
         expr
+    }
+
+    /// Seed the sandbox with real git repositories from remote URLs.
+    /// Uses pcb-zen's download functionality for GitHub and GitLab repos.
+    pub fn seed_from_git(&mut self, url: &str, refs: &[&str]) {
+        // Parse URL: https://github.com/user/repo or https://gitlab.com/user/repo
+        let parts: Vec<&str> = url.trim_end_matches(".git").splitn(5, '/').collect();
+        if parts.len() < 5 || (!url.contains("github.com") && !url.contains("gitlab.com")) {
+            panic!("Only GitHub and GitLab URLs supported: {url}");
+        }
+        let (domain, user, repo) = (parts[2], parts[3], parts[4]);
+        let domain = match domain {
+            "github.com" => SupportedGitForge::GitHub,
+            "gitlab.com" => SupportedGitForge::GitLab,
+            _ => panic!("Unsupported domain: {domain}"),
+        };
+
+        for rev in refs {
+            let suffix = format!("{domain}/{user}/{repo}/{rev}");
+            let cache_root = pcb_zen::load::cache_dir().unwrap().join(&suffix);
+
+            // Download and unpack if not cached
+            if !cache_root.exists() {
+                match domain {
+                    SupportedGitForge::GitHub => {
+                        pcb_zen::load::download_and_unpack_github_repo(user, repo, rev, &cache_root)
+                            .unwrap()
+                    }
+                    SupportedGitForge::GitLab => {
+                        let project_path = format!("{user}/{repo}");
+                        pcb_zen::load::download_and_unpack_gitlab_repo(
+                            &project_path,
+                            rev,
+                            &cache_root,
+                        )
+                        .unwrap()
+                    }
+                }
+            }
+
+            // Symlink from sandbox cache to real cache
+            let sandbox_cache_path = self.cache_dir.join(&suffix);
+            if sandbox_cache_path.exists() {
+                fs::remove_dir_all(&sandbox_cache_path).unwrap();
+            }
+            fs::create_dir_all(sandbox_cache_path.parent().unwrap()).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&cache_root, &sandbox_cache_path).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_dir(&cache_root, &sandbox_cache_path).unwrap();
+        }
+    }
+
+    pub fn seed_stdlib(&mut self, versions: &[&str]) -> &mut Self {
+        self.seed_from_git(STDLIB_GIT_URL, versions);
+        self
+    }
+
+    pub fn seed_kicad(&mut self, versions: &[&str]) -> &mut Self {
+        self.seed_from_git(KICAD_SYMBOLS_GIT_URL, versions);
+        self.seed_from_git(KICAD_FOOTPRINTS_GIT_URL, versions);
+        self
     }
 }
 
@@ -519,7 +633,7 @@ mod tests {
         .expect("git clone should succeed");
 
         // Run ls to check the contents (uses default cwd = root)
-        let ls_output = sb
+        let _ls_output = sb
             .cmd("ls", &["-la", "cloned"])
             .read()
             .expect("ls should succeed");
@@ -551,7 +665,7 @@ mod tests {
             .write("test_dir/another.txt", "more content");
 
         // Change default cwd to the test directory
-        sb.set_default_cwd("test_dir");
+        sb.cwd("test_dir");
         assert_eq!(sb.default_cwd(), sb.root_path().join("test_dir"));
 
         // Run ls without specifying directory - should use default cwd
@@ -646,16 +760,16 @@ mod tests {
         .expect("git clone should succeed");
 
         // Snapshot the entire project directory
-        sb.snapshot_dir("project", "integration_test_project");
+        crate::assert_snapshot!("project", sb.snapshot_dir("project"));
 
         // Also snapshot the cloned repository
-        sb.snapshot_dir("cloned-repo", "integration_test_cloned_repo");
+        crate::assert_snapshot!("cloned_repo", sb.snapshot_dir("cloned-repo"));
     }
 
     #[test]
     fn test_multi_branch_tags_with_snapshots() {
         let mut sb = Sandbox::new();
-        sb.set_default_cwd("src");
+        sb.cwd("src");
 
         // Create a multi-branch fixture with simple single-file content per version
         let mut fixture = sb.git_fixture("https://github.com/example/multi-version.git");
@@ -743,6 +857,6 @@ mod tests {
         .expect("clone tag v1.0.0 should succeed");
 
         // Snapshot the current directory (src) to see all cloned directories
-        sb.snapshot_dir(".", "multi_branch_clones");
+        crate::assert_snapshot!("multi_branches", sb.snapshot_dir("."));
     }
 }

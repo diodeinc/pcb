@@ -2538,6 +2538,8 @@ dependencies = [
  "duct",
  "ignore",
  "insta",
+ "pcb-zen",
+ "regex",
  "tempfile",
 ]
 

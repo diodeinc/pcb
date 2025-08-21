@@ -48,3 +48,7 @@ ignore = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 tempfile = { workspace = true }
+assert_cmd = { workspace = true }
+assert_fs = { workspace = true }
+duct = { workspace = true }
+pcb-test-utils = { workspace = true }
