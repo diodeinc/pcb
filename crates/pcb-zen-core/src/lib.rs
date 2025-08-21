@@ -777,6 +777,11 @@ impl CoreLoadResolver {
         files
     }
 
+    /// Get only local files (not from cache/remote dependencies)
+    pub fn get_tracked_local_files(&self) -> HashSet<PathBuf> {
+        self.tracked_local_files.lock().unwrap().clone()
+    }
+
     /// Get the LoadSpec for a specific resolved file path
     pub fn get_load_spec_for_path(&self, path: &Path) -> Option<LoadSpec> {
         self.path_to_spec.lock().unwrap().get(path).cloned()

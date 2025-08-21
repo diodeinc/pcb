@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use log::{debug, info};
-use pcb_zen::load::{cache_dir, DefaultRemoteFetcher};
+use pcb_zen::load::DefaultRemoteFetcher;
 use pcb_zen_core::workspace::find_workspace_root;
 use pcb_zen_core::{
     normalize_path, CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap,
@@ -53,8 +53,8 @@ pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result
     let workspace_root = if initial_workspace_root.join("pcb.toml").exists() {
         initial_workspace_root
     } else {
-        // No pcb.toml found, use common ancestor of tracked files
-        detect_workspace_root_from_files(&zen_path, &resolver.get_tracked_files())?
+        // No pcb.toml found, use common ancestor of local files only
+        detect_workspace_root_from_files(&zen_path, &resolver.get_tracked_local_files())?
     };
 
     // Log workspace root info for debugging
@@ -68,17 +68,14 @@ pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result
     })
 }
 
-/// Detect workspace root from tracked files when no pcb.toml is found
+/// Detect workspace root from local files when no pcb.toml is found
 pub fn detect_workspace_root_from_files(
     entry: &Path,
-    tracked: &HashSet<PathBuf>,
+    local_files: &HashSet<PathBuf>,
 ) -> Result<PathBuf> {
-    let cache_root = cache_dir()?.canonicalize()?;
-
-    let mut paths: Vec<PathBuf> = tracked
+    let mut paths: Vec<PathBuf> = local_files
         .iter()
         .filter_map(|p| p.canonicalize().ok())
-        .filter(|p| !p.starts_with(&cache_root))
         .collect();
 
     paths.push(entry.canonicalize()?);
@@ -92,7 +89,7 @@ pub fn detect_workspace_root_from_files(
             };
             Ok(current_root)
         })?
-        .context("Unable to determine workspace root from tracked files")?;
+        .context("Unable to determine workspace root from local files")?;
 
     info!("Detected workspace root from files: {}", root.display());
     Ok(root)
