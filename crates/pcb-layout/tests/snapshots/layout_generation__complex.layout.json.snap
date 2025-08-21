@@ -2384,6 +2384,33 @@ expression: content
       "locked": false,
       "min_thickness": 250000,
       "name": "",
+      "net_name": "BOARD_P2",
+      "points": [
+        {
+          "x": 140450000,
+          "y": 103000000
+        },
+        {
+          "x": 144450000,
+          "y": 103000000
+        },
+        {
+          "x": 144450000,
+          "y": 107000000
+        },
+        {
+          "x": 140450000,
+          "y": 107000000
+        }
+      ]
+    },
+    {
+      "filled": true,
+      "hatch_style": 2,
+      "layer": "F.Cu",
+      "locked": false,
+      "min_thickness": 250000,
+      "name": "",
       "net_name": "BOARD_P3",
       "points": [
         {
@@ -2427,33 +2454,6 @@ expression: content
         },
         {
           "x": 155050000,
-          "y": 107000000
-        }
-      ]
-    },
-    {
-      "filled": true,
-      "hatch_style": 2,
-      "layer": "F.Cu",
-      "locked": false,
-      "min_thickness": 250000,
-      "name": "",
-      "net_name": "BOARD_P2",
-      "points": [
-        {
-          "x": 140450000,
-          "y": 103000000
-        },
-        {
-          "x": 144450000,
-          "y": 103000000
-        },
-        {
-          "x": 144450000,
-          "y": 107000000
-        },
-        {
-          "x": 140450000,
           "y": 107000000
         }
       ]
