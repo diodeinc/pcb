@@ -1,0 +1,21 @@
+---
+source: crates/pcb/tests/info.rs
+expression: output
+---
+Command: pcb info
+Exit Code: 0
+
+--- STDOUT ---
+Workspace Information
+Root: <TEMP_DIR>
+Name: BoardDiscoveryTest
+Members: boards/*, special/custom-board
+
+Boards (4)
+  BrokenBoard - broken.zen in <TEMP_DIR>/boards/broken-board
+  CustomBoard - custom.zen in <TEMP_DIR>/special/custom-board
+    Special custom board with unique features
+  MainBoard - main_board.zen in <TEMP_DIR>/boards/main-board
+  TestBoard (default) - test_board.zen in <TEMP_DIR>/boards/test-board
+    Main test board for validation
+--- STDERR ---

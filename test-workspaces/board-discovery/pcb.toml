@@ -1,7 +1,0 @@
-[workspace]
-name = "BoardDiscoveryTest"
-members = ["boards/*", "special/custom-board"]
-default_board = "TestBoard"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib:v1.0.0"

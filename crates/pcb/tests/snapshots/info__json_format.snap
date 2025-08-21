@@ -1,0 +1,33 @@
+---
+source: crates/pcb/tests/info.rs
+expression: output
+---
+Command: pcb info -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "root": "<TEMP_DIR>",
+  "config": {
+    "name": "BoardDiscoveryTest",
+    "members": [
+      "boards/*",
+      "special/custom-board"
+    ],
+    "default_board": "TestBoard"
+  },
+  "boards": [
+    {
+      "name": "MainBoard",
+      "zen_path": "main_board.zen",
+      "directory": "<TEMP_DIR>/boards/main-board"
+    },
+    {
+      "name": "TestBoard",
+      "zen_path": "test_board.zen",
+      "description": "Main test board for validation",
+      "directory": "<TEMP_DIR>/boards/test-board"
+    }
+  ]
+}
+--- STDERR ---

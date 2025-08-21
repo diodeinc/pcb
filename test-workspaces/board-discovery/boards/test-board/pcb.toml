@@ -1,4 +1,0 @@
-[board]
-name = "TestBoard"
-path = "test_board.zen"
-description = "Main test board for validation"

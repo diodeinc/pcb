@@ -1,0 +1,17 @@
+---
+source: crates/pcb/tests/info.rs
+expression: output
+---
+Command: pcb info subdir
+Exit Code: 0
+
+--- STDOUT ---
+Workspace Information
+Root: subdir
+Name: BoardDiscoveryTest
+Members: boards/*, special/custom-board
+
+Boards (1)
+  TestBoard (default) - test_board.zen in subdir/boards/test-board
+    Main test board for validation
+--- STDERR ---

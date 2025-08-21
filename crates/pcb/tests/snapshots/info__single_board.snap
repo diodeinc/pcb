@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/info.rs
+expression: output
+---
+Command: pcb info
+Exit Code: 0
+
+--- STDOUT ---
+Workspace Information
+Root: <TEMP_DIR>
+
+Boards (1)
+  TestBoard (default) - test_board.zen in <TEMP_DIR>/boards/TestBoard
+    Main test board for validation
+--- STDERR ---

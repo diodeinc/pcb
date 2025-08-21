@@ -1,8 +1,0 @@
-load("@stdlib/interfaces.zen", "Ground", "Power")
-
-Capacitor = Module("@stdlib/generics/Capacitor.zen")
-
-vcc = Power("3V3")  
-gnd = Ground("GND")
-
-Capacitor("C1", "100nF", "0603", P1=vcc.NET, P2=gnd.NET)
