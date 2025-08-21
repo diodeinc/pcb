@@ -771,19 +771,20 @@ class VirtualGraphic(VirtualElement):
         """Move graphic element by offset."""
         item = self.kicad_item
 
+        # TODO: review these conditionals, sometimes they can cause double moves
         if hasattr(item, "SetPosition"):
             pos = item.GetPosition()
             item.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
 
-        if hasattr(item, "SetStart") and hasattr(item, "GetStart"):
+        elif hasattr(item, "SetStart") and hasattr(item, "GetStart"):
             start = item.GetStart()
             item.SetStart(pcbnew.VECTOR2I(start.x + dx, start.y + dy))
 
-        if hasattr(item, "SetEnd") and hasattr(item, "GetEnd"):
-            end = item.GetEnd()
-            item.SetEnd(pcbnew.VECTOR2I(end.x + dx, end.y + dy))
+            if hasattr(item, "SetEnd") and hasattr(item, "GetEnd"):
+                end = item.GetEnd()
+                item.SetEnd(pcbnew.VECTOR2I(end.x + dx, end.y + dy))
 
-        if hasattr(item, "SetCenter") and hasattr(item, "GetCenter"):
+        elif hasattr(item, "SetCenter") and hasattr(item, "GetCenter"):
             center = item.GetCenter()
             item.SetCenter(pcbnew.VECTOR2I(center.x + dx, center.y + dy))
 
@@ -851,19 +852,43 @@ class VirtualGraphic(VirtualElement):
 
     def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
         """Clone graphic to target board."""
+        old = self.kicad_item
+
+        # Try using Clone() first for complete property copying
+        if hasattr(old, "Clone"):
+            return old.Clone()
+
+        # Fallback to manual copying
         if self._type == "PCB_TEXT":
             new_item = pcbnew.PCB_TEXT(target_board)
-            old = self.kicad_item
             new_item.SetText(old.GetText())
             new_item.SetTextSize(old.GetTextSize())
             new_item.SetTextThickness(old.GetTextThickness())
             new_item.SetTextAngle(old.GetTextAngle())
             new_item.SetLayer(old.GetLayer())
             new_item.SetPosition(old.GetPosition())
+
+            # Copy additional text properties
+            if hasattr(old, "GetHorizJustify") and hasattr(new_item, "SetHorizJustify"):
+                new_item.SetHorizJustify(old.GetHorizJustify())
+            if hasattr(old, "GetVertJustify") and hasattr(new_item, "SetVertJustify"):
+                new_item.SetVertJustify(old.GetVertJustify())
+            if hasattr(old, "IsMirrored") and hasattr(new_item, "SetMirrored"):
+                new_item.SetMirrored(old.IsMirrored())
+            if hasattr(old, "IsVisible") and hasattr(new_item, "SetVisible"):
+                new_item.SetVisible(old.IsVisible())
+            if hasattr(old, "IsItalic") and hasattr(new_item, "SetItalic"):
+                new_item.SetItalic(old.IsItalic())
+            if hasattr(old, "IsBold") and hasattr(new_item, "SetBold"):
+                new_item.SetBold(old.IsBold())
+            if hasattr(old, "IsKeepUpright") and hasattr(new_item, "SetKeepUpright"):
+                new_item.SetKeepUpright(old.IsKeepUpright())
+            # Copy attributes if available (this might include font and other properties)
+            if hasattr(old, "GetAttributes") and hasattr(new_item, "SetAttributes"):
+                new_item.SetAttributes(old.GetAttributes())
             return new_item
         elif self._type == "PCB_SHAPE":
             new_item = pcbnew.PCB_SHAPE(target_board)
-            old = self.kicad_item
             new_item.SetShape(old.GetShape())
             new_item.SetLayer(old.GetLayer())
             new_item.SetWidth(old.GetWidth())
@@ -875,10 +900,7 @@ class VirtualGraphic(VirtualElement):
                 new_item.SetCenter(old.GetCenter())
             return new_item
         else:
-            # Fallback to basic clone if available
-            return (
-                self.kicad_item.Clone() if hasattr(self.kicad_item, "Clone") else None
-            )
+            return None
 
     def render_tree(self, indent: int = 0) -> str:
         """Render this graphic as a string."""
@@ -2249,7 +2271,41 @@ class SyncLayouts(Step):
                     new_drawing.SetTextAngle(drawing.GetTextAngle())
                     new_drawing.SetLayer(drawing.GetLayer())
                     new_drawing.SetPosition(drawing.GetPosition())
+
+                    # Copy additional text properties
+                    if hasattr(drawing, "GetHorizJustify") and hasattr(
+                        new_drawing, "SetHorizJustify"
+                    ):
+                        new_drawing.SetHorizJustify(drawing.GetHorizJustify())
+                    if hasattr(drawing, "GetVertJustify") and hasattr(
+                        new_drawing, "SetVertJustify"
+                    ):
+                        new_drawing.SetVertJustify(drawing.GetVertJustify())
+                    if hasattr(drawing, "IsMirrored") and hasattr(
+                        new_drawing, "SetMirrored"
+                    ):
+                        new_drawing.SetMirrored(drawing.IsMirrored())
+                    if hasattr(drawing, "IsVisible") and hasattr(
+                        new_drawing, "SetVisible"
+                    ):
+                        new_drawing.SetVisible(drawing.IsVisible())
+                    if hasattr(drawing, "IsItalic") and hasattr(
+                        new_drawing, "SetItalic"
+                    ):
+                        new_drawing.SetItalic(drawing.IsItalic())
+                    if hasattr(drawing, "IsBold") and hasattr(new_drawing, "SetBold"):
+                        new_drawing.SetBold(drawing.IsBold())
+                    if hasattr(drawing, "IsKeepUpright") and hasattr(
+                        new_drawing, "SetKeepUpright"
+                    ):
+                        new_drawing.SetKeepUpright(drawing.IsKeepUpright())
+                    # Copy attributes if available (this might include font and other properties)
+                    if hasattr(drawing, "GetAttributes") and hasattr(
+                        new_drawing, "SetAttributes"
+                    ):
+                        new_drawing.SetAttributes(drawing.GetAttributes())
                 elif item_type == "PCB_SHAPE":
+                    # Fallback: manually copy shape properties
                     new_drawing = pcbnew.PCB_SHAPE(self.board)
                     new_drawing.SetShape(drawing.GetShape())
                     new_drawing.SetLayer(drawing.GetLayer())
