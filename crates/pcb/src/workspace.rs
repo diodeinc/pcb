@@ -36,7 +36,7 @@ pub enum FileClassification<'a> {
 }
 
 /// Gather common workspace information for both vendor and release commands
-pub fn gather_workspace_info(zen_path: PathBuf) -> Result<WorkspaceInfo> {
+pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result<WorkspaceInfo> {
     debug!("Starting workspace information gathering");
 
     // Canonicalize the zen path
@@ -46,7 +46,8 @@ pub fn gather_workspace_info(zen_path: PathBuf) -> Result<WorkspaceInfo> {
     let initial_workspace_root = find_workspace_root(&DefaultFileProvider, &zen_path);
 
     // Evaluate the zen file and track dependencies
-    let (resolver, eval_result) = eval_zen_entrypoint(&zen_path, &initial_workspace_root)?;
+    let (resolver, eval_result) =
+        eval_zen_entrypoint(&zen_path, &initial_workspace_root, use_vendor_path)?;
 
     // Refine workspace root based on tracked files if no pcb.toml was found
     let workspace_root = if initial_workspace_root.join("pcb.toml").exists() {
@@ -123,6 +124,7 @@ pub fn common_ancestor(a: &Path, b: &Path) -> Option<PathBuf> {
 pub fn eval_zen_entrypoint(
     entry: &Path,
     workspace_root: &Path,
+    use_vendor_path: bool,
 ) -> Result<(Arc<CoreLoadResolver>, WithDiagnostics<EvalOutput>)> {
     debug!("Starting zen file evaluation: {}", entry.display());
 
@@ -133,7 +135,7 @@ pub fn eval_zen_entrypoint(
         file_provider.clone(),
         remote_fetcher,
         workspace_root.to_path_buf(),
-        true,
+        use_vendor_path,
     ));
 
     // Track the entrypoint (though it won't have a LoadSpec, which is fine)

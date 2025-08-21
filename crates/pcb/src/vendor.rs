@@ -205,7 +205,8 @@ fn gather_vendor_info(zen_files: Vec<PathBuf>, workspace_root: PathBuf) -> Resul
 
     // Evaluate each zen file and collect dependencies
     for zen_file in &zen_files {
-        let workspace_info = gather_workspace_info(zen_file.clone())?;
+        // Don't use the vendor path for the workspace info, we're just gathering dependencies
+        let workspace_info = gather_workspace_info(zen_file.clone(), false)?;
 
         for path in workspace_info.resolver.get_tracked_files() {
             if is_vendor_dependency(&workspace_root, &path, &workspace_info.resolver) {

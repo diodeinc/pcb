@@ -150,7 +150,7 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
     debug!("Starting release information gathering");
 
     // Use common workspace info gathering
-    let workspace = gather_workspace_info(zen_path)?;
+    let workspace = gather_workspace_info(zen_path, true)?;
 
     // Get version and git hash from git
     let (version, git_hash) = git_version_and_hash(&workspace.workspace_root)?;
