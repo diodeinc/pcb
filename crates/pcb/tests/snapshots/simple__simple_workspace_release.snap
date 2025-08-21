@@ -1,0 +1,14 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: "sb.snapshot_run(\"pcb\", [\"release\", \"boards/TestBoard.zen\", \"-f\", \"json\"])"
+---
+Command: pcb release boards/TestBoard.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "archive": "<TEMP_DIR>/.pcb/releases/boards/TestBoard/unknown.zip",
+  "staging_directory": "<TEMP_DIR>/.pcb/releases/boards/TestBoard/unknown",
+  "version": "unknown"
+}
+--- STDERR ---

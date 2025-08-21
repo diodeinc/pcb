@@ -1,0 +1,107 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: "sb.snapshot_run(\"pcb\", [\"bom\", \"boards/TestBoard.zen\", \"-f\", \"json\"])"
+---
+Command: pcb bom boards/TestBoard.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "designators": [
+      "C1"
+    ],
+    "package": "0402",
+    "value": "100nF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.0000001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  },
+  {
+    "designators": [
+      "C2"
+    ],
+    "package": "0805",
+    "value": "10uF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.00001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  },
+  {
+    "designators": [
+      "C3",
+      "C4"
+    ],
+    "package": "0402",
+    "value": "22pF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.000000000022",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  },
+  {
+    "designators": [
+      "D1"
+    ],
+    "package": "0603",
+    "value": "LED GREEN",
+    "dnp": false
+  },
+  {
+    "designators": [
+      "D2"
+    ],
+    "package": "0603",
+    "value": "LED RED",
+    "dnp": false
+  },
+  {
+    "designators": [
+      "R1",
+      "R2"
+    ],
+    "package": "0603",
+    "value": "330",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "330",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  },
+  {
+    "designators": [
+      "R3"
+    ],
+    "package": "0603",
+    "value": "10k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "10000",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  },
+  {
+    "designators": [
+      "Y1"
+    ],
+    "package": "5032_2Pin",
+    "value": "16MHz 18pF",
+    "dnp": false
+  }
+]
+--- STDERR ---

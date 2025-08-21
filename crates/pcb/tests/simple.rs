@@ -24,6 +24,8 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 const TEST_BOARD_ZEN: &str = r#"
 load("@stdlib:v0.2.2/interfaces.zen", "Gpio", "Ground", "Power")
 
+add_property("layout_path", "build/TestBoard")
+
 LedModule = Module("../modules/LedModule.zen")
 Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
 Capacitor = Module("@stdlib:v0.2.2/generics/Capacitor.zen")
@@ -124,7 +126,28 @@ fn test_pcb_build_simple_workspace() {
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "boards/TestBoard.zen"]);
-    assert_snapshot!("simple_workspace", output);
+    assert_snapshot!("simple_workspace_build", output);
+}
+
+#[test]
+fn test_pcb_release_simple_workspace() {
+    let mut sb = Sandbox::new();
+    sb.seed_stdlib(&["v0.2.2"])
+        .seed_kicad(&["9.0.0"])
+        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN);
+
+    // Test BOM first
+    assert_snapshot!(
+        "simple_workspace_bom",
+        sb.snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "json"])
+    );
+
+    // Test release
+    assert_snapshot!(
+        "simple_workspace_release",
+        sb.snapshot_run("pcb", ["release", "boards/TestBoard.zen", "-f", "json"])
+    );
 }
 
 #[test]

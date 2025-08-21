@@ -33,7 +33,7 @@
 //! assert_eq!(fs::read_to_string(sb.root_path().join("clone/README.md")).unwrap(), "hello");
 //!
 //! // Run a cargo binary and snapshot the output
-//! let output = sb.wd("clone").snapshot_run("my-binary", ["--help"]);
+//! let output = sb.cwd("clone").snapshot_run("my-binary", ["--help"]);
 //! pcb_test_utils::assert_snapshot!("help", output);
 //! ```
 
@@ -285,6 +285,11 @@ impl Sandbox {
             .unchecked()
             .run()
             .unwrap();
+
+        if !output.status.success() {
+            println!("Leaking root directory: {}", self.root.display());
+            self.leak_root();
+        }
 
         let exit_code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout);
