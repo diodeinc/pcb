@@ -133,7 +133,7 @@ pub fn eval_zen_entrypoint(
         file_provider.clone(),
         remote_fetcher,
         workspace_root.to_path_buf(),
-        false,
+        true,
     ));
 
     // Track the entrypoint (though it won't have a LoadSpec, which is fine)
