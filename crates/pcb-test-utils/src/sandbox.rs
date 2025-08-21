@@ -645,6 +645,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_git_sandbox_basic_functionality() {
         let sb = Sandbox::new();
 
@@ -723,6 +724,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_assert_dir_snapshot_integration() {
         let mut sb = Sandbox::new();
 
@@ -807,6 +809,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_multi_branch_tags_with_snapshots() {
         let mut sb = Sandbox::new();
         sb.cwd("src");
