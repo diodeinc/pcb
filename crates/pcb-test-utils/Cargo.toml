@@ -17,4 +17,6 @@ ignore = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 globset = { workspace = true }
+url = { workspace = true }
 pcb-zen = { workspace = true }
+pcb-zen-core = { workspace = true }

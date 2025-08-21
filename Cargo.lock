@@ -2540,9 +2540,11 @@ dependencies = [
  "ignore",
  "insta",
  "pcb-zen",
+ "pcb-zen-core",
  "regex",
  "sha2",
  "tempfile",
+ "url",
 ]
 
 [[package]]

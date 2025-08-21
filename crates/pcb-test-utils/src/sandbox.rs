@@ -42,7 +42,7 @@ use assert_fs::TempDir;
 use duct::Expression;
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fmt;
+
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -75,20 +75,6 @@ pub struct Sandbox {
 impl Default for Sandbox {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-enum SupportedGitForge {
-    GitHub,
-    GitLab,
-}
-
-impl fmt::Display for SupportedGitForge {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SupportedGitForge::GitHub => write!(f, "github"),
-            SupportedGitForge::GitLab => write!(f, "gitlab"),
-        }
     }
 }
 
@@ -419,52 +405,47 @@ impl Sandbox {
 
     /// Seed the sandbox with real git repositories from remote URLs.
     /// Uses pcb-zen's download functionality for GitHub and GitLab repos.
-    pub fn seed_from_git(&mut self, url: &str, refs: &[&str]) {
-        // Parse URL: https://github.com/user/repo or https://gitlab.com/user/repo
-        let parts: Vec<&str> = url.trim_end_matches(".git").splitn(5, '/').collect();
-        if parts.len() < 5 || (!url.contains("github.com") && !url.contains("gitlab.com")) {
-            panic!("Only GitHub and GitLab URLs supported: {url}");
-        }
-        let (domain, user, repo) = (parts[2], parts[3], parts[4]);
-        let domain = match domain {
-            "github.com" => SupportedGitForge::GitHub,
-            "gitlab.com" => SupportedGitForge::GitLab,
-            _ => panic!("Unsupported domain: {domain}"),
+    pub fn seed_from_git(&mut self, url: &str, revs: &[&str]) {
+        let parsed = url::Url::parse(url.trim_end_matches(".git")).expect("valid git URL expected");
+
+        // Translate the URL to the LoadSpec stem we need (@github/... or @gitlab/...)
+        let stem = match parsed.host_str() {
+            Some("github.com") => {
+                let mut segs = parsed.path_segments().expect("URL must have path");
+                let user = segs.next().expect("GitHub URL must have user");
+                let repo = segs.next().expect("GitHub URL must have repo");
+                format!("@github/{user}/{repo}")
+            }
+            Some("gitlab.com") => {
+                let path = parsed.path().trim_start_matches('/');
+                format!("@gitlab/{path}")
+            }
+            _ => panic!("seed_from_git supports github.com / gitlab.com only"),
         };
 
-        for rev in refs {
-            let suffix = format!("{domain}/{user}/{repo}/{rev}");
-            let cache_root = pcb_zen::load::cache_dir().unwrap().join(&suffix);
+        let real_cache = pcb_zen::load::cache_dir().unwrap();
 
-            // Download and unpack if not cached
-            if !cache_root.exists() {
-                match domain {
-                    SupportedGitForge::GitHub => {
-                        pcb_zen::load::download_and_unpack_github_repo(user, repo, rev, &cache_root)
-                            .unwrap()
-                    }
-                    SupportedGitForge::GitLab => {
-                        let project_path = format!("{user}/{repo}");
-                        pcb_zen::load::download_and_unpack_gitlab_repo(
-                            &project_path,
-                            rev,
-                            &cache_root,
-                        )
-                        .unwrap()
-                    }
-                }
-            }
+        for rev in revs {
+            // Let LoadSpec do the heavy lifting for us
+            let spec_str = format!("{stem}:{rev}");
+            let spec = pcb_zen_core::LoadSpec::parse(&spec_str).expect("generated spec must parse");
 
-            // Symlink from sandbox cache to real cache
-            let sandbox_cache_path = self.cache_dir.join(&suffix);
-            if sandbox_cache_path.exists() {
-                fs::remove_dir_all(&sandbox_cache_path).unwrap();
+            // 1. Ensure it is cached (download if necessary)
+            let checked_out = pcb_zen::load::ensure_remote_cached(&spec).unwrap();
+
+            // 2. Mirror it inside the sandbox's private cache directory
+            let suffix = checked_out.strip_prefix(&real_cache).unwrap();
+            let sandbox_path = self.cache_dir.join(suffix);
+
+            if sandbox_path.exists() {
+                fs::remove_dir_all(&sandbox_path).unwrap();
             }
-            fs::create_dir_all(sandbox_cache_path.parent().unwrap()).unwrap();
+            fs::create_dir_all(sandbox_path.parent().unwrap()).unwrap();
+
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&cache_root, &sandbox_cache_path).unwrap();
+            std::os::unix::fs::symlink(&checked_out, &sandbox_path).unwrap();
             #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(&cache_root, &sandbox_cache_path).unwrap();
+            std::os::windows::fs::symlink_dir(&checked_out, &sandbox_path).unwrap();
         }
     }
 
