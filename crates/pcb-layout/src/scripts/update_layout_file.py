@@ -450,8 +450,35 @@ class VirtualItem:
         raise NotImplementedError("Subclasses must implement render_tree")
 
 
-class VirtualFootprint(VirtualItem):
-    """Represents a real footprint with 1:1 mapping to KiCad footprint."""
+class VirtualElement(VirtualItem, ABC):
+    """Abstract base class for all PCB elements (footprints, zones, graphics)."""
+
+    def __init__(self, element_id: str, name: str, kicad_item: Any):
+        super().__init__(VirtualItemType.EDA_ITEM, element_id, name)
+        self.kicad_item = kicad_item
+        self._bbox = None
+        self.attributes: Dict[str, Any] = {}
+
+    @abstractmethod
+    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
+        """Capture this element's geometry relative to a reference point."""
+        pass
+
+    @abstractmethod
+    def apply_geometry(
+        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
+    ) -> None:
+        """Apply stored geometry from a new reference point."""
+        pass
+
+    @abstractmethod
+    def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
+        """Clone this element to a target board."""
+        pass
+
+
+class VirtualFootprint(VirtualElement):
+    """Represents a footprint with position and orientation."""
 
     def __init__(
         self,
@@ -460,10 +487,9 @@ class VirtualFootprint(VirtualItem):
         kicad_footprint: Any,  # pcbnew.FOOTPRINT
         bbox: VirtualBoundingBox,
     ):
-        super().__init__(VirtualItemType.EDA_ITEM, fp_id, name)
-        self.kicad_footprint = kicad_footprint
+        super().__init__(fp_id, name, kicad_footprint)
+        self.kicad_footprint = kicad_footprint  # Keep for compatibility
         self._bbox = bbox
-        self.attributes: Dict[str, Any] = {}
 
     @property
     def bbox(self) -> Optional[VirtualBoundingBox]:
@@ -568,6 +594,28 @@ class VirtualFootprint(VirtualItem):
                 target_val.SetPosition(source_val.GetPosition())
                 target_val.SetAttributes(source_val.GetAttributes())
 
+    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
+        """Capture footprint position and orientation relative to reference."""
+        pos = self.kicad_footprint.GetPosition()
+        return {
+            "offset_x": pos.x - reference_point[0],
+            "offset_y": pos.y - reference_point[1],
+            "orientation": self.kicad_footprint.GetOrientation(),
+        }
+
+    def apply_geometry(
+        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
+    ) -> None:
+        """Apply stored geometry from a new reference point."""
+        new_x = reference_point[0] + geometry["offset_x"]
+        new_y = reference_point[1] + geometry["offset_y"]
+        self.kicad_footprint.SetPosition(pcbnew.VECTOR2I(new_x, new_y))
+        self.kicad_footprint.SetOrientation(geometry["orientation"])
+
+    def clone_to_board(self, target_board: pcbnew.BOARD) -> pcbnew.FOOTPRINT:
+        """Clone footprint to target board."""
+        return self.kicad_footprint.Clone()
+
     def render_tree(self, indent: int = 0) -> str:
         """Render this footprint as a string."""
         prefix = "  " * indent
@@ -583,6 +631,266 @@ class VirtualFootprint(VirtualItem):
         return f"{prefix}{self.name}{fpid_info}{status_str} {self.bbox}"
 
 
+class VirtualZone(VirtualElement):
+    """Represents a zone with polygon outline and net connectivity."""
+
+    def __init__(self, zone_id: str, name: str, kicad_zone: Any):
+        super().__init__(zone_id, name, kicad_zone)
+        self._source_net_code = kicad_zone.GetNetCode()
+        self._capture_outline()
+
+    def _capture_outline(self):
+        """Cache the zone outline for transformations."""
+        self._outline_points = []
+        outline = self.kicad_item.Outline()
+        for i in range(outline.OutlineCount()):
+            contour = outline.COutline(i)
+            contour_points = []
+            for j in range(contour.PointCount()):
+                pt = contour.CPoint(j)
+                contour_points.append((pt.x, pt.y))
+            self._outline_points.append(contour_points)
+
+    @property
+    def bbox(self) -> Optional[VirtualBoundingBox]:
+        """Calculate bounding box from outline points."""
+        if not self._outline_points or not self._outline_points[0]:
+            return None
+
+        all_points = [pt for contour in self._outline_points for pt in contour]
+        min_x = min(x for x, y in all_points)
+        max_x = max(x for x, y in all_points)
+        min_y = min(y for x, y in all_points)
+        max_y = max(y for x, y in all_points)
+
+        return VirtualBoundingBox(min_x, min_y, max_x - min_x, max_y - min_y)
+
+    def move_by(self, dx: int, dy: int) -> None:
+        """Transform all outline points by offset."""
+        outline = self.kicad_item.Outline()
+        for i in range(outline.OutlineCount()):
+            contour = outline.COutline(i)
+            for j in range(contour.PointCount()):
+                pt = contour.CPoint(j)
+                contour.SetPoint(j, pcbnew.VECTOR2I(pt.x + dx, pt.y + dy))
+        self._capture_outline()  # Update cached points
+
+    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
+        """Capture zone outline relative to reference point."""
+        return {
+            "relative_outlines": [
+                [(x - reference_point[0], y - reference_point[1]) for x, y in contour]
+                for contour in self._outline_points
+            ],
+            "layer": self.kicad_item.GetLayer(),
+            "net_code": self._source_net_code,
+            "settings": {
+                "min_thickness": self.kicad_item.GetMinThickness(),
+                "hatch_style": self.kicad_item.GetHatchStyle(),
+                "filled": self.kicad_item.IsFilled(),
+            },
+        }
+
+    def apply_geometry(
+        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
+    ) -> None:
+        """Rebuild zone outline from relative points."""
+        outline = self.kicad_item.Outline()
+        outline.RemoveAllContours()
+
+        for contour_data in geometry["relative_outlines"]:
+            outline.NewOutline()
+            for rel_x, rel_y in contour_data:
+                abs_x = reference_point[0] + rel_x
+                abs_y = reference_point[1] + rel_y
+                outline.Append(abs_x, abs_y)
+
+        # Apply settings
+        for key, value in geometry["settings"].items():
+            setter_name = f"Set{key.replace('_', ' ').title().replace(' ', '')}"
+            if hasattr(self.kicad_item, setter_name):
+                getattr(self.kicad_item, setter_name)(value)
+
+        self._capture_outline()  # Update cached points
+
+    def clone_to_board(self, target_board: pcbnew.BOARD) -> pcbnew.ZONE:
+        """Clone zone to target board."""
+        return self.kicad_item.Clone()
+
+    def apply_net_code_mapping(
+        self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
+    ) -> bool:
+        """Apply net code mapping to this zone."""
+        if self._source_net_code == 0:
+            return True  # No net zone
+
+        target_net_code = net_code_map.get(self._source_net_code, 0)
+        if target_net_code == 0:
+            logger.warning(
+                f"Zone {self.name}: No mapping for net code {self._source_net_code}"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+        target_net = target_board.FindNet(target_net_code)
+        if target_net:
+            self.kicad_item.SetNet(target_net)
+            return True
+        else:
+            logger.error(
+                f"Zone {self.name}: Target net code {target_net_code} not found"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+    def render_tree(self, indent: int = 0) -> str:
+        """Render this zone as a string."""
+        prefix = "  " * indent
+        status_markers = []
+        if self.added:
+            status_markers.append("NEW")
+        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
+
+        net_info = f" (net:{self._source_net_code})"
+        return f"{prefix}Zone:{self.name}{net_info}{status_str} {self.bbox}"
+
+
+class VirtualGraphic(VirtualElement):
+    """Represents a graphic element (line, arc, text, etc)."""
+
+    def __init__(self, graphic_id: str, name: str, kicad_graphic: Any):
+        super().__init__(graphic_id, name, kicad_graphic)
+        self._type = kicad_graphic.GetClass()
+
+    @property
+    def bbox(self) -> Optional[VirtualBoundingBox]:
+        """Get bounding box from KiCad object."""
+        return get_kicad_bbox(self.kicad_item)
+
+    def move_by(self, dx: int, dy: int) -> None:
+        """Move graphic element by offset."""
+        item = self.kicad_item
+
+        if hasattr(item, "SetPosition"):
+            pos = item.GetPosition()
+            item.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
+
+        if hasattr(item, "SetStart") and hasattr(item, "GetStart"):
+            start = item.GetStart()
+            item.SetStart(pcbnew.VECTOR2I(start.x + dx, start.y + dy))
+
+        if hasattr(item, "SetEnd") and hasattr(item, "GetEnd"):
+            end = item.GetEnd()
+            item.SetEnd(pcbnew.VECTOR2I(end.x + dx, end.y + dy))
+
+        if hasattr(item, "SetCenter") and hasattr(item, "GetCenter"):
+            center = item.GetCenter()
+            item.SetCenter(pcbnew.VECTOR2I(center.x + dx, center.y + dy))
+
+    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
+        """Capture graphic geometry relative to reference."""
+        data = {"type": self._type}
+
+        if hasattr(self.kicad_item, "GetPosition"):
+            pos = self.kicad_item.GetPosition()
+            data["position_offset"] = (
+                pos.x - reference_point[0],
+                pos.y - reference_point[1],
+            )
+
+        if hasattr(self.kicad_item, "GetStart"):
+            start = self.kicad_item.GetStart()
+            data["start_offset"] = (
+                start.x - reference_point[0],
+                start.y - reference_point[1],
+            )
+
+        if hasattr(self.kicad_item, "GetEnd"):
+            end = self.kicad_item.GetEnd()
+            data["end_offset"] = (
+                end.x - reference_point[0],
+                end.y - reference_point[1],
+            )
+
+        if hasattr(self.kicad_item, "GetCenter"):
+            center = self.kicad_item.GetCenter()
+            data["center_offset"] = (
+                center.x - reference_point[0],
+                center.y - reference_point[1],
+            )
+
+        return data
+
+    def apply_geometry(
+        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
+    ) -> None:
+        """Apply stored geometry from new reference point."""
+        if "position_offset" in geometry:
+            x, y = geometry["position_offset"]
+            self.kicad_item.SetPosition(
+                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
+            )
+
+        if "start_offset" in geometry:
+            x, y = geometry["start_offset"]
+            self.kicad_item.SetStart(
+                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
+            )
+
+        if "end_offset" in geometry:
+            x, y = geometry["end_offset"]
+            self.kicad_item.SetEnd(
+                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
+            )
+
+        if "center_offset" in geometry:
+            x, y = geometry["center_offset"]
+            self.kicad_item.SetCenter(
+                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
+            )
+
+    def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
+        """Clone graphic to target board."""
+        if self._type == "PCB_TEXT":
+            new_item = pcbnew.PCB_TEXT(target_board)
+            old = self.kicad_item
+            new_item.SetText(old.GetText())
+            new_item.SetTextSize(old.GetTextSize())
+            new_item.SetTextThickness(old.GetTextThickness())
+            new_item.SetTextAngle(old.GetTextAngle())
+            new_item.SetLayer(old.GetLayer())
+            new_item.SetPosition(old.GetPosition())
+            return new_item
+        elif self._type == "PCB_SHAPE":
+            new_item = pcbnew.PCB_SHAPE(target_board)
+            old = self.kicad_item
+            new_item.SetShape(old.GetShape())
+            new_item.SetLayer(old.GetLayer())
+            new_item.SetWidth(old.GetWidth())
+            if hasattr(old, "GetStart"):
+                new_item.SetStart(old.GetStart())
+            if hasattr(old, "GetEnd"):
+                new_item.SetEnd(old.GetEnd())
+            if hasattr(old, "GetCenter"):
+                new_item.SetCenter(old.GetCenter())
+            return new_item
+        else:
+            # Fallback to basic clone if available
+            return (
+                self.kicad_item.Clone() if hasattr(self.kicad_item, "Clone") else None
+            )
+
+    def render_tree(self, indent: int = 0) -> str:
+        """Render this graphic as a string."""
+        prefix = "  " * indent
+        status_markers = []
+        if self.added:
+            status_markers.append("NEW")
+        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
+
+        return f"{prefix}Graphic:{self._type}{status_str} {self.bbox}"
+
+
 class VirtualGroup(VirtualItem):
     """Lightweight group/container for organizing items hierarchically."""
 
@@ -591,6 +899,8 @@ class VirtualGroup(VirtualItem):
         self.children: List[VirtualItem] = []
         self.synced = False  # Whether this group has been synced from a layout file
         self._cached_bbox: Optional[VirtualBoundingBox] = None
+        self._reference_footprint: Optional[VirtualFootprint] = None
+        self._captured_geometries: Dict[str, Dict[str, Any]] = {}
 
     @property
     def added(self) -> bool:
@@ -719,6 +1029,53 @@ class VirtualGroup(VirtualItem):
         self._cached_bbox = None
         _ = self.bbox  # Force recomputation
 
+    def capture_rigid_body_state(self) -> None:
+        """Capture all child geometries relative to a reference footprint."""
+        # Find reference footprint (first footprint in group)
+        footprints = [c for c in self.children if isinstance(c, VirtualFootprint)]
+        if not footprints:
+            logger.warning(f"Group {self.name} has no footprints for reference")
+            return
+
+        self._reference_footprint = footprints[0]
+        ref_point = self._reference_footprint.get_position()
+        if not ref_point:
+            return
+
+        # Capture all children's geometry relative to reference
+        for child in self.children:
+            if isinstance(child, VirtualElement):
+                self._captured_geometries[child.id] = child.capture_geometry(ref_point)
+            elif isinstance(child, VirtualGroup):
+                # Recursively capture nested groups
+                child.capture_rigid_body_state()
+
+    def apply_rigid_body_transformation(self, dx: int, dy: int) -> None:
+        """Move group as rigid body using captured geometries."""
+        if self._reference_footprint and self._captured_geometries:
+            # Move reference footprint
+            self._reference_footprint.move_by(dx, dy)
+            new_ref = self._reference_footprint.get_position()
+
+            if new_ref:
+                # Apply relative geometries from new reference point
+                for child in self.children:
+                    if (
+                        child.id in self._captured_geometries
+                        and child != self._reference_footprint
+                    ):
+                        if isinstance(child, VirtualElement):
+                            child.apply_geometry(
+                                new_ref, self._captured_geometries[child.id]
+                            )
+                    elif isinstance(child, VirtualGroup):
+                        # Move child groups as rigid bodies
+                        child.apply_rigid_body_transformation(dx, dy)
+        else:
+            # Fallback to simple move
+            for child in self.children:
+                child.move_by(dx, dy)
+
 
 class VirtualBoard:
     """Root of the virtual DOM tree representing a KiCad board."""
@@ -755,11 +1112,15 @@ class VirtualBoard:
         return None
 
 
-def build_virtual_dom_from_board(board: pcbnew.BOARD) -> VirtualBoard:
-    """Build a virtual DOM from a KiCad board based on footprint paths.
+def build_virtual_dom_from_board(
+    board: pcbnew.BOARD, include_zones: bool = True, include_graphics: bool = True
+) -> VirtualBoard:
+    """Build a virtual DOM from a KiCad board including all element types.
 
     Args:
         board: The KiCad board to build from
+        include_zones: Whether to include zones in the DOM
+        include_graphics: Whether to include graphics in the DOM
 
     Returns:
         A VirtualBoard with the complete hierarchy
@@ -783,12 +1144,19 @@ def build_virtual_dom_from_board(board: pcbnew.BOARD) -> VirtualBoard:
 
     # Create groups for all paths that have children
     module_groups = {}
+    kicad_groups = {}  # Map group names to KiCad PCB_GROUP objects
+
+    # First, track existing KiCad groups
+    for group in board.Groups():
+        if group.GetName():
+            kicad_groups[group.GetName()] = group
+
     for path in sorted_paths:
         # Check if this path has any children
         has_children = any(p != path and p.startswith(path + ".") for p in all_paths)
 
         if has_children:
-            # Groups don't have a direct KiCad object
+            # Create virtual group
             group = VirtualGroup(path, path)
             module_groups[path] = group
 
@@ -856,7 +1224,135 @@ def build_virtual_dom_from_board(board: pcbnew.BOARD) -> VirtualBoard:
             # No path, add to root
             vboard.root.add_child(vfp)
 
+    # Add zones to virtual DOM
+    if include_zones:
+        for zone in board.Zones():
+            zone_uuid = (
+                str(zone.m_Uuid) if hasattr(zone, "m_Uuid") else str(uuid.uuid4())
+            )
+            zone_name = zone.GetZoneName() or f"Zone_{zone_uuid[:8]}"
+
+            vzone = VirtualZone(zone_uuid, zone_name, zone)
+
+            # Determine which group this zone belongs to by checking parent group
+            parent_group = (
+                zone.GetParentGroup() if hasattr(zone, "GetParentGroup") else None
+            )
+            if parent_group and parent_group.GetName() in module_groups:
+                module_groups[parent_group.GetName()].add_child(vzone)
+            else:
+                # Add to root if no parent group
+                vboard.root.add_child(vzone)
+
+    # Add graphics to virtual DOM
+    if include_graphics:
+        for drawing in board.GetDrawings():
+            # Skip items that belong to footprints
+            if drawing.GetParent() and isinstance(
+                drawing.GetParent(), pcbnew.FOOTPRINT
+            ):
+                continue
+
+            drawing_uuid = (
+                str(drawing.m_Uuid) if hasattr(drawing, "m_Uuid") else str(uuid.uuid4())
+            )
+            drawing_name = f"{drawing.GetClass()}_{drawing_uuid[:8]}"
+
+            vgraphic = VirtualGraphic(drawing_uuid, drawing_name, drawing)
+
+            # Determine which group this graphic belongs to
+            parent_group = (
+                drawing.GetParentGroup() if hasattr(drawing, "GetParentGroup") else None
+            )
+            if parent_group and parent_group.GetName() in module_groups:
+                module_groups[parent_group.GetName()].add_child(vgraphic)
+            else:
+                # Add to root if no parent group
+                vboard.root.add_child(vgraphic)
+
     return vboard
+
+
+def build_net_code_mapping(
+    source_board: pcbnew.BOARD,
+    target_board: pcbnew.BOARD,
+    matched_footprints: List[Tuple[VirtualFootprint, VirtualFootprint]],
+) -> Dict[int, int]:
+    """Build mapping of source net codes to target net codes via matched footprint pads.
+
+    Args:
+        source_board: The source layout board
+        target_board: The target board
+        matched_footprints: List of (source_fp, target_fp) pairs
+
+    Returns:
+        Dict mapping source_net_code -> target_net_code
+    """
+    net_code_map = {}
+
+    for source_vfp, target_vfp in matched_footprints:
+        source_fp = (
+            source_vfp.kicad_footprint
+            if hasattr(source_vfp, "kicad_footprint")
+            else source_vfp.kicad_item
+        )
+        target_fp = (
+            target_vfp.kicad_footprint
+            if hasattr(target_vfp, "kicad_footprint")
+            else target_vfp.kicad_item
+        )
+
+        if not source_fp or not target_fp:
+            continue
+
+        # Build pad mapping by pad name/number
+        source_pads = {pad.GetPadName(): pad for pad in source_fp.Pads()}
+        target_pads = {pad.GetPadName(): pad for pad in target_fp.Pads()}
+
+        for pad_name, source_pad in source_pads.items():
+            if pad_name not in target_pads:
+                continue
+
+            target_pad = target_pads[pad_name]
+            source_net_code = source_pad.GetNetCode()
+            target_net_code = target_pad.GetNetCode()
+
+            # Only map connected pads (net code 0 means no connection)
+            if source_net_code > 0 and target_net_code > 0:
+                if source_net_code in net_code_map:
+                    # Verify consistency
+                    if net_code_map[source_net_code] != target_net_code:
+                        source_net = source_board.FindNet(source_net_code)
+                        target_net = target_board.FindNet(target_net_code)
+                        source_name = (
+                            source_net.GetNetname() if source_net else "unknown"
+                        )
+                        target_name = (
+                            target_net.GetNetname() if target_net else "unknown"
+                        )
+                        logger.warning(
+                            f"Net code mapping conflict: {source_net_code} ({source_name}) "
+                            f"maps to both {net_code_map[source_net_code]} and {target_net_code} ({target_name})"
+                        )
+                else:
+                    net_code_map[source_net_code] = target_net_code
+
+                    # Log mapping for debugging
+                    if logger.isEnabledFor(logging.DEBUG):
+                        source_net = source_board.FindNet(source_net_code)
+                        target_net = target_board.FindNet(target_net_code)
+                        source_name = (
+                            source_net.GetNetname() if source_net else "unknown"
+                        )
+                        target_name = (
+                            target_net.GetNetname() if target_net else "unknown"
+                        )
+                        logger.debug(
+                            f"Mapped net {source_net_code} ({source_name}) -> "
+                            f"{target_net_code} ({target_name})"
+                        )
+
+    return net_code_map
 
 
 def get_kicad_bbox(item: Any) -> VirtualBoundingBox:
@@ -1598,7 +2094,7 @@ class SyncLayouts(Step):
         self.netlist = netlist
 
     def _sync_group_layout(self, group: VirtualGroup, layout_file: Path):
-        """Sync footprints in a group from a layout file."""
+        """Sync all elements (footprints, zones, graphics) in a group from a layout file."""
         # Load the layout file into a virtual board
         layout_board = pcbnew.LoadBoard(str(layout_file))
         layout_vboard = build_virtual_dom_from_board(layout_board)
@@ -1609,7 +2105,7 @@ class SyncLayouts(Step):
         # Get all footprints from the layout
         source_footprints = self._get_all_footprints(layout_vboard.root)
 
-        # Build maps for matching
+        # Build maps for matching footprints
         target_by_path = {}  # relative_path -> VirtualFootprint
         for fp in target_footprints:
             # Get the footprint's path relative to the group
@@ -1627,8 +2123,8 @@ class SyncLayouts(Step):
         for fp in source_footprints:
             source_by_path[fp.name] = fp
 
-        # Match footprints and sync
-        matched = 0
+        # Match footprints and build matched pairs
+        matched_pairs = []
         unmatched_target = []
         unmatched_source = []
 
@@ -1638,7 +2134,7 @@ class SyncLayouts(Step):
                 # Found a match - sync the footprint
                 source_fp = source_by_path[rel_path]
                 target_fp.replace_with(source_fp)
-                matched += 1
+                matched_pairs.append((source_fp, target_fp))
                 logger.debug(f"  Matched and synced: {target_fp.name}")
             else:
                 unmatched_target.append(target_fp.name)
@@ -1654,8 +2150,8 @@ class SyncLayouts(Step):
             if src_path not in matched_sources:
                 unmatched_source.append(src_path)
 
-                # Log results
-        logger.info(f"  Synced {matched} footprints")
+        # Log footprint results
+        logger.info(f"  Synced {len(matched_pairs)} footprints")
         if unmatched_target:
             logger.warning(
                 f"  {len(unmatched_target)} footprints in group had no match in layout:"
@@ -1670,9 +2166,128 @@ class SyncLayouts(Step):
             for fp in unmatched_source:
                 logger.info(f"    - {fp}")
 
-        # Mark the group as synced if we matched at least one footprint
-        if matched > 0:
+        # Only sync zones and graphics if we matched at least one footprint
+        if matched_pairs:
+            # Build net code mapping from matched footprints
+            net_code_map = build_net_code_mapping(
+                layout_board, self.board, matched_pairs
+            )
+
+            # Capture group's current state for rigid body transformation
+            group.capture_rigid_body_state()
+
+            # Get all zones from source layout
+            zones_synced = 0
+            for zone in layout_board.Zones():
+                # Clone zone
+                new_zone = pcbnew.ZONE(self.board)
+
+                # Copy zone properties
+                new_zone.SetLayer(zone.GetLayer())
+                new_zone.SetLayerSet(zone.GetLayerSet())
+
+                # Copy outline
+                source_outline = zone.Outline()
+                new_outline = new_zone.Outline()
+                new_outline.RemoveAllContours()
+
+                for i in range(source_outline.OutlineCount()):
+                    contour = source_outline.COutline(i)
+                    new_outline.NewOutline()
+                    for j in range(contour.PointCount()):
+                        pt = contour.CPoint(j)
+                        new_outline.Append(pt.x, pt.y)
+
+                # Apply net code mapping
+                source_net_code = zone.GetNetCode()
+                if source_net_code in net_code_map:
+                    target_net_code = net_code_map[source_net_code]
+                    target_net = self.board.FindNet(target_net_code)
+                    if target_net:
+                        new_zone.SetNet(target_net)
+                else:
+                    new_zone.SetNetCode(0)
+
+                # Copy other zone settings
+                if hasattr(zone, "GetMinThickness"):
+                    new_zone.SetMinThickness(zone.GetMinThickness())
+                if hasattr(zone, "GetHatchStyle"):
+                    new_zone.SetHatchStyle(zone.GetHatchStyle())
+                if hasattr(zone, "IsFilled") and hasattr(new_zone, "SetIsFilled"):
+                    new_zone.SetIsFilled(zone.IsFilled())
+
+                # Add to board
+                self.board.Add(new_zone)
+
+                # Create virtual zone and add to group
+                zone_uuid = str(uuid.uuid4())
+                vzone = VirtualZone(
+                    zone_uuid, zone.GetZoneName() or f"Zone_{zone_uuid[:8]}", new_zone
+                )
+                vzone.added = True
+                group.add_child(vzone)
+                zones_synced += 1
+
+            # Get all graphics from source layout
+            graphics_synced = 0
+            for drawing in layout_board.GetDrawings():
+                # Skip footprint graphics
+                if drawing.GetParent() and isinstance(
+                    drawing.GetParent(), pcbnew.FOOTPRINT
+                ):
+                    continue
+
+                # Clone graphic based on type
+                item_type = drawing.GetClass()
+                new_drawing = None
+
+                if item_type == "PCB_TEXT":
+                    new_drawing = pcbnew.PCB_TEXT(self.board)
+                    new_drawing.SetText(drawing.GetText())
+                    new_drawing.SetTextSize(drawing.GetTextSize())
+                    new_drawing.SetTextThickness(drawing.GetTextThickness())
+                    new_drawing.SetTextAngle(drawing.GetTextAngle())
+                    new_drawing.SetLayer(drawing.GetLayer())
+                    new_drawing.SetPosition(drawing.GetPosition())
+                elif item_type == "PCB_SHAPE":
+                    new_drawing = pcbnew.PCB_SHAPE(self.board)
+                    new_drawing.SetShape(drawing.GetShape())
+                    new_drawing.SetLayer(drawing.GetLayer())
+                    new_drawing.SetWidth(drawing.GetWidth())
+                    if hasattr(drawing, "GetStart"):
+                        new_drawing.SetStart(drawing.GetStart())
+                    if hasattr(drawing, "GetEnd"):
+                        new_drawing.SetEnd(drawing.GetEnd())
+                    if hasattr(drawing, "GetCenter"):
+                        new_drawing.SetCenter(drawing.GetCenter())
+
+                if new_drawing:
+                    # Add to board
+                    self.board.Add(new_drawing)
+
+                    # Create virtual graphic and add to group
+                    graphic_uuid = str(uuid.uuid4())
+                    vgraphic = VirtualGraphic(
+                        graphic_uuid, f"{item_type}_{graphic_uuid[:8]}", new_drawing
+                    )
+                    vgraphic.added = True
+                    group.add_child(vgraphic)
+                    graphics_synced += 1
+
+            logger.info(f"  Synced {zones_synced} zones and {graphics_synced} graphics")
+
+            # Mark the group as synced
             group.synced = True
+
+            # Find and link to KiCad group if it exists
+            for kicad_group in self.board.Groups():
+                if kicad_group.GetName() == group.id:
+                    # Add zones and graphics to the KiCad group
+                    for child in group.children:
+                        if isinstance(child, (VirtualZone, VirtualGraphic)):
+                            kicad_group.AddItem(child.kicad_item)
+                    break
+
             logger.info(f"  Marked group {group.id} as synced")
 
     def _get_footprints_in_group(self, group: VirtualGroup) -> List[VirtualFootprint]:
@@ -1811,7 +2426,13 @@ class PlaceComponents(Step):
 
             if i == 0:
                 # First item serves as anchor at origin
-                item.move_to(0, 0)
+                # For synced groups, use rigid body transformation
+                if isinstance(item, VirtualGroup) and item.synced:
+                    dx = -item.bbox.left
+                    dy = -item.bbox.top
+                    item.apply_rigid_body_transformation(dx, dy)
+                else:
+                    item.move_to(0, 0)
                 placed_items.append(item)
                 # Add its corners as placement points
                 placement_pts.extend(
@@ -1874,7 +2495,13 @@ class PlaceComponents(Step):
 
                 if best_pt:
                     # Move to the best position found
-                    item.move_to(best_pt[0], best_pt[1])
+                    # For synced groups, use rigid body transformation
+                    if isinstance(item, VirtualGroup) and item.synced:
+                        dx = best_pt[0] - item.bbox.left
+                        dy = best_pt[1] - item.bbox.top
+                        item.apply_rigid_body_transformation(dx, dy)
+                    else:
+                        item.move_to(best_pt[0], best_pt[1])
                     placed_items.append(item)
 
                     logger.info(f"Placed {item.name} at {best_pt}")
@@ -2055,9 +2682,12 @@ class PlaceComponents(Step):
             offset_y = target_y - added_bbox.center_y
 
         # Move all items in the sparse tree
-        # move_by will recursively move children and update parent bboxes
+        # For synced groups, use rigid body transformation
         for item in top_level_added:
-            item.move_by(offset_x, offset_y)
+            if isinstance(item, VirtualGroup) and item.synced:
+                item.apply_rigid_body_transformation(offset_x, offset_y)
+            else:
+                item.move_by(offset_x, offset_y)
 
         logger.info(f"Positioned new content with offset ({offset_x}, {offset_y})")
 
