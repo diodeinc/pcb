@@ -79,15 +79,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          # Only save cache from main branch to prevent cache proliferation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build All (Workspace)
         run: cargo build --verbose --workspace
