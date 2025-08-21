@@ -1,0 +1,10 @@
+---
+source: crates/pcb-test-utils/src/snapdir.rs
+expression: manifest
+---
+=== docs/guide.md
+# Getting Started
+
+Welcome to the guide.
+=== hello.txt
+Hello, snapshot!

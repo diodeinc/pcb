@@ -106,6 +106,7 @@ impl Sandbox {
     }
 
     /// Set the default working directory for commands. Path is relative to sandbox root if not absolute.
+    /// Creates the directory if it doesn't exist.
     pub fn set_default_cwd<P: AsRef<Path>>(&mut self, cwd: P) -> &mut Self {
         let cwd = cwd.as_ref();
         self.default_cwd = if cwd.is_absolute() {
@@ -113,6 +114,10 @@ impl Sandbox {
         } else {
             self.root_path().join(cwd)
         };
+
+        // Create the directory if it doesn't exist
+        fs::create_dir_all(&self.default_cwd).expect("create default cwd directory");
+
         self
     }
 
@@ -129,6 +134,21 @@ impl Sandbox {
         }
         fs::write(p, contents).expect("write file");
         self
+    }
+
+    /// Take a directory snapshot with a descriptive name.
+    /// Path is relative to current working directory if not absolute.
+    pub fn snapshot_dir<P: AsRef<Path>>(&self, path: P, name: &str) {
+        use crate::snapdir::assert_dir_snapshot_with;
+
+        let path = path.as_ref();
+        let snapshot_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.default_cwd.join(path)
+        };
+
+        assert_dir_snapshot_with(snapshot_path, &[], Some(name));
     }
 
     /// Create and initialize a git fixture for a given GitHub/GitLab URL.
@@ -291,6 +311,10 @@ impl Sandbox {
             "DIODE_STAR_CACHE_DIR".into(),
             self.cache_dir.to_string_lossy().into_owned(),
         );
+        // Block HTTP requests by setting invalid proxy - prevents Strategy 3 fallback
+        env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
+        env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
+        env_map.insert("NO_PROXY".into(), "".into()); // Don't bypass proxy for any domains
         if self.trace {
             env_map.insert("GIT_TRACE".into(), "1".into());
             env_map.insert("GIT_CURL_VERBOSE".into(), "1".into());
@@ -334,6 +358,32 @@ impl FixtureRepo {
         self
     }
 
+    /// Create and check out a new branch (or reset existing branch to HEAD).
+    pub fn branch<S: AsRef<str>>(&mut self, name: S) -> &mut Self {
+        let name = name.as_ref();
+        run_git(&["-C", self.work_str(), "checkout", "-B", name]);
+        self
+    }
+
+    /// Check out an existing branch or commit.
+    pub fn checkout<S: AsRef<str>>(&mut self, refname: S) -> &mut Self {
+        let refname = refname.as_ref();
+        run_git(&["-C", self.work_str(), "checkout", refname]);
+        self
+    }
+
+    /// Scoped branch helper: create/switch to branch, run closure, then return to original HEAD.
+    pub fn with_branch<S: AsRef<str>, F>(&mut self, name: S, f: F) -> &mut Self
+    where
+        F: FnOnce(&mut Self),
+    {
+        let original_head = current_head(&self.work);
+        self.branch(name);
+        f(self);
+        run_git(&["-C", self.work_str(), "checkout", &original_head]);
+        self
+    }
+
     /// Create or move a tag. If `annotated`, creates/updates an annotated tag.
     pub fn tag<S: AsRef<str>>(&self, name: S, annotated: bool) -> &Self {
         let name = name.as_ref();
@@ -370,6 +420,27 @@ fn run_git(args: &[&str]) {
         .stderr_null()
         .run()
         .unwrap_or_else(|e| panic!("git {args:?} failed: {e}"));
+}
+
+fn current_head(work: &Path) -> String {
+    let output = duct::cmd(
+        "git",
+        [
+            "-C",
+            work.to_str().unwrap(),
+            "symbolic-ref",
+            "--short",
+            "HEAD",
+        ],
+    )
+    .read()
+    .unwrap_or_else(|_| {
+        // Fallback to rev-parse if we're in detached HEAD state
+        duct::cmd("git", ["-C", work.to_str().unwrap(), "rev-parse", "HEAD"])
+            .read()
+            .expect("get HEAD")
+    });
+    output.trim().to_string()
 }
 
 fn ensure_dot_git(mut rel: String) -> String {
@@ -453,8 +524,6 @@ mod tests {
             .read()
             .expect("ls should succeed");
 
-        println!("Directory contents:\n{}", ls_output);
-
         // Verify the files exist
         let clone_dir = sb.root_path().join("cloned");
         assert!(clone_dir.is_dir());
@@ -488,8 +557,6 @@ mod tests {
         // Run ls without specifying directory - should use default cwd
         let output = sb.cmd("ls", &["-la"]).read().expect("ls should succeed");
 
-        println!("Test directory contents:\n{}", output);
-
         assert!(output.contains("file.txt"));
         assert!(output.contains("another.txt"));
 
@@ -498,14 +565,11 @@ mod tests {
             .cmd("sh", &["-c", "echo $DIODE_STAR_CACHE_DIR"])
             .read()
             .expect("echo should succeed");
-        println!("Cache dir env var: {}", cache_output.trim());
         assert!(cache_output.trim().contains("cache"));
     }
 
     #[test]
     fn test_assert_dir_snapshot_integration() {
-        use crate::snapdir::assert_dir_snapshot;
-
         let mut sb = Sandbox::new();
 
         // Create a realistic project structure
@@ -582,11 +646,103 @@ mod tests {
         .expect("git clone should succeed");
 
         // Snapshot the entire project directory
-        assert_dir_snapshot(sb.root_path().join("project"));
+        sb.snapshot_dir("project", "integration_test_project");
 
         // Also snapshot the cloned repository
-        assert_dir_snapshot(sb.root_path().join("cloned-repo"));
+        sb.snapshot_dir("cloned-repo", "integration_test_cloned_repo");
+    }
 
-        println!("Successfully created directory snapshots!");
+    #[test]
+    fn test_multi_branch_tags_with_snapshots() {
+        let mut sb = Sandbox::new();
+        sb.set_default_cwd("src");
+
+        // Create a multi-branch fixture with simple single-file content per version
+        let mut fixture = sb.git_fixture("https://github.com/example/multi-version.git");
+
+        // Set up main branch
+        fixture
+            .write("version.txt", "ref=main\nversion=2.0.0-dev")
+            .commit("Main branch");
+
+        // Create v1.5 branch with different content
+        fixture.with_branch("v1.5", |f| {
+            f.write("version.txt", "ref=v1.5\nversion=1.5.0")
+                .commit("Version 1.5.0 release")
+                .tag("v1.5.0", true);
+        });
+
+        // Create v1.0 branch with minimal content
+        fixture.with_branch("v1.0", |f| {
+            f.write("version.txt", "ref=v1.0\nversion=1.0.0")
+                .commit("Version 1.0.0 release")
+                .tag("v1.0.0", true);
+        });
+
+        // Back on main, add latest tag
+        fixture.checkout("main").tag("latest", false).push_mirror();
+
+        // Clone each branch/tag to separate directories
+        sb.cmd(
+            "git",
+            &[
+                "clone",
+                "https://github.com/example/multi-version.git",
+                "cloned-main",
+            ],
+        )
+        .stdout_null()
+        .stderr_null()
+        .run()
+        .expect("clone main should succeed");
+
+        sb.cmd(
+            "git",
+            &[
+                "clone",
+                "-b",
+                "v1.5",
+                "https://github.com/example/multi-version.git",
+                "cloned-v1.5",
+            ],
+        )
+        .stdout_null()
+        .stderr_null()
+        .run()
+        .expect("clone v1.5 should succeed");
+
+        sb.cmd(
+            "git",
+            &[
+                "clone",
+                "-b",
+                "v1.0",
+                "https://github.com/example/multi-version.git",
+                "cloned-v1.0",
+            ],
+        )
+        .stdout_null()
+        .stderr_null()
+        .run()
+        .expect("clone v1.0 should succeed");
+
+        // Clone by tag
+        sb.cmd(
+            "git",
+            &[
+                "clone",
+                "--branch",
+                "v1.0.0",
+                "https://github.com/example/multi-version.git",
+                "cloned-tag-v1.0.0",
+            ],
+        )
+        .stdout_null()
+        .stderr_null()
+        .run()
+        .expect("clone tag v1.0.0 should succeed");
+
+        // Snapshot the current directory (src) to see all cloned directories
+        sb.snapshot_dir(".", "multi_branch_clones");
     }
 }

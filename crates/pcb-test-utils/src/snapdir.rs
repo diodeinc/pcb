@@ -11,16 +11,24 @@ use std::{fs, io::Read, path::Path};
 
 /// Snapshot directory with defaults.
 pub fn assert_dir_snapshot(root: impl AsRef<Path>) {
-    assert_dir_snapshot_with(root, &[])
+    assert_dir_snapshot_with(root, &[], None)
 }
 
-/// Snapshot directory with insta filters.
+/// Snapshot directory with insta filters and optional custom name.
 /// - `filters`: regex replacements applied before assertion, e.g. [ (r"\b[0-9a-f]{40}\b", "<SHA>") ]
-pub fn assert_dir_snapshot_with(root: impl AsRef<Path>, filters: &[(&str, &str)]) {
+/// - `name`: optional custom name for the snapshot file
+pub fn assert_dir_snapshot_with(
+    root: impl AsRef<Path>,
+    filters: &[(&str, &str)],
+    name: Option<&str>,
+) {
     let manifest = build_manifest(root.as_ref());
     let mut settings = Settings::clone_current();
     for &(re, rep) in filters {
         settings.add_filter(re, rep);
+    }
+    if let Some(name) = name {
+        settings.set_snapshot_suffix(name);
     }
     settings.bind(|| {
         insta::assert_snapshot!(manifest);
@@ -32,10 +40,10 @@ fn build_manifest(root: &Path) -> String {
 
     // Gitignore-aware file walker, but deterministic and confined to `base`
     let mut wb = WalkBuilder::new(&base);
-    wb.hidden(false)
+    wb.hidden(true)
         .git_ignore(true) // Respect .gitignore files
         .ignore(true) // Respect .ignore files
-        .git_exclude(false) // Keep host-independent
+        .git_exclude(true) // Keep host-independent
         .git_global(false) // No global git config
         .parents(false); // Don't traverse up directory tree
 
@@ -56,7 +64,7 @@ fn build_manifest(root: &Path) -> String {
         let Some(ft) = dent.file_type() else { continue };
 
         if ft.is_dir() {
-            entries.push((rel, "<DIR>\n".to_string()));
+            // Skip directory entries - only show files
         } else if ft.is_file() {
             let mut buf = Vec::new();
             fs::File::open(p)

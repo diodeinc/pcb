@@ -2,10 +2,6 @@
 source: crates/pcb-test-utils/src/snapdir.rs
 expression: manifest
 ---
-=== .gitignore
-target/
-*.tmp
-.DS_Store
 === Cargo.toml
 [package]
 name = "test-project"
@@ -18,8 +14,6 @@ serde = "1.0"
 # Test Project
 
 This is a test project for snapshots.
-=== src
-<DIR>
 === src/lib.rs
 //! A test library
 
