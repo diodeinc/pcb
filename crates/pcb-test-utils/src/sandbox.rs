@@ -68,6 +68,8 @@ pub struct Sandbox {
     pub cache_dir: PathBuf,
     default_cwd: PathBuf,
     trace: bool,
+    hash_globs: Vec<String>,
+    ignore_globs: Vec<String>,
 }
 
 impl Default for Sandbox {
@@ -116,6 +118,8 @@ impl Sandbox {
             cache_dir,
             default_cwd,
             trace: false,
+            hash_globs: Vec::new(),
+            ignore_globs: Vec::new(),
         };
         s.write_gitconfig();
         s
@@ -124,6 +128,26 @@ impl Sandbox {
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
     pub fn with_trace(mut self, yes: bool) -> Self {
         self.trace = yes;
+        self
+    }
+
+    /// Set glob patterns for files that should always be hashed in snapshots.
+    pub fn hash_globs<I, S>(&mut self, globs: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.hash_globs = globs.into_iter().map(|s| s.as_ref().to_string()).collect();
+        self
+    }
+
+    /// Set glob patterns for files that should be ignored in snapshots.
+    pub fn ignore_globs<I, S>(&mut self, globs: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.ignore_globs = globs.into_iter().map(|s| s.as_ref().to_string()).collect();
         self
     }
 
@@ -178,7 +202,9 @@ impl Sandbox {
             self.default_cwd.join(path)
         };
 
-        crate::snapdir::build_manifest(&dir_path)
+        let hash_refs: Vec<&str> = self.hash_globs.iter().map(|s| s.as_str()).collect();
+        let ignore_refs: Vec<&str> = self.ignore_globs.iter().map(|s| s.as_str()).collect();
+        crate::snapdir::build_manifest(&dir_path, &hash_refs, &ignore_refs)
     }
 
     /// Create and initialize a git fixture for a given GitHub/GitLab URL.

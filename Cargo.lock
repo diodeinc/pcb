@@ -2536,10 +2536,12 @@ dependencies = [
  "assert_fs",
  "dir-diff",
  "duct",
+ "globset",
  "ignore",
  "insta",
  "pcb-zen",
  "regex",
+ "sha2",
  "tempfile",
 ]
 

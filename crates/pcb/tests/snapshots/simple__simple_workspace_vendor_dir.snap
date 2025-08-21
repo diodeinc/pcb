@@ -1,0 +1,24 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: "sb.snapshot_dir(\"vendor\")"
+---
+=== github.com/diodeinc/stdlib/v0.2.2/config.zen <3994 bytes, sha256: 49a58dc>
+=== github.com/diodeinc/stdlib/v0.2.2/generics/Capacitor.zen <4121 bytes, sha256: da23fbf>
+=== github.com/diodeinc/stdlib/v0.2.2/generics/Crystal.zen <4254 bytes, sha256: 30f3b4f>
+=== github.com/diodeinc/stdlib/v0.2.2/generics/Led.zen <3597 bytes, sha256: 9f30609>
+=== github.com/diodeinc/stdlib/v0.2.2/generics/Resistor.zen <3284 bytes, sha256: 3ad91a6>
+=== github.com/diodeinc/stdlib/v0.2.2/generics/SolderJumper.zen <4422 bytes, sha256: c610f95>
+=== github.com/diodeinc/stdlib/v0.2.2/interfaces.zen <8417 bytes, sha256: 37ab673>
+=== github.com/diodeinc/stdlib/v0.2.2/units.zen <9407 bytes, sha256: 099a28c>
+=== github.com/diodeinc/stdlib/v0.2.2/utils.zen <533 bytes, sha256: 25e07ab>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod <3588 bytes, sha256: 3164c1b>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod <3574 bytes, sha256: bd6bc0e>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod <3670 bytes, sha256: 41fc23f>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Crystal.pretty/Crystal_SMD_0603-4Pin_6.0x3.5mm.kicad_mod <5821 bytes, sha256: 63b5618>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Crystal.pretty/Crystal_SMD_5032-2Pin_5.0x3.2mm.kicad_mod <5024 bytes, sha256: f7484fe>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod <2889 bytes, sha256: 874695d>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/LED_SMD.pretty/LED_0201_0603Metric.kicad_mod <3957 bytes, sha256: dfc8904>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/LED_SMD.pretty/LED_0603_1608Metric.kicad_mod <3855 bytes, sha256: 16387fe>
+=== gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod <3607 bytes, sha256: 4704c9c>
+=== gitlab.com/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym <2213878 bytes, sha256: 972f851>
+=== gitlab.com/kicad/libraries/kicad-symbols/9.0.0/power.kicad_sym <165243 bytes, sha256: 541c49b>

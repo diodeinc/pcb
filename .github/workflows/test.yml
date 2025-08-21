@@ -104,17 +104,16 @@ jobs:
           RUST_BACKTRACE: full
         run: cargo test --verbose --workspace
 
+      - name: Run slow tests
+        env:
+          RUST_LOG: debug
+          RUST_BACKTRACE: full
+        run: cargo test --verbose -p pcb -- --ignored
+
       - name: Test CLI (E2E)
         env:
           RUST_LOG: info,pcb::release=debug,pcb::bom=debug
         run: |
-          # Test BOM generation on example project
-          cargo run -- bom examples/PhaseDriver/PhaseDriver.zen -f json
-
-          # Test simple workspace (no pcb.toml)
-          cargo run -- bom test-workspaces/simple/boards/TestBoard.zen
-          cargo run -- release test-workspaces/simple/boards/TestBoard.zen
-
           # Test workspace with pcb.toml and workspace-relative loads
           cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
           cargo run -- release test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen

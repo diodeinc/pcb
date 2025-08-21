@@ -1,0 +1,14 @@
+---
+source: crates/pcb/tests/simple.rs
+expression: "sb.snapshot_run(\"pcb\", [\"vendor\", \"boards/TestBoard.zen\"])"
+---
+Command: pcb vendor boards/TestBoard.zen
+Exit Code: 0
+
+--- STDOUT ---
+✓ Found 1 zen files to analyze
+✓ Dependencies analyzed
+
+✓ Vendored 20 dependencies from 1 designs
+Vendor directory: <TEMP_DIR>/vendor
+--- STDERR ---

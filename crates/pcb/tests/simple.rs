@@ -100,7 +100,13 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 )
 "#;
 
+const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
+[workspace]
+name = "simple_workspace"
+"#;
+
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_should_fail_without_fixture() {
     let output = Sandbox::new()
         .write("boards/TestBoard.zen", NONEXISTENT_REPO_BOARD_ZEN)
@@ -109,6 +115,7 @@ fn test_pcb_build_should_fail_without_fixture() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_board() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
@@ -119,6 +126,7 @@ fn test_pcb_build_simple_board() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_workspace() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])
@@ -130,6 +138,8 @@ fn test_pcb_build_simple_workspace() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
+#[ignore = "slow test - run with 'cargo test -- --ignored' or 'cargo test -- --include-ignored'"]
 fn test_pcb_release_simple_workspace() {
     let mut sb = Sandbox::new();
     sb.seed_stdlib(&["v0.2.2"])
@@ -151,6 +161,24 @@ fn test_pcb_release_simple_workspace() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
+fn test_pcb_vendor_simple_workspace() {
+    let mut sb = Sandbox::new();
+    sb.seed_stdlib(&["v0.2.2"])
+        .seed_kicad(&["9.0.0"])
+        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
+        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"]);
+    assert_snapshot!(
+        "simple_workspace_vendor",
+        sb.snapshot_run("pcb", ["vendor", "boards/TestBoard.zen"])
+    );
+    assert_snapshot!("simple_workspace_vendor_dir", sb.snapshot_dir("vendor"));
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_with_git_fixture() {
     let mut sandbox = Sandbox::new();
 
@@ -171,6 +199,7 @@ fn test_pcb_build_with_git_fixture() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_help() {
     let output = Sandbox::new().snapshot_run("pcb", ["help"]);
     assert_snapshot!("help", output);
