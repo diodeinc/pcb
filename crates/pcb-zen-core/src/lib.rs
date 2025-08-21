@@ -682,12 +682,14 @@ impl CoreLoadResolver {
         let file = self.file_provider.canonicalize(file)?;
         let dir = file.parent().expect("File must have a parent directory");
 
+        // Check cache first (optimistic read)
         if let Some(cached) = self.alias_cache.read().unwrap().get(dir) {
             log::debug!("  Using cached aliases for directory: {}", dir.display());
             return Ok(cached.clone());
         }
 
         // Determine alias root (workspace or workspace/vendor or remote repo root)
+        let spec = self.path_to_spec.lock().unwrap().get(&file).cloned();
         let vendor_dir = self.workspace_root.join("vendor");
         let alias_root = if file.starts_with(&vendor_dir) {
             log::debug!("  Using vendor root: {}", vendor_dir.display());
@@ -697,56 +699,65 @@ impl CoreLoadResolver {
             self.workspace_root.clone()
         } else {
             // For remote files, find repo root using existing LoadSpec mapping
-            let spec = self
-                .path_to_spec
-                .lock()
-                .unwrap()
-                .get(&file)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("File not in path_to_spec mapping: {}", file.display())
-                })?;
-
-            // Walk up from file by the number of components in spec_path
-            let spec_path = spec.path();
-            let mut root = file.clone();
-            for _ in 0..spec_path.components().count() {
-                root = root.parent().unwrap_or(Path::new("")).to_path_buf();
+            if let Some(spec) = &spec {
+                // Walk up from file by the number of components in spec_path
+                let mut root = file.clone();
+                for _ in 0..spec.path().components().count() {
+                    root = root.parent().unwrap_or(Path::new("")).to_path_buf();
+                }
+                log::debug!("  Using remote repo root: {}", root.display());
+                root
+            } else {
+                log::debug!("  File not in path_to_spec mapping, using defaults");
+                return Ok(LoadSpec::default_package_aliases());
             }
-            log::debug!("  Using remote repo root: {}", root.display());
-            root
         };
 
-        // Iterate in reverse to prioritize the deepest (closest to leaf) pcb.toml files
         let pcb_toml_files = file
             .ancestors()
             .take_while(|p| p.starts_with(&alias_root))
             .map(|p| p.join("pcb.toml"))
             .filter(|p| p.exists())
+            .collect::<Vec<_>>();
+
+        // Add all discovered pcb.toml files to path_to_spec mapping
+        if let Some(spec) = &spec {
+            let pcb_toml_specs = pcb_toml_files
+                .iter()
+                .cloned()
+                .map(|p| {
+                    // get pcb.toml path relative to alias root
+                    let rel_pcb_toml_path = p.strip_prefix(&alias_root).unwrap().to_path_buf();
+                    (p, spec.with_path(rel_pcb_toml_path))
+                })
+                .collect::<HashMap<PathBuf, LoadSpec>>();
+            self.path_to_spec.lock().unwrap().extend(pcb_toml_specs);
+        }
+
+        // Iterate in reverse to prioritize the deepest (closest to leaf) pcb.toml files
+        let aliases = pcb_toml_files
+            .into_iter()
             .map(|p| {
                 let content = self.file_provider.read_file(&p)?;
                 let toml_aliases = parse_package_aliases_from_toml(&content);
-                Ok::<_, anyhow::Error>((p, toml_aliases))
+                Ok::<_, anyhow::Error>(toml_aliases)
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        let aliases: HashMap<String, String> = pcb_toml_files.into_iter().rev().fold(
-            LoadSpec::default_package_aliases(),
-            |mut acc, (_, aliases)| {
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .rev()
+            .fold(LoadSpec::default_package_aliases(), |mut acc, aliases| {
                 acc.extend(aliases);
                 acc
-            },
-        );
+            });
 
-        let mut alias_cache = self.alias_cache.write().unwrap();
-        log::debug!(
-            "Inserting aliases for dir: {}, {:?}",
-            dir.display(),
-            &aliases
-        );
-        alias_cache.insert(dir.to_path_buf(), aliases.clone());
+        log::debug!("Inserting aliases for dir: {}", dir.display());
+        self.alias_cache
+            .write()
+            .unwrap()
+            .insert(dir.to_path_buf(), aliases.clone());
 
         log::debug!(
-            "  Final aliases for {}: {:?}",
+            "Final aliases for {}: {:?}",
             dir.display(),
             aliases.keys().collect::<Vec<_>>()
         );
