@@ -115,23 +115,19 @@ jobs:
           cargo run -- vendor test-workspaces/with-pcb-toml
           cargo run -- build test-workspaces/with-pcb-toml/boards --offline
 
+      - name: Checkout stdlib
+        uses: actions/checkout@v5
+        with:
+          repository: diodeinc/stdlib
+          path: stdlib
+
       - name: Test stdlib builds
         shell: bash
         run: |
-          # Save current directory
-          ORIGINAL_DIR=$(pwd)
+          # Save path to pcb binary
+          PCB_BIN="$(pwd)/target/debug/pcb"
 
-          # Clone the stdlib repository
-          git clone https://github.com/diodeinc/stdlib.git /tmp/stdlib
-
-          # Find all .star and .zen files and build them
-          cd /tmp/stdlib
-          find . -name "*.star" -o -name "*.zen" | while read -r file; do
-            echo "Building $file..."
-            if ! (cd "$ORIGINAL_DIR" && cargo run -p pcb -- build "/tmp/stdlib/$file"); then
-              echo "Failed to build $file"
-              exit 1
-            fi
-          done
+          # Find and build all .zen files
+          find stdlib -name "*.zen" -exec "$PCB_BIN" build {} +
 
           echo "All stdlib files built successfully!"
