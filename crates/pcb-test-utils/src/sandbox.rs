@@ -211,7 +211,12 @@ impl Sandbox {
         }
 
         // Init bare remote
-        run_git(&["init", "--bare", bare.to_str().unwrap()]);
+        run_git(&[
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            bare.to_str().unwrap(),
+        ]);
 
         // Prepare a work repo to compose commits, independent of rewrite rules
         let work = self
@@ -631,7 +636,8 @@ mod tests {
         let sb = Sandbox::new();
 
         // Create a fixture repository with some test files
-        sb.git_fixture("https://github.com/test/repo.git")
+        let _fixture = sb
+            .git_fixture("https://github.com/test/repo.git")
             .write("README.md", "# Test Repository\n\nThis is a test.")
             .write(
                 "src/main.rs",
