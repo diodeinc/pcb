@@ -74,8 +74,6 @@ const TASKS: &[(&str, TaskFn)] = &[
     ("Substituting version variables", substitute_variables),
     ("Generating unmatched BOM", generate_unmatched_bom),
     ("Generating gerber files", generate_gerbers),
-    ("Generating drill files", generate_drill_files),
-    ("Generating drill map", generate_drill_map),
     ("Generating pick-and-place file", generate_cpl),
     ("Generating assembly drawings", generate_assembly_drawings),
     ("Generating ODB++ files", generate_odb),
@@ -624,60 +622,33 @@ fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
         .run()
         .context("Failed to generate gerber files")?;
 
-    // Create gerbers.zip from the temp directory
-    create_gerbers_zip(&gerbers_dir, &manufacturing_dir.join("gerbers.zip"))?;
-
-    // Clean up temp directory
-    fs::remove_dir_all(&gerbers_dir)?;
-
-    Ok(())
-}
-
-/// Generate drill files
-fn generate_drill_files(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
-
+    // Generate drill files with PDF map
     KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
         .subcommand("drill")
         .arg("--output")
-        .arg(manufacturing_dir.to_string_lossy())
+        .arg(gerbers_dir.to_string_lossy())
+        .arg("--format")
+        .arg("excellon")
         .arg("--drill-origin")
         .arg("plot")
-        .arg("--excellon-oval-format")
-        .arg("alternate")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()
-        .context("Failed to generate drill files")?;
-
-    Ok(())
-}
-
-/// Generate drill map PDF
-fn generate_drill_map(info: &ReleaseInfo) -> Result<()> {
-    let manufacturing_dir = info.staging_dir.join("manufacturing");
-    fs::create_dir_all(&manufacturing_dir)?;
-
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
-
-    KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("drill")
-        .arg("--output")
-        .arg(manufacturing_dir.to_string_lossy())
-        .arg("--drill-origin")
-        .arg("plot")
+        .arg("--excellon-zeros-format")
+        .arg("decimal")
+        .arg("--excellon-units")
+        .arg("mm")
         .arg("--generate-map")
         .arg("--map-format")
         .arg("pdf")
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
-        .context("Failed to generate drill map")?;
+        .context("Failed to generate drill files")?;
+
+    // Create gerbers.zip from the temp directory
+    create_gerbers_zip(&gerbers_dir, &manufacturing_dir.join("gerbers.zip"))?;
+
+    // Clean up temp directory
+    fs::remove_dir_all(&gerbers_dir)?;
 
     Ok(())
 }
