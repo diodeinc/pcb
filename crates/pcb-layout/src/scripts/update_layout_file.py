@@ -2884,7 +2884,26 @@ class FinalizeBoard(Step):
                     for item in get_group_items(group)
                     if isinstance(item, (pcbnew.PCB_SHAPE, pcbnew.PCB_TEXT))
                 ],
-                key=lambda g: (g["position"]["x"], g["position"]["y"]),
+                # Use a comprehensive sort key to ensure deterministic ordering even
+                # when multiple drawings share the same position. This prevents the
+                # output snapshot from changing across runs.
+                key=lambda g: (
+                    g["position"]["x"],
+                    g["position"]["y"],
+                    g.get("type") or "",
+                    g.get("layer") or "",
+                    # Start/end coordinates provide deterministic tie-breakers for shapes
+                    (g.get("start", {}).get("x") if g.get("start") else None) or -1,
+                    (g.get("start", {}).get("y") if g.get("start") else None) or -1,
+                    (g.get("end", {}).get("x") if g.get("end") else None) or -1,
+                    (g.get("end", {}).get("y") if g.get("end") else None) or -1,
+                    # Numeric attributes
+                    (g.get("angle") if g.get("angle") is not None else -1),
+                    (g.get("shape") if g.get("shape") is not None else -1),
+                    (g.get("width") if g.get("width") is not None else -1),
+                    # Text last to avoid impacting geometry-first ordering
+                    g.get("text") or "",
+                ),
             ),
             "locked": group.IsLocked(),
             "name": group.GetName(),
