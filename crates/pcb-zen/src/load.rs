@@ -100,33 +100,66 @@ fn materialise_remote(spec: &LoadSpec, workspace_root: &Path) -> anyhow::Result<
     }
 }
 
+/// Ensure a cache directory exists atomically, downloading if necessary.
+fn ensure_cached_atomically(
+    cache_root: &Path,
+    download_fn: impl FnOnce(&Path) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if cache_root.exists() {
+        return Ok(());
+    }
+
+    // Ensure parent directory exists
+    if let Some(parent) = cache_root.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Create temp directory in same parent as final cache directory
+    let temp_dir = tempfile::tempdir_in(cache_root.parent().unwrap())?;
+
+    // Download to temp directory
+    download_fn(temp_dir.path())?;
+
+    // Atomically move temp directory to final location
+    match std::fs::rename(temp_dir.path(), cache_root) {
+        Ok(()) => Ok(()),
+        Err(_) if cache_root.exists() => {
+            // Another thread won the race - that's fine
+            // TempDir will clean itself up on drop
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Ensure the remote is cached and return the root directory of the checked-out revision.
 /// Returns the directory containing the checked-out repository or unpacked package.
+/// Uses atomic directory creation to prevent race conditions when multiple tests run in parallel.
 pub fn ensure_remote_cached(spec: &LoadSpec) -> anyhow::Result<PathBuf> {
     match spec {
         LoadSpec::Package { package, tag, .. } => {
             let cache_root = cache_dir()?.join("packages").join(package).join(tag);
-            if !cache_root.exists() {
-                download_and_unpack_package(package, tag, &cache_root)?;
-            }
+            ensure_cached_atomically(&cache_root, |temp_dir| {
+                download_and_unpack_package(package, tag, temp_dir)
+            })?;
             Ok(cache_root)
         }
         LoadSpec::Github {
             user, repo, rev, ..
         } => {
             let cache_root = cache_dir()?.join("github").join(user).join(repo).join(rev);
-            if !cache_root.exists() {
-                download_and_unpack_github_repo(user, repo, rev, &cache_root)?;
-            }
+            ensure_cached_atomically(&cache_root, |temp_dir| {
+                download_and_unpack_github_repo(user, repo, rev, temp_dir)
+            })?;
             Ok(cache_root)
         }
         LoadSpec::Gitlab {
             project_path, rev, ..
         } => {
             let cache_root = cache_dir()?.join("gitlab").join(project_path).join(rev);
-            if !cache_root.exists() {
-                download_and_unpack_gitlab_repo(project_path, rev, &cache_root)?;
-            }
+            ensure_cached_atomically(&cache_root, |temp_dir| {
+                download_and_unpack_gitlab_repo(project_path, rev, temp_dir)
+            })?;
             Ok(cache_root)
         }
         _ => anyhow::bail!("ensure_remote_cached only handles remote specs"),
