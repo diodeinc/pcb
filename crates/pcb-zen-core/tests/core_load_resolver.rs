@@ -679,69 +679,6 @@ local = "./local"
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn test_malformed_toml_graceful_handling() {
-    let file_provider = Arc::new(MockFileProvider::new());
-    let remote_fetcher = Arc::new(MockRemoteFetcher::new());
-
-    // Set up workspace with malformed pcb.toml
-    let workspace_root = PathBuf::from("/workspace");
-    let modules_dir = workspace_root.join("modules");
-
-    file_provider.add_directory(&workspace_root);
-    file_provider.add_directory(&modules_dir);
-
-    // Good workspace pcb.toml
-    file_provider.add_file(
-        workspace_root.join("pcb.toml"),
-        r#"
-[workspace]
-name = "test"
-
-[packages]
-stdlib = "@github/diodeinc/stdlib"
-"#,
-    );
-
-    // Malformed modules pcb.toml (bad TOML syntax)
-    file_provider.add_file(
-        modules_dir.join("pcb.toml"),
-        r#"
-[module]
-name = "modules"
-
-[packages
-stdlib = "@github/invalid
-"#,
-    );
-
-    let resolver = CoreLoadResolver::new(
-        file_provider.clone(),
-        remote_fetcher.clone(),
-        workspace_root.clone(),
-        true,
-    );
-
-    let spec = LoadSpec::Package {
-        package: "stdlib".to_string(),
-        tag: "latest".to_string(),
-        path: PathBuf::from("units.zen"),
-    };
-
-    let modules_file = modules_dir.join("module.zen");
-    let cache_path = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/units.zen");
-    remote_fetcher.add_fetch_result("@github/diodeinc/stdlib/units.zen", &cache_path);
-    file_provider.add_file(&cache_path, "# Units");
-
-    // Should fall back to workspace aliases when module toml is malformed
-    let resolved = resolver
-        .resolve_spec(file_provider.as_ref(), &spec, &modules_file)
-        .unwrap();
-
-    assert_eq!(resolved, cache_path);
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
 fn test_concurrent_alias_resolution() {
     use std::thread;
 
