@@ -929,6 +929,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
 
 [[package]]
+name = "duct"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7478638a31d1f1f3d6c9f5e57c76b906a04ac4879d6fd0fb6245bc88f73fd0b"
+dependencies = [
+ "libc",
+ "os_pipe",
+ "shared_child",
+ "shared_thread",
+]
+
+[[package]]
 name = "dupe"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2367,11 +2379,14 @@ version = "0.2.0-prerelease.4"
 dependencies = [
  "anyhow",
  "ariadne",
+ "assert_cmd",
+ "assert_fs",
  "chrono",
  "clap",
  "colored",
  "comfy-table",
  "dir-diff",
+ "duct",
  "env_logger",
  "ignore",
  "inquire",
@@ -2383,6 +2398,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-layout",
  "pcb-sch",
+ "pcb-test-utils",
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
@@ -2510,6 +2526,18 @@ dependencies = [
  "starlark_syntax",
  "textwrap",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "pcb-test-utils"
+version = "0.2.0-prerelease.4"
+dependencies = [
+ "assert_cmd",
+ "assert_fs",
+ "dir-diff",
+ "duct",
+ "insta",
+ "tempfile",
 ]
 
 [[package]]
@@ -3503,10 +3531,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared_child"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e362d9935bc50f019969e2f9ecd66786612daae13e8f277be7bfb66e8bed3f7"
+dependencies = [
+ "libc",
+ "sigchld",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "shared_thread"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52b86057fcb5423f5018e331ac04623e32d6b5ce85e33300f92c79a1973928b0"
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "sigchld"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47106eded3c154e70176fc83df9737335c94ce22f821c32d17ed1db1f83badb1"
+dependencies = [
+ "libc",
+ "os_pipe",
+ "signal-hook",
+]
 
 [[package]]
 name = "signal-hook"

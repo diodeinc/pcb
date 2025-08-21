@@ -1,0 +1,15 @@
+[package]
+name = "pcb-test-utils"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }
+assert_cmd = { workspace = true }
+assert_fs = { workspace = true }
+duct = { workspace = true }
+dir-diff = { workspace = true }
