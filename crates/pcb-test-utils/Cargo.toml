@@ -13,3 +13,4 @@ assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
 duct = { workspace = true }
 dir-diff = { workspace = true }
+ignore = { workspace = true }

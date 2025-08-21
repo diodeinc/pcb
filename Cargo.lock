@@ -2536,6 +2536,7 @@ dependencies = [
  "assert_fs",
  "dir-diff",
  "duct",
+ "ignore",
  "insta",
  "tempfile",
 ]

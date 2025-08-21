@@ -1,0 +1,46 @@
+---
+source: crates/pcb-test-utils/src/snapdir.rs
+expression: manifest
+---
+=== .gitignore
+target/
+*.tmp
+.DS_Store
+=== Cargo.toml
+[package]
+name = "test-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+=== README.md
+# Test Project
+
+This is a test project for snapshots.
+=== src
+<DIR>
+=== src/lib.rs
+//! A test library
+
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(2, 3), 5);
+    }
+}
+=== src/main.rs
+use std::collections::HashMap;
+
+fn main() {
+    let mut map = HashMap::new();
+    map.insert("key", "value");
+    println!("Hello from {:?}!", map);
+}

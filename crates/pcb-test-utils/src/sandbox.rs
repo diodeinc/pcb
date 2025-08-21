@@ -501,4 +501,92 @@ mod tests {
         println!("Cache dir env var: {}", cache_output.trim());
         assert!(cache_output.trim().contains("cache"));
     }
+
+    #[test]
+    fn test_assert_dir_snapshot_integration() {
+        use crate::snapdir::assert_dir_snapshot;
+
+        let mut sb = Sandbox::new();
+
+        // Create a realistic project structure
+        sb.write(
+            "project/Cargo.toml",
+            r#"[package]
+name = "test-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+"#,
+        )
+        .write(
+            "project/src/main.rs",
+            r#"use std::collections::HashMap;
+
+fn main() {
+    let mut map = HashMap::new();
+    map.insert("key", "value");
+    println!("Hello from {:?}!", map);
+}
+"#,
+        )
+        .write(
+            "project/src/lib.rs",
+            r#"//! A test library
+
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(2, 3), 5);
+    }
+}
+"#,
+        )
+        .write(
+            "project/README.md",
+            "# Test Project\n\nThis is a test project for snapshots.\n",
+        )
+        .write("project/.gitignore", "target/\n*.tmp\n.DS_Store\n");
+
+        // Create a git fixture and clone it to test git integration with snapshots
+        sb.git_fixture("https://github.com/example/snapshot-test.git")
+            .write("hello.txt", "Hello, snapshot!")
+            .write(
+                "docs/guide.md",
+                "# Getting Started\n\nWelcome to the guide.",
+            )
+            .commit("Initial commit")
+            .tag("v1.0.0", true)
+            .push_mirror();
+
+        // Clone the fixture
+        sb.cmd(
+            "git",
+            &[
+                "clone",
+                "https://github.com/example/snapshot-test.git",
+                "cloned-repo",
+            ],
+        )
+        .stdout_null()
+        .stderr_null()
+        .run()
+        .expect("git clone should succeed");
+
+        // Snapshot the entire project directory
+        assert_dir_snapshot(sb.root_path().join("project"));
+
+        // Also snapshot the cloned repository
+        assert_dir_snapshot(sb.root_path().join("cloned-repo"));
+
+        println!("Successfully created directory snapshots!");
+    }
 }
