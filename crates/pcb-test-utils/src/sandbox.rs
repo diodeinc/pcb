@@ -339,10 +339,19 @@ impl Sandbox {
     fn sanitize_temp_paths(&self, content: &str) -> String {
         use regex::Regex;
 
-        // Replace temp directory paths with a placeholder - matches macOS temp paths
-        let temp_pattern =
+        let mut result = content.to_string();
+
+        // Replace temp directory paths with a placeholder
+        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ
+        let macos_pattern =
             Regex::new(r"/private/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
-        temp_pattern.replace_all(content, "<TEMP_DIR>").to_string()
+        result = macos_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
+
+        // Linux: /tmp/.tmpXXX
+        let linux_pattern = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
+        result = linux_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
+
+        result
     }
 
     fn write_gitconfig(&self) {
