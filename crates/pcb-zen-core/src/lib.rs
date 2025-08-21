@@ -569,7 +569,7 @@ pub struct CoreLoadResolver {
     use_vendor_dir: bool,
 
     // Hierarchical alias resolution cache
-    alias_cache: RwLock<HashMap<PathBuf, Arc<HashMap<String, String>>>>,
+    alias_cache: RwLock<HashMap<PathBuf, HashMap<String, String>>>,
 }
 
 impl CoreLoadResolver {
@@ -677,34 +677,28 @@ impl CoreLoadResolver {
     /// Get hierarchical package aliases for a specific file.
     /// This walks from the appropriate root (workspace or repo) to the file's directory,
     /// merging aliases with deeper directories taking priority.
-    fn get_aliases_for_file(&self, file: &Path) -> Arc<HashMap<String, String>> {
+    fn get_aliases_for_file(&self, file: &Path) -> anyhow::Result<HashMap<String, String>> {
         log::debug!("Resolving aliases for file: {}", file.display());
-        // Canonicalize the directory once
-        let canonical_dir = self
-            .file_provider
-            .canonicalize(file.parent().unwrap_or(Path::new("")))
-            .unwrap_or_else(|_| file.parent().unwrap_or(Path::new("")).to_path_buf());
+        // Canonicalize file
+        let file = self.file_provider.canonicalize(file)?;
+        let dir = file.parent().expect("File must have a parent directory");
 
-        // Check cache first (optimistic read)
-        if let Some(cached) = self.alias_cache.read().unwrap().get(&canonical_dir) {
-            log::debug!(
-                "  Using cached aliases for directory: {}",
-                canonical_dir.display()
-            );
-            return cached.clone();
+        if let Some(cached) = self.alias_cache.read().unwrap().get(dir) {
+            log::debug!("  Using cached aliases for directory: {}", dir.display());
+            return Ok(cached.clone());
         }
 
-        // Determine alias root (workspace or remote repo root)
-        let alias_root = if canonical_dir.starts_with(&self.workspace_root) {
+        // Determine alias root (workspace or workspace/vendor or remote repo root)
+        let vendor_dir = self.workspace_root.join("vendor");
+        let alias_root = if file.starts_with(&vendor_dir) {
+            log::debug!("  Using vendor root: {}", vendor_dir.display());
+            vendor_dir
+        } else if file.starts_with(&self.workspace_root) {
             log::debug!("  Using workspace root: {}", self.workspace_root.display());
             self.workspace_root.clone()
         } else {
             // For remote files, find repo root using existing LoadSpec mapping
-            let canonical_file = self
-                .file_provider
-                .canonicalize(file)
-                .unwrap_or_else(|_| file.to_path_buf());
-            if let Some(spec) = self.path_to_spec.lock().unwrap().get(&canonical_file) {
+            if let Some(spec) = self.path_to_spec.lock().unwrap().get(&file).cloned() {
                 match spec {
                     LoadSpec::Github {
                         path: spec_path, ..
@@ -716,7 +710,7 @@ impl CoreLoadResolver {
                         path: spec_path, ..
                     } => {
                         // Walk up from file by the number of components in spec_path
-                        let mut root = canonical_file;
+                        let mut root = file.clone();
                         for _ in 0..spec_path.components().count() {
                             root = root.parent().unwrap_or(Path::new("")).to_path_buf();
                         }
@@ -725,45 +719,48 @@ impl CoreLoadResolver {
                     }
                     _ => {
                         log::debug!("  File has non-remote LoadSpec, using defaults");
-                        return Arc::new(LoadSpec::default_package_aliases());
+                        return Ok(LoadSpec::default_package_aliases());
                     }
                 }
             } else {
                 log::debug!("  File not in path_to_spec mapping, using defaults");
-                return Arc::new(LoadSpec::default_package_aliases());
+                return Ok(LoadSpec::default_package_aliases());
             }
         };
 
-        // Build aliases by walking ancestors from root to target
-        let mut aliases = LoadSpec::default_package_aliases();
-        let ancestors: Vec<_> = canonical_dir
+        // Iterate in reverse to prioritize the deepest (closest to leaf) pcb.toml files
+        let aliases: HashMap<String, String> = file
             .ancestors()
             .take_while(|p| p.starts_with(&alias_root))
-            .collect();
-        for ancestor in ancestors.into_iter().rev() {
-            if let Ok(content) = self.file_provider.read_file(&ancestor.join("pcb.toml")) {
+            .map(|p| p.join("pcb.toml"))
+            .filter(|p| p.exists())
+            .map(|p| {
+                let content = self.file_provider.read_file(&p)?;
                 let toml_aliases = parse_package_aliases_from_toml(&content);
-                log::debug!(
-                    "  Merging {} aliases from: {}",
-                    toml_aliases.len(),
-                    ancestor.display()
-                );
-                aliases.extend(toml_aliases);
-            }
-        }
+                Ok::<_, anyhow::Error>(toml_aliases)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .rev()
+            .fold(LoadSpec::default_package_aliases(), |mut acc, aliases| {
+                acc.extend(aliases);
+                acc
+            });
+
+        let mut alias_cache = self.alias_cache.write().unwrap();
+        log::debug!(
+            "Inserting aliases for dir: {}, {:?}",
+            dir.display(),
+            &aliases
+        );
+        alias_cache.insert(dir.to_path_buf(), aliases.clone());
 
         log::debug!(
             "  Final aliases for {}: {:?}",
-            canonical_dir.display(),
+            dir.display(),
             aliases.keys().collect::<Vec<_>>()
         );
-
-        self.alias_cache
-            .write()
-            .unwrap()
-            .entry(canonical_dir)
-            .or_insert_with(|| Arc::new(aliases))
-            .clone()
+        Ok(aliases)
     }
 
     /// Get all files that have been resolved through this resolver
@@ -905,7 +902,7 @@ impl LoadResolver for CoreLoadResolver {
         // First, resolve any package aliases
         let (resolved_spec, is_from_alias) = if let LoadSpec::Package { .. } = spec {
             // Always use hierarchical alias resolution - works for workspace OR remote repo
-            let aliases = self.get_aliases_for_file(current_file);
+            let aliases = self.get_aliases_for_file(current_file)?;
             log::debug!(
                 "Resolving package spec: {} from file: {}",
                 spec.to_load_string(),
