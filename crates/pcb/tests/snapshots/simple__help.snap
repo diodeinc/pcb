@@ -14,6 +14,7 @@ Commands:
   build    Build PCB projects
   upgrade  Upgrade PCB projects
   bom      Generate Bill of Materials (BOM)
+  info     Display workspace and board information
   layout   Layout PCB designs
   clean    Clean PCB build artifacts
   fmt      Format .zen and .star files
