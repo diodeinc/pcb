@@ -176,6 +176,7 @@ pub struct KiCadCliBuilder {
     args: Vec<String>,
     log_file: Option<File>,
     env_vars: HashMap<String, String>,
+    suppress_error_output: bool,
 }
 
 impl KiCadCliBuilder {
@@ -218,6 +219,12 @@ impl KiCadCliBuilder {
         self
     }
 
+    /// Suppress error output to stderr (useful for commands with verbose non-critical output)
+    pub fn suppress_error_output(mut self, suppress: bool) -> Self {
+        self.suppress_error_output = suppress;
+        self
+    }
+
     /// Add an environment variable
     pub fn env<K, V>(mut self, key: K, value: V) -> Self
     where
@@ -257,7 +264,9 @@ impl KiCadCliBuilder {
         let output = cmd.run().context("Failed to execute kicad-cli")?;
 
         if !output.success {
-            std::io::stderr().write_all(&output.raw_output)?;
+            if !self.suppress_error_output {
+                std::io::stderr().write_all(&output.raw_output)?;
+            }
             anyhow::bail!("kicad-cli execution failed");
         }
 

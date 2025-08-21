@@ -794,6 +794,9 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
     fs::create_dir_all(&models_dir)?;
 
     let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+
+    // Create a temp file to capture and discard verbose KiCad output
+    let devnull = tempfile::tempfile()?;
     // Generate STEP model - KiCad CLI has platform-specific exit code issues
     let step_path = models_dir.join("model.step");
     let step_result = KiCadCliBuilder::new()
@@ -810,6 +813,8 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg("--include-silkscreen")
         .arg("--include-soldermask")
         .arg(kicad_pcb_path.to_string_lossy())
+        .log_file(devnull.try_clone()?)
+        .suppress_error_output(true)
         .run();
 
     if let Err(e) = step_result {
@@ -831,6 +836,8 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg("--units")
         .arg("mm")
         .arg(kicad_pcb_path.to_string_lossy())
+        .log_file(devnull.try_clone()?)
+        .suppress_error_output(true)
         .run();
 
     if let Err(e) = wrl_result {
@@ -854,6 +861,8 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg("--page-size-mode")
         .arg("2") // Board area only
         .arg(kicad_pcb_path.to_string_lossy())
+        .log_file(devnull.try_clone()?)
+        .suppress_error_output(true)
         .run();
 
     if let Err(e) = svg_result {
