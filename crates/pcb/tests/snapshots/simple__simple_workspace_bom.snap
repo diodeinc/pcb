@@ -6,11 +6,9 @@ Command: pcb bom boards/TestBoard.zen -f json
 Exit Code: 0
 
 --- STDOUT ---
-[
-  {
-    "designators": [
-      "C1"
-    ],
+{
+  "C1.C": {
+    "designator": "C1",
     "package": "0402",
     "value": "100nF",
     "component_type": "Capacitor",
@@ -21,10 +19,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  {
-    "designators": [
-      "C2"
-    ],
+  "C2.C": {
+    "designator": "C2",
     "package": "0805",
     "value": "10uF",
     "component_type": "Capacitor",
@@ -35,11 +31,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  {
-    "designators": [
-      "C3",
-      "C4"
-    ],
+  "C3.C": {
+    "designator": "C3",
     "package": "0402",
     "value": "22pF",
     "component_type": "Capacitor",
@@ -50,27 +43,26 @@ Exit Code: 0
     },
     "dnp": false
   },
-  {
-    "designators": [
-      "D1"
-    ],
+  "C4.C": {
+    "designator": "C4",
+    "package": "0402",
+    "value": "22pF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.000000000022",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  },
+  "LED1.D1.LED": {
+    "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
     "dnp": false
   },
-  {
-    "designators": [
-      "D2"
-    ],
-    "package": "0603",
-    "value": "LED RED",
-    "dnp": false
-  },
-  {
-    "designators": [
-      "R1",
-      "R2"
-    ],
+  "LED1.R1.R": {
+    "designator": "R1",
     "package": "0603",
     "value": "330",
     "component_type": "Resistor",
@@ -81,10 +73,26 @@ Exit Code: 0
     },
     "dnp": false
   },
-  {
-    "designators": [
-      "R3"
-    ],
+  "LED2.D1.LED": {
+    "designator": "D2",
+    "package": "0603",
+    "value": "LED RED",
+    "dnp": false
+  },
+  "LED2.R1.R": {
+    "designator": "R2",
+    "package": "0603",
+    "value": "330",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "330",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  },
+  "R1.R": {
+    "designator": "R3",
     "package": "0603",
     "value": "10k",
     "component_type": "Resistor",
@@ -95,13 +103,11 @@ Exit Code: 0
     },
     "dnp": false
   },
-  {
-    "designators": [
-      "Y1"
-    ],
+  "X1.Y": {
+    "designator": "Y1",
     "package": "5032_2Pin",
     "value": "16MHz 18pF",
     "dnp": false
   }
-]
+}
 --- STDERR ---
