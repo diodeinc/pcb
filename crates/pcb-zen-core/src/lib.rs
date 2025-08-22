@@ -6,7 +6,6 @@ use std::{
 
 use anyhow::Context;
 
-pub mod bundle;
 pub mod config;
 pub mod convert;
 pub mod diagnostics;

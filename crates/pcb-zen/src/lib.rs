@@ -1,6 +1,5 @@
 //! Diode Star – evaluate .zen designs and return schematic data structures.
 
-pub mod bundle;
 pub mod diagnostics;
 pub mod load;
 pub mod lsp;
@@ -19,7 +18,6 @@ use pcb_zen_core::{
 use starlark::errors::EvalMessage;
 
 pub use diagnostics::Renderable;
-pub use pcb_zen_core::bundle::{Bundle, BundleMetadata};
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;
