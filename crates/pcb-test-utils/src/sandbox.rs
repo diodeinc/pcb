@@ -47,6 +47,8 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub use assert_cmd::cargo_bin;
+
 /// Macro to create a snapshot assertion with a clean interface
 #[macro_export]
 macro_rules! assert_snapshot {
@@ -151,10 +153,7 @@ impl Sandbox {
         } else {
             self.root_path().join(cwd)
         };
-
-        // Create the directory if it doesn't exist
-        fs::create_dir_all(&self.default_cwd).expect("create default cwd directory");
-
+        fs::create_dir_all(self.default_cwd()).expect("create default cwd directory");
         self
     }
 
@@ -168,9 +167,14 @@ impl Sandbox {
         self.root = temp_dir.into_persistent();
     }
 
-    /// Write/overwrite a file relative to the sandbox root.
+    /// Write/overwrite a file relative to the current working directory.
     pub fn write<P: AsRef<Path>, S: AsRef<[u8]>>(&mut self, rel: P, contents: S) -> &mut Self {
-        let p = self.root_path().join(rel);
+        let rel_path = rel.as_ref();
+        let p = if rel_path.is_absolute() {
+            rel_path.to_path_buf()
+        } else {
+            self.default_cwd.join(rel_path)
+        };
         if let Some(parent) = p.parent() {
             fs::create_dir_all(parent).expect("create parent dir");
         }
@@ -190,7 +194,10 @@ impl Sandbox {
 
         let hash_refs: Vec<&str> = self.hash_globs.iter().map(|s| s.as_str()).collect();
         let ignore_refs: Vec<&str> = self.ignore_globs.iter().map(|s| s.as_str()).collect();
-        crate::snapdir::build_manifest(&dir_path, &hash_refs, &ignore_refs)
+        let manifest = crate::snapdir::build_manifest(&dir_path, &hash_refs, &ignore_refs);
+
+        // Sanitize temp paths and timestamps in the manifest
+        self.sanitize_output(&manifest)
     }
 
     /// Create and initialize a git fixture for a given GitHub/GitLab URL.
@@ -312,9 +319,9 @@ impl Sandbox {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Sanitize temp paths to make snapshots deterministic
-        let sanitized_stdout = self.sanitize_temp_paths(&stdout);
-        let sanitized_stderr = self.sanitize_temp_paths(&stderr);
+        // Sanitize temp paths and timestamps to make snapshots deterministic
+        let sanitized_stdout = self.sanitize_output(&stdout);
+        let sanitized_stderr = self.sanitize_output(&stderr);
 
         format!(
             "Command: {} {}\nExit Code: {}\n\n--- STDOUT ---\n{}\n--- STDERR ---\n{}",
@@ -326,8 +333,8 @@ impl Sandbox {
         )
     }
 
-    /// Sanitize temporary paths in output to make snapshots deterministic
-    fn sanitize_temp_paths(&self, content: &str) -> String {
+    /// Sanitize temporary paths and timestamps in output to make snapshots deterministic
+    pub fn sanitize_output(&self, content: &str) -> String {
         use regex::Regex;
 
         let mut result = content.to_string();
@@ -341,6 +348,13 @@ impl Sandbox {
         // Linux: /tmp/.tmpXXX
         let linux_pattern = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
         result = linux_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
+
+        // Sanitize ISO 8601 timestamps
+        let timestamp_pattern =
+            Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+\+\d{2}:\d{2}").unwrap();
+        result = timestamp_pattern
+            .replace_all(&result, "<TIMESTAMP>")
+            .to_string();
 
         result
     }
@@ -474,7 +488,7 @@ pub struct FixtureRepo {
 
 impl FixtureRepo {
     /// Write/overwrite a file relative to the work tree.
-    pub fn write<P: AsRef<Path>, S: AsRef<[u8]>>(&self, rel: P, contents: S) -> &Self {
+    pub fn write<P: AsRef<Path>, S: AsRef<[u8]>>(&mut self, rel: P, contents: S) -> &mut Self {
         let p = self.work.join(rel);
         if let Some(parent) = p.parent() {
             fs::create_dir_all(parent).expect("create parent dir");
@@ -484,7 +498,7 @@ impl FixtureRepo {
     }
 
     /// Stage all changes and commit with the given message.
-    pub fn commit<S: AsRef<str>>(&self, msg: S) -> &Self {
+    pub fn commit<S: AsRef<str>>(&mut self, msg: S) -> &mut Self {
         run_git(&["-C", self.work_str(), "add", "-A"]);
         run_git(&["-C", self.work_str(), "commit", "-m", msg.as_ref()]);
         self
@@ -525,7 +539,7 @@ impl FixtureRepo {
     }
 
     /// Create or move a tag. If `annotated`, creates/updates an annotated tag.
-    pub fn tag<S: AsRef<str>>(&self, name: S, annotated: bool) -> &Self {
+    pub fn tag<S: AsRef<str>>(&mut self, name: S, annotated: bool) -> &mut Self {
         let name = name.as_ref();
         if annotated {
             run_git(&["-C", self.work_str(), "tag", "-fa", name, "-m", name]);
@@ -536,7 +550,7 @@ impl FixtureRepo {
     }
 
     /// Mirror-push all refs to the bare “remote”.
-    pub fn push_mirror(&self) {
+    pub fn push_mirror(&mut self) {
         run_git(&["-C", self.work_str(), "push", "--mirror", "origin"]);
     }
 
@@ -805,26 +819,25 @@ mod tests {
         let mut fixture = sb.git_fixture("https://github.com/example/multi-version.git");
 
         // Set up main branch
+        // Create v1.5 branch with different content
+        // Create v1.0 branch with minimal content
+        // Back on main, add latest tag
         fixture
             .write("version.txt", "ref=main\nversion=2.0.0-dev")
-            .commit("Main branch");
-
-        // Create v1.5 branch with different content
-        fixture.with_branch("v1.5", |f| {
-            f.write("version.txt", "ref=v1.5\nversion=1.5.0")
-                .commit("Version 1.5.0 release")
-                .tag("v1.5.0", true);
-        });
-
-        // Create v1.0 branch with minimal content
-        fixture.with_branch("v1.0", |f| {
-            f.write("version.txt", "ref=v1.0\nversion=1.0.0")
-                .commit("Version 1.0.0 release")
-                .tag("v1.0.0", true);
-        });
-
-        // Back on main, add latest tag
-        fixture.checkout("main").tag("latest", false).push_mirror();
+            .commit("Main branch")
+            .with_branch("v1.5", |f| {
+                f.write("version.txt", "ref=v1.5\nversion=1.5.0")
+                    .commit("Version 1.5.0 release")
+                    .tag("v1.5.0", true);
+            })
+            .with_branch("v1.0", |f| {
+                f.write("version.txt", "ref=v1.0\nversion=1.0.0")
+                    .commit("Version 1.0.0 release")
+                    .tag("v1.0.0", true);
+            })
+            .checkout("main")
+            .tag("latest", false)
+            .push_mirror();
 
         // Clone each branch/tag to separate directories
         sb.cmd(
