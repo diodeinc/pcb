@@ -23,6 +23,8 @@ use crate::workspace::{
     WorkspaceInfo,
 };
 
+const RELEASE_SCHEMA_VERSION: &str = "0.1";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReleaseKind {
     SourceOnly,
@@ -275,7 +277,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 
     serde_json::json!({
         "release": {
-            "version": info.version,
+            "schema_version": RELEASE_SCHEMA_VERSION,
+            "git_version": info.version,
             "created_at": rfc3339_timestamp,
             "zen_file": info.workspace.zen_path.strip_prefix(&info.workspace.workspace_root).expect("zen_file must be within workspace_root"),
             "workspace_root": info.workspace.workspace_root,
