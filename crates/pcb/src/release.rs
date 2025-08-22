@@ -151,12 +151,8 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     // Execute finalization tasks
     execute_tasks(&release_info, FINALIZATION_TASKS, using_human)?;
 
-    // Calculate zip path with source suffix if needed
-    let zip_path = if matches!(release_info.kind, ReleaseKind::SourceOnly) {
-        format!("{}.source.zip", release_info.staging_dir.display())
-    } else {
-        format!("{}.zip", release_info.staging_dir.display())
-    };
+    // Calculate archive path
+    let zip_path = archive_zip_path(&release_info);
 
     info!("Release {} staged successfully", release_info.version);
 
@@ -620,9 +616,17 @@ fn write_metadata(info: &ReleaseInfo) -> Result<()> {
     Ok(())
 }
 
+fn archive_zip_path(info: &ReleaseInfo) -> String {
+    if matches!(info.kind, ReleaseKind::SourceOnly) {
+        format!("{}.source.zip", info.staging_dir.display())
+    } else {
+        format!("{}.zip", info.staging_dir.display())
+    }
+}
+
 /// Create zip archive of release staging directory
 fn zip_release(info: &ReleaseInfo) -> Result<()> {
-    let zip_path = format!("{}.zip", info.staging_dir.display());
+    let zip_path = archive_zip_path(info);
     let zip_file = fs::File::create(&zip_path)?;
     let mut zip = ZipWriter::new(zip_file);
     add_directory_to_zip(&mut zip, &info.staging_dir, &info.staging_dir)?;
