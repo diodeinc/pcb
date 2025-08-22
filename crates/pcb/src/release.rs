@@ -23,6 +23,12 @@ use crate::workspace::{
     WorkspaceInfo,
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReleaseKind {
+    SourceOnly,
+    Full,
+}
+
 #[derive(ValueEnum, Debug, Clone, Default)]
 pub enum ReleaseOutputFormat {
     #[default]
@@ -48,6 +54,10 @@ pub struct ReleaseArgs {
     /// Output format
     #[arg(short, long, value_enum, default_value_t = ReleaseOutputFormat::Human)]
     pub format: ReleaseOutputFormat,
+
+    /// Create source-only release without manufacturing artifacts
+    #[arg(long)]
+    pub source_only: bool,
 }
 
 /// All information gathered during the release preparation phase
@@ -64,23 +74,54 @@ pub struct ReleaseInfo {
     pub layout_path: PathBuf,
     /// Evaluated schematic from the zen file
     pub schematic: pcb_sch::Schematic,
+    /// Type of release being created
+    pub kind: ReleaseKind,
 }
 
 type TaskFn = fn(&ReleaseInfo) -> Result<()>;
 
-const TASKS: &[(&str, TaskFn)] = &[
+const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Copying layout files", copy_layout),
     ("Substituting version variables", substitute_variables),
+];
+
+const MANUFACTURING_TASKS: &[(&str, TaskFn)] = &[
     ("Generating design BOM", generate_design_bom),
     ("Generating gerber files", generate_gerbers),
     ("Generating pick-and-place file", generate_cpl),
     ("Generating assembly drawings", generate_assembly_drawings),
     ("Generating ODB++ files", generate_odb),
     ("Generating 3D models", generate_3d_models),
+];
+const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
     ("Creating release archive", zip_release),
 ];
+
+/// Execute a list of tasks with proper error handling and UI feedback
+fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], human: bool) -> Result<()> {
+    for (name, task) in tasks {
+        let maybe_spinner = human.then(|| Spinner::builder(*name).start());
+        let res = task(info);
+
+        if let Some(spinner) = maybe_spinner {
+            spinner.finish();
+        }
+
+        match res {
+            Ok(()) if human => println!("{} {name}", "✓".green()),
+            Err(e) => {
+                if human {
+                    println!("{} {name} failed", "✗".red());
+                }
+                return Err(e.context(format!("{name} failed")));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
 
 pub fn execute(args: ReleaseArgs) -> Result<()> {
     let using_human = matches!(args.format, ReleaseOutputFormat::Human);
@@ -88,40 +129,32 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     // Gather all release information
     let release_info = if using_human {
         let info_spinner = Spinner::builder("Gathering release information").start();
-        let info = gather_release_info(args.zen_path)?;
+        let info = gather_release_info(args.zen_path, args.source_only)?;
         info_spinner.finish();
         println!("{} Release information gathered", "✓".green());
-        display_release_info(&info);
+        display_release_info(&info, args.source_only);
         info
     } else {
-        gather_release_info(args.zen_path)?
+        gather_release_info(args.zen_path, args.source_only)?
     };
 
-    // Execute release tasks
-    if using_human {
-        for (name, task) in TASKS {
-            let spinner = Spinner::builder(*name).start();
-            match task(&release_info) {
-                Ok(()) => {
-                    spinner.finish();
-                    println!("{} {name}", "✓".green());
-                }
-                Err(e) => {
-                    spinner.finish();
-                    println!("{} {name} failed", "✗".red());
-                    return Err(e.context(format!("{name} failed")));
-                }
-            }
-        }
-    } else {
-        for (_, task) in TASKS {
-            // Run tasks silently in JSON mode
-            task(&release_info)?;
-        }
+    // Execute base tasks
+    execute_tasks(&release_info, BASE_TASKS, using_human)?;
+
+    // Execute manufacturing tasks if full release
+    if matches!(release_info.kind, ReleaseKind::Full) {
+        execute_tasks(&release_info, MANUFACTURING_TASKS, using_human)?;
     }
 
-    // Calculate zip path
-    let zip_path = format!("{}.zip", release_info.staging_dir.display());
+    // Execute finalization tasks
+    execute_tasks(&release_info, FINALIZATION_TASKS, using_human)?;
+
+    // Calculate zip path with source suffix if needed
+    let zip_path = if matches!(release_info.kind, ReleaseKind::SourceOnly) {
+        format!("{}.source.zip", release_info.staging_dir.display())
+    } else {
+        format!("{}.zip", release_info.staging_dir.display())
+    };
 
     info!("Release {} staged successfully", release_info.version);
 
@@ -146,7 +179,7 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
 }
 
 /// Gather all information needed for the release
-fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
+fn gather_release_info(zen_path: PathBuf, source_only: bool) -> Result<ReleaseInfo> {
     debug!("Starting release information gathering");
 
     // Use common workspace info gathering
@@ -189,6 +222,11 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
         .map(|m| m.sch_module.to_schematic())
         .transpose()?
         .context("No schematic output from zen file")?;
+    let kind = if source_only {
+        ReleaseKind::SourceOnly
+    } else {
+        ReleaseKind::Full
+    };
 
     Ok(ReleaseInfo {
         workspace,
@@ -197,13 +235,23 @@ fn gather_release_info(zen_path: PathBuf) -> Result<ReleaseInfo> {
         staging_dir,
         layout_path,
         schematic,
+        kind,
     })
 }
 
 /// Display all the gathered release information
-fn display_release_info(info: &ReleaseInfo) {
+fn display_release_info(info: &ReleaseInfo, _source_only: bool) {
     println!();
-    println!("{}", "Release Metadata".with_style(Style::Blue).bold());
+    let release_type = match info.kind {
+        ReleaseKind::SourceOnly => "Source-Only Release",
+        ReleaseKind::Full => "Full Release",
+    };
+    println!(
+        "{}",
+        format!("{release_type} Metadata")
+            .with_style(Style::Blue)
+            .bold()
+    );
 
     // Create and display the metadata that will be saved
     let metadata = create_metadata_json(info);
@@ -222,6 +270,7 @@ fn display_release_info(info: &ReleaseInfo) {
 
 /// Create the metadata JSON object (shared between display and file writing)
 fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
+    let source_only = matches!(info.kind, ReleaseKind::SourceOnly);
     let rfc3339_timestamp = Utc::now().to_rfc3339();
 
     serde_json::json!({
@@ -231,7 +280,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
             "zen_file": info.workspace.zen_path.strip_prefix(&info.workspace.workspace_root).expect("zen_file must be within workspace_root"),
             "workspace_root": info.workspace.workspace_root,
             "staging_directory": info.staging_dir,
-            "layout_path": info.layout_path
+            "layout_path": info.layout_path,
+            "source_only": source_only
         },
         "system": {
             "user": std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
