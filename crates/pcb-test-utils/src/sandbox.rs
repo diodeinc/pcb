@@ -167,6 +167,47 @@ impl Sandbox {
         self.root = temp_dir.into_persistent();
     }
 
+    /// Run a git command in the sandbox's default cwd with injected env.
+    fn git<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args_vec: Vec<String> = args
+            .into_iter()
+            .map(|a| a.as_ref().to_string_lossy().to_string())
+            .collect();
+        let display = format!("git {}", args_vec.join(" "));
+        self.cmd("git", &args_vec)
+            .stdout_null()
+            .stderr_null()
+            .run()
+            .unwrap_or_else(|e| panic!("{display} failed: {e}"));
+        self
+    }
+
+    /// Initialize a git repository in the current default cwd and set default user.
+    pub fn init_git(&mut self) -> &mut Self {
+        self.git(["init"]);
+        // default user
+        self.git(["config", "user.email", "test@example.com"]);
+        self.git(["config", "user.name", "Sandbox"]);
+        self
+    }
+
+    /// Stage all changes and commit with the given message.
+    pub fn commit<S: AsRef<str>>(&mut self, msg: S) -> &mut Self {
+        self.git(["add", "."]);
+        self.git(["commit", "-m", msg.as_ref()]);
+        self
+    }
+
+    /// Create a lightweight tag at HEAD.
+    pub fn tag<S: AsRef<str>>(&mut self, name: S) -> &mut Self {
+        self.git(["tag", name.as_ref()]);
+        self
+    }
+
     /// Write/overwrite a file relative to the current working directory.
     pub fn write<P: AsRef<Path>, S: AsRef<[u8]>>(&mut self, rel: P, contents: S) -> &mut Self {
         let rel_path = rel.as_ref();

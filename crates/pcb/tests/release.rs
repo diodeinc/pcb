@@ -6,18 +6,6 @@ use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::{cargo_bin, Sandbox};
 use serde_json::Value;
 
-fn git_cmd<I>(sb: &mut Sandbox, args: I)
-where
-    I: IntoIterator,
-    I::Item: AsRef<std::ffi::OsStr>,
-{
-    sb.cmd("git", args)
-        .stdout_null()
-        .stderr_null()
-        .run()
-        .unwrap();
-}
-
 const LED_MODULE_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 
@@ -107,26 +95,19 @@ fn test_pcb_release_source_only() {
 #[test]
 fn test_pcb_release_with_git() {
     let mut sb = Sandbox::new();
-    sb.cwd("src")
+    let output = sb
+        .cwd("src")
+        .ignore_globs(&["layout/*"])
+        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .seed_stdlib(&["v0.2.4"])
         .seed_kicad(&["9.0.0"])
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TB0001.zen", TEST_BOARD_ZEN)
-        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(&["layout/*"]);
-
-    // Initialize git repo in src/ and create a tagged commit
-    git_cmd(&mut sb, ["init"]);
-    git_cmd(&mut sb, ["config", "user.email", "test@example.com"]);
-    git_cmd(&mut sb, ["config", "user.name", "Test User"]);
-    git_cmd(&mut sb, ["add", "."]);
-    git_cmd(&mut sb, ["commit", "-m", "Initial commit"]);
-    git_cmd(&mut sb, ["tag", "TB0001/v1.2.3"]);
-
-    // Run source-only release with JSON output
-    let output = sb
+        .init_git()
+        .commit("Initial commit")
+        .tag("TB0001/v1.2.3")
         .cmd(
             cargo_bin!("pcb"),
             [
@@ -164,22 +145,15 @@ n1 = Net("N1")
 n2 = Net("N2")
 "#;
 
-    let mut sb = Sandbox::new();
-    sb.cwd("src")
-        .write("boards/CaseBoard.zen", board_zen)
-        .ignore_globs(&["layout/*"]);
-
-    // Initialize git, commit, and tag with different case than board name
-    git_cmd(&mut sb, ["init"]);
-    git_cmd(&mut sb, ["config", "user.email", "test@example.com"]);
-    git_cmd(&mut sb, ["config", "user.name", "Test User"]);
-    git_cmd(&mut sb, ["add", "."]);
-    git_cmd(&mut sb, ["commit", "-m", "Initial commit"]);
     // Board name is CaseBoard; tag uses upper-case prefix to test case-insensitivity
-    git_cmd(&mut sb, ["tag", "CASEBOARD/v9.9.9"]);
-
-    // Run source-only release with JSON output
+    let mut sb = Sandbox::new();
     let output = sb
+        .cwd("src")
+        .ignore_globs(&["layout/*"])
+        .write("boards/CaseBoard.zen", board_zen)
+        .init_git()
+        .commit("Initial commit")
+        .tag("CASEBOARD/v9.9.9")
         .cmd(
             cargo_bin!("pcb"),
             [
