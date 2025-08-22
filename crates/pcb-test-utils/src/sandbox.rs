@@ -362,6 +362,22 @@ impl Sandbox {
             .replace_all(&result, r#""hash": "<GIT_HASH>""#)
             .to_string();
 
+        // Sanitize system information that varies across platforms
+        let arch_pattern = Regex::new(r#""arch":\s*"[^"]+""#).unwrap();
+        result = arch_pattern
+            .replace_all(&result, r#""arch": "<ARCH>""#)
+            .to_string();
+
+        let platform_pattern = Regex::new(r#""platform":\s*"[^"]+""#).unwrap();
+        result = platform_pattern
+            .replace_all(&result, r#""platform": "<PLATFORM>""#)
+            .to_string();
+
+        let user_pattern = Regex::new(r#""user":\s*"[^"]+""#).unwrap();
+        result = user_pattern
+            .replace_all(&result, r#""user": "<USER>""#)
+            .to_string();
+
         result
     }
 

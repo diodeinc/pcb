@@ -20,10 +20,10 @@ expression: sb.snapshot_dir(staging_dir)
     "zen_file": "boards/TestBoard.zen"
   },
   "system": {
-    "arch": "aarch64",
+    "arch": "<ARCH>",
     "cli_version": "0.2.0-prerelease.5",
-    "platform": "macos",
-    "user": "unknown"
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
   }
 }
 === src/boards/TestBoard.zen
