@@ -184,14 +184,7 @@ fn gather_release_info(zen_path: PathBuf, source_only: bool) -> Result<ReleaseIn
     let workspace = gather_workspace_info(zen_path, true)?;
 
     // Get board name from workspace info with fallback to zen filename
-    let board_name = workspace.board_name().unwrap_or_else(|| {
-        workspace
-            .zen_path
-            .file_stem()
-            .unwrap()
-            .to_string_lossy()
-            .to_string()
-    });
+    let board_name = workspace.board_display_name();
     // Get version and git hash from git
     let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
 
@@ -486,6 +479,7 @@ fn update_kicad_pro_text_variables(
     kicad_pro_path: &Path,
     version: &str,
     git_hash: &str,
+    board_name: &str,
 ) -> Result<()> {
     // Read the existing .kicad_pro file
     let content = fs::read_to_string(kicad_pro_path).with_context(|| {
@@ -507,9 +501,10 @@ fn update_kicad_pro_text_variables(
     let text_vars = project.get("text_variables").and_then(|v| v.as_object());
     let needs_pcb_version = text_vars.is_none_or(|vars| !vars.contains_key("PCB_VERSION"));
     let needs_pcb_git_hash = text_vars.is_none_or(|vars| !vars.contains_key("PCB_GIT_HASH"));
+    let needs_pcb_name = text_vars.is_none_or(|vars| !vars.contains_key("PCB_NAME"));
 
     // Only modify if we need to add missing variables
-    if needs_pcb_version || needs_pcb_git_hash {
+    if needs_pcb_version || needs_pcb_git_hash || needs_pcb_name {
         // Ensure text_variables object exists
         if project.get("text_variables").is_none() || !project["text_variables"].is_object() {
             project["text_variables"] = serde_json::json!({});
@@ -518,18 +513,18 @@ fn update_kicad_pro_text_variables(
         let text_vars = project["text_variables"].as_object_mut().unwrap();
 
         // Add missing variables with correct values
-        if needs_pcb_version {
-            text_vars.insert(
-                "PCB_VERSION".to_string(),
-                serde_json::Value::String(version.to_string()),
-            );
-        }
-        if needs_pcb_git_hash {
-            text_vars.insert(
-                "PCB_GIT_HASH".to_string(),
-                serde_json::Value::String(git_hash.to_string()),
-            );
-        }
+        text_vars.insert(
+            "PCB_VERSION".to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
+        text_vars.insert(
+            "PCB_GIT_HASH".to_string(),
+            serde_json::Value::String(git_hash.to_string()),
+        );
+        text_vars.insert(
+            "PCB_NAME".to_string(),
+            serde_json::Value::String(board_name.to_string()),
+        );
 
         // Write back to file with pretty formatting
         let updated_content = serde_json::to_string_pretty(&project)?;
@@ -554,13 +549,16 @@ fn update_kicad_pro_text_variables(
     Ok(())
 }
 
-/// Substitute version and git hash variables in KiCad PCB files
+/// Substitute version, git hash and name variables in KiCad PCB files
 fn substitute_variables(info: &ReleaseInfo) -> Result<()> {
     debug!("Substituting version variables in KiCad files");
 
+    // Determine display name of the board
+    let board_name = info.workspace.board_display_name();
+
     // First, update the .kicad_pro file to ensure text variables are defined
     let kicad_pro_path = info.staging_dir.join("layout").join("layout.kicad_pro");
-    update_kicad_pro_text_variables(&kicad_pro_path, &info.version, &info.git_hash)?;
+    update_kicad_pro_text_variables(&kicad_pro_path, &info.version, &info.git_hash, &board_name)?;
 
     // Then update the .kicad_pcb file with the actual values
     let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
@@ -578,13 +576,15 @@ text_vars = board.GetProperties()
 # Update variables
 text_vars['PCB_VERSION'] = '{version}'
 text_vars['PCB_GIT_HASH'] = '{git_hash}'
+text_vars['PCB_NAME'] = '{board_name}'
 
 # Save the board
 board.Save(sys.argv[1])
 print("Text variables updated successfully")
 "#,
-        version = info.version.replace('\'', "\\'"), // Escape single quotes
-        git_hash = info.git_hash.replace('\'', "\\'")  // Escape single quotes
+        version = info.version.replace('\'', "\\'"),
+        git_hash = info.git_hash.replace('\'', "\\'"),
+        board_name = board_name.replace('\'', "\\'")
     );
 
     PythonScriptBuilder::new(script)

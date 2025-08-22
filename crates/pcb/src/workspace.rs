@@ -30,6 +30,17 @@ impl WorkspaceInfo {
         self.config.board_name_for_zen(&self.zen_path)
     }
 
+    /// Get a human-friendly board display name, with a safe fallback to the .zen file stem
+    pub fn board_display_name(&self) -> String {
+        self.board_name().unwrap_or_else(|| {
+            self.zen_path
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        })
+    }
+
     pub fn root(&self) -> &Path {
         &self.config.root
     }
