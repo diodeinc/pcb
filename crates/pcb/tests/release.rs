@@ -70,8 +70,8 @@ stdlib = "@github/diodeinc/stdlib:v0.2.4"
 #[test]
 fn test_pcb_release_source_only() {
     let mut sb = Sandbox::new();
-    sb.seed_stdlib(&["v0.2.4"])
-        .cwd("src")
+    sb.cwd("src")
+        .seed_stdlib(&["v0.2.4"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
@@ -107,8 +107,8 @@ fn test_pcb_release_source_only() {
 #[test]
 fn test_pcb_release_with_git() {
     let mut sb = Sandbox::new();
-    sb.seed_stdlib(&["v0.2.4"])
-        .cwd("src")
+    sb.cwd("src")
+        .seed_stdlib(&["v0.2.4"])
         .seed_kicad(&["9.0.0"])
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
@@ -153,4 +153,57 @@ fn test_pcb_release_with_git() {
 
     // Snapshot the staging directory contents
     assert_snapshot!("release_with_git", sb.snapshot_dir(staging_dir));
+}
+
+#[test]
+fn test_pcb_release_case_insensitive_tag() {
+    let board_zen = r#"
+add_property("layout_path", "build/CaseBoard")
+
+n1 = Net("N1")
+n2 = Net("N2")
+"#;
+
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("boards/CaseBoard.zen", board_zen)
+        .ignore_globs(&["layout/*"]);
+
+    // Initialize git, commit, and tag with different case than board name
+    git_cmd(&mut sb, ["init"]);
+    git_cmd(&mut sb, ["config", "user.email", "test@example.com"]);
+    git_cmd(&mut sb, ["config", "user.name", "Test User"]);
+    git_cmd(&mut sb, ["add", "."]);
+    git_cmd(&mut sb, ["commit", "-m", "Initial commit"]);
+    // Board name is CaseBoard; tag uses upper-case prefix to test case-insensitivity
+    git_cmd(&mut sb, ["tag", "CASEBOARD/v9.9.9"]);
+
+    // Run source-only release with JSON output
+    let output = sb
+        .cmd(
+            cargo_bin!("pcb"),
+            [
+                "release",
+                "boards/CaseBoard.zen",
+                "--source-only",
+                "-f",
+                "json",
+            ],
+        )
+        .read()
+        .expect("Failed to run pcb release command");
+
+    // Parse JSON output to get staging directory
+    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
+    let staging_dir = json["staging_directory"].as_str().unwrap();
+
+    // Load and sanitize metadata.json for stable snapshot
+    let metadata_path = format!("{staging_dir}/metadata.json");
+    let metadata_file = File::open(&metadata_path).unwrap();
+    let meta: Value = serde_json::from_reader(metadata_file).unwrap();
+
+    // Ensure git tag was detected
+    let git_version = meta["release"]["git_version"].as_str().unwrap();
+    assert_eq!(git_version, "v9.9.9");
+    assert_snapshot!("case_insensitive_tag", sb.snapshot_dir(staging_dir));
 }

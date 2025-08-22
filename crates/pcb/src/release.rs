@@ -342,11 +342,14 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
         let tags = String::from_utf8(tag_out.stdout)?;
         let tags: Vec<&str> = tags.lines().collect();
 
-        // Look for board-specific tag in format "board_name/version"
+        // Look for board-specific tag in format "board_name/version" (case-insensitive board name)
         let tag_prefix = format!("{board_name}/");
         for tag in tags {
-            if !tag.is_empty() && tag.starts_with(&tag_prefix) {
-                let version = tag.strip_prefix(&tag_prefix).unwrap().to_string();
+            if !tag.is_empty()
+                && tag.len() > tag_prefix.len()
+                && tag[..tag_prefix.len()].eq_ignore_ascii_case(&tag_prefix)
+            {
+                let version = tag[tag_prefix.len()..].to_string();
                 info!("Git version (board tag): {version} for board {board_name}");
                 return Ok((version, commit_hash.clone()));
             }

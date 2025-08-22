@@ -1,0 +1,34 @@
+---
+source: crates/pcb/tests/release.rs
+expression: sb.snapshot_dir(staging_dir)
+---
+=== metadata.json
+{
+  "git": {
+    "describe": "v9.9.9",
+    "hash": "<GIT_HASH>",
+    "workspace": "<TEMP_DIR>/src/boards"
+  },
+  "release": {
+    "created_at": "<TIMESTAMP>",
+    "git_version": "v9.9.9",
+    "layout_path": "<TEMP_DIR>/src/boards/build/CaseBoard",
+    "schema_version": "1",
+    "source_only": true,
+    "staging_directory": "<TEMP_DIR>/src/boards/.pcb/releases/CaseBoard/v9.9.9",
+    "workspace_root": "<TEMP_DIR>/src/boards",
+    "zen_file": "CaseBoard.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "0.2.0-prerelease.5",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
+}
+=== src/CaseBoard.zen
+
+add_property("layout_path", "build/CaseBoard")
+
+n1 = Net("N1")
+n2 = Net("N2")
