@@ -378,6 +378,12 @@ impl Sandbox {
             .replace_all(&result, r#""user": "<USER>""#)
             .to_string();
 
+        // Sanitize CLI version fields in JSON
+        let cli_version_pattern = Regex::new(r#""cli_version"\s*:\s*"[^"]+""#).unwrap();
+        result = cli_version_pattern
+            .replace_all(&result, r#""cli_version": "<CLI_VERSION>""#)
+            .to_string();
+
         result
     }
 

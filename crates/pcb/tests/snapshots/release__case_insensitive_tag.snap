@@ -21,7 +21,7 @@ expression: sb.snapshot_dir(staging_dir)
   },
   "system": {
     "arch": "<ARCH>",
-    "cli_version": "0.2.0-prerelease.5",
+    "cli_version": "<CLI_VERSION>",
     "platform": "<PLATFORM>",
     "user": "<USER>"
   }
