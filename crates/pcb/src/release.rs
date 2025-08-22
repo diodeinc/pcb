@@ -3,7 +3,7 @@ use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
-use pcb_sch::generate_bom;
+use pcb_sch::generate_bom_entries;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
@@ -547,7 +547,7 @@ print("Text variables updated successfully")
 /// Generate unmatched BOM JSON file
 fn generate_unmatched_bom(info: &ReleaseInfo) -> Result<()> {
     // Generate BOM entries from the schematic
-    let bom_entries = generate_bom(&info.schematic);
+    let bom_entries = generate_bom_entries(&mut info.schematic.clone());
 
     // Create bom directory in staging
     let bom_dir = info.staging_dir.join("bom");

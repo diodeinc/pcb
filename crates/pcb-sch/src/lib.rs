@@ -17,7 +17,7 @@ pub mod kicad_netlist;
 pub mod kicad_schematic;
 
 // Re-export BOM functionality
-pub use bom::{generate_bom, BomEntry};
+pub use bom::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

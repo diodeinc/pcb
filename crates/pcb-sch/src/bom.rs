@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +7,7 @@ use crate::{AttributeValue, InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomEntry {
-    pub designators: Vec<String>,
+    pub designator: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manufacturer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -23,6 +24,20 @@ pub struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub well_known_module: Option<WellKnownModule>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub voltage: Option<PhysicalValue>,
+    pub dnp: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AggregatedBomEntry {
+    pub designators: BTreeSet<String>,
+    pub manufacturer: Option<String>,
+    pub mpn: Option<String>,
+    pub alternatives: Vec<String>,
+    pub package: Option<String>,
+    pub value: Option<String>,
+    pub description: Option<String>,
+    pub well_known_module: Option<WellKnownModule>,
     pub voltage: Option<PhysicalValue>,
     pub dnp: bool,
 }
@@ -85,16 +100,32 @@ pub enum Dielectric {
     Z5U,
 }
 
-/// Generate a Bill of Materials from a schematic
-pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
-    // Clone schematic to assign reference designators without mutating original
-    let mut working_schematic = schematic.clone();
-    working_schematic.assign_reference_designators();
+impl FromStr for Dielectric {
+    type Err = String;
 
-    let mut bom_entries = Vec::new();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "C0G" => Ok(Dielectric::C0G),
+            "NP0" => Ok(Dielectric::NP0),
+            "X5R" => Ok(Dielectric::X5R),
+            "X7R" => Ok(Dielectric::X7R),
+            "X7S" => Ok(Dielectric::X7S),
+            "X7T" => Ok(Dielectric::X7T),
+            "Y5V" => Ok(Dielectric::Y5V),
+            "Z5U" => Ok(Dielectric::Z5U),
+            _ => Err(format!("Unknown dielectric: {s}")),
+        }
+    }
+}
+
+/// Generate ungrouped BOM entries from a schematic
+pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEntry> {
+    schematic.assign_reference_designators();
+
+    let mut bom_entries = BTreeMap::new();
 
     // Iterate through all instances and find components
-    for (instance_ref, instance) in &working_schematic.instances {
+    for (instance_ref, instance) in &schematic.instances {
         if instance.kind != InstanceKind::Component {
             continue;
         }
@@ -103,6 +134,8 @@ pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
             .reference_designator
             .clone()
             .unwrap_or_else(|| format!("?{}", instance_ref.instance_path.join(".")));
+
+        let path = instance_ref.instance_path.join(".");
 
         // Extract attributes directly from the original map
         let mpn = get_string_attribute(&instance.attributes, &["MPN", "Mpn", "mpn"]);
@@ -150,22 +183,24 @@ pub fn generate_bom(schematic: &Schematic) -> Vec<BomEntry> {
 
         let well_known_module = detect_well_known_module(&instance.attributes);
 
-        bom_entries.push(BomEntry {
-            designators: vec![designator],
-            mpn,
-            manufacturer,
-            alternatives,
-            package,
-            value,
-            description,
-            well_known_module,
-            dnp,
-            voltage,
-        });
+        bom_entries.insert(
+            path.clone(),
+            BomEntry {
+                designator,
+                mpn,
+                manufacturer,
+                alternatives,
+                package,
+                value,
+                description,
+                well_known_module,
+                dnp,
+                voltage,
+            },
+        );
     }
 
-    // Group entries and return
-    group_bom_entries(bom_entries)
+    bom_entries
 }
 
 /// Detect well-known modules based on Type attribute
@@ -182,19 +217,8 @@ fn detect_well_known_module(
         }
         "capacitor" => {
             if let Some(capacitance) = get_physical_attribute(attributes, &["__capacitance__"]) {
-                let dielectric = get_string_attribute(attributes, &["Dielectric"]).and_then(|d| {
-                    match d.as_str() {
-                        "C0G" => Some(Dielectric::C0G),
-                        "NP0" => Some(Dielectric::NP0),
-                        "X5R" => Some(Dielectric::X5R),
-                        "X7R" => Some(Dielectric::X7R),
-                        "X7S" => Some(Dielectric::X7S),
-                        "X7T" => Some(Dielectric::X7T),
-                        "Y5V" => Some(Dielectric::Y5V),
-                        "Z5U" => Some(Dielectric::Z5U),
-                        _ => None,
-                    }
-                });
+                let dielectric =
+                    get_string_attribute(attributes, &["Dielectric"]).and_then(|d| d.parse().ok());
 
                 let esr = get_physical_attribute(attributes, &["__esr__"]);
 
@@ -212,27 +236,39 @@ fn detect_well_known_module(
 }
 
 /// Group BOM entries that have identical properties
-fn group_bom_entries(entries: Vec<BomEntry>) -> Vec<BomEntry> {
+pub fn group_bom_entries(entries: BTreeMap<String, BomEntry>) -> Vec<AggregatedBomEntry> {
     use std::collections::HashMap;
 
-    let mut grouped: HashMap<GroupKey, BomEntry> = HashMap::new();
+    let mut grouped: HashMap<GroupKey, AggregatedBomEntry> = HashMap::new();
 
-    for entry in entries {
+    for (_, entry) in entries {
         let key = GroupKey::from(&entry);
 
         grouped
             .entry(key)
             .and_modify(|existing| {
-                existing.designators.extend(entry.designators.clone());
+                existing.designators.insert(entry.designator.clone());
             })
-            .or_insert(entry);
+            .or_insert(AggregatedBomEntry {
+                designators: {
+                    let mut set = BTreeSet::new();
+                    set.insert(entry.designator);
+                    set
+                },
+                manufacturer: entry.manufacturer,
+                mpn: entry.mpn,
+                alternatives: entry.alternatives,
+                package: entry.package,
+                value: entry.value,
+                description: entry.description,
+                well_known_module: entry.well_known_module,
+                voltage: entry.voltage,
+                dnp: entry.dnp,
+            });
     }
 
     let mut result: Vec<_> = grouped.into_values().collect();
-    for entry in &mut result {
-        entry.designators.sort();
-    }
-    result.sort_by(|a, b| a.designators[0].cmp(&b.designators[0]));
+    result.sort_by(|a, b| a.designators.first().cmp(&b.designators.first()));
     result
 }
 

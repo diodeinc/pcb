@@ -5,8 +5,9 @@ use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
-use pcb_sch::{generate_bom, BomEntry};
+use pcb_sch::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
 use pcb_ui::prelude::*;
+use std::collections::BTreeMap;
 
 use crate::build::evaluate_zen_file;
 
@@ -27,9 +28,20 @@ impl std::fmt::Display for BomFormat {
 }
 
 impl BomFormat {
-    fn write<W: Write>(&self, entries: &[BomEntry], writer: W) -> Result<()> {
+    fn write_ungrouped<W: Write>(
+        &self,
+        entries: &BTreeMap<String, BomEntry>,
+        writer: W,
+    ) -> Result<()> {
         match self {
             BomFormat::Json => write_bom_json(entries, writer),
+            BomFormat::Table => panic!("Use write_grouped for table format"),
+        }
+    }
+
+    fn write_grouped<W: Write>(&self, entries: &[AggregatedBomEntry], writer: W) -> Result<()> {
+        match self {
+            BomFormat::Json => panic!("Use write_ungrouped for JSON format"),
             BomFormat::Table => write_bom_table(entries, writer),
         }
     }
@@ -61,27 +73,36 @@ pub fn execute(args: BomArgs) -> Result<()> {
         anyhow::bail!("Failed to build {} - cannot generate BOM", file_name);
     }
 
-    let schematic = eval_result
+    let mut schematic = eval_result
         .output
         .ok_or_else(|| anyhow::anyhow!("No schematic generated from {}", file_name))?;
 
     // Generate BOM entries
-    let bom_entries = generate_bom(&schematic);
+    let ungrouped_entries = generate_bom_entries(&mut schematic);
 
     spinner.finish();
 
     // Write output to stdout
-    args.format.write(&bom_entries, io::stdout().lock())?;
+    match args.format {
+        BomFormat::Json => args
+            .format
+            .write_ungrouped(&ungrouped_entries, io::stdout().lock())?,
+        BomFormat::Table => {
+            let grouped_entries = group_bom_entries(ungrouped_entries);
+            args.format
+                .write_grouped(&grouped_entries, io::stdout().lock())?;
+        }
+    }
 
     Ok(())
 }
 
-pub fn write_bom_json<W: Write>(entries: &[BomEntry], writer: W) -> Result<()> {
+pub fn write_bom_json<W: Write>(entries: &BTreeMap<String, BomEntry>, writer: W) -> Result<()> {
     serde_json::to_writer_pretty(writer, entries).context("Failed to write JSON BOM")?;
     Ok(())
 }
 
-fn write_bom_table<W: Write>(entries: &[BomEntry], mut writer: W) -> Result<()> {
+fn write_bom_table<W: Write>(entries: &[AggregatedBomEntry], mut writer: W) -> Result<()> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
@@ -100,7 +121,12 @@ fn write_bom_table<W: Write>(entries: &[BomEntry], mut writer: W) -> Result<()> 
     // Add rows
     for entry in entries {
         table.add_row(vec![
-            entry.designators.join(","),
+            entry
+                .designators
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(","),
             entry.mpn.as_deref().unwrap_or("").to_string(),
             entry.manufacturer.as_deref().unwrap_or("").to_string(),
             entry.package.as_deref().unwrap_or("").to_string(),
