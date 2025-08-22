@@ -1,0 +1,47 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/SimpleResistors.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "R1.R": {
+    "designator": "R1",
+    "package": "0603",
+    "value": "1k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "1000",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  },
+  "R2.R": {
+    "designator": "R2",
+    "package": "0603",
+    "value": "1k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "1000",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  },
+  "R3.R": {
+    "designator": "R3",
+    "package": "0402",
+    "value": "4.7k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "4700",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  }
+}
+--- STDERR ---

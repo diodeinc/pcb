@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/SimpleResistors.zen -f table
+Exit Code: 0
+
+--- STDOUT ---
+┌─────────────┬─────┬──────────────┬─────────┬───────┬─────────────┬─────┐
+│ Designators ┆ MPN ┆ Manufacturer ┆ Package ┆ Value ┆ Description ┆ DNP │
+╞═════════════╪═════╪══════════════╪═════════╪═══════╪═════════════╪═════╡
+│ R1,R2       ┆     ┆              ┆ 0603    ┆ 1k    ┆             ┆ No  │
+│ R3          ┆     ┆              ┆ 0402    ┆ 4.7k  ┆             ┆ No  │
+└─────────────┴─────┴──────────────┴─────────┴───────┴─────────────┴─────┘
+--- STDERR ---

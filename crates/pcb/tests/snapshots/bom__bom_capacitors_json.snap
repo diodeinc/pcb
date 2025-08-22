@@ -1,0 +1,59 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/Capacitors.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "C1.C": {
+    "designator": "C1",
+    "package": "0402",
+    "value": "100nF 16V X7R",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.0000001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dielectric": "X7R",
+    "voltage": {
+      "value": "16",
+      "tolerance": "0",
+      "unit": "Volts"
+    },
+    "dnp": false
+  },
+  "C2.C": {
+    "designator": "C2",
+    "package": "0805",
+    "value": "10uF 25V X5R",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.00001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dielectric": "X5R",
+    "voltage": {
+      "value": "25",
+      "tolerance": "0",
+      "unit": "Volts"
+    },
+    "dnp": false
+  },
+  "C3.C": {
+    "designator": "C3",
+    "package": "0603",
+    "value": "1uF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.000001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  }
+}
+--- STDERR ---
