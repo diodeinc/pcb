@@ -135,8 +135,8 @@ impl<'v> ContextValue<'v> {
         self.missing_inputs.borrow_mut().push(name);
     }
 
-    pub(crate) fn add_diagnostic(&self, diag: crate::Diagnostic) {
-        self.diagnostics.borrow_mut().push(diag);
+    pub(crate) fn add_diagnostic<D: Into<crate::Diagnostic>>(&self, diag: D) {
+        self.diagnostics.borrow_mut().push(diag.into());
     }
 
     #[allow(dead_code)]

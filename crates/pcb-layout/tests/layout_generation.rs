@@ -23,19 +23,17 @@ macro_rules! layout_test {
                 assert!(zen_file.exists(), "{}.zen should exist", $board_name);
 
                 // Evaluate the Zen file to generate a schematic
-                let eval_result = pcb_zen::run(&zen_file, false);
+                let (output, diagnostics) = pcb_zen::run(&zen_file, false).unpack();
 
                 // Check for errors in evaluation
-                if !eval_result.diagnostics.is_empty() {
+                if !diagnostics.is_empty() {
                     eprintln!("Zen evaluation diagnostics:");
-                    for diag in &eval_result.diagnostics {
+                    for diag in diagnostics {
                         eprintln!("  {:?}", diag);
                     }
                 }
 
-                let schematic = eval_result
-                    .output
-                    .expect("Zen evaluation should produce a schematic");
+                let schematic = output.expect("Zen evaluation should produce a schematic");
 
                 // Process the layout
                 let result = process_layout(&schematic, &zen_file)?;

@@ -18,10 +18,10 @@ use pcb_zen_core::{
 };
 use starlark::errors::EvalMessage;
 
-pub use diagnostics::render_diagnostic;
+pub use diagnostics::Renderable;
 pub use pcb_zen_core::bundle::{Bundle, BundleMetadata};
 pub use pcb_zen_core::file_extensions;
-pub use pcb_zen_core::{Diagnostic, WithDiagnostics};
+pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;
 
 /// Create an evaluation context with proper load resolver setup for a given workspace.
@@ -82,38 +82,17 @@ pub fn run(file: &Path, offline: bool) -> WithDiagnostics<Schematic> {
 
     // For now we don't inject any external inputs.
     let inputs = InputMap::new();
-    let eval_result = ctx
-        .set_source_path(abs_path.clone())
+    ctx.set_source_path(abs_path.clone())
         .set_module_name("<root>".to_string())
         .set_inputs(inputs)
-        .eval();
-
-    // Collect diagnostics emitted during evaluation.
-    let diagnostics = eval_result.diagnostics;
-    let schematic = eval_result.output.map(|m| m.sch_module.to_schematic());
-
-    // Determine the overall outcome.  Even if the evaluation emitted error
-    // diagnostics we still return `success` as long as a schematic was
-    // produced so that callers (e.g. the CLI) can decide based on
-    // `has_errors()` whether to treat the build as failed.
-    match schematic {
-        Some(Ok(mut schematic)) => {
-            schematic.assign_reference_designators();
-            WithDiagnostics::success(schematic, diagnostics)
-        }
-        Some(Err(e)) => {
-            // Convert the schematic conversion error into a Starlark diagnostic and append it
-            // to the existing list so that callers can surface it to users.
-            let mut diagnostics_with_error = diagnostics;
-            let st_error: starlark::Error = e.into();
-            diagnostics_with_error.push(Diagnostic::from_eval_message(EvalMessage::from_error(
-                abs_path.as_path(),
-                &st_error,
-            )));
-            WithDiagnostics::failure(diagnostics_with_error)
-        }
-        None => WithDiagnostics::failure(diagnostics),
-    }
+        .eval()
+        .try_map(|m| {
+            // Convert schematic conversion error into a Starlark diagnostic
+            m.sch_module
+                .to_schematic()
+                .map_err(|e| EvalMessage::from_error(abs_path.as_path(), &e.into()))
+        })
+        .inspect_mut(|s| s.assign_reference_designators())
 }
 
 pub fn lsp() -> anyhow::Result<()> {

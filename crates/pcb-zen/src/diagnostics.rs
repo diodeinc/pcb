@@ -3,158 +3,182 @@ use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::Diagnostic;
+use crate::{Diagnostic, Diagnostics};
 
-/// Render a [`Diagnostic`] using the `ariadne` crate.
-///
-/// All related diagnostics that refer to the same file are rendered together in a
-/// single coloured report so that the context is easy to follow.
-/// Diagnostics that originate from a different file fall back to a separate
-/// Ariadne report (or a plain `eprintln!` when source code cannot be read).
-pub fn render_diagnostic(diag: &Diagnostic) {
-    if diag.body.contains("<hidden>") {
-        return;
-    }
+/// Extension trait to render diagnostics prettily using Ariadne.
+pub trait Renderable {
+    fn render(&self);
+}
 
-    // Collect all EvalMessages in the diagnostic chain (primary + children) for convenience.
-    fn collect_messages<'a>(d: &'a Diagnostic, out: &mut Vec<&'a Diagnostic>) {
-        out.push(d);
-        if let Some(child) = &d.child {
-            collect_messages(child, out);
-        }
-    }
-
-    let mut messages: Vec<&Diagnostic> = Vec::new();
-    collect_messages(diag, &mut messages);
-
-    // 0. Attempt to read source for every file referenced by any message that has a span.
-    let mut sources_map: HashMap<String, String> = HashMap::new();
-    for msg in &messages {
-        if msg.span.is_some() {
-            let path = msg.path.clone();
-            sources_map
-                .entry(path.clone())
-                .or_insert_with(|| std::fs::read_to_string(&path).unwrap_or_default());
-        }
-    }
-
-    // If we failed to read the primary file source, fall back to plain printing.
-    let primary_src = sources_map.get(&diag.path);
-    if primary_src.is_none() {
-        for m in &messages {
-            eprintln!("{m}");
-        }
-        return;
-    }
-
-    // Identify deepest message in the chain.
-    let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diag);
-
-    // Determine ReportKind from deepest error severity (more relevant).
-    let kind = match deepest_error_msg.severity {
-        EvalSeverity::Error => ReportKind::Error,
-        EvalSeverity::Warning => ReportKind::Warning,
-        EvalSeverity::Advice => ReportKind::Advice,
-        EvalSeverity::Disabled => ReportKind::Advice,
-    };
-
-    // Compute span for deepest message.
-    let primary_src_str = sources_map.get(&deepest_error_msg.path).unwrap();
-    let primary_span = compute_span(primary_src_str, deepest_error_msg);
-    if primary_span.is_none() {
-        for m in &messages {
-            eprintln!("{m}");
-        }
-        return;
-    }
-
-    // Build report with colours.
-    let mut colors = ColorGenerator::new();
-    let red = colors.next(); // red-ish for the deepest (primary) error
-    let yellow = colors.next(); // yellow for all other messages in the chain
-
-    let primary_path_id = deepest_error_msg.path.clone();
-
-    let mut report = Report::build(
-        kind,
-        (primary_path_id.clone(), primary_span.clone().unwrap()),
-    )
-    .with_message(&deepest_error_msg.body)
-    .with_label(
-        Label::new((primary_path_id.clone(), primary_span.unwrap()))
-            .with_message(&deepest_error_msg.body)
-            .with_color(red),
-    );
-
-    // Add all other messages in the chain (except the deepest) in yellow.
-    for (idx, msg) in messages.iter().enumerate().rev() {
-        // Skip the deepest message (already added in red)
-        if idx == messages.len() - 1 {
-            continue;
+impl Renderable for Diagnostic {
+    /// Render a [`Diagnostic`] using the `ariadne` crate.
+    ///
+    /// All related diagnostics that refer to the same file are rendered together in a
+    /// single coloured report so that the context is easy to follow.
+    /// Diagnostics that originate from a different file fall back to a separate
+    /// Ariadne report (or a plain `eprintln!` when source code cannot be read).
+    fn render(&self) {
+        if self.body.contains("<hidden>") {
+            return;
         }
 
-        if let Some(src) = sources_map.get(&msg.path) {
-            if let Some(span) = compute_span(src, msg) {
-                report = report.with_label(
-                    Label::new((msg.path.clone(), span))
-                        .with_message(&msg.body)
-                        .with_color(yellow)
-                        .with_order((idx + 2) as i32), // Order 1 is the primary, so start from 2
-                );
+        // Collect all EvalMessages in the diagnostic chain (primary + children) for convenience.
+        fn collect_messages<'a>(d: &'a Diagnostic, out: &mut Vec<&'a Diagnostic>) {
+            out.push(d);
+            if let Some(child) = &d.child {
+                collect_messages(child, out);
             }
         }
-    }
 
-    // Prepare sources for printing (plain strings are fine – Ariadne wraps them).
-    let src_vec: Vec<(String, String)> = sources_map.into_iter().collect();
+        let mut messages: Vec<&Diagnostic> = Vec::new();
+        collect_messages(self, &mut messages);
 
-    // Print the report.
-    let _ = report.finish().print(sources(src_vec));
-
-    // Build helper for rendering locations.
-    let render_loc = |msg: &Diagnostic| -> String {
-        if let Some(sp) = &msg.span {
-            format!("{}:{}:{}", msg.path, sp.begin.line + 1, sp.begin.column + 1)
-        } else {
-            msg.path.clone()
+        // 0. Attempt to read source for every file referenced by any message that has a span.
+        let mut sources_map: HashMap<String, String> = HashMap::new();
+        for msg in &messages {
+            if msg.span.is_some() {
+                let path = msg.path.clone();
+                sources_map
+                    .entry(path.clone())
+                    .or_insert_with(|| std::fs::read_to_string(&path).unwrap_or_default());
+            }
         }
-    };
 
-    // Gather diagnostics from outer-most to inner-most.
-    let mut chain: Vec<&Diagnostic> = Vec::new();
-    let mut current: Option<&Diagnostic> = Some(diag);
-    while let Some(d) = current {
-        chain.push(d);
-        current = d.child.as_deref();
-    }
+        // If we failed to read the primary file source, fall back to plain printing.
+        let primary_src = sources_map.get(&self.path);
+        if primary_src.is_none() {
+            for m in &messages {
+                eprintln!("{m}");
+            }
+            return;
+        }
 
-    if !chain.is_empty() {
-        eprintln!("\nStack trace (most recent call last):");
+        // Identify deepest message in the chain.
+        let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(self);
 
-        for (idx, d) in chain.iter().enumerate() {
-            let is_last_diag = idx + 1 == chain.len();
+        // Determine ReportKind from deepest error severity (more relevant).
+        let kind = match deepest_error_msg.severity {
+            EvalSeverity::Error => ReportKind::Error,
+            EvalSeverity::Warning => ReportKind::Warning,
+            EvalSeverity::Advice => ReportKind::Advice,
+            EvalSeverity::Disabled => ReportKind::Advice,
+        };
 
-            // Instantiation location + message (plain, no tree chars).
-            eprintln!("    {} ({})", render_loc(d), d.body);
+        // Compute span for deepest message.
+        let primary_src_str = sources_map.get(&deepest_error_msg.path).unwrap();
+        let primary_span = compute_span(primary_src_str, deepest_error_msg);
+        if primary_span.is_none() {
+            for m in &messages {
+                eprintln!("{m}");
+            }
+            return;
+        }
 
-            // Render frames with tree characters underneath this instantiation.
-            if let Some(fe) = &d.call_stack {
-                for (f_idx, frame) in fe.frames.iter().enumerate() {
-                    let is_last_frame = f_idx + 1 == fe.frames.len();
+        // Build report with colours.
+        let mut colors = ColorGenerator::new();
+        let red = colors.next(); // red-ish for the deepest (primary) error
+        let yellow = colors.next(); // yellow for all other messages in the chain
 
-                    // Base indent aligns under the instantiation line.
-                    let base_indent = "      ";
+        let primary_path_id = deepest_error_msg.path.clone();
 
-                    // If not the last diagnostic, skip the last stack frame
-                    if !is_last_diag && is_last_frame {
-                        continue;
-                    }
+        let mut report = Report::build(
+            kind,
+            (primary_path_id.clone(), primary_span.clone().unwrap()),
+        )
+        // .with_config(ariadne::Config::default().with_compact(true))
+        .with_message(&deepest_error_msg.body)
+        .with_label(
+            Label::new((primary_path_id.clone(), primary_span.unwrap()))
+                .with_message(&deepest_error_msg.body)
+                .with_color(red),
+        );
 
-                    let branch = if is_last_frame { "╰─ " } else { "├─ " };
+        // Add all other messages in the chain (except the deepest) in yellow.
+        for (idx, msg) in messages.iter().enumerate().rev() {
+            // Skip the deepest message (already added in red)
+            if idx == messages.len() - 1 {
+                continue;
+            }
 
-                    eprintln!("{base_indent}{branch}{frame}");
+            if let Some(src) = sources_map.get(&msg.path) {
+                if let Some(span) = compute_span(src, msg) {
+                    report = report.with_label(
+                        Label::new((msg.path.clone(), span))
+                            .with_message(&msg.body)
+                            .with_color(yellow)
+                            .with_order((idx + 2) as i32), // Order 1 is the primary, so start from 2
+                    );
                 }
             }
+        }
+
+        // Prepare sources for printing (plain strings are fine – Ariadne wraps them).
+        let src_vec: Vec<(String, String)> = sources_map.into_iter().collect();
+
+        // Print the report.
+        let _ = report.finish().print(sources(src_vec));
+
+        // Build helper for rendering locations.
+        let render_loc = |msg: &Diagnostic| -> String {
+            if let Some(sp) = &msg.span {
+                format!("{}:{}:{}", msg.path, sp.begin.line + 1, sp.begin.column + 1)
+            } else {
+                msg.path.clone()
+            }
+        };
+
+        // Gather diagnostics from outer-most to inner-most.
+        let mut chain: Vec<&Diagnostic> = Vec::new();
+        let mut current: Option<&Diagnostic> = Some(self);
+        while let Some(d) = current {
+            chain.push(d);
+            current = d.child.as_deref();
+        }
+
+        if !chain.is_empty() {
+            eprintln!("\nStack trace (most recent call last):");
+
+            for (idx, d) in chain.iter().enumerate() {
+                let is_last_diag = idx + 1 == chain.len();
+
+                // Instantiation location + message (plain, no tree chars).
+                eprintln!("    {} ({})", render_loc(d), d.body);
+
+                // Render frames with tree characters underneath this instantiation.
+                if let Some(fe) = &d.call_stack {
+                    for (f_idx, frame) in fe.frames.iter().enumerate() {
+                        let is_last_frame = f_idx + 1 == fe.frames.len();
+
+                        // Base indent aligns under the instantiation line.
+                        let base_indent = "      ";
+
+                        // If not the last diagnostic, skip the last stack frame
+                        if !is_last_diag && is_last_frame {
+                            continue;
+                        }
+
+                        let branch = if is_last_frame { "╰─ " } else { "├─ " };
+
+                        eprintln!("{base_indent}{branch}{frame}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Renderable for Diagnostics {
+    /// Render all diagnostics in a Diagnostics: warnings first, then errors.
+    fn render(&self) {
+        let warnings = self.warnings();
+        for diag in &warnings {
+            diag.render();
+            eprintln!();
+        }
+        let errors = self.errors();
+        for diag in &errors {
+            diag.render();
+            eprintln!();
         }
     }
 }

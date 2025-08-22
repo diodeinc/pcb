@@ -4,7 +4,7 @@ use inquire::Select;
 use pcb_layout::utils;
 use std::path::{Path, PathBuf};
 
-use crate::build::{collect_files, evaluate_zen_file};
+use crate::build::collect_files;
 
 #[derive(Args, Debug)]
 pub struct OpenArgs {
@@ -58,15 +58,15 @@ fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         // Evaluate the zen file
-        let (eval_result, has_errors) = evaluate_zen_file(&zen_path, false);
+        let (output, diagnostics) = pcb_zen::run(&zen_path, false).unpack();
 
-        if has_errors {
+        if diagnostics.has_errors() {
             eprintln!("Skipping {file_name} due to build errors");
             continue;
         }
 
         // Check if the schematic has a layout
-        if let Some(schematic) = &eval_result.output {
+        if let Some(schematic) = &output {
             if let Some(layout_path_attr) = utils::extract_layout_path(schematic) {
                 // Convert relative path to absolute based on star file location
                 let layout_dir = if layout_path_attr.is_relative() {

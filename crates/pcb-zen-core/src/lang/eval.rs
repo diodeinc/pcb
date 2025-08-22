@@ -628,21 +628,16 @@ impl EvalContext {
                 .set_inputs(InputMap::new())
                 .eval();
 
-            // Collect any error diagnostics for this symbol
-            let mut symbol_errors = Vec::new();
-            for diag in &eval_result.diagnostics {
-                if diag.is_error() {
-                    symbol_errors.push(diag.clone());
-                }
-            }
+            let (output, diagnostics) = eval_result.unpack();
 
             // If there were errors, store them keyed by symbol name
-            if !symbol_errors.is_empty() {
-                errors_by_symbol.insert(symbol_name.clone(), symbol_errors);
+            let errors = diagnostics.errors();
+            if !errors.is_empty() {
+                errors_by_symbol.insert(symbol_name.clone(), errors);
             }
 
             // If the module loaded successfully, create a loader for it
-            if let Some(output) = eval_result.output {
+            if let Some(output) = output {
                 // Build a ModuleLoader with the frozen module
                 let loader = ModuleLoader {
                     name: symbol_name.clone(),
@@ -825,9 +820,7 @@ impl EvalContext {
         let source_path = match self.source_path {
             Some(ref path) => path,
             None => {
-                return WithDiagnostics::failure(vec![Diagnostic::from_error(
-                    anyhow::anyhow!("source_path not set on Context before eval()").into(),
-                )]);
+                return anyhow::anyhow!("source_path not set on Context before eval()").into();
             }
         };
 
@@ -847,10 +840,7 @@ impl EvalContext {
                     c
                 }
                 Err(err) => {
-                    let diag = crate::Diagnostic::from_error(starlark::Error::new_other(
-                        anyhow::anyhow!("Failed to read file: {}", err),
-                    ));
-                    return WithDiagnostics::failure(vec![diag]);
+                    return anyhow::anyhow!("Failed to read file: {}", err).into();
                 }
             },
         };
@@ -869,115 +859,104 @@ impl EvalContext {
             &self.dialect(),
         );
 
-        let eval_res = match ast_res {
-            Ok(ast) => WithDiagnostics::success(ast, Vec::new()),
-            Err(err) => WithDiagnostics::failure(vec![crate::Diagnostic::from_eval_message(
-                EvalMessage::from_error(source_path, &err),
-            )]),
+        let ast = match ast_res {
+            Ok(ast) => ast,
+            Err(err) => return EvalMessage::from_error(source_path, &err).into(),
         };
 
-        eval_res.flat_map(|ast| {
-            // Create a print handler to collect output
-            let print_handler = CollectingPrintHandler::new();
+        // Create a print handler to collect output
+        let print_handler = CollectingPrintHandler::new();
 
-            let eval_result = {
-                let mut eval = Evaluator::new(&self.module);
-                eval.enable_static_typechecking(true);
-                eval.set_loader(&self);
-                eval.set_print_handler(&print_handler);
+        let eval_result = {
+            let mut eval = Evaluator::new(&self.module);
+            eval.enable_static_typechecking(true);
+            eval.set_loader(&self);
+            eval.set_print_handler(&print_handler);
 
-                // Attach a `ContextValue` so user code can access evaluation context.
-                self.module
-                    .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
+            // Attach a `ContextValue` so user code can access evaluation context.
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
 
-                // If the caller supplied custom properties via `set_properties()` attach them to the
-                // freshly created `ModuleValue` *before* executing the module body so that user code
-                // can observe/override them as needed.
-                if let Some(props) = &self.properties {
-                    if let Some(ctx_val) = eval
-                        .module()
-                        .extra_value()
-                        .and_then(|e| e.downcast_ref::<ContextValue>())
-                    {
-                        for (key, iv) in props.iter() {
-                            match iv.to_value(&mut eval, None) {
-                                Ok(val) => ctx_val.add_property(key.clone(), val),
-                                Err(e) => {
-                                    return WithDiagnostics::failure(vec![
-                                        crate::Diagnostic::from_error(e.into()),
-                                    ]);
-                                }
-                            }
+            // If the caller supplied custom properties via `set_properties()` attach them to the
+            // freshly created `ModuleValue` *before* executing the module body so that user code
+            // can observe/override them as needed.
+            if let Some(props) = &self.properties {
+                if let Some(ctx_val) = eval
+                    .module()
+                    .extra_value()
+                    .and_then(|e| e.downcast_ref::<ContextValue>())
+                {
+                    for (key, iv) in props.iter() {
+                        match iv.to_value(&mut eval, None) {
+                            Ok(val) => ctx_val.add_property(key.clone(), val),
+                            Err(e) => return e.into(),
                         }
                     }
                 }
+            }
 
-                let globals = Self::build_globals();
+            let globals = Self::build_globals();
 
-                // We are only interested in whether evaluation succeeded, not in the
-                // value of the final expression, so map the result to `()`.
-                eval.eval_module(ast.clone(), &globals).map(|_| ())
-            };
+            // We are only interested in whether evaluation succeeded, not in the
+            // value of the final expression, so map the result to `()`.
+            eval.eval_module(ast.clone(), &globals).map(|_| ())
+        };
 
-            // Collect print output after evaluation
-            let print_output = print_handler.take_output();
+        // Collect print output after evaluation
+        let print_output = print_handler.take_output();
 
-            let result = match eval_result {
-                Ok(_) => {
-                    let frozen_module = self.module.freeze().expect("failed to freeze module");
-                    let extra = frozen_module
-                        .extra_value()
-                        .expect("extra value should be set before freezing")
-                        .downcast_ref::<FrozenContextValue>()
-                        .expect("extra value should be a FrozenContextValue");
-                    let mut diagnostics = extra.diagnostics().clone();
-                    diagnostics.extend(self.diagnostics.borrow().clone());
+        match eval_result {
+            Ok(_) => {
+                let frozen_module = self.module.freeze().expect("failed to freeze module");
+                let extra = frozen_module
+                    .extra_value()
+                    .expect("extra value should be set before freezing")
+                    .downcast_ref::<FrozenContextValue>()
+                    .expect("extra value should be a FrozenContextValue");
+                let signature = extra
+                    .module
+                    .signature()
+                    .iter()
+                    .map(|param| {
+                        // Convert frozen value to regular value for introspection
+                        let type_value = param.type_value.to_value();
+                        let type_info = TypeInfo::from_value(type_value);
 
-                    let signature = extra
-                        .module
-                        .signature()
-                        .iter()
-                        .map(|param| {
-                            // Convert frozen value to regular value for introspection
-                            let type_value = param.type_value.to_value();
-                            let type_info = TypeInfo::from_value(type_value);
+                        // Convert default value to InputValue if present
+                        let default_value = param
+                            .default_value
+                            .as_ref()
+                            .map(|v| InputValue::from_value(v.to_value()));
 
-                            // Convert default value to InputValue if present
-                            let default_value = param
-                                .default_value
-                                .as_ref()
-                                .map(|v| InputValue::from_value(v.to_value()));
+                        ParameterInfo {
+                            name: param.name.clone(),
+                            type_info,
+                            required: !param.optional,
+                            default_value,
+                            help: param.help.clone(),
+                        }
+                    })
+                    .collect();
 
-                            ParameterInfo {
-                                name: param.name.clone(),
-                                type_info,
-                                required: !param.optional,
-                                default_value,
-                                help: param.help.clone(),
-                            }
-                        })
-                        .collect();
-
-                    WithDiagnostics::success(
-                        EvalOutput {
-                            ast,
-                            star_module: frozen_module,
-                            sch_module: extra.module.clone(),
-                            signature,
-                            print_output,
-                        },
-                        diagnostics,
-                    )
-                }
-                Err(err) => {
-                    let mut diagnostics = vec![crate::Diagnostic::from_error(err)];
-                    diagnostics.extend(self.diagnostics.borrow().clone());
-                    WithDiagnostics::failure(diagnostics)
-                }
-            };
-
-            result
-        })
+                let output = EvalOutput {
+                    ast,
+                    star_module: frozen_module,
+                    sch_module: extra.module.clone(),
+                    signature,
+                    print_output,
+                };
+                let mut ret = WithDiagnostics::success(output);
+                ret.diagnostics.extend(extra.diagnostics().clone());
+                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret
+            }
+            Err(err) => {
+                let mut ret = WithDiagnostics::default();
+                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret.diagnostics.push(err.into());
+                ret
+            }
+        }
     }
 
     /// Introspect a module by evaluating it with empty inputs and non-strict IO config.
@@ -1010,26 +989,13 @@ impl EvalContext {
         module_name: &str,
     ) -> WithDiagnostics<Vec<crate::lang::type_info::ParameterInfo>> {
         // First evaluate the module with empty inputs to get the used inputs
-        let eval_result = self
-            .child_context()
+        self.child_context()
             .set_source_path(source_path.to_path_buf())
             .set_module_name(module_name.to_string())
             .set_inputs(InputMap::new())
             .set_strict_io_config(false)
-            .eval();
-
-        match eval_result.output {
-            Some(output) => {
-                // The signature is already a Vec of ParameterInfo
-                let parameters = output.signature;
-
-                WithDiagnostics::success(parameters, eval_result.diagnostics)
-            }
-            None => {
-                // If evaluation failed, return empty parameters with diagnostics
-                WithDiagnostics::failure(eval_result.diagnostics)
-            }
-        }
+            .eval()
+            .map(|output| output.signature)
     }
 
     /// Get the file contents from the in-memory cache
