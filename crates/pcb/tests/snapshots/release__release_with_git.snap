@@ -13,7 +13,7 @@ expression: sb.snapshot_dir(staging_dir)
     "created_at": "<TIMESTAMP>",
     "git_version": "v1.2.3",
     "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
-    "schema_version": "0.1",
+    "schema_version": "1",
     "source_only": true,
     "staging_directory": "<TEMP_DIR>/src/.pcb/releases/boards/TestBoard/v1.2.3",
     "workspace_root": "<TEMP_DIR>/src",

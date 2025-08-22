@@ -23,7 +23,7 @@ use crate::workspace::{
     WorkspaceInfo,
 };
 
-const RELEASE_SCHEMA_VERSION: &str = "0.1";
+const RELEASE_SCHEMA_VERSION: &str = "1";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReleaseKind {
