@@ -113,7 +113,7 @@ fn test_pcb_release_with_git() {
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
-        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .write("boards/TB0001.zen", TEST_BOARD_ZEN)
         .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .ignore_globs(&["layout/*"]);
 
@@ -123,7 +123,7 @@ fn test_pcb_release_with_git() {
     git_cmd(&mut sb, ["config", "user.name", "Test User"]);
     git_cmd(&mut sb, ["add", "."]);
     git_cmd(&mut sb, ["commit", "-m", "Initial commit"]);
-    git_cmd(&mut sb, ["tag", "v1.2.3"]);
+    git_cmd(&mut sb, ["tag", "TB0001/v1.2.3"]);
 
     // Run source-only release with JSON output
     let output = sb
@@ -131,7 +131,7 @@ fn test_pcb_release_with_git() {
             cargo_bin!("pcb"),
             [
                 "release",
-                "boards/TestBoard.zen",
+                "boards/TB0001.zen",
                 "--source-only",
                 "-f",
                 "json",

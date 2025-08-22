@@ -93,8 +93,6 @@ wasm-bindgen-test = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 zip = { version = "4.3", default-features = false, features = ["deflate"] }
 flate2 = "1.0.34"
-openssl-sys = { version = "0.9", features = ["vendored"] }
-openssl = { version = "0.10", features = ["vendored"] }
 wasm-bindgen-futures = "0.4"
 rust_decimal = { version = "1", features = ["serde", "serde-with-str"] }
 comfy-table = "7.1"

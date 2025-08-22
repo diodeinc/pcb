@@ -3,25 +3,36 @@
 use anyhow::{Context, Result};
 use log::{debug, info};
 use pcb_zen::load::DefaultRemoteFetcher;
-use pcb_zen_core::config::find_workspace_root;
+use pcb_zen_core::config::{get_workspace_info, WorkspaceInfo as ConfigWorkspaceInfo};
 use pcb_zen_core::{
     normalize_path, CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap,
     LoadSpec, WithDiagnostics,
 };
-use std::collections::HashSet;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Common workspace information used by both vendor and release commands
 pub struct WorkspaceInfo {
+    /// From config discovery
+    pub config: ConfigWorkspaceInfo,
     /// Canonical path to the .zen file being processed
     pub zen_path: PathBuf,
-    /// Root directory of the workspace
-    pub workspace_root: PathBuf,
     /// Core resolver that tracked all file dependencies during evaluation
     pub resolver: Arc<CoreLoadResolver>,
     /// Evaluation result containing the parsed zen file
     pub eval_result: WithDiagnostics<EvalOutput>,
+}
+
+impl WorkspaceInfo {
+    /// Get the board name for this workspace's zen file
+    pub fn board_name(&self) -> Option<String> {
+        self.config.board_name_for_zen(&self.zen_path)
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.config.root
+    }
 }
 
 /// Classification of a tracked file
@@ -42,79 +53,18 @@ pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result
     // Canonicalize the zen path
     let zen_path = zen_path.canonicalize()?;
 
-    // Try to find workspace root by walking up for pcb.toml
-    let initial_workspace_root = find_workspace_root(&DefaultFileProvider, &zen_path);
+    // 1. Reuse config.rs to get workspace + board list
+    let config = get_workspace_info(&DefaultFileProvider, &zen_path)?;
 
-    // Evaluate the zen file and track dependencies
-    let (resolver, eval_result) =
-        eval_zen_entrypoint(&zen_path, &initial_workspace_root, use_vendor_path)?;
-
-    // Refine workspace root based on tracked files if no pcb.toml was found
-    let workspace_root = if initial_workspace_root.join("pcb.toml").exists() {
-        initial_workspace_root
-    } else {
-        // No pcb.toml found, use common ancestor of local files only
-        detect_workspace_root_from_files(&zen_path, &resolver.get_tracked_local_files())?
-    };
-
-    // Log workspace root info for debugging
-    info!("Using workspace root: {}", workspace_root.display());
+    // 2. Evaluate the zen file – workspace root comes out of config
+    let (resolver, eval_result) = eval_zen_entrypoint(&zen_path, &config.root, use_vendor_path)?;
 
     Ok(WorkspaceInfo {
+        config,
         zen_path,
-        workspace_root,
         resolver,
         eval_result,
     })
-}
-
-/// Detect workspace root from local files when no pcb.toml is found
-pub fn detect_workspace_root_from_files(
-    entry: &Path,
-    local_files: &HashSet<PathBuf>,
-) -> Result<PathBuf> {
-    let mut paths: Vec<PathBuf> = local_files
-        .iter()
-        .filter_map(|p| p.canonicalize().ok())
-        .collect();
-
-    paths.push(entry.canonicalize()?);
-
-    let root = paths
-        .into_iter()
-        .try_fold(None::<PathBuf>, |acc, path| -> Result<Option<PathBuf>> {
-            let current_root = match acc {
-                None => path.parent().map(|p| p.to_path_buf()),
-                Some(existing) => common_ancestor(&existing, &path),
-            };
-            Ok(current_root)
-        })?
-        .context("Unable to determine workspace root from local files")?;
-
-    info!("Detected workspace root from files: {}", root.display());
-    Ok(root)
-}
-
-/// Find common ancestor of two paths
-pub fn common_ancestor(a: &Path, b: &Path) -> Option<PathBuf> {
-    let mut a_components = a.components();
-    let mut b_components = b.components();
-    let mut common = PathBuf::new();
-
-    loop {
-        match (a_components.next(), b_components.next()) {
-            (Some(a_comp), Some(b_comp)) if a_comp == b_comp => {
-                common.push(a_comp);
-            }
-            _ => break,
-        }
-    }
-
-    if common.as_os_str().is_empty() {
-        None
-    } else {
-        Some(common)
-    }
 }
 
 /// Evaluate zen file and track dependencies using CoreLoadResolver directly

@@ -15,9 +15,9 @@ expression: sb.snapshot_dir(staging_dir)
     "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
     "schema_version": "1",
     "source_only": true,
-    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/boards/TestBoard/v1.2.3",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TB0001/v1.2.3",
     "workspace_root": "<TEMP_DIR>/src",
-    "zen_file": "boards/TestBoard.zen"
+    "zen_file": "boards/TB0001.zen"
   },
   "system": {
     "arch": "<ARCH>",
@@ -26,7 +26,7 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== src/boards/TestBoard.zen
+=== src/boards/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
 

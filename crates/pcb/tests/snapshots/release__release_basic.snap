@@ -15,7 +15,7 @@ expression: sb.snapshot_dir(staging_dir)
     "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
     "schema_version": "1",
     "source_only": true,
-    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/boards/TestBoard/unknown",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard/unknown",
     "workspace_root": "<TEMP_DIR>/src",
     "zen_file": "boards/TestBoard.zen"
   },

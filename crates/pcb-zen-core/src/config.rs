@@ -150,7 +150,7 @@ impl PcbToml {
 impl BoardInfo {
     /// Get the absolute path to the board's .zen file
     pub fn absolute_zen_path(&self) -> PathBuf {
-        self.directory.join(&self.zen_path)
+        self.directory.join(&self.zen_path).canonicalize().unwrap()
     }
 }
 
@@ -395,6 +395,18 @@ pub fn get_workspace_info(
         boards: discovery.boards,
         errors: discovery.errors,
     })
+}
+
+impl WorkspaceInfo {
+    /// Given an absolute .zen path, return the board name
+    /// (or None if the file is not one of the workspace boards).
+    pub fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
+        let canon = zen_path.canonicalize().ok()?;
+        self.boards
+            .iter()
+            .find(|b| b.absolute_zen_path() == canon)
+            .map(|b| b.name.clone())
+    }
 }
 
 #[cfg(test)]

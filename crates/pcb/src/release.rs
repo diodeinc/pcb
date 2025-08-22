@@ -187,25 +187,26 @@ fn gather_release_info(zen_path: PathBuf, source_only: bool) -> Result<ReleaseIn
     // Use common workspace info gathering
     let workspace = gather_workspace_info(zen_path, true)?;
 
+    // Get board name from workspace info with fallback to zen filename
+    let board_name = workspace.board_name().unwrap_or_else(|| {
+        workspace
+            .zen_path
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    });
     // Get version and git hash from git
-    let (version, git_hash) = git_version_and_hash(&workspace.workspace_root)?;
+    let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
 
     // Create release staging directory in workspace root:
-    // Structure: {workspace_root}/.pcb/releases/{relative_path_to_zen}/{board_name}/{version}
-    // Example: /workspace/.pcb/releases/boards/TestBoard/TestBoard/f20ac95-dirty
-    let zen_relative_path = workspace.zen_path.strip_prefix(&workspace.workspace_root)?;
-    let zen_dir = zen_relative_path
-        .parent()
-        .context("Zen file must have a parent directory")?;
-    let board_name = workspace
-        .zen_path
-        .file_stem()
-        .context("Zen file must have a name")?;
+    // Structure: {workspace_root}/.pcb/releases/{board_name}/{version}
+    // Example: /workspace/.pcb/releases/test_board/f20ac95-dirty
     let staging_dir = workspace
-        .workspace_root
+        .config
+        .root
         .join(".pcb/releases")
-        .join(zen_dir)
-        .join(board_name)
+        .join(&board_name)
         .join(&version);
 
     // Delete existing staging dir and recreate
@@ -265,7 +266,7 @@ fn display_release_info(info: &ReleaseInfo, _source_only: bool) {
     info!(
         "Release info gathered - zen: {}, workspace: {}, version: {}",
         info.workspace.zen_path.display(),
-        info.workspace.workspace_root.display(),
+        info.workspace.root().display(),
         info.version
     );
 }
@@ -280,8 +281,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
             "schema_version": RELEASE_SCHEMA_VERSION,
             "git_version": info.version,
             "created_at": rfc3339_timestamp,
-            "zen_file": info.workspace.zen_path.strip_prefix(&info.workspace.workspace_root).expect("zen_file must be within workspace_root"),
-            "workspace_root": info.workspace.workspace_root,
+            "zen_file": info.workspace.zen_path.strip_prefix(info.workspace.root()).expect("zen_file must be within workspace_root"),
+            "workspace_root": info.workspace.root(),
             "staging_directory": info.staging_dir,
             "layout_path": info.layout_path,
             "source_only": source_only
@@ -295,7 +296,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         "git": {
             "describe": info.version.clone(),
             "hash": info.git_hash.clone(),
-            "workspace": info.workspace.workspace_root.display().to_string()
+            "workspace": info.workspace.root().display().to_string()
         }
     })
 }
@@ -304,7 +305,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 /// - If working directory is dirty: {commit_hash}-dirty
 /// - If current commit has a tag: {tag_name}
 /// - If clean but no tag: {commit_hash}
-fn git_version_and_hash(path: &Path) -> Result<(String, String)> {
+fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String)> {
     debug!("Getting git version from: {}", path.display());
 
     // Check if working directory is dirty
@@ -345,11 +346,12 @@ fn git_version_and_hash(path: &Path) -> Result<(String, String)> {
         let tags = String::from_utf8(tag_out.stdout)?;
         let tags: Vec<&str> = tags.lines().collect();
 
-        // Use the first tag if any exist
-        if let Some(tag) = tags.first() {
-            if !tag.is_empty() {
-                let version = tag.to_string();
-                info!("Git version (tag): {version}");
+        // Look for board-specific tag in format "board_name/version"
+        let tag_prefix = format!("{board_name}/");
+        for tag in tags {
+            if !tag.is_empty() && tag.starts_with(&tag_prefix) {
+                let version = tag.strip_prefix(&tag_prefix).unwrap().to_string();
+                info!("Git version (board tag): {version} for board {board_name}");
                 return Ok((version, commit_hash.clone()));
             }
         }
@@ -393,7 +395,7 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
     let mut vendor_files = HashSet::new();
 
     // Copy pcb.toml from workspace root if it exists
-    let pcb_toml_path = info.workspace.workspace_root.join("pcb.toml");
+    let pcb_toml_path = info.workspace.root().join("pcb.toml");
     if pcb_toml_path.exists() {
         let dest_path = info.staging_dir.join("src").join("pcb.toml");
         if let Some(parent) = dest_path.parent() {
@@ -411,11 +413,7 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
     }
 
     for path in info.workspace.resolver.get_tracked_files() {
-        match classify_file(
-            &info.workspace.workspace_root,
-            &path,
-            &info.workspace.resolver,
-        ) {
+        match classify_file(info.workspace.root(), &path, &info.workspace.resolver) {
             FileClassification::Local(rel) => {
                 let dest_path = info.staging_dir.join("src").join(rel);
                 if let Some(parent) = dest_path.parent() {
