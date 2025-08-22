@@ -98,7 +98,9 @@ pub fn execute(args: BomArgs) -> Result<()> {
 }
 
 pub fn write_bom_json<W: Write>(entries: &BTreeMap<String, BomEntry>, writer: W) -> Result<()> {
-    serde_json::to_writer_pretty(writer, entries).context("Failed to write JSON BOM")?;
+    // Output a list of BOM entries sorted by path
+    let list: Vec<&BomEntry> = entries.values().collect();
+    serde_json::to_writer_pretty(writer, &list).context("Failed to write JSON BOM")?;
     Ok(())
 }
 

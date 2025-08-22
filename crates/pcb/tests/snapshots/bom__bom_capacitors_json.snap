@@ -6,8 +6,9 @@ Command: pcb bom boards/Capacitors.zen -f json
 Exit Code: 0
 
 --- STDOUT ---
-{
-  "C1.C": {
+[
+  {
+    "path": "C1.C",
     "designator": "C1",
     "package": "0402",
     "value": "100nF 16V X7R",
@@ -25,7 +26,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "C2.C": {
+  {
+    "path": "C2.C",
     "designator": "C2",
     "package": "0805",
     "value": "10uF 25V X5R",
@@ -43,7 +45,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "C3.C": {
+  {
+    "path": "C3.C",
     "designator": "C3",
     "package": "0603",
     "value": "1uF",
@@ -55,5 +58,5 @@ Exit Code: 0
     },
     "dnp": false
   }
-}
+]
 --- STDERR ---

@@ -7,6 +7,7 @@ use crate::{AttributeValue, InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomEntry {
+    pub path: String,
     pub designator: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manufacturer: Option<String>,
@@ -186,6 +187,7 @@ pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEn
         bom_entries.insert(
             path.clone(),
             BomEntry {
+                path: path.clone(),
                 designator,
                 mpn,
                 manufacturer,

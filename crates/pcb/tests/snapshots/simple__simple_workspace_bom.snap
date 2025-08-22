@@ -6,8 +6,9 @@ Command: pcb bom boards/TestBoard.zen -f json
 Exit Code: 0
 
 --- STDOUT ---
-{
-  "C1.C": {
+[
+  {
+    "path": "C1.C",
     "designator": "C1",
     "package": "0402",
     "value": "100nF",
@@ -19,7 +20,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "C2.C": {
+  {
+    "path": "C2.C",
     "designator": "C2",
     "package": "0805",
     "value": "10uF",
@@ -31,7 +33,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "C3.C": {
+  {
+    "path": "C3.C",
     "designator": "C3",
     "package": "0402",
     "value": "22pF",
@@ -43,7 +46,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "C4.C": {
+  {
+    "path": "C4.C",
     "designator": "C4",
     "package": "0402",
     "value": "22pF",
@@ -55,13 +59,15 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "LED1.D1.LED": {
+  {
+    "path": "LED1.D1.LED",
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
     "dnp": false
   },
-  "LED1.R1.R": {
+  {
+    "path": "LED1.R1.R",
     "designator": "R1",
     "package": "0603",
     "value": "330",
@@ -73,13 +79,15 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "LED2.D1.LED": {
+  {
+    "path": "LED2.D1.LED",
     "designator": "D2",
     "package": "0603",
     "value": "LED RED",
     "dnp": false
   },
-  "LED2.R1.R": {
+  {
+    "path": "LED2.R1.R",
     "designator": "R2",
     "package": "0603",
     "value": "330",
@@ -91,7 +99,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "R1.R": {
+  {
+    "path": "R1.R",
     "designator": "R3",
     "package": "0603",
     "value": "10k",
@@ -103,11 +112,12 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "X1.Y": {
+  {
+    "path": "X1.Y",
     "designator": "Y1",
     "package": "5032_2Pin",
     "value": "16MHz 18pF",
     "dnp": false
   }
-}
+]
 --- STDERR ---

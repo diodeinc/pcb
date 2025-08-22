@@ -6,8 +6,9 @@ Command: pcb bom boards/SimpleResistors.zen -f json
 Exit Code: 0
 
 --- STDOUT ---
-{
-  "R1.R": {
+[
+  {
+    "path": "R1.R",
     "designator": "R1",
     "package": "0603",
     "value": "1k",
@@ -19,7 +20,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "R2.R": {
+  {
+    "path": "R2.R",
     "designator": "R2",
     "package": "0603",
     "value": "1k",
@@ -31,7 +33,8 @@ Exit Code: 0
     },
     "dnp": false
   },
-  "R3.R": {
+  {
+    "path": "R3.R",
     "designator": "R3",
     "package": "0402",
     "value": "4.7k",
@@ -43,5 +46,5 @@ Exit Code: 0
     },
     "dnp": false
   }
-}
+]
 --- STDERR ---
