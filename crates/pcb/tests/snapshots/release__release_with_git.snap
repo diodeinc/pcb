@@ -6,7 +6,7 @@ expression: sb.snapshot_dir(staging_dir)
 {
   "git": {
     "describe": "v1.2.3",
-    "hash": "99bd1ab",
+    "hash": "<GIT_HASH>",
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {

@@ -18,8 +18,8 @@
 //! let mut sb = Sandbox::new();
 //!
 //! // Create a fake GitHub remote and seed it
-//! let fx = sb.git_fixture("https://github.com/foo/bar.git");
-//! fx.write("README.md", "hello")
+//! sb.git_fixture("https://github.com/foo/bar.git")
+//!   .write("README.md", "hello")
 //!   .commit("init")
 //!   .tag("v1", true)
 //!   .push_mirror();
@@ -354,6 +354,12 @@ impl Sandbox {
             Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+\+\d{2}:\d{2}").unwrap();
         result = timestamp_pattern
             .replace_all(&result, "<TIMESTAMP>")
+            .to_string();
+
+        // Sanitize git hashes in JSON "hash" field only
+        let git_hash_json_pattern = Regex::new(r#""hash":\s*"[a-f0-9]{7}""#).unwrap();
+        result = git_hash_json_pattern
+            .replace_all(&result, r#""hash": "<GIT_HASH>""#)
             .to_string();
 
         result
