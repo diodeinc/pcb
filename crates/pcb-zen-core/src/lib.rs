@@ -201,10 +201,6 @@ pub enum RemoteRef {
         project_path: String,
         rev: String,
     },
-    Package {
-        package: String,
-        tag: String,
-    },
 }
 
 impl RemoteRef {
@@ -217,7 +213,12 @@ impl RemoteRef {
             RemoteRef::GitLab { project_path, .. } => {
                 Some(format!("https://gitlab.com/{project_path}"))
             }
-            RemoteRef::Package { .. } => None,
+        }
+    }
+
+    pub fn rev(&self) -> &str {
+        match self {
+            RemoteRef::GitHub { rev, .. } | RemoteRef::GitLab { rev, .. } => rev,
         }
     }
 }

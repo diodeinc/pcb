@@ -4,7 +4,7 @@ use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use pcb_zen::file_extensions;
-use pcb_zen::Renderable;
+use pcb_zen::{diagnostics::RenderArgs, Renderable};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,11 +28,21 @@ pub struct BuildArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
+
+    /// Set lint level to deny (treat as error). Use 'warnings' for all warnings,
+    /// or specific lint names like 'unstable-refs'
+    #[arg(short = 'D', long = "deny", value_name = "LINT")]
+    pub deny: Vec<String>,
 }
 
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
-pub fn build(zen_path: &Path, offline: bool, has_errors: &mut bool) -> Option<Schematic> {
+pub fn build(
+    zen_path: &Path,
+    offline: bool,
+    render_args: &RenderArgs,
+    has_errors: &mut bool,
+) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     // Show spinner while building
@@ -47,7 +57,7 @@ pub fn build(zen_path: &Path, offline: bool, has_errors: &mut bool) -> Option<Sc
         spinner.set_message(format!("{file_name}: No output generated"));
     }
     spinner.finish();
-    eval.diagnostics.render();
+    eval.diagnostics.render_with_options(render_args);
     eval.output_result()
         .inspect_err(|_| {
             println!(
@@ -58,7 +68,9 @@ pub fn build(zen_path: &Path, offline: bool, has_errors: &mut bool) -> Option<Sc
         })
         .inspect_err(|diagnostics| {
             // dbg!(&diagnostics);
-            if diagnostics.has_errors() {
+            if diagnostics.has_errors()
+                || (render_args.deny_warnings() && !diagnostics.warnings().is_empty())
+            {
                 *has_errors = true;
             }
         })
@@ -66,6 +78,9 @@ pub fn build(zen_path: &Path, offline: bool, has_errors: &mut bool) -> Option<Sc
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
+    // Create render args from CLI options
+    let render_args = RenderArgs::new(args.deny.clone());
+
     // Determine which .zen files to compile
     let zen_paths = if args.recursive {
         collect_files_recursive(&args.paths)?
@@ -86,7 +101,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     // Process each .zen file
     for zen_path in zen_paths {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        let Some(schematic) = build(&zen_path, args.offline, &mut has_errors) else {
+        let Some(schematic) = build(&zen_path, args.offline, &render_args, &mut has_errors) else {
             continue;
         };
 

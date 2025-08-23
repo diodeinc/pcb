@@ -5,9 +5,31 @@ use std::ops::Range;
 
 use crate::{Diagnostic, Diagnostics};
 
+/// Options for rendering diagnostics with lint level control
+#[derive(Debug, Clone, Default)]
+pub struct RenderArgs {
+    /// List of lint names to treat as errors (currently only supports "warnings")
+    pub deny: Vec<String>,
+}
+
+impl RenderArgs {
+    /// Create new RenderArgs from a list of denied lint names
+    pub fn new(deny: Vec<String>) -> Self {
+        Self { deny }
+    }
+
+    /// Check if warnings should be treated as errors
+    pub fn deny_warnings(&self) -> bool {
+        self.deny.contains(&"warnings".to_string())
+    }
+}
+
 /// Extension trait to render diagnostics prettily using Ariadne.
 pub trait Renderable {
-    fn render(&self);
+    fn render(&self) {
+        self.render_with_options(&RenderArgs::default());
+    }
+    fn render_with_options(&self, args: &RenderArgs);
 }
 
 impl Renderable for Diagnostic {
@@ -17,7 +39,7 @@ impl Renderable for Diagnostic {
     /// single coloured report so that the context is easy to follow.
     /// Diagnostics that originate from a different file fall back to a separate
     /// Ariadne report (or a plain `eprintln!` when source code cannot be read).
-    fn render(&self) {
+    fn render_with_options(&self, _args: &RenderArgs) {
         if self.body.contains("<hidden>") {
             return;
         }
@@ -170,15 +192,31 @@ impl Renderable for Diagnostic {
 
 impl Renderable for Diagnostics {
     /// Render all diagnostics in a Diagnostics: warnings first, then errors.
-    fn render(&self) {
+    fn render_with_options(&self, args: &RenderArgs) {
         let warnings = self.warnings();
-        for diag in &warnings {
-            diag.render();
-            eprintln!();
-        }
         let errors = self.errors();
+
+        // If warnings should be treated as errors, promote them
+        if args.deny_warnings() {
+            // Render warnings as errors (red)
+            for diag in &warnings {
+                // Create a copy with error severity for rendering
+                let mut error_diag = diag.clone();
+                error_diag.severity = EvalSeverity::Error;
+                error_diag.render_with_options(args);
+                eprintln!();
+            }
+        } else {
+            // Render warnings normally
+            for diag in &warnings {
+                diag.render_with_options(args);
+                eprintln!();
+            }
+        }
+
+        // Always render errors as errors
         for diag in &errors {
-            diag.render();
+            diag.render_with_options(args);
             eprintln!();
         }
     }

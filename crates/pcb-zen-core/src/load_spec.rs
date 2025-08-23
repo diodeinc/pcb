@@ -53,10 +53,6 @@ impl LoadSpec {
     /// Generate a structured remote reference for this LoadSpec.
     pub fn remote_ref(&self) -> Option<crate::RemoteRef> {
         match self {
-            LoadSpec::Package { package, tag, .. } => Some(crate::RemoteRef::Package {
-                package: package.clone(),
-                tag: tag.clone(),
-            }),
             LoadSpec::Github {
                 user, repo, rev, ..
             } => Some(crate::RemoteRef::GitHub {

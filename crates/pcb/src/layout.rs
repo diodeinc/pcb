@@ -56,7 +56,8 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
     // Process each .zen file
     for zen_path in zen_paths {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        let Some(schematic) = build(&zen_path, args.offline, &mut has_errors) else {
+        let render_args = pcb_zen::diagnostics::RenderArgs::default();
+        let Some(schematic) = build(&zen_path, args.offline, &render_args, &mut has_errors) else {
             continue;
         };
 

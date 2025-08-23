@@ -1334,7 +1334,7 @@ impl FileLoader for EvalContext {
                         path: module_path.as_ref().map_or_else(|| "<unknown>".to_string(), |p| p.to_string_lossy().to_string()),
                         span: self.resolve_span(path),
                         severity: EvalSeverity::Warning,
-                        body: format!("'{path}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml)."),
+                        body: format!("'{path}:{}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).", remote_ref.rev()),
                         call_stack: None,
                         child: None,
                     };
