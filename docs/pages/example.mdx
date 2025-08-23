@@ -2,11 +2,11 @@
 
 If we pull this off with Zener, it should end up looking like the KiCad schematic below!
 
-![](../images/KiCAD_Antenna_CRC_Matcher.png)
+![](../images/KiCAD_L_Network.png)
 
-Let's start with the Antenna LRC Matcher (L Network). The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our components. Notably, our L Network uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
+The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our components. Notably, our L Network uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
 
-```starlark
+```python
 load("@stdlib/interfaces.zen", "Ground")
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -19,13 +19,13 @@ However, for both our SMA connector and the antenna, the standard library does n
 ## What Does Zener Consider a Module?
 If you check the [Zener module specification](https://docs.pcb.new/pages/spec#files-as-modules), you'll see the following:
 
->Each `.zen` file is a Starlark module. It can be used in two ways:
+>Each `.zen` file is a python module. It can be used in two ways:
 >
 > 1. Its exported symbols can be `load()`ed into other modules. For example, `load("./MyFile.zen", "MyFunction", "MyType")` will load the `MyFunction` and `MyType` symbols from the `MyFile.zen` module.
 > 
 > 2. It can be loaded as a schematic module using the `Module()` helper. For example, `MyFile = Module("./MyFile.zen")` will import `MyFile.zen` as a schematic module, which you can instantiate like so:
 > 
-```starlark
+```python
 MyFile = Module("./MyFile.zen")
 MyFile(
     name = "MyFile",
@@ -37,14 +37,14 @@ In short, **a module is defined by a `.zen` file that declares its inputs and cr
 
 I'll first make a `MyModules` directory, where we can put both of our custom modules. Starting with our `SMAConnector.zen` file, let's get our schematic symbol from KiCad. If we double-click on the schematic symbol in KiCad, we can see a `Library link: Connector:Conn_Coaxial_Small` in the bottom left. Then, we can [import the symbol with Zener](https://docs.pcb.new/pages/spec#symbol) as follows (notice how we append `.kicad_sym`):
 
-```starlark
+```python
 SMA_symbol = Symbol("@kicad-symbols/Connector.kicad_sym:Conn_Coaxial_Small")
 ```
 <Warning> In the future, variables may not be able to use symbols, so you should define symbols inline when defining components, as shown later in this tutorial. </Warning>
 
 Now, if we think logically about a connector, we need one input and one output. What better construct than an `io()` declaration! Let's define our two `io`s for the connector, which are `input` and `external` with [a type of net](https://docs.pcb.new/pages/spec#net):
 
-```starlark
+```python
 # Declare inputs
 input = io("input", Net)
 external = io("external", Net)
@@ -52,7 +52,7 @@ external = io("external", Net)
 
 Finally, we'll define a component for our SMA Connector. A component requires a name, footprint, symbol, and pins (which are defined by the symbol):
 
-```starlark
+```python
 Component(
     name = "SMA_Connector",
     footprint = "KICAD",
@@ -70,7 +70,7 @@ Component(
 
 Let's quickly take a look at the whole file before we move on.
 
-```starlark
+```python
 SMA_Symbol = Symbol("@kicad-symbols/Connector.kicad_sym:Conn_Coaxial_Small")
 
 input = io("input", Net)
@@ -90,9 +90,9 @@ And the generated output, when clicking on the `pcb: View Schematic` button in V
 
 ![](../images/First_Pass.png)
 
-Pretty close! One small personal preference is defining the symbol inline for our component. We might also want to change the prefix from U1 to J1 when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. We should also include an actual footprint so we can render the final PCB. There are two ways to do this. We can go digging in the cache at `~/Library/Caches/pcb/gitlab/kicad/libraries/kicad-footprints/...`. Then you need to find the KiCad version and folder where the footprints are. Alternatively, you can just use `pcb pro search` to search for a component and automatically look through the footprints until it finds one that makes sense. We're going to use the first way for demonstration.
+Pretty close! _A recommended practice is defining the symbol inline for our component_. We might also want to change the prefix from U1 to J1 when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. We should also include an actual footprint so we can render the final PCB. There are two ways to do this. We can go digging in the cache at `~/Library/Caches/pcb/gitlab/kicad/libraries/kicad-footprints/...`. Then you need to find the KiCad version and folder where the footprints are. Alternatively, you can just use `pcb pro search` to search for a component and automatically look through the footprints until it finds one that makes sense. We're going to use the first way for demonstration.
 
-```starlark
+```python
 load("@stdlib/interfaces.zen", "Ground")
 load("@stdlib/properties.zen", "Layout") # Optional standard library import to see a preview render
 
@@ -121,7 +121,7 @@ Even better!
 
 Similarly, for the antenna:
 
-```starlark
+```python
 load("@stdlib/properties.zen", "Layout")
 
 output = io("output", Net)
@@ -144,11 +144,11 @@ Layout(name = "Antenna", path = "build/preview")
 ![](../images/antenna.png)
 
 ## Antenna LRC Matcher
-Let's first import our custom modules into our `AntennaLRCMatcher.zen`:
+Let's first import our custom modules into our `EX0001.zen`:
 
-```starlark
-Antenna = Module("../MyModules/Antenna.zen")
-SMA_Connector = Module("../MyModules/SMAConnector.zen")
+```python
+Antenna = Module("../../modules/Antenna.zen")
+SMA_Connector = Module("../../modules/SMAConnector.zen")
 ```
 
 We should also define our `Net()`s and `io()`s. If a wire or signal is internal, we should define it as a `Net`, but if we expect it to be attached to another wire or signal that's external to the module, we should use `io()`. I've added annotations to our original schematic from KiCad:
@@ -156,7 +156,7 @@ We should also define our `Net()`s and `io()`s. If a wire or signal is internal,
 
 Let's now make it in Zener!
 
-```starlark
+```python
 input = io("input", Net, default = Net("input"))
 output = io("output", Net, default = Net("output"))
 gnd = io("gnd", Ground, default = Ground("gnd"))
@@ -166,7 +166,7 @@ t_junction = Net("t_junction")
 
 Finally, we need to hook up the pins of every component, and we'll use placeholder values for the package and value:
 
-```starlark
+```python
 Antenna(name = "Antenna", output = output)
 SMA_Connector(name = "SMA_Connector", input = input, external = gnd.NET)
 Inductor(name = "L1", value = "10nH", package = "0603", P1 = input, P2 = t_junction)
@@ -178,6 +178,6 @@ add_property("layout_path", "build/preview")
 
 After rotating and moving the rendered schematic components, just as you would with KiCad, here is the result:
 
-![](../images/Zener_ACRCM.png)
+![](../images/Zener_L_Network.png)
 
 You've created a functional schematic with Zener!
