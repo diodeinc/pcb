@@ -170,7 +170,7 @@ fn test_pcb_vendor_simple_workspace() {
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
-        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"]);
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"]);
     assert_snapshot!(
         "simple_workspace_vendor",
         sb.snapshot_run("pcb", ["vendor", "boards/TestBoard.zen"])

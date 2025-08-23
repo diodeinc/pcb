@@ -717,8 +717,7 @@ mod tests {
         let sb = Sandbox::new();
 
         // Create a fixture repository with some test files
-        let _fixture = sb
-            .git_fixture("https://github.com/test/repo.git")
+        sb.git_fixture("https://github.com/test/repo.git")
             .write("README.md", "# Test Repository\n\nThis is a test.")
             .write(
                 "src/main.rs",
