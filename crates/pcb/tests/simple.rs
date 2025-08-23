@@ -200,6 +200,35 @@ fn test_pcb_build_with_git_fixture() {
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn test_pcb_build_workspace_relative_paths_local_alias() {
+    let output = Sandbox::new()
+        .write("dep-ws/pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
+        .write(
+            "dep-ws/foo.zen",
+            r#"
+SimpleResistor = Module("//SimpleResistor.zen")
+SimpleResistor(name = "R1", P1 = Net("VCC"), P2 = Net("GND"))"#,
+        )
+        .write("dep-ws/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("dep-ws/test.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "build-ws/pcb.toml",
+            r#"
+[workspace]
+name = "build-ws"
+[packages]
+dep-ws = "../dep-ws""#,
+        )
+        .write(
+            "build-ws/foo.zen",
+            r#"Module("@dep-ws/foo.zen")(name = "FOO")"#,
+        )
+        .snapshot_run("pcb", ["build", "build-ws/foo.zen"]);
+    assert_snapshot!("workspace_relative_paths_local_alias", output);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_help() {
     let output = Sandbox::new().snapshot_run("pcb", ["help"]);
     assert_snapshot!("help", output);
