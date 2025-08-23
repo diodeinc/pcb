@@ -81,11 +81,12 @@ impl Renderable for Diagnostic {
 
         let primary_path_id = deepest_error_msg.path.clone();
 
+        let compact = !matches!(deepest_error_msg.severity, EvalSeverity::Error);
         let mut report = Report::build(
             kind,
             (primary_path_id.clone(), primary_span.clone().unwrap()),
         )
-        // .with_config(ariadne::Config::default().with_compact(true))
+        .with_config(ariadne::Config::default().with_compact(compact))
         .with_message(&deepest_error_msg.body)
         .with_label(
             Label::new((primary_path_id.clone(), primary_span.unwrap()))
@@ -135,7 +136,7 @@ impl Renderable for Diagnostic {
             current = d.child.as_deref();
         }
 
-        if !chain.is_empty() {
+        if !chain.is_empty() && !compact {
             eprintln!("\nStack trace (most recent call last):");
 
             for (idx, d) in chain.iter().enumerate() {

@@ -233,6 +233,12 @@ pub struct RemoteRefMeta {
     pub kind: RefKind,
 }
 
+impl RemoteRefMeta {
+    pub fn stable(&self) -> bool {
+        matches!(self.kind, RefKind::Tag | RefKind::Commit)
+    }
+}
+
 pub trait LoadResolver: Send + Sync {
     /// Resolve a LoadSpec to an absolute file path
     ///

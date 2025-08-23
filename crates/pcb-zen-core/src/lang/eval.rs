@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::anyhow;
-use starlark::collections::SmallMap;
 use starlark::typing::Interface;
 use starlark::{
     any::ProvidesStaticType,
@@ -22,6 +21,7 @@ use starlark::{
     },
     PrintHandler,
 };
+use starlark::{codemap::ResolvedSpan, collections::SmallMap, errors::EvalSeverity};
 
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
@@ -1275,6 +1275,12 @@ impl EvalContext {
         }
     }
 
+    pub fn resolve_span(&self, path: &str) -> Option<ResolvedSpan> {
+        self.find_load_span_for_path(path)
+            .and_then(|load_span| self.get_codemap().map(|codemap| (load_span, codemap)))
+            .map(|(load_span, codemap)| codemap.file_span(load_span).resolve_span())
+    }
+
     /// Get the source path of the current module being evaluated
     pub fn get_source_path(&self) -> Option<&Path> {
         self.source_path.as_deref()
@@ -1319,6 +1325,27 @@ impl FileLoader for EvalContext {
                 )));
             }
         };
+
+        if let Some(remote_ref) = load_resolver.remote_ref(&absolute_path) {
+            if let Some(remote_ref_meta) = load_resolver.remote_ref_meta(&remote_ref) {
+                if !remote_ref_meta.stable() {
+                    // We found an unstable ref, so raise a warning
+                    let warning_diag = Diagnostic {
+                        path: module_path.as_ref().map_or_else(|| "<unknown>".to_string(), |p| p.to_string_lossy().to_string()),
+                        span: self.resolve_span(path),
+                        severity: EvalSeverity::Warning,
+                        body: format!("'{path}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml)."),
+                        call_stack: None,
+                        child: None,
+                    };
+                    self.diagnostics.borrow_mut().push(warning_diag);
+                }
+            } else {
+                // Potentially unstable ref here, no git metadata found
+                // Likely git clone failed and we fell back to fetching tar ball
+                // TODO: figure out what warning to show here
+            }
+        }
 
         // Canonicalize the path for cache lookup
         let canonical_path = file_provider
