@@ -58,6 +58,12 @@ pub fn build(
     }
     spinner.finish();
     eval.diagnostics.render_with_options(render_args);
+
+    // Check if warnings should be treated as errors
+    if render_args.deny_warnings() && !eval.diagnostics.warnings().is_empty() {
+        *has_errors = true;
+    }
+
     eval.output_result()
         .inspect_err(|_| {
             println!(
@@ -67,9 +73,7 @@ pub fn build(
             );
         })
         .inspect_err(|diagnostics| {
-            if diagnostics.has_errors()
-                || (render_args.deny_warnings() && !diagnostics.warnings().is_empty())
-            {
+            if diagnostics.has_errors() {
                 *has_errors = true;
             }
         })

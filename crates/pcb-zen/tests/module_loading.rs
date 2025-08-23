@@ -258,7 +258,7 @@ fn module_with_stdlib_alias() {
         "test.zen",
         r#"
 # Test that Module() can resolve @stdlib imports (using units as an example)
-Units = Module("@stdlib/units.zen")
+Units = Module("@stdlib:v0.2.4/units.zen")
 
 # We don't instantiate Units since it's just definitions,
 # but the Module() call should resolve correctly
