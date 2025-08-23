@@ -1,10 +1,8 @@
-# Building an Antenna Matching Network with Zener
+# Building an Antenna CRC Matcher with Zener
 
-We need to build three components for our network: Antenna CRC Matcher, Common Mode Choke, T-Filter. If we pull it off with Zener, it should end up looking like the three KiCad schematics below!
+If we pull it off with Zener, it should end up looking like the three KiCad schematics below!
 
 ![](../images/KiCAD_Antenna_CRC_Matcher.png)
-![]()
-![]()
 
 Let's start with the Antenna CRC Matcher (ACRCM). The first thing we should start out with is importing our dependencies. Diode, very kindly, provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are super helpful for each of our components. Notably, our ACRCM makes use of an SMA connector, resistor, capacitor, inductor, ground and antenna schematic symbol. We can easily import each of these schematics using the built in `Module()` or `load()` function coupled with the default package aliases if module is already covered within the standard library.
 
@@ -36,13 +34,15 @@ MyFile(
 )
 ```
 
-In short, **a module is defined by a `.zen` file that declares its inputs and creates components** So, let's define a module for our SMA connector and antenna with this knowledge. 
+In short, **a module is defined by a `.zen` file that declares its inputs and creates components**. So, let's define a module for our SMA connector and antenna with this knowledge. 
 
 I'll first make a `MyModules` directory, where we can put both of our custom modules. Starting with our `SMAConnector.zen` file, let's start with getting our schematic symbol from KiCad. If we double click on the schematic symbol in KiCad, at the bottom left we can see a `Library link: Connector:Conn_Coaxial_Small`. Then, we can [import the symbol with Zener](https://docs.pcb.new/pages/spec#symbol) as follows (notice how we append `.kicad_sym`):
 
 ```zener
 SMA_symbol = Symbol("@kicad-symbols/Connector.kicad_sym:Conn_Coaxial_Small")
 ```
+> [!WARNING]
+> In the future, variables may not be able to use symbols, so you should inline define symbols when defining components like later in this tutorial.
 
 Now, if we think logically about a connector, we need one input and one output. What better construct than an `io()` declaration! Let's define our two `io()`s for the connector, which are `input` and `external` with [a type of net](https://docs.pcb.new/pages/spec#net):
 
@@ -97,6 +97,7 @@ Pretty close! One small personal preference is inline defining the symbol for ou
 
 ```zener
 load("@stdlib/interfaces.zen", "Ground")
+load("@stdlib/properties.zen", "Layout") # Optional standard library import to see a preview render
 
 input = io("input", Net)
 external = io("external", Net)
@@ -114,7 +115,7 @@ Component(
     }
 )
 
-add_property("layout_path", "build/preview")
+Layout(name = "SMA Connector", path = "build/preview") # Use standard library layout function
 ```
 
 ![](../images/Second_Pass.png)
@@ -124,19 +125,23 @@ Even better!
 Similarly for the antenna:
 
 ```zener
+load("@stdlib/properties.zen", "Layout")
+
 output = io("output", Net)
 
 prefix = config("prefix", str, default="AE")
 
 Component(
     name = "Antenna",
-    footprint = File("@kicad-footprints/RF_Antenna.pretty/Astrocast_AST50127-00.kicad_mod"),
+    footprint = File("@kicad-footprints/RF_Antenna.pretty/Texas_SWRA416_868MHz_915MHz.kicad_mod"),
     prefix = prefix,
     symbol = Symbol("@kicad-symbols/Device.kicad_sym:Antenna"),
     pins = {
         "A": output,
     }
 )
+
+Layout(name = "Antenna", path = "build/preview")
 ```
 ![](../images/antenna.png)
 
@@ -164,15 +169,18 @@ t_junction = Net("t_junction")
 Finally, we need to hook up the pins of every component, and we'll use placeholder values for the package and value:
 
 ```zener
-Antenna(name = "Antenna", output = t_junction)
+Antenna(name = "Antenna", output = output)
 SMA_Connector(name = "SMA_Connector", input = input, external = gnd.NET)
 Inductor(name = "L1", value = "10nH", package = "0603", P1 = input, P2 = t_junction)
 Capacitor(name = "C1", value = "10pF", package = "0603", P1 = t_junction, P2 = gnd.NET)
+Resistor(name = "R1", value = "100ohm", package = "0603", P1 = t_junction, P2 = output)
 
 add_property("layout_path", "build/preview")
 ```
 
+After rotating and moving around the rendered schematic exactly as you would with KiCad:
+
 ![](../images/Zener_ACRCM.png)
 
-... and that's it! You may have to move around components to make it look pretty (and the coordinates will be saved at the bottom of the file as location hints for the schematic viewer), but you've created a functional schematic with Zener!
+You've created a functional schematic with Zener!
 
