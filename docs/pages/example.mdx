@@ -1,10 +1,10 @@
-# Building an Antenna CRC Matcher with Zener
+# Building an Antenna LRC Matcher with Zener
 
 If we pull this off with Zener, it should end up looking like the KiCad schematic below!
 
 ![](../images/KiCAD_Antenna_CRC_Matcher.png)
 
-Let's start with the Antenna CRC Matcher (ACRCM). The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our components. Notably, our ACRCM uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
+Let's start with the Antenna LRC Matcher (L Network). The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our components. Notably, our L Network uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
 
 ```zener
 # AntennaCRCMatcher.zen
@@ -147,8 +147,8 @@ Layout(name = "Antenna", path = "build/preview")
 
 ![](../images/antenna.png)
 
-## Antenna CRC Matcher
-Let's first import our custom modules into our `AntennaCRCMatcher.zen`:
+## Antenna LRC Matcher
+Let's first import our custom modules into our `AntennaLRCMatcher.zen`:
 
 ```zener
 Antenna = Module("../MyModules/Antenna.zen")
