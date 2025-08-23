@@ -71,15 +71,12 @@ pub struct BoardInfo {
     /// Board name
     pub name: String,
 
-    /// Path to the .zen file (relative to board directory)
+    /// Path to the .zen file (relative to workspace root)
     pub zen_path: String,
 
     /// Board description
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
-
-    /// Directory containing the board
-    pub directory: PathBuf,
 }
 
 /// Discovery errors that can occur during board discovery
@@ -149,40 +146,39 @@ impl PcbToml {
 
 impl BoardInfo {
     /// Get the absolute path to the board's .zen file
-    pub fn absolute_zen_path(&self) -> PathBuf {
-        self.directory.join(&self.zen_path).canonicalize().unwrap()
+    pub fn absolute_zen_path(&self, workspace_root: &Path) -> PathBuf {
+        workspace_root.join(&self.zen_path)
     }
 }
 
 /// Walk up the directory tree starting at `start` until a directory containing
 /// `pcb.toml` with a `[workspace]` section is found. If we reach the filesystem root
-/// without finding one, return the parent directory of `start`.
+/// without finding one, return the start directory (or its parent if start is a file).
+/// Always returns a canonicalized absolute path.
 pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
-    let mut current = if !file_provider.is_directory(start) {
-        // For files we search from their parent directory.
-        start.parent().map(|p| p.to_path_buf())
+    // Convert to absolute path using combinators
+    let abs_start = start
+        .canonicalize()
+        .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(start)))
+        .unwrap_or_else(|_| start.to_path_buf());
+
+    // Start directory (parent if file, self if directory)
+    let start_dir = if file_provider.is_directory(&abs_start) {
+        abs_start
     } else {
-        Some(start.to_path_buf())
+        abs_start.parent().unwrap_or(&abs_start).to_path_buf()
     };
 
-    while let Some(dir) = current {
-        let pcb_toml = dir.join("pcb.toml");
-        if file_provider.exists(&pcb_toml) {
-            // Check if the TOML file contains a [workspace] section
-            if let Ok(config) = PcbToml::from_file(file_provider, &pcb_toml) {
-                if config.is_workspace() {
-                    return dir;
-                }
-            }
-        }
-        current = dir.parent().map(|p| p.to_path_buf());
-    }
-    // If start is a file, use its parent; otherwise use start itself
-    if !file_provider.is_directory(start) {
-        start.parent().unwrap_or(start).to_path_buf()
-    } else {
-        start.to_path_buf()
-    }
+    // Walk up looking for workspace
+    std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent())
+        .find(|dir| {
+            let pcb_toml = dir.join("pcb.toml");
+            file_provider.exists(&pcb_toml)
+                && PcbToml::from_file(file_provider, &pcb_toml)
+                    .is_ok_and(|config| config.is_workspace())
+        })
+        .map(|p| p.to_path_buf())
+        .unwrap_or(start_dir)
 }
 
 /// Discover all boards in a workspace using glob patterns
@@ -261,11 +257,14 @@ pub fn discover_boards(
                         Ok(config) => {
                             if let Some(board_config) = config.board {
                                 visited_directories.insert(path.to_path_buf());
+                                let workspace_relative_zen_path =
+                                    relative_path.join(&board_config.path);
                                 let board = BoardInfo {
                                     name: board_config.name,
-                                    zen_path: board_config.path,
+                                    zen_path: workspace_relative_zen_path
+                                        .to_string_lossy()
+                                        .to_string(),
                                     description: board_config.description,
-                                    directory: path.to_path_buf(),
                                 };
                                 insert_board(
                                     &mut boards_by_name,
@@ -331,11 +330,14 @@ pub fn discover_boards(
                         .unwrap_or(&zen_path_str)
                         .to_string();
 
+                    // Calculate workspace-relative path
+                    let board_dir_relative = path.strip_prefix(workspace_root).unwrap_or(&path);
+                    let workspace_relative_zen_path = board_dir_relative.join(&*zen_path_str);
+
                     let board = BoardInfo {
                         name: board_name,
-                        zen_path: zen_path_str.to_string(),
+                        zen_path: workspace_relative_zen_path.to_string_lossy().to_string(),
                         description: String::new(),
-                        directory: path.to_path_buf(),
                     };
                     insert_board(
                         &mut boards_by_name,
@@ -409,7 +411,7 @@ impl WorkspaceInfo {
         let canon = zen_path.canonicalize().ok()?;
         self.boards
             .iter()
-            .find(|b| b.absolute_zen_path() == canon)
+            .find(|b| b.absolute_zen_path(&self.root) == canon)
             .map(|b| b.name.clone())
     }
 }

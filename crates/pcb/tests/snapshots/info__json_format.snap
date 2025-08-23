@@ -19,14 +19,12 @@ Exit Code: 0
   "boards": [
     {
       "name": "MainBoard",
-      "zen_path": "main_board.zen",
-      "directory": "<TEMP_DIR>/boards/main-board"
+      "zen_path": "boards/main-board/main_board.zen"
     },
     {
       "name": "TestBoard",
-      "zen_path": "test_board.zen",
-      "description": "Main test board for validation",
-      "directory": "<TEMP_DIR>/boards/test-board"
+      "zen_path": "boards/test-board/test_board.zen",
+      "description": "Main test board for validation"
     }
   ]
 }

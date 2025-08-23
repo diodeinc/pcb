@@ -12,10 +12,10 @@ Name: BoardDiscoveryTest
 Members: boards/*, special/custom-board
 
 Boards (4)
-  BrokenBoard - broken.zen in <TEMP_DIR>/boards/broken-board
-  CustomBoard - custom.zen in <TEMP_DIR>/special/custom-board
+  BrokenBoard - boards/broken-board/broken.zen
+  CustomBoard - special/custom-board/custom.zen
     Special custom board with unique features
-  MainBoard - main_board.zen in <TEMP_DIR>/boards/main-board
-  TestBoard (default) - test_board.zen in <TEMP_DIR>/boards/test-board
+  MainBoard - boards/main-board/main_board.zen
+  TestBoard (default) - boards/test-board/test_board.zen
     Main test board for validation
 --- STDERR ---

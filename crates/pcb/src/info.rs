@@ -100,19 +100,9 @@ fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
             };
 
             if board.description.is_empty() {
-                println!(
-                    "  {} - {} in {}",
-                    name_display,
-                    board.zen_path,
-                    board.directory.display()
-                );
+                println!("  {} - {}", name_display, board.zen_path);
             } else {
-                println!(
-                    "  {} - {} in {}",
-                    name_display,
-                    board.zen_path,
-                    board.directory.display()
-                );
+                println!("  {} - {}", name_display, board.zen_path);
                 println!("    {}", board.description);
             }
         }
