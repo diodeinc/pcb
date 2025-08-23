@@ -168,6 +168,8 @@ Antenna(name = "Antenna", output = t_junction)
 SMA_Connector(name = "SMA_Connector", input = input, external = gnd.NET)
 Inductor(name = "L1", value = "10nH", package = "0603", P1 = input, P2 = t_junction)
 Capacitor(name = "C1", value = "10pF", package = "0603", P1 = t_junction, P2 = gnd.NET)
+
+add_property("layout_path", "build/preview")
 ```
 
 ![](../images/Zener_ACRCM.png)
