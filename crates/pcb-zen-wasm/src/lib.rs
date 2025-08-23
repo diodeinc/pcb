@@ -92,6 +92,13 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
             }
         }
     }
+
+    fn remote_ref_meta(
+        &self,
+        _remote_ref: &pcb_zen_core::RemoteRef,
+    ) -> Option<pcb_zen_core::RemoteRefMeta> {
+        None
+    }
 }
 
 impl WasmRemoteFetcher {

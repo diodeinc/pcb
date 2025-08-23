@@ -148,12 +148,14 @@ impl FileProvider for DefaultFileProvider {
 /// the actual network/filesystem operations to the implementor.
 pub trait RemoteFetcher: Send + Sync {
     /// Fetch a remote resource and return the local path where it was materialized.
-    /// This could involve downloading, caching, unpacking, etc.
     fn fetch_remote(
         &self,
         spec: &LoadSpec,
         workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error>;
+
+    /// Lookup metadata for a previously fetched remote ref, if cached.
+    fn remote_ref_meta(&self, remote_ref: &RemoteRef) -> Option<RemoteRefMeta>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -171,9 +173,66 @@ impl RemoteFetcher for NoopRemoteFetcher {
             spec
         ))
     }
+
+    fn remote_ref_meta(&self, _remote_ref: &RemoteRef) -> Option<RemoteRefMeta> {
+        None
+    }
 }
 
 /// Abstraction for resolving load() paths to file contents
+/// Kind of a resolved Git reference after fetching
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    Tag,
+    Branch,
+    Commit,
+    Head,
+}
+
+/// Remote reference identifier with structured information
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RemoteRef {
+    GitHub {
+        user: String,
+        repo: String,
+        rev: String,
+    },
+    GitLab {
+        project_path: String,
+        rev: String,
+    },
+    Package {
+        package: String,
+        tag: String,
+    },
+}
+
+impl RemoteRef {
+    /// Get the canonical repository URL for this remote reference
+    pub fn repo_url(&self) -> Option<String> {
+        match self {
+            RemoteRef::GitHub { user, repo, .. } => {
+                Some(format!("https://github.com/{user}/{repo}"))
+            }
+            RemoteRef::GitLab { project_path, .. } => {
+                Some(format!("https://gitlab.com/{project_path}"))
+            }
+            RemoteRef::Package { .. } => None,
+        }
+    }
+}
+
+/// Metadata about a resolved remote reference
+#[derive(Debug, Clone)]
+pub struct RemoteRefMeta {
+    /// Full 40-character SHA-1 commit id
+    pub commit_sha1: String,
+    /// Full SHA-256 commit id when repository uses SHA-256 object format
+    pub commit_sha256: Option<String>,
+    /// Classification of the ref
+    pub kind: RefKind,
+}
+
 pub trait LoadResolver: Send + Sync {
     /// Resolve a LoadSpec to an absolute file path
     ///
@@ -204,6 +263,12 @@ pub trait LoadResolver: Send + Sync {
             .ok_or_else(|| anyhow::anyhow!("Invalid load spec: {}", load_path))?;
         self.resolve_spec(file_provider, &spec, current_file)
     }
+
+    /// Return the remote ref for a resolved path, if available.
+    fn remote_ref(&self, _path: &Path) -> Option<RemoteRef>;
+
+    /// Return stored metadata for a previously fetched remote ref, if available.
+    fn remote_ref_meta(&self, _remote_ref: &RemoteRef) -> Option<RemoteRefMeta>;
 }
 
 /// File extension constants and utilities
@@ -264,12 +329,12 @@ pub struct CoreLoadResolver {
     file_provider: Arc<dyn FileProvider>,
     remote_fetcher: Arc<dyn RemoteFetcher>,
     workspace_root: PathBuf,
+    use_vendor_dir: bool,
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
     /// Tracks all local files that have been resolved (for vendor/release commands)
     tracked_local_files: Arc<Mutex<HashSet<PathBuf>>>,
-    use_vendor_dir: bool,
     /// Hierarchical alias resolution cache
     alias_cache: RwLock<HashMap<PathBuf, HashMap<String, String>>>,
     /// Workspace root cache by directory path
@@ -787,5 +852,14 @@ impl LoadResolver for CoreLoadResolver {
                 }
             }
         }
+    }
+
+    fn remote_ref(&self, path: &Path) -> Option<RemoteRef> {
+        self.get_load_spec_for_path(path)
+            .and_then(|s| s.remote_ref())
+    }
+
+    fn remote_ref_meta(&self, remote_ref: &RemoteRef) -> Option<RemoteRefMeta> {
+        self.remote_fetcher.remote_ref_meta(remote_ref)
     }
 }

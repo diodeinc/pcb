@@ -167,6 +167,13 @@ impl RemoteFetcher for MockRemoteFetcher {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No mock result for spec: {}", spec_str))
     }
+
+    fn remote_ref_meta(
+        &self,
+        _remote_ref: &pcb_zen_core::RemoteRef,
+    ) -> Option<pcb_zen_core::RemoteRefMeta> {
+        None // Mock doesn't provide metadata
+    }
 }
 
 #[test]

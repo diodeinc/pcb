@@ -38,7 +38,7 @@ fn create_standard_load_resolver(
 ) -> Arc<CoreLoadResolver> {
     let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
 
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
     Arc::new(CoreLoadResolver::new(
         file_provider,
         remote_fetcher,

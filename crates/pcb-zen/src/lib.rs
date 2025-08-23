@@ -1,6 +1,7 @@
 //! Diode Star – evaluate .zen designs and return schematic data structures.
 
 pub mod diagnostics;
+pub mod git;
 pub mod load;
 pub mod lsp;
 pub mod suppression;
@@ -49,7 +50,7 @@ pub fn create_eval_context(workspace_root: &Path, offline: bool) -> EvalContext 
     let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if offline {
         Arc::new(NoopRemoteFetcher)
     } else {
-        Arc::new(DefaultRemoteFetcher)
+        Arc::new(DefaultRemoteFetcher::default())
     };
 
     let load_resolver = Arc::new(CoreLoadResolver::new(

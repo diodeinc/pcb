@@ -76,7 +76,7 @@ pub fn eval_zen_entrypoint(
     debug!("Starting zen file evaluation: {}", entry.display());
 
     let file_provider = Arc::new(DefaultFileProvider);
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
 
     let core_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),

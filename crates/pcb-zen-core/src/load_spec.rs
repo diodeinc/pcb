@@ -50,6 +50,30 @@ impl LoadSpec {
         }
     }
 
+    /// Generate a structured remote reference for this LoadSpec.
+    pub fn remote_ref(&self) -> Option<crate::RemoteRef> {
+        match self {
+            LoadSpec::Package { package, tag, .. } => Some(crate::RemoteRef::Package {
+                package: package.clone(),
+                tag: tag.clone(),
+            }),
+            LoadSpec::Github {
+                user, repo, rev, ..
+            } => Some(crate::RemoteRef::GitHub {
+                user: user.clone(),
+                repo: repo.clone(),
+                rev: rev.clone(),
+            }),
+            LoadSpec::Gitlab {
+                project_path, rev, ..
+            } => Some(crate::RemoteRef::GitLab {
+                project_path: project_path.clone(),
+                rev: rev.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     /// Create a new LoadSpec pointing to a different file in the same repository.
     ///
     /// This preserves the repository identity (GitHub user/repo, GitLab project, package name/tag)
