@@ -32,7 +32,7 @@
     "groups": [
       {
         "group": "Documentation",
-        "pages": ["pages/quickstart", "pages/vscode", "pages/spec"]
+        "pages": ["pages/quickstart", "pages/vscode", "pages/spec", "pages/example"]
       }
     ]
   },
