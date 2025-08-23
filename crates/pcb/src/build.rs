@@ -67,7 +67,6 @@ pub fn build(
             );
         })
         .inspect_err(|diagnostics| {
-            // dbg!(&diagnostics);
             if diagnostics.has_errors()
                 || (render_args.deny_warnings() && !diagnostics.warnings().is_empty())
             {

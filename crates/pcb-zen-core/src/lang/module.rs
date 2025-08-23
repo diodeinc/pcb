@@ -497,17 +497,30 @@ where
         // showing the same error twice: instead create a new diagnostic whose
         // primary span is the call-site inside the parent file and which
         // carries the child error(s) as `related` entries.
+        // For warnings, preserve them as warnings.
 
-        let had_diags = !diagnostics.is_empty();
+        let had_errors = diagnostics.has_errors();
 
         for child in diagnostics.into_iter() {
             let diag_to_add = if let Some(cs) = &call_site {
-                // Build a new primary message pointing at this ModuleLoader call-site.
+                // Wrap both errors and warnings with call-site context
+                let (severity, message) = match child.severity {
+                    EvalSeverity::Error => (
+                        EvalSeverity::Error,
+                        format!("Error instantiating `{}`", self.name),
+                    ),
+                    EvalSeverity::Warning => (
+                        EvalSeverity::Warning,
+                        format!("Warning from `{}`", self.name),
+                    ),
+                    other => (other, format!("Issue in `{}`", self.name)),
+                };
+
                 Diagnostic {
                     path: cs.filename().to_string(),
                     span: Some(cs.resolve_span()),
-                    severity: EvalSeverity::Error,
-                    body: format!("Error instantiating `{}`", self.name),
+                    severity,
+                    body: message,
                     call_stack: Some(eval.call_stack().clone()),
                     child: Some(Box::new(child)),
                 }
@@ -571,7 +584,7 @@ where
                 Ok(Value::new_none())
             }
             None => {
-                if !had_diags {
+                if !had_errors {
                     if let Some(call_site) = eval.call_stack_top_location() {
                         let msg = format!("Failed to instantiate module {}", self.name);
                         let mut call_diag =
@@ -854,6 +867,26 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         let resolved_path = load_resolver
             .resolve_path(file_provider.as_ref(), &path, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
+
+        // Check for unstable Git references and emit warnings
+        if let Some((remote_ref, _)) = parent_context.should_warn_unstable_ref(
+            load_resolver.as_ref(),
+            Some(current_file),
+            &resolved_path,
+        ) {
+            let warning_diag = crate::Diagnostic {
+                path: current_file.to_string_lossy().to_string(),
+                span: parent_context.find_module_span_for_path(&path)
+                    .and_then(|module_span| parent_context.get_codemap()
+                        .map(|codemap| codemap.file_span(module_span).resolve_span())),
+                severity: starlark::errors::EvalSeverity::Warning,
+                body: format!("'{path}:{}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).", remote_ref.rev()),
+                call_stack: None,
+                child: None,
+            };
+
+            parent_context.add_diagnostic(warning_diag);
+        }
 
         // Verify the resolved path exists
         if !file_provider.exists(&resolved_path) {

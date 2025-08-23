@@ -1235,6 +1235,42 @@ impl EvalContext {
         Ok(files)
     }
 
+    /// Find the span of the *string literal* that is passed to a `Module()` call
+    /// whose value equals `path`.
+    ///
+    /// The span is used by the LSP so that diagnostics highlight only the quoted
+    /// string, not the whole `Module()` invocation.
+    pub fn find_module_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
+        use starlark::syntax::ast::{ArgumentP, AstExpr, AstLiteral, ExprP};
+
+        let ast = AstModule::parse(
+            &self.source_path.as_ref()?.to_string_lossy(),
+            self.contents.as_ref()?.clone(),
+            &self.dialect(),
+        )
+        .ok()?;
+
+        let mut found = None;
+        ast.statement().visit_expr(|expr: &AstExpr| {
+            if found.is_some() { return; }
+            // Find Module() calls and extract string argument spans
+            if let ExprP::Call(callee, call_args) = &expr.node {
+                if let ExprP::Identifier(ident) = &callee.node {
+                    if ident.node.ident == "Module" {
+                        found = call_args.args.iter()
+                            .find_map(|arg| match &arg.node {
+                                ArgumentP::Positional(expr) => Some(expr),
+                                _ => None,
+                            })
+                            .filter(|expr| matches!(&expr.node, ExprP::Literal(AstLiteral::String(s)) if s.node == path))
+                            .map(|expr| expr.span);
+                    }
+                }
+            }
+        });
+        found
+    }
+
     /// Find the span of a load statement that loads the given path
     pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
         // We need access to the AST of the current module being evaluated
@@ -1290,6 +1326,40 @@ impl EvalContext {
     pub fn get_load_resolver(&self) -> Option<&Arc<dyn crate::LoadResolver>> {
         self.load_resolver.as_ref()
     }
+
+    /// Append a diagnostic that was produced while this context was active.
+    pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
+        self.diagnostics.borrow_mut().push(diag.into());
+    }
+
+    /// Check if we should warn about an unstable reference load.
+    /// Returns the remote ref and metadata if a warning should be generated.
+    ///
+    /// Only warns for:
+    /// - Top-level loads from local code → remote repo  
+    /// - Cross-repository loads (remote A → remote B)
+    ///
+    /// Skips warnings for:
+    /// - Internal loads within the same remote repo (./file.zen, ../file.zen)
+    pub fn should_warn_unstable_ref(
+        &self,
+        load_resolver: &dyn crate::LoadResolver,
+        caller_path: Option<&std::path::Path>,
+        callee_path: &std::path::Path,
+    ) -> Option<(crate::RemoteRef, crate::RemoteRefMeta)> {
+        let caller_remote = caller_path.and_then(|p| load_resolver.remote_ref(p));
+        let callee_remote = load_resolver.remote_ref(callee_path)?;
+
+        // Only warn if the callee's remote ref differs from the caller's remote ref
+        if caller_remote != Some(callee_remote.clone()) {
+            let remote_ref_meta = load_resolver.remote_ref_meta(&callee_remote)?;
+            if !remote_ref_meta.stable() {
+                return Some((callee_remote, remote_ref_meta));
+            }
+        }
+
+        None
+    }
 }
 
 // Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
@@ -1326,25 +1396,21 @@ impl FileLoader for EvalContext {
             }
         };
 
-        if let Some(remote_ref) = load_resolver.remote_ref(&absolute_path) {
-            if let Some(remote_ref_meta) = load_resolver.remote_ref_meta(&remote_ref) {
-                if !remote_ref_meta.stable() {
-                    // We found an unstable ref, so raise a warning
-                    let warning_diag = Diagnostic {
-                        path: module_path.as_ref().map_or_else(|| "<unknown>".to_string(), |p| p.to_string_lossy().to_string()),
-                        span: self.resolve_span(path),
-                        severity: EvalSeverity::Warning,
-                        body: format!("'{path}:{}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).", remote_ref.rev()),
-                        call_stack: None,
-                        child: None,
-                    };
-                    self.diagnostics.borrow_mut().push(warning_diag);
-                }
-            } else {
-                // Potentially unstable ref here, no git metadata found
-                // Likely git clone failed and we fell back to fetching tar ball
-                // TODO: figure out what warning to show here
-            }
+        // Check for unstable Git references and emit warnings
+        if let Some((remote_ref, _)) = self.should_warn_unstable_ref(
+            load_resolver.as_ref(),
+            module_path.as_deref(),
+            &absolute_path,
+        ) {
+            let warning_diag = Diagnostic {
+                path: module_path.as_ref().map_or_else(|| "<unknown>".to_string(), |p| p.to_string_lossy().to_string()),
+                span: self.resolve_span(path),
+                severity: EvalSeverity::Warning,
+                body: format!("'{path}:{}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).", remote_ref.rev()),
+                call_stack: None,
+                child: None,
+            };
+            self.diagnostics.borrow_mut().push(warning_diag);
         }
 
         // Canonicalize the path for cache lookup
