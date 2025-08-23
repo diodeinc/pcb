@@ -93,7 +93,7 @@ And the generated output, when clicking on the `pcb: View Schematic` button in V
 
 ![](../images/First_Pass.png)
 
-Pretty close! However, we might want to change the prefix from U1 to J1, when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. We should also include an actual footprint, so we can render the finalized PCB. There are two ways to do this. We can go digging in the cache at `~/Library/Caches/pcb/gitlab/kicad/libraries/kicad-footprints/...`. Then you need to find the KiCad version and folder where the footprints are. Alternatively, you can just use `pcb pro search` to search for a component and automatically look through the footprints until it finds one that makes sense. We're going to use the first way for demonstration.
+Pretty close! One small personal preference is inline defining the symbol for our component. We might also want to change the prefix from U1 to J1, when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. We should also include an actual footprint, so we can render the finalized PCB. There are two ways to do this. We can go digging in the cache at `~/Library/Caches/pcb/gitlab/kicad/libraries/kicad-footprints/...`. Then you need to find the KiCad version and folder where the footprints are. Alternatively, you can just use `pcb pro search` to search for a component and automatically look through the footprints until it finds one that makes sense. We're going to use the first way for demonstration.
 
 ```zener
 load("@stdlib/interfaces.zen", "Ground")
@@ -124,17 +124,15 @@ Even better!
 Similarly for the antenna:
 
 ```zener
-antenna_symbol = Symbol("@kicad-symbols/Device.kicad_sym:Antenna")
-
 output = io("output", Net)
 
 prefix = config("prefix", str, default="AE")
 
 Component(
     name = "Antenna",
-    footprint = "KICAD",
+    footprint = File("@kicad-footprints/RF_Antenna.pretty/Astrocast_AST50127-00.kicad_mod"),
     prefix = prefix,
-    symbol = antenna_symbol,
+    symbol = Symbol("@kicad-symbols/Device.kicad_sym:Antenna"),
     pins = {
         "A": output,
     }
