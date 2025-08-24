@@ -20,7 +20,7 @@ use starlark::{
     },
     PrintHandler,
 };
-use starlark::{codemap::ResolvedSpan, collections::SmallMap, errors::EvalSeverity};
+use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
@@ -1377,35 +1377,6 @@ impl EvalContext {
     pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
         self.diagnostics.borrow_mut().push(diag.into());
     }
-
-    /// Check if we should warn about an unstable reference load.
-    /// Returns the remote ref and metadata if a warning should be generated.
-    ///
-    /// Only warns for:
-    /// - Top-level loads from local code → remote repo  
-    /// - Cross-repository loads (remote A → remote B)
-    ///
-    /// Skips warnings for:
-    /// - Internal loads within the same remote repo (./file.zen, ../file.zen)
-    pub fn should_warn_unstable_ref(
-        &self,
-        load_resolver: &dyn crate::LoadResolver,
-        caller_path: Option<&std::path::Path>,
-        callee_path: &std::path::Path,
-    ) -> Option<(crate::RemoteRef, crate::RemoteRefMeta)> {
-        let caller_remote = caller_path.and_then(|p| load_resolver.remote_ref(p));
-        let callee_remote = load_resolver.remote_ref(callee_path)?;
-
-        // Only warn if the callee's remote ref differs from the caller's remote ref
-        if caller_remote != Some(callee_remote.clone()) {
-            let remote_ref_meta = load_resolver.remote_ref_meta(&callee_remote)?;
-            if !remote_ref_meta.stable() {
-                return Some((callee_remote, remote_ref_meta));
-            }
-        }
-
-        None
-    }
 }
 
 // Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
@@ -1428,34 +1399,23 @@ impl FileLoader for EvalContext {
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No LoadResolver provided")))?;
 
         let module_path = self.source_path.clone();
-
-        // Resolve the load path to an absolute path
-        let absolute_path = match module_path {
-            Some(ref current_file) => load_resolver
-                .resolve_path(path, current_file)
-                .map_err(starlark::Error::new_other)?,
-            None => {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Cannot resolve load path '{}' without a current file context",
-                    path
-                )));
-            }
+        let Some(current_file) = module_path.as_ref() else {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Cannot resolve load path '{}' without a current file context",
+                path
+            )));
         };
 
-        // Check for unstable Git references and emit warnings
-        if let Some((remote_ref, _)) = self.should_warn_unstable_ref(
+        // Resolve the load path to an absolute path
+        let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
+        let absolute_path = load_resolver.resolve(&mut resolve_context)?;
+
+        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
             load_resolver.as_ref(),
-            module_path.as_deref(),
-            &absolute_path,
+            current_file,
+            &resolve_context,
+            self.resolve_span(path),
         ) {
-            let warning_diag = Diagnostic {
-                path: module_path.as_ref().map_or_else(|| "<unknown>".to_string(), |p| p.to_string_lossy().to_string()),
-                span: self.resolve_span(path),
-                severity: EvalSeverity::Warning,
-                body: format!("'{path}:{}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).", remote_ref.rev()),
-                call_stack: None,
-                child: None,
-            };
             self.diagnostics.borrow_mut().push(warning_diag);
         }
 

@@ -12,6 +12,7 @@ pub mod diagnostics;
 mod file_provider;
 pub mod lang;
 pub mod load_spec;
+pub mod warnings;
 
 // Re-export commonly used types
 pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
@@ -143,6 +144,16 @@ impl FileProvider for DefaultFileProvider {
     }
 }
 
+/// Information about a package alias including its target and source
+#[derive(Debug, Clone)]
+pub struct AliasInfo {
+    /// The target of the alias (e.g., "@github/mycompany/components:main")
+    pub target: String,
+    /// The canonical path to the pcb.toml file that defined this alias.
+    /// None for built-in default aliases.
+    pub source_path: Option<PathBuf>,
+}
+
 /// Abstraction for fetching remote resources (packages, GitHub repos, etc.)
 /// This allows pcb-zen-core to handle all resolution logic while delegating
 /// the actual network/filesystem operations to the implementor.
@@ -251,6 +262,9 @@ pub struct ResolveContext<'a> {
     // Index 0 = original spec, later indices = progressively resolved specs
     pub spec_history: Vec<LoadSpec>,
 
+    // Alias information for the current file (cached on construction)
+    pub alias_info: HashMap<String, AliasInfo>,
+
     // Computed state (lazily initialized)
     effective_workspace_root: Option<PathBuf>,
 }
@@ -266,6 +280,7 @@ impl<'a> ResolveContext<'a> {
             file_provider,
             current_file,
             spec_history: vec![spec.clone()],
+            alias_info: HashMap::new(), // Will be populated during resolution
             effective_workspace_root: None,
         }
     }
@@ -301,6 +316,15 @@ impl<'a> ResolveContext<'a> {
         }
         Ok(self.effective_workspace_root.as_ref().unwrap())
     }
+
+    /// Get alias information if this resolution went through alias resolution
+    pub fn get_alias_info(&self) -> Option<&crate::AliasInfo> {
+        // Check if we started with a package spec (alias resolution)
+        if let Some(LoadSpec::Package { package, .. }) = self.spec_history.first() {
+            return self.alias_info.get(package);
+        }
+        None
+    }
 }
 
 pub trait LoadResolver: Send + Sync {
@@ -317,6 +341,17 @@ pub trait LoadResolver: Send + Sync {
     fn resolve_spec(&self, spec: &LoadSpec, current_file: &Path) -> Result<PathBuf, anyhow::Error> {
         let mut context = ResolveContext::new(self.file_provider(), spec, current_file);
         self.resolve(&mut context)
+    }
+
+    fn resolve_context<'a>(
+        &'a self,
+        path: &str,
+        current_file: &'a Path,
+    ) -> Result<ResolveContext<'a>, anyhow::Error> {
+        let spec = LoadSpec::parse(path)
+            .ok_or_else(|| anyhow::anyhow!("Invalid load path spec: {}", path))?;
+        let context = ResolveContext::new(self.file_provider(), &spec, current_file);
+        Ok(context)
     }
 
     fn file_provider(&self) -> &dyn FileProvider;
@@ -399,7 +434,7 @@ pub struct CoreLoadResolver {
     /// Tracks all local files that have been resolved (for vendor/release commands)
     tracked_local_files: Arc<Mutex<HashSet<PathBuf>>>,
     /// Hierarchical alias resolution cache
-    alias_cache: RwLock<HashMap<PathBuf, HashMap<String, String>>>,
+    alias_cache: RwLock<HashMap<PathBuf, HashMap<String, AliasInfo>>>,
     /// Workspace root cache by directory path
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
 }
@@ -548,10 +583,10 @@ impl CoreLoadResolver {
         }
     }
 
-    /// Get hierarchical package aliases for a specific file.
+    /// Get hierarchical package aliases with source info for a specific file.
     /// This walks from the appropriate root (workspace or repo) to the file's directory,
     /// merging aliases with deeper directories taking priority.
-    fn get_aliases_for_file(&self, file: &Path) -> anyhow::Result<HashMap<String, String>> {
+    fn get_alias_info_for_file(&self, file: &Path) -> anyhow::Result<HashMap<String, AliasInfo>> {
         log::debug!("Resolving aliases for file: {}", file.display());
         // Canonicalize file
         let file = self.file_provider.canonicalize(file)?;
@@ -608,7 +643,21 @@ impl CoreLoadResolver {
             .map(|p| {
                 let content = self.file_provider.read_file(&p)?;
                 let toml_aliases = config::PcbToml::parse(&content)?.packages;
-                Ok::<_, anyhow::Error>(toml_aliases)
+                // Convert to AliasInfo with source path
+                let canonical_path = self.file_provider.canonicalize(&p)?;
+                let alias_info_map = toml_aliases
+                    .into_iter()
+                    .map(|(key, target)| {
+                        (
+                            key,
+                            AliasInfo {
+                                target,
+                                source_path: Some(canonical_path.clone()),
+                            },
+                        )
+                    })
+                    .collect::<HashMap<String, AliasInfo>>();
+                Ok::<_, anyhow::Error>(alias_info_map)
             })
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -696,12 +745,17 @@ impl CoreLoadResolver {
     /// Attempt to resolve package aliases and push resolved spec to history
     /// Returns true if alias resolution happened and a new spec was pushed
     pub fn resolve_alias_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
-        let current_spec = context.current_spec();
-        let aliases = self.get_aliases_for_file(context.current_file)?;
-        let mut resolved = current_spec.resolve(Some(&aliases))?;
+        // Get the full alias info and populate context
+        context.alias_info = self.get_alias_info_for_file(context.current_file)?;
+
+        // Clone the current spec to avoid borrowing issues
+        let current_spec = context.current_spec().clone();
+
+        // Use the AliasInfo map directly
+        let mut resolved = current_spec.resolve(Some(&context.alias_info))?;
 
         // Only push if the resolution actually changed the spec
-        if &resolved != current_spec {
+        if resolved != current_spec {
             // Make paths absolute before pushing to history
             if let LoadSpec::Path { path } = &resolved {
                 if !path.is_absolute() {
@@ -801,9 +855,6 @@ impl LoadResolver for CoreLoadResolver {
     fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
         // Handle remote relative paths first (pushes to spec history if needed)
         self.handle_remote_relative_paths(context)?;
-
-        // Try to resolve package aliases (pushes to spec history if resolved)
-        // context.try_resolve_package_alias(self)?;
 
         // Route to appropriate resolver based on current spec type
         match context.current_spec() {

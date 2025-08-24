@@ -243,3 +243,64 @@ fn test_method_chaining_unstable_ref_warning() {
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("method_chaining_unstable_ref_warning", output);
 }
+
+#[test]
+fn test_alias_unstable_ref_warning() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a fake git repository with components
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .push_mirror();
+
+    // Create a pcb.toml with an alias that points to an unstable ref
+    let pcb_toml_content = r#"
+[packages]
+mycomps = "@github/mycompany/components:main"
+"#;
+
+    // Create a board that uses the component via an alias
+    let board_zen_content = r#"
+SimpleResistor = Module("@mycomps/SimpleResistor.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml_content)
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("alias_unstable_ref_warning", output);
+}
+
+#[test]
+fn test_default_alias_unstable_ref_warning() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a fake stdlib repository that matches the default stdlib alias
+    sandbox
+        .git_fixture("https://github.com/diodeinc/stdlib.git")
+        .write("TestModule.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add test module")
+        .push_mirror();
+
+    // Create a board that uses the default stdlib alias with HEAD (unstable)
+    let board_zen_content = r#"
+TestModule = Module("@stdlib/TestModule.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+TestModule(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("default_alias_unstable_ref_warning", output);
+}

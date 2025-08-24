@@ -6,10 +6,10 @@ Command: pcb build board.zen
 Exit Code: 1
 
 --- STDOUT ---
-Warning: '@github/mycompany/components:main/SimpleResistor.zen:main' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
+Warning: '@github/mycompany/components:main/SimpleResistor.zen' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
    ╭─[ <TEMP_DIR>/board.zen:2:25 ]
  2 │SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
-   │                                                   ╰─────────────────────────── '@github/mycompany/components:main/SimpleResistor.zen:main' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
+   │                                                   ╰─────────────────────────── '@github/mycompany/components:main/SimpleResistor.zen' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
 Error: Input 'P2' is required but was not provided and no default value was given
    ╭─[ <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6 ]
    │

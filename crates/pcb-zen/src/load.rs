@@ -671,11 +671,11 @@ mod tests {
         let aliases = pcb_zen_core::LoadSpec::default_package_aliases();
 
         assert_eq!(
-            aliases.get("kicad-symbols"),
+            aliases.get("kicad-symbols").map(|a| &a.target),
             Some(&"@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
         );
         assert_eq!(
-            aliases.get("stdlib"),
+            aliases.get("stdlib").map(|a| &a.target),
             Some(&"@github/diodeinc/stdlib:HEAD".to_string())
         );
     }
@@ -687,18 +687,18 @@ mod tests {
 
         // Test kicad-symbols alias
         assert_eq!(
-            aliases.get("kicad-symbols"),
+            aliases.get("kicad-symbols").map(|a| &a.target),
             Some(&"@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
         );
 
         // Test stdlib alias
         assert_eq!(
-            aliases.get("stdlib"),
+            aliases.get("stdlib").map(|a| &a.target),
             Some(&"@github/diodeinc/stdlib:HEAD".to_string())
         );
 
         // Test non-existent alias
-        assert_eq!(aliases.get("nonexistent"), None);
+        assert!(aliases.get("nonexistent").is_none());
     }
 
     #[test]

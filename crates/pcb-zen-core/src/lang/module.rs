@@ -864,27 +864,25 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .ok_or_else(|| anyhow::anyhow!("No source path available"))?;
 
         // Resolve the path using the load resolver
+        let mut resolve_context = load_resolver.resolve_context(&path, current_file)?;
         let resolved_path = load_resolver
-            .resolve_path(&path, current_file)
+            .resolve(&mut resolve_context)
             .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
 
-        // Check for unstable Git references and emit warnings
-        if let Some((remote_ref, _)) = parent_context.should_warn_unstable_ref(
-            load_resolver.as_ref(),
-            Some(current_file),
-            &resolved_path,
-        ) {
-            let warning_diag = crate::Diagnostic {
-                path: current_file.to_string_lossy().to_string(),
-                span: parent_context.find_module_span_for_path(&path)
-                    .and_then(|module_span| parent_context.get_codemap()
-                        .map(|codemap| codemap.file_span(module_span).resolve_span())),
-                severity: starlark::errors::EvalSeverity::Warning,
-                body: format!("'{path}:{}' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).", remote_ref.rev()),
-                call_stack: None,
-                child: None,
-            };
+        let span = parent_context
+            .find_module_span_for_path(&path)
+            .and_then(|module_span| {
+                parent_context
+                    .get_codemap()
+                    .map(|codemap| codemap.file_span(module_span).resolve_span())
+            });
 
+        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
+            load_resolver.as_ref(),
+            current_file,
+            &resolve_context,
+            span,
+        ) {
             parent_context.add_diagnostic(warning_diag);
         }
 
