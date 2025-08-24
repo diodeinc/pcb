@@ -459,22 +459,13 @@ class VirtualElement(VirtualItem, ABC):
         self._bbox = None
         self.attributes: Dict[str, Any] = {}
 
-    @abstractmethod
-    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
-        """Capture this element's geometry relative to a reference point."""
-        pass
-
-    @abstractmethod
-    def apply_geometry(
-        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
-    ) -> None:
-        """Apply stored geometry from a new reference point."""
-        pass
-
-    @abstractmethod
     def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
-        """Clone this element to a target board."""
-        pass
+        """Clone this element to a target board.
+
+        Since all KiCad EDA_ITEMs have Clone(), we can use a single implementation.
+        The target_board parameter is kept for API compatibility but not used.
+        """
+        return self.kicad_item.Clone()
 
 
 class VirtualFootprint(VirtualElement):
@@ -502,10 +493,9 @@ class VirtualFootprint(VirtualElement):
 
     def move_by(self, dx: int, dy: int) -> None:
         """Move the footprint by a relative offset."""
-        # Update the actual KiCad object
-        if self.kicad_footprint and hasattr(self.kicad_footprint, "SetPosition"):
-            pos = self.kicad_footprint.GetPosition()
-            self.kicad_footprint.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
+        # Use KiCad's built-in Move method
+        if self.kicad_footprint:
+            self.kicad_footprint.Move(pcbnew.VECTOR2I(dx, dy))
 
         # Update cached bbox
         if self._bbox:
@@ -594,28 +584,6 @@ class VirtualFootprint(VirtualElement):
                 target_val.SetPosition(source_val.GetPosition())
                 target_val.SetAttributes(source_val.GetAttributes())
 
-    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
-        """Capture footprint position and orientation relative to reference."""
-        pos = self.kicad_footprint.GetPosition()
-        return {
-            "offset_x": pos.x - reference_point[0],
-            "offset_y": pos.y - reference_point[1],
-            "orientation": self.kicad_footprint.GetOrientation(),
-        }
-
-    def apply_geometry(
-        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
-    ) -> None:
-        """Apply stored geometry from a new reference point."""
-        new_x = reference_point[0] + geometry["offset_x"]
-        new_y = reference_point[1] + geometry["offset_y"]
-        self.kicad_footprint.SetPosition(pcbnew.VECTOR2I(new_x, new_y))
-        self.kicad_footprint.SetOrientation(geometry["orientation"])
-
-    def clone_to_board(self, target_board: pcbnew.BOARD) -> pcbnew.FOOTPRINT:
-        """Clone footprint to target board."""
-        return self.kicad_footprint.Clone()
-
     def render_tree(self, indent: int = 0) -> str:
         """Render this footprint as a string."""
         prefix = "  " * indent
@@ -666,56 +634,10 @@ class VirtualZone(VirtualElement):
         return VirtualBoundingBox(min_x, min_y, max_x - min_x, max_y - min_y)
 
     def move_by(self, dx: int, dy: int) -> None:
-        """Transform all outline points by offset."""
-        outline = self.kicad_item.Outline()
-        for i in range(outline.OutlineCount()):
-            contour = outline.COutline(i)
-            for j in range(contour.PointCount()):
-                pt = contour.CPoint(j)
-                contour.SetPoint(j, pcbnew.VECTOR2I(pt.x + dx, pt.y + dy))
+        """Move zone by offset using KiCad's built-in Move method."""
+        # Use KiCad's built-in Move method
+        self.kicad_item.Move(pcbnew.VECTOR2I(dx, dy))
         self._capture_outline()  # Update cached points
-
-    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
-        """Capture zone outline relative to reference point."""
-        return {
-            "relative_outlines": [
-                [(x - reference_point[0], y - reference_point[1]) for x, y in contour]
-                for contour in self._outline_points
-            ],
-            "layer": self.kicad_item.GetLayer(),
-            "net_code": self._source_net_code,
-            "settings": {
-                "min_thickness": self.kicad_item.GetMinThickness(),
-                "hatch_style": self.kicad_item.GetHatchStyle(),
-                "filled": self.kicad_item.IsFilled(),
-            },
-        }
-
-    def apply_geometry(
-        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
-    ) -> None:
-        """Rebuild zone outline from relative points."""
-        outline = self.kicad_item.Outline()
-        outline.RemoveAllContours()
-
-        for contour_data in geometry["relative_outlines"]:
-            outline.NewOutline()
-            for rel_x, rel_y in contour_data:
-                abs_x = reference_point[0] + rel_x
-                abs_y = reference_point[1] + rel_y
-                outline.Append(abs_x, abs_y)
-
-        # Apply settings
-        for key, value in geometry["settings"].items():
-            setter_name = f"Set{key.replace('_', ' ').title().replace(' ', '')}"
-            if hasattr(self.kicad_item, setter_name):
-                getattr(self.kicad_item, setter_name)(value)
-
-        self._capture_outline()  # Update cached points
-
-    def clone_to_board(self, target_board: pcbnew.BOARD) -> pcbnew.ZONE:
-        """Clone zone to target board."""
-        return self.kicad_item.Clone()
 
     def apply_net_code_mapping(
         self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
@@ -768,139 +690,9 @@ class VirtualGraphic(VirtualElement):
         return get_kicad_bbox(self.kicad_item)
 
     def move_by(self, dx: int, dy: int) -> None:
-        """Move graphic element by offset."""
-        item = self.kicad_item
-
-        # TODO: review these conditionals, sometimes they can cause double moves
-        if hasattr(item, "SetPosition"):
-            pos = item.GetPosition()
-            item.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
-
-        elif hasattr(item, "SetStart") and hasattr(item, "GetStart"):
-            start = item.GetStart()
-            item.SetStart(pcbnew.VECTOR2I(start.x + dx, start.y + dy))
-
-            if hasattr(item, "SetEnd") and hasattr(item, "GetEnd"):
-                end = item.GetEnd()
-                item.SetEnd(pcbnew.VECTOR2I(end.x + dx, end.y + dy))
-
-        elif hasattr(item, "SetCenter") and hasattr(item, "GetCenter"):
-            center = item.GetCenter()
-            item.SetCenter(pcbnew.VECTOR2I(center.x + dx, center.y + dy))
-
-    def capture_geometry(self, reference_point: Tuple[int, int]) -> Dict[str, Any]:
-        """Capture graphic geometry relative to reference."""
-        data = {"type": self._type}
-
-        if hasattr(self.kicad_item, "GetPosition"):
-            pos = self.kicad_item.GetPosition()
-            data["position_offset"] = (
-                pos.x - reference_point[0],
-                pos.y - reference_point[1],
-            )
-
-        if hasattr(self.kicad_item, "GetStart"):
-            start = self.kicad_item.GetStart()
-            data["start_offset"] = (
-                start.x - reference_point[0],
-                start.y - reference_point[1],
-            )
-
-        if hasattr(self.kicad_item, "GetEnd"):
-            end = self.kicad_item.GetEnd()
-            data["end_offset"] = (
-                end.x - reference_point[0],
-                end.y - reference_point[1],
-            )
-
-        if hasattr(self.kicad_item, "GetCenter"):
-            center = self.kicad_item.GetCenter()
-            data["center_offset"] = (
-                center.x - reference_point[0],
-                center.y - reference_point[1],
-            )
-
-        return data
-
-    def apply_geometry(
-        self, reference_point: Tuple[int, int], geometry: Dict[str, Any]
-    ) -> None:
-        """Apply stored geometry from new reference point."""
-        if "position_offset" in geometry:
-            x, y = geometry["position_offset"]
-            self.kicad_item.SetPosition(
-                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
-            )
-
-        if "start_offset" in geometry:
-            x, y = geometry["start_offset"]
-            self.kicad_item.SetStart(
-                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
-            )
-
-        if "end_offset" in geometry:
-            x, y = geometry["end_offset"]
-            self.kicad_item.SetEnd(
-                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
-            )
-
-        if "center_offset" in geometry:
-            x, y = geometry["center_offset"]
-            self.kicad_item.SetCenter(
-                pcbnew.VECTOR2I(reference_point[0] + x, reference_point[1] + y)
-            )
-
-    def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
-        """Clone graphic to target board."""
-        old = self.kicad_item
-
-        # Try using Clone() first for complete property copying
-        if hasattr(old, "Clone"):
-            return old.Clone()
-
-        # Fallback to manual copying
-        if self._type == "PCB_TEXT":
-            new_item = pcbnew.PCB_TEXT(target_board)
-            new_item.SetText(old.GetText())
-            new_item.SetTextSize(old.GetTextSize())
-            new_item.SetTextThickness(old.GetTextThickness())
-            new_item.SetTextAngle(old.GetTextAngle())
-            new_item.SetLayer(old.GetLayer())
-            new_item.SetPosition(old.GetPosition())
-
-            # Copy additional text properties
-            if hasattr(old, "GetHorizJustify") and hasattr(new_item, "SetHorizJustify"):
-                new_item.SetHorizJustify(old.GetHorizJustify())
-            if hasattr(old, "GetVertJustify") and hasattr(new_item, "SetVertJustify"):
-                new_item.SetVertJustify(old.GetVertJustify())
-            if hasattr(old, "IsMirrored") and hasattr(new_item, "SetMirrored"):
-                new_item.SetMirrored(old.IsMirrored())
-            if hasattr(old, "IsVisible") and hasattr(new_item, "SetVisible"):
-                new_item.SetVisible(old.IsVisible())
-            if hasattr(old, "IsItalic") and hasattr(new_item, "SetItalic"):
-                new_item.SetItalic(old.IsItalic())
-            if hasattr(old, "IsBold") and hasattr(new_item, "SetBold"):
-                new_item.SetBold(old.IsBold())
-            if hasattr(old, "IsKeepUpright") and hasattr(new_item, "SetKeepUpright"):
-                new_item.SetKeepUpright(old.IsKeepUpright())
-            # Copy attributes if available (this might include font and other properties)
-            if hasattr(old, "GetAttributes") and hasattr(new_item, "SetAttributes"):
-                new_item.SetAttributes(old.GetAttributes())
-            return new_item
-        elif self._type == "PCB_SHAPE":
-            new_item = pcbnew.PCB_SHAPE(target_board)
-            new_item.SetShape(old.GetShape())
-            new_item.SetLayer(old.GetLayer())
-            new_item.SetWidth(old.GetWidth())
-            if hasattr(old, "GetStart"):
-                new_item.SetStart(old.GetStart())
-            if hasattr(old, "GetEnd"):
-                new_item.SetEnd(old.GetEnd())
-            if hasattr(old, "GetCenter"):
-                new_item.SetCenter(old.GetCenter())
-            return new_item
-        else:
-            return None
+        """Move graphic element by offset using KiCad's built-in Move method."""
+        # Use KiCad's built-in Move method
+        self.kicad_item.Move(pcbnew.VECTOR2I(dx, dy))
 
     def render_tree(self, indent: int = 0) -> str:
         """Render this graphic as a string."""
@@ -921,8 +713,6 @@ class VirtualGroup(VirtualItem):
         self.children: List[VirtualItem] = []
         self.synced = False  # Whether this group has been synced from a layout file
         self._cached_bbox: Optional[VirtualBoundingBox] = None
-        self._reference_footprint: Optional[VirtualFootprint] = None
-        self._captured_geometries: Dict[str, Dict[str, Any]] = {}
 
     @property
     def added(self) -> bool:
@@ -1052,51 +842,14 @@ class VirtualGroup(VirtualItem):
         _ = self.bbox  # Force recomputation
 
     def capture_rigid_body_state(self) -> None:
-        """Capture all child geometries relative to a reference footprint."""
-        # Find reference footprint (first footprint in group)
-        footprints = [c for c in self.children if isinstance(c, VirtualFootprint)]
-        if not footprints:
-            logger.warning(f"Group {self.name} has no footprints for reference")
-            return
-
-        self._reference_footprint = footprints[0]
-        ref_point = self._reference_footprint.get_position()
-        if not ref_point:
-            return
-
-        # Capture all children's geometry relative to reference
-        for child in self.children:
-            if isinstance(child, VirtualElement):
-                self._captured_geometries[child.id] = child.capture_geometry(ref_point)
-            elif isinstance(child, VirtualGroup):
-                # Recursively capture nested groups
-                child.capture_rigid_body_state()
+        """No longer needed - using simple move_by for all elements."""
+        pass
 
     def apply_rigid_body_transformation(self, dx: int, dy: int) -> None:
-        """Move group as rigid body using captured geometries."""
-        if self._reference_footprint and self._captured_geometries:
-            # Move reference footprint
-            self._reference_footprint.move_by(dx, dy)
-            new_ref = self._reference_footprint.get_position()
-
-            if new_ref:
-                # Apply relative geometries from new reference point
-                for child in self.children:
-                    if (
-                        child.id in self._captured_geometries
-                        and child != self._reference_footprint
-                    ):
-                        if isinstance(child, VirtualElement):
-                            child.apply_geometry(
-                                new_ref, self._captured_geometries[child.id]
-                            )
-                    elif isinstance(child, VirtualGroup):
-                        # Move child groups as rigid bodies
-                        child.apply_rigid_body_transformation(dx, dy)
-        else:
-            # Fallback to simple move
-            for child in self.children:
-                child.move_by(dx, dy)
+        """Move group as rigid body - simplified to just move all children."""
+        # Simply move all children by the same offset
+        for child in self.children:
+            child.move_by(dx, dy)
 
 
 class VirtualBoard:
@@ -2195,8 +1948,7 @@ class SyncLayouts(Step):
                 layout_board, self.board, matched_pairs
             )
 
-            # Capture group's current state for rigid body transformation
-            group.capture_rigid_body_state()
+            # No longer need to capture state - simplified approach
 
             # Get all zones from source layout
             zones_synced = 0
@@ -2483,12 +2235,8 @@ class PlaceComponents(Step):
             if i == 0:
                 # First item serves as anchor at origin
                 # For synced groups, use rigid body transformation
-                if isinstance(item, VirtualGroup) and item.synced:
-                    dx = -item.bbox.left
-                    dy = -item.bbox.top
-                    item.apply_rigid_body_transformation(dx, dy)
-                else:
-                    item.move_to(0, 0)
+                # Move item to origin
+                item.move_to(0, 0)
                 placed_items.append(item)
                 # Add its corners as placement points
                 placement_pts.extend(
@@ -2552,12 +2300,8 @@ class PlaceComponents(Step):
                 if best_pt:
                     # Move to the best position found
                     # For synced groups, use rigid body transformation
-                    if isinstance(item, VirtualGroup) and item.synced:
-                        dx = best_pt[0] - item.bbox.left
-                        dy = best_pt[1] - item.bbox.top
-                        item.apply_rigid_body_transformation(dx, dy)
-                    else:
-                        item.move_to(best_pt[0], best_pt[1])
+                    # Move item to best position
+                    item.move_to(best_pt[0], best_pt[1])
                     placed_items.append(item)
 
                     logger.info(f"Placed {item.name} at {best_pt}")
@@ -2738,12 +2482,9 @@ class PlaceComponents(Step):
             offset_y = target_y - added_bbox.center_y
 
         # Move all items in the sparse tree
-        # For synced groups, use rigid body transformation
+        # Move all items by the calculated offset
         for item in top_level_added:
-            if isinstance(item, VirtualGroup) and item.synced:
-                item.apply_rigid_body_transformation(offset_x, offset_y)
-            else:
-                item.move_by(offset_x, offset_y)
+            item.move_by(offset_x, offset_y)
 
         logger.info(f"Positioned new content with offset ({offset_x}, {offset_y})")
 
