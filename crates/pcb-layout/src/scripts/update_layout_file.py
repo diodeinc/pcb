@@ -1858,26 +1858,10 @@ class SyncLayouts(Step):
             # Get all zones from source layout
             zones_synced = 0
             for zone in layout_board.Zones():
-                # Clone zone
-                new_zone = pcbnew.ZONE(self.board)
+                # Use Duplicate() to copy all zone properties automatically
+                new_zone = zone.Duplicate()
 
-                # Copy zone properties
-                new_zone.SetLayer(zone.GetLayer())
-                new_zone.SetLayerSet(zone.GetLayerSet())
-
-                # Copy outline
-                source_outline = zone.Outline()
-                new_outline = new_zone.Outline()
-                new_outline.RemoveAllContours()
-
-                for i in range(source_outline.OutlineCount()):
-                    contour = source_outline.COutline(i)
-                    new_outline.NewOutline()
-                    for j in range(contour.PointCount()):
-                        pt = contour.CPoint(j)
-                        new_outline.Append(pt.x, pt.y)
-
-                # Apply net code mapping
+                # Apply net code mapping (this is the only thing we need to update)
                 source_net_code = zone.GetNetCode()
                 if source_net_code in net_code_map:
                     target_net_code = net_code_map[source_net_code]
@@ -1886,14 +1870,6 @@ class SyncLayouts(Step):
                         new_zone.SetNet(target_net)
                 else:
                     new_zone.SetNetCode(0)
-
-                # Copy other zone settings
-                if hasattr(zone, "GetMinThickness"):
-                    new_zone.SetMinThickness(zone.GetMinThickness())
-                if hasattr(zone, "GetHatchStyle"):
-                    new_zone.SetHatchStyle(zone.GetHatchStyle())
-                if hasattr(zone, "IsFilled") and hasattr(new_zone, "SetIsFilled"):
-                    new_zone.SetIsFilled(zone.IsFilled())
 
                 # Add to board
                 self.board.Add(new_zone)
@@ -1916,76 +1892,21 @@ class SyncLayouts(Step):
                 ):
                     continue
 
-                # Clone graphic based on type
+                # Use Duplicate() to copy all graphic properties automatically
+                new_drawing = drawing.Duplicate()
+
+                # Add to board
+                self.board.Add(new_drawing)
+
+                # Create virtual graphic and add to group
                 item_type = drawing.GetClass()
-                new_drawing = None
-
-                if item_type == "PCB_TEXT":
-                    new_drawing = pcbnew.PCB_TEXT(self.board)
-                    new_drawing.SetText(drawing.GetText())
-                    new_drawing.SetTextSize(drawing.GetTextSize())
-                    new_drawing.SetTextThickness(drawing.GetTextThickness())
-                    new_drawing.SetTextAngle(drawing.GetTextAngle())
-                    new_drawing.SetLayer(drawing.GetLayer())
-                    new_drawing.SetPosition(drawing.GetPosition())
-
-                    # Copy additional text properties
-                    if hasattr(drawing, "GetHorizJustify") and hasattr(
-                        new_drawing, "SetHorizJustify"
-                    ):
-                        new_drawing.SetHorizJustify(drawing.GetHorizJustify())
-                    if hasattr(drawing, "GetVertJustify") and hasattr(
-                        new_drawing, "SetVertJustify"
-                    ):
-                        new_drawing.SetVertJustify(drawing.GetVertJustify())
-                    if hasattr(drawing, "IsMirrored") and hasattr(
-                        new_drawing, "SetMirrored"
-                    ):
-                        new_drawing.SetMirrored(drawing.IsMirrored())
-                    if hasattr(drawing, "IsVisible") and hasattr(
-                        new_drawing, "SetVisible"
-                    ):
-                        new_drawing.SetVisible(drawing.IsVisible())
-                    if hasattr(drawing, "IsItalic") and hasattr(
-                        new_drawing, "SetItalic"
-                    ):
-                        new_drawing.SetItalic(drawing.IsItalic())
-                    if hasattr(drawing, "IsBold") and hasattr(new_drawing, "SetBold"):
-                        new_drawing.SetBold(drawing.IsBold())
-                    if hasattr(drawing, "IsKeepUpright") and hasattr(
-                        new_drawing, "SetKeepUpright"
-                    ):
-                        new_drawing.SetKeepUpright(drawing.IsKeepUpright())
-                    # Copy attributes if available (this might include font and other properties)
-                    if hasattr(drawing, "GetAttributes") and hasattr(
-                        new_drawing, "SetAttributes"
-                    ):
-                        new_drawing.SetAttributes(drawing.GetAttributes())
-                elif item_type == "PCB_SHAPE":
-                    # Fallback: manually copy shape properties
-                    new_drawing = pcbnew.PCB_SHAPE(self.board)
-                    new_drawing.SetShape(drawing.GetShape())
-                    new_drawing.SetLayer(drawing.GetLayer())
-                    new_drawing.SetWidth(drawing.GetWidth())
-                    if hasattr(drawing, "GetStart"):
-                        new_drawing.SetStart(drawing.GetStart())
-                    if hasattr(drawing, "GetEnd"):
-                        new_drawing.SetEnd(drawing.GetEnd())
-                    if hasattr(drawing, "GetCenter"):
-                        new_drawing.SetCenter(drawing.GetCenter())
-
-                if new_drawing:
-                    # Add to board
-                    self.board.Add(new_drawing)
-
-                    # Create virtual graphic and add to group
-                    graphic_uuid = str(uuid.uuid4())
-                    vgraphic = VirtualGraphic(
-                        graphic_uuid, f"{item_type}_{graphic_uuid[:8]}", new_drawing
-                    )
-                    vgraphic.added = True
-                    group.add_child(vgraphic)
-                    graphics_synced += 1
+                graphic_uuid = str(uuid.uuid4())
+                vgraphic = VirtualGraphic(
+                    graphic_uuid, f"{item_type}_{graphic_uuid[:8]}", new_drawing
+                )
+                vgraphic.added = True
+                group.add_child(vgraphic)
+                graphics_synced += 1
 
             logger.info(f"  Synced {zones_synced} zones and {graphics_synced} graphics")
 

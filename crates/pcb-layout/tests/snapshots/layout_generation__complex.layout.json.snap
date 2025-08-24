@@ -262,17 +262,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155011400,
+            "x": 157921400,
             "y": 106597200
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 155011400,
+            "x": 157921400,
             "y": 105137200
           },
           "shape": 0,
           "start": {
-            "x": 155011400,
+            "x": 157921400,
             "y": 105137200
           },
           "text": null,
@@ -282,17 +282,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157971400,
+            "x": 160881400,
             "y": 106597200
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 155011400,
+            "x": 157921400,
             "y": 106597200
           },
           "shape": 0,
           "start": {
-            "x": 155011400,
+            "x": 157921400,
             "y": 106597200
           },
           "text": null,
@@ -302,17 +302,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155691400,
+            "x": 158601400,
             "y": 106279700
           },
           "layer": "B.Fab",
           "position": {
-            "x": 155691400,
+            "x": 158601400,
             "y": 105454700
           },
           "shape": 0,
           "start": {
-            "x": 155691400,
+            "x": 158601400,
             "y": 105454700
           },
           "text": null,
@@ -322,17 +322,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157291400,
+            "x": 160201400,
             "y": 106279700
           },
           "layer": "B.Fab",
           "position": {
-            "x": 155691400,
+            "x": 158601400,
             "y": 106279700
           },
           "shape": 0,
           "start": {
-            "x": 155691400,
+            "x": 158601400,
             "y": 106279700
           },
           "text": null,
@@ -344,7 +344,7 @@ expression: content
           "end": null,
           "layer": "B.Fab",
           "position": {
-            "x": 156491400,
+            "x": 159401400,
             "y": 105867200
           },
           "shape": null,
@@ -356,17 +356,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 156254142,
+            "x": 159164142,
             "y": 105344700
           },
           "layer": "B.Silkscreen",
           "position": {
-            "x": 156728658,
+            "x": 159638658,
             "y": 105344700
           },
           "shape": 0,
           "start": {
-            "x": 156728658,
+            "x": 159638658,
             "y": 105344700
           },
           "text": null,
@@ -376,17 +376,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 156254142,
+            "x": 159164142,
             "y": 106389700
           },
           "layer": "B.Silkscreen",
           "position": {
-            "x": 156728658,
+            "x": 159638658,
             "y": 106389700
           },
           "shape": 0,
           "start": {
-            "x": 156728658,
+            "x": 159638658,
             "y": 106389700
           },
           "text": null,
@@ -396,17 +396,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155691400,
+            "x": 158601400,
             "y": 105454700
           },
           "layer": "B.Fab",
           "position": {
-            "x": 157291400,
+            "x": 160201400,
             "y": 105454700
           },
           "shape": 0,
           "start": {
-            "x": 157291400,
+            "x": 160201400,
             "y": 105454700
           },
           "text": null,
@@ -416,17 +416,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157291400,
+            "x": 160201400,
             "y": 105454700
           },
           "layer": "B.Fab",
           "position": {
-            "x": 157291400,
+            "x": 160201400,
             "y": 106279700
           },
           "shape": 0,
           "start": {
-            "x": 157291400,
+            "x": 160201400,
             "y": 106279700
           },
           "text": null,
@@ -436,17 +436,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155011400,
+            "x": 157921400,
             "y": 105137200
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 157971400,
+            "x": 160881400,
             "y": 105137200
           },
           "shape": 0,
           "start": {
-            "x": 157971400,
+            "x": 160881400,
             "y": 105137200
           },
           "text": null,
@@ -456,17 +456,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157971400,
+            "x": 160881400,
             "y": 105137200
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 157971400,
+            "x": 160881400,
             "y": 106597200
           },
           "shape": 0,
           "start": {
-            "x": 157971400,
+            "x": 160881400,
             "y": 106597200
           },
           "text": null,
@@ -483,7 +483,7 @@ expression: content
           "layer": "F.Cu",
           "name": "1",
           "position": {
-            "x": 157316400,
+            "x": 160226400,
             "y": 105867200
           }
         },
@@ -491,13 +491,13 @@ expression: content
           "layer": "F.Cu",
           "name": "2",
           "position": {
-            "x": 155666400,
+            "x": 158576400,
             "y": 105867200
           }
         }
       ],
       "position": {
-        "x": 156491400,
+        "x": 159401400,
         "y": 105867200
       },
       "reference": "R7",
@@ -512,17 +512,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 105111800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 105111800
           },
           "shape": 0,
           "start": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 105111800
           },
           "text": null,
@@ -532,17 +532,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 105111800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 106571800
           },
           "shape": 0,
           "start": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 106571800
           },
           "text": null,
@@ -552,17 +552,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 105429300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 105429300
           },
           "shape": 0,
           "start": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 105429300
           },
           "text": null,
@@ -572,17 +572,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 105429300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 106254300
           },
           "shape": 0,
           "start": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 106254300
           },
           "text": null,
@@ -592,17 +592,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 152867858,
+            "x": 155777858,
             "y": 105319300
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 105319300
           },
           "shape": 0,
           "start": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 105319300
           },
           "text": null,
@@ -612,17 +612,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 152867858,
+            "x": 155777858,
             "y": 106364300
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 106364300
           },
           "shape": 0,
           "start": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 106364300
           },
           "text": null,
@@ -634,7 +634,7 @@ expression: content
           "end": null,
           "layer": "F.Fab",
           "position": {
-            "x": 152630600,
+            "x": 155540600,
             "y": 105841800
           },
           "shape": null,
@@ -646,17 +646,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 106254300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 105429300
           },
           "shape": 0,
           "start": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 105429300
           },
           "text": null,
@@ -666,17 +666,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 106254300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 106254300
           },
           "shape": 0,
           "start": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 106254300
           },
           "text": null,
@@ -686,17 +686,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 106571800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 105111800
           },
           "shape": 0,
           "start": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 105111800
           },
           "text": null,
@@ -706,17 +706,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 106571800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 106571800
           },
           "shape": 0,
           "start": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 106571800
           },
           "text": null,
@@ -733,7 +733,7 @@ expression: content
           "layer": "F.Cu",
           "name": "1",
           "position": {
-            "x": 151805600,
+            "x": 154715600,
             "y": 105841800
           }
         },
@@ -741,13 +741,13 @@ expression: content
           "layer": "F.Cu",
           "name": "2",
           "position": {
-            "x": 153455600,
+            "x": 156365600,
             "y": 105841800
           }
         }
       ],
       "position": {
-        "x": 152630600,
+        "x": 155540600,
         "y": 105841800
       },
       "reference": "R5",
@@ -762,17 +762,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 103601800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 103601800
           },
           "shape": 0,
           "start": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 103601800
           },
           "text": null,
@@ -782,17 +782,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 103601800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 105061800
           },
           "shape": 0,
           "start": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 105061800
           },
           "text": null,
@@ -802,17 +802,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 103919300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 103919300
           },
           "shape": 0,
           "start": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 103919300
           },
           "text": null,
@@ -822,17 +822,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 103919300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 104744300
           },
           "shape": 0,
           "start": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 104744300
           },
           "text": null,
@@ -842,17 +842,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 152867858,
+            "x": 155777858,
             "y": 103809300
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 103809300
           },
           "shape": 0,
           "start": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 103809300
           },
           "text": null,
@@ -862,17 +862,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 152867858,
+            "x": 155777858,
             "y": 104854300
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 104854300
           },
           "shape": 0,
           "start": {
-            "x": 152393342,
+            "x": 155303342,
             "y": 104854300
           },
           "text": null,
@@ -884,7 +884,7 @@ expression: content
           "end": null,
           "layer": "F.Fab",
           "position": {
-            "x": 152630600,
+            "x": 155540600,
             "y": 104331800
           },
           "shape": null,
@@ -896,17 +896,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 104744300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 103919300
           },
           "shape": 0,
           "start": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 103919300
           },
           "text": null,
@@ -916,17 +916,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151830600,
+            "x": 154740600,
             "y": 104744300
           },
           "layer": "F.Fab",
           "position": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 104744300
           },
           "shape": 0,
           "start": {
-            "x": 153430600,
+            "x": 156340600,
             "y": 104744300
           },
           "text": null,
@@ -936,17 +936,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 105061800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 103601800
           },
           "shape": 0,
           "start": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 103601800
           },
           "text": null,
@@ -956,17 +956,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151150600,
+            "x": 154060600,
             "y": 105061800
           },
           "layer": "F.Courtyard",
           "position": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 105061800
           },
           "shape": 0,
           "start": {
-            "x": 154110600,
+            "x": 157020600,
             "y": 105061800
           },
           "text": null,
@@ -983,7 +983,7 @@ expression: content
           "layer": "F.Cu",
           "name": "1",
           "position": {
-            "x": 151805600,
+            "x": 154715600,
             "y": 104331800
           }
         },
@@ -991,13 +991,13 @@ expression: content
           "layer": "F.Cu",
           "name": "2",
           "position": {
-            "x": 153455600,
+            "x": 156365600,
             "y": 104331800
           }
         }
       ],
       "position": {
-        "x": 152630600,
+        "x": 155540600,
         "y": 104331800
       },
       "reference": "R6",
@@ -1512,17 +1512,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155011401,
+            "x": 157921401,
             "y": 105087199
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 155011401,
+            "x": 157921401,
             "y": 103627199
           },
           "shape": 0,
           "start": {
-            "x": 155011401,
+            "x": 157921401,
             "y": 103627199
           },
           "text": null,
@@ -1532,17 +1532,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157971401,
+            "x": 160881401,
             "y": 105087199
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 155011401,
+            "x": 157921401,
             "y": 105087199
           },
           "shape": 0,
           "start": {
-            "x": 155011401,
+            "x": 157921401,
             "y": 105087199
           },
           "text": null,
@@ -1552,17 +1552,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155691401,
+            "x": 158601401,
             "y": 104769699
           },
           "layer": "B.Fab",
           "position": {
-            "x": 155691401,
+            "x": 158601401,
             "y": 103944699
           },
           "shape": 0,
           "start": {
-            "x": 155691401,
+            "x": 158601401,
             "y": 103944699
           },
           "text": null,
@@ -1572,17 +1572,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157291401,
+            "x": 160201401,
             "y": 104769699
           },
           "layer": "B.Fab",
           "position": {
-            "x": 155691401,
+            "x": 158601401,
             "y": 104769699
           },
           "shape": 0,
           "start": {
-            "x": 155691401,
+            "x": 158601401,
             "y": 104769699
           },
           "text": null,
@@ -1594,7 +1594,7 @@ expression: content
           "end": null,
           "layer": "B.Fab",
           "position": {
-            "x": 156491401,
+            "x": 159401401,
             "y": 104357199
           },
           "shape": null,
@@ -1606,17 +1606,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 156254143,
+            "x": 159164143,
             "y": 103834699
           },
           "layer": "B.Silkscreen",
           "position": {
-            "x": 156728659,
+            "x": 159638659,
             "y": 103834699
           },
           "shape": 0,
           "start": {
-            "x": 156728659,
+            "x": 159638659,
             "y": 103834699
           },
           "text": null,
@@ -1626,17 +1626,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 156254143,
+            "x": 159164143,
             "y": 104879699
           },
           "layer": "B.Silkscreen",
           "position": {
-            "x": 156728659,
+            "x": 159638659,
             "y": 104879699
           },
           "shape": 0,
           "start": {
-            "x": 156728659,
+            "x": 159638659,
             "y": 104879699
           },
           "text": null,
@@ -1646,17 +1646,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155691401,
+            "x": 158601401,
             "y": 103944699
           },
           "layer": "B.Fab",
           "position": {
-            "x": 157291401,
+            "x": 160201401,
             "y": 103944699
           },
           "shape": 0,
           "start": {
-            "x": 157291401,
+            "x": 160201401,
             "y": 103944699
           },
           "text": null,
@@ -1666,17 +1666,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157291401,
+            "x": 160201401,
             "y": 103944699
           },
           "layer": "B.Fab",
           "position": {
-            "x": 157291401,
+            "x": 160201401,
             "y": 104769699
           },
           "shape": 0,
           "start": {
-            "x": 157291401,
+            "x": 160201401,
             "y": 104769699
           },
           "text": null,
@@ -1686,17 +1686,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 155011401,
+            "x": 157921401,
             "y": 103627199
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 157971401,
+            "x": 160881401,
             "y": 103627199
           },
           "shape": 0,
           "start": {
-            "x": 157971401,
+            "x": 160881401,
             "y": 103627199
           },
           "text": null,
@@ -1706,17 +1706,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 157971401,
+            "x": 160881401,
             "y": 103627199
           },
           "layer": "B.Courtyard",
           "position": {
-            "x": 157971401,
+            "x": 160881401,
             "y": 105087199
           },
           "shape": 0,
           "start": {
-            "x": 157971401,
+            "x": 160881401,
             "y": 105087199
           },
           "text": null,
@@ -1733,7 +1733,7 @@ expression: content
           "layer": "F.Cu",
           "name": "1",
           "position": {
-            "x": 157316401,
+            "x": 160226401,
             "y": 104357199
           }
         },
@@ -1741,13 +1741,13 @@ expression: content
           "layer": "F.Cu",
           "name": "2",
           "position": {
-            "x": 155666401,
+            "x": 158576401,
             "y": 104357199
           }
         }
       ],
       "position": {
-        "x": 156491401,
+        "x": 159401401,
         "y": 104357199
       },
       "reference": "R8",
@@ -2009,11 +2009,51 @@ expression: content
     {
       "bounding_box": {
         "bottom": 111040000,
-        "left": 133650000,
+        "left": 130740000,
         "right": 148750000,
         "top": 98960000
       },
       "drawings": [
+        {
+          "angle": null,
+          "end": {
+            "x": 134450000,
+            "y": 105000000
+          },
+          "layer": "F.Silkscreen",
+          "position": {
+            "x": 131040000,
+            "y": 105000000
+          },
+          "shape": 5,
+          "start": {
+            "x": 131040000,
+            "y": 105000000
+          },
+          "text": null,
+          "type": "PCB_SHAPE",
+          "width": 100000
+        },
+        {
+          "angle": null,
+          "end": {
+            "x": 134450000,
+            "y": 105000000
+          },
+          "layer": "F.Silkscreen",
+          "position": {
+            "x": 131040000,
+            "y": 105000000
+          },
+          "shape": 5,
+          "start": {
+            "x": 131040000,
+            "y": 105000000
+          },
+          "text": null,
+          "type": "PCB_SHAPE",
+          "width": 100000
+        },
         {
           "angle": null,
           "end": {
@@ -2049,6 +2089,26 @@ expression: content
           "start": {
             "x": 134450000,
             "y": 102000000
+          },
+          "text": null,
+          "type": "PCB_SHAPE",
+          "width": 100000
+        },
+        {
+          "angle": null,
+          "end": {
+            "x": 0,
+            "y": 0
+          },
+          "layer": "F.Silkscreen",
+          "position": {
+            "x": 134450000,
+            "y": 105000000
+          },
+          "shape": 4,
+          "start": {
+            "x": 0,
+            "y": 0
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -2181,24 +2241,64 @@ expression: content
       "bounding_box": {
         "bottom": 111040000,
         "left": 148250000,
-        "right": 163350000,
+        "right": 166260000,
         "top": 98960000
       },
       "drawings": [
         {
           "angle": null,
           "end": {
-            "x": 149550000,
+            "x": 151960000,
+            "y": 105000000
+          },
+          "layer": "F.Silkscreen",
+          "position": {
+            "x": 148550000,
+            "y": 105000000
+          },
+          "shape": 5,
+          "start": {
+            "x": 148550000,
+            "y": 105000000
+          },
+          "text": null,
+          "type": "PCB_SHAPE",
+          "width": 100000
+        },
+        {
+          "angle": null,
+          "end": {
+            "x": 151960000,
+            "y": 105000000
+          },
+          "layer": "F.Silkscreen",
+          "position": {
+            "x": 148550000,
+            "y": 105000000
+          },
+          "shape": 5,
+          "start": {
+            "x": 148550000,
+            "y": 105000000
+          },
+          "text": null,
+          "type": "PCB_SHAPE",
+          "width": 100000
+        },
+        {
+          "angle": null,
+          "end": {
+            "x": 152460000,
             "y": 102000000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 149050000,
+            "x": 151960000,
             "y": 102000000
           },
           "shape": 3,
           "start": {
-            "x": 149050000,
+            "x": 151960000,
             "y": 102000000
           },
           "text": null,
@@ -2208,17 +2308,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 160050000,
+            "x": 162960000,
             "y": 108000000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 149050000,
+            "x": 151960000,
             "y": 102000000
           },
           "shape": 1,
           "start": {
-            "x": 149050000,
+            "x": 151960000,
             "y": 102000000
           },
           "text": null,
@@ -2228,17 +2328,37 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 149550000,
+            "x": 0,
+            "y": 0
+          },
+          "layer": "F.Silkscreen",
+          "position": {
+            "x": 151960000,
+            "y": 105000000
+          },
+          "shape": 4,
+          "start": {
+            "x": 0,
+            "y": 0
+          },
+          "text": null,
+          "type": "PCB_SHAPE",
+          "width": 100000
+        },
+        {
+          "angle": null,
+          "end": {
+            "x": 152460000,
             "y": 108000000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 149050000,
+            "x": 151960000,
             "y": 108000000
           },
           "shape": 3,
           "start": {
-            "x": 149050000,
+            "x": 151960000,
             "y": 108000000
           },
           "text": null,
@@ -2250,7 +2370,7 @@ expression: content
           "end": null,
           "layer": "B.Silkscreen",
           "position": {
-            "x": 150620000,
+            "x": 153530000,
             "y": 108390000
           },
           "shape": null,
@@ -2264,7 +2384,7 @@ expression: content
           "end": null,
           "layer": "F.Silkscreen",
           "position": {
-            "x": 150870000,
+            "x": 153780000,
             "y": 101610000
           },
           "shape": null,
@@ -2276,17 +2396,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 160050000,
+            "x": 162960000,
             "y": 108000000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 160050000,
+            "x": 162960000,
             "y": 105000000
           },
           "shape": 2,
           "start": {
-            "x": 160050000,
+            "x": 162960000,
             "y": 102000000
           },
           "text": null,
@@ -2296,17 +2416,17 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 161550000,
+            "x": 164460000,
             "y": 105000000
           },
           "layer": "F.Silkscreen",
           "position": {
-            "x": 160050000,
+            "x": 162960000,
             "y": 105000000
           },
           "shape": 3,
           "start": {
-            "x": 160050000,
+            "x": 162960000,
             "y": 105000000
           },
           "text": null,
@@ -2321,8 +2441,8 @@ expression: content
     {
       "bounding_box": {
         "bottom": 106950650,
-        "left": 148778610,
-        "right": 154385600,
+        "left": 151688610,
+        "right": 157295600,
         "top": 103230150
       },
       "drawings": [],
@@ -2336,8 +2456,8 @@ expression: content
     {
       "bounding_box": {
         "bottom": 106976050,
-        "left": 154736400,
-        "right": 160343392,
+        "left": 157646400,
+        "right": 163253392,
         "top": 103255549
       },
       "drawings": [],
@@ -2414,19 +2534,19 @@ expression: content
       "net_name": "BOARD_P3",
       "points": [
         {
-          "x": 150050000,
+          "x": 152960000,
           "y": 103000000
         },
         {
-          "x": 154050000,
+          "x": 156960000,
           "y": 103000000
         },
         {
-          "x": 154050000,
+          "x": 156960000,
           "y": 107000000
         },
         {
-          "x": 150050000,
+          "x": 152960000,
           "y": 107000000
         }
       ]
@@ -2441,19 +2561,19 @@ expression: content
       "net_name": "BOARD_P4",
       "points": [
         {
-          "x": 155050000,
+          "x": 157960000,
           "y": 103000000
         },
         {
-          "x": 159050000,
+          "x": 161960000,
           "y": 103000000
         },
         {
-          "x": 159050000,
+          "x": 161960000,
           "y": 107000000
         },
         {
-          "x": 155050000,
+          "x": 157960000,
           "y": 107000000
         }
       ]
