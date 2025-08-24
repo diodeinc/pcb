@@ -1,4 +1,5 @@
-#[cfg(not(target_os = "windows"))]
+#![cfg(not(target_os = "windows"))]
+
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
@@ -7,6 +8,8 @@ value = config("value", str, default = "10kOhm")
 
 P1 = io("P1", Net)
 P2 = io("P2", Net)
+
+Resistance = "foobar"
 
 Component(
     name = "R",
@@ -42,6 +45,11 @@ vcc = Net("VCC")
 gnd = Net("GND")
 # This will cause an error - missing required parameter
 SimpleResistor(name = "R1", P1 = vcc)
+"#;
+
+const METHOD_CHAINING_UNSTABLE_ZEN: &str = r#"
+# Test Module() with method chaining - should still show span highlighting
+R = Module("@github/mycompany/components:main/SimpleResistor.zen").Resistance
 "#;
 
 const COMMON_ZEN: &str = r#"
@@ -214,4 +222,24 @@ StableComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
         )
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("cross_repo_unstable_warning", output);
+}
+
+#[test]
+fn test_method_chaining_unstable_ref_warning() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a fake git repository with a component that exports a sub-interface
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .push_mirror();
+
+    // Create a board that uses Module() with method chaining (.Resistance)
+    // This should show proper span highlighting on the string argument
+    let output = sandbox
+        .write("board.zen", METHOD_CHAINING_UNSTABLE_ZEN)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("method_chaining_unstable_ref_warning", output);
 }

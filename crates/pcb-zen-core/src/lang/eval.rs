@@ -1235,68 +1235,117 @@ impl EvalContext {
         Ok(files)
     }
 
+    /// Parse the current module's AST, returning None if parsing fails
+    fn parse_current_ast(&self) -> Option<starlark::syntax::AstModule> {
+        let source_path = self.source_path.as_ref()?;
+        let contents = self.contents.as_ref()?;
+        starlark::syntax::AstModule::parse(
+            &source_path.to_string_lossy(),
+            contents.clone(),
+            &self.dialect(),
+        )
+        .ok()
+    }
+
+    /// Recursively search for expressions matching a predicate within an expression tree
+    fn find_in_expr<F>(
+        expr: &starlark::syntax::ast::AstExpr,
+        predicate: &mut F,
+    ) -> Option<starlark::codemap::Span>
+    where
+        F: FnMut(&starlark::syntax::ast::AstExpr) -> Option<starlark::codemap::Span>,
+    {
+        use starlark::syntax::ast::{ArgumentP, ExprP};
+
+        // Check current expression first
+        if let Some(span) = predicate(expr) {
+            return Some(span);
+        }
+
+        // Recursively search sub-expressions
+        match &expr.node {
+            ExprP::Call(_, call_args) => {
+                for arg in &call_args.args {
+                    if let ArgumentP::Positional(arg_expr) = &arg.node {
+                        if let Some(span) = Self::find_in_expr(arg_expr, predicate) {
+                            return Some(span);
+                        }
+                    }
+                }
+            }
+            ExprP::Dot(obj, _) => {
+                return Self::find_in_expr(obj, predicate);
+            }
+            ExprP::Index(boxed) => {
+                let (obj, index_expr) = &**boxed;
+                if let Some(span) = Self::find_in_expr(obj, predicate) {
+                    return Some(span);
+                }
+                return Self::find_in_expr(index_expr, predicate);
+            }
+            ExprP::Slice(obj, start, end, _) => {
+                if let Some(span) = Self::find_in_expr(obj, predicate) {
+                    return Some(span);
+                }
+                if let Some(start_expr) = start {
+                    if let Some(span) = Self::find_in_expr(start_expr, predicate) {
+                        return Some(span);
+                    }
+                }
+                if let Some(end_expr) = end {
+                    if let Some(span) = Self::find_in_expr(end_expr, predicate) {
+                        return Some(span);
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     /// Find the span of the *string literal* that is passed to a `Module()` call
     /// whose value equals `path`.
     ///
     /// The span is used by the LSP so that diagnostics highlight only the quoted
     /// string, not the whole `Module()` invocation.
     pub fn find_module_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
-        use starlark::syntax::ast::{ArgumentP, AstExpr, AstLiteral, ExprP};
+        use starlark::syntax::ast::{ArgumentP, AstLiteral, ExprP};
 
-        let ast = AstModule::parse(
-            &self.source_path.as_ref()?.to_string_lossy(),
-            self.contents.as_ref()?.clone(),
-            &self.dialect(),
-        )
-        .ok()?;
-
+        let ast = self.parse_current_ast()?;
         let mut found = None;
-        ast.statement().visit_expr(|expr: &AstExpr| {
+
+        ast.statement().visit_expr(|expr| {
             if found.is_some() { return; }
-            // Find Module() calls and extract string argument spans
-            if let ExprP::Call(callee, call_args) = &expr.node {
-                if let ExprP::Identifier(ident) = &callee.node {
-                    if ident.node.ident == "Module" {
-                        found = call_args.args.iter()
-                            .find_map(|arg| match &arg.node {
-                                ArgumentP::Positional(expr) => Some(expr),
-                                _ => None,
-                            })
-                            .filter(|expr| matches!(&expr.node, ExprP::Literal(AstLiteral::String(s)) if s.node == path))
-                            .map(|expr| expr.span);
+            found = Self::find_in_expr(expr, &mut |expr| {
+                // Look for Module() calls with matching string argument
+                if let ExprP::Call(callee, call_args) = &expr.node {
+                    if let ExprP::Identifier(ident) = &callee.node {
+                        if ident.node.ident == "Module" {
+                            return call_args.args.iter()
+                                .find_map(|arg| match &arg.node {
+                                    ArgumentP::Positional(expr) => Some(expr),
+                                    _ => None,
+                                })
+                                .filter(|expr| matches!(&expr.node, ExprP::Literal(AstLiteral::String(s)) if s.node == path))
+                                .map(|expr| expr.span);
+                        }
                     }
                 }
-            }
+                None
+            });
         });
         found
     }
 
     /// Find the span of a load statement that loads the given path
     pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
-        // We need access to the AST of the current module being evaluated
-        // This is a bit tricky since we're in the middle of evaluation
-        // For now, we'll try to parse the contents if available
-
-        if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
-            // Try to parse the AST to find load statements
-            if let Ok(ast) = AstModule::parse(
-                &source_path.to_string_lossy(),
-                contents.clone(),
-                &self.dialect(),
-            ) {
-                // Get all load statements
-                let loads = ast.loads();
-
-                // Find a load statement that matches our path
-                for load in loads {
-                    if load.module_id == path {
-                        return Some(load.span.span);
-                    }
-                }
-            }
-        }
-
-        None
+        let ast = self.parse_current_ast()?;
+        let result = ast
+            .loads()
+            .into_iter()
+            .find(|load| load.module_id == path)
+            .map(|load| load.span.span);
+        result
     }
 
     /// Get the codemap for the current module being evaluated
