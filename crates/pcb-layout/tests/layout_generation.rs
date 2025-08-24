@@ -78,6 +78,8 @@ layout_test!("dnp", "MyBoard");
 
 layout_test!("zones", "Board");
 
+layout_test!("tracks", "Board");
+
 layout_test!("graphics", "Board");
 
 layout_test!("complex", "Board");
