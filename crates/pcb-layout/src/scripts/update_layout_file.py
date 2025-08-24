@@ -433,6 +433,25 @@ class VirtualItem:
         """Move this item by a relative offset."""
         raise NotImplementedError("Subclasses must implement move_by")
 
+    def move_to(self, x: int, y: int) -> None:
+        """Move this item to a specific position."""
+        if self.bbox:
+            dx = x - self.bbox.x
+            dy = y - self.bbox.y
+            self.move_by(dx, dy)
+
+    def get_position(self) -> Optional[Tuple[int, int]]:
+        """Get the position of this item."""
+        if self.bbox:
+            return (self.bbox.x, self.bbox.y)
+        return None
+
+    def get_center(self) -> Optional[Tuple[int, int]]:
+        """Get the center position of this item."""
+        if self.bbox:
+            return (self.bbox.center_x, self.bbox.center_y)
+        return None
+
     def intersects_with(self, other: "VirtualItem", margin: int = 0) -> bool:
         """Check if this item's bounding box intersects with another's."""
         if not self.bbox or not other.bbox:
@@ -456,8 +475,17 @@ class VirtualElement(VirtualItem, ABC):
     def __init__(self, element_id: str, name: str, kicad_item: Any):
         super().__init__(VirtualItemType.EDA_ITEM, element_id, name)
         self.kicad_item = kicad_item
-        self._bbox = None
         self.attributes: Dict[str, Any] = {}
+
+    @property
+    def bbox(self) -> Optional[VirtualBoundingBox]:
+        """Get bounding box from KiCad object."""
+        return get_kicad_bbox(self.kicad_item) if self.kicad_item else None
+
+    def move_by(self, dx: int, dy: int) -> None:
+        """Move element using KiCad's built-in Move method."""
+        if self.kicad_item:
+            self.kicad_item.Move(pcbnew.VECTOR2I(dx, dy))
 
     def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
         """Clone this element to a target board.
@@ -476,63 +504,10 @@ class VirtualFootprint(VirtualElement):
         fp_id: str,
         name: str,
         kicad_footprint: Any,  # pcbnew.FOOTPRINT
-        bbox: VirtualBoundingBox,
+        bbox: VirtualBoundingBox,  # Kept for API compatibility but not used
     ):
         super().__init__(fp_id, name, kicad_footprint)
         self.kicad_footprint = kicad_footprint  # Keep for compatibility
-        self._bbox = bbox
-
-    @property
-    def bbox(self) -> Optional[VirtualBoundingBox]:
-        """Get the current bounding box from the KiCad footprint."""
-        # Always return the current bbox from the actual footprint position
-        if self.kicad_footprint and hasattr(self.kicad_footprint, "GetBoundingBox"):
-            bb = get_kicad_bbox(self.kicad_footprint)
-            self._bbox = bb
-        return self._bbox
-
-    def move_by(self, dx: int, dy: int) -> None:
-        """Move the footprint by a relative offset."""
-        # Use KiCad's built-in Move method
-        if self.kicad_footprint:
-            self.kicad_footprint.Move(pcbnew.VECTOR2I(dx, dy))
-
-        # Update cached bbox
-        if self._bbox:
-            self._bbox = VirtualBoundingBox(
-                self._bbox.x + dx,
-                self._bbox.y + dy,
-                self._bbox.width,
-                self._bbox.height,
-            )
-
-        # Notify parent groups to update their bboxes
-        parent = self.parent
-        while parent and isinstance(parent, VirtualGroup):
-            parent._cached_bbox = None  # Invalidate cache
-            parent = parent.parent
-
-    def move_to(self, x: int, y: int) -> None:
-        """Move the footprint to a specific position."""
-        if self.bbox:
-            dx = x - self.bbox.x
-            dy = y - self.bbox.y
-            self.move_by(dx, dy)
-
-    def get_position(self) -> Optional[Tuple[int, int]]:
-        """Get the position of this footprint."""
-        if self.kicad_footprint and hasattr(self.kicad_footprint, "GetPosition"):
-            pos = self.kicad_footprint.GetPosition()
-            return (pos.x, pos.y)
-        elif self._bbox:
-            return (self._bbox.x, self._bbox.y)
-        return None
-
-    def get_center(self) -> Optional[Tuple[int, int]]:
-        """Get the center position of this footprint."""
-        if self.bbox:
-            return (self.bbox.center_x, self.bbox.center_y)
-        return None
 
     def replace_with(self, source_footprint: "VirtualFootprint") -> None:
         """Copy position and properties from another footprint."""
@@ -540,8 +515,6 @@ class VirtualFootprint(VirtualElement):
             self._copy_kicad_properties(
                 source_footprint.kicad_footprint, self.kicad_footprint
             )
-        # Update bbox after copying properties
-        self._bbox = source_footprint._bbox
 
     def _copy_kicad_properties(self, source: Any, target: Any) -> None:
         """Copy position, orientation, etc from source to target KiCad object."""
@@ -605,39 +578,6 @@ class VirtualZone(VirtualElement):
     def __init__(self, zone_id: str, name: str, kicad_zone: Any):
         super().__init__(zone_id, name, kicad_zone)
         self._source_net_code = kicad_zone.GetNetCode()
-        self._capture_outline()
-
-    def _capture_outline(self):
-        """Cache the zone outline for transformations."""
-        self._outline_points = []
-        outline = self.kicad_item.Outline()
-        for i in range(outline.OutlineCount()):
-            contour = outline.COutline(i)
-            contour_points = []
-            for j in range(contour.PointCount()):
-                pt = contour.CPoint(j)
-                contour_points.append((pt.x, pt.y))
-            self._outline_points.append(contour_points)
-
-    @property
-    def bbox(self) -> Optional[VirtualBoundingBox]:
-        """Calculate bounding box from outline points."""
-        if not self._outline_points or not self._outline_points[0]:
-            return None
-
-        all_points = [pt for contour in self._outline_points for pt in contour]
-        min_x = min(x for x, y in all_points)
-        max_x = max(x for x, y in all_points)
-        min_y = min(y for x, y in all_points)
-        max_y = max(y for x, y in all_points)
-
-        return VirtualBoundingBox(min_x, min_y, max_x - min_x, max_y - min_y)
-
-    def move_by(self, dx: int, dy: int) -> None:
-        """Move zone by offset using KiCad's built-in Move method."""
-        # Use KiCad's built-in Move method
-        self.kicad_item.Move(pcbnew.VECTOR2I(dx, dy))
-        self._capture_outline()  # Update cached points
 
     def apply_net_code_mapping(
         self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
@@ -683,16 +623,6 @@ class VirtualGraphic(VirtualElement):
     def __init__(self, graphic_id: str, name: str, kicad_graphic: Any):
         super().__init__(graphic_id, name, kicad_graphic)
         self._type = kicad_graphic.GetClass()
-
-    @property
-    def bbox(self) -> Optional[VirtualBoundingBox]:
-        """Get bounding box from KiCad object."""
-        return get_kicad_bbox(self.kicad_item)
-
-    def move_by(self, dx: int, dy: int) -> None:
-        """Move graphic element by offset using KiCad's built-in Move method."""
-        # Use KiCad's built-in Move method
-        self.kicad_item.Move(pcbnew.VECTOR2I(dx, dy))
 
     def render_tree(self, indent: int = 0) -> str:
         """Render this graphic as a string."""
@@ -767,31 +697,8 @@ class VirtualGroup(VirtualItem):
         for child in self.children:
             child.move_by(dx, dy)
 
-        # Invalidate our cached bbox and parent caches
+        # Invalidate our cached bbox
         self._cached_bbox = None
-        parent = self.parent
-        while parent and isinstance(parent, VirtualGroup):
-            parent._cached_bbox = None
-            parent = parent.parent
-
-    def move_to(self, x: int, y: int) -> None:
-        """Move this group to a specific position."""
-        if self.bbox:
-            dx = x - self.bbox.x
-            dy = y - self.bbox.y
-            self.move_by(dx, dy)
-
-    def get_center(self) -> Optional[Tuple[int, int]]:
-        """Get the center position of this group."""
-        if self.bbox:
-            return (self.bbox.center_x, self.bbox.center_y)
-        return None
-
-    def get_position(self) -> Optional[Tuple[int, int]]:
-        """Get the position (top-left) of this group."""
-        if self.bbox:
-            return (self.bbox.x, self.bbox.y)
-        return None
 
     def find_by_id(self, item_id: str) -> Optional[VirtualItem]:
         """Find an item by ID in this subtree."""
