@@ -362,7 +362,7 @@ pub struct Module {
 impl Module {
     /// Create a module from a single file path
     #[wasm_bindgen(js_name = fromPath)]
-    pub fn from_path(file_path: &str) -> Result<Module, JsValue> {
+    pub fn from_path(file_path: &str, options: JsValue) -> Result<Module, JsValue> {
         // Extract module name from the file path
         let path = PathBuf::from(file_path);
         let module_name = path
@@ -381,7 +381,35 @@ impl Module {
 
         // Create file provider and remote fetcher that share the same inner provider
         let file_provider = Arc::new(WasmFileProvider::new(inner_provider.clone()));
-        let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
+        // Parse options for resolver configuration
+        #[derive(Deserialize)]
+        struct ModuleOptions {
+            #[serde(rename = "useVendorDir")]
+            use_vendor_dir: Option<bool>,
+            offline: Option<bool>,
+        }
+
+        let (use_vendor_dir, offline) = if !options.is_undefined() && !options.is_null() {
+            match serde_wasm_bindgen::from_value::<ModuleOptions>(options) {
+                Ok(opts) => (
+                    opts.use_vendor_dir.unwrap_or(true),
+                    opts.offline.unwrap_or(false),
+                ),
+                Err(e) => {
+                    return Err(JsValue::from_str(&format!(
+                        "Failed to parse module options: {e}"
+                    )));
+                }
+            }
+        } else {
+            (true, false)
+        };
+
+        let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if offline {
+            Arc::new(pcb_zen_core::NoopRemoteFetcher)
+        } else {
+            Arc::new(WasmRemoteFetcher::new(inner_provider))
+        };
 
         // Determine workspace root using pcb.toml discovery
         let workspace_root = find_workspace_root(file_provider.as_ref(), &path);
@@ -391,7 +419,7 @@ impl Module {
             file_provider.clone(),
             remote_fetcher.clone(),
             workspace_root,
-            true,
+            use_vendor_dir,
         ));
 
         Ok(Module {
@@ -409,6 +437,7 @@ impl Module {
         files_json: &str,
         main_file: &str,
         module_name: &str,
+        options: JsValue,
     ) -> Result<Module, JsValue> {
         let files: std::collections::HashMap<String, String> = serde_json::from_str(files_json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse files JSON: {e}")))?;
@@ -423,7 +452,35 @@ impl Module {
 
         // Create file provider and remote fetcher that share the same inner provider
         let file_provider = Arc::new(WasmFileProvider::new(inner_provider.clone()));
-        let remote_fetcher = Arc::new(WasmRemoteFetcher::new(inner_provider));
+        // Parse options for resolver configuration
+        #[derive(Deserialize)]
+        struct ModuleOptions {
+            #[serde(rename = "useVendorDir")]
+            use_vendor_dir: Option<bool>,
+            offline: Option<bool>,
+        }
+
+        let (use_vendor_dir, offline) = if !options.is_undefined() && !options.is_null() {
+            match serde_wasm_bindgen::from_value::<ModuleOptions>(options) {
+                Ok(opts) => (
+                    opts.use_vendor_dir.unwrap_or(true),
+                    opts.offline.unwrap_or(false),
+                ),
+                Err(e) => {
+                    return Err(JsValue::from_str(&format!(
+                        "Failed to parse module options: {e}"
+                    )));
+                }
+            }
+        } else {
+            (true, false)
+        };
+
+        let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if offline {
+            Arc::new(pcb_zen_core::NoopRemoteFetcher)
+        } else {
+            Arc::new(WasmRemoteFetcher::new(inner_provider))
+        };
 
         // Determine workspace root using pcb.toml discovery
         let main_path = PathBuf::from(main_file);
@@ -434,7 +491,7 @@ impl Module {
             file_provider.clone(),
             remote_fetcher.clone(),
             workspace_root,
-            true,
+            use_vendor_dir,
         ));
 
         Ok(Module {

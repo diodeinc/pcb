@@ -516,6 +516,8 @@ pub struct CoreLoadResolver {
     use_vendor_dir: bool,
     /// Hierarchical alias resolution cache
     alias_cache: RwLock<HashMap<PathBuf, HashMap<String, String>>>,
+    /// Workspace root cache by directory path
+    workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
 }
 
 impl CoreLoadResolver {
@@ -539,6 +541,7 @@ impl CoreLoadResolver {
             tracked_local_files: Arc::new(Mutex::new(HashSet::new())),
             use_vendor_dir,
             alias_cache: RwLock::new(HashMap::new()),
+            workspace_root_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -556,6 +559,47 @@ impl CoreLoadResolver {
             workspace_root,
             use_vendor_dir,
         )
+    }
+
+    /// Get the effective workspace root for a given file, with caching.
+    /// This determines the correct workspace context for the file, which may differ
+    /// from self.workspace_root when dealing with local aliases or remote dependencies.
+    fn get_effective_workspace_root(&self, current_file: &Path) -> Result<PathBuf, anyhow::Error> {
+        let canonical_file = self.file_provider.canonicalize(current_file)?;
+        let dir = canonical_file.parent().unwrap_or(&canonical_file);
+
+        // Check cache first (optimistic read)
+        if let Some(cached) = self.workspace_root_cache.read().unwrap().get(dir) {
+            return Ok(cached.clone());
+        }
+
+        // Determine workspace root - order matters!
+        let vendor_dir = self.workspace_root.join("vendor");
+        let workspace_root =
+            if let Some(spec) = self.path_to_spec.lock().unwrap().get(&canonical_file) {
+                // Remote file - use LoadSpec to walk up to repo root
+                let mut root = canonical_file.clone();
+                for _ in 0..spec.path().components().count() {
+                    root = root.parent().unwrap_or(Path::new("")).to_path_buf();
+                }
+                root
+            } else if canonical_file.starts_with(&self.workspace_root)
+                && !canonical_file.starts_with(&vendor_dir)
+            {
+                // Main workspace (but not vendor)
+                self.workspace_root.clone()
+            } else {
+                // Vendored dependency OR local file outside main workspace
+                // Both cases: search for pcb.toml with [workspace]
+                config::find_workspace_root(self.file_provider.as_ref(), &canonical_file)
+            };
+
+        // Cache result for this directory
+        self.workspace_root_cache
+            .write()
+            .unwrap()
+            .insert(dir.to_path_buf(), workspace_root.clone());
+        Ok(workspace_root)
     }
 
     /// Try to resolve a LoadSpec from the vendor directory
@@ -635,30 +679,17 @@ impl CoreLoadResolver {
             return Ok(cached.clone());
         }
 
-        // Determine alias root (workspace or workspace/vendor or remote repo root)
-        let spec = self.path_to_spec.lock().unwrap().get(&file).cloned();
-        let vendor_dir = self.workspace_root.join("vendor");
-        let alias_root = if file.starts_with(&vendor_dir) {
-            log::debug!("  Using vendor root: {}", vendor_dir.display());
-            vendor_dir
-        } else if file.starts_with(&self.workspace_root) {
-            log::debug!("  Using workspace root: {}", self.workspace_root.display());
-            self.workspace_root.clone()
-        } else {
-            // For remote files, find repo root using existing LoadSpec mapping
-            if let Some(spec) = &spec {
-                // Walk up from file by the number of components in spec_path
-                let mut root = file.clone();
-                for _ in 0..spec.path().components().count() {
-                    root = root.parent().unwrap_or(Path::new("")).to_path_buf();
-                }
-                log::debug!("  Using remote repo root: {}", root.display());
-                root
-            } else {
-                log::debug!("  File not in path_to_spec mapping, using defaults");
+        // Determine alias root using centralized workspace detection
+        let alias_root = match self.get_effective_workspace_root(&file) {
+            Ok(root) => root,
+            Err(_) => {
+                log::debug!("  Failed to determine workspace root, using defaults");
                 return Ok(LoadSpec::default_package_aliases());
             }
         };
+
+        // Still need spec for path_to_spec mapping below
+        let spec = self.path_to_spec.lock().unwrap().get(&file).cloned();
 
         let pcb_toml_files = file
             .ancestors()
@@ -747,6 +778,8 @@ impl LoadResolver for CoreLoadResolver {
         spec: &LoadSpec,
         current_file: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
+        // Compute the effective workspace root for this file at the top
+        let effective_workspace_root = self.get_effective_workspace_root(current_file)?;
         // Check if the current file is a cached remote file
         let current_file_spec = self.get_load_spec_for_path(current_file);
 
@@ -903,7 +936,7 @@ impl LoadResolver for CoreLoadResolver {
 
             // Workspace-relative paths (starts with //)
             LoadSpec::WorkspacePath { path } => {
-                let canonical_root = file_provider.canonicalize(&self.workspace_root)?;
+                let canonical_root = file_provider.canonicalize(&effective_workspace_root)?;
                 let resolved_path = canonical_root.join(path);
 
                 // Canonicalize the resolved path to handle .. and symlinks

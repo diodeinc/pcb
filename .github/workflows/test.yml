@@ -19,6 +19,7 @@ jobs:
     name: Build and Test (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs-on }}
     container: ${{ matrix.config.container }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

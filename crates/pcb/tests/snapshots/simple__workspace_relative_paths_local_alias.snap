@@ -1,0 +1,12 @@
+---
+source: crates/pcb/tests/simple.rs
+assertion_line: 259
+expression: output
+---
+Command: pcb build build-ws/foo.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ foo.zen (1 components)

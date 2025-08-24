@@ -10,6 +10,6 @@ Workspace Information
 Root: <TEMP_DIR>
 
 Boards (1)
-  TestBoard (default) - test_board.zen in <TEMP_DIR>/boards/TestBoard
+  TestBoard (default) - boards/TestBoard/test_board.zen
     Main test board for validation
 --- STDERR ---
