@@ -137,6 +137,38 @@ fn test_pcb_release_with_git() {
 }
 
 #[test]
+#[ignore]
+fn test_pcb_release_full() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .seed_stdlib(&["v0.2.4"])
+        .seed_kicad(&["9.0.0"])
+        .write("pcb.toml", PCB_TOML)
+        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .ignore_globs(&["layout/*", "3d/*"]);
+
+    // Run full release with JSON output
+    let output = sb
+        .cmd(
+            cargo_bin!("pcb"),
+            ["release", "boards/TestBoard.zen", "-f", "json"],
+        )
+        .read()
+        .expect("Failed to run pcb release command");
+
+    // Parse JSON output to get staging directory
+    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
+    let staging_dir = json["staging_directory"]
+        .as_str()
+        .expect("Missing staging_directory in JSON");
+
+    // Snapshot the staging directory contents
+    assert_snapshot!("release_full", sb.snapshot_dir(staging_dir));
+}
+
+#[test]
 fn test_pcb_release_case_insensitive_tag() {
     let board_zen = r#"
 add_property("layout_path", "build/CaseBoard")

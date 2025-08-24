@@ -18,6 +18,7 @@ use std::process::Command;
 
 use zip::{write::FileOptions, ZipWriter};
 
+use crate::bom::write_bom_json;
 use crate::workspace::{
     classify_file, gather_workspace_info, loadspec_to_vendor_path, FileClassification,
     WorkspaceInfo,
@@ -606,7 +607,7 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
     let file = fs::File::create(&bom_file)?;
-    serde_json::to_writer_pretty(file, &bom_entries)?;
+    write_bom_json(&bom_entries, &file)?;
 
     Ok(())
 }

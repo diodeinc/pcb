@@ -1,0 +1,160 @@
+---
+source: crates/pcb/tests/release.rs
+expression: sb.snapshot_dir(staging_dir)
+---
+=== bom/design_bom.json
+[
+  {
+    "path": "C1.C",
+    "designator": "C1",
+    "package": "0402",
+    "value": "100nF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.0000001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  },
+  {
+    "path": "C2.C",
+    "designator": "C2",
+    "package": "0805",
+    "value": "10uF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.00001",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": false
+  },
+  {
+    "path": "LED1.D1.LED",
+    "designator": "D1",
+    "package": "0603",
+    "value": "LED GREEN",
+    "dnp": false
+  },
+  {
+    "path": "LED1.R1.R",
+    "designator": "R1",
+    "package": "0603",
+    "value": "330",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "330",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  },
+  {
+    "path": "R1.R",
+    "designator": "R2",
+    "package": "0603",
+    "value": "10k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "10000",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": false
+  }
+]
+=== manufacturing/cpl.csv
+Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
+"C1","100nF","C_0402_1005Metric",149.855000,-103.970000,0.000000,top
+"C2","10uF","C_0805_2012Metric",147.195000,-103.450000,0.000000,top
+"D1","LED GREEN","LED_0603_1608Metric",147.015000,-106.760000,0.000000,top
+"R1","330","R_0603_1608Metric",146.975000,-105.210000,0.000000,top
+"R2","10k","R_0603_1608Metric",150.025000,-106.800000,0.000000,top
+=== metadata.json
+{
+  "git": {
+    "describe": "unknown",
+    "hash": "unknown",
+    "workspace": "<TEMP_DIR>/src"
+  },
+  "release": {
+    "created_at": "<TIMESTAMP>",
+    "git_version": "unknown",
+    "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
+    "schema_version": "1",
+    "source_only": false,
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard/unknown",
+    "workspace_root": "<TEMP_DIR>/src",
+    "zen_file": "boards/TestBoard.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "<CLI_VERSION>",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
+}
+=== src/boards/TestBoard.zen
+
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+
+add_property("layout_path", "build/TestBoard")
+
+LedModule = Module("../modules/LedModule.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+vcc_3v3 = Power("VCC_3V3")
+gnd = Ground("GND")
+led_ctrl = Gpio("LED_CTRL")
+
+Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3.NET, P2 = gnd.NET)
+Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = gnd.NET)
+
+LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = led_ctrl)
+
+Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
+=== src/modules/LedModule.zen
+
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+
+led_color = config("led_color", str, default = "red")
+r_value = config("r_value", str, default = "330Ohm")
+package = config("package", str, default = "0603")
+
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+CTRL = io("CTRL", Gpio)
+
+led_anode = Net("LED_ANODE")
+
+Resistor(name = "R1", value = r_value, package = package, P1 = VCC.NET, P2 = led_anode)
+Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.NET)
+=== src/pcb.toml
+
+[workspace]
+name = "test_workspace"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v0.2.4"
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/config.zen <3994 bytes, sha256: 49a58dc>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/generics/Capacitor.zen <4082 bytes, sha256: bc6d94a>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/generics/Led.zen <3597 bytes, sha256: 9f30609>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/generics/Resistor.zen <3284 bytes, sha256: 3ad91a6>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/generics/SolderJumper.zen <4422 bytes, sha256: c610f95>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/interfaces.zen <8417 bytes, sha256: 37ab673>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/units.zen <9407 bytes, sha256: 099a28c>
+=== src/vendor/github.com/diodeinc/stdlib/v0.2.4/utils.zen <533 bytes, sha256: 25e07ab>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod <3588 bytes, sha256: 3164c1b>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod <3574 bytes, sha256: bd6bc0e>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod <3670 bytes, sha256: 41fc23f>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod <2889 bytes, sha256: 874695d>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/LED_SMD.pretty/LED_0201_0603Metric.kicad_mod <3957 bytes, sha256: dfc8904>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/LED_SMD.pretty/LED_0603_1608Metric.kicad_mod <3855 bytes, sha256: 16387fe>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.0/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod <3607 bytes, sha256: 4704c9c>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym <2213878 bytes, sha256: 972f851>
+=== src/vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.0/power.kicad_sym <165243 bytes, sha256: 541c49b>
