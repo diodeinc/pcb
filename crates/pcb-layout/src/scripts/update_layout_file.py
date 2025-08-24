@@ -606,24 +606,35 @@ class VirtualFootprint(VirtualElement):
         return f"{prefix}{self.name}{fpid_info}{status_str} {self.bbox}"
 
 
-class VirtualZone(VirtualElement):
-    """Represents a zone with polygon outline and net connectivity."""
+class VirtualConnectedItem(VirtualElement):
+    """Represents any BOARD_CONNECTED_ITEM (track, via, zone, etc.) with net connectivity."""
 
-    def __init__(self, zone_id: str, name: str, kicad_zone: Any):
-        super().__init__(zone_id, name, kicad_zone)
-        self._source_net_code = kicad_zone.GetNetCode()
+    def __init__(self, item_id: str, name: str, kicad_item: Any):
+        super().__init__(item_id, name, kicad_item)
+        self._source_net_code = kicad_item.GetNetCode()
+        # Determine the item type for display purposes
+        item_class = kicad_item.GetClass()
+        if "VIA" in item_class.upper():
+            self._item_type = "Via"
+        elif "TRACK" in item_class.upper():
+            self._item_type = "Track"
+        elif "ZONE" in item_class.upper():
+            self._item_type = "Zone"
+        else:
+            # Fallback for any other BOARD_CONNECTED_ITEM types
+            self._item_type = item_class
 
     def apply_net_code_mapping(
         self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
     ) -> bool:
-        """Apply net code mapping to this zone."""
+        """Apply net code mapping to this connected item."""
         if self._source_net_code == 0:
-            return True  # No net zone
+            return True  # No net connection
 
         target_net_code = net_code_map.get(self._source_net_code, 0)
         if target_net_code == 0:
             logger.warning(
-                f"Zone {self.name}: No mapping for net code {self._source_net_code}"
+                f"{self._item_type} {self.name}: No mapping for net code {self._source_net_code}"
             )
             self.kicad_item.SetNetCode(0)
             return False
@@ -634,13 +645,13 @@ class VirtualZone(VirtualElement):
             return True
         else:
             logger.error(
-                f"Zone {self.name}: Target net code {target_net_code} not found"
+                f"{self._item_type} {self.name}: Target net code {target_net_code} not found"
             )
             self.kicad_item.SetNetCode(0)
             return False
 
     def render_tree(self, indent: int = 0) -> str:
-        """Render this zone as a string."""
+        """Render this connected item as a string."""
         prefix = "  " * indent
         status_markers = []
         if self.added:
@@ -648,97 +659,9 @@ class VirtualZone(VirtualElement):
         status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
 
         net_info = f" (net:{self._source_net_code})"
-        return f"{prefix}Zone:{self.name}{net_info}{status_str} {self.bbox}"
-
-
-class VirtualTrack(VirtualElement):
-    """Represents a track with net connectivity."""
-
-    def __init__(self, track_id: str, name: str, kicad_track: Any):
-        super().__init__(track_id, name, kicad_track)
-        self._source_net_code = kicad_track.GetNetCode()
-
-    def apply_net_code_mapping(
-        self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
-    ) -> bool:
-        """Apply net code mapping to this track."""
-        if self._source_net_code == 0:
-            return True  # No net track
-
-        target_net_code = net_code_map.get(self._source_net_code, 0)
-        if target_net_code == 0:
-            logger.warning(
-                f"Track {self.name}: No mapping for net code {self._source_net_code}"
-            )
-            self.kicad_item.SetNetCode(0)
-            return False
-
-        target_net = target_board.FindNet(target_net_code)
-        if target_net:
-            self.kicad_item.SetNet(target_net)
-            return True
-        else:
-            logger.error(
-                f"Track {self.name}: Target net code {target_net_code} not found"
-            )
-            self.kicad_item.SetNetCode(0)
-            return False
-
-    def render_tree(self, indent: int = 0) -> str:
-        """Render this track as a string."""
-        prefix = "  " * indent
-        status_markers = []
-        if self.added:
-            status_markers.append("NEW")
-        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
-
-        net_info = f" (net:{self._source_net_code})"
-        return f"{prefix}Track:{self.name}{net_info}{status_str} {self.bbox}"
-
-
-class VirtualVia(VirtualElement):
-    """Represents a via with net connectivity."""
-
-    def __init__(self, via_id: str, name: str, kicad_via: Any):
-        super().__init__(via_id, name, kicad_via)
-        self._source_net_code = kicad_via.GetNetCode()
-
-    def apply_net_code_mapping(
-        self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
-    ) -> bool:
-        """Apply net code mapping to this via."""
-        if self._source_net_code == 0:
-            return True  # No net via
-
-        target_net_code = net_code_map.get(self._source_net_code, 0)
-        if target_net_code == 0:
-            logger.warning(
-                f"Via {self.name}: No mapping for net code {self._source_net_code}"
-            )
-            self.kicad_item.SetNetCode(0)
-            return False
-
-        target_net = target_board.FindNet(target_net_code)
-        if target_net:
-            self.kicad_item.SetNet(target_net)
-            return True
-        else:
-            logger.error(
-                f"Via {self.name}: Target net code {target_net_code} not found"
-            )
-            self.kicad_item.SetNetCode(0)
-            return False
-
-    def render_tree(self, indent: int = 0) -> str:
-        """Render this via as a string."""
-        prefix = "  " * indent
-        status_markers = []
-        if self.added:
-            status_markers.append("NEW")
-        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
-
-        net_info = f" (net:{self._source_net_code})"
-        return f"{prefix}Via:{self.name}{net_info}{status_str} {self.bbox}"
+        return (
+            f"{prefix}{self._item_type}:{self.name}{net_info}{status_str} {self.bbox}"
+        )
 
 
 class VirtualGraphic(VirtualElement):
@@ -1032,7 +955,7 @@ def build_virtual_dom_from_board(
             )
             zone_name = zone.GetZoneName() or f"Zone_{zone_uuid[:8]}"
 
-            vzone = VirtualZone(zone_uuid, zone_name, zone)
+            vzone = VirtualConnectedItem(zone_uuid, zone_name, zone)
 
             # Determine which group this zone belongs to by checking parent group
             parent_group = (
@@ -1082,11 +1005,11 @@ def build_virtual_dom_from_board(
             if "VIA" in item_class.upper():
                 # It's a via
                 item_name = f"Via_{item_uuid[:8]}"
-                vitem = VirtualVia(item_uuid, item_name, item)
             else:
                 # It's a track
                 item_name = f"Track_{item_uuid[:8]}"
-                vitem = VirtualTrack(item_uuid, item_name, item)
+
+            vitem = VirtualConnectedItem(item_uuid, item_name, item)
 
             # Determine which group this track/via belongs to
             parent_group = (
@@ -2160,6 +2083,61 @@ class SyncLayouts(Step):
         self.board = board
         self.netlist = netlist
 
+    def _sync_connected_item(
+        self,
+        item: Any,
+        net_code_map: Dict[int, int],
+        group: VirtualGroup,
+        item_name: str = None,
+    ) -> VirtualConnectedItem:
+        """Sync a single connected item (zone, track, or via) to the target board.
+
+        Args:
+            item: The source item to sync
+            net_code_map: Mapping of source to target net codes
+            group: The group to add the item to
+            item_name: Optional name for the item
+
+        Returns:
+            The created VirtualConnectedItem
+        """
+        # Use Duplicate() to copy all properties automatically
+        new_item = item.Duplicate()
+
+        # Apply net code mapping (this is the only thing we need to update)
+        source_net_code = item.GetNetCode()
+        if source_net_code in net_code_map:
+            target_net_code = net_code_map[source_net_code]
+            target_net = self.board.FindNet(target_net_code)
+            if target_net:
+                new_item.SetNet(target_net)
+        else:
+            new_item.SetNetCode(0)
+
+        # Add to board
+        self.board.Add(new_item)
+
+        # Create virtual connected item and add to group
+        item_uuid = str(uuid.uuid4())
+
+        # Determine item name if not provided
+        if item_name is None:
+            item_class = item.GetClass()
+            if "VIA" in item_class.upper():
+                item_name = f"Via_{item_uuid[:8]}"
+            elif "TRACK" in item_class.upper():
+                item_name = f"Track_{item_uuid[:8]}"
+            elif "ZONE" in item_class.upper():
+                item_name = item.GetZoneName() or f"Zone_{item_uuid[:8]}"
+            else:
+                item_name = f"{item_class}_{item_uuid[:8]}"
+
+        vitem = VirtualConnectedItem(item_uuid, item_name, new_item)
+        vitem.added = True
+        group.add_child(vitem)
+
+        return vitem
+
     def _sync_group_layout(self, group: VirtualGroup, layout_file: Path):
         """Sync all elements (footprints, zones, graphics) in a group from a layout file."""
         # Load the layout file into a virtual board
@@ -2240,33 +2218,25 @@ class SyncLayouts(Step):
                 layout_board, self.board, matched_pairs
             )
 
-            # Get all zones from source layout
+            # Sync all connected items (zones and tracks/vias)
             zones_synced = 0
+            tracks_synced = 0
+            vias_synced = 0
+
+            # Sync zones
             for zone in layout_board.Zones():
-                # Use Duplicate() to copy all zone properties automatically
-                new_zone = zone.Duplicate()
-
-                # Apply net code mapping (this is the only thing we need to update)
-                source_net_code = zone.GetNetCode()
-                if source_net_code in net_code_map:
-                    target_net_code = net_code_map[source_net_code]
-                    target_net = self.board.FindNet(target_net_code)
-                    if target_net:
-                        new_zone.SetNet(target_net)
-                else:
-                    new_zone.SetNetCode(0)
-
-                # Add to board
-                self.board.Add(new_zone)
-
-                # Create virtual zone and add to group
-                zone_uuid = str(uuid.uuid4())
-                vzone = VirtualZone(
-                    zone_uuid, zone.GetZoneName() or f"Zone_{zone_uuid[:8]}", new_zone
-                )
-                vzone.added = True
-                group.add_child(vzone)
+                self._sync_connected_item(zone, net_code_map, group)
                 zones_synced += 1
+
+            # Sync tracks and vias
+            for item in layout_board.GetTracks():
+                self._sync_connected_item(item, net_code_map, group)
+                # Count tracks vs vias for logging
+                item_class = item.GetClass()
+                if "VIA" in item_class.upper():
+                    vias_synced += 1
+                else:
+                    tracks_synced += 1
 
             # Get all graphics from source layout
             graphics_synced = 0
@@ -2293,44 +2263,6 @@ class SyncLayouts(Step):
                 group.add_child(vgraphic)
                 graphics_synced += 1
 
-            # Get all tracks and vias from source layout
-            tracks_synced = 0
-            vias_synced = 0
-            for item in layout_board.GetTracks():
-                # Use Duplicate() to copy all track/via properties automatically
-                new_item = item.Duplicate()
-
-                # Apply net code mapping (this is the only thing we need to update)
-                source_net_code = item.GetNetCode()
-                if source_net_code in net_code_map:
-                    target_net_code = net_code_map[source_net_code]
-                    target_net = self.board.FindNet(target_net_code)
-                    if target_net:
-                        new_item.SetNet(target_net)
-                else:
-                    new_item.SetNetCode(0)
-
-                # Add to board
-                self.board.Add(new_item)
-
-                # Create appropriate virtual element and add to group
-                item_uuid = str(uuid.uuid4())
-
-                # Check if it's a track or via
-                # We need to check the class type to distinguish
-                item_class = item.GetClass()
-                if "VIA" in item_class.upper():
-                    # It's a via
-                    vitem = VirtualVia(item_uuid, f"Via_{item_uuid[:8]}", new_item)
-                    vias_synced += 1
-                else:
-                    # It's a track
-                    vitem = VirtualTrack(item_uuid, f"Track_{item_uuid[:8]}", new_item)
-                    tracks_synced += 1
-
-                vitem.added = True
-                group.add_child(vitem)
-
             logger.info(
                 f"  Synced {zones_synced} zones, {graphics_synced} graphics, {tracks_synced} tracks, and {vias_synced} vias"
             )
@@ -2345,7 +2277,7 @@ class SyncLayouts(Step):
                     for child in group.children:
                         if isinstance(
                             child,
-                            (VirtualZone, VirtualGraphic, VirtualTrack, VirtualVia),
+                            (VirtualConnectedItem, VirtualGraphic),
                         ):
                             kicad_group.AddItem(child.kicad_item)
                     break
