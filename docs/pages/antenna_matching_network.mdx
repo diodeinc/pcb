@@ -5,7 +5,7 @@ description: "Build an Antenna Matching Network with Zener"
 
 If we pull this off with Zener, it should end up looking like the KiCad schematic below! You can follow along with the [example GitHub directory](https://github.com/diodeinc/example).
 
-![](../images/KiCAD_L_Network.png)
+![](../images/Kicad_L_Network.png)
 
 The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our physical components. Notably, our L Network uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
 
@@ -146,7 +146,7 @@ Component(
 Layout(name = "Antenna", path = "build/preview")
 ```
 
-![](../images/antenna.png)
+![](../images/Antenna.png)
 
 ## Modules
 
