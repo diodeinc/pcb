@@ -1853,8 +1853,6 @@ class SyncLayouts(Step):
                 layout_board, self.board, matched_pairs
             )
 
-            # No longer need to capture state - simplified approach
-
             # Get all zones from source layout
             zones_synced = 0
             for zone in layout_board.Zones():

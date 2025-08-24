@@ -2502,7 +2502,7 @@ expression: content
       "hatch_style": 2,
       "layer": "F.Cu",
       "locked": false,
-      "min_thickness": 250000,
+      "min_thickness": 100000,
       "name": "",
       "net_name": "BOARD_P2",
       "points": [
@@ -2556,7 +2556,7 @@ expression: content
       "hatch_style": 2,
       "layer": "F.Cu",
       "locked": false,
-      "min_thickness": 250000,
+      "min_thickness": 100000,
       "name": "",
       "net_name": "BOARD_P4",
       "points": [
