@@ -190,6 +190,15 @@ impl Renderable for Diagnostic {
     }
 }
 
+/// Recursively promote a diagnostic and all its children to error severity
+fn promote_diagnostic_to_error(diagnostic: &mut pcb_zen_core::Diagnostic) {
+    use starlark::errors::EvalSeverity;
+    diagnostic.severity = EvalSeverity::Error;
+    if let Some(ref mut child) = diagnostic.child {
+        promote_diagnostic_to_error(child);
+    }
+}
+
 impl Renderable for Diagnostics {
     /// Render all diagnostics in a Diagnostics: warnings first, then errors.
     fn render_with_options(&self, args: &RenderArgs) {
@@ -200,9 +209,9 @@ impl Renderable for Diagnostics {
         if args.deny_warnings() {
             // Render warnings as errors (red)
             for diag in &warnings {
-                // Create a copy with error severity for rendering
+                // Create a copy with error severity for rendering (including children)
                 let mut error_diag = diag.clone();
-                error_diag.severity = EvalSeverity::Error;
+                promote_diagnostic_to_error(&mut error_diag);
                 error_diag.render_with_options(args);
                 eprintln!();
             }

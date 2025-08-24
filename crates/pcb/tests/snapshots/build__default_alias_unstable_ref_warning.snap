@@ -6,10 +6,10 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
-Warning: 'stdlib' default alias uses unstable reference 'HEAD'. Use a pinned version (inline :tag or pcb.toml).
+Warning: '@stdlib:latest' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:21 ]
  2 │TestModule = Module("@stdlib/TestModule.zen")
-   │                                ╰──────────── 'stdlib' default alias uses unstable reference 'HEAD'. Use a pinned version (inline :tag or pcb.toml).
+   │                                ╰──────────── '@stdlib:latest' is an unstable reference. Use a pinned version.
 --- STDERR ---
 
 ✓ board.zen (1 components)

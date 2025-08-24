@@ -6,14 +6,14 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
-Warning: '@github/mycompany/components:main/common.zen' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
+Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:6 ]
  2 │load("@github/mycompany/components:main/common.zen", "helper")
-   │                            ╰─────────────────────── '@github/mycompany/components:main/common.zen' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
-Warning: '@github/mycompany/components:main/SimpleResistor.zen' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
+   │                            ╰─────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:3:25 ]
  3 │SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
-   │                                                   ╰─────────────────────────── '@github/mycompany/components:main/SimpleResistor.zen' is an unstable reference. Use a pinned version (inline :tag or pcb.toml).
+   │                                                   ╰─────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
 --- STDERR ---
 
 

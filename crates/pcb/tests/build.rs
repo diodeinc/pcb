@@ -304,3 +304,168 @@ TestModule(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("default_alias_unstable_ref_warning", output);
 }
+
+#[test]
+fn test_gitlab_unstable_ref_warning() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a fake GitLab repository with components
+    sandbox
+        .git_fixture("https://gitlab.com/mycompany/components.git")
+        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .push_mirror();
+
+    // Create a board that uses GitLab with unstable ref
+    let board_zen_content = r#"
+SimpleResistor = Module("@gitlab/mycompany/components:main/SimpleResistor.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("gitlab_unstable_ref_warning", output);
+}
+
+#[test]
+fn test_transitive_unstable_dependencies() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a third-party utility repo (unstable)
+    sandbox
+        .git_fixture("https://github.com/thirdparty/utils.git")
+        .write(
+            "Utility.zen",
+            r#"
+def utility_function(): 
+    return "helper"
+"#,
+        )
+        .commit("Add utility functions")
+        .push_mirror();
+
+    // Create intermediate components repo (stable) that depends on unstable third-party via PCB.toml
+    sandbox
+        .git_fixture("https://github.com/mycompany/intermediate.git")
+        .write(
+            "pcb.toml",
+            r#"
+[packages]
+utils = "@github/thirdparty/utils:main"
+"#,
+        )
+        .write(
+            "IntermediateComponent.zen",
+            r#"
+# This intermediate component depends on unstable third-party via alias
+load("@utils/Utility.zen", "utility_function")
+
+value = config("value", str, default = "10kOhm")
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    prefix = "R",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": P1, "P2": P2},
+    properties = {"value": value, "type": "resistor"},
+)
+"#,
+        )
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add intermediate component")
+        .tag("v1.0.0", false)
+        .push_mirror();
+
+    // Create a PCB.toml with multiple aliases creating a chain
+    let pcb_toml_content = r#"
+[packages]
+intermediate = "@github/mycompany/intermediate:v1.0.0"
+utils = "@github/thirdparty/utils:main"
+"#;
+
+    // Create a board that uses the intermediate alias (which internally uses the utils alias)
+    let board_zen_content = r#"
+IntermediateComponent = Module("@intermediate/IntermediateComponent.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+IntermediateComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml_content)
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("transitive_unstable_dependencies", output);
+}
+
+#[test]
+fn test_mixed_stable_unstable_refs() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a stable component repository
+    sandbox
+        .git_fixture("https://github.com/stable/components.git")
+        .write("StableResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add stable resistor")
+        .tag("v1.0.0", false)
+        .push_mirror();
+
+    // Create an unstable component repository
+    sandbox
+        .git_fixture("https://github.com/unstable/components.git")
+        .write(
+            "UnstableCapacitor.zen",
+            r#"
+value = config("value", str, default = "1uF")
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "C",
+    prefix = "C",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": P1, "P2": P2},
+    properties = {"value": value, "type": "capacitor"},
+)
+"#,
+        )
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add unstable capacitor")
+        .push_mirror();
+
+    // Create PCB.toml with mixed stable/unstable aliases
+    let pcb_toml_content = r#"
+[packages]
+stable = "@github/stable/components:v1.0.0"
+unstable = "@github/unstable/components:main"
+"#;
+
+    // Create a board that uses both stable and unstable components
+    let board_zen_content = r#"
+StableResistor = Module("@stable/StableResistor.zen")
+UnstableCapacitor = Module("@unstable/UnstableCapacitor.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+StableResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+UnstableCapacitor(name = "C1", value = "1uF", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml_content)
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("mixed_stable_unstable_refs", output);
+}

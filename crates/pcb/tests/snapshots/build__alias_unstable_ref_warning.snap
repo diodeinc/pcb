@@ -6,10 +6,13 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
-Warning: 'mycomps' uses unstable reference 'main'. The alias defined in '<TEMP_DIR>/pcb.toml' points to an unstable reference. Use a pinned version (inline :tag or pcb.toml).
-   ╭─[ <TEMP_DIR>/board.zen:2:25 ]
+Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+   ╭─[ <TEMP_DIR>/pcb.toml:3:11 ]
+ 3 │mycomps = "@github/mycompany/components:main"
+   │                           ╰────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+   ├─[ <TEMP_DIR>/board.zen:2:25 ]
  2 │SimpleResistor = Module("@mycomps/SimpleResistor.zen")
-   │                                      ╰─────────────── 'mycomps' uses unstable reference 'main'. The alias defined in '<TEMP_DIR>/pcb.toml' points to an unstable reference. Use a pinned version (inline :tag or pcb.toml).
+   │                                      ╰─────────────── '@mycomps:latest' is an unstable reference. Use a pinned version.
 --- STDERR ---
 
 ✓ board.zen (1 components)
