@@ -1,0 +1,10 @@
+load("@stdlib/properties.zen", "Layout")
+
+MyModule = Module("Module.zen")
+
+P1 = Net("BOARD_ONE")
+P2 = Net("BOARD_TWO")
+
+MyModule(name = "MyModule", P1 = P1, P2 = P2)
+
+Layout(name = "Board", path = "build/layout/")

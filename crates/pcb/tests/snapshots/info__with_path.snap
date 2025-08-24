@@ -7,11 +7,11 @@ Exit Code: 0
 
 --- STDOUT ---
 Workspace Information
-Root: subdir
+Root: <TEMP_DIR>/subdir
 Name: BoardDiscoveryTest
 Members: boards/*, special/custom-board
 
 Boards (1)
-  TestBoard (default) - test_board.zen in subdir/boards/test-board
+  TestBoard (default) - boards/test-board/test_board.zen
     Main test board for validation
 --- STDERR ---
