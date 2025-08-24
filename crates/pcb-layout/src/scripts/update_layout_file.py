@@ -748,16 +748,6 @@ class VirtualGroup(VirtualItem):
         self._cached_bbox = None
         _ = self.bbox  # Force recomputation
 
-    def capture_rigid_body_state(self) -> None:
-        """No longer needed - using simple move_by for all elements."""
-        pass
-
-    def apply_rigid_body_transformation(self, dx: int, dy: int) -> None:
-        """Move group as rigid body - simplified to just move all children."""
-        # Simply move all children by the same offset
-        for child in self.children:
-            child.move_by(dx, dy)
-
 
 class VirtualBoard:
     """Root of the virtual DOM tree representing a KiCad board."""
@@ -1612,11 +1602,19 @@ class ImportNetlist(Step):
                     if "." not in remainder:
                         direct_child_count += 1
 
-            # Only create group if it has more than one child
-            if direct_child_count > 1:
+            # Check if this module has a layout_path (will have graphics/zones)
+            has_layout = False
+            if path in self.netlist.modules:
+                module = self.netlist.modules[path]
+                if module.layout_path:
+                    has_layout = True
+
+            # Create group if it has children OR if it has a layout (which will have graphics/zones)
+            if direct_child_count > 1 or has_layout:
                 groups_to_create[path] = True
                 logger.debug(
                     f"Will create group {path} with {direct_child_count} children"
+                    + (" and layout" if has_layout else "")
                 )
 
         # Create or update groups, ensuring hierarchical structure
