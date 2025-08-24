@@ -38,6 +38,33 @@ pub enum LoadSpec {
     WorkspacePath { path: PathBuf },
 }
 
+impl std::fmt::Display for LoadSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadSpec::Package { package, tag, path } => {
+                write!(f, "@{}/{}:{}", package, tag, path.display())
+            }
+            LoadSpec::Github {
+                user,
+                repo,
+                rev,
+                path,
+            } => {
+                write!(f, "@github/{}/{}/{}:{}", user, repo, rev, path.display())
+            }
+            LoadSpec::Gitlab {
+                project_path,
+                rev,
+                path,
+            } => {
+                write!(f, "@gitlab/{}/{}:{}", project_path, rev, path.display())
+            }
+            LoadSpec::Path { path } => write!(f, "{}", path.display()),
+            LoadSpec::WorkspacePath { path } => write!(f, "{}", path.display()),
+        }
+    }
+}
+
 impl LoadSpec {
     /// Get the path from this LoadSpec.
     pub fn path(&self) -> &PathBuf {

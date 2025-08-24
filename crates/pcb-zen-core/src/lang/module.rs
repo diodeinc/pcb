@@ -865,7 +865,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
         // Resolve the path using the load resolver
         let resolved_path = load_resolver
-            .resolve_path(file_provider.as_ref(), &path, current_file)
+            .resolve_path(&path, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
 
         // Check for unstable Git references and emit warnings

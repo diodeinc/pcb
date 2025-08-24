@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ops::Deref,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -533,7 +532,6 @@ impl EvalContext {
             // Use the load resolver to resolve this specific file's load path
             let resolved_star_path = if let Some(load_resolver) = &self.load_resolver {
                 match load_resolver.resolve_path(
-                    file_provider.as_ref(),
                     &file_load_path,
                     self.source_path.as_ref().unwrap_or(&PathBuf::from(".")),
                 ) {
@@ -716,7 +714,6 @@ impl EvalContext {
             // Use the load resolver to resolve this specific file's load path
             let resolved_sym_path = if let Some(load_resolver) = &self.load_resolver {
                 match load_resolver.resolve_path(
-                    file_provider.as_ref(),
                     &file_load_path,
                     self.source_path.as_ref().unwrap_or(&PathBuf::from(".")),
                 ) {
@@ -1435,7 +1432,7 @@ impl FileLoader for EvalContext {
         // Resolve the load path to an absolute path
         let absolute_path = match module_path {
             Some(ref current_file) => load_resolver
-                .resolve_path(file_provider.deref(), path, current_file)
+                .resolve_path(path, current_file)
                 .map_err(starlark::Error::new_other)?,
             None => {
                 return Err(starlark::Error::new_other(anyhow::anyhow!(

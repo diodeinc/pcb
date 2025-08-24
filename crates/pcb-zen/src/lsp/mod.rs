@@ -12,7 +12,7 @@ use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::lang::type_info::ParameterInfo;
 use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, InputValue,
-    LoadResolver,
+    LoadResolver, LoadSpec, ResolveContext,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -259,8 +259,7 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                let resolved =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), path, current_path)?;
+                let resolved = load_resolver.resolve_path(path, current_path)?;
                 Ok(LspUrl::File(resolved))
             }
             _ => Err(anyhow::anyhow!("Cannot resolve load from non-file URL")),
@@ -303,14 +302,16 @@ impl LspContext for LspEvalContext {
                 // Try to resolve as a file path
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                if let Ok(resolved) =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), literal, current_path)
-                {
-                    if resolved.exists() {
-                        return Ok(Some(StringLiteralResult {
-                            url: LspUrl::File(resolved),
-                            location_finder: None,
-                        }));
+                if let Some(spec) = LoadSpec::parse(literal) {
+                    let mut context =
+                        ResolveContext::new(self.file_provider.as_ref(), &spec, current_path);
+                    if let Ok(resolved) = load_resolver.resolve(&mut context) {
+                        if resolved.exists() {
+                            return Ok(Some(StringLiteralResult {
+                                url: LspUrl::File(resolved),
+                                location_finder: None,
+                            }));
+                        }
                     }
                 }
                 Ok(None)
@@ -429,17 +430,19 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                if let Ok(resolved) =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), load_path, current_path)
-                {
-                    if resolved.is_dir() {
-                        return Ok(Some(Hover {
-                            contents: HoverContents::Markup(MarkupContent {
-                                kind: MarkupKind::Markdown,
-                                value: format!("Directory: `{}`", resolved.display()),
-                            }),
-                            range: None,
-                        }));
+                if let Some(spec) = LoadSpec::parse(load_path) {
+                    let mut context =
+                        ResolveContext::new(self.file_provider.as_ref(), &spec, current_path);
+                    if let Ok(resolved) = load_resolver.resolve(&mut context) {
+                        if resolved.is_dir() {
+                            return Ok(Some(Hover {
+                                contents: HoverContents::Markup(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: format!("Directory: `{}`", resolved.display()),
+                                }),
+                                range: None,
+                            }));
+                        }
                     }
                 }
                 Ok(None)
