@@ -1,5 +1,5 @@
 {
-  "$schema": "https://mintlify.com/schema.json",
+  "$schema": "https://mintlify.com/docs.json",
   "name": "Diode Computers, Inc.",
   "theme": "linden",
   "logo": {
@@ -27,23 +27,20 @@
       "url": "mailto:founders@diode.computer"
     }
   ],
-  "tabs": [],
-  "navigation": {
-    "groups": [
-      {
-        "group": "Intro",
-        "pages": ["pages/quickstart", "pages/vscode"]
-      },
-      {
-        "group": "Examples",
-        "pages": ["pages/antenna_matching_network"]
-      },
-      {
-        "group": "Documentation",
-        "pages": ["pages/spec"]
-      }
-    ]
-  },
+  "navigation": [
+    {
+      "group": "Intro",
+      "pages": ["pages/quickstart", "pages/vscode"]
+    },
+    {
+      "group": "Examples",
+      "pages": ["pages/antenna_matching_network"]
+    },
+    {
+      "group": "Documentation",
+      "pages": ["pages/spec"]
+    }
+  ],
   "footerSocials": {
     "x": "https://x.com/diodeinc",
     "github": "https://github.com/diodeinc",
