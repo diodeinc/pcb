@@ -7,7 +7,7 @@ description: "Build an Antenna Matching Network with Zener"
 
 If we pull this off with Zener, it should end up looking like the KiCad schematic below! You can follow along with the [example GitHub directory](https://github.com/diodeinc/example).
 
-![](../images/Kicad_L_Network.png)
+![](/images/Kicad_L_Network.png)
 
 The first thing to do is import our dependencies. Diode kindly provides a few generics in the [standard library](https://github.com/diodeinc/stdlib/tree/main/generics) that are very helpful for each of our physical components. Notably, our L Network uses an SMA connector, resistor, capacitor, inductor, ground, and antenna schematic symbol. We can easily import each of these schematics using the built-in `Module()` or `load()` function, coupled with the default package aliases, if the module is already available in the standard library.
 
@@ -68,7 +68,7 @@ Layout(name = "SMA_Connector", path = "build/preview") # Don't use spaces in the
 ```
 
 <Tip> Hovering over the pins in a component definition will tell you all the pins Zener expects you to define.
-![](../images/Pin_Hints.gif) </Tip>
+![](/images/Pin_Hints.gif) </Tip>
 
 <Info> There are other definable fields in the component; [check out the spec](https://docs.pcb.new/pages/spec#component)! </Info>
 
@@ -95,7 +95,7 @@ Layout(name = "SMA_Connector", path = "build/preview")
 ```
 And the generated output, when clicking on the `pcb: View Schematic` button in VSCode:
 
-![](../images/First_Pass.png)
+![](/images/First_Pass.png)
 
 Pretty close! We might also want to change the prefix from U1 to J1 when we initialize the component. We can improve our `SMAConnector.zen` file by adding a prefix field to the `Component()` function and using a `config`. 
 
@@ -122,7 +122,7 @@ Component(
 Layout(name = "SMA_Connector", path = "build/preview")
 ```
 
-![](../images/Second_Pass.png)
+![](/images/Second_Pass.png)
 
 Even better!
 
@@ -149,7 +149,7 @@ Layout(name = "Antenna", path = "build/preview")
 ```
 
 
-![](../images/Antenna.png)
+![](/images/Antenna.png)
 
 ## Modules
 
@@ -262,7 +262,7 @@ Layout(name = "Antenna_LRC_Matcher", path = "build/preview")
 
 After rotating and moving the rendered schematic components, just as you would with KiCad, here is the result:
 
-![](../images/Zener_L_Network.png)
+![](/images/Zener_L_Network.png)
 
 You've created a functional schematic with Zener!
 
@@ -296,4 +296,4 @@ Layout(name = "Antenna_LRC_Matcher", path = "build/preview")
 
 We can then finish up the layout and routing inside of KiCad:
 
-![](../images/Antenna_PCB_Render.png)
+![](/images/Antenna_PCB_Render.png)
