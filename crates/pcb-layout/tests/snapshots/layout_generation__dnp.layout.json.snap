@@ -1006,5 +1006,7 @@ expression: content
     }
   ],
   "groups": [],
+  "tracks": [],
+  "vias": [],
   "zones": []
 }
