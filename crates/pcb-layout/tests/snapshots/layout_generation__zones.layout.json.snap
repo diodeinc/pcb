@@ -522,6 +522,8 @@ expression: content
       "name": "MyModule"
     }
   ],
+  "tracks": [],
+  "vias": [],
   "zones": [
     {
       "filled": true,
