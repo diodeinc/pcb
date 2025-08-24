@@ -1,15 +1,11 @@
 use anyhow::Result;
 use clap::Args;
-use itertools::Itertools;
-use pcb_sch::{AttributeValue, Schematic};
 use pcb_sim::gen_sim;
 use pcb_ui::prelude::*;
-use pcb_zen::load::{cache_dir, find_workspace_root};
 use pcb_zen::EvalSeverity;
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Args, Debug)]
 #[command(about = "generate spice .cir file for simulation")]
@@ -53,7 +49,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let eval_result = pcb_zen::run(&zen_path);
+    let eval_result = pcb_zen::run(&zen_path, false);
 
     let mut out = get_output_writer(&args.output.to_string_lossy())?;
 
@@ -101,7 +97,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
         if let Some(setup_path) = args.setup {
             let mut setup = String::new();
             File::open(setup_path)?.read_to_string(&mut setup).unwrap();
-            writeln!(out, "{}", setup).unwrap();
+            writeln!(out, "{setup}").unwrap();
         }
     } else {
         spinner.error(format!("{file_name}: No output generated"));

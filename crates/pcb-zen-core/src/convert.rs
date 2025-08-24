@@ -1,7 +1,8 @@
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::{
-    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
+    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, InputValue,
+    NetId,
 };
 use itertools::Itertools;
 use pcb_sch::Net;
@@ -148,7 +149,7 @@ impl ModuleConverter {
             let arg_str = model
                 .args()
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|(k, v)| format!("{k}={v}"))
                 .join(" ");
             comp_inst.add_attribute("model_args", AttributeValue::String(arg_str));
         }

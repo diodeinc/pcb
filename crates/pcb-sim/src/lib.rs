@@ -1,12 +1,8 @@
 use anyhow::Result;
-use clap::Args;
 use itertools::Itertools;
 use pcb_sch::{AttributeValue, Schematic};
-use pcb_ui::prelude::*;
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
 
 // Generate .cir from a zen file
 pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
@@ -31,7 +27,7 @@ pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
             .string()
             .unwrap();
         if included_libs.insert(model_def) {
-            write!(out, "{}", model_def).unwrap();
+            write!(out, "{model_def}").unwrap();
         }
         assert!(comp_inst.attributes.contains_key("model_name"));
         let model_name = comp_inst
@@ -49,7 +45,7 @@ pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
             .unwrap();
         if let AttributeValue::Array(net_arr) = comp_inst.attributes.get("model_nets").unwrap() {
             let nets = net_arr.iter().map(|s| s.string().unwrap()).join(" ");
-            writeln!(out, "X{} {} {} {}", comp_name, nets, model_name, arg_str).unwrap();
+            writeln!(out, "X{comp_name} {nets} {model_name} {arg_str}").unwrap();
         } else {
             unreachable!("bad spice model");
         }

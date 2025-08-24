@@ -1,11 +1,9 @@
 #![allow(clippy::needless_lifetimes)]
 
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
 
 use allocative::Allocative;
-use once_cell::sync::Lazy;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -18,9 +16,7 @@ use starlark::{
     },
 };
 
-use crate::lang::eval::DeepCopyToHeap;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::EvalContext;
 
 use anyhow::anyhow;
 
@@ -78,7 +74,7 @@ impl<'v, V: ValueLike<'v>> SpiceModelValueGen<V> {
     }
 
     pub fn definition(&self) -> &str {
-        &self.name
+        &self.definition
     }
 }
 
@@ -117,7 +113,7 @@ where
         );
 
         let (path, name, nets, args) =
-            param_spec.parser(args, eval, |param_parser, eval_ctx| {
+            param_spec.parser(args, eval, |param_parser, _eval_ctx| {
                 let path_val: Value = param_parser.next()?;
                 let path = path_val
                     .unpack_str()
@@ -257,9 +253,9 @@ where
 
         Ok(eval.heap().alloc_complex(SpiceModelValue {
             definition: contents,
-            name: name,
-            nets: nets,
-            args: args,
+            name,
+            nets,
+            args,
         }))
     }
 
@@ -300,7 +296,7 @@ fn get_sub_circuit(s: &str, name: &str) -> anyhow::Result<SubCircuit> {
     // Scan for the declaration
     let mut lines = s.lines().peekable();
     let mut found = false;
-    while let Some(line) = lines.next() {
+    for line in lines.by_ref() {
         if let Some(caps) = decl_re.captures(line) {
             circuit.nets = caps
                 .get(1)
@@ -320,7 +316,7 @@ fn get_sub_circuit(s: &str, name: &str) -> anyhow::Result<SubCircuit> {
     }
 
     // Scan for out-of-line definition
-    while let Some(line) = lines.next() {
+    for line in lines {
         if let Some(caps) = params_re.captures(line) {
             parse_params(caps.get(1).map(|m| m.as_str()).unwrap_or(""), &mut circuit);
         } else {

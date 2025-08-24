@@ -2,8 +2,6 @@ mod common;
 use common::TestProject;
 
 use pcb_sim::gen_sim;
-use std::any::Any;
-use std::io::{Cursor, Write};
 
 #[macro_export]
 macro_rules! sim_snapshot {
@@ -11,7 +9,7 @@ macro_rules! sim_snapshot {
         let top_path = $env.root().join($entry);
 
         let mut buf = Vec::new();
-        pcb_zen::run(&top_path).map(
+        pcb_zen::run(&top_path, true).map(
             |s| {
                 gen_sim(&s, &mut buf).unwrap();
             }
@@ -89,7 +87,7 @@ value = config_unit("value", Resistance)
 # Optional
 voltage = config_unit("voltage", Voltage, optional = True)
 
-# Properties – combined and normalized
+# Properties - combined and normalized
 properties = config_properties({
     "value": format_value(value, voltage),
     "package": package,
@@ -108,7 +106,7 @@ P2 = io("P2", Net)
 # Helper functions
 # -----------------------------------------------------------------------------
 
-properties['model'] = SpiceModel('r.lib', 'my_resistor',
+properties['model'] = SpiceModel('./r.lib', 'my_resistor',
     nets=[P1, P2],
     args={"RVAL": str(value.value)})
 
@@ -133,7 +131,7 @@ Component(
     env.add_file(
         "divider.zen",
         r#"
-load("@stdlib:zen/interfaces.zen", "Power", "Ground", "Analog")
+load("@stdlib/interfaces.zen", "Power", "Ground", "Analog")
 Resistor = Module("myresistor.zen")
 
 # Configuration parameters
