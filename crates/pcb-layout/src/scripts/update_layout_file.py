@@ -617,6 +617,96 @@ class VirtualZone(VirtualElement):
         return f"{prefix}Zone:{self.name}{net_info}{status_str} {self.bbox}"
 
 
+class VirtualTrack(VirtualElement):
+    """Represents a track with net connectivity."""
+
+    def __init__(self, track_id: str, name: str, kicad_track: Any):
+        super().__init__(track_id, name, kicad_track)
+        self._source_net_code = kicad_track.GetNetCode()
+
+    def apply_net_code_mapping(
+        self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
+    ) -> bool:
+        """Apply net code mapping to this track."""
+        if self._source_net_code == 0:
+            return True  # No net track
+
+        target_net_code = net_code_map.get(self._source_net_code, 0)
+        if target_net_code == 0:
+            logger.warning(
+                f"Track {self.name}: No mapping for net code {self._source_net_code}"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+        target_net = target_board.FindNet(target_net_code)
+        if target_net:
+            self.kicad_item.SetNet(target_net)
+            return True
+        else:
+            logger.error(
+                f"Track {self.name}: Target net code {target_net_code} not found"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+    def render_tree(self, indent: int = 0) -> str:
+        """Render this track as a string."""
+        prefix = "  " * indent
+        status_markers = []
+        if self.added:
+            status_markers.append("NEW")
+        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
+
+        net_info = f" (net:{self._source_net_code})"
+        return f"{prefix}Track:{self.name}{net_info}{status_str} {self.bbox}"
+
+
+class VirtualVia(VirtualElement):
+    """Represents a via with net connectivity."""
+
+    def __init__(self, via_id: str, name: str, kicad_via: Any):
+        super().__init__(via_id, name, kicad_via)
+        self._source_net_code = kicad_via.GetNetCode()
+
+    def apply_net_code_mapping(
+        self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
+    ) -> bool:
+        """Apply net code mapping to this via."""
+        if self._source_net_code == 0:
+            return True  # No net via
+
+        target_net_code = net_code_map.get(self._source_net_code, 0)
+        if target_net_code == 0:
+            logger.warning(
+                f"Via {self.name}: No mapping for net code {self._source_net_code}"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+        target_net = target_board.FindNet(target_net_code)
+        if target_net:
+            self.kicad_item.SetNet(target_net)
+            return True
+        else:
+            logger.error(
+                f"Via {self.name}: Target net code {target_net_code} not found"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+    def render_tree(self, indent: int = 0) -> str:
+        """Render this via as a string."""
+        prefix = "  " * indent
+        status_markers = []
+        if self.added:
+            status_markers.append("NEW")
+        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
+
+        net_info = f" (net:{self._source_net_code})"
+        return f"{prefix}Via:{self.name}{net_info}{status_str} {self.bbox}"
+
+
 class VirtualGraphic(VirtualElement):
     """Represents a graphic element (line, arc, text, etc)."""
 
@@ -785,7 +875,10 @@ class VirtualBoard:
 
 
 def build_virtual_dom_from_board(
-    board: pcbnew.BOARD, include_zones: bool = True, include_graphics: bool = True
+    board: pcbnew.BOARD,
+    include_zones: bool = True,
+    include_graphics: bool = True,
+    include_tracks: bool = True,
 ) -> VirtualBoard:
     """Build a virtual DOM from a KiCad board including all element types.
 
@@ -793,6 +886,7 @@ def build_virtual_dom_from_board(
         board: The KiCad board to build from
         include_zones: Whether to include zones in the DOM
         include_graphics: Whether to include graphics in the DOM
+        include_tracks: Whether to include tracks and vias in the DOM
 
     Returns:
         A VirtualBoard with the complete hierarchy
@@ -941,6 +1035,34 @@ def build_virtual_dom_from_board(
             else:
                 # Add to root if no parent group
                 vboard.root.add_child(vgraphic)
+
+    # Add tracks and vias to virtual DOM
+    if include_tracks:
+        for item in board.GetTracks():
+            item_uuid = (
+                str(item.m_Uuid) if hasattr(item, "m_Uuid") else str(uuid.uuid4())
+            )
+
+            # Check if it's a track or via based on class name
+            item_class = item.GetClass()
+            if "VIA" in item_class.upper():
+                # It's a via
+                item_name = f"Via_{item_uuid[:8]}"
+                vitem = VirtualVia(item_uuid, item_name, item)
+            else:
+                # It's a track
+                item_name = f"Track_{item_uuid[:8]}"
+                vitem = VirtualTrack(item_uuid, item_name, item)
+
+            # Determine which group this track/via belongs to
+            parent_group = (
+                item.GetParentGroup() if hasattr(item, "GetParentGroup") else None
+            )
+            if parent_group and parent_group.GetName() in module_groups:
+                module_groups[parent_group.GetName()].add_child(vitem)
+            else:
+                # Add to root if no parent group
+                vboard.root.add_child(vitem)
 
     return vboard
 
@@ -1906,7 +2028,47 @@ class SyncLayouts(Step):
                 group.add_child(vgraphic)
                 graphics_synced += 1
 
-            logger.info(f"  Synced {zones_synced} zones and {graphics_synced} graphics")
+            # Get all tracks and vias from source layout
+            tracks_synced = 0
+            vias_synced = 0
+            for item in layout_board.GetTracks():
+                # Use Duplicate() to copy all track/via properties automatically
+                new_item = item.Duplicate()
+
+                # Apply net code mapping (this is the only thing we need to update)
+                source_net_code = item.GetNetCode()
+                if source_net_code in net_code_map:
+                    target_net_code = net_code_map[source_net_code]
+                    target_net = self.board.FindNet(target_net_code)
+                    if target_net:
+                        new_item.SetNet(target_net)
+                else:
+                    new_item.SetNetCode(0)
+
+                # Add to board
+                self.board.Add(new_item)
+
+                # Create appropriate virtual element and add to group
+                item_uuid = str(uuid.uuid4())
+
+                # Check if it's a track or via
+                # We need to check the class type to distinguish
+                item_class = item.GetClass()
+                if "VIA" in item_class.upper():
+                    # It's a via
+                    vitem = VirtualVia(item_uuid, f"Via_{item_uuid[:8]}", new_item)
+                    vias_synced += 1
+                else:
+                    # It's a track
+                    vitem = VirtualTrack(item_uuid, f"Track_{item_uuid[:8]}", new_item)
+                    tracks_synced += 1
+
+                vitem.added = True
+                group.add_child(vitem)
+
+            logger.info(
+                f"  Synced {zones_synced} zones, {graphics_synced} graphics, {tracks_synced} tracks, and {vias_synced} vias"
+            )
 
             # Mark the group as synced
             group.synced = True
@@ -1914,9 +2076,12 @@ class SyncLayouts(Step):
             # Find and link to KiCad group if it exists
             for kicad_group in self.board.Groups():
                 if kicad_group.GetName() == group.id:
-                    # Add zones and graphics to the KiCad group
+                    # Add zones, graphics, tracks and vias to the KiCad group
                     for child in group.children:
-                        if isinstance(child, (VirtualZone, VirtualGraphic)):
+                        if isinstance(
+                            child,
+                            (VirtualZone, VirtualGraphic, VirtualTrack, VirtualVia),
+                        ):
                             kicad_group.AddItem(child.kicad_item)
                     break
 
@@ -2491,8 +2656,45 @@ class FinalizeBoard(Step):
             ],
         }
 
+    def _get_track_data(self, track: Any) -> dict:
+        """Extract relevant data from a track."""
+        # Return a sorted dictionary to ensure consistent ordering
+        start = track.GetStart()
+        end = track.GetEnd()
+        return {
+            "net_name": track.GetNetname(),
+            "layer": track.GetLayerName(),
+            "width": track.GetWidth(),
+            "locked": track.IsLocked(),
+            "start": {"x": start.x, "y": start.y},
+            "end": {"x": end.x, "y": end.y},
+        }
+
+    def _get_via_data(self, via: Any) -> dict:
+        """Extract relevant data from a via."""
+        # Return a sorted dictionary to ensure consistent ordering
+        pos = via.GetPosition()
+        return {
+            "net_name": via.GetNetname(),
+            "position": {"x": pos.x, "y": pos.y},
+            "drill": via.GetDrillValue(),
+            "diameter": via.GetWidth(),
+            "locked": via.IsLocked(),
+            "via_type": via.GetViaType(),
+        }
+
     def _export_layout_snapshot(self):
         """Export a JSON snapshot of the board layout."""
+        # Separate tracks and vias
+        tracks = []
+        vias = []
+        for item in self.board.GetTracks():
+            item_class = item.GetClass()
+            if "VIA" in item_class.upper():
+                vias.append(item)
+            else:
+                tracks.append(item)
+
         # Sort footprints by UUID and groups by name for deterministic ordering
         snapshot = {
             "footprints": [
@@ -2511,6 +2713,23 @@ class FinalizeBoard(Step):
                 self._get_zone_data(zone)
                 for zone in sorted(
                     self.board.Zones(), key=lambda z: z.GetZoneName() or ""
+                )
+            ],
+            "tracks": [
+                self._get_track_data(track)
+                for track in sorted(
+                    tracks, key=lambda t: (t.GetNetname() or "", t.GetLayerName() or "")
+                )
+            ],
+            "vias": [
+                self._get_via_data(via)
+                for via in sorted(
+                    vias,
+                    key=lambda v: (
+                        v.GetNetname() or "",
+                        v.GetPosition().x,
+                        v.GetPosition().y,
+                    ),
                 )
             ],
         }
