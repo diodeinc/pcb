@@ -268,9 +268,6 @@ pub struct ResolveContext<'a> {
 
     // Alias information for the current file (cached on construction)
     pub alias_info: HashMap<String, AliasInfo>,
-
-    // Computed state (lazily initialized)
-    effective_workspace_root: Option<PathBuf>,
 }
 
 impl<'a> ResolveContext<'a> {
@@ -285,7 +282,6 @@ impl<'a> ResolveContext<'a> {
             current_file,
             spec_history: vec![spec.clone()],
             alias_info: HashMap::new(), // Will be populated during resolution
-            effective_workspace_root: None,
         }
     }
 
@@ -307,18 +303,6 @@ impl<'a> ResolveContext<'a> {
         }
         self.spec_history.push(spec);
         Ok(())
-    }
-
-    /// Get or compute the effective workspace root for the current file
-    pub fn effective_workspace_root(
-        &mut self,
-        resolver: &CoreLoadResolver,
-    ) -> anyhow::Result<&PathBuf> {
-        if self.effective_workspace_root.is_none() {
-            self.effective_workspace_root =
-                Some(resolver.get_effective_workspace_root(self.current_file)?);
-        }
-        Ok(self.effective_workspace_root.as_ref().unwrap())
     }
 
     /// Get alias information if this resolution went through alias resolution
@@ -516,6 +500,9 @@ impl CoreLoadResolver {
                 // Both cases: search for pcb.toml with [workspace]
                 config::find_workspace_root(self.file_provider.as_ref(), &canonical_file)
             };
+
+        // Canonicalize the workspace root
+        let workspace_root = self.file_provider.canonicalize(&workspace_root)?;
 
         // Cache result for this directory
         self.workspace_root_cache
@@ -805,14 +792,9 @@ impl CoreLoadResolver {
     /// Resolve local specs (Path/WorkspacePath)
     fn resolve_local_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
         let resolved_spec = context.current_spec().clone();
+        let effective_workspace_root = self.get_effective_workspace_root(context.current_file)?;
         let resolved_path = match &resolved_spec {
-            LoadSpec::WorkspacePath { path } => {
-                let effective_workspace_root = context.effective_workspace_root(self)?.clone();
-                let canonical_root = context
-                    .file_provider
-                    .canonicalize(&effective_workspace_root)?;
-                canonical_root.join(path)
-            }
+            LoadSpec::WorkspacePath { path } => effective_workspace_root.join(path),
             LoadSpec::Path { path } => {
                 if path.is_absolute() {
                     path.clone()
