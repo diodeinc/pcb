@@ -1,13 +1,13 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use crate::build::create_diagnostics_passes;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
 use pcb_sch::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
 use pcb_ui::prelude::*;
-use pcb_zen::Renderable;
 use std::collections::BTreeMap;
 
 #[derive(ValueEnum, Debug, Clone, Default)]
@@ -65,13 +65,14 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let mut schematic = pcb_zen::run(&args.file, false)
-        .output_result()
-        .map_err(|diagnostics| {
-            // Only render diagnostics if there are errors
-            diagnostics.render();
-            anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
-        })?;
+    let mut schematic =
+        pcb_zen::run(&args.file, false)
+            .output_result()
+            .map_err(|mut diagnostics| {
+                // Apply passes and render diagnostics if there are errors
+                diagnostics.apply_passes(&create_diagnostics_passes(&[]));
+                anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
+            })?;
 
     // Generate BOM entries
     spinner.set_message(format!("{file_name}: Generating BOM"));

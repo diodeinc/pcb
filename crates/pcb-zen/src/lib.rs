@@ -18,7 +18,6 @@ use pcb_zen_core::{
 };
 use starlark::errors::EvalMessage;
 
-pub use diagnostics::Renderable;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;

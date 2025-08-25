@@ -217,6 +217,12 @@ impl Diagnostic {
             .map(|err| err.is::<E>())
             .unwrap_or(false)
     }
+
+    /// Get the count of suppressed diagnostics if this diagnostic represents aggregated warnings
+    pub fn suppressed_count(&self) -> Option<usize> {
+        self.downcast_error_ref::<crate::lang::error::SuppressedDiagnostics>()
+            .map(|suppressed| suppressed.suppressed.len())
+    }
 }
 
 impl Display for Diagnostic {
@@ -410,6 +416,18 @@ impl Diagnostics {
     pub fn has_errors(&self) -> bool {
         self.diagnostics.iter().any(|diag| diag.is_error())
     }
+
+    /// Apply a single diagnostics pass to this collection
+    pub fn apply_pass(&mut self, pass: &dyn DiagnosticsPass) {
+        pass.apply(self);
+    }
+
+    /// Apply multiple diagnostics passes in sequence
+    pub fn apply_passes(&mut self, passes: &[Box<dyn DiagnosticsPass>]) {
+        for pass in passes {
+            pass.apply(self);
+        }
+    }
 }
 
 impl From<Vec<Diagnostic>> for Diagnostics {
@@ -435,4 +453,11 @@ impl<T, D: Into<Diagnostic>> From<D> for WithDiagnostics<T> {
             output: None,
         }
     }
+}
+
+/// Trait for implementing diagnostic transformation passes.
+/// Each pass can refine, mutate, or generally make changes to a list of diagnostics.
+pub trait DiagnosticsPass {
+    /// Apply this pass to the given diagnostics, potentially mutating them in-place.
+    fn apply(&self, diagnostics: &mut Diagnostics);
 }

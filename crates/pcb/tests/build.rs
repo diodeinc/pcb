@@ -469,3 +469,89 @@ UnstableCapacitor(name = "C1", value = "1uF", P1 = vcc, P2 = gnd)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("mixed_stable_unstable_refs", output);
 }
+
+#[test]
+fn test_aggregated_warnings() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a fake git repository with components
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .push_mirror();
+
+    // Create pcb.toml with a package alias that points to an unstable ref
+    let pcb_toml_content = r#"
+[packages]
+mycomponents = "@github/mycompany/components:main"
+"#;
+
+    // Create a board that uses the alias multiple times - should aggregate warnings
+    // because all warnings will trace back to the same PCB.toml line
+    let board_zen_content = r#"
+SimpleResistor1 = Module("@mycomponents/SimpleResistor.zen")
+SimpleResistor2 = Module("@mycomponents/SimpleResistor.zen") 
+SimpleResistor3 = Module("@mycomponents/SimpleResistor.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+SimpleResistor1(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+SimpleResistor2(name = "R2", value = "2kOhm", P1 = vcc, P2 = gnd)
+SimpleResistor3(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml_content)
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("aggregated_warnings", output);
+}
+
+#[test]
+fn test_mixed_aggregated_and_unique_warnings() {
+    let mut sandbox = Sandbox::new();
+
+    // Create multiple fake git repositories
+    sandbox
+        .git_fixture("https://github.com/company1/components.git")
+        .write("Component1.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add component1")
+        .push_mirror();
+
+    sandbox
+        .git_fixture("https://github.com/company2/components.git")
+        .write("Component2.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add component2")
+        .push_mirror();
+
+    // Create pcb.toml with a package alias for one of the repos (will create aggregated warnings)
+    let pcb_toml_content = r#"
+[packages]
+comp1 = "@github/company1/components:main"
+"#;
+
+    // Create a board with both aggregated and unique warnings
+    let board_zen_content = r#"
+# These should aggregate (same alias used multiple times -> same PCB.toml span)
+Comp1a = Module("@comp1/Component1.zen")
+Comp1b = Module("@comp1/Component1.zen")
+# This should be separate (direct reference -> different span in .zen file)
+Comp2 = Module("@github/company2/components:main/Component2.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+Comp1a(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
+Comp1b(name = "R2", value = "2kOhm", P1 = vcc, P2 = gnd) 
+Comp2(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("pcb.toml", pcb_toml_content)
+        .write("board.zen", board_zen_content)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("mixed_aggregated_and_unique_warnings", output);
+}

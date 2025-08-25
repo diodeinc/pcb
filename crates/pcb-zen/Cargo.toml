@@ -55,6 +55,7 @@ pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-zen-core = { workspace = true }
+pcb-ui = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

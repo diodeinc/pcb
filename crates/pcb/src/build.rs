@@ -4,10 +4,20 @@ use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use pcb_zen::file_extensions;
-use pcb_zen::{diagnostics::RenderArgs, Renderable};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Create diagnostics passes for the given deny list
+pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+    vec![
+        Box::new(pcb_zen_core::FilterPass),
+        Box::new(pcb_zen_core::PromoteDeniedPass::new(deny)),
+        Box::new(pcb_zen_core::AggregatePass),
+        Box::new(pcb_zen_core::SortPass),
+        Box::new(pcb_zen::diagnostics::RenderPass),
+    ]
+}
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
@@ -40,7 +50,7 @@ pub struct BuildArgs {
 pub fn build(
     zen_path: &Path,
     offline: bool,
-    render_args: &RenderArgs,
+    passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
     has_errors: &mut bool,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
@@ -57,10 +67,13 @@ pub fn build(
         spinner.set_message(format!("{file_name}: No output generated"));
     }
     spinner.finish();
-    eval.diagnostics.render_with_options(render_args);
 
-    // Check if warnings should be treated as errors
-    if render_args.deny_warnings() && !eval.diagnostics.warnings().is_empty() {
+    // Apply all passes including rendering
+    let mut diagnostics = eval.diagnostics.clone();
+    diagnostics.apply_passes(&passes);
+
+    // Check for errors
+    if diagnostics.has_errors() {
         *has_errors = true;
     }
 
@@ -81,9 +94,6 @@ pub fn build(
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
-    // Create render args from CLI options
-    let render_args = RenderArgs::new(args.deny.clone());
-
     // Determine which .zen files to compile
     let zen_paths = if args.recursive {
         collect_files_recursive(&args.paths)?
@@ -104,7 +114,12 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     // Process each .zen file
     for zen_path in zen_paths {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        let Some(schematic) = build(&zen_path, args.offline, &render_args, &mut has_errors) else {
+        let Some(schematic) = build(
+            &zen_path,
+            args.offline,
+            create_diagnostics_passes(&args.deny),
+            &mut has_errors,
+        ) else {
             continue;
         };
 
