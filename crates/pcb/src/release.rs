@@ -6,7 +6,7 @@ use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_sch::generate_bom_entries;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::{EvalOutput, LoadSpec, WithDiagnostics};
+use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
 use std::collections::HashSet;
 use std::fs;
@@ -19,7 +19,7 @@ use std::process::Command;
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::bom::write_bom_json;
-use crate::workspace::{gather_workspace_info, loadspec_to_vendor_path, WorkspaceInfo};
+use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -403,14 +403,9 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
         })?;
     }
 
-    for path in info.workspace.resolver.get_tracked_files() {
-        let load_spec = info.workspace.resolver.get_load_spec_for_path(&path);
-        let is_remote = matches!(
-            load_spec,
-            Some(LoadSpec::Github { .. } | LoadSpec::Gitlab { .. })
-        );
-        if is_remote {
-            let vendor_path = loadspec_to_vendor_path(&load_spec.clone().unwrap())?;
+    for (path, load_spec) in info.workspace.resolver.get_tracked_files() {
+        if load_spec.is_remote() {
+            let vendor_path = load_spec.vendor_path()?;
             if vendor_files.insert(vendor_path.clone()) {
                 let dest_path = info
                     .staging_dir
@@ -423,6 +418,7 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
                     })?;
                 }
                 fs::copy(&path, &dest_path).with_context(|| {
+                    dbg!(&path, &load_spec);
                     format!(
                         "Failed to copy {} -> {}",
                         path.display(),

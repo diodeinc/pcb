@@ -1,12 +1,11 @@
 //! Common workspace and dependency handling utilities
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use log::{debug, info};
 use pcb_zen::load::DefaultRemoteFetcher;
 use pcb_zen_core::config::{get_workspace_info, WorkspaceInfo as ConfigWorkspaceInfo};
 use pcb_zen_core::{
-    normalize_path, CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap,
-    LoadSpec, WithDiagnostics,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap, WithDiagnostics,
 };
 
 use std::path::{Path, PathBuf};
@@ -85,9 +84,6 @@ pub fn eval_zen_entrypoint(
         use_vendor_path,
     ));
 
-    // Track the entrypoint (though it won't have a LoadSpec, which is fine)
-    core_resolver.track_file(entry.to_path_buf());
-
     let eval_context = EvalContext::new()
         .set_file_provider(file_provider.clone())
         .set_load_resolver(core_resolver.clone())
@@ -111,67 +107,4 @@ pub fn eval_zen_entrypoint(
 
     info!("Zen file evaluation completed successfully");
     Ok((core_resolver, eval_result))
-}
-
-/// Convert LoadSpec to vendor path
-pub fn loadspec_to_vendor_path(spec: &LoadSpec) -> Result<PathBuf> {
-    // Resolve package aliases to canonical git form
-    let canonical_spec = match spec {
-        LoadSpec::Package { .. } => spec
-            .resolve(None)
-            .context("Failed to resolve package alias to canonical form")?,
-        _ => spec.clone(),
-    };
-
-    // Convert canonical spec to vendor path
-    match canonical_spec {
-        LoadSpec::Github {
-            user,
-            repo,
-            rev,
-            path,
-        } => {
-            let mut vendor_path = PathBuf::from("github.com").join(user).join(repo).join(rev);
-            // Normalize and add path components (handles .. and . components)
-            if !path.as_os_str().is_empty() && path != Path::new(".") {
-                vendor_path.push(normalize_path(&path));
-            }
-            Ok(vendor_path)
-        }
-        LoadSpec::Gitlab {
-            project_path,
-            rev,
-            path,
-        } => {
-            let mut vendor_path = PathBuf::from("gitlab.com").join(project_path).join(rev);
-            // Normalize and add path components (handles .. and . components)
-            if !path.as_os_str().is_empty() && path != Path::new(".") {
-                vendor_path.push(normalize_path(&path));
-            }
-            Ok(vendor_path)
-        }
-        LoadSpec::Package { package, tag, path } => {
-            info!("Package spec not resolved to canonical form: {package}");
-            let mut vendor_path = PathBuf::from("packages").join(package);
-            // Avoid creating empty tag directories
-            if !tag.is_empty() {
-                vendor_path.push(tag);
-            }
-            if !path.as_os_str().is_empty() && path != Path::new(".") {
-                vendor_path.push(normalize_path(&path));
-            }
-            Ok(vendor_path)
-        }
-        LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
-            anyhow::bail!(
-                "Local path dependency detected during vendoring. This typically indicates zen files \
-                from different workspaces are being processed together.\n\
-                \n\
-                Local dependencies should not be vendored - they belong to your workspace.\n\
-                \n\
-                Solution: Run 'pcb vendor' separately for each workspace, or ensure all zen files \
-                belong to the same workspace."
-            )
-        }
-    }
 }

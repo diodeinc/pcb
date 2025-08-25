@@ -834,6 +834,10 @@ impl EvalContext {
             }
         };
 
+        if let Some(load_resolver) = &self.load_resolver {
+            load_resolver.track_file(source_path);
+        }
+
         // Get or create a default file provider if none was set
         let file_provider = self
             .file_provider

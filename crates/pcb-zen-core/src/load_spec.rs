@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Default tag that is assumed when the caller does not specify one in a
 /// package spec, e.g. `@mypkg/utils.zen`.
@@ -94,6 +94,16 @@ impl LoadSpec {
                 rev: rev.clone(),
             }),
             _ => None,
+        }
+    }
+
+    pub fn allow_dir(&self) -> bool {
+        match self {
+            LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
+                // TODO: conditionally allow refereincing dirs in Path()
+                false
+            }
+            _ => false,
         }
     }
 
@@ -323,7 +333,8 @@ impl LoadSpec {
     ///
     /// For Package specs, it checks for aliases in the workspace configuration and default aliases.
     /// If an alias is found, it parses the target and applies any tag overrides and path joining.
-    /// Other spec types (Github, Gitlab, Path, WorkspacePath) are returned unchanged.
+    /// If an alias is not found, it returns an error.
+    /// If called with a non-package spec, it returns an error.
     ///
     /// # Arguments
     /// * `aliases` - Optional workspace-specific aliases (overrides defaults)
@@ -334,89 +345,106 @@ impl LoadSpec {
         &self,
         aliases: Option<&HashMap<String, crate::AliasInfo>>,
     ) -> Result<LoadSpec, anyhow::Error> {
-        match self {
-            LoadSpec::Package { package, tag, path } => {
-                // Check for package aliases (workspace or default)
-                let aliases_map = if let Some(ws_aliases) = aliases {
-                    // Use provided workspace aliases
-                    ws_aliases
-                } else {
-                    // Fall back to default aliases only
-                    &Self::default_package_aliases()
-                };
+        let LoadSpec::Package { package, tag, path } = self else {
+            anyhow::bail!("LoadSpec::resolve() called on non-package spec")
+        };
+        // Check for package aliases (workspace or default)
+        let aliases_map = if let Some(ws_aliases) = aliases {
+            // Use provided workspace aliases
+            ws_aliases
+        } else {
+            // Fall back to default aliases only
+            &Self::default_package_aliases()
+        };
 
-                if let Some(alias_info) = aliases_map.get(package) {
-                    let target = &alias_info.target;
-                    // Parse the alias target
-                    if let Some(mut resolved_spec) = LoadSpec::parse(target) {
-                        // If caller explicitly specified a tag (non-default), override the alias's tag
-                        if tag != DEFAULT_PKG_TAG {
-                            match &mut resolved_spec {
-                                LoadSpec::Package { tag: alias_tag, .. } => {
-                                    *alias_tag = tag.clone();
-                                }
-                                LoadSpec::Github { rev: alias_rev, .. } => {
-                                    *alias_rev = tag.clone();
-                                }
-                                LoadSpec::Gitlab { rev: alias_rev, .. } => {
-                                    *alias_rev = tag.clone();
-                                }
-                                // Path and WorkspacePath specs don't support tags
-                                LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
-                                    return Err(anyhow::anyhow!(
-                                        "Cannot apply tag '{}' to path-based alias target '{}'",
-                                        tag,
-                                        target
-                                    ));
-                                }
-                            }
-                        }
+        let Some(alias_info) = aliases_map.get(package) else {
+            anyhow::bail!("Failed to resolve alias for spec: {}", self)
+        };
 
-                        // Append the path if needed
-                        if !path.as_os_str().is_empty() {
-                            match &mut resolved_spec {
-                                LoadSpec::Package {
-                                    path: alias_path, ..
-                                } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::Github {
-                                    path: alias_path, ..
-                                } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::Gitlab {
-                                    path: alias_path, ..
-                                } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::Path { path: alias_path } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::WorkspacePath { path: alias_path } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                            }
-                        }
-
-                        Ok(resolved_spec)
-                    } else {
-                        // Invalid alias target
-                        Err(anyhow::anyhow!(
-                            "Invalid alias target for package '{}': '{}'",
-                            package,
-                            target
-                        ))
+        let target = &alias_info.target;
+        // Parse the alias target
+        if let Some(mut resolved_spec) = LoadSpec::parse(target) {
+            // If caller explicitly specified a tag (non-default), override the alias's tag
+            if tag != DEFAULT_PKG_TAG {
+                match &mut resolved_spec {
+                    LoadSpec::Package { tag: alias_tag, .. } => {
+                        *alias_tag = tag.clone();
                     }
-                } else {
-                    // No alias found, return original spec
-                    Ok(self.clone())
+                    LoadSpec::Github { rev: alias_rev, .. } => {
+                        *alias_rev = tag.clone();
+                    }
+                    LoadSpec::Gitlab { rev: alias_rev, .. } => {
+                        *alias_rev = tag.clone();
+                    }
+                    // Path and WorkspacePath specs don't support tags
+                    LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
+                        return Err(anyhow::anyhow!(
+                            "Cannot apply tag '{}' to path-based alias target '{}'",
+                            tag,
+                            target
+                        ));
+                    }
                 }
             }
-            // Other spec types pass through unchanged
-            _ => Ok(self.clone()),
+
+            // Append the path if needed
+            if !path.as_os_str().is_empty() {
+                resolved_spec = resolved_spec.with_path(resolved_spec.path().join(path));
+            }
+            Ok(resolved_spec)
+        } else {
+            // Invalid alias target
+            Err(anyhow::anyhow!(
+                "Invalid alias target for package '{}': '{}'",
+                package,
+                target
+            ))
         }
     }
+
+    pub fn vendor_path(&self) -> anyhow::Result<PathBuf> {
+        match self {
+            LoadSpec::Github {
+                user,
+                repo,
+                rev,
+                path,
+            } => {
+                let mut vendor_path = PathBuf::from("github.com").join(user).join(repo).join(rev);
+                // Normalize and add path components (handles .. and . components)
+                if !path.as_os_str().is_empty() && path != Path::new(".") {
+                    vendor_path.push(crate::normalize_path(path));
+                }
+                Ok(vendor_path)
+            }
+            LoadSpec::Gitlab {
+                project_path,
+                rev,
+                path,
+            } => {
+                let mut vendor_path = PathBuf::from("gitlab.com").join(project_path).join(rev);
+                // Normalize and add path components (handles .. and . components)
+                if !path.as_os_str().is_empty() && path != Path::new(".") {
+                    vendor_path.push(crate::normalize_path(path));
+                }
+                Ok(vendor_path)
+            }
+            LoadSpec::Package { .. } => {
+                anyhow::bail!("Package spec not supported during vendoring. This is most likely a compiler bug.")
+            }
+            LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
+                anyhow::bail!(
+                "Local path dependency detected during vendoring. This typically indicates zen files \
+                from different workspaces are being processed together.\n\
+                \n\
+                Local dependencies should not be vendored - they belong to your workspace.\n\
+                \n\
+                Solution: Run 'pcb vendor' separately for each workspace, or ensure all zen files \
+                belong to the same workspace.")
+            }
+        }
+    }
+
     /// Check if this LoadSpec represents a remote resource that needs to be downloaded.
     /// Returns true for Package, Github, and Gitlab specs.
     /// Returns false for Path and WorkspacePath specs.
@@ -425,6 +453,11 @@ impl LoadSpec {
             self,
             LoadSpec::Package { .. } | LoadSpec::Github { .. } | LoadSpec::Gitlab { .. }
         )
+    }
+
+    /// Check if this LoadSpec represents a local resource.
+    pub fn is_local(&self) -> bool {
+        matches!(self, LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. })
     }
 
     /// Convert the LoadSpec back to a load string representation.
@@ -947,8 +980,7 @@ mod tests {
                 path: PathBuf::from("math.zen"),
             };
 
-            let resolved = spec.resolve(None).unwrap();
-            assert_eq!(resolved, spec); // Should return unchanged
+            assert!(spec.resolve(None).is_err());
         }
 
         #[test]
@@ -1205,7 +1237,7 @@ mod tests {
         }
 
         #[test]
-        fn test_resolve_non_package_specs_unchanged() {
+        fn test_resolve_non_package_specs_error() {
             let specs = vec![
                 LoadSpec::Github {
                     user: "user".to_string(),
@@ -1227,8 +1259,8 @@ mod tests {
             ];
 
             for spec in specs {
-                let resolved = spec.resolve(None).unwrap();
-                assert_eq!(resolved, spec); // Should return unchanged
+                // Error because non-package specs cannot be resolved
+                assert!(spec.resolve(None).is_err());
             }
         }
     }

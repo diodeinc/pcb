@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use super::Codemod;
 use pcb_zen_core::FileProvider;
-use pcb_zen_core::{
-    file_extensions, CoreLoadResolver, DefaultFileProvider, LoadResolver, LoadSpec, ResolveContext,
-};
+use pcb_zen_core::{file_extensions, CoreLoadResolver, DefaultFileProvider, LoadResolver};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::{ArgumentP, AstArgumentP, ExprP, StmtP};
 use starlark_syntax::syntax::module::AstModuleFields;
@@ -49,13 +47,11 @@ impl Codemod for RemoveDirectoryLoads {
                 continue;
             }
 
-            // Resolve
-            let resolved_dir: PathBuf = match LoadSpec::parse(module_path).and_then(|spec| {
-                let mut context = ResolveContext::new(file_provider.as_ref(), &spec, current_file);
-                resolver.resolve(&mut context).ok()
-            }) {
-                Some(p) => p,
-                None => continue,
+            let Ok(resolved_dir) = resolver
+                .resolve_context(module_path, current_file)
+                .and_then(|mut c| resolver.resolve(&mut c))
+            else {
+                continue;
             };
             if !file_provider.is_directory(&resolved_dir) {
                 continue;
