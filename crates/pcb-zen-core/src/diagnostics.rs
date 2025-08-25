@@ -1,6 +1,8 @@
 use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
+    path::Path,
+    sync::Arc,
 };
 
 use serde::ser::SerializeStruct;
@@ -62,6 +64,11 @@ pub struct Diagnostic {
     /// reconstruct a chain of diagnostics across module/evaluation boundaries
     /// without needing to rely on parsing rendered strings.
     pub child: Option<Box<Diagnostic>>,
+
+    /// Optional type-erased source error that can be downcast to specific error types
+    /// for detailed analysis while keeping the diagnostic struct generic-free.
+    /// Using Arc to preserve type information during clone operations.
+    pub source_error: Option<Arc<anyhow::Error>>,
 }
 
 impl From<starlark::Error> for Diagnostic {
@@ -89,6 +96,7 @@ impl From<starlark::Error> for Diagnostic {
             body: err.kind().to_string(),
             call_stack: Some(err.call_stack().clone()),
             child: None,
+            source_error: Some(Arc::new(err.into_anyhow())),
         }
     }
 }
@@ -102,13 +110,24 @@ impl From<EvalMessage> for Diagnostic {
             body: msg.description,
             call_stack: None,
             child: None,
+            source_error: None, // EvalMessage doesn't have an underlying error to preserve
         }
     }
 }
 
 impl From<anyhow::Error> for Diagnostic {
     fn from(err: anyhow::Error) -> Self {
-        Self::from(starlark::Error::from(err))
+        // Create a diagnostic directly from anyhow error, preserving the original
+        let body = err.to_string();
+        Self {
+            path: String::new(), // anyhow errors don't have file info by default
+            span: None,
+            severity: EvalSeverity::Error,
+            body,
+            call_stack: None,
+            child: None,
+            source_error: Some(Arc::new(err)),
+        }
     }
 }
 
@@ -117,7 +136,7 @@ impl serde::Serialize for Diagnostic {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Diagnostic", 6)?;
+        let mut state = serializer.serialize_struct("Diagnostic", 7)?;
         state.serialize_field("path", &self.path)?;
         state.serialize_field("span", &self.span.map(|span| span.to_string()))?;
         state.serialize_field("severity", &self.severity)?;
@@ -127,21 +146,76 @@ impl serde::Serialize for Diagnostic {
             &self.call_stack.as_ref().map(|stack| stack.to_string()),
         )?;
         state.serialize_field("child", &self.child)?;
+        state.serialize_field(
+            "source_error",
+            &self.source_error.as_ref().map(|err| err.to_string()),
+        )?;
         state.end()
     }
 }
 
 impl Diagnostic {
-    pub fn with_child(self, child: Diagnostic) -> Self {
+    pub fn new<S: Into<String>>(body: S, severity: EvalSeverity, path: &Path) -> Self {
         Self {
-            child: Some(Box::new(child)),
+            path: path.to_string_lossy().to_string(),
+            span: None,
+            severity,
+            body: body.into(),
+            call_stack: None,
+            child: None,
+            source_error: None,
+        }
+    }
+
+    pub fn with_child<D: Into<Option<Box<Diagnostic>>>>(self, child: D) -> Self {
+        Self {
+            child: child.into(),
             ..self
         }
+    }
+
+    pub fn with_span<S: Into<Option<ResolvedSpan>>>(self, span: S) -> Self {
+        Self {
+            span: span.into(),
+            ..self
+        }
+    }
+
+    pub fn with_source_error<E: Into<anyhow::Error>>(self, source_error: Option<E>) -> Self {
+        Self {
+            source_error: source_error.map(|err| Arc::new(err.into())),
+            ..self
+        }
+    }
+
+    pub fn boxed(self) -> Box<Self> {
+        Box::new(self)
     }
 
     /// Return `true` if the diagnostic severity is `Error`.
     pub fn is_error(&self) -> bool {
         matches!(self.severity, EvalSeverity::Error)
+    }
+
+    /// Get a reference to the source error as a specific type without consuming the diagnostic.
+    /// Returns `Some(&E)` if the downcast succeeds, `None` otherwise.
+    pub fn downcast_error_ref<E>(&self) -> Option<&E>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        self.source_error.as_ref()?.downcast_ref::<E>()
+    }
+
+    /// Check if the source error is of a specific type without consuming or borrowing.
+    /// Returns `true` if the diagnostic has a source error of type E, `false` otherwise.
+    pub fn is_error_type<E>(&self) -> bool
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        self.source_error
+            .as_ref()
+            .map(|err| err.is::<E>())
+            .unwrap_or(false)
     }
 }
 

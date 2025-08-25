@@ -17,6 +17,7 @@ pub mod warnings;
 // Re-export commonly used types
 pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{Diagnostic, DiagnosticError, Diagnostics, LoadError, WithDiagnostics};
+pub use lang::error::UnstableRefError;
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;

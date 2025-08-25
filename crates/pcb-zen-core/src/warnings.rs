@@ -1,4 +1,4 @@
-use crate::{Diagnostic, LoadResolver, ResolveContext};
+use crate::{Diagnostic, LoadResolver, ResolveContext, UnstableRefError};
 use regex::Regex;
 use starlark::{
     codemap::{CodeMap, Pos, ResolvedSpan, Span},
@@ -107,6 +107,15 @@ pub fn check_and_create_unstable_ref_warning(
     let remote_ref_meta = load_resolver.remote_ref_meta(&callee_remote)?;
     if !remote_ref_meta.stable() {
         let spec_without_path = format_spec_without_path(first_spec);
+
+        // Create the simplified error with only essential information
+        let mut unstable_ref_error = Some(UnstableRefError {
+            spec_chain: resolve_context.spec_history.clone(),
+            calling_file: current_file.to_path_buf(),
+            remote_ref_meta: remote_ref_meta.clone(),
+            remote_ref: callee_remote.clone(),
+        });
+
         let main_message =
             format!("'{spec_without_path}' is an unstable reference. Use a pinned version.");
 
@@ -121,29 +130,22 @@ pub fn check_and_create_unstable_ref_warning(
 
                 // For PCB.toml diagnostic, show the actual unstable reference (last spec)
                 let last_spec = resolve_context.spec_history.last().unwrap();
-                let last_spec_without_path = format_spec_without_path(last_spec);
+                let resolved_spec_without_path = format_spec_without_path(last_spec);
                 let toml_message = format!(
-                    "'{last_spec_without_path}' is an unstable reference. Use a pinned version."
+                    "'{resolved_spec_without_path}' is an unstable reference. Use a pinned version."
                 );
 
-                Box::new(Diagnostic {
-                    path: toml_source_path.to_string_lossy().to_string(),
-                    span: resolved_span,
-                    severity: EvalSeverity::Warning,
-                    body: toml_message,
-                    call_stack: None,
-                    child: None,
-                })
+                Diagnostic::new(toml_message, EvalSeverity::Warning, toml_source_path)
+                    .with_span(resolved_span)
+                    .with_source_error(unstable_ref_error.take())
+                    .boxed()
             });
 
-        return Some(Diagnostic {
-            path: current_file.to_string_lossy().to_string(),
-            span,
-            severity: EvalSeverity::Warning,
-            body: main_message,
-            call_stack: None,
-            child,
-        });
+        let diagnostic = Diagnostic::new(main_message, EvalSeverity::Warning, current_file)
+            .with_span(span)
+            .with_source_error(unstable_ref_error)
+            .with_child(child);
+        return Some(diagnostic);
     }
 
     None

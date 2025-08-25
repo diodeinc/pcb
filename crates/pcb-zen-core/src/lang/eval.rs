@@ -545,6 +545,7 @@ impl EvalContext {
                             body: format!("Failed to resolve load path '{file_load_path}': {e}"),
                             call_stack: None,
                             child: None,
+                            source_error: None,
                         };
                         errors_by_symbol
                             .entry(symbol_name.clone())
@@ -727,6 +728,7 @@ impl EvalContext {
                             body: format!("Failed to resolve load path '{file_load_path}': {e}"),
                             call_stack: None,
                             child: None,
+                            source_error: None,
                         };
                         errors_by_symbol
                             .entry(symbol_name.clone())
@@ -760,6 +762,7 @@ impl EvalContext {
                         body: format!("Failed to load component from {file_load_path}: {e}"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     errors_by_symbol
                         .entry(symbol_name.clone())
@@ -1512,6 +1515,7 @@ impl FileLoader for EvalContext {
                                 body: format!("Error loading module `{error_path}`"),
                                 call_stack: None,
                                 child: Some(Box::new(error.clone())),
+                                source_error: None,
                             };
 
                             // Wrap in DiagnosticError and pass through anyhow
@@ -1537,6 +1541,7 @@ impl FileLoader for EvalContext {
                         body: format!("Error loading module `{error_path}`"),
                         call_stack: None,
                         child: Some(Box::new(error.clone())),
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(parent_diag);
                     let load_err = crate::LoadError {
@@ -1578,6 +1583,7 @@ impl FileLoader for EvalContext {
                         body: format!("Error loading module `{path}`"),
                         call_stack: None,
                         child: Some(Box::new(first_error.clone())),
+                        source_error: None,
                     };
 
                     // Wrap in DiagnosticError and pass through anyhow
@@ -1601,6 +1607,7 @@ impl FileLoader for EvalContext {
                         body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
@@ -1637,6 +1644,7 @@ impl FileLoader for EvalContext {
                         body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
@@ -1659,6 +1667,7 @@ impl FileLoader for EvalContext {
                 body: format!("Failed to load module `{path}`"),
                 call_stack: None,
                 child: None,
+                source_error: None,
             };
             let diag_err = crate::DiagnosticError(diag);
             let load_err = crate::LoadError {

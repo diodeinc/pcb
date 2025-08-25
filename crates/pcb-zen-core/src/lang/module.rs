@@ -523,6 +523,7 @@ where
                     body: message,
                     call_stack: Some(eval.call_stack().clone()),
                     child: Some(Box::new(child)),
+                    source_error: None,
                 }
             } else {
                 child
