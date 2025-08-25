@@ -129,7 +129,11 @@ fn test_pcb_release_source_only() {
     // Snapshot the build from release contents
     let build_ouput = sb.snapshot_run(
         "pcb",
-        ["build", &format!("{staging_dir}/src/boards/TestBoard.zen")],
+        [
+            "build",
+            "--offline",
+            &format!("{staging_dir}/src/boards/TestBoard.zen"),
+        ],
     );
     assert_snapshot!("release_basic_build", build_ouput);
 }
@@ -180,7 +184,11 @@ fn test_pcb_release_with_git() {
     // Snapshot the build from release contents
     let build_ouput = sb.snapshot_run(
         "pcb",
-        ["build", &format!("{staging_dir}/src/boards/TB0001.zen")],
+        [
+            "build",
+            "--offline",
+            &format!("{staging_dir}/src/boards/TB0001.zen"),
+        ],
     );
     assert_snapshot!("release_with_git_build", build_ouput);
 }
@@ -219,7 +227,11 @@ fn test_pcb_release_full() {
     // Snapshot the build from release contents
     let build_ouput = sb.snapshot_run(
         "pcb",
-        ["build", &format!("{staging_dir}/src/boards/TestBoard.zen")],
+        [
+            "build",
+            "--offline",
+            &format!("{staging_dir}/src/boards/TestBoard.zen"),
+        ],
     );
     assert_snapshot!("release_full_build", build_ouput);
 }
@@ -262,7 +274,11 @@ n2 = Net("N2")
     // Snapshot the build from release contents
     let build_ouput = sb.snapshot_run(
         "pcb",
-        ["build", &format!("{staging_dir}/src/CaseBoard.zen")],
+        [
+            "build",
+            "--offline",
+            &format!("{staging_dir}/src/CaseBoard.zen"),
+        ],
     );
     assert_snapshot!("case_insensitive_tag_build", build_ouput);
 
@@ -320,7 +336,11 @@ fn test_pcb_release_with_file() {
     // Snapshot the build from release contents
     let build_ouput = sb.snapshot_run(
         "pcb",
-        ["build", &format!("{staging_dir}/src/boards/TB0002.zen")],
+        [
+            "build",
+            "--offline",
+            &format!("{staging_dir}/src/boards/TB0002.zen"),
+        ],
     );
     assert_snapshot!("release_with_file_build", build_ouput);
 }
