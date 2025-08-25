@@ -870,13 +870,10 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .resolve(&mut resolve_context)
             .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
 
-        let span = parent_context
-            .find_module_span_for_path(&path)
-            .and_then(|module_span| {
-                parent_context
-                    .get_codemap()
-                    .map(|codemap| codemap.file_span(module_span).resolve_span())
-            });
+        // Increment module counter - this happens before warning generation
+        parent_context.increment_module_counter();
+
+        let span = parent_context.resolve_span_for_current_module(&path);
 
         if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
             load_resolver.as_ref(),

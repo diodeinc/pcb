@@ -275,6 +275,12 @@ pub struct EvalContext {
 
     /// Load resolver for resolving load() paths
     pub(crate) load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+
+    /// Index to track which load statement we're currently processing (for span resolution)
+    current_load_index: RefCell<usize>,
+
+    /// Index to track which Module() call we're currently processing (for span resolution)
+    current_module_index: RefCell<usize>,
 }
 
 impl Default for EvalContext {
@@ -311,6 +317,8 @@ impl EvalContext {
             diagnostics: RefCell::new(Vec::new()),
             file_provider: None,
             load_resolver: None,
+            current_load_index: RefCell::new(0),
+            current_module_index: RefCell::new(0),
         }
     }
 
@@ -361,6 +369,8 @@ impl EvalContext {
             diagnostics: RefCell::new(Vec::new()),
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
+            current_load_index: RefCell::new(0),
+            current_module_index: RefCell::new(0),
         }
     }
 
@@ -1303,40 +1313,6 @@ impl EvalContext {
         None
     }
 
-    /// Find the span of the *string literal* that is passed to a `Module()` call
-    /// whose value equals `path`.
-    ///
-    /// The span is used by the LSP so that diagnostics highlight only the quoted
-    /// string, not the whole `Module()` invocation.
-    pub fn find_module_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
-        use starlark::syntax::ast::{ArgumentP, AstLiteral, ExprP};
-
-        let ast = self.parse_current_ast()?;
-        let mut found = None;
-
-        ast.statement().visit_expr(|expr| {
-            if found.is_some() { return; }
-            found = Self::find_in_expr(expr, &mut |expr| {
-                // Look for Module() calls with matching string argument
-                if let ExprP::Call(callee, call_args) = &expr.node {
-                    if let ExprP::Identifier(ident) = &callee.node {
-                        if ident.node.ident == "Module" {
-                            return call_args.args.iter()
-                                .find_map(|arg| match &arg.node {
-                                    ArgumentP::Positional(expr) => Some(expr),
-                                    _ => None,
-                                })
-                                .filter(|expr| matches!(&expr.node, ExprP::Literal(AstLiteral::String(s)) if s.node == path))
-                                .map(|expr| expr.span);
-                        }
-                    }
-                }
-                None
-            });
-        });
-        found
-    }
-
     /// Find the span of a load statement that loads the given path
     pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
         let ast = self.parse_current_ast()?;
@@ -1360,10 +1336,90 @@ impl EvalContext {
         }
     }
 
-    pub fn resolve_span(&self, path: &str) -> Option<ResolvedSpan> {
-        self.find_load_span_for_path(path)
-            .and_then(|load_span| self.get_codemap().map(|codemap| (load_span, codemap)))
-            .map(|(load_span, codemap)| codemap.file_span(load_span).resolve_span())
+    /// Resolve the span for the current load statement being processed (using the load index)
+    pub fn resolve_span_for_current_load(&self, path: &str) -> Option<ResolvedSpan> {
+        let current_index = *self.current_load_index.borrow();
+        // We've already incremented the counter, so subtract 1 to get the actual current load
+        let actual_index = current_index.saturating_sub(1);
+
+        // Get the AST to verify the path matches
+        let ast = self.parse_current_ast()?;
+        let loads = ast.loads();
+        let load = loads.get(actual_index)?;
+
+        // Safety check: ensure the path matches what we expect
+        if load.module_id != path {
+            panic!(
+                "Load path mismatch at index {actual_index}: expected '{path}', got '{}'",
+                load.module_id
+            );
+        }
+
+        let load_span = load.span.span;
+        self.get_codemap()
+            .map(|codemap| codemap.file_span(load_span).resolve_span())
+    }
+
+    /// Resolve the span for the current Module() call being processed (using the module index)
+    pub fn resolve_span_for_current_module(&self, path: &str) -> Option<ResolvedSpan> {
+        let current_index = *self.current_module_index.borrow();
+        // We've already incremented the counter, so subtract 1 to get the actual current module
+        let actual_index = current_index.saturating_sub(1);
+
+        // Get the AST to verify the path matches
+        use starlark::syntax::ast::{ArgumentP, AstLiteral, ExprP};
+        let ast = self.parse_current_ast()?;
+        let mut module_calls = Vec::new();
+
+        ast.statement().visit_expr(|expr| {
+            Self::find_in_expr(expr, &mut |expr| {
+                // Look for Module() calls
+                if let ExprP::Call(callee, call_args) = &expr.node {
+                    if let ExprP::Identifier(ident) = &callee.node {
+                        if ident.node.ident == "Module" {
+                            if let Some((path_str, span)) = call_args
+                                .args
+                                .iter()
+                                .find_map(|arg| match &arg.node {
+                                    ArgumentP::Positional(expr) => Some(expr),
+                                    _ => None,
+                                })
+                                .filter(|expr| {
+                                    matches!(&expr.node, ExprP::Literal(AstLiteral::String(_)))
+                                })
+                                .and_then(|expr| match &expr.node {
+                                    ExprP::Literal(AstLiteral::String(s)) => {
+                                        Some((s.node.clone(), expr.span))
+                                    }
+                                    _ => None,
+                                })
+                            {
+                                module_calls.push((path_str, span));
+                            }
+                        }
+                    }
+                }
+                None
+            });
+        });
+
+        let (actual_path, span) = module_calls.get(actual_index)?;
+
+        // Safety check: ensure the path matches what we expect
+        if *actual_path != path {
+            panic!(
+                "Module path mismatch at index {actual_index}: expected '{path}', got '{actual_path}'"
+            );
+        }
+
+        self.get_codemap()
+            .map(|codemap| codemap.file_span(*span).resolve_span())
+    }
+
+    /// Increment the module counter for span tracking
+    pub fn increment_module_counter(&self) {
+        let mut index = self.current_module_index.borrow_mut();
+        *index += 1;
     }
 
     /// Get the source path of the current module being evaluated
@@ -1389,6 +1445,12 @@ impl FileLoader for EvalContext {
             "Trying to load path {path} with current path {:?}",
             self.source_path
         );
+
+        // Increment load counter - this happens before warning generation
+        {
+            let mut index = self.current_load_index.borrow_mut();
+            *index += 1;
+        }
 
         // Get or create default providers if none were set
         let file_provider = self
@@ -1417,7 +1479,7 @@ impl FileLoader for EvalContext {
             load_resolver.as_ref(),
             current_file,
             &resolve_context,
-            self.resolve_span(path),
+            self.resolve_span_for_current_load(path),
         ) {
             self.diagnostics.borrow_mut().push(warning_diag);
         }
