@@ -19,6 +19,7 @@ use std::process::Command;
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::bom::write_bom_json;
+use crate::build::evaluate_zen_file;
 use crate::workspace::{gather_workspace_info, loadspec_to_vendor_path, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
@@ -82,6 +83,7 @@ type TaskFn = fn(&ReleaseInfo) -> Result<()>;
 
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
+    ("Validating build from staged sources", validate_build),
     ("Copying layout files", copy_layout),
     ("Substituting version variables", substitute_variables),
 ];
@@ -596,6 +598,30 @@ print("Text variables updated successfully")
         .arg(kicad_pcb_path.to_string_lossy())
         .run()?;
     debug!("Updated variables in: {}", kicad_pcb_path.display());
+    Ok(())
+}
+
+/// Validate that the staged zen file can be built successfully
+fn validate_build(info: &ReleaseInfo) -> Result<()> {
+    // Calculate the zen file path in the staging directory
+    let zen_file_rel = info
+        .workspace
+        .zen_path
+        .strip_prefix(info.workspace.root())
+        .context("Zen file must be within workspace root")?;
+    let staged_zen_path = info.staging_dir.join("src").join(zen_file_rel);
+
+    debug!("Validating build of: {}", staged_zen_path.display());
+
+    // Use offline mode since all dependencies should be vendored
+    let (_eval_result, has_errors) = evaluate_zen_file(&staged_zen_path, true);
+
+    if has_errors {
+        anyhow::bail!(
+            "Build validation failed for staged zen file: {}",
+            staged_zen_path.display()
+        );
+    }
     Ok(())
 }
 
