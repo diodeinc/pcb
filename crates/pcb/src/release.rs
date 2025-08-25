@@ -424,7 +424,6 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
                     })?;
                 }
                 fs::copy(&path, &dest_path).with_context(|| {
-                    dbg!("remote", &load_spec, &path, &dest_path);
                     format!(
                         "Failed to copy {} -> {}",
                         path.display(),
@@ -434,8 +433,10 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
             }
         } else {
             let Ok(rel) = path.strip_prefix(info.workspace.root()) else {
-                // local dep not in workspace
-                continue;
+                anyhow::bail!(
+                    "Cannot release with local path outside of workspace: {}",
+                    path.display()
+                )
             };
             let dest_path = info.staging_dir.join("src").join(rel);
             if let Some(parent) = dest_path.parent() {
@@ -444,7 +445,6 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
                 })?;
             }
             fs::copy(&path, &dest_path).with_context(|| {
-                dbg!("local", &path, &dest_path);
                 format!(
                     "Failed to copy {} -> {}",
                     path.display(),

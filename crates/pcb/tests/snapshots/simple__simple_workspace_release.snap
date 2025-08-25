@@ -7,8 +7,8 @@ Exit Code: 0
 
 --- STDOUT ---
 {
-  "archive": "<TEMP_DIR>/boards/.pcb/releases/TestBoard/unknown.zip",
-  "staging_directory": "<TEMP_DIR>/boards/.pcb/releases/TestBoard/unknown",
+  "archive": "<TEMP_DIR>/.pcb/releases/TestBoard/unknown.zip",
+  "staging_directory": "<TEMP_DIR>/.pcb/releases/TestBoard/unknown",
   "version": "unknown"
 }
 --- STDERR ---
