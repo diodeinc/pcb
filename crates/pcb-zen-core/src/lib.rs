@@ -710,6 +710,12 @@ impl CoreLoadResolver {
                 })
                 .collect::<HashMap<PathBuf, LoadSpec>>();
             self.path_to_spec.lock().unwrap().extend(pcb_toml_specs);
+        } else {
+            // If no spec, then the pcb.toml files are local. So, add it to the tracked local files
+            // TODO: remove after tracked_local_files, path_to_spec unification
+            pcb_toml_files.iter().for_each(|p| {
+                self.tracked_local_files.lock().unwrap().insert(p.clone());
+            });
         }
 
         // Iterate in reverse to prioritize the deepest (closest to leaf) pcb.toml files
