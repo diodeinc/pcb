@@ -360,18 +360,16 @@ impl Sandbox {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Sanitize temp paths and timestamps to make snapshots deterministic
-        let sanitized_stdout = self.sanitize_output(&stdout);
-        let sanitized_stderr = self.sanitize_output(&stderr);
-
-        format!(
+        let manifest = format!(
             "Command: {} {}\nExit Code: {}\n\n--- STDOUT ---\n{}\n--- STDERR ---\n{}",
             program,
             args.join(" "),
             exit_code,
-            sanitized_stdout.trim_end(),
-            sanitized_stderr.trim_end()
-        )
+            stdout.trim_end(),
+            stderr.trim_end()
+        );
+        // Sanitize temp paths and timestamps to make snapshots deterministic
+        self.sanitize_output(&manifest)
     }
 
     /// Sanitize temporary paths and timestamps in output to make snapshots deterministic
