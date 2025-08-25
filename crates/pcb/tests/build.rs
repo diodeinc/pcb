@@ -555,3 +555,27 @@ Comp2(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("mixed_aggregated_and_unique_warnings", output);
 }
+
+#[test]
+fn test_unstable_ref_wrong_tag() {
+    let mut sandbox = Sandbox::new();
+
+    // Create a fake git repository with HEAD tagged
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .tag("v1.0.0", false)
+        .push_mirror();
+
+    // Create a board that uses branch unstabe ref
+    let unstable_default_zen = r#"
+SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
+"#;
+
+    let output = sandbox
+        .write("board.zen", unstable_default_zen)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("unstable_ref_wrong_tag", output);
+}

@@ -200,9 +200,8 @@ impl RemoteFetcher for NoopRemoteFetcher {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefKind {
     Tag,
-    Branch,
     Commit,
-    Head,
+    Unstable,
 }
 
 /// Remote reference identifier with structured information

@@ -1,4 +1,5 @@
-use pcb_zen_core::LoadSpec;
+use log::debug;
+use pcb_zen_core::{LoadSpec, RefKind, RemoteRefMeta};
 use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,22 +80,28 @@ fn ensure_symlinks(
 }
 
 /// Classify a remote Git repository to determine reference type
-fn classify_remote(cache_root: &Path, _spec: &LoadSpec) -> Option<pcb_zen_core::RemoteRefMeta> {
-    let git_dir = cache_root.join(".git");
-    if !git_dir.exists() || !git_dir.is_dir() {
-        return None; // Not a Git repository
-    }
-
-    let sha1 = git::rev_parse_head(cache_root)?;
-    let kind = if git::describe_exact_tag_head(cache_root).is_some() {
-        pcb_zen_core::RefKind::Tag
-    } else if let Some(_branch) = git::symbolic_ref_short_head(cache_root) {
-        pcb_zen_core::RefKind::Branch
-    } else {
-        pcb_zen_core::RefKind::Commit
+fn classify_remote(cache_root: &Path, spec: &LoadSpec) -> Option<RemoteRefMeta> {
+    let expected_ref = match spec {
+        LoadSpec::Github { rev, .. } | LoadSpec::Gitlab { rev, .. } => rev,
+        _ => unreachable!(),
     };
 
-    Some(pcb_zen_core::RemoteRefMeta {
+    let sha1 = git::rev_parse_head(cache_root)?;
+    let kind = {
+        let tag_sha1 = git::rev_parse(cache_root, &format!("{expected_ref}^{{commit}}"));
+        if git::tag_exists(cache_root, expected_ref) && tag_sha1 == Some(sha1.clone()) {
+            debug!("Tag {expected_ref} exists, and it's at HEAD");
+            RefKind::Tag
+        } else if expected_ref.len() > 7 && sha1.starts_with(expected_ref) {
+            debug!("Hash matches {expected_ref} ref");
+            RefKind::Commit
+        } else {
+            debug!("{expected_ref} is unstable");
+            RefKind::Unstable
+        }
+    };
+
+    Some(RemoteRefMeta {
         commit_sha1: sha1,
         commit_sha256: None,
         kind,

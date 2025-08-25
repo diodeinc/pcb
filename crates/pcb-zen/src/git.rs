@@ -1,12 +1,12 @@
 use std::path::Path;
 use std::process::Command;
 
-pub fn rev_parse_head(repo_root: &Path) -> Option<String> {
+pub fn rev_parse(repo_root: &Path, ref_name: &str) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .arg("rev-parse")
-        .arg("HEAD")
+        .arg(ref_name)
         .output()
         .ok()?;
     if !out.status.success() {
@@ -18,6 +18,10 @@ pub fn rev_parse_head(repo_root: &Path) -> Option<String> {
     } else {
         None
     }
+}
+
+pub fn rev_parse_head(repo_root: &Path) -> Option<String> {
+    rev_parse(repo_root, "HEAD")
 }
 
 pub fn symbolic_ref_short_head(repo_root: &Path) -> Option<String> {
@@ -41,25 +45,21 @@ pub fn symbolic_ref_short_head(repo_root: &Path) -> Option<String> {
     }
 }
 
-pub fn describe_exact_tag_head(repo_root: &Path) -> Option<String> {
+pub fn tag_exists(repo_root: &Path, tag_name: &str) -> bool {
+    // return true if the tag exists in the repo
     let out = Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .arg("describe")
-        .arg("--exact-match")
-        .arg("--tags")
-        .arg("HEAD")
+        .arg("tag")
+        .arg("-l")
+        .arg(tag_name)
         .output()
-        .ok()?;
+        .unwrap();
     if !out.status.success() {
-        return None;
+        return false;
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    let out = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    out == tag_name
 }
 
 /// Check if git is available on the system
