@@ -55,6 +55,41 @@ name = "test_workspace"
 stdlib = "@github/diodeinc/stdlib:v0.2.4"
 "#;
 
+const SIMPLE_COMPONENT: &str = r#"
+value = config("value", str, default = "10kOhm")
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    prefix = "R",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": P1, "P2": P2},
+    properties = {
+        "value": value,
+        "type": "resistor",
+        "datasheet": File("datasheet.txt"),
+    }
+)
+"#;
+
+const TEST_KICAD_MOD: &str = r#"(footprint "test"
+  (layer "F.Cu")
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))
+)
+"#;
+
+const SIMPLE_BOARD_ZEN: &str = r#"
+SimpleComponent = Module("../modules/component.zen")
+add_property("layout_path", "build/TestBoard")
+vcc_3v3 = Net("VCC_3V3")
+gnd = Net("GND")
+SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
+"#;
+
 #[test]
 fn test_pcb_release_source_only() {
     let mut sb = Sandbox::new();
@@ -64,8 +99,8 @@ fn test_pcb_release_source_only() {
         .write("pcb.toml", PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(&["layout/*"]);
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .ignore_globs(["layout/*"]);
 
     // Run source-only release with JSON output
     let output = sb
@@ -90,6 +125,13 @@ fn test_pcb_release_source_only() {
 
     // Snapshot the staging directory contents
     assert_snapshot!("release_basic", sb.snapshot_dir(staging_dir));
+
+    // Snapshot the build from release contents
+    let build_ouput = sb.snapshot_run(
+        "pcb",
+        ["build", &format!("{staging_dir}/src/boards/TestBoard.zen")],
+    );
+    assert_snapshot!("release_basic_build", build_ouput);
 }
 
 #[test]
@@ -97,8 +139,8 @@ fn test_pcb_release_with_git() {
     let mut sb = Sandbox::new();
     let output = sb
         .cwd("src")
-        .ignore_globs(&["layout/*"])
-        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .ignore_globs(["layout/*"])
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .seed_stdlib(&["v0.2.4"])
         .seed_kicad(&["9.0.0"])
         .write(".gitignore", ".pcb")
@@ -134,6 +176,13 @@ fn test_pcb_release_with_git() {
 
     // Snapshot the staging directory contents
     assert_snapshot!("release_with_git", sb.snapshot_dir(staging_dir));
+
+    // Snapshot the build from release contents
+    let build_ouput = sb.snapshot_run(
+        "pcb",
+        ["build", &format!("{staging_dir}/src/boards/TB0001.zen")],
+    );
+    assert_snapshot!("release_with_git_build", build_ouput);
 }
 
 #[test]
@@ -166,6 +215,13 @@ fn test_pcb_release_full() {
 
     // Snapshot the staging directory contents
     assert_snapshot!("release_full", sb.snapshot_dir(staging_dir));
+
+    // Snapshot the build from release contents
+    let build_ouput = sb.snapshot_run(
+        "pcb",
+        ["build", &format!("{staging_dir}/src/boards/TestBoard.zen")],
+    );
+    assert_snapshot!("release_full_build", build_ouput);
 }
 
 #[test]
@@ -181,7 +237,7 @@ n2 = Net("N2")
     let mut sb = Sandbox::new();
     let output = sb
         .cwd("src")
-        .ignore_globs(&["layout/*"])
+        .ignore_globs(["layout/*"])
         .write("boards/CaseBoard.zen", board_zen)
         .init_git()
         .commit("Initial commit")
@@ -203,6 +259,13 @@ n2 = Net("N2")
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
     let staging_dir = json["staging_directory"].as_str().unwrap();
 
+    // Snapshot the build from release contents
+    let build_ouput = sb.snapshot_run(
+        "pcb",
+        ["build", &format!("{staging_dir}/src/CaseBoard.zen")],
+    );
+    assert_snapshot!("case_insensitive_tag_build", build_ouput);
+
     // Load and sanitize metadata.json for stable snapshot
     let metadata_path = format!("{staging_dir}/metadata.json");
     let metadata_file = File::open(&metadata_path).unwrap();
@@ -212,4 +275,52 @@ n2 = Net("N2")
     let git_version = meta["release"]["git_version"].as_str().unwrap();
     assert_eq!(git_version, "v9.9.9");
     assert_snapshot!("case_insensitive_tag", sb.snapshot_dir(staging_dir));
+}
+
+#[test]
+fn test_pcb_release_with_file() {
+    let mut sb = Sandbox::new();
+    const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("modules/component.zen", SIMPLE_COMPONENT)
+        .write("modules/test.kicad_mod", TEST_KICAD_MOD)
+        .write("modules/datasheet.txt", DATASHEET_CONTENTS)
+        .write("boards/TB0002.zen", SIMPLE_BOARD_ZEN)
+        .ignore_globs(["layout/*"]);
+
+    // Run source-only release with JSON output
+    let output = sb
+        .cmd(
+            cargo_bin!("pcb"),
+            [
+                "release",
+                "boards/TB0002.zen",
+                "--source-only",
+                "-f",
+                "json",
+            ],
+        )
+        .read()
+        .expect("Failed to run pcb release command");
+
+    // Parse JSON output to get staging directory
+    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
+    let staging_dir = json["staging_directory"]
+        .as_str()
+        .expect("Missing staging_directory in JSON");
+
+    let datasheet_path = format!("{staging_dir}/src/modules/datasheet.txt");
+    let datasheet_contents = std::fs::read_to_string(&datasheet_path).unwrap();
+    assert_eq!(datasheet_contents, DATASHEET_CONTENTS);
+
+    // Snapshot the staging directory contents
+    assert_snapshot!("release_with_file", sb.snapshot_dir(staging_dir));
+
+    // Snapshot the build from release contents
+    let build_ouput = sb.snapshot_run(
+        "pcb",
+        ["build", &format!("{staging_dir}/src/boards/TB0002.zen")],
+    );
+    assert_snapshot!("release_with_file_build", build_ouput);
 }

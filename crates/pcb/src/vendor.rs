@@ -1,8 +1,9 @@
-use crate::workspace::{gather_workspace_info, is_vendor_dependency, loadspec_to_vendor_path};
+use crate::workspace::{gather_workspace_info, loadspec_to_vendor_path};
 use anyhow::{Context, Result};
 use clap::Args;
 use log::{debug, info};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
+use pcb_zen_core::LoadSpec;
 use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::collections::HashMap;
 use std::fs;
@@ -209,14 +210,17 @@ fn gather_vendor_info(zen_files: Vec<PathBuf>, workspace_root: PathBuf) -> Resul
         let workspace_info = gather_workspace_info(zen_file.clone(), false)?;
 
         for path in workspace_info.resolver.get_tracked_files() {
-            if is_vendor_dependency(&workspace_root, &path, &workspace_info.resolver) {
-                if let Some(load_spec) = workspace_info.resolver.get_load_spec_for_path(&path) {
-                    let vendor_path = loadspec_to_vendor_path(&load_spec)?;
-
-                    dependencies
-                        .entry(vendor_path)
-                        .or_insert(path.to_path_buf());
+            if let Some(load_spec) = workspace_info.resolver.get_load_spec_for_path(&path) {
+                let is_remote =
+                    matches!(load_spec, LoadSpec::Github { .. } | LoadSpec::Gitlab { .. });
+                if !is_remote {
+                    continue;
                 }
+                let vendor_path = loadspec_to_vendor_path(&load_spec)?;
+
+                dependencies
+                    .entry(vendor_path)
+                    .or_insert(path.to_path_buf());
             }
         }
     }

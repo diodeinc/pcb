@@ -1,0 +1,69 @@
+---
+source: crates/pcb/tests/release.rs
+expression: sb.snapshot_dir(staging_dir)
+---
+=== metadata.json
+{
+  "git": {
+    "describe": "unknown",
+    "hash": "unknown",
+    "workspace": "<TEMP_DIR>/src"
+  },
+  "release": {
+    "created_at": "<TIMESTAMP>",
+    "git_version": "unknown",
+    "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
+    "schema_version": "1",
+    "source_only": true,
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TB0002/unknown",
+    "workspace_root": "<TEMP_DIR>/src",
+    "zen_file": "boards/TB0002.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "<CLI_VERSION>",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
+}
+=== src/boards/TB0002.zen
+
+SimpleComponent = Module("../modules/component.zen")
+add_property("layout_path", "build/TestBoard")
+vcc_3v3 = Net("VCC_3V3")
+gnd = Net("GND")
+SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
+=== src/modules/component.zen
+
+value = config("value", str, default = "10kOhm")
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Component(
+    name = "R",
+    prefix = "R",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": P1, "P2": P2},
+    properties = {
+        "value": value,
+        "type": "resistor",
+        "datasheet": File("datasheet.txt"),
+    }
+)
+=== src/modules/datasheet.txt
+Simple component datasheet.
+=== src/modules/test.kicad_mod
+(footprint "test"
+  (layer "F.Cu")
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu"))
+)
+=== src/pcb.toml
+
+[workspace]
+name = "test_workspace"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v0.2.4"

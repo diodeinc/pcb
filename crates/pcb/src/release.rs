@@ -6,7 +6,7 @@ use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_sch::generate_bom_entries;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::{EvalOutput, WithDiagnostics};
+use pcb_zen_core::{EvalOutput, LoadSpec, WithDiagnostics};
 
 use std::collections::HashSet;
 use std::fs;
@@ -19,10 +19,7 @@ use std::process::Command;
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::bom::write_bom_json;
-use crate::workspace::{
-    classify_file, gather_workspace_info, loadspec_to_vendor_path, FileClassification,
-    WorkspaceInfo,
-};
+use crate::workspace::{gather_workspace_info, loadspec_to_vendor_path, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -406,15 +403,26 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
     }
 
     for path in info.workspace.resolver.get_tracked_files() {
-        match classify_file(info.workspace.root(), &path, &info.workspace.resolver) {
-            FileClassification::Local(rel) => {
-                let dest_path = info.staging_dir.join("src").join(rel);
+        let load_spec = info.workspace.resolver.get_load_spec_for_path(&path);
+        let is_remote = matches!(
+            load_spec,
+            Some(LoadSpec::Github { .. } | LoadSpec::Gitlab { .. })
+        );
+        if is_remote {
+            let vendor_path = loadspec_to_vendor_path(&load_spec.clone().unwrap())?;
+            if vendor_files.insert(vendor_path.clone()) {
+                let dest_path = info
+                    .staging_dir
+                    .join("src")
+                    .join("vendor")
+                    .join(&vendor_path);
                 if let Some(parent) = dest_path.parent() {
                     fs::create_dir_all(parent).with_context(|| {
                         format!("Failed to create parent directory: {}", parent.display())
                     })?;
                 }
                 fs::copy(&path, &dest_path).with_context(|| {
+                    dbg!("remote", &load_spec, &path, &dest_path);
                     format!(
                         "Failed to copy {} -> {}",
                         path.display(),
@@ -422,29 +430,25 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
                     )
                 })?;
             }
-            FileClassification::Vendor(load_spec) => {
-                let vendor_path = loadspec_to_vendor_path(&load_spec)?;
-                if vendor_files.insert(vendor_path.clone()) {
-                    let dest_path = info
-                        .staging_dir
-                        .join("src")
-                        .join("vendor")
-                        .join(&vendor_path);
-                    if let Some(parent) = dest_path.parent() {
-                        fs::create_dir_all(parent).with_context(|| {
-                            format!("Failed to create parent directory: {}", parent.display())
-                        })?;
-                    }
-                    fs::copy(&path, &dest_path).with_context(|| {
-                        format!(
-                            "Failed to copy {} -> {}",
-                            path.display(),
-                            dest_path.display()
-                        )
-                    })?;
-                }
+        } else {
+            let Ok(rel) = path.strip_prefix(info.workspace.root()) else {
+                // local dep not in workspace
+                continue;
+            };
+            let dest_path = info.staging_dir.join("src").join(rel);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create parent directory: {}", parent.display())
+                })?;
             }
-            FileClassification::Irrelevant => {}
+            fs::copy(&path, &dest_path).with_context(|| {
+                dbg!("local", &path, &dest_path);
+                format!(
+                    "Failed to copy {} -> {}",
+                    path.display(),
+                    dest_path.display()
+                )
+            })?;
         }
     }
     Ok(())

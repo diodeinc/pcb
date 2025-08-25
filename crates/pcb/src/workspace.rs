@@ -46,17 +46,6 @@ impl WorkspaceInfo {
     }
 }
 
-/// Classification of a tracked file
-#[derive(Debug)]
-pub enum FileClassification<'a> {
-    /// Local file within workspace (contains relative path)
-    Local(&'a Path),
-    /// Vendor dependency (contains LoadSpec)
-    Vendor(LoadSpec),
-    /// Not relevant for packaging
-    Irrelevant,
-}
-
 /// Gather common workspace information for both vendor and release commands
 pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result<WorkspaceInfo> {
     debug!("Starting workspace information gathering");
@@ -185,61 +174,4 @@ pub fn loadspec_to_vendor_path(spec: &LoadSpec) -> Result<PathBuf> {
             )
         }
     }
-}
-
-/// Classify a tracked file for packaging purposes
-pub fn classify_file<'a>(
-    workspace_root: &Path,
-    path: &'a Path,
-    resolver: &CoreLoadResolver,
-) -> FileClassification<'a> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    let filename = path
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or_default();
-    if !matches!(ext, "zen" | "kicad_mod" | "kicad_sym")
-        && !ext.starts_with("kicad_")
-        && filename != "pcb.toml"
-    {
-        return FileClassification::Irrelevant;
-    }
-
-    // Use proper path comparison instead of string matching
-    if path.starts_with(workspace_root) {
-        if let Ok(rel) = path.strip_prefix(workspace_root) {
-            debug!(
-                "Classified as local: {} (relative: {})",
-                path.display(),
-                rel.display()
-            );
-            FileClassification::Local(rel)
-        } else {
-            FileClassification::Irrelevant
-        }
-    } else if let Some(load_spec) = resolver.get_load_spec_for_path(path) {
-        debug!("Classified as vendor: {}", path.display());
-        FileClassification::Vendor(load_spec)
-    } else {
-        debug!(
-            "Classified as irrelevant: {} (outside workspace, no LoadSpec)",
-            path.display()
-        );
-        FileClassification::Irrelevant
-    }
-}
-
-/// Check if a file is a vendor dependency (external to workspace) - compatibility helper
-pub fn is_vendor_dependency(
-    workspace_root: &Path,
-    path: &Path,
-    resolver: &CoreLoadResolver,
-) -> bool {
-    matches!(
-        classify_file(workspace_root, path, resolver),
-        FileClassification::Vendor(_)
-    )
 }

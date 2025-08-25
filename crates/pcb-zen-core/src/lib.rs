@@ -749,6 +749,7 @@ impl CoreLoadResolver {
             .lock()
             .unwrap()
             .keys()
+            .filter(|p| p.is_file())
             .cloned()
             .collect::<HashSet<_>>();
         files.extend(self.tracked_local_files.lock().unwrap().iter().cloned());
