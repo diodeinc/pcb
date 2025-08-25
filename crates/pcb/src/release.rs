@@ -19,7 +19,6 @@ use std::process::Command;
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::bom::write_bom_json;
-use crate::build::evaluate_zen_file;
 use crate::workspace::{gather_workspace_info, loadspec_to_vendor_path, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
@@ -614,9 +613,9 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     debug!("Validating build of: {}", staged_zen_path.display());
 
     // Use offline mode since all dependencies should be vendored
-    let (_eval_result, has_errors) = evaluate_zen_file(&staged_zen_path, true);
+    let eval = pcb_zen::run(&staged_zen_path, true);
 
-    if has_errors {
+    if !eval.is_success() {
         anyhow::bail!(
             "Build validation failed for staged zen file: {}",
             staged_zen_path.display()
