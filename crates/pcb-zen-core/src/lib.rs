@@ -448,8 +448,6 @@ pub struct CoreLoadResolver {
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
     /// Hierarchical alias resolution cache
     alias_cache: RwLock<HashMap<PathBuf, HashMap<String, AliasInfo>>>,
-    /// Workspace root cache by directory path
-    workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
 }
 
 impl CoreLoadResolver {
@@ -472,7 +470,6 @@ impl CoreLoadResolver {
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
             use_vendor_dir,
             alias_cache: RwLock::new(HashMap::new()),
-            workspace_root_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -499,22 +496,10 @@ impl CoreLoadResolver {
         &self,
         context: &ResolveContext,
     ) -> Result<PathBuf, anyhow::Error> {
-        let dir = context
-            .current_file
-            .parent()
-            .expect("Current file should have a parent directory");
-
-        // Check cache first (optimistic read)
-        if let Some(cached) = self.workspace_root_cache.read().unwrap().get(dir) {
-            return Ok(cached.clone());
-        }
-
-        let spec_path = context.current_file_spec.path();
-
         let workspace_root = if context.current_file_spec.is_remote() {
             // Remote file - use LoadSpec to walk up to repo root
             let mut root = context.current_file.to_path_buf();
-            for _ in 0..spec_path.components().count() {
+            for _ in 0..context.current_file_spec.path().components().count() {
                 root = root.parent().unwrap_or(Path::new("")).to_path_buf();
             }
             root
@@ -526,12 +511,6 @@ impl CoreLoadResolver {
 
         // Canonicalize the workspace root
         let workspace_root = self.file_provider.canonicalize(&workspace_root)?;
-
-        // Cache result for this directory
-        self.workspace_root_cache
-            .write()
-            .unwrap()
-            .insert(dir.to_path_buf(), workspace_root.clone());
         Ok(workspace_root)
     }
 
