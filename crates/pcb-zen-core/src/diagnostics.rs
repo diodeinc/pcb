@@ -223,6 +223,15 @@ impl Diagnostic {
         self.downcast_error_ref::<crate::lang::error::SuppressedDiagnostics>()
             .map(|suppressed| suppressed.suppressed.len())
     }
+
+    /// Get the innermost diagnostic in a chain (follows child pointers to the end)
+    pub fn innermost(&self) -> &Diagnostic {
+        let mut current = self;
+        while let Some(ref child) = current.child {
+            current = child;
+        }
+        current
+    }
 }
 
 impl Display for Diagnostic {

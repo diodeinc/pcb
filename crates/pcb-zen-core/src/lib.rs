@@ -24,7 +24,7 @@ pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;
-pub use passes::{AggregatePass, FilterPass, PromoteDeniedPass, SortPass};
+pub use passes::{AggregatePass, FilterHiddenPass, LspFilterPass, PromoteDeniedPass, SortPass};
 
 // Re-export file provider types
 pub use file_provider::InMemoryFileProvider;

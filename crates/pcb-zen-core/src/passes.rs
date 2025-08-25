@@ -1,5 +1,6 @@
 use crate::{Diagnostic, Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
 use starlark::errors::EvalSeverity;
+use std::path::Path;
 use std::sync::Arc;
 
 /// A pass that promotes diagnostics based on deny rules
@@ -25,14 +26,44 @@ impl DiagnosticsPass for PromoteDeniedPass {
     }
 }
 
-/// A pass that filters out diagnostics based on certain criteria
-pub struct FilterPass;
+/// A pass that filters out hidden diagnostics (containing "<hidden>")
+pub struct FilterHiddenPass;
 
-impl DiagnosticsPass for FilterPass {
+impl DiagnosticsPass for FilterHiddenPass {
     fn apply(&self, diagnostics: &mut Diagnostics) {
         diagnostics.diagnostics.retain(|diag| {
             // Filter out hidden diagnostics
             !diag.body.contains("<hidden>")
+        });
+    }
+}
+
+/// A pass that filters out diagnostics that are too noisy for LSP/editor display
+pub struct LspFilterPass {
+    workspace_root: std::path::PathBuf,
+}
+
+impl LspFilterPass {
+    pub fn new(workspace_root: std::path::PathBuf) -> Self {
+        Self { workspace_root }
+    }
+}
+
+impl DiagnosticsPass for LspFilterPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        let vendor_dir = self.workspace_root.join("vendor");
+
+        diagnostics.diagnostics.retain(|diag| {
+            let innermost = diag.innermost();
+
+            // Check if innermost has unstable ref error and is external
+            innermost
+                .downcast_error_ref::<crate::UnstableRefError>()
+                .map(|_| {
+                    let path = Path::new(&innermost.path);
+                    path.starts_with(&self.workspace_root) && !path.starts_with(&vendor_dir)
+                })
+                .unwrap_or(true) // Keep non-unstable-ref diagnostics
         });
     }
 }
@@ -62,13 +93,13 @@ impl DiagnosticsPass for AggregatePass {
                 continue;
             }
 
-            let innermost = get_innermost_diagnostic(diagnostic);
+            let innermost = diagnostic.innermost();
             let key = (&innermost.body, &innermost.path, &innermost.span);
 
             // Check if we already have a similar warning
             if let Some(existing) = result.iter_mut().find(|d| {
                 matches!(d.severity, EvalSeverity::Warning) && {
-                    let existing_innermost = get_innermost_diagnostic(d);
+                    let existing_innermost = d.innermost();
                     (
                         &existing_innermost.body,
                         &existing_innermost.path,
@@ -107,15 +138,6 @@ fn promote_diagnostic_to_error(diagnostic: &mut Diagnostic) {
     if let Some(ref mut child) = diagnostic.child {
         promote_diagnostic_to_error(child);
     }
-}
-
-/// Get the innermost diagnostic in a chain (follows child pointers to the end)
-fn get_innermost_diagnostic(diagnostic: &Diagnostic) -> &Diagnostic {
-    let mut current = diagnostic;
-    while let Some(ref child) = current.child {
-        current = child;
-    }
-    current
 }
 
 /// Return sort order for severity (lower numbers come first)

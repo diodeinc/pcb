@@ -89,6 +89,18 @@ impl LspEvalContext {
         self
     }
 
+    /// Create LSP-specific diagnostic passes
+    fn create_lsp_diagnostic_passes(
+        &self,
+        current_file: &std::path::Path,
+    ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+        let workspace_root = find_workspace_root(self.file_provider.as_ref(), current_file);
+        vec![
+            Box::new(pcb_zen_core::FilterHiddenPass),
+            Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
+        ]
+    }
+
     fn diagnostic_to_lsp(&self, diag: &pcb_zen_core::Diagnostic) -> lsp_types::Diagnostic {
         use lsp_types::{
             DiagnosticRelatedInformation, DiagnosticSeverity, Location, Position, Range,
@@ -220,11 +232,15 @@ impl LspContext for LspEvalContext {
                     create_standard_load_resolver(self.file_provider.clone(), uri.path());
 
                 // Parse and analyze the file with the load resolver set
-                let result = self
+                let mut result = self
                     .inner
                     .child_context()
                     .set_load_resolver(load_resolver)
                     .parse_and_analyze_file(path.clone(), content.clone());
+
+                // Apply LSP-specific diagnostic passes
+                let passes = self.create_lsp_diagnostic_passes(path);
+                result.diagnostics.apply_passes(&passes);
 
                 // Convert diagnostics to LSP format
                 let diagnostics = result

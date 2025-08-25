@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// Create diagnostics passes for the given deny list
 pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
     vec![
-        Box::new(pcb_zen_core::FilterPass),
+        Box::new(pcb_zen_core::FilterHiddenPass),
         Box::new(pcb_zen_core::PromoteDeniedPass::new(deny)),
         Box::new(pcb_zen_core::AggregatePass),
         Box::new(pcb_zen_core::SortPass),
