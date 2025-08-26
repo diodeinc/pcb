@@ -9,11 +9,11 @@ macro_rules! sim_snapshot {
         let top_path = $env.root().join($entry);
 
         let mut buf = Vec::new();
-        pcb_zen::run(&top_path, true).map(
-            |s| {
-                gen_sim(&s, &mut buf).unwrap();
-            }
-        );
+        let schematic = pcb_zen::run(&top_path, false)
+            .output_result()
+            .expect("failed to compile schematic for simulation");
+        gen_sim(&schematic, &mut buf)
+            .expect("failed to generate .cir contents");
         let result = String::from_utf8(buf).unwrap();
 
         let root_path = $env.root().to_string_lossy();
@@ -102,19 +102,14 @@ properties = config_properties({
 P1 = io("P1", Net)
 P2 = io("P2", Net)
 
-# -----------------------------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------------------------
-
-properties['model'] = SpiceModel('./r.lib', 'my_resistor',
-    nets=[P1, P2],
-    args={"RVAL": str(value.value)})
-
 Component(
     name = "R",
     symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name="R"),
     footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod"),
     prefix = "R",
+    spice_model = SpiceModel('./r.lib', 'my_resistor',
+        nets=[P1, P2],
+        args={"RVAL": str(value.value)}),
     pin_defs = {
         "P1": "1",
         "P2": "2",

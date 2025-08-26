@@ -2532,6 +2532,7 @@ dependencies = [
  "pcb-sch",
  "pcb-ui",
  "pcb-zen",
+ "pcb-zen-core",
  "serde_json",
  "serial_test",
  "tempfile",

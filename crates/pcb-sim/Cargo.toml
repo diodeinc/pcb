@@ -23,6 +23,7 @@ pcb-ui = { workspace = true }
 pcb-buildifier = { workspace = true }
 itertools = { workspace = true }
 tempfile = { workspace = true }
+pcb-zen-core = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

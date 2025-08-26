@@ -18,7 +18,6 @@ use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
 use std::collections::HashSet;
-// removed unused BTree imports after refactor
 use std::path::Path;
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
@@ -101,10 +100,10 @@ impl ModuleConverter {
         for (net_id, unique_name) in ids_and_names {
             // Determine net kind from properties.
             let net_kind = if let Some(props) = self.net_to_properties.get(&net_id) {
-                if let Some(type_prop) = props.get("type") {
+                if let Some(type_prop) = props.get(crate::attrs::TYPE) {
                     match type_prop.string() {
-                        Some("ground") => NetKind::Ground,
-                        Some("power") => NetKind::Power,
+                        Some(crate::attrs::net::kind::GROUND) => NetKind::Ground,
+                        Some(crate::attrs::net::kind::POWER) => NetKind::Power,
                         _ => NetKind::Normal,
                     }
                 } else {
@@ -135,8 +134,8 @@ impl ModuleConverter {
         for (instance_ref, model) in self.comp_models {
             assert!(self.schematic.instances.contains_key(&instance_ref));
             let comp_inst: &mut Instance = self.schematic.instances.get_mut(&instance_ref).unwrap();
-            comp_inst.add_attribute("model_def", model.definition.clone());
-            comp_inst.add_attribute("model_name", model.name.clone());
+            comp_inst.add_attribute(crate::attrs::MODEL_DEF, model.definition.clone());
+            comp_inst.add_attribute(crate::attrs::MODEL_NAME, model.name.clone());
             let mut net_names = Vec::new();
             for net in model.nets() {
                 let net_id = net.downcast_ref::<FrozenNetValue>().unwrap().id();
@@ -145,13 +144,13 @@ impl ModuleConverter {
                     self.net_to_name.get(&net_id).unwrap().to_string(),
                 ));
             }
-            comp_inst.add_attribute("model_nets", AttributeValue::Array(net_names));
+            comp_inst.add_attribute(crate::attrs::MODEL_NETS, AttributeValue::Array(net_names));
             let arg_str = model
                 .args()
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .join(" ");
-            comp_inst.add_attribute("model_args", AttributeValue::String(arg_str));
+            comp_inst.add_attribute(crate::attrs::MODEL_ARGS, AttributeValue::String(arg_str));
         }
 
         Ok(self.schematic)
@@ -194,7 +193,7 @@ impl ModuleConverter {
         for (key, val) in module.properties().iter() {
             // HACK: If this is a layout_path attribute and we're not at the root,
             // prepend the module's directory path to the layout path
-            if key == "layout_path" && !instance_ref.instance_path.is_empty() {
+            if key == crate::attrs::LAYOUT_PATH && !instance_ref.instance_path.is_empty() {
                 if let Ok(AttributeValue::String(layout_path)) = to_attribute_value(*val) {
                     // Get the directory of the module's source file
                     let module_dir = Path::new(module.source_path())
@@ -245,7 +244,10 @@ impl ModuleConverter {
         // Add the signature as a JSON attribute
         if !signature.parameters.is_empty() {
             let signature_json = serde_json::to_value(&signature).unwrap_or_default();
-            inst.add_attribute("__signature", AttributeValue::Json(signature_json));
+            inst.add_attribute(
+                crate::attrs::SIGNATURE,
+                AttributeValue::Json(signature_json),
+            );
         }
 
         // Record final names for nets introduced by this module using the instance path.
@@ -338,21 +340,21 @@ impl ModuleConverter {
 
         // Add component's built-in attributes.
         comp_inst.add_attribute(
-            "footprint",
+            crate::attrs::FOOTPRINT,
             AttributeValue::String(component.footprint().to_owned()),
         );
 
         comp_inst.add_attribute(
-            "prefix",
+            crate::attrs::PREFIX,
             AttributeValue::String(component.prefix().to_owned()),
         );
 
         if let Some(mpn) = component.mpn() {
-            comp_inst.add_attribute("mpn", AttributeValue::String(mpn.to_owned()));
+            comp_inst.add_attribute(crate::attrs::MPN, AttributeValue::String(mpn.to_owned()));
         }
 
         if let Some(ctype) = component.ctype() {
-            comp_inst.add_attribute("type", AttributeValue::String(ctype.to_owned()));
+            comp_inst.add_attribute(crate::attrs::TYPE, AttributeValue::String(ctype.to_owned()));
         }
 
         // Add any properties defined directly on the component.
@@ -361,8 +363,14 @@ impl ModuleConverter {
             comp_inst.add_attribute(key.clone(), attr_value);
         }
 
-        if let Some(model_val) = component.properties().get("model") {
-            let model = model_val.downcast_ref::<FrozenSpiceModelValue>().unwrap();
+        if let Some(model_val) = component.spice_model() {
+            let model =
+                model_val
+                    .downcast_ref::<FrozenSpiceModelValue>()
+                    .ok_or(anyhow::anyhow!(
+                        "Expected spice model for component {}",
+                        component.name()
+                    ))?;
             self.comp_models.push((instance_ref.clone(), model.clone()));
         }
 
@@ -373,7 +381,7 @@ impl ModuleConverter {
                 // Add symbol_name for backwards compatibility
                 if let Some(name) = symbol.name() {
                     comp_inst.add_attribute(
-                        "symbol_name".to_string(),
+                        crate::attrs::SYMBOL_NAME.to_string(),
                         AttributeValue::String(name.to_string()),
                     );
                 }
@@ -381,7 +389,7 @@ impl ModuleConverter {
                 // Add symbol_path for backwards compatibility
                 if let Some(path) = symbol.source_path() {
                     comp_inst.add_attribute(
-                        "symbol_path".to_string(),
+                        crate::attrs::SYMBOL_PATH.to_string(),
                         AttributeValue::String(path.to_string()),
                     );
                 }
@@ -391,7 +399,7 @@ impl ModuleConverter {
                 if let Some(sexp_string) = raw_sexp {
                     // The raw_sexp is stored as a string value in the SymbolValue
                     comp_inst.add_attribute(
-                        "__symbol_value".to_string(),
+                        crate::attrs::SYMBOL_VALUE.to_string(),
                         AttributeValue::String(sexp_string.to_string()),
                     );
                 }
@@ -420,7 +428,7 @@ impl ModuleConverter {
                 let mut pin_inst = Instance::port(comp_type_ref.clone());
 
                 pin_inst.add_attribute(
-                    "pads",
+                    crate::attrs::PADS,
                     AttributeValue::Array(
                         pads.iter()
                             .map(|p| AttributeValue::String(p.clone()))
@@ -436,7 +444,7 @@ impl ModuleConverter {
                     let net = net_val
                         .downcast_ref::<FrozenNetValue>()
                         .ok_or(anyhow::anyhow!(
-                            "Expected net value for pin '{}', found '{}'",
+                            "Expected net value for pin '{}' , found '{}'",
                             signal_name,
                             net_val
                         ))?;
@@ -476,46 +484,43 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         // Extract fields from the record
         for (field_name, field_value) in record.iter() {
             let field_name_str = field_name.to_string();
-            match field_name_str.as_str() {
-                "value" => {
-                    // Try f64 first, fall back to i32 converted to f64
-                    if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
-                        record_value = Some(f.0);
-                    }
+            if field_name_str == crate::attrs::record_fields::VALUE {
+                // Try f64 first, fall back to i32 converted to f64
+                if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
+                    record_value = Some(f.0);
                 }
-                "tolerance" => {
-                    if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
-                        record_tolerance = Some(f.0);
-                    }
+            } else if field_name_str == crate::attrs::record_fields::TOLERANCE {
+                if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
+                    record_tolerance = Some(f.0);
                 }
-                "unit" => {
-                    // Unit is an enum like Ohms("Ohms"), parse to PhysicalUnit
-                    let unit_str = field_value.to_string();
-                    // Extract content within parentheses and remove quotes
-                    let unit_name = if let Some(start) = unit_str.find('(') {
-                        if let Some(end) = unit_str.find(')') {
-                            let inner = &unit_str[start + 1..end];
-                            inner.trim_matches('"').to_string()
-                        } else {
-                            unit_str.trim_matches('"').to_string()
-                        }
+            } else if field_name_str == crate::attrs::record_fields::UNIT {
+                // Unit is an enum like Ohms("Ohms"), parse to PhysicalUnit
+                let unit_str = field_value.to_string();
+                // Extract content within parentheses and remove quotes
+                let unit_name = if let Some(start) = unit_str.find('(') {
+                    if let Some(end) = unit_str.find(')') {
+                        let inner = &unit_str[start + 1..end];
+                        inner.trim_matches('"').to_string()
                     } else {
                         unit_str.trim_matches('"').to_string()
-                    };
+                    }
+                } else {
+                    unit_str.trim_matches('"').to_string()
+                };
 
-                    record_unit = match unit_name.as_str() {
-                        "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
-                        "V" | "Volts" => Some(PhysicalUnit::Volts),
-                        "A" | "Amperes" => Some(PhysicalUnit::Amperes),
-                        "F" | "Farads" => Some(PhysicalUnit::Farads),
-                        "H" | "Henries" => Some(PhysicalUnit::Henries),
-                        "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
-                        "s" | "Seconds" => Some(PhysicalUnit::Seconds),
-                        "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
-                        _ => None, // Unknown unit, will fall back to string conversion
-                    };
-                }
-                _ => {} // Ignore other fields like __str__
+                record_unit = match unit_name.as_str() {
+                    "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
+                    "V" | "Volts" => Some(PhysicalUnit::Volts),
+                    "A" | "Amperes" => Some(PhysicalUnit::Amperes),
+                    "F" | "Farads" => Some(PhysicalUnit::Farads),
+                    "H" | "Henries" => Some(PhysicalUnit::Henries),
+                    "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
+                    "s" | "Seconds" => Some(PhysicalUnit::Seconds),
+                    "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
+                    _ => None, // Unknown unit, will fall back to string conversion
+                };
+            } else {
+                // Ignore other fields like __str__
             }
         }
 

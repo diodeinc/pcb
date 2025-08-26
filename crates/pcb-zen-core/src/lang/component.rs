@@ -13,7 +13,10 @@ use starlark::{
     },
 };
 
-use crate::{lang::evaluator_ext::EvaluatorExt, EvalContext};
+use crate::{
+    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
+    EvalContext, FrozenSpiceModelValue,
+};
 
 use super::net::NetType;
 use super::symbol::{load_symbols_from_library, SymbolType, SymbolValue};
@@ -32,6 +35,7 @@ pub struct ComponentValueGen<V> {
     properties: SmallMap<String, V>,
     source_path: String,
     symbol: V,
+    spice_model: Option<V>,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -69,6 +73,11 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 
         // Show symbol field
         debug.field("symbol", &self.symbol);
+
+        // Show spice_model if present
+        if let Some(spice_model) = &self.spice_model {
+            debug.field("spice_model", spice_model);
+        }
 
         debug.finish()
     }
@@ -141,6 +150,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
     pub fn symbol(&self) -> &V {
         &self.symbol
     }
+
+    pub fn spice_model(&self) -> Option<&V> {
+        self.spice_model.as_ref()
+    }
 }
 
 /// ComponentFactory is a value that represents a factory for a component.
@@ -178,6 +191,7 @@ where
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
+                ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -233,6 +247,7 @@ where
             let mpn: Option<Value> = param_parser.next_opt()?;
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
+            let spice_model_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
@@ -389,6 +404,17 @@ where
                 );
             }
 
+            if let Some(ref sm) = spice_model_val {
+                if sm.downcast_ref::<SpiceModelValue>().is_none()
+                    && sm.downcast_ref::<FrozenSpiceModelValue>().is_none()
+                {
+                    return Err(starlark::Error::new_other(anyhow!(format!(
+                        "`spice_model` must be a SpiceModel, got {}",
+                        sm.get_type()
+                    ))));
+                }
+            }
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
@@ -399,6 +425,7 @@ where
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
+                spice_model: spice_model_val,
             });
 
             Ok(component)
@@ -512,6 +539,7 @@ where
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
+                ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -636,6 +664,7 @@ where
             };
 
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
+            let spice_model_val: Option<Value> = param_parser.next_opt()?;
             let mut properties_map: SmallMap<String, Value<'v>> = SmallMap::new();
 
             // Start with default_properties from factory.
@@ -659,6 +688,16 @@ where
                 }
             }
 
+            // Validate spice_model type if provided
+            if let Some(ref sm) = spice_model_val {
+                if sm.get_type() != "SpiceModel" {
+                    return Err(starlark::Error::new_other(anyhow!(format!(
+                        "`spice_model` must be a SpiceModel, got {}",
+                        sm.get_type()
+                    ))));
+                }
+            }
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: final_mpn,
@@ -669,6 +708,7 @@ where
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(self.symbol.clone()),
+                spice_model: spice_model_val,
             });
 
             Ok(component)

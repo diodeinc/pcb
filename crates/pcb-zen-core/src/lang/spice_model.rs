@@ -181,11 +181,7 @@ where
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
         let resolved_path = load_resolver
-            .resolve_path(
-                eval_ctx.file_provider.as_ref().unwrap().as_ref(),
-                &path,
-                std::path::Path::new(&current_file),
-            )
+            .resolve_path(&path, std::path::Path::new(&current_file))
             .map_err(|e| {
                 starlark::Error::new_other(anyhow!("Failed to resolve spice model path: {}", e))
             })?;
