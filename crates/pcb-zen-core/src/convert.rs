@@ -18,7 +18,7 @@ use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {
@@ -201,11 +201,12 @@ impl ModuleConverter {
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
 
-                    let full_layout_path = if module_dir.is_empty() {
-                        layout_path
-                    } else {
-                        format!("{module_dir}/{layout_path}")
-                    };
+                    let full_layout_path =
+                        if module_dir.is_empty() || PathBuf::from(&layout_path).is_absolute() {
+                            layout_path
+                        } else {
+                            format!("{module_dir}/{layout_path}")
+                        };
 
                     inst.add_attribute(key.clone(), AttributeValue::String(full_layout_path));
                 } else {

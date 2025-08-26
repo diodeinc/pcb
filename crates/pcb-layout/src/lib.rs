@@ -15,6 +15,7 @@ pub struct LayoutResult {
     pub layout_dir: PathBuf,
     pub pcb_file: PathBuf,
     pub netlist_file: PathBuf,
+    pub json_netlist_file: PathBuf,
     pub snapshot_file: PathBuf,
     pub log_file: PathBuf,
     pub created: bool, // true if new, false if updated
@@ -146,6 +147,7 @@ pub fn process_layout(
         layout_dir,
         pcb_file: paths.pcb,
         netlist_file: paths.netlist,
+        json_netlist_file: paths.json_netlist,
         snapshot_file: paths.snapshot,
         log_file: paths.log,
         created: !pcb_exists,
