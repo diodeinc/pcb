@@ -97,11 +97,9 @@ pub fn clone_as_branch_or_tag(remote_url: &str, rev: &str, dest_dir: &Path) -> a
 }
 
 /// Clone default branch of a Git repository (shallow)
-pub fn clone_default_branch(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
+pub fn clone(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let status = Command::new("git")
         .arg("clone")
-        .arg("--depth")
-        .arg("1")
         .arg("--quiet")
         .arg(remote_url)
         .arg(dest_dir)
@@ -116,30 +114,8 @@ pub fn clone_default_branch(remote_url: &str, dest_dir: &Path) -> anyhow::Result
     }
 }
 
-/// Fetch a specific commit from origin (shallow)
-pub fn fetch_commit(repo_root: &Path, rev: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("fetch")
-        .arg("--depth")
-        .arg("1")
-        .arg("--quiet")
-        .arg("origin")
-        .arg(rev)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git fetch failed for commit {rev}"))
-    }
-}
-
-/// Checkout a specific revision
-pub fn checkout_revision(repo_root: &Path, rev: &str) -> anyhow::Result<()> {
+/// Checkout a specific commit
+pub fn checkout_commit(repo_root: &Path, rev: &str) -> anyhow::Result<()> {
     let status = Command::new("git")
         .arg("-C")
         .arg(repo_root)

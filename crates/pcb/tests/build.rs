@@ -579,3 +579,30 @@ SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("unstable_ref_wrong_tag", output);
 }
+
+#[test]
+fn test_commit_stable_ref() {
+    let mut sandbox = Sandbox::new();
+
+    let short_hash = &sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .branch("foo")
+        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .push_mirror()
+        .rev_parse_head()[0..7];
+
+    // Create a board that uses branch unstabe ref
+    let unstable_default_zen = format!(
+        r#"
+SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
+"#,
+        short_hash
+    );
+
+    let output = sandbox
+        .write("board.zen", unstable_default_zen)
+        .snapshot_run("pcb", ["build", "board.zen"]);
+    assert_snapshot!("commit_stable_ref", output);
+}

@@ -636,8 +636,9 @@ impl FixtureRepo {
     }
 
     /// Mirror-push all refs to the bare “remote”.
-    pub fn push_mirror(&mut self) {
+    pub fn push_mirror(&mut self) -> &mut Self {
         run_git(&["-C", self.work_str(), "push", "--mirror", "origin"]);
+        self
     }
 
     pub fn work_dir(&self) -> &Path {
@@ -645,6 +646,13 @@ impl FixtureRepo {
     }
     pub fn bare_dir(&self) -> &Path {
         &self.bare
+    }
+
+    pub fn rev_parse_head(&self) -> String {
+        let output = duct::cmd("git", ["-C", self.work_str(), "rev-parse", "HEAD"])
+            .read()
+            .expect("get HEAD");
+        output.trim().to_string()
     }
 
     fn work_str(&self) -> &str {

@@ -79,7 +79,7 @@ fn classify_remote(cache_root: &Path, spec: &LoadSpec) -> Option<RemoteRefMeta> 
         if git::tag_exists(cache_root, expected_ref) && tag_sha1 == Some(sha1.clone()) {
             debug!("Tag {expected_ref} exists, and it's at HEAD");
             RefKind::Tag
-        } else if expected_ref.len() > 7 && sha1.starts_with(expected_ref) {
+        } else if expected_ref.len() >= 7 && sha1.starts_with(expected_ref) {
             debug!("Hash matches {expected_ref} ref");
             RefKind::Commit
         } else {
@@ -183,9 +183,8 @@ pub fn cache_dir() -> anyhow::Result<PathBuf> {
 
 fn try_clone_and_fetch_commit(remote_url: &str, rev: &str, dest_dir: &Path) -> anyhow::Result<()> {
     log::debug!("Cloning default branch then fetching commit: {remote_url} @ {rev}");
-    git::clone_default_branch(remote_url, dest_dir)?;
-    git::fetch_commit(dest_dir, rev)?;
-    git::checkout_revision(dest_dir, rev)
+    git::clone(remote_url, dest_dir)?;
+    git::checkout_commit(dest_dir, rev)
 }
 
 /// Try Git clone with 2-pass strategy for multiple URLs
