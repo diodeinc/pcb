@@ -379,9 +379,9 @@ impl Sandbox {
         let mut result = content.to_string();
 
         // Replace temp directory paths with a placeholder
-        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ
+        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ or /var/folders/XX/YY/T/.tmpZZZ
         let macos_pattern =
-            Regex::new(r"/private/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
+            Regex::new(r"(?:/private)?/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
         result = macos_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
         // Linux: /tmp/.tmpXXX

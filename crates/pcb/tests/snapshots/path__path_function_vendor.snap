@@ -1,0 +1,14 @@
+---
+source: crates/pcb/tests/path.rs
+expression: "sb.snapshot_run(\"pcb\", [\"vendor\", \"boards/PathTest.zen\"])"
+---
+Command: pcb vendor boards/PathTest.zen
+Exit Code: 0
+
+--- STDOUT ---
+✓ Found 1 zen files to analyze
+✓ Dependencies analyzed
+
+✓ Vendored 3 dependencies from 1 designs
+Vendor directory: <TEMP_DIR>/src/vendor
+--- STDERR ---

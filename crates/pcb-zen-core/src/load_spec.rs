@@ -35,7 +35,6 @@ pub enum LoadSpec {
     Path {
         path: PathBuf,
         workspace_relative: bool,
-        allow_dir: bool,
         allow_not_exist: bool,
     },
 }
@@ -109,7 +108,6 @@ impl LoadSpec {
         LoadSpec::Path {
             path: path.into(),
             workspace_relative: false,
-            allow_dir: false,
             allow_not_exist: false,
         }
     }
@@ -119,8 +117,17 @@ impl LoadSpec {
         LoadSpec::Path {
             path: path.into(),
             workspace_relative: true,
-            allow_dir: false,
             allow_not_exist: false,
+        }
+    }
+
+    /// Returns true if this LoadSpec allows the path to not exist.
+    pub fn allow_not_exist(&self) -> bool {
+        match self {
+            LoadSpec::Path {
+                allow_not_exist, ..
+            } => *allow_not_exist,
+            _ => false,
         }
     }
 
@@ -182,13 +189,11 @@ impl LoadSpec {
             },
             LoadSpec::Path {
                 workspace_relative,
-                allow_dir,
                 allow_not_exist,
                 ..
             } => LoadSpec::Path {
                 path: new_path,
                 workspace_relative: *workspace_relative,
-                allow_dir: *allow_dir,
                 allow_not_exist: *allow_not_exist,
             },
         }

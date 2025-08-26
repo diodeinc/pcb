@@ -20,62 +20,49 @@ fn ensure_symlinks(
     workspace_root: &Path,
     cache_root: &Path,
 ) -> anyhow::Result<PathBuf> {
-    let path = match spec {
-        LoadSpec::Package { path, .. }
-        | LoadSpec::Github { path, .. }
-        | LoadSpec::Gitlab { path, .. } => path,
-        _ => anyhow::bail!("ensure_symlinks only handles remote specs"),
-    };
-
+    let path = spec.path();
     let local_path = if path.as_os_str().is_empty() {
         cache_root.to_path_buf()
     } else {
         cache_root.join(path)
     };
 
-    if !local_path.exists() {
-        anyhow::bail!(
-            "Path {} not found in cached content for spec {}",
-            path.display(),
-            spec.to_load_string()
-        );
+    if local_path.exists() {
+        // Create convenience symlinks for Git repos (not packages)
+        match spec {
+            LoadSpec::Github {
+                user, repo, rev, ..
+            } => {
+                let folder_name = format!(
+                    "github{}{}{}{}{}{}",
+                    std::path::MAIN_SEPARATOR,
+                    user,
+                    std::path::MAIN_SEPARATOR,
+                    repo,
+                    std::path::MAIN_SEPARATOR,
+                    rev
+                );
+                let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
+            }
+            LoadSpec::Gitlab {
+                project_path, rev, ..
+            } => {
+                let folder_name = format!(
+                    "gitlab{}{}{}{}",
+                    std::path::MAIN_SEPARATOR,
+                    project_path,
+                    std::path::MAIN_SEPARATOR,
+                    rev
+                );
+                let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
+            }
+            LoadSpec::Package { package, .. } => {
+                // Packages use simple alias symlinks
+                let _ = expose_alias_symlink(workspace_root, package, path, &local_path);
+            }
+            _ => {}
+        }
     }
-
-    // Create convenience symlinks for Git repos (not packages)
-    match spec {
-        LoadSpec::Github {
-            user, repo, rev, ..
-        } => {
-            let folder_name = format!(
-                "github{}{}{}{}{}{}",
-                std::path::MAIN_SEPARATOR,
-                user,
-                std::path::MAIN_SEPARATOR,
-                repo,
-                std::path::MAIN_SEPARATOR,
-                rev
-            );
-            let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
-        }
-        LoadSpec::Gitlab {
-            project_path, rev, ..
-        } => {
-            let folder_name = format!(
-                "gitlab{}{}{}{}",
-                std::path::MAIN_SEPARATOR,
-                project_path,
-                std::path::MAIN_SEPARATOR,
-                rev
-            );
-            let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
-        }
-        LoadSpec::Package { package, .. } => {
-            // Packages use simple alias symlinks
-            let _ = expose_alias_symlink(workspace_root, package, path, &local_path);
-        }
-        _ => {}
-    }
-
     Ok(local_path)
 }
 
@@ -145,13 +132,6 @@ fn ensure_cached_atomically(
 /// Uses atomic directory creation to prevent race conditions when multiple tests run in parallel.
 pub fn ensure_remote_cached(spec: &LoadSpec) -> anyhow::Result<PathBuf> {
     match spec {
-        LoadSpec::Package { package, tag, .. } => {
-            let cache_root = cache_dir()?.join("packages").join(package).join(tag);
-            ensure_cached_atomically(&cache_root, |temp_dir| {
-                download_and_unpack_package(package, tag, temp_dir)
-            })?;
-            Ok(cache_root)
-        }
         LoadSpec::Github {
             user, repo, rev, ..
         } => {
@@ -199,10 +179,6 @@ pub fn cache_dir() -> anyhow::Result<PathBuf> {
     let dir = std::env::temp_dir().join("pcb_cache");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
-}
-
-fn download_and_unpack_package(_package: &str, _tag: &str, _dest_dir: &Path) -> anyhow::Result<()> {
-    anyhow::bail!("Package file download not yet implemented")
 }
 
 fn try_clone_and_fetch_commit(remote_url: &str, rev: &str, dest_dir: &Path) -> anyhow::Result<()> {
