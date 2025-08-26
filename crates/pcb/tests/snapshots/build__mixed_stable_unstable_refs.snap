@@ -12,7 +12,7 @@ Warning: '@github/unstable/components:main' is an unstable reference. Use a pinn
    │                            ╰───────────────── '@github/unstable/components:main' is an unstable reference. Use a pinned version.
    ├─[ <TEMP_DIR>/board.zen:3:28 ]
  3 │UnstableCapacitor = Module("@unstable/UnstableCapacitor.zen")
-   │                                           ╰───────────────── '@unstable:latest' is an unstable reference. Use a pinned version.
+   │                                           ╰───────────────── '@unstable' is an unstable reference. Use a pinned version.
 --- STDERR ---
 
 ✓ board.zen (2 components)

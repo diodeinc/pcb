@@ -372,6 +372,25 @@ impl Sandbox {
         self.sanitize_output(&manifest)
     }
 
+    pub fn run<I>(&mut self, program: &str, args: I) -> Expression
+    where
+        I: IntoIterator,
+        I::Item: AsRef<OsStr>,
+    {
+        let cargo_bin_path = assert_cmd::cargo::cargo_bin(program)
+            .to_string_lossy()
+            .to_string();
+        let args: Vec<_> = args
+            .into_iter()
+            .map(|arg| arg.as_ref().to_string_lossy().to_string())
+            .collect();
+
+        let mut expr = duct::cmd(&cargo_bin_path, args.clone());
+        expr = expr.dir(&self.default_cwd);
+        expr = self.inject_env(expr);
+        expr
+    }
+
     /// Sanitize temporary paths and timestamps in output to make snapshots deterministic
     pub fn sanitize_output(&self, content: &str) -> String {
         use regex::Regex;
@@ -379,9 +398,9 @@ impl Sandbox {
         let mut result = content.to_string();
 
         // Replace temp directory paths with a placeholder
-        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ
+        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ or /var/folders/XX/YY/T/.tmpZZZ
         let macos_pattern =
-            Regex::new(r"/private/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
+            Regex::new(r"(?:/private)?/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
         result = macos_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
         // Linux: /tmp/.tmpXXX

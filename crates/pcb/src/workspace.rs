@@ -5,7 +5,8 @@ use log::{debug, info};
 use pcb_zen::load::DefaultRemoteFetcher;
 use pcb_zen_core::config::{get_workspace_info, WorkspaceInfo as ConfigWorkspaceInfo};
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap, WithDiagnostics,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, FileProvider, InputMap,
+    LoadResolver, WithDiagnostics,
 };
 
 use std::path::{Path, PathBuf};
@@ -84,6 +85,10 @@ pub fn eval_zen_entrypoint(
         use_vendor_path,
     ));
 
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+    if file_provider.exists(&pcb_toml_path) {
+        core_resolver.track_file(&pcb_toml_path);
+    }
     let eval_context = EvalContext::new()
         .set_file_provider(file_provider.clone())
         .set_load_resolver(core_resolver.clone())

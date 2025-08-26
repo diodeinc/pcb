@@ -13,7 +13,7 @@ Warning: '@github/mycompany/components:main' is an unstable reference. Use a pin
    │                                ╰────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ├─[ <TEMP_DIR>/board.zen:2:26 ]
  2 │SimpleResistor1 = Module("@mycomponents/SimpleResistor.zen")
-   │                                          ╰───────────────── '@mycomponents:latest' is an unstable reference. Use a pinned version.
+   │                                          ╰───────────────── '@mycomponents' is an unstable reference. Use a pinned version.
 --- STDERR ---
 
 ✓ board.zen (3 components)

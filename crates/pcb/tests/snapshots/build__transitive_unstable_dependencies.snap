@@ -12,7 +12,7 @@ Warning: '@github/thirdparty/utils:main' is an unstable reference. Use a pinned 
    │                       ╰──────────────── '@github/thirdparty/utils:main' is an unstable reference. Use a pinned version.
    ├─[ <TEMP_DIR>/cache/github/mycompany/intermediate/v1.0.0/IntermediateComponent.zen:3:6 ]
  3 │load("@utils/Utility.zen", "utility_function")
-   │               ╰────────── '@utils:latest' is an unstable reference. Use a pinned version.
+   │               ╰────────── '@utils' is an unstable reference. Use a pinned version.
    ├─[ <TEMP_DIR>/board.zen:6:1 ]
  6 │IntermediateComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
    │                                   ╰──────────────────────────────────── Warning from `IntermediateComponent`

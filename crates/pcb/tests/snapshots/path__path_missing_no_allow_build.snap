@@ -1,0 +1,23 @@
+---
+source: crates/pcb/tests/path.rs
+expression: "sb.snapshot_run(\"pcb\", [\"build\", \"boards/FailingTest.zen\"])"
+---
+Command: pcb build boards/FailingTest.zen
+Exit Code: 1
+
+--- STDOUT ---
+Error: Failed to resolve path 'this_file_does_not_exist.toml': File not found: <TEMP_DIR>/boards/this_file_does_not_exist.toml
+   ╭─[ <TEMP_DIR>/boards/FailingTest.zen:3:18 ]
+   │
+ 3 │ missing_config = Path("this_file_does_not_exist.toml")
+   │                  ──────────────────┬──────────────────  
+   │                                    ╰──────────────────── Failed to resolve path 'this_file_does_not_exist.toml': File not found: <TEMP_DIR>/boards/this_file_does_not_exist.toml
+───╯
+✗ FailingTest.zen: Build failed
+--- STDERR ---
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/boards/FailingTest.zen:3:18 (Failed to resolve path 'this_file_does_not_exist.toml': File not found: <TEMP_DIR>/boards/this_file_does_not_exist.toml)
+      ╰─ Path (called from <TEMP_DIR>/boards/FailingTest.zen:3:18-55)
+
+Error: Build failed with errors

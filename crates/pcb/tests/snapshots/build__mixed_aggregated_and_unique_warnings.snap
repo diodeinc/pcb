@@ -13,7 +13,7 @@ Warning: '@github/company1/components:main' is an unstable reference. Use a pinn
    │                         ╰───────────────── '@github/company1/components:main' is an unstable reference. Use a pinned version.
    ├─[ <TEMP_DIR>/board.zen:3:17 ]
  3 │Comp1a = Module("@comp1/Component1.zen")
-   │                           ╰──────────── '@comp1:latest' is an unstable reference. Use a pinned version.
+   │                           ╰──────────── '@comp1' is an unstable reference. Use a pinned version.
 Warning: '@github/company2/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:6:16 ]
  6 │Comp2 = Module("@github/company2/components:main/Component2.zen")

@@ -13,29 +13,6 @@ fn get_package_name_from_spec(spec: &crate::LoadSpec) -> String {
     package.clone()
 }
 
-/// Format a LoadSpec without the path component (e.g. "@stdlib:latest" instead of "@stdlib:latest/path.zen")
-fn format_spec_without_path(spec: &crate::LoadSpec) -> String {
-    match spec {
-        crate::LoadSpec::Package { package, tag, .. } => {
-            format!("@{package}:{tag}")
-        }
-        crate::LoadSpec::Github {
-            user, repo, rev, ..
-        } => {
-            format!("@github/{user}/{repo}:{rev}")
-        }
-        crate::LoadSpec::Gitlab {
-            project_path, rev, ..
-        } => {
-            format!("@gitlab/{project_path}:{rev}")
-        }
-        crate::LoadSpec::Path { path } => path.display().to_string(),
-        crate::LoadSpec::WorkspacePath { path } => {
-            format!("//{}", path.display())
-        }
-    }
-}
-
 /// Find the span for a package alias value in a PCB.toml file
 fn find_toml_alias_span(
     file_provider: &dyn crate::FileProvider,
@@ -93,7 +70,8 @@ pub fn check_and_create_unstable_ref_warning(
     resolve_context: &ResolveContext,
     span: Option<ResolvedSpan>,
 ) -> Option<Diagnostic> {
-    let first_spec = resolve_context.spec_history.first().unwrap();
+    // Drop path to not include it in the warning message
+    let first_spec = &resolve_context.spec_history.first().unwrap().without_path();
 
     // If the original spec was a local Path, this is an internal load within the same repo - don't warn
     if matches!(first_spec, crate::LoadSpec::Path { .. }) {
@@ -106,8 +84,6 @@ pub fn check_and_create_unstable_ref_warning(
     // Check if the remote ref is unstable
     let remote_ref_meta = load_resolver.remote_ref_meta(&callee_remote)?;
     if !remote_ref_meta.stable() {
-        let spec_without_path = format_spec_without_path(first_spec);
-
         // Create the simplified error with only essential information
         let mut unstable_ref_error = Some(UnstableRefError {
             spec_chain: resolve_context.spec_history.clone(),
@@ -117,7 +93,7 @@ pub fn check_and_create_unstable_ref_warning(
         });
 
         let main_message =
-            format!("'{spec_without_path}' is an unstable reference. Use a pinned version.");
+            format!("'{first_spec}' is an unstable reference. Use a pinned version.");
 
         // Try to create a child diagnostic for non-default aliases
         let child = resolve_context
@@ -129,11 +105,9 @@ pub fn check_and_create_unstable_ref_warning(
                     find_toml_alias_span(load_resolver.file_provider(), toml_source_path, &package);
 
                 // For PCB.toml diagnostic, show the actual unstable reference (last spec)
-                let last_spec = resolve_context.spec_history.last().unwrap();
-                let resolved_spec_without_path = format_spec_without_path(last_spec);
-                let toml_message = format!(
-                    "'{resolved_spec_without_path}' is an unstable reference. Use a pinned version."
-                );
+                let last_spec = resolve_context.spec_history.last().unwrap().without_path();
+                let toml_message =
+                    format!("'{last_spec}' is an unstable reference. Use a pinned version.");
 
                 Diagnostic::new(toml_message, EvalSeverity::Warning, toml_source_path)
                     .with_span(resolved_span)
