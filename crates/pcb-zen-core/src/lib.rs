@@ -518,7 +518,7 @@ impl CoreLoadResolver {
     fn try_resolve_from_vendor(&self, spec: &LoadSpec) -> Result<PathBuf, anyhow::Error> {
         let full_vendor_path = self.workspace_root.join("vendor").join(spec.vendor_path()?);
         if self.file_provider.exists(&full_vendor_path) {
-            self.insert_load_spec(full_vendor_path.clone(), spec.clone());
+            self.insert_load_spec(full_vendor_path.clone(), spec.clone())?;
             Ok(full_vendor_path)
         } else {
             anyhow::bail!(
@@ -575,7 +575,7 @@ impl CoreLoadResolver {
                 resolved_path.clone()
             };
             let pcb_toml_spec = context.current_file_spec.with_path(path);
-            self.insert_load_spec(resolved_path, pcb_toml_spec);
+            self.insert_load_spec(resolved_path, pcb_toml_spec).unwrap();
         });
 
         // Iterate in reverse to prioritize the deepest (closest to leaf) pcb.toml files
@@ -633,11 +633,12 @@ impl CoreLoadResolver {
             .collect()
     }
 
-    fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) {
+    fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) -> anyhow::Result<()> {
         if let LoadSpec::Path {
             path,
             workspace_relative,
-            ..
+            allow_dir,
+            allow_not_exist,
         } = &spec
         {
             let path_str = path.to_string_lossy();
@@ -647,13 +648,22 @@ impl CoreLoadResolver {
             // Workaround for https://github.com/diodeinc/stdlib/pull/35
             // We're unlikely to refer to the kicad-footprints library with an absolute path, so this should be safe
             if path_str.contains("gitlab/kicad/libraries/kicad-footprints") && path.is_absolute() {
-                return;
+                return Ok(());
+            }
+            if self.file_provider.is_directory(path) && !allow_dir {
+                // This is used to support load("path/to/dir") syntax
+                // anyhow::bail!("Path {} is a directory", path.display());
+                log::warn!("Path {} is a directory", path.display());
+            }
+            if !self.file_provider.exists(path) && !allow_not_exist {
+                anyhow::bail!("File not found: {}", path.display());
             }
         }
         self.path_to_spec
             .lock()
             .unwrap()
             .insert(resolved_path, spec);
+        Ok(())
     }
 
     /// Handle remote relative path resolution
@@ -723,7 +733,7 @@ impl CoreLoadResolver {
 
         // Store the mapping from resolved path to original spec
         assert!(resolved_spec.is_remote());
-        self.insert_load_spec(canonical_resolved_path.clone(), resolved_spec.clone());
+        self.insert_load_spec(canonical_resolved_path.clone(), resolved_spec.clone())?;
         Ok(canonical_resolved_path)
     }
 
@@ -755,11 +765,7 @@ impl CoreLoadResolver {
 
         // Verify the path exists
         let resolved_path = resolved_spec.path().clone();
-        // Verify the path exists
-        if !context.file_provider.exists(&resolved_path) {
-            anyhow::bail!("File not found: {}", resolved_path.display());
-        }
-        self.insert_load_spec(resolved_path.clone(), resolved_spec);
+        self.insert_load_spec(resolved_path.clone(), resolved_spec)?;
         Ok(resolved_path)
     }
 }
@@ -799,12 +805,8 @@ impl LoadResolver for CoreLoadResolver {
             // If already tracked, do nothing
             return;
         }
-        let load_spec = LoadSpec::Path {
-            path: canonical_path.clone(),
-            workspace_relative: false,
-            is_dir: false,
-        };
-        self.insert_load_spec(canonical_path, load_spec);
+        let load_spec = LoadSpec::local_path(&canonical_path);
+        self.insert_load_spec(canonical_path, load_spec).unwrap();
     }
 
     fn get_load_spec(&self, path: &Path) -> Option<LoadSpec> {

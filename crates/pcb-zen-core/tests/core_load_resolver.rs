@@ -192,6 +192,7 @@ fn test_resolve_github_spec() {
 
     // The fetched file should exist in our mock file system
     file_provider.add_file(&cache_path, "# Resistor implementation");
+    file_provider.add_file("/workspace/main.zen", "# Main file");
 
     let resolver = CoreLoadResolver::new(
         file_provider.clone(),
@@ -336,6 +337,7 @@ stdlib = "@github/diodeinc/stdlib"
     };
 
     let current_file = workspace_root.join("main.zen");
+    file_provider.add_file(&current_file, "# Main file");
     let resolved = resolver.resolve_spec(&spec, &current_file).unwrap();
 
     assert_eq!(resolved, cache_path);
@@ -395,6 +397,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
         path: PathBuf::from("zen/generics/Resistor.zen"),
     };
 
+    file_provider.add_file("/workspace/main.zen", "# Main file");
     let resolved_resistor = resolver
         .resolve_spec(&github_spec, &PathBuf::from("/workspace/main.zen"))
         .unwrap();
@@ -474,6 +477,7 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
         path: PathBuf::from("zen/module.zen"),
     };
 
+    file_provider.add_file("/workspace/main.zen", "# Main file");
     let resolved_module = resolver
         .resolve_spec(&module_spec, &PathBuf::from("/workspace/main.zen"))
         .unwrap();
@@ -548,6 +552,7 @@ stdlib = "@github/diodeinc/stdlib:v1.0.0"
     };
 
     let current_file = workspace_root.join("main.zen");
+    file_provider.add_file(&current_file, "# Main file");
 
     // Set up expected resolution
     let cache_path = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/units.zen");
@@ -615,6 +620,7 @@ local = "./local"
     };
 
     let workspace_file = workspace_root.join("main.zen");
+    file_provider.add_file(&workspace_file, "# Main file");
     let workspace_cache =
         PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/v1/units.zen");
     remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v1.0.0/units.zen", &workspace_cache);
@@ -633,6 +639,7 @@ local = "./local"
     };
 
     let modules_file = modules_dir.join("module.zen");
+    file_provider.add_file(&modules_file, "# Module file");
     let modules_cache = PathBuf::from("/home/user/.cache/pcb/github/diodeinc/stdlib/v2/units.zen");
     remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v2.0.0/units.zen", &modules_cache);
     file_provider.add_file(&modules_cache, "# Units v2");
@@ -700,12 +707,14 @@ stdlib = "@github/diodeinc/stdlib"
     // Spawn multiple threads resolving from the same directory
     let handles: Vec<_> = (0..4)
         .map(|i| {
+            let file_provider = file_provider.clone();
             let resolver = resolver.clone();
             let spec = spec.clone();
             let workspace_root = workspace_root.clone();
 
             thread::spawn(move || {
                 let file = workspace_root.join(format!("file{i}.zen"));
+                file_provider.add_file(&file, format!("# File {i}"));
                 resolver.resolve_spec(&spec, &file).unwrap()
             })
         })

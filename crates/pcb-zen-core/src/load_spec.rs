@@ -35,7 +35,8 @@ pub enum LoadSpec {
     Path {
         path: PathBuf,
         workspace_relative: bool,
-        is_dir: bool,
+        allow_dir: bool,
+        allow_not_exist: bool,
     },
 }
 
@@ -108,7 +109,8 @@ impl LoadSpec {
         LoadSpec::Path {
             path: path.into(),
             workspace_relative: false,
-            is_dir: false,
+            allow_dir: false,
+            allow_not_exist: false,
         }
     }
 
@@ -117,7 +119,8 @@ impl LoadSpec {
         LoadSpec::Path {
             path: path.into(),
             workspace_relative: true,
-            is_dir: false,
+            allow_dir: false,
+            allow_not_exist: false,
         }
     }
 
@@ -151,16 +154,6 @@ impl LoadSpec {
         }
     }
 
-    pub fn allow_dir(&self) -> bool {
-        match self {
-            LoadSpec::Path { .. } => {
-                // TODO: conditionally allow referencing dirs in Path()
-                false
-            }
-            _ => false,
-        }
-    }
-
     /// Create a new LoadSpec pointing to a different file in the same repository.
     ///
     /// This preserves the repository identity (GitHub user/repo, GitLab project, package name/tag)
@@ -189,12 +182,14 @@ impl LoadSpec {
             },
             LoadSpec::Path {
                 workspace_relative,
-                is_dir,
+                allow_dir,
+                allow_not_exist,
                 ..
             } => LoadSpec::Path {
                 path: new_path,
                 workspace_relative: *workspace_relative,
-                is_dir: *is_dir,
+                allow_dir: *allow_dir,
+                allow_not_exist: *allow_not_exist,
             },
         }
     }
@@ -351,18 +346,10 @@ impl LoadSpec {
             })
         } else if let Some(workspace_path) = s.strip_prefix("//") {
             // Workspace-relative path: //path/to/file.zen
-            Some(LoadSpec::Path {
-                path: PathBuf::from(workspace_path),
-                workspace_relative: true,
-                is_dir: false,
-            })
+            Some(LoadSpec::workspace_path(workspace_path))
         } else {
             // Raw file path (relative or absolute)
-            Some(LoadSpec::Path {
-                path: PathBuf::from(s),
-                workspace_relative: false,
-                is_dir: false,
-            })
+            Some(LoadSpec::local_path(s))
         }
     }
 
