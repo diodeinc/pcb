@@ -24,6 +24,7 @@ pcb-zen-core = { workspace = true }
 pcb-zen = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-layout = { workspace = true }
+pcb-sim = { workspace = true }
 log = { workspace = true }
 ariadne = { workspace = true }
 env_logger = { workspace = true }
@@ -54,3 +55,4 @@ assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
 duct = { workspace = true }
 pcb-test-utils = { workspace = true }
+itertools = { workspace = true }

@@ -1,0 +1,9 @@
+---
+source: crates/pcb-zen/tests/spice_model.rs
+expression: result
+---
+.SUBCKT my_resistor p n PARAMS: RVAL={0}
+R1 p n {RVAL}
+.ENDS my_resistor
+XR1 vin_VCC vout_NET my_resistor RVAL=10000.0
+XR2 vout_NET gnd_GND my_resistor RVAL=20000.0

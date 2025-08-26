@@ -24,6 +24,7 @@ use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
+use crate::lang::spice_model::model_globals;
 use crate::lang::{
     component::{build_component_factory_from_symbol, component_globals},
     type_info::{ParameterInfo, TypeInfo},
@@ -399,6 +400,7 @@ impl EvalContext {
         .with(interface_globals)
         .with(assert_globals)
         .with(file_globals)
+        .with(model_globals)
         .build()
     }
 

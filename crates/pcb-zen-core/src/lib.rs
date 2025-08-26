@@ -13,6 +13,37 @@ pub mod load_spec;
 pub mod passes;
 pub mod warnings;
 
+/// Attribute, net, and record field constants used across the core
+pub mod attrs {
+    pub const MODEL_DEF: &str = "__model_def";
+    pub const MODEL_NAME: &str = "__model_name";
+    pub const MODEL_NETS: &str = "__model_nets";
+    pub const MODEL_ARGS: &str = "__model_args";
+    pub const SIGNATURE: &str = "__signature";
+    pub const LAYOUT_PATH: &str = "layout_path";
+    pub const FOOTPRINT: &str = "footprint";
+    pub const PREFIX: &str = "prefix";
+    pub const MPN: &str = "mpn";
+    pub const TYPE: &str = "type";
+    pub const SYMBOL_NAME: &str = "symbol_name";
+    pub const SYMBOL_PATH: &str = "symbol_path";
+    pub const SYMBOL_VALUE: &str = "__symbol_value";
+    pub const PADS: &str = "pads";
+
+    pub mod net {
+        pub mod kind {
+            pub const GROUND: &str = "ground";
+            pub const POWER: &str = "power";
+        }
+    }
+
+    pub mod record_fields {
+        pub const VALUE: &str = "value";
+        pub const TOLERANCE: &str = "tolerance";
+        pub const UNIT: &str = "unit";
+    }
+}
+
 // Re-export commonly used types
 pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{
@@ -31,6 +62,7 @@ pub use file_provider::InMemoryFileProvider;
 pub use lang::component::FrozenComponentValue;
 pub use lang::module::FrozenModuleValue;
 pub use lang::net::{FrozenNetValue, NetId};
+pub use lang::spice_model::FrozenSpiceModelValue;
 
 /// Abstraction for file system access to make the core WASM-compatible
 pub trait FileProvider: Send + Sync {

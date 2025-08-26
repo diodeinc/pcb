@@ -1,0 +1,38 @@
+[package]
+name = "pcb-sim"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "Spice simulation setup from PCB schematic"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+pcb-sch = { workspace = true }
+pcb-layout = { workspace = true }
+log = { workspace = true }
+ariadne = { workspace = true }
+env_logger = { workspace = true }
+colored = { workspace = true }
+pcb-kicad = { workspace = true }
+open = { workspace = true }
+inquire = { workspace = true }
+pcb-ui = { workspace = true }
+pcb-buildifier = { workspace = true }
+itertools = { workspace = true }
+tempfile = { workspace = true }
+pcb-zen-core = { workspace = true }
+
+[dev-dependencies]
+assert_fs = { workspace = true }
+assert_cmd = { workspace = true }
+insta = { workspace = true }
+serial_test = { workspace = true }
+paste = { workspace = true }
+walkdir = { workspace = true }
+zip = { workspace = true }
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+pcb-zen = { workspace = true }

@@ -11,6 +11,7 @@ mod layout;
 mod lsp;
 mod open;
 mod release;
+mod sim;
 mod tag;
 mod upgrade;
 mod vendor;
@@ -68,6 +69,9 @@ enum Commands {
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
+    /// Run SPICE simulations
+    Sim(sim::SimArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -92,6 +96,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
+        Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");
