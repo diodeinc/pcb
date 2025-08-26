@@ -1,7 +1,8 @@
 #![cfg(not(target_os = "windows"))]
 
 use pcb_test_utils::assert_snapshot;
-use pcb_test_utils::sandbox::Sandbox;
+use pcb_test_utils::sandbox::{cargo_bin, Sandbox};
+use serde_json::Value;
 
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
@@ -119,6 +120,8 @@ fn test_path_function_local_mixed() {
         "boards/LocalPathTest.zen",
         r#"
 # Test various Path() scenarios locally
+add_property("layout_path", Path("build/LocalPathTest", allow_not_exist=True))
+
 existing_file = Path("existing.toml")
 nonexistent_file = Path("missing.toml", allow_not_exist=True)
 existing_dir = Path("../config")
@@ -129,12 +132,9 @@ print("Nonexistent file:", nonexistent_file)
 print("Existing directory:", existing_dir)
 print("Nonexistent directory:", nonexistent_dir)
 
-Component(
-    name="R1",
-    footprint="",
-    pin_defs={"1": "P1", "2": "P2"},
-    pins={"1": Net("VCC"), "2": Net("GND")}
-)
+# Simple board to test Path() functionality - just define some nets
+vcc = Net("VCC") 
+gnd = Net("GND")
 "#,
     )
     .write("boards/existing.toml", "# This file exists")
@@ -146,6 +146,32 @@ Component(
         "path_local_mixed_build",
         sb.snapshot_run("pcb", ["build", "boards/LocalPathTest.zen"])
     );
+
+    // Test release functionality - run source-only release with JSON output
+    let output = sb
+        .hash_globs(["*.kicad_mod"])
+        .ignore_globs(["layout/*"])
+        .cmd(
+            cargo_bin!("pcb"),
+            [
+                "release",
+                "boards/LocalPathTest.zen",
+                "--source-only",
+                "-f",
+                "json",
+            ],
+        )
+        .read()
+        .expect("Failed to run pcb release command");
+
+    // Parse JSON output to get staging directory
+    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
+    let staging_dir = json["staging_directory"]
+        .as_str()
+        .expect("Missing staging_directory in JSON");
+
+    // Snapshot the staging directory contents
+    assert_snapshot!("path_local_mixed_release", sb.snapshot_dir(staging_dir));
 }
 
 #[test]

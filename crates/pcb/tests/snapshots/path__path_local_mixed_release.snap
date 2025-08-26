@@ -1,0 +1,54 @@
+---
+source: crates/pcb/tests/path.rs
+expression: sb.snapshot_dir(staging_dir)
+---
+=== metadata.json
+{
+  "git": {
+    "describe": "unknown",
+    "hash": "unknown",
+    "workspace": "<TEMP_DIR>"
+  },
+  "release": {
+    "created_at": "<TIMESTAMP>",
+    "git_version": "unknown",
+    "layout_path": "<TEMP_DIR>/boards/build/LocalPathTest",
+    "schema_version": "1",
+    "source_only": true,
+    "staging_directory": "<TEMP_DIR>/.pcb/releases/LocalPathTest/unknown",
+    "workspace_root": "<TEMP_DIR>",
+    "zen_file": "boards/LocalPathTest.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "<CLI_VERSION>",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
+}
+=== src/boards/LocalPathTest.zen
+
+# Test various Path() scenarios locally
+add_property("layout_path", Path("build/LocalPathTest", allow_not_exist=True))
+
+existing_file = Path("existing.toml")
+nonexistent_file = Path("missing.toml", allow_not_exist=True)
+existing_dir = Path("../config")
+nonexistent_dir = Path("missing_dir", allow_not_exist=True)
+
+print("Existing file:", existing_file)
+print("Nonexistent file:", nonexistent_file)
+print("Existing directory:", existing_dir)
+print("Nonexistent directory:", nonexistent_dir)
+
+# Simple board to test Path() functionality - just define some nets
+vcc = Net("VCC") 
+gnd = Net("GND")
+=== src/boards/existing.toml
+# This file exists
+=== src/config/settings.json
+{"debug": true}
+=== src/pcb.toml
+
+[workspace]
+name = "simple_workspace"

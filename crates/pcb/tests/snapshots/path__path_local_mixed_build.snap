@@ -12,4 +12,4 @@ Existing file: <TEMP_DIR>/boards/existing.toml
 Nonexistent file: <TEMP_DIR>/boards/missing.toml
 Existing directory: <TEMP_DIR>/config
 Nonexistent directory: <TEMP_DIR>/boards/missing_dir
-✓ LocalPathTest.zen (1 components)
+✓ LocalPathTest.zen (0 components)
