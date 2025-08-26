@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "windows"))]
+
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
@@ -31,7 +33,6 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 "#;
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_path_function_vendor() {
     let mut sb = Sandbox::new();
 
@@ -57,4 +58,120 @@ fn test_path_function_vendor() {
 
     // Verify vendor directory contains the module and both config files
     assert_snapshot!("path_function_vendor_dir", sb.snapshot_dir("vendor"));
+}
+
+#[test]
+fn test_path_function_vendor_directory() {
+    let mut sb = Sandbox::new();
+
+    // Create a Git repository with a module that references a directory using Path()
+    sb.git_fixture("https://github.com/testcompany/pathtest.git")
+        .write(
+            "PathModule.zen",
+            r#"
+config_dir = Path("config")  # Reference to directory
+Component(
+    name="D1",
+    footprint = Path("test.kicad_mod"),
+    pin_defs={"1": "A", "2": "K"},
+    pins={"1": Net("P1"), "2": Net("P2")}
+)
+"#,
+        )
+        .write("config/app.toml", "name = \"test-app\"")
+        .write("config/schema.json", r#"{"type": "object"}"#)
+        .write("config/deep/readme.txt", "Configuration files")
+        .write("test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add module with directory reference")
+        .tag("v1.0.0", false)
+        .push_mirror();
+
+    // Create board that uses the module
+    sb.cwd("src")
+        .write(
+            "boards/DirectoryTest.zen",
+            r#"
+PathTestModule = Module("@github/testcompany/pathtest:v1.0.0/PathModule.zen")
+PathTestModule(name="D1")
+"#,
+        )
+        .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML);
+
+    // Vendor should include the entire directory and its contents
+    sb.run("pcb", ["vendor", "boards/DirectoryTest.zen"])
+        .run()
+        .unwrap();
+    let module_vendor_dir = sb
+        .root_path()
+        .join("src/vendor/github.com/testcompany/pathtest/v1.0.0");
+    assert!(module_vendor_dir.join("config/app.toml").exists());
+    assert!(module_vendor_dir.join("config/schema.json").exists());
+    assert!(module_vendor_dir.join("config/deep/readme.txt").exists());
+    assert_snapshot!("path_directory_vendor_dir", sb.snapshot_dir("vendor"));
+}
+
+#[test]
+fn test_path_function_local_mixed() {
+    let mut sb = Sandbox::new();
+
+    // Create a board that directly uses Path() with mixed existing/non-existing files
+    sb.write(
+        "boards/LocalPathTest.zen",
+        r#"
+# Test various Path() scenarios locally
+existing_file = Path("existing.toml")
+nonexistent_file = Path("missing.toml", allow_not_exist=True)
+existing_dir = Path("../config")
+nonexistent_dir = Path("missing_dir", allow_not_exist=True)
+
+print("Existing file:", existing_file)
+print("Nonexistent file:", nonexistent_file)
+print("Existing directory:", existing_dir)
+print("Nonexistent directory:", nonexistent_dir)
+
+Component(
+    name="R1",
+    footprint="",
+    pin_defs={"1": "P1", "2": "P2"},
+    pins={"1": Net("VCC"), "2": Net("GND")}
+)
+"#,
+    )
+    .write("boards/existing.toml", "# This file exists")
+    .write("config/settings.json", r#"{"debug": true}"#) // Make config dir exist
+    .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML);
+
+    // Build should succeed with mixed existing/non-existing paths
+    assert_snapshot!(
+        "path_local_mixed_build",
+        sb.snapshot_run("pcb", ["build", "boards/LocalPathTest.zen"])
+    );
+}
+
+#[test]
+fn test_path_function_missing_without_allow() {
+    let mut sb = Sandbox::new();
+
+    // Create a board that references non-existent file WITHOUT allow_not_exist=true
+    sb.write(
+        "boards/FailingTest.zen",
+        r#"
+# This should fail - references non-existent file without allow_not_exist=true
+missing_config = Path("this_file_does_not_exist.toml")
+
+Component(
+    name="R1",
+    footprint="",
+    pin_defs={"1": "P1", "2": "P2"},
+    pins={"1": Net("VCC"), "2": Net("GND")}
+)
+"#,
+    )
+    .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML);
+
+    // Build should fail because file doesn't exist and allow_not_exist=false (default)
+    assert_snapshot!(
+        "path_missing_no_allow_build",
+        sb.snapshot_run("pcb", ["build", "boards/FailingTest.zen"])
+    );
 }

@@ -641,13 +641,7 @@ impl CoreLoadResolver {
 
     /// Get all files that have been resolved through this resolver
     pub fn get_tracked_files(&self) -> HashMap<PathBuf, LoadSpec> {
-        self.path_to_spec
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(k, _)| k.is_file())
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+        self.path_to_spec.lock().unwrap().clone()
     }
 
     fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) {

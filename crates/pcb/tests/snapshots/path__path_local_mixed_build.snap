@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/path.rs
+expression: "sb.snapshot_run(\"pcb\", [\"build\", \"boards/LocalPathTest.zen\"])"
+---
+Command: pcb build boards/LocalPathTest.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Existing file: <TEMP_DIR>/boards/existing.toml
+Nonexistent file: <TEMP_DIR>/boards/missing.toml
+Existing directory: <TEMP_DIR>/config
+Nonexistent directory: <TEMP_DIR>/boards/missing_dir
+✓ LocalPathTest.zen (1 components)

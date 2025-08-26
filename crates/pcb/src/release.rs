@@ -8,7 +8,6 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 
@@ -19,6 +18,7 @@ use std::process::Command;
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::bom::write_bom_json;
+use crate::vendor::sync_tracked_files;
 use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
@@ -383,71 +383,11 @@ fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> R
 
 /// Copy source files and vendor dependencies
 fn copy_sources(info: &ReleaseInfo) -> Result<()> {
-    let mut vendor_files = HashSet::new();
-
-    // Copy pcb.toml from workspace root if it exists
-    let pcb_toml_path = info.workspace.root().join("pcb.toml");
-    if pcb_toml_path.exists() {
-        let dest_path = info.staging_dir.join("src").join("pcb.toml");
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create parent directory: {}", parent.display())
-            })?;
-        }
-        fs::copy(&pcb_toml_path, &dest_path).with_context(|| {
-            format!(
-                "Failed to copy pcb.toml: {} -> {}",
-                pcb_toml_path.display(),
-                dest_path.display()
-            )
-        })?;
-    }
-
-    for (path, load_spec) in info.workspace.resolver.get_tracked_files() {
-        if load_spec.is_remote() {
-            let vendor_path = load_spec.vendor_path()?;
-            if vendor_files.insert(vendor_path.clone()) {
-                let dest_path = info
-                    .staging_dir
-                    .join("src")
-                    .join("vendor")
-                    .join(&vendor_path);
-                if let Some(parent) = dest_path.parent() {
-                    fs::create_dir_all(parent).with_context(|| {
-                        format!("Failed to create parent directory: {}", parent.display())
-                    })?;
-                }
-                fs::copy(&path, &dest_path).with_context(|| {
-                    dbg!(&path, &load_spec);
-                    format!(
-                        "Failed to copy {} -> {}",
-                        path.display(),
-                        dest_path.display()
-                    )
-                })?;
-            }
-        } else {
-            let Ok(rel) = path.strip_prefix(info.workspace.root()) else {
-                anyhow::bail!(
-                    "Cannot release with local path outside of workspace: {}",
-                    path.display()
-                )
-            };
-            let dest_path = info.staging_dir.join("src").join(rel);
-            if let Some(parent) = dest_path.parent() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!("Failed to create parent directory: {}", parent.display())
-                })?;
-            }
-            fs::copy(&path, &dest_path).with_context(|| {
-                format!(
-                    "Failed to copy {} -> {}",
-                    path.display(),
-                    dest_path.display()
-                )
-            })?;
-        }
-    }
+    let tracked_files = info.workspace.resolver.get_tracked_files();
+    let workspace_root = info.workspace.root();
+    let src_dir = info.staging_dir.join("src");
+    let vendor_dir = src_dir.join("vendor");
+    sync_tracked_files(&tracked_files, workspace_root, &vendor_dir, Some(&src_dir))?;
     Ok(())
 }
 
