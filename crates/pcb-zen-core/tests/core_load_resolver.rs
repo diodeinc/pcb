@@ -246,9 +246,7 @@ fn test_resolve_relative_from_github_spec() {
 
     // First, let's test resolving a relative path from the cached Resistor.zen
     // This test will fail with the current implementation, but shows what we want to achieve
-    let relative_spec = LoadSpec::Path {
-        path: PathBuf::from("../units.zen"),
-    };
+    let relative_spec = LoadSpec::local_path("../units.zen");
 
     // When resolving from the cached file, it should understand that this file
     // came from @github/diodeinc/stdlib:zen/generics/Resistor.zen
@@ -290,9 +288,7 @@ fn test_resolve_workspace_path_from_remote() {
 
     // When resolving a workspace path from a remote file, it should be
     // resolved relative to the remote repository's root, not the local workspace
-    let _workspace_spec = LoadSpec::WorkspacePath {
-        path: PathBuf::from("common/utils.zen"),
-    };
+    let _workspace_spec = LoadSpec::workspace_path("common/utils.zen");
 
     // This test shows what we want to achieve - workspace paths in remote files
     // should resolve within that remote repository
@@ -406,9 +402,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
     assert_eq!(resolved_resistor, resistor_cache_path);
 
     // Now when we resolve a relative path from the cached Resistor.zen
-    let relative_spec = LoadSpec::Path {
-        path: PathBuf::from("../units.zen"),
-    };
+    let relative_spec = LoadSpec::local_path("../units.zen");
 
     // This should understand that resistor_cache_path came from
     // @github/diodeinc/stdlib/zen/generics/Resistor.zen
@@ -487,9 +481,7 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
     assert_eq!(resolved_module, remote_cache_path);
 
     // Now resolve a workspace path from within the remote file
-    let workspace_spec = LoadSpec::WorkspacePath {
-        path: PathBuf::from("common/utils.zen"),
-    };
+    let workspace_spec = LoadSpec::workspace_path("common/utils.zen");
 
     // This should understand that remote_cache_path is from @github/diodeinc/stdlib
     // and resolve //common/utils.zen relative to that repository's root

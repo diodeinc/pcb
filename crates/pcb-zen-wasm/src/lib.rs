@@ -85,8 +85,7 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
                 req.path = Some(path.to_string_lossy().to_string());
             }),
 
-            pcb_zen_core::LoadSpec::Path { path }
-            | pcb_zen_core::LoadSpec::WorkspacePath { path } => {
+            pcb_zen_core::LoadSpec::Path { path, .. } => {
                 // Regular path - just return it
                 Ok(path.clone())
             }

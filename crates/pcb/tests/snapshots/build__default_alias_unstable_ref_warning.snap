@@ -6,10 +6,10 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
-Warning: '@stdlib:latest' is an unstable reference. Use a pinned version.
+Warning: '@stdlib' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:21 ]
  2 │TestModule = Module("@stdlib/TestModule.zen")
-   │                                ╰──────────── '@stdlib:latest' is an unstable reference. Use a pinned version.
+   │                                ╰──────────── '@stdlib' is an unstable reference. Use a pinned version.
 --- STDERR ---
 
 ✓ board.zen (1 components)
