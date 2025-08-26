@@ -17,6 +17,7 @@ pub fn gen_sim(schematic: &Schematic, out: &mut impl Write) -> Result<()> {
         .instances
         .values()
         .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+        .sorted_by_key(|i| i.reference_designator.as_ref().unwrap())
     {
         if !comp_inst.attributes.contains_key(attrs::MODEL_DEF) {
             continue;
