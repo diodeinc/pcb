@@ -59,7 +59,7 @@ fn test_pcb_tag_duplicate_tag() {
 }
 
 #[test]
-fn test_pcb_tag_version_not_newer() {
+fn test_pcb_tag_older_version_allowed() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
         .write("pcb.toml", PCB_TOML)
@@ -68,7 +68,7 @@ fn test_pcb_tag_version_not_newer() {
         .commit("Initial commit")
         .tag("TB0001/v1.5.0") // Existing higher version
         .snapshot_run("pcb", ["tag", "-v", "1.2.0"]);
-    assert_snapshot!("tag_version_not_newer", output);
+    assert_snapshot!("tag_older_version_allowed", output);
 }
 
 #[test]

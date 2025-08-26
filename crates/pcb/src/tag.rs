@@ -25,6 +25,10 @@ pub struct TagArgs {
     #[arg(long)]
     pub push: bool,
 
+    /// Skip confirmation prompts
+    #[arg(short = 'f', long)]
+    pub force: bool,
+
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -66,19 +70,6 @@ pub fn execute(args: TagArgs) -> Result<()> {
         anyhow::bail!("Tag '{tag_name}' already exists");
     }
 
-    // Check existing versions
-    let existing_tags = git::list_tags(&workspace_info.root, &format!("{board_name}/v*"))?;
-    for tag in existing_tags {
-        if let Some(v) = tag
-            .strip_prefix(&format!("{board_name}/v"))
-            .and_then(|s| Version::parse(s).ok())
-        {
-            if version <= v {
-                anyhow::bail!("Version {version} is not newer than existing version {v}");
-            }
-        }
-    }
-
     git::create_tag(
         &workspace_info.root,
         &tag_name,
@@ -93,30 +84,32 @@ pub fn execute(args: TagArgs) -> Result<()> {
     );
 
     if args.push {
-        let remote =
-            git::get_remote_url(&workspace_info.root).unwrap_or_else(|_| "origin".to_string());
-        print!(
-            "Push tag {} to {}? (y/N): ",
-            tag_name.bold().yellow(),
-            remote
-        );
-        io::stdout().flush()?;
+        let should_push = args.force || {
+            let remote =
+                git::get_remote_url(&workspace_info.root).unwrap_or_else(|_| "origin".to_string());
+            print!(
+                "Push tag {} to {}? (y/N): ",
+                tag_name.bold().yellow(),
+                remote
+            );
+            io::stdout().flush()?;
 
-        // Read a single keypress
-        enable_raw_mode()?;
-        let input = loop {
-            if let Event::Key(KeyEvent { code, .. }) = event::read()? {
-                match code {
-                    KeyCode::Char(c) => break c,
-                    KeyCode::Esc => break 'n',
-                    _ => continue,
+            enable_raw_mode()?;
+            let input = loop {
+                if let Event::Key(KeyEvent { code, .. }) = event::read()? {
+                    match code {
+                        KeyCode::Char(c) => break c,
+                        KeyCode::Esc => break 'n',
+                        _ => continue,
+                    }
                 }
-            }
+            };
+            disable_raw_mode()?;
+            println!("{input}");
+            input.eq_ignore_ascii_case(&'y')
         };
-        disable_raw_mode()?;
-        println!("{input}"); // Echo the character
 
-        if input.eq_ignore_ascii_case(&'y') {
+        if should_push {
             git::push_tag(&workspace_info.root, &tag_name).context("Failed to push tag")?;
             println!(
                 "{} Pushed tag {}",
