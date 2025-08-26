@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/tag.rs
+expression: output
+---
+Command: pcb tag -v 1.0.0
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Tag 'TB0001/v1.0.0' already exists

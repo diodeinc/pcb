@@ -1,0 +1,10 @@
+---
+source: crates/pcb/tests/tag.rs
+expression: output
+---
+Command: pcb tag -v 1.2.0
+Exit Code: 0
+
+--- STDOUT ---
+✓ Created tag: TB0001/v1.2.0
+--- STDERR ---

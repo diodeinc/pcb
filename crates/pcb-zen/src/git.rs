@@ -156,3 +156,80 @@ pub fn checkout_revision(repo_root: &Path, rev: &str) -> anyhow::Result<()> {
         Err(anyhow::anyhow!("Git checkout failed for {rev}"))
     }
 }
+
+/// Create a git tag
+pub fn create_tag(repo_root: &Path, tag_name: &str, message: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("tag")
+        .arg("-a")
+        .arg(tag_name)
+        .arg("-m")
+        .arg(message)
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Git tag creation failed for {tag_name}"))
+    }
+}
+
+/// Push a git tag to remote
+pub fn push_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("push")
+        .arg("origin")
+        .arg(tag_name)
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Git push failed for tag {tag_name}"))
+    }
+}
+
+/// List git tags matching a pattern
+pub fn list_tags(repo_root: &Path, pattern: &str) -> anyhow::Result<Vec<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("tag")
+        .arg("-l")
+        .arg(pattern)
+        .output()?;
+
+    if !out.status.success() {
+        return Err(anyhow::anyhow!("Git tag list failed"));
+    }
+
+    let tags_output = String::from_utf8_lossy(&out.stdout);
+    let tags: Vec<String> = tags_output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+        .collect();
+
+    Ok(tags)
+}
+
+/// Get the remote URL for origin
+pub fn get_remote_url(repo_root: &Path) -> anyhow::Result<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .output()?;
+
+    if !out.status.success() {
+        return Err(anyhow::anyhow!("Failed to get remote URL"));
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
