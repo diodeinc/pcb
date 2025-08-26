@@ -11,6 +11,7 @@ mod layout;
 mod lsp;
 mod open;
 mod release;
+mod tag;
 mod upgrade;
 mod vendor;
 mod workspace;
@@ -61,6 +62,9 @@ enum Commands {
     #[command(alias = "r")]
     Release(release::ReleaseArgs),
 
+    /// Create and manage PCB version tags
+    Tag(tag::TagArgs),
+
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
@@ -86,6 +90,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::Release(args) => release::execute(args),
+        Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::External(args) => {
             if args.is_empty() {

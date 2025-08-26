@@ -100,6 +100,7 @@ url = "2.5"
 dir-diff = "0.3"
 ignore = "0.4"
 sha2 = "0.10"
+semver = "1.0"
 
 # The profile that 'dist' will build with
 [profile.dist]

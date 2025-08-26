@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/tag.rs
+expression: output
+---
+Command: pcb tag -v 1.2.0
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Version 1.2.0 is not newer than existing version 1.5.0

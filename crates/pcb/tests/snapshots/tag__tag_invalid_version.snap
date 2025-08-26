@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/tag.rs
+expression: output
+---
+Command: pcb tag -v not-a-version
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Invalid semantic version: 'not-a-version'

@@ -44,6 +44,8 @@ chrono = { workspace = true }
 dir-diff = { workspace = true }
 tempfile = { workspace = true }
 ignore = { workspace = true }
+semver = { workspace = true }
+crossterm = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
