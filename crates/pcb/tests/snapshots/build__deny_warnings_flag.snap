@@ -1,0 +1,22 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build board.zen -Dwarnings
+Exit Code: 1
+
+--- STDOUT ---
+Error: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+   ╭─[ <TEMP_DIR>/board.zen:2:25 ]
+   │
+ 2 │ SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
+   │                         ───────────────────────────┬──────────────────────────  
+   │                                                    ╰──────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+───╯
+--- STDERR ---
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/board.zen:2:25 ('@github/mycompany/components:main' is an unstable reference. Use a pinned version.)
+
+✓ board.zen (1 components)
+Error: Build failed with errors

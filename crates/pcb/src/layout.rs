@@ -5,7 +5,7 @@ use pcb_layout::{process_layout, LayoutError};
 use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
-use crate::build::{collect_files, collect_files_recursive};
+use crate::build::{build, collect_files, collect_files_recursive, create_diagnostics_passes};
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Generate PCB layout files from .zen files")]
@@ -56,89 +56,57 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
     // Process each .zen file
     for zen_path in zen_paths {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
+        let Some(schematic) = build(
+            &zen_path,
+            args.offline,
+            create_diagnostics_passes(&[]),
+            &mut has_errors,
+        ) else {
+            continue;
+        };
 
-        // Building stage
-        let mut spinner = Spinner::builder(format!("{file_name}: Building")).start();
+        // Layout stage
+        let spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
 
-        // Evaluate the design
-        let eval_result = pcb_zen::run(&zen_path, args.offline);
-
-        // Check if we have diagnostics to print
-        if !eval_result.diagnostics.is_empty() {
-            // Finish spinner before printing diagnostics
-            spinner.finish();
-
-            // Now print diagnostics
-            let mut file_has_errors = false;
-            for diag in eval_result.diagnostics.iter() {
-                pcb_zen::render_diagnostic(diag);
-                eprintln!();
-
-                if matches!(diag.severity, pcb_zen::EvalSeverity::Error) {
-                    file_has_errors = true;
-                }
-            }
-
-            if file_has_errors {
+        // Check if the schematic has a layout
+        match process_layout(&schematic, &zen_path) {
+            Ok(layout_result) => {
+                spinner.finish();
+                // Print success with the layout path relative to the star file
+                let relative_path = zen_path
+                    .parent()
+                    .and_then(|parent| layout_result.pcb_file.strip_prefix(parent).ok())
+                    .unwrap_or(&layout_result.pcb_file);
                 println!(
-                    "{} {}: Build failed",
+                    "{} {} ({})",
+                    pcb_ui::icons::success(),
+                    file_name.with_style(Style::Green).bold(),
+                    relative_path.display()
+                );
+                generated_layouts.push((zen_path.clone(), layout_result.pcb_file.clone()));
+            }
+            Err(LayoutError::NoLayoutPath) => {
+                spinner.finish();
+                // Show warning for files without layout
+                println!(
+                    "{} {} (no layout)",
+                    pcb_ui::icons::warning(),
+                    file_name.with_style(Style::Yellow).bold(),
+                );
+                continue;
+            }
+            Err(e) => {
+                // Finish the spinner first to avoid visual overlap
+                spinner.finish();
+                // Now print the error message
+                println!(
+                    "{} {}: Layout generation failed",
                     pcb_ui::icons::error(),
                     file_name.with_style(Style::Red).bold()
                 );
+                eprintln!("  Error: {e}");
                 has_errors = true;
-                continue;
             }
-
-            // Restart spinner for layout stage after diagnostics
-            spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
-        } else {
-            // No diagnostics - just update the spinner message
-            spinner.set_message(format!("{file_name}: Generating layout"));
-        }
-
-        // Check if the schematic has a layout
-        if let Some(schematic) = &eval_result.output {
-            match process_layout(schematic, &zen_path) {
-                Ok(layout_result) => {
-                    spinner.finish();
-                    // Print success with the layout path relative to the star file
-                    let relative_path = zen_path
-                        .parent()
-                        .and_then(|parent| layout_result.pcb_file.strip_prefix(parent).ok())
-                        .unwrap_or(&layout_result.pcb_file);
-                    println!(
-                        "{} {} ({})",
-                        pcb_ui::icons::success(),
-                        file_name.with_style(Style::Green).bold(),
-                        relative_path.display()
-                    );
-                    generated_layouts.push((zen_path.clone(), layout_result.pcb_file.clone()));
-                }
-                Err(LayoutError::NoLayoutPath) => {
-                    spinner.finish();
-                    // Show warning for files without layout
-                    println!(
-                        "{} {} (no layout)",
-                        pcb_ui::icons::warning(),
-                        file_name.with_style(Style::Yellow).bold(),
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    // Finish the spinner first to avoid visual overlap
-                    spinner.finish();
-                    // Now print the error message
-                    println!(
-                        "{} {}: Layout generation failed",
-                        pcb_ui::icons::error(),
-                        file_name.with_style(Style::Red).bold()
-                    );
-                    eprintln!("  Error: {e}");
-                    has_errors = true;
-                }
-            }
-        } else {
-            spinner.finish();
         }
     }
 

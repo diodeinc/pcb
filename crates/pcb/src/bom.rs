@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use crate::build::create_diagnostics_passes;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
@@ -8,8 +9,6 @@ use comfy_table::Table;
 use pcb_sch::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
 use pcb_ui::prelude::*;
 use std::collections::BTreeMap;
-
-use crate::build::evaluate_zen_file;
 
 #[derive(ValueEnum, Debug, Clone, Default)]
 pub enum BomFormat {
@@ -63,23 +62,21 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
     // Show spinner while processing
-    let spinner = Spinner::builder(format!("{file_name}: Generating BOM")).start();
+    let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let (eval_result, has_errors) = evaluate_zen_file(&args.file, false);
-
-    if has_errors {
-        spinner.error(format!("{file_name}: Build failed"));
-        anyhow::bail!("Failed to build {} - cannot generate BOM", file_name);
-    }
-
-    let mut schematic = eval_result
-        .output
-        .ok_or_else(|| anyhow::anyhow!("No schematic generated from {}", file_name))?;
+    let mut schematic =
+        pcb_zen::run(&args.file, false)
+            .output_result()
+            .map_err(|mut diagnostics| {
+                // Apply passes and render diagnostics if there are errors
+                diagnostics.apply_passes(&create_diagnostics_passes(&[]));
+                anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
+            })?;
 
     // Generate BOM entries
+    spinner.set_message(format!("{file_name}: Generating BOM"));
     let ungrouped_entries = generate_bom_entries(&mut schematic);
-
     spinner.finish();
 
     // Write output to stdout

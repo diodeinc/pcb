@@ -16,7 +16,7 @@ pub struct RemoveDirectoryLoads;
 impl Codemod for RemoveDirectoryLoads {
     fn apply(&self, current_file: &Path, content: &str) -> Result<Option<String>> {
         let file_provider = Arc::new(DefaultFileProvider);
-        let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+        let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
         let resolver =
             CoreLoadResolver::for_file(file_provider.clone(), remote_fetcher, current_file, true);
 
@@ -47,12 +47,12 @@ impl Codemod for RemoveDirectoryLoads {
                 continue;
             }
 
-            // Resolve
-            let resolved_dir =
-                match resolver.resolve_path(file_provider.as_ref(), module_path, current_file) {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
+            let Ok(resolved_dir) = resolver
+                .resolve_context(module_path, current_file)
+                .and_then(|mut c| resolver.resolve(&mut c))
+            else {
+                continue;
+            };
             if !file_provider.is_directory(&resolved_dir) {
                 continue;
             }

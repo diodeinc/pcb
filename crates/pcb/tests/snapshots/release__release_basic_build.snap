@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/release.rs
+expression: build_ouput
+---
+Command: pcb build --offline <TEMP_DIR>/src/.pcb/releases/TestBoard/unknown/src/boards/TestBoard.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ TestBoard.zen (5 components)

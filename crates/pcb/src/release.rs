@@ -18,10 +18,8 @@ use std::process::Command;
 
 use zip::{write::FileOptions, ZipWriter};
 
-use crate::workspace::{
-    classify_file, gather_workspace_info, loadspec_to_vendor_path, FileClassification,
-    WorkspaceInfo,
-};
+use crate::bom::write_bom_json;
+use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -84,6 +82,7 @@ type TaskFn = fn(&ReleaseInfo) -> Result<()>;
 
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
+    ("Validating build from staged sources", validate_build),
     ("Copying layout files", copy_layout),
     ("Substituting version variables", substitute_variables),
 ];
@@ -404,16 +403,22 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
         })?;
     }
 
-    for path in info.workspace.resolver.get_tracked_files() {
-        match classify_file(info.workspace.root(), &path, &info.workspace.resolver) {
-            FileClassification::Local(rel) => {
-                let dest_path = info.staging_dir.join("src").join(rel);
+    for (path, load_spec) in info.workspace.resolver.get_tracked_files() {
+        if load_spec.is_remote() {
+            let vendor_path = load_spec.vendor_path()?;
+            if vendor_files.insert(vendor_path.clone()) {
+                let dest_path = info
+                    .staging_dir
+                    .join("src")
+                    .join("vendor")
+                    .join(&vendor_path);
                 if let Some(parent) = dest_path.parent() {
                     fs::create_dir_all(parent).with_context(|| {
                         format!("Failed to create parent directory: {}", parent.display())
                     })?;
                 }
                 fs::copy(&path, &dest_path).with_context(|| {
+                    dbg!(&path, &load_spec);
                     format!(
                         "Failed to copy {} -> {}",
                         path.display(),
@@ -421,29 +426,26 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
                     )
                 })?;
             }
-            FileClassification::Vendor(load_spec) => {
-                let vendor_path = loadspec_to_vendor_path(&load_spec)?;
-                if vendor_files.insert(vendor_path.clone()) {
-                    let dest_path = info
-                        .staging_dir
-                        .join("src")
-                        .join("vendor")
-                        .join(&vendor_path);
-                    if let Some(parent) = dest_path.parent() {
-                        fs::create_dir_all(parent).with_context(|| {
-                            format!("Failed to create parent directory: {}", parent.display())
-                        })?;
-                    }
-                    fs::copy(&path, &dest_path).with_context(|| {
-                        format!(
-                            "Failed to copy {} -> {}",
-                            path.display(),
-                            dest_path.display()
-                        )
-                    })?;
-                }
+        } else {
+            let Ok(rel) = path.strip_prefix(info.workspace.root()) else {
+                anyhow::bail!(
+                    "Cannot release with local path outside of workspace: {}",
+                    path.display()
+                )
+            };
+            let dest_path = info.staging_dir.join("src").join(rel);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create parent directory: {}", parent.display())
+                })?;
             }
-            FileClassification::Irrelevant => {}
+            fs::copy(&path, &dest_path).with_context(|| {
+                format!(
+                    "Failed to copy {} -> {}",
+                    path.display(),
+                    dest_path.display()
+                )
+            })?;
         }
     }
     Ok(())
@@ -594,6 +596,30 @@ print("Text variables updated successfully")
     Ok(())
 }
 
+/// Validate that the staged zen file can be built successfully
+fn validate_build(info: &ReleaseInfo) -> Result<()> {
+    // Calculate the zen file path in the staging directory
+    let zen_file_rel = info
+        .workspace
+        .zen_path
+        .strip_prefix(info.workspace.root())
+        .context("Zen file must be within workspace root")?;
+    let staged_zen_path = info.staging_dir.join("src").join(zen_file_rel);
+
+    debug!("Validating build of: {}", staged_zen_path.display());
+
+    // Use offline mode since all dependencies should be vendored
+    let eval = pcb_zen::run(&staged_zen_path, true);
+
+    if !eval.is_success() {
+        anyhow::bail!(
+            "Build validation failed for staged zen file: {}",
+            staged_zen_path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Generate design BOM JSON file
 fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     // Generate BOM entries from the schematic
@@ -606,7 +632,7 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
     let file = fs::File::create(&bom_file)?;
-    serde_json::to_writer_pretty(file, &bom_entries)?;
+    write_bom_json(&bom_entries, &file)?;
 
     Ok(())
 }

@@ -1,103 +1,111 @@
-use pcb_zen_core::LoadSpec;
+use log::debug;
+use pcb_zen_core::{LoadSpec, RefKind, RemoteRefMeta};
+use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[cfg(unix)]
 use std::os::unix::fs as unix_fs;
 #[cfg(windows)]
 use std::os::windows::fs as win_fs;
 
+use crate::git;
+
 // Re-export constants from LoadSpec for backward compatibility
 pub use pcb_zen_core::load_spec::{DEFAULT_GITHUB_REV, DEFAULT_GITLAB_REV, DEFAULT_PKG_TAG};
 
-/// Download and cache remote resources (Package, GitHub, GitLab specs).
-///
-/// This function only handles remote specs - local paths should be resolved
-/// by the CoreLoadResolver before reaching this function.
-///
-/// The returned path is guaranteed to exist on success.
-fn materialise_remote(spec: &LoadSpec, workspace_root: &Path) -> anyhow::Result<PathBuf> {
+/// Resolve file path within cache and create convenience symlinks for Git repos
+fn ensure_symlinks(
+    spec: &LoadSpec,
+    workspace_root: &Path,
+    cache_root: &Path,
+) -> anyhow::Result<PathBuf> {
+    let path = match spec {
+        LoadSpec::Package { path, .. }
+        | LoadSpec::Github { path, .. }
+        | LoadSpec::Gitlab { path, .. } => path,
+        _ => anyhow::bail!("ensure_symlinks only handles remote specs"),
+    };
+
+    let local_path = if path.as_os_str().is_empty() {
+        cache_root.to_path_buf()
+    } else {
+        cache_root.join(path)
+    };
+
+    if !local_path.exists() {
+        anyhow::bail!(
+            "Path {} not found in cached content for spec {}",
+            path.display(),
+            spec.to_load_string()
+        );
+    }
+
+    // Create convenience symlinks for Git repos (not packages)
     match spec {
-        LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
-            // Local specs should not reach here
-            anyhow::bail!("materialise_remote only handles remote specs, not local paths")
-        }
-        LoadSpec::Package { package, tag, path } => {
-            let cache_root = ensure_remote_cached(spec)?;
-
-            let local_path = if path.as_os_str().is_empty() {
-                cache_root.clone()
-            } else {
-                cache_root.join(path)
-            };
-
-            if !local_path.exists() {
-                anyhow::bail!(
-                    "File {} not found in package {}:{}",
-                    path.display(),
-                    package,
-                    tag
-                );
-            }
-
-            // Expose in .pcb for direct package reference
-            let _ = expose_alias_symlink(workspace_root, package, path, &local_path);
-
-            Ok(local_path)
-        }
         LoadSpec::Github {
-            user,
-            repo,
-            rev,
-            path,
+            user, repo, rev, ..
         } => {
-            let cache_root = ensure_remote_cached(spec)?;
-
-            let local_path = cache_root.join(path);
-            if !local_path.exists() {
-                anyhow::bail!(
-                    "Path {} not found inside cached GitHub repo",
-                    path.display()
-                );
-            }
             let folder_name = format!(
-                "github{}{}{}{}{}",
+                "github{}{}{}{}{}{}",
                 std::path::MAIN_SEPARATOR,
                 user,
                 std::path::MAIN_SEPARATOR,
                 repo,
-                std::path::MAIN_SEPARATOR
+                std::path::MAIN_SEPARATOR,
+                rev
             );
-            let folder_name = format!("{folder_name}{rev}");
             let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
-            Ok(local_path)
         }
         LoadSpec::Gitlab {
-            project_path,
-            rev,
-            path,
+            project_path, rev, ..
         } => {
-            let cache_root = ensure_remote_cached(spec)?;
-
-            let local_path = cache_root.join(path);
-            if !local_path.exists() {
-                anyhow::bail!(
-                    "Path {} not found inside cached GitLab repo",
-                    path.display()
-                );
-            }
             let folder_name = format!(
-                "gitlab{}{}{}",
+                "gitlab{}{}{}{}",
                 std::path::MAIN_SEPARATOR,
                 project_path,
-                std::path::MAIN_SEPARATOR
+                std::path::MAIN_SEPARATOR,
+                rev
             );
-            let folder_name = format!("{folder_name}{rev}");
             let _ = expose_alias_symlink(workspace_root, &folder_name, path, &local_path);
-            Ok(local_path)
         }
+        LoadSpec::Package { package, .. } => {
+            // Packages use simple alias symlinks
+            let _ = expose_alias_symlink(workspace_root, package, path, &local_path);
+        }
+        _ => {}
     }
+
+    Ok(local_path)
+}
+
+/// Classify a remote Git repository to determine reference type
+fn classify_remote(cache_root: &Path, spec: &LoadSpec) -> Option<RemoteRefMeta> {
+    let expected_ref = match spec {
+        LoadSpec::Github { rev, .. } | LoadSpec::Gitlab { rev, .. } => rev,
+        _ => unreachable!(),
+    };
+
+    let sha1 = git::rev_parse_head(cache_root)?;
+    let kind = {
+        let tag_sha1 = git::rev_parse(cache_root, &format!("{expected_ref}^{{commit}}"));
+        if git::tag_exists(cache_root, expected_ref) && tag_sha1 == Some(sha1.clone()) {
+            debug!("Tag {expected_ref} exists, and it's at HEAD");
+            RefKind::Tag
+        } else if expected_ref.len() > 7 && sha1.starts_with(expected_ref) {
+            debug!("Hash matches {expected_ref} ref");
+            RefKind::Commit
+        } else {
+            debug!("{expected_ref} is unstable");
+            RefKind::Unstable
+        }
+    };
+
+    Some(RemoteRefMeta {
+        commit_sha1: sha1,
+        commit_sha256: None,
+        kind,
+    })
 }
 
 /// Ensure a cache directory exists atomically, downloading if necessary.
@@ -197,6 +205,39 @@ fn download_and_unpack_package(_package: &str, _tag: &str, _dest_dir: &Path) -> 
     anyhow::bail!("Package file download not yet implemented")
 }
 
+fn try_clone_and_fetch_commit(remote_url: &str, rev: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    log::debug!("Cloning default branch then fetching commit: {remote_url} @ {rev}");
+    git::clone_default_branch(remote_url, dest_dir)?;
+    git::fetch_commit(dest_dir, rev)?;
+    git::checkout_revision(dest_dir, rev)
+}
+
+/// Try Git clone with 2-pass strategy for multiple URLs
+fn try_git_clone(clone_urls: &[String], rev: &str, dest_dir: &Path) -> anyhow::Result<bool> {
+    if !git::is_available() {
+        return Ok(false);
+    }
+
+    for remote_url in clone_urls {
+        // Ensure parent dirs exist so `git clone` can create `dest_dir`.
+        if let Some(parent) = dest_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Pass 1: Try to clone as branch/tag (most efficient)
+        log::debug!("Trying branch/tag clone: {remote_url} @ {rev}");
+        if git::clone_as_branch_or_tag(remote_url, rev, dest_dir).is_ok() {
+            return Ok(true);
+        }
+
+        // Pass 2: Clone default branch, then fetch specific commit
+        if try_clone_and_fetch_commit(remote_url, rev, dest_dir).is_ok() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn download_and_unpack_github_repo(
     user: &str,
     repo: &str,
@@ -205,141 +246,30 @@ pub fn download_and_unpack_github_repo(
 ) -> anyhow::Result<()> {
     log::info!("Fetching GitHub repo {user}/{repo} @ {rev}");
 
-    // Reject abbreviated commit hashes – we only support full 40-character SHAs or branch/tag names.
-    if looks_like_git_sha(rev) && rev.len() < 40 {
-        anyhow::bail!(
-            "Abbreviated commit hashes ({} characters) are not supported - please use the full 40-character commit SHA or a branch/tag name (got '{}').",
-            rev.len(),
-            rev
-        );
-    }
+    // Try Git clone strategies first
+    let clone_urls = [
+        format!("https://github.com/{user}/{repo}.git"),
+        format!("git@github.com:{user}/{repo}.git"),
+    ];
 
-    let effective_rev = rev.to_string();
-
-    // Helper that attempts to clone via the system `git` binary. Returns true on
-    // success, false on failure (so we can fall back to other mechanisms).
-    let try_git_clone = |remote_url: &str| -> anyhow::Result<bool> {
-        // Ensure parent dirs exist so `git clone` can create `dest_dir`.
-        if let Some(parent) = dest_dir.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        // Build the basic clone command.
-        let mut cmd = Command::new("git");
-        cmd.arg("clone");
-        cmd.arg("--depth");
-        cmd.arg("1");
-        cmd.arg("--quiet"); // Suppress output
-
-        // Decide how to treat the requested revision.
-        let rev_is_head = effective_rev.eq_ignore_ascii_case("HEAD");
-        let rev_is_sha = looks_like_git_sha(&effective_rev);
-
-        // For branch or tag names we can use the efficient `--branch <name>` clone.
-        // For commit SHAs we first perform a regular shallow clone of the default branch
-        // and then fetch & checkout the desired commit afterwards.
-        if !rev_is_head && !rev_is_sha {
-            cmd.arg("--branch");
-            cmd.arg(&effective_rev);
-            cmd.arg("--single-branch");
-        }
-
-        cmd.arg(remote_url);
-        cmd.arg(dest_dir);
-
-        // Silence all output
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-
-        log::debug!("Running command: {cmd:?}");
-        match cmd.status() {
-            Ok(status) if status.success() => {
-                if rev_is_head {
-                    // Nothing to do – HEAD already checked out.
-                    return Ok(true);
-                }
-
-                if rev_is_sha {
-                    // Fetch the specific commit (shallow) and check it out.
-                    let fetch_ok = Command::new("git")
-                        .arg("-C")
-                        .arg(dest_dir)
-                        .arg("fetch")
-                        .arg("--quiet")
-                        .arg("--depth")
-                        .arg("1")
-                        .arg("origin")
-                        .arg(&effective_rev)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-
-                    if !fetch_ok {
-                        return Ok(false);
-                    }
-                }
-
-                // Detach checkout for both commit SHAs and branch/tag when we didn't use --branch.
-                let checkout_ok = Command::new("git")
-                    .arg("-C")
-                    .arg(dest_dir)
-                    .arg("checkout")
-                    .arg("--quiet")
-                    .arg(&effective_rev)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-
-                if checkout_ok {
-                    return Ok(true);
-                }
-
-                // Fall through – treat as failure so other strategies can try.
-                Ok(false)
-            }
-            _ => Ok(false),
-        }
-    };
-
-    // Strategy 1: system git with HTTPS (respects credential helpers).
-    let https_url = format!("https://github.com/{user}/{repo}.git");
-    if git_is_available() && try_git_clone(&https_url)? {
+    if try_git_clone(&clone_urls, rev, dest_dir)? {
         return Ok(());
     }
 
-    // Strategy 2: system git with SSH.
-    let ssh_url = format!("git@github.com:{user}/{repo}.git");
-    if git_is_available() && try_git_clone(&ssh_url)? {
-        return Ok(());
-    }
-
-    // Strategy 3: fall back to unauthenticated or token-authenticated codeload tarball.
-
-    // Example tarball URL: https://codeload.github.com/<user>/<repo>/tar.gz/<rev>
-    let url = format!("https://codeload.github.com/{user}/{repo}/tar.gz/{effective_rev}");
-
-    // Build a reqwest client so we can attach an Authorization header when needed
+    // Fallback: GitHub's codeload tarball API
+    let url = format!("https://codeload.github.com/{user}/{repo}/tar.gz/{rev}");
     let client = reqwest::blocking::Client::builder()
         .user_agent("diode-star-loader")
         .build()?;
 
-    // Allow users to pass a token for private repositories via env var.
     let token = std::env::var("DIODE_GITHUB_TOKEN")
         .or_else(|_| std::env::var("GITHUB_TOKEN"))
         .ok();
 
     let mut request = client.get(&url);
     if let Some(t) = token.as_ref() {
-        request = request.header("Authorization", format!("token {t}"));
+        request = request.header("Authorization", format!("Bearer {t}"));
     }
-
-    // GitHub tarball endpoint returns 302 to S3; reqwest follows automatically and
-    // does **not** forward the Authorization header (which is fine – S3 URL is
-    // pre-signed).  We keep redirects enabled via the default policy.
 
     let resp = request.send()?;
     if !resp.status().is_success() {
@@ -348,23 +278,18 @@ pub fn download_and_unpack_github_repo(
             anyhow::bail!(
                 "Failed to download GitHub repo {user}/{repo} at {rev} (HTTP {code}).\n\
                  Tried clones via HTTPS & SSH, then tarball download.\n\
-                 If this repository is private please set an access token in the `GITHUB_TOKEN` environment variable, e.g.:\n\
-                     export GITHUB_TOKEN=$(gh auth token)"
+                 If this repository is private, set an access token in GITHUB_TOKEN."
             );
         } else {
-            anyhow::bail!(
-                "Failed to download repo archive {url} (HTTP {code}) after trying git clone."
-            );
+            anyhow::bail!("Failed to download GitHub repo {user}/{repo} at {rev} (HTTP {code})");
         }
     }
-    let bytes = resp.bytes()?;
 
-    // Decompress tar.gz in-memory.
+    let bytes = resp.bytes()?;
     let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
     let mut archive = tar::Archive::new(gz);
 
-    // The tarball contains a single top-level directory like <repo>-<rev>/...
-    // We extract its contents into dest_dir while stripping the first component.
+    // Extract contents while stripping the top-level folder
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?;
@@ -387,137 +312,30 @@ pub fn download_and_unpack_gitlab_repo(
 ) -> anyhow::Result<()> {
     log::info!("Fetching GitLab repo {project_path} @ {rev}");
 
-    // Reject abbreviated commit hashes – we only support full 40-character SHAs or branch/tag names.
-    if looks_like_git_sha(rev) && rev.len() < 40 {
-        anyhow::bail!(
-            "Abbreviated commit hashes ({} characters) are not supported – please use the full 40-character commit SHA or a branch/tag name (got '{}').",
-            rev.len(),
-            rev
-        );
-    }
+    // Try Git clone strategies first
+    let clone_urls = [
+        format!("https://gitlab.com/{project_path}.git"),
+        format!("git@gitlab.com:{project_path}.git"),
+    ];
 
-    let effective_rev = rev.to_string();
-
-    // Helper that attempts to clone via the system `git` binary. Returns true on
-    // success, false on failure (so we can fall back to other mechanisms).
-    let try_git_clone = |remote_url: &str| -> anyhow::Result<bool> {
-        // Ensure parent dirs exist so `git clone` can create `dest_dir`.
-        if let Some(parent) = dest_dir.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        // Build the basic clone command.
-        let mut cmd = Command::new("git");
-        cmd.arg("clone");
-        cmd.arg("--depth");
-        cmd.arg("1");
-        cmd.arg("--quiet"); // Suppress output
-
-        // Decide how to treat the requested revision.
-        let rev_is_head = effective_rev.eq_ignore_ascii_case("HEAD");
-        let rev_is_sha = looks_like_git_sha(&effective_rev);
-
-        // For branch or tag names we can use the efficient `--branch <name>` clone.
-        // For commit SHAs we first perform a regular shallow clone of the default branch
-        // and then fetch & checkout the desired commit afterwards.
-        if !rev_is_head && !rev_is_sha {
-            cmd.arg("--branch");
-            cmd.arg(&effective_rev);
-            cmd.arg("--single-branch");
-        }
-
-        cmd.arg(remote_url);
-        cmd.arg(dest_dir);
-
-        // Silence all output
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-
-        log::debug!("Running command: {cmd:?}");
-        match cmd.status() {
-            Ok(status) if status.success() => {
-                if rev_is_head {
-                    // Nothing to do – HEAD already checked out.
-                    return Ok(true);
-                }
-
-                if rev_is_sha {
-                    // Fetch the specific commit (shallow) and check it out.
-                    let fetch_ok = Command::new("git")
-                        .arg("-C")
-                        .arg(dest_dir)
-                        .arg("fetch")
-                        .arg("--quiet")
-                        .arg("--depth")
-                        .arg("1")
-                        .arg("origin")
-                        .arg(&effective_rev)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-
-                    if !fetch_ok {
-                        return Ok(false);
-                    }
-                }
-
-                // Detach checkout for both commit SHAs and branch/tag when we didn't use --branch.
-                let checkout_ok = Command::new("git")
-                    .arg("-C")
-                    .arg(dest_dir)
-                    .arg("checkout")
-                    .arg("--quiet")
-                    .arg(&effective_rev)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-
-                if checkout_ok {
-                    return Ok(true);
-                }
-
-                // Fall through – treat as failure so other strategies can try.
-                Ok(false)
-            }
-            _ => Ok(false),
-        }
-    };
-
-    // Strategy 1: system git with HTTPS (respects credential helpers).
-    let https_url = format!("https://gitlab.com/{project_path}.git");
-    if git_is_available() && try_git_clone(&https_url)? {
+    if try_git_clone(&clone_urls, rev, dest_dir)? {
         return Ok(());
     }
 
-    // Strategy 2: system git with SSH.
-    let ssh_url = format!("git@gitlab.com:{project_path}.git");
-    if git_is_available() && try_git_clone(&ssh_url)? {
-        return Ok(());
-    }
+    // Fallback: GitLab's archive API
+    let encoded_project_path = project_path.replace('/', "%2F");
+    let url = format!("https://gitlab.com/api/v4/projects/{encoded_project_path}/repository/archive.tar.gz?sha={rev}");
 
-    // Strategy 3: fall back to unauthenticated or token-authenticated archive tarball.
-    // GitLab's archive API: https://gitlab.com/api/v4/projects/{id}/repository/archive?sha={rev}
-    // We need to URL-encode the project path (user/repo) for the API
-    let encoded_project_path = project_path.replace("/", "%2F");
-    let url = format!("https://gitlab.com/api/v4/projects/{encoded_project_path}/repository/archive.tar.gz?sha={effective_rev}");
-
-    // Build a reqwest client so we can attach an Authorization header when needed
     let client = reqwest::blocking::Client::builder()
         .user_agent("diode-star-loader")
         .build()?;
 
-    // Allow users to pass a token for private repositories via env var.
     let token = std::env::var("DIODE_GITLAB_TOKEN")
         .or_else(|_| std::env::var("GITLAB_TOKEN"))
         .ok();
 
     let mut request = client.get(&url);
     if let Some(t) = token.as_ref() {
-        // GitLab uses a different header format
         request = request.header("PRIVATE-TOKEN", t);
     }
 
@@ -528,22 +346,18 @@ pub fn download_and_unpack_gitlab_repo(
             anyhow::bail!(
                 "Failed to download GitLab repo {project_path} at {rev} (HTTP {code}).\n\
                  Tried clones via HTTPS & SSH, then archive download.\n\
-                 If this repository is private please set an access token in the `GITLAB_TOKEN` environment variable."
+                 If this repository is private, set an access token in GITLAB_TOKEN."
             );
         } else {
-            anyhow::bail!(
-                "Failed to download repo archive {url} (HTTP {code}) after trying git clone."
-            );
+            anyhow::bail!("Failed to download GitLab repo {project_path} at {rev} (HTTP {code})");
         }
     }
-    let bytes = resp.bytes()?;
 
-    // Decompress tar.gz in-memory.
-    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
+    let bytes = resp.bytes()?;
+    let gz = flate2::read::GzDecoder::new(bytes.as_ref());
     let mut archive = tar::Archive::new(gz);
 
-    // The tarball contains a single top-level directory like <repo>-<rev>-<hash>/...
-    // We extract its contents into dest_dir while stripping the first component.
+    // Extract contents while stripping the top-level folder
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?;
@@ -557,17 +371,6 @@ pub fn download_and_unpack_gitlab_repo(
         entry.unpack(&out_path)?;
     }
     Ok(())
-}
-
-// Simple helper that checks whether the `git` executable is available on PATH.
-fn git_is_available() -> bool {
-    Command::new("git")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }
 
 // Create a symlink inside `<workspace>/.pcb/<alias>/<sub_path>` pointing to `target`.
@@ -607,19 +410,22 @@ fn expose_alias_symlink(
     Ok(())
 }
 
-// Determine whether the given revision string looks like a Git commit SHA (short or long).
-// We accept hexadecimal strings of length 7–40 (Git allows abbreviated hashes as short as 7).
-fn looks_like_git_sha(rev: &str) -> bool {
-    if !(7..=40).contains(&rev.len()) {
-        return false;
-    }
-    rev.chars().all(|c| c.is_ascii_hexdigit())
-}
-
 /// Default implementation of RemoteFetcher that handles downloading and caching
 /// remote resources (GitHub repos, GitLab repos, packages).
-#[derive(Debug, Clone)]
-pub struct DefaultRemoteFetcher;
+#[derive(Debug)]
+pub struct DefaultRemoteFetcher {
+    metadata_cache: std::sync::Mutex<
+        std::collections::HashMap<pcb_zen_core::RemoteRef, pcb_zen_core::RemoteRefMeta>,
+    >,
+}
+
+impl Default for DefaultRemoteFetcher {
+    fn default() -> Self {
+        Self {
+            metadata_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
 
 impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
     fn fetch_remote(
@@ -627,8 +433,31 @@ impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
         spec: &LoadSpec,
         workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error> {
-        // Use the existing materialise_load function
-        materialise_remote(spec, workspace_root)
+        // Step 1: Ensure remote is cached (downloads if needed)
+        let cache_root = ensure_remote_cached(spec)?;
+
+        // Step 2: Resolve specific file path within cache and create symlinks
+        let file_path = ensure_symlinks(spec, workspace_root, &cache_root)?;
+
+        // Step 3: Classify Git repository and cache metadata (only if not already cached)
+        let remote_ref = spec
+            .remote_ref()
+            .expect("remote specs should always have remote_ref");
+        let mut cache = self.metadata_cache.lock().unwrap();
+        if let Entry::Vacant(entry) = cache.entry(remote_ref) {
+            if let Some(metadata) = classify_remote(&cache_root, spec) {
+                entry.insert(metadata);
+            }
+        }
+
+        Ok(file_path)
+    }
+
+    fn remote_ref_meta(
+        &self,
+        remote_ref: &pcb_zen_core::RemoteRef,
+    ) -> Option<pcb_zen_core::RemoteRefMeta> {
+        self.metadata_cache.lock().unwrap().get(remote_ref).cloned()
     }
 }
 // Add unit tests for LoadSpec::parse
@@ -849,11 +678,11 @@ mod tests {
         let aliases = pcb_zen_core::LoadSpec::default_package_aliases();
 
         assert_eq!(
-            aliases.get("kicad-symbols"),
+            aliases.get("kicad-symbols").map(|a| &a.target),
             Some(&"@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
         );
         assert_eq!(
-            aliases.get("stdlib"),
+            aliases.get("stdlib").map(|a| &a.target),
             Some(&"@github/diodeinc/stdlib:HEAD".to_string())
         );
     }
@@ -865,18 +694,18 @@ mod tests {
 
         // Test kicad-symbols alias
         assert_eq!(
-            aliases.get("kicad-symbols"),
+            aliases.get("kicad-symbols").map(|a| &a.target),
             Some(&"@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
         );
 
         // Test stdlib alias
         assert_eq!(
-            aliases.get("stdlib"),
+            aliases.get("stdlib").map(|a| &a.target),
             Some(&"@github/diodeinc/stdlib:HEAD".to_string())
         );
 
         // Test non-existent alias
-        assert_eq!(aliases.get("nonexistent"), None);
+        assert!(aliases.get("nonexistent").is_none());
     }
 
     #[test]

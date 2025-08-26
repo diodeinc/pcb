@@ -1,0 +1,16 @@
+load("@stdlib/properties.zen", "Layout")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Resistor(
+    name = "R1",
+    value = "1kohm",
+    package = "0603",
+    P1 = P1,
+    P2 = P2,
+)
+
+Layout(name = "Module", path = "module/")

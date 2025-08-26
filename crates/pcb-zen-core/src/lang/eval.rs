@@ -1,13 +1,11 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ops::Deref,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
-use starlark::collections::SmallMap;
 use starlark::typing::Interface;
 use starlark::{
     any::ProvidesStaticType,
@@ -22,6 +20,7 @@ use starlark::{
     },
     PrintHandler,
 };
+use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
@@ -277,6 +276,12 @@ pub struct EvalContext {
 
     /// Load resolver for resolving load() paths
     pub(crate) load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+
+    /// Index to track which load statement we're currently processing (for span resolution)
+    current_load_index: RefCell<usize>,
+
+    /// Index to track which Module() call we're currently processing (for span resolution)
+    current_module_index: RefCell<usize>,
 }
 
 impl Default for EvalContext {
@@ -313,6 +318,8 @@ impl EvalContext {
             diagnostics: RefCell::new(Vec::new()),
             file_provider: None,
             load_resolver: None,
+            current_load_index: RefCell::new(0),
+            current_module_index: RefCell::new(0),
         }
     }
 
@@ -363,6 +370,8 @@ impl EvalContext {
             diagnostics: RefCell::new(Vec::new()),
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
+            current_load_index: RefCell::new(0),
+            current_module_index: RefCell::new(0),
         }
     }
 
@@ -535,7 +544,6 @@ impl EvalContext {
             // Use the load resolver to resolve this specific file's load path
             let resolved_star_path = if let Some(load_resolver) = &self.load_resolver {
                 match load_resolver.resolve_path(
-                    file_provider.as_ref(),
                     &file_load_path,
                     self.source_path.as_ref().unwrap_or(&PathBuf::from(".")),
                 ) {
@@ -549,6 +557,7 @@ impl EvalContext {
                             body: format!("Failed to resolve load path '{file_load_path}': {e}"),
                             call_stack: None,
                             child: None,
+                            source_error: None,
                         };
                         errors_by_symbol
                             .entry(symbol_name.clone())
@@ -630,21 +639,16 @@ impl EvalContext {
                 .set_inputs(InputMap::new())
                 .eval();
 
-            // Collect any error diagnostics for this symbol
-            let mut symbol_errors = Vec::new();
-            for diag in &eval_result.diagnostics {
-                if diag.is_error() {
-                    symbol_errors.push(diag.clone());
-                }
-            }
+            let (output, diagnostics) = eval_result.unpack();
 
             // If there were errors, store them keyed by symbol name
-            if !symbol_errors.is_empty() {
-                errors_by_symbol.insert(symbol_name.clone(), symbol_errors);
+            let errors = diagnostics.errors();
+            if !errors.is_empty() {
+                errors_by_symbol.insert(symbol_name.clone(), errors);
             }
 
             // If the module loaded successfully, create a loader for it
-            if let Some(output) = eval_result.output {
+            if let Some(output) = output {
                 // Build a ModuleLoader with the frozen module
                 let loader = ModuleLoader {
                     name: symbol_name.clone(),
@@ -723,7 +727,6 @@ impl EvalContext {
             // Use the load resolver to resolve this specific file's load path
             let resolved_sym_path = if let Some(load_resolver) = &self.load_resolver {
                 match load_resolver.resolve_path(
-                    file_provider.as_ref(),
                     &file_load_path,
                     self.source_path.as_ref().unwrap_or(&PathBuf::from(".")),
                 ) {
@@ -737,6 +740,7 @@ impl EvalContext {
                             body: format!("Failed to resolve load path '{file_load_path}': {e}"),
                             call_stack: None,
                             child: None,
+                            source_error: None,
                         };
                         errors_by_symbol
                             .entry(symbol_name.clone())
@@ -770,6 +774,7 @@ impl EvalContext {
                         body: format!("Failed to load component from {file_load_path}: {e}"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     errors_by_symbol
                         .entry(symbol_name.clone())
@@ -827,11 +832,13 @@ impl EvalContext {
         let source_path = match self.source_path {
             Some(ref path) => path,
             None => {
-                return WithDiagnostics::failure(vec![Diagnostic::from_error(
-                    anyhow::anyhow!("source_path not set on Context before eval()").into(),
-                )]);
+                return anyhow::anyhow!("source_path not set on Context before eval()").into();
             }
         };
+
+        if let Some(load_resolver) = &self.load_resolver {
+            load_resolver.track_file(source_path);
+        }
 
         // Get or create a default file provider if none was set
         let file_provider = self
@@ -849,10 +856,7 @@ impl EvalContext {
                     c
                 }
                 Err(err) => {
-                    let diag = crate::Diagnostic::from_error(starlark::Error::new_other(
-                        anyhow::anyhow!("Failed to read file: {}", err),
-                    ));
-                    return WithDiagnostics::failure(vec![diag]);
+                    return anyhow::anyhow!("Failed to read file: {}", err).into();
                 }
             },
         };
@@ -871,115 +875,104 @@ impl EvalContext {
             &self.dialect(),
         );
 
-        let eval_res = match ast_res {
-            Ok(ast) => WithDiagnostics::success(ast, Vec::new()),
-            Err(err) => WithDiagnostics::failure(vec![crate::Diagnostic::from_eval_message(
-                EvalMessage::from_error(source_path, &err),
-            )]),
+        let ast = match ast_res {
+            Ok(ast) => ast,
+            Err(err) => return EvalMessage::from_error(source_path, &err).into(),
         };
 
-        eval_res.flat_map(|ast| {
-            // Create a print handler to collect output
-            let print_handler = CollectingPrintHandler::new();
+        // Create a print handler to collect output
+        let print_handler = CollectingPrintHandler::new();
 
-            let eval_result = {
-                let mut eval = Evaluator::new(&self.module);
-                eval.enable_static_typechecking(true);
-                eval.set_loader(&self);
-                eval.set_print_handler(&print_handler);
+        let eval_result = {
+            let mut eval = Evaluator::new(&self.module);
+            eval.enable_static_typechecking(true);
+            eval.set_loader(&self);
+            eval.set_print_handler(&print_handler);
 
-                // Attach a `ContextValue` so user code can access evaluation context.
-                self.module
-                    .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
+            // Attach a `ContextValue` so user code can access evaluation context.
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
 
-                // If the caller supplied custom properties via `set_properties()` attach them to the
-                // freshly created `ModuleValue` *before* executing the module body so that user code
-                // can observe/override them as needed.
-                if let Some(props) = &self.properties {
-                    if let Some(ctx_val) = eval
-                        .module()
-                        .extra_value()
-                        .and_then(|e| e.downcast_ref::<ContextValue>())
-                    {
-                        for (key, iv) in props.iter() {
-                            match iv.to_value(&mut eval, None) {
-                                Ok(val) => ctx_val.add_property(key.clone(), val),
-                                Err(e) => {
-                                    return WithDiagnostics::failure(vec![
-                                        crate::Diagnostic::from_error(e.into()),
-                                    ]);
-                                }
-                            }
+            // If the caller supplied custom properties via `set_properties()` attach them to the
+            // freshly created `ModuleValue` *before* executing the module body so that user code
+            // can observe/override them as needed.
+            if let Some(props) = &self.properties {
+                if let Some(ctx_val) = eval
+                    .module()
+                    .extra_value()
+                    .and_then(|e| e.downcast_ref::<ContextValue>())
+                {
+                    for (key, iv) in props.iter() {
+                        match iv.to_value(&mut eval, None) {
+                            Ok(val) => ctx_val.add_property(key.clone(), val),
+                            Err(e) => return e.into(),
                         }
                     }
                 }
+            }
 
-                let globals = Self::build_globals();
+            let globals = Self::build_globals();
 
-                // We are only interested in whether evaluation succeeded, not in the
-                // value of the final expression, so map the result to `()`.
-                eval.eval_module(ast.clone(), &globals).map(|_| ())
-            };
+            // We are only interested in whether evaluation succeeded, not in the
+            // value of the final expression, so map the result to `()`.
+            eval.eval_module(ast.clone(), &globals).map(|_| ())
+        };
 
-            // Collect print output after evaluation
-            let print_output = print_handler.take_output();
+        // Collect print output after evaluation
+        let print_output = print_handler.take_output();
 
-            let result = match eval_result {
-                Ok(_) => {
-                    let frozen_module = self.module.freeze().expect("failed to freeze module");
-                    let extra = frozen_module
-                        .extra_value()
-                        .expect("extra value should be set before freezing")
-                        .downcast_ref::<FrozenContextValue>()
-                        .expect("extra value should be a FrozenContextValue");
-                    let mut diagnostics = extra.diagnostics().clone();
-                    diagnostics.extend(self.diagnostics.borrow().clone());
+        match eval_result {
+            Ok(_) => {
+                let frozen_module = self.module.freeze().expect("failed to freeze module");
+                let extra = frozen_module
+                    .extra_value()
+                    .expect("extra value should be set before freezing")
+                    .downcast_ref::<FrozenContextValue>()
+                    .expect("extra value should be a FrozenContextValue");
+                let signature = extra
+                    .module
+                    .signature()
+                    .iter()
+                    .map(|param| {
+                        // Convert frozen value to regular value for introspection
+                        let type_value = param.type_value.to_value();
+                        let type_info = TypeInfo::from_value(type_value);
 
-                    let signature = extra
-                        .module
-                        .signature()
-                        .iter()
-                        .map(|param| {
-                            // Convert frozen value to regular value for introspection
-                            let type_value = param.type_value.to_value();
-                            let type_info = TypeInfo::from_value(type_value);
+                        // Convert default value to InputValue if present
+                        let default_value = param
+                            .default_value
+                            .as_ref()
+                            .map(|v| InputValue::from_value(v.to_value()));
 
-                            // Convert default value to InputValue if present
-                            let default_value = param
-                                .default_value
-                                .as_ref()
-                                .map(|v| InputValue::from_value(v.to_value()));
+                        ParameterInfo {
+                            name: param.name.clone(),
+                            type_info,
+                            required: !param.optional,
+                            default_value,
+                            help: param.help.clone(),
+                        }
+                    })
+                    .collect();
 
-                            ParameterInfo {
-                                name: param.name.clone(),
-                                type_info,
-                                required: !param.optional,
-                                default_value,
-                                help: param.help.clone(),
-                            }
-                        })
-                        .collect();
-
-                    WithDiagnostics::success(
-                        EvalOutput {
-                            ast,
-                            star_module: frozen_module,
-                            sch_module: extra.module.clone(),
-                            signature,
-                            print_output,
-                        },
-                        diagnostics,
-                    )
-                }
-                Err(err) => {
-                    let mut diagnostics = vec![crate::Diagnostic::from_error(err)];
-                    diagnostics.extend(self.diagnostics.borrow().clone());
-                    WithDiagnostics::failure(diagnostics)
-                }
-            };
-
-            result
-        })
+                let output = EvalOutput {
+                    ast,
+                    star_module: frozen_module,
+                    sch_module: extra.module.clone(),
+                    signature,
+                    print_output,
+                };
+                let mut ret = WithDiagnostics::success(output);
+                ret.diagnostics.extend(extra.diagnostics().clone());
+                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret
+            }
+            Err(err) => {
+                let mut ret = WithDiagnostics::default();
+                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret.diagnostics.push(err.into());
+                ret
+            }
+        }
     }
 
     /// Introspect a module by evaluating it with empty inputs and non-strict IO config.
@@ -1012,26 +1005,13 @@ impl EvalContext {
         module_name: &str,
     ) -> WithDiagnostics<Vec<crate::lang::type_info::ParameterInfo>> {
         // First evaluate the module with empty inputs to get the used inputs
-        let eval_result = self
-            .child_context()
+        self.child_context()
             .set_source_path(source_path.to_path_buf())
             .set_module_name(module_name.to_string())
             .set_inputs(InputMap::new())
             .set_strict_io_config(false)
-            .eval();
-
-        match eval_result.output {
-            Some(output) => {
-                // The signature is already a Vec of ParameterInfo
-                let parameters = output.signature;
-
-                WithDiagnostics::success(parameters, eval_result.diagnostics)
-            }
-            None => {
-                // If evaluation failed, return empty parameters with diagnostics
-                WithDiagnostics::failure(eval_result.diagnostics)
-            }
-        }
+            .eval()
+            .map(|output| output.signature)
     }
 
     /// Get the file contents from the in-memory cache
@@ -1271,32 +1251,83 @@ impl EvalContext {
         Ok(files)
     }
 
-    /// Find the span of a load statement that loads the given path
-    pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
-        // We need access to the AST of the current module being evaluated
-        // This is a bit tricky since we're in the middle of evaluation
-        // For now, we'll try to parse the contents if available
+    /// Parse the current module's AST, returning None if parsing fails
+    fn parse_current_ast(&self) -> Option<starlark::syntax::AstModule> {
+        let source_path = self.source_path.as_ref()?;
+        let contents = self.contents.as_ref()?;
+        starlark::syntax::AstModule::parse(
+            &source_path.to_string_lossy(),
+            contents.clone(),
+            &self.dialect(),
+        )
+        .ok()
+    }
 
-        if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
-            // Try to parse the AST to find load statements
-            if let Ok(ast) = AstModule::parse(
-                &source_path.to_string_lossy(),
-                contents.clone(),
-                &self.dialect(),
-            ) {
-                // Get all load statements
-                let loads = ast.loads();
+    /// Recursively search for expressions matching a predicate within an expression tree
+    fn find_in_expr<F>(
+        expr: &starlark::syntax::ast::AstExpr,
+        predicate: &mut F,
+    ) -> Option<starlark::codemap::Span>
+    where
+        F: FnMut(&starlark::syntax::ast::AstExpr) -> Option<starlark::codemap::Span>,
+    {
+        use starlark::syntax::ast::{ArgumentP, ExprP};
 
-                // Find a load statement that matches our path
-                for load in loads {
-                    if load.module_id == path {
-                        return Some(load.span.span);
+        // Check current expression first
+        if let Some(span) = predicate(expr) {
+            return Some(span);
+        }
+
+        // Recursively search sub-expressions
+        match &expr.node {
+            ExprP::Call(_, call_args) => {
+                for arg in &call_args.args {
+                    if let ArgumentP::Positional(arg_expr) = &arg.node {
+                        if let Some(span) = Self::find_in_expr(arg_expr, predicate) {
+                            return Some(span);
+                        }
                     }
                 }
             }
+            ExprP::Dot(obj, _) => {
+                return Self::find_in_expr(obj, predicate);
+            }
+            ExprP::Index(boxed) => {
+                let (obj, index_expr) = &**boxed;
+                if let Some(span) = Self::find_in_expr(obj, predicate) {
+                    return Some(span);
+                }
+                return Self::find_in_expr(index_expr, predicate);
+            }
+            ExprP::Slice(obj, start, end, _) => {
+                if let Some(span) = Self::find_in_expr(obj, predicate) {
+                    return Some(span);
+                }
+                if let Some(start_expr) = start {
+                    if let Some(span) = Self::find_in_expr(start_expr, predicate) {
+                        return Some(span);
+                    }
+                }
+                if let Some(end_expr) = end {
+                    if let Some(span) = Self::find_in_expr(end_expr, predicate) {
+                        return Some(span);
+                    }
+                }
+            }
+            _ => {}
         }
-
         None
+    }
+
+    /// Find the span of a load statement that loads the given path
+    pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
+        let ast = self.parse_current_ast()?;
+        let result = ast
+            .loads()
+            .into_iter()
+            .find(|load| load.module_id == path)
+            .map(|load| load.span.span);
+        result
     }
 
     /// Get the codemap for the current module being evaluated
@@ -1311,6 +1342,92 @@ impl EvalContext {
         }
     }
 
+    /// Resolve the span for the current load statement being processed (using the load index)
+    pub fn resolve_span_for_current_load(&self, path: &str) -> Option<ResolvedSpan> {
+        let current_index = *self.current_load_index.borrow();
+        // We've already incremented the counter, so subtract 1 to get the actual current load
+        let actual_index = current_index.saturating_sub(1);
+
+        // Get the AST to verify the path matches
+        let ast = self.parse_current_ast()?;
+        let loads = ast.loads();
+        let load = loads.get(actual_index)?;
+
+        // Safety check: ensure the path matches what we expect
+        if load.module_id != path {
+            panic!(
+                "Load path mismatch at index {actual_index}: expected '{path}', got '{}'",
+                load.module_id
+            );
+        }
+
+        let load_span = load.span.span;
+        self.get_codemap()
+            .map(|codemap| codemap.file_span(load_span).resolve_span())
+    }
+
+    /// Resolve the span for the current Module() call being processed (using the module index)
+    pub fn resolve_span_for_current_module(&self, path: &str) -> Option<ResolvedSpan> {
+        let current_index = *self.current_module_index.borrow();
+        // We've already incremented the counter, so subtract 1 to get the actual current module
+        let actual_index = current_index.saturating_sub(1);
+
+        // Get the AST to verify the path matches
+        use starlark::syntax::ast::{ArgumentP, AstLiteral, ExprP};
+        let ast = self.parse_current_ast()?;
+        let mut module_calls = Vec::new();
+
+        ast.statement().visit_expr(|expr| {
+            Self::find_in_expr(expr, &mut |expr| {
+                // Look for Module() calls
+                if let ExprP::Call(callee, call_args) = &expr.node {
+                    if let ExprP::Identifier(ident) = &callee.node {
+                        if ident.node.ident == "Module" {
+                            if let Some((path_str, span)) = call_args
+                                .args
+                                .iter()
+                                .find_map(|arg| match &arg.node {
+                                    ArgumentP::Positional(expr) => Some(expr),
+                                    _ => None,
+                                })
+                                .filter(|expr| {
+                                    matches!(&expr.node, ExprP::Literal(AstLiteral::String(_)))
+                                })
+                                .and_then(|expr| match &expr.node {
+                                    ExprP::Literal(AstLiteral::String(s)) => {
+                                        Some((s.node.clone(), expr.span))
+                                    }
+                                    _ => None,
+                                })
+                            {
+                                module_calls.push((path_str, span));
+                            }
+                        }
+                    }
+                }
+                None
+            });
+        });
+
+        let (actual_path, span) = module_calls.get(actual_index)?;
+
+        // Safety check: ensure the path matches what we expect
+        if *actual_path != path {
+            panic!(
+                "Module path mismatch at index {actual_index}: expected '{path}', got '{actual_path}'"
+            );
+        }
+
+        self.get_codemap()
+            .map(|codemap| codemap.file_span(*span).resolve_span())
+    }
+
+    /// Increment the module counter for span tracking
+    pub fn increment_module_counter(&self) {
+        let mut index = self.current_module_index.borrow_mut();
+        *index += 1;
+    }
+
     /// Get the source path of the current module being evaluated
     pub fn get_source_path(&self) -> Option<&Path> {
         self.source_path.as_deref()
@@ -1319,6 +1436,11 @@ impl EvalContext {
     /// Get the load resolver if available
     pub fn get_load_resolver(&self) -> Option<&Arc<dyn crate::LoadResolver>> {
         self.load_resolver.as_ref()
+    }
+
+    /// Append a diagnostic that was produced while this context was active.
+    pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
+        self.diagnostics.borrow_mut().push(diag.into());
     }
 }
 
@@ -1329,6 +1451,12 @@ impl FileLoader for EvalContext {
             "Trying to load path {path} with current path {:?}",
             self.source_path
         );
+
+        // Increment load counter - this happens before warning generation
+        {
+            let mut index = self.current_load_index.borrow_mut();
+            *index += 1;
+        }
 
         // Get or create default providers if none were set
         let file_provider = self
@@ -1342,19 +1470,25 @@ impl FileLoader for EvalContext {
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No LoadResolver provided")))?;
 
         let module_path = self.source_path.clone();
+        let Some(current_file) = module_path.as_ref() else {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Cannot resolve load path '{}' without a current file context",
+                path
+            )));
+        };
 
         // Resolve the load path to an absolute path
-        let absolute_path = match module_path {
-            Some(ref current_file) => load_resolver
-                .resolve_path(file_provider.deref(), path, current_file)
-                .map_err(starlark::Error::new_other)?,
-            None => {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Cannot resolve load path '{}' without a current file context",
-                    path
-                )));
-            }
-        };
+        let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
+        let absolute_path = load_resolver.resolve(&mut resolve_context)?;
+
+        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
+            load_resolver.as_ref(),
+            current_file,
+            &resolve_context,
+            self.resolve_span_for_current_load(path),
+        ) {
+            self.diagnostics.borrow_mut().push(warning_diag);
+        }
 
         // Canonicalize the path for cache lookup
         let canonical_path = file_provider
@@ -1449,6 +1583,7 @@ impl FileLoader for EvalContext {
                                 body: format!("Error loading module `{error_path}`"),
                                 call_stack: None,
                                 child: Some(Box::new(error.clone())),
+                                source_error: None,
                             };
 
                             // Wrap in DiagnosticError and pass through anyhow
@@ -1474,6 +1609,7 @@ impl FileLoader for EvalContext {
                         body: format!("Error loading module `{error_path}`"),
                         call_stack: None,
                         child: Some(Box::new(error.clone())),
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(parent_diag);
                     let load_err = crate::LoadError {
@@ -1515,6 +1651,7 @@ impl FileLoader for EvalContext {
                         body: format!("Error loading module `{path}`"),
                         call_stack: None,
                         child: Some(Box::new(first_error.clone())),
+                        source_error: None,
                     };
 
                     // Wrap in DiagnosticError and pass through anyhow
@@ -1538,6 +1675,7 @@ impl FileLoader for EvalContext {
                         body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
@@ -1574,6 +1712,7 @@ impl FileLoader for EvalContext {
                         body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
@@ -1596,6 +1735,7 @@ impl FileLoader for EvalContext {
                 body: format!("Failed to load module `{path}`"),
                 call_stack: None,
                 child: None,
+                source_error: None,
             };
             let diag_err = crate::DiagnosticError(diag);
             let load_err = crate::LoadError {

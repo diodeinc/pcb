@@ -43,7 +43,7 @@ pub(crate) trait EvaluatorExt<'v> {
     fn module_value_mut(&self) -> Option<RefMut<'_, ModuleValue<'v>>>;
 
     /// Add a diagnostic to the module value.
-    fn add_diagnostic(&self, diagnostic: Diagnostic);
+    fn add_diagnostic<D: Into<Diagnostic>>(&self, diagnostic: D);
 
     /// Return the [`Context`] that is currently being used.
     fn eval_context(&self) -> Option<&EvalContext>;
@@ -85,9 +85,9 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
         }
     }
 
-    fn add_diagnostic(&self, diagnostic: Diagnostic) {
+    fn add_diagnostic<D: Into<Diagnostic>>(&self, diagnostic: D) {
         if let Some(ctx) = self.context_value() {
-            ctx.add_diagnostic(diagnostic);
+            ctx.add_diagnostic(diagnostic.into());
         }
     }
 

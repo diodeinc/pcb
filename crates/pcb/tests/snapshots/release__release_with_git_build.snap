@@ -1,0 +1,11 @@
+---
+source: crates/pcb/tests/release.rs
+expression: build_ouput
+---
+Command: pcb build --offline <TEMP_DIR>/src/.pcb/releases/TB0001/v1.2.3/src/boards/TB0001.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ TB0001.zen (5 components)

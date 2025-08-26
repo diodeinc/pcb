@@ -3,8 +3,8 @@ A simple LED circuit with current limiting resistor.
 This demonstrates using standard components to create a basic LED driver.
 """
 
-load("@stdlib:v0.2.2/interfaces.zen", "Power", "Ground")
-Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 Led = Module("@stdlib:v0.2.2/generics/Led.zen")
 
 # Configuration parameters

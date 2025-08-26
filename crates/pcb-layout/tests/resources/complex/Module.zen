@@ -1,0 +1,20 @@
+load("@stdlib/properties.zen", "Layout")
+
+Submodule = Module("Submodule.zen")
+
+P1 = io("P1", Net)
+P2 = io("P2", Net)
+
+Submodule(
+    name = "S1",
+    P1 = P1,
+    P2 = P2,
+)
+
+Submodule(
+    name = "S2",
+    P1 = P1,
+    P2 = P2,
+)
+
+Layout(name = "Module", path = "module")

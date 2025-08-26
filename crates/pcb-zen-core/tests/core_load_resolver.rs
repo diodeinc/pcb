@@ -167,6 +167,13 @@ impl RemoteFetcher for MockRemoteFetcher {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No mock result for spec: {}", spec_str))
     }
+
+    fn remote_ref_meta(
+        &self,
+        _remote_ref: &pcb_zen_core::RemoteRef,
+    ) -> Option<pcb_zen_core::RemoteRefMeta> {
+        None // Mock doesn't provide metadata
+    }
 }
 
 #[test]
@@ -201,9 +208,7 @@ fn test_resolve_github_spec() {
     };
 
     let current_file = PathBuf::from("/workspace/main.zen");
-    let resolved = resolver
-        .resolve_spec(file_provider.as_ref(), &spec, &current_file)
-        .unwrap();
+    let resolved = resolver.resolve_spec(&spec, &current_file).unwrap();
 
     assert_eq!(resolved, cache_path);
 
@@ -251,7 +256,7 @@ fn test_resolve_relative_from_github_spec() {
 
     // For now, this will resolve as a regular relative path
     let resolved = resolver
-        .resolve_spec(file_provider.as_ref(), &relative_spec, &resistor_cache_path)
+        .resolve_spec(&relative_spec, &resistor_cache_path)
         .unwrap();
 
     assert_eq!(resolved, units_cache_path);
@@ -335,9 +340,7 @@ stdlib = "@github/diodeinc/stdlib"
     };
 
     let current_file = workspace_root.join("main.zen");
-    let resolved = resolver
-        .resolve_spec(file_provider.as_ref(), &spec, &current_file)
-        .unwrap();
+    let resolved = resolver.resolve_spec(&spec, &current_file).unwrap();
 
     assert_eq!(resolved, cache_path);
 }
@@ -397,11 +400,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
     };
 
     let resolved_resistor = resolver
-        .resolve_spec(
-            file_provider.as_ref(),
-            &github_spec,
-            &PathBuf::from("/workspace/main.zen"),
-        )
+        .resolve_spec(&github_spec, &PathBuf::from("/workspace/main.zen"))
         .unwrap();
 
     assert_eq!(resolved_resistor, resistor_cache_path);
@@ -415,7 +414,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
     // @github/diodeinc/stdlib/zen/generics/Resistor.zen
     // and resolve ../units.zen as @github/diodeinc/stdlib/zen/units.zen
     let resolved_units = resolver
-        .resolve_spec(file_provider.as_ref(), &relative_spec, &resistor_cache_path)
+        .resolve_spec(&relative_spec, &resistor_cache_path)
         .unwrap();
 
     assert_eq!(resolved_units, units_cache_path);
@@ -482,11 +481,7 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
     };
 
     let resolved_module = resolver
-        .resolve_spec(
-            file_provider.as_ref(),
-            &module_spec,
-            &PathBuf::from("/workspace/main.zen"),
-        )
+        .resolve_spec(&module_spec, &PathBuf::from("/workspace/main.zen"))
         .unwrap();
 
     assert_eq!(resolved_module, remote_cache_path);
@@ -499,7 +494,7 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
     // This should understand that remote_cache_path is from @github/diodeinc/stdlib
     // and resolve //common/utils.zen relative to that repository's root
     let resolved_utils = resolver
-        .resolve_spec(file_provider.as_ref(), &workspace_spec, &remote_cache_path)
+        .resolve_spec(&workspace_spec, &remote_cache_path)
         .unwrap();
 
     assert_eq!(resolved_utils, utils_cache_path);
@@ -567,9 +562,7 @@ stdlib = "@github/diodeinc/stdlib:v1.0.0"
     remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v1.0.0/units.zen", &cache_path);
     file_provider.add_file(&cache_path, "# Units");
 
-    let resolved = resolver
-        .resolve_spec(file_provider.as_ref(), &spec, &current_file)
-        .unwrap();
+    let resolved = resolver.resolve_spec(&spec, &current_file).unwrap();
 
     assert_eq!(resolved, cache_path);
 
@@ -636,7 +629,7 @@ local = "./local"
     file_provider.add_file(&workspace_cache, "# Units v1");
 
     let resolved_workspace = resolver
-        .resolve_spec(file_provider.as_ref(), &spec_workspace, &workspace_file)
+        .resolve_spec(&spec_workspace, &workspace_file)
         .unwrap();
     assert_eq!(resolved_workspace, workspace_cache);
 
@@ -652,9 +645,7 @@ local = "./local"
     remote_fetcher.add_fetch_result("@github/diodeinc/stdlib:v2.0.0/units.zen", &modules_cache);
     file_provider.add_file(&modules_cache, "# Units v2");
 
-    let resolved_modules = resolver
-        .resolve_spec(file_provider.as_ref(), &spec_modules, &modules_file)
-        .unwrap();
+    let resolved_modules = resolver.resolve_spec(&spec_modules, &modules_file).unwrap();
     assert_eq!(resolved_modules, modules_cache);
 
     // Test custom alias from workspace (should work from modules too)
@@ -668,9 +659,7 @@ local = "./local"
     remote_fetcher.add_fetch_result("@github/workspace/custom/lib.zen", &custom_cache);
     file_provider.add_file(&custom_cache, "# Custom lib");
 
-    let resolved_custom = resolver
-        .resolve_spec(file_provider.as_ref(), &spec_custom, &modules_file)
-        .unwrap();
+    let resolved_custom = resolver.resolve_spec(&spec_custom, &modules_file).unwrap();
     assert_eq!(resolved_custom, custom_cache);
 
     // Test local alias only available in modules - this would resolve to a path spec
@@ -720,15 +709,12 @@ stdlib = "@github/diodeinc/stdlib"
     let handles: Vec<_> = (0..4)
         .map(|i| {
             let resolver = resolver.clone();
-            let file_provider = file_provider.clone();
             let spec = spec.clone();
             let workspace_root = workspace_root.clone();
 
             thread::spawn(move || {
                 let file = workspace_root.join(format!("file{i}.zen"));
-                resolver
-                    .resolve_spec(file_provider.as_ref(), &spec, &file)
-                    .unwrap()
+                resolver.resolve_spec(&spec, &file).unwrap()
             })
         })
         .collect();

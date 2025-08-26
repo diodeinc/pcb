@@ -1,9 +1,22 @@
 use ariadne::{sources, ColorGenerator, Label, Report, ReportKind};
+use pcb_ui::Colorize;
 use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::Diagnostic;
+use crate::{Diagnostic, Diagnostics};
+
+/// A pass that renders diagnostics to the console using Ariadne
+pub struct RenderPass;
+
+impl pcb_zen_core::DiagnosticsPass for RenderPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diag in &diagnostics.diagnostics {
+            render_diagnostic(diag);
+            eprintln!();
+        }
+    }
+}
 
 /// Render a [`Diagnostic`] using the `ariadne` crate.
 ///
@@ -11,11 +24,7 @@ use crate::Diagnostic;
 /// single coloured report so that the context is easy to follow.
 /// Diagnostics that originate from a different file fall back to a separate
 /// Ariadne report (or a plain `eprintln!` when source code cannot be read).
-pub fn render_diagnostic(diag: &Diagnostic) {
-    if diag.body.contains("<hidden>") {
-        return;
-    }
-
+fn render_diagnostic(diagnostic: &Diagnostic) {
     // Collect all EvalMessages in the diagnostic chain (primary + children) for convenience.
     fn collect_messages<'a>(d: &'a Diagnostic, out: &mut Vec<&'a Diagnostic>) {
         out.push(d);
@@ -25,7 +34,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 
     let mut messages: Vec<&Diagnostic> = Vec::new();
-    collect_messages(diag, &mut messages);
+    collect_messages(diagnostic, &mut messages);
 
     // 0. Attempt to read source for every file referenced by any message that has a span.
     let mut sources_map: HashMap<String, String> = HashMap::new();
@@ -39,7 +48,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 
     // If we failed to read the primary file source, fall back to plain printing.
-    let primary_src = sources_map.get(&diag.path);
+    let primary_src = sources_map.get(&diagnostic.path);
     if primary_src.is_none() {
         for m in &messages {
             eprintln!("{m}");
@@ -48,7 +57,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 
     // Identify deepest message in the chain.
-    let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diag);
+    let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diagnostic);
 
     // Determine ReportKind from deepest error severity (more relevant).
     let kind = match deepest_error_msg.severity {
@@ -75,11 +84,29 @@ pub fn render_diagnostic(diag: &Diagnostic) {
 
     let primary_path_id = deepest_error_msg.path.clone();
 
+    let compact = !matches!(deepest_error_msg.severity, EvalSeverity::Error);
+
+    // Create message with suppressed count if any
+    let message = if let Some(count) = diagnostic.suppressed_count() {
+        format!(
+            "{}\n{}",
+            deepest_error_msg.body,
+            format!(
+                "{} similar warning(s) were suppressed",
+                format!("{count}").bold()
+            )
+            .blue()
+        )
+    } else {
+        deepest_error_msg.body.clone()
+    };
+
     let mut report = Report::build(
         kind,
         (primary_path_id.clone(), primary_span.clone().unwrap()),
     )
-    .with_message(&deepest_error_msg.body)
+    .with_config(ariadne::Config::default().with_compact(compact))
+    .with_message(&message)
     .with_label(
         Label::new((primary_path_id.clone(), primary_span.unwrap()))
             .with_message(&deepest_error_msg.body)
@@ -122,13 +149,13 @@ pub fn render_diagnostic(diag: &Diagnostic) {
 
     // Gather diagnostics from outer-most to inner-most.
     let mut chain: Vec<&Diagnostic> = Vec::new();
-    let mut current: Option<&Diagnostic> = Some(diag);
+    let mut current: Option<&Diagnostic> = Some(diagnostic);
     while let Some(d) = current {
         chain.push(d);
         current = d.child.as_deref();
     }
 
-    if !chain.is_empty() {
+    if !chain.is_empty() && !compact {
         eprintln!("\nStack trace (most recent call last):");
 
         for (idx, d) in chain.iter().enumerate() {

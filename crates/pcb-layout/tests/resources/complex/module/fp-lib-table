@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "R_0603_1608Metric") (type "KiCad") (uri "${KIPRJMOD}/../../../../../../../../Library/Caches/pcb/gitlab/kicad/libraries/kicad-footprints/9.0.0/Resistor_SMD.pretty/") (options "") (descr ""))
+)

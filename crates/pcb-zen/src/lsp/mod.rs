@@ -38,7 +38,7 @@ fn create_standard_load_resolver(
 ) -> Arc<CoreLoadResolver> {
     let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
 
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
     Arc::new(CoreLoadResolver::new(
         file_provider,
         remote_fetcher,
@@ -87,6 +87,18 @@ impl LspEvalContext {
     pub fn set_eager(mut self, eager: bool) -> Self {
         self.inner = self.inner.set_eager(eager);
         self
+    }
+
+    /// Create LSP-specific diagnostic passes
+    fn create_lsp_diagnostic_passes(
+        &self,
+        current_file: &std::path::Path,
+    ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+        let workspace_root = find_workspace_root(self.file_provider.as_ref(), current_file);
+        vec![
+            Box::new(pcb_zen_core::FilterHiddenPass),
+            Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
+        ]
     }
 
     fn diagnostic_to_lsp(&self, diag: &pcb_zen_core::Diagnostic) -> lsp_types::Diagnostic {
@@ -220,11 +232,15 @@ impl LspContext for LspEvalContext {
                     create_standard_load_resolver(self.file_provider.clone(), uri.path());
 
                 // Parse and analyze the file with the load resolver set
-                let result = self
+                let mut result = self
                     .inner
                     .child_context()
                     .set_load_resolver(load_resolver)
                     .parse_and_analyze_file(path.clone(), content.clone());
+
+                // Apply LSP-specific diagnostic passes
+                let passes = self.create_lsp_diagnostic_passes(path);
+                result.diagnostics.apply_passes(&passes);
 
                 // Convert diagnostics to LSP format
                 let diagnostics = result
@@ -259,8 +275,7 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                let resolved =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), path, current_path)?;
+                let resolved = load_resolver.resolve_path(path, current_path)?;
                 Ok(LspUrl::File(resolved))
             }
             _ => Err(anyhow::anyhow!("Cannot resolve load from non-file URL")),
@@ -303,8 +318,9 @@ impl LspContext for LspEvalContext {
                 // Try to resolve as a file path
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                if let Ok(resolved) =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), literal, current_path)
+                if let Ok(resolved) = load_resolver
+                    .resolve_context(literal, current_path)
+                    .and_then(|mut c| load_resolver.resolve(&mut c))
                 {
                     if resolved.exists() {
                         return Ok(Some(StringLiteralResult {
@@ -429,8 +445,9 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                if let Ok(resolved) =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), load_path, current_path)
+                if let Ok(resolved) = load_resolver
+                    .resolve_context(load_path, current_path)
+                    .and_then(|mut c| load_resolver.resolve(&mut c))
                 {
                     if resolved.is_dir() {
                         return Ok(Some(Hover {

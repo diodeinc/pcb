@@ -1,12 +1,23 @@
 use anyhow::Result;
 use clap::Args;
 use log::debug;
+use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use pcb_zen::file_extensions;
-use pcb_zen::EvalSeverity;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Create diagnostics passes for the given deny list
+pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+    vec![
+        Box::new(pcb_zen_core::FilterHiddenPass),
+        Box::new(pcb_zen_core::PromoteDeniedPass::new(deny)),
+        Box::new(pcb_zen_core::AggregatePass),
+        Box::new(pcb_zen_core::SortPass),
+        Box::new(pcb_zen::diagnostics::RenderPass),
+    ]
+}
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
@@ -27,31 +38,59 @@ pub struct BuildArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
+
+    /// Set lint level to deny (treat as error). Use 'warnings' for all warnings,
+    /// or specific lint names like 'unstable-refs'
+    #[arg(short = 'D', long = "deny", value_name = "LINT")]
+    pub deny: Vec<String>,
 }
 
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
-pub fn evaluate_zen_file(
-    path: &Path,
+pub fn build(
+    zen_path: &Path,
     offline: bool,
-) -> (pcb_zen::WithDiagnostics<pcb_sch::Schematic>, bool) {
-    debug!("Compiling Zener file: {}", path.display());
+    passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
+    has_errors: &mut bool,
+) -> Option<Schematic> {
+    let file_name = zen_path.file_name().unwrap().to_string_lossy();
+
+    // Show spinner while building
+    debug!("Compiling Zener file: {}", zen_path.display());
+    let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let eval_result = pcb_zen::run(path, offline);
-    let mut has_errors = false;
+    let eval = pcb_zen::run(zen_path, offline);
 
-    // Print diagnostics
-    for diag in eval_result.diagnostics.iter() {
-        pcb_zen::render_diagnostic(diag);
-        eprintln!();
+    // Finish spinner before printing diagnostics
+    if eval.is_empty() {
+        spinner.set_message(format!("{file_name}: No output generated"));
+    }
+    spinner.finish();
 
-        if matches!(diag.severity, EvalSeverity::Error) {
-            has_errors = true;
-        }
+    // Apply all passes including rendering
+    let mut diagnostics = eval.diagnostics.clone();
+    diagnostics.apply_passes(&passes);
+
+    // Check for errors
+    if diagnostics.has_errors() {
+        *has_errors = true;
     }
 
-    (eval_result, has_errors)
+    eval.output_result()
+        .inspect_err(|_| {
+            println!(
+                "{} {}: Build failed",
+                pcb_ui::icons::error(),
+                file_name.with_style(Style::Red).bold()
+            );
+        })
+        .inspect_err(|diagnostics| {
+            if diagnostics.has_errors() {
+                *has_errors = true;
+            }
+        })
+        .ok()
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
@@ -75,66 +114,36 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     // Process each .zen file
     for zen_path in zen_paths {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
+        let Some(schematic) = build(
+            &zen_path,
+            args.offline,
+            create_diagnostics_passes(&args.deny),
+            &mut has_errors,
+        ) else {
+            continue;
+        };
 
-        // Show spinner while building
-        let spinner = Spinner::builder(format!("{file_name}: Building")).start();
-
-        // Evaluate the design
-        let eval_result = pcb_zen::run(&zen_path, args.offline);
-
-        // Check if we have diagnostics to print
-        if !eval_result.diagnostics.is_empty() {
-            // Finish spinner before printing diagnostics
-            spinner.finish();
-
-            // Now print diagnostics
-            let mut file_has_errors = false;
-            for diag in eval_result.diagnostics.iter() {
-                pcb_zen::render_diagnostic(diag);
-                eprintln!();
-
-                if matches!(diag.severity, EvalSeverity::Error) {
-                    file_has_errors = true;
+        if args.netlist {
+            match schematic.to_json() {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("Error serializing netlist to JSON: {e}");
+                    has_errors = true;
                 }
-            }
-
-            if file_has_errors {
-                println!(
-                    "{} {}: Build failed",
-                    pcb_ui::icons::error(),
-                    file_name.with_style(Style::Red).bold()
-                );
-                has_errors = true;
-            }
-        } else if let Some(schematic) = &eval_result.output {
-            spinner.finish();
-
-            // If netlist flag is set, print JSON to stdout
-            if args.netlist {
-                match schematic.to_json() {
-                    Ok(json) => println!("{json}"),
-                    Err(e) => {
-                        eprintln!("Error serializing netlist to JSON: {e}");
-                        has_errors = true;
-                    }
-                }
-            } else {
-                // Print success with component count
-                let component_count = schematic
-                    .instances
-                    .values()
-                    .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-                    .count();
-                eprintln!(
-                    "{} {} ({} components)",
-                    pcb_ui::icons::success(),
-                    file_name.with_style(Style::Green).bold(),
-                    component_count
-                );
             }
         } else {
-            spinner.error(format!("{file_name}: No output generated"));
-            has_errors = true;
+            // Print success with component count
+            let component_count = schematic
+                .instances
+                .values()
+                .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+                .count();
+            eprintln!(
+                "{} {} ({} components)",
+                pcb_ui::icons::success(),
+                file_name.with_style(Style::Green).bold(),
+                component_count
+            );
         }
     }
 

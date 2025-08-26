@@ -42,7 +42,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         // Resolve the path using the load resolver
         let resolved_path = load_resolver
-            .resolve_path(file_provider.as_ref(), &path, current_file)
+            .resolve_path(&path, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve file path '{}': {}", path, e))?;
 
         // Verify the path exists (either as a file or directory)

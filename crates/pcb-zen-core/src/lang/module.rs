@@ -445,14 +445,15 @@ where
                 );
                 let mut diag = EvalMessage::from_any_error(Path::new(call_site.filename()), &msg);
                 diag.span = Some(call_site.resolve_span());
-                eval.add_diagnostic(crate::Diagnostic::from_eval_message(diag));
+                eval.add_diagnostic(diag);
             } else {
                 let msg = format!(
                     "Missing required argument `name` when instantiating module {}",
                     self.name
                 );
-                eval.add_diagnostic(crate::Diagnostic::from_eval_message(
-                    EvalMessage::from_any_error(Path::new(&self.source_path), &msg),
+                eval.add_diagnostic(EvalMessage::from_any_error(
+                    Path::new(&self.source_path),
+                    &msg,
                 ));
             }
 
@@ -473,11 +474,12 @@ where
             ctx
         };
 
-        let result = ctx
+        let (output, diagnostics) = ctx
             .set_source_path(std::path::PathBuf::from(&self.source_path))
             .set_module_name(final_name.clone())
             .set_inputs(input_map)
-            .eval();
+            .eval()
+            .unpack();
 
         let context = eval
             .module()
@@ -495,19 +497,33 @@ where
         // showing the same error twice: instead create a new diagnostic whose
         // primary span is the call-site inside the parent file and which
         // carries the child error(s) as `related` entries.
+        // For warnings, preserve them as warnings.
 
-        let had_diags = !result.diagnostics.is_empty();
+        let had_errors = diagnostics.has_errors();
 
-        for child in result.diagnostics.into_iter() {
+        for child in diagnostics.into_iter() {
             let diag_to_add = if let Some(cs) = &call_site {
-                // Build a new primary message pointing at this ModuleLoader call-site.
+                // Wrap both errors and warnings with call-site context
+                let (severity, message) = match child.severity {
+                    EvalSeverity::Error => (
+                        EvalSeverity::Error,
+                        format!("Error instantiating `{}`", self.name),
+                    ),
+                    EvalSeverity::Warning => (
+                        EvalSeverity::Warning,
+                        format!("Warning from `{}`", self.name),
+                    ),
+                    other => (other, format!("Issue in `{}`", self.name)),
+                };
+
                 Diagnostic {
                     path: cs.filename().to_string(),
                     span: Some(cs.resolve_span()),
-                    severity: EvalSeverity::Error,
-                    body: format!("Error instantiating `{}`", self.name),
+                    severity,
+                    body: message,
                     call_stack: Some(eval.call_stack().clone()),
                     child: Some(Box::new(child)),
+                    source_error: None,
                 }
             } else {
                 child
@@ -517,7 +533,7 @@ where
             context.add_diagnostic(diag_to_add);
         }
 
-        match result.output {
+        match output {
             Some(output) => {
                 // Add a reference to the dependent module's frozen heap so it stays alive.
                 eval.frozen_heap()
@@ -555,10 +571,11 @@ where
                         let mut unused_diag =
                             EvalMessage::from_any_error(Path::new(cs.filename()), &msg);
                         unused_diag.span = Some(cs.resolve_span());
-                        context.add_diagnostic(crate::Diagnostic::from_eval_message(unused_diag));
+                        context.add_diagnostic(unused_diag);
                     } else {
-                        context.add_diagnostic(crate::Diagnostic::from_eval_message(
-                            EvalMessage::from_any_error(Path::new(&self.source_path), &msg),
+                        context.add_diagnostic(EvalMessage::from_any_error(
+                            Path::new(&self.source_path),
+                            &msg,
                         ));
                     }
                     // Continue execution without raising an error.
@@ -568,13 +585,13 @@ where
                 Ok(Value::new_none())
             }
             None => {
-                if !had_diags {
+                if !had_errors {
                     if let Some(call_site) = eval.call_stack_top_location() {
                         let msg = format!("Failed to instantiate module {}", self.name);
                         let mut call_diag =
                             EvalMessage::from_any_error(Path::new(call_site.filename()), &msg);
                         call_diag.span = Some(call_site.resolve_span());
-                        context.add_diagnostic(crate::Diagnostic::from_eval_message(call_diag));
+                        context.add_diagnostic(call_diag);
                     }
                 }
                 Ok(Value::new_none())
@@ -848,9 +865,24 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .ok_or_else(|| anyhow::anyhow!("No source path available"))?;
 
         // Resolve the path using the load resolver
+        let mut resolve_context = load_resolver.resolve_context(&path, current_file)?;
         let resolved_path = load_resolver
-            .resolve_path(file_provider.as_ref(), &path, current_file)
+            .resolve(&mut resolve_context)
             .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
+
+        // Increment module counter - this happens before warning generation
+        parent_context.increment_module_counter();
+
+        let span = parent_context.resolve_span_for_current_module(&path);
+
+        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
+            load_resolver.as_ref(),
+            current_file,
+            &resolve_context,
+            span,
+        ) {
+            parent_context.add_diagnostic(warning_diag);
+        }
 
         // Verify the resolved path exists
         if !file_provider.exists(&resolved_path) {

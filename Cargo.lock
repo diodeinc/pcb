@@ -2622,6 +2622,7 @@ dependencies = [
  "pcb-sch",
  "pcb-sim",
  "pcb-starlark-lsp",
+ "pcb-ui",
  "pcb-zen-core",
  "regex",
  "reqwest 0.12.21",

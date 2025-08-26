@@ -433,6 +433,25 @@ class VirtualItem:
         """Move this item by a relative offset."""
         raise NotImplementedError("Subclasses must implement move_by")
 
+    def move_to(self, x: int, y: int) -> None:
+        """Move this item to a specific position."""
+        if self.bbox:
+            dx = x - self.bbox.x
+            dy = y - self.bbox.y
+            self.move_by(dx, dy)
+
+    def get_position(self) -> Optional[Tuple[int, int]]:
+        """Get the position of this item."""
+        if self.bbox:
+            return (self.bbox.x, self.bbox.y)
+        return None
+
+    def get_center(self) -> Optional[Tuple[int, int]]:
+        """Get the center position of this item."""
+        if self.bbox:
+            return (self.bbox.center_x, self.bbox.center_y)
+        return None
+
     def intersects_with(self, other: "VirtualItem", margin: int = 0) -> bool:
         """Check if this item's bounding box intersects with another's."""
         if not self.bbox or not other.bbox:
@@ -450,73 +469,45 @@ class VirtualItem:
         raise NotImplementedError("Subclasses must implement render_tree")
 
 
-class VirtualFootprint(VirtualItem):
-    """Represents a real footprint with 1:1 mapping to KiCad footprint."""
+class VirtualElement(VirtualItem, ABC):
+    """Abstract base class for all PCB elements (footprints, zones, graphics)."""
+
+    def __init__(self, element_id: str, name: str, kicad_item: Any):
+        super().__init__(VirtualItemType.EDA_ITEM, element_id, name)
+        self.kicad_item = kicad_item
+        self.attributes: Dict[str, Any] = {}
+
+    @property
+    def bbox(self) -> Optional[VirtualBoundingBox]:
+        """Get bounding box from KiCad object."""
+        return get_kicad_bbox(self.kicad_item) if self.kicad_item else None
+
+    def move_by(self, dx: int, dy: int) -> None:
+        """Move element using KiCad's built-in Move method."""
+        if self.kicad_item:
+            self.kicad_item.Move(pcbnew.VECTOR2I(dx, dy))
+
+    def clone_to_board(self, target_board: pcbnew.BOARD) -> Any:
+        """Clone this element to a target board.
+
+        Since all KiCad EDA_ITEMs have Clone(), we can use a single implementation.
+        The target_board parameter is kept for API compatibility but not used.
+        """
+        return self.kicad_item.Clone()
+
+
+class VirtualFootprint(VirtualElement):
+    """Represents a footprint with position and orientation."""
 
     def __init__(
         self,
         fp_id: str,
         name: str,
         kicad_footprint: Any,  # pcbnew.FOOTPRINT
-        bbox: VirtualBoundingBox,
+        bbox: VirtualBoundingBox,  # Kept for API compatibility but not used
     ):
-        super().__init__(VirtualItemType.EDA_ITEM, fp_id, name)
-        self.kicad_footprint = kicad_footprint
-        self._bbox = bbox
-        self.attributes: Dict[str, Any] = {}
-
-    @property
-    def bbox(self) -> Optional[VirtualBoundingBox]:
-        """Get the current bounding box from the KiCad footprint."""
-        # Always return the current bbox from the actual footprint position
-        if self.kicad_footprint and hasattr(self.kicad_footprint, "GetBoundingBox"):
-            bb = get_kicad_bbox(self.kicad_footprint)
-            self._bbox = bb
-        return self._bbox
-
-    def move_by(self, dx: int, dy: int) -> None:
-        """Move the footprint by a relative offset."""
-        # Update the actual KiCad object
-        if self.kicad_footprint and hasattr(self.kicad_footprint, "SetPosition"):
-            pos = self.kicad_footprint.GetPosition()
-            self.kicad_footprint.SetPosition(pcbnew.VECTOR2I(pos.x + dx, pos.y + dy))
-
-        # Update cached bbox
-        if self._bbox:
-            self._bbox = VirtualBoundingBox(
-                self._bbox.x + dx,
-                self._bbox.y + dy,
-                self._bbox.width,
-                self._bbox.height,
-            )
-
-        # Notify parent groups to update their bboxes
-        parent = self.parent
-        while parent and isinstance(parent, VirtualGroup):
-            parent._cached_bbox = None  # Invalidate cache
-            parent = parent.parent
-
-    def move_to(self, x: int, y: int) -> None:
-        """Move the footprint to a specific position."""
-        if self.bbox:
-            dx = x - self.bbox.x
-            dy = y - self.bbox.y
-            self.move_by(dx, dy)
-
-    def get_position(self) -> Optional[Tuple[int, int]]:
-        """Get the position of this footprint."""
-        if self.kicad_footprint and hasattr(self.kicad_footprint, "GetPosition"):
-            pos = self.kicad_footprint.GetPosition()
-            return (pos.x, pos.y)
-        elif self._bbox:
-            return (self._bbox.x, self._bbox.y)
-        return None
-
-    def get_center(self) -> Optional[Tuple[int, int]]:
-        """Get the center position of this footprint."""
-        if self.bbox:
-            return (self.bbox.center_x, self.bbox.center_y)
-        return None
+        super().__init__(fp_id, name, kicad_footprint)
+        self.kicad_footprint = kicad_footprint  # Keep for compatibility
 
     def replace_with(self, source_footprint: "VirtualFootprint") -> None:
         """Copy position and properties from another footprint."""
@@ -524,8 +515,6 @@ class VirtualFootprint(VirtualItem):
             self._copy_kicad_properties(
                 source_footprint.kicad_footprint, self.kicad_footprint
             )
-        # Update bbox after copying properties
-        self._bbox = source_footprint._bbox
 
     def _copy_kicad_properties(self, source: Any, target: Any) -> None:
         """Copy position, orientation, etc from source to target KiCad object."""
@@ -581,6 +570,69 @@ class VirtualFootprint(VirtualItem):
             fpid_info = f" ({self.attributes['fpid']})"
 
         return f"{prefix}{self.name}{fpid_info}{status_str} {self.bbox}"
+
+
+class VirtualZone(VirtualElement):
+    """Represents a zone with polygon outline and net connectivity."""
+
+    def __init__(self, zone_id: str, name: str, kicad_zone: Any):
+        super().__init__(zone_id, name, kicad_zone)
+        self._source_net_code = kicad_zone.GetNetCode()
+
+    def apply_net_code_mapping(
+        self, net_code_map: Dict[int, int], target_board: pcbnew.BOARD
+    ) -> bool:
+        """Apply net code mapping to this zone."""
+        if self._source_net_code == 0:
+            return True  # No net zone
+
+        target_net_code = net_code_map.get(self._source_net_code, 0)
+        if target_net_code == 0:
+            logger.warning(
+                f"Zone {self.name}: No mapping for net code {self._source_net_code}"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+        target_net = target_board.FindNet(target_net_code)
+        if target_net:
+            self.kicad_item.SetNet(target_net)
+            return True
+        else:
+            logger.error(
+                f"Zone {self.name}: Target net code {target_net_code} not found"
+            )
+            self.kicad_item.SetNetCode(0)
+            return False
+
+    def render_tree(self, indent: int = 0) -> str:
+        """Render this zone as a string."""
+        prefix = "  " * indent
+        status_markers = []
+        if self.added:
+            status_markers.append("NEW")
+        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
+
+        net_info = f" (net:{self._source_net_code})"
+        return f"{prefix}Zone:{self.name}{net_info}{status_str} {self.bbox}"
+
+
+class VirtualGraphic(VirtualElement):
+    """Represents a graphic element (line, arc, text, etc)."""
+
+    def __init__(self, graphic_id: str, name: str, kicad_graphic: Any):
+        super().__init__(graphic_id, name, kicad_graphic)
+        self._type = kicad_graphic.GetClass()
+
+    def render_tree(self, indent: int = 0) -> str:
+        """Render this graphic as a string."""
+        prefix = "  " * indent
+        status_markers = []
+        if self.added:
+            status_markers.append("NEW")
+        status_str = f" [{', '.join(status_markers)}]" if status_markers else ""
+
+        return f"{prefix}Graphic:{self._type}{status_str} {self.bbox}"
 
 
 class VirtualGroup(VirtualItem):
@@ -645,31 +697,8 @@ class VirtualGroup(VirtualItem):
         for child in self.children:
             child.move_by(dx, dy)
 
-        # Invalidate our cached bbox and parent caches
+        # Invalidate our cached bbox
         self._cached_bbox = None
-        parent = self.parent
-        while parent and isinstance(parent, VirtualGroup):
-            parent._cached_bbox = None
-            parent = parent.parent
-
-    def move_to(self, x: int, y: int) -> None:
-        """Move this group to a specific position."""
-        if self.bbox:
-            dx = x - self.bbox.x
-            dy = y - self.bbox.y
-            self.move_by(dx, dy)
-
-    def get_center(self) -> Optional[Tuple[int, int]]:
-        """Get the center position of this group."""
-        if self.bbox:
-            return (self.bbox.center_x, self.bbox.center_y)
-        return None
-
-    def get_position(self) -> Optional[Tuple[int, int]]:
-        """Get the position (top-left) of this group."""
-        if self.bbox:
-            return (self.bbox.x, self.bbox.y)
-        return None
 
     def find_by_id(self, item_id: str) -> Optional[VirtualItem]:
         """Find an item by ID in this subtree."""
@@ -755,11 +784,15 @@ class VirtualBoard:
         return None
 
 
-def build_virtual_dom_from_board(board: pcbnew.BOARD) -> VirtualBoard:
-    """Build a virtual DOM from a KiCad board based on footprint paths.
+def build_virtual_dom_from_board(
+    board: pcbnew.BOARD, include_zones: bool = True, include_graphics: bool = True
+) -> VirtualBoard:
+    """Build a virtual DOM from a KiCad board including all element types.
 
     Args:
         board: The KiCad board to build from
+        include_zones: Whether to include zones in the DOM
+        include_graphics: Whether to include graphics in the DOM
 
     Returns:
         A VirtualBoard with the complete hierarchy
@@ -783,12 +816,19 @@ def build_virtual_dom_from_board(board: pcbnew.BOARD) -> VirtualBoard:
 
     # Create groups for all paths that have children
     module_groups = {}
+    kicad_groups = {}  # Map group names to KiCad PCB_GROUP objects
+
+    # First, track existing KiCad groups
+    for group in board.Groups():
+        if group.GetName():
+            kicad_groups[group.GetName()] = group
+
     for path in sorted_paths:
         # Check if this path has any children
         has_children = any(p != path and p.startswith(path + ".") for p in all_paths)
 
         if has_children:
-            # Groups don't have a direct KiCad object
+            # Create virtual group
             group = VirtualGroup(path, path)
             module_groups[path] = group
 
@@ -856,7 +896,135 @@ def build_virtual_dom_from_board(board: pcbnew.BOARD) -> VirtualBoard:
             # No path, add to root
             vboard.root.add_child(vfp)
 
+    # Add zones to virtual DOM
+    if include_zones:
+        for zone in board.Zones():
+            zone_uuid = (
+                str(zone.m_Uuid) if hasattr(zone, "m_Uuid") else str(uuid.uuid4())
+            )
+            zone_name = zone.GetZoneName() or f"Zone_{zone_uuid[:8]}"
+
+            vzone = VirtualZone(zone_uuid, zone_name, zone)
+
+            # Determine which group this zone belongs to by checking parent group
+            parent_group = (
+                zone.GetParentGroup() if hasattr(zone, "GetParentGroup") else None
+            )
+            if parent_group and parent_group.GetName() in module_groups:
+                module_groups[parent_group.GetName()].add_child(vzone)
+            else:
+                # Add to root if no parent group
+                vboard.root.add_child(vzone)
+
+    # Add graphics to virtual DOM
+    if include_graphics:
+        for drawing in board.GetDrawings():
+            # Skip items that belong to footprints
+            if drawing.GetParent() and isinstance(
+                drawing.GetParent(), pcbnew.FOOTPRINT
+            ):
+                continue
+
+            drawing_uuid = (
+                str(drawing.m_Uuid) if hasattr(drawing, "m_Uuid") else str(uuid.uuid4())
+            )
+            drawing_name = f"{drawing.GetClass()}_{drawing_uuid[:8]}"
+
+            vgraphic = VirtualGraphic(drawing_uuid, drawing_name, drawing)
+
+            # Determine which group this graphic belongs to
+            parent_group = (
+                drawing.GetParentGroup() if hasattr(drawing, "GetParentGroup") else None
+            )
+            if parent_group and parent_group.GetName() in module_groups:
+                module_groups[parent_group.GetName()].add_child(vgraphic)
+            else:
+                # Add to root if no parent group
+                vboard.root.add_child(vgraphic)
+
     return vboard
+
+
+def build_net_code_mapping(
+    source_board: pcbnew.BOARD,
+    target_board: pcbnew.BOARD,
+    matched_footprints: List[Tuple[VirtualFootprint, VirtualFootprint]],
+) -> Dict[int, int]:
+    """Build mapping of source net codes to target net codes via matched footprint pads.
+
+    Args:
+        source_board: The source layout board
+        target_board: The target board
+        matched_footprints: List of (source_fp, target_fp) pairs
+
+    Returns:
+        Dict mapping source_net_code -> target_net_code
+    """
+    net_code_map = {}
+
+    for source_vfp, target_vfp in matched_footprints:
+        source_fp = (
+            source_vfp.kicad_footprint
+            if hasattr(source_vfp, "kicad_footprint")
+            else source_vfp.kicad_item
+        )
+        target_fp = (
+            target_vfp.kicad_footprint
+            if hasattr(target_vfp, "kicad_footprint")
+            else target_vfp.kicad_item
+        )
+
+        if not source_fp or not target_fp:
+            continue
+
+        # Build pad mapping by pad name/number
+        source_pads = {pad.GetPadName(): pad for pad in source_fp.Pads()}
+        target_pads = {pad.GetPadName(): pad for pad in target_fp.Pads()}
+
+        for pad_name, source_pad in source_pads.items():
+            if pad_name not in target_pads:
+                continue
+
+            target_pad = target_pads[pad_name]
+            source_net_code = source_pad.GetNetCode()
+            target_net_code = target_pad.GetNetCode()
+
+            # Only map connected pads (net code 0 means no connection)
+            if source_net_code > 0 and target_net_code > 0:
+                if source_net_code in net_code_map:
+                    # Verify consistency
+                    if net_code_map[source_net_code] != target_net_code:
+                        source_net = source_board.FindNet(source_net_code)
+                        target_net = target_board.FindNet(target_net_code)
+                        source_name = (
+                            source_net.GetNetname() if source_net else "unknown"
+                        )
+                        target_name = (
+                            target_net.GetNetname() if target_net else "unknown"
+                        )
+                        logger.warning(
+                            f"Net code mapping conflict: {source_net_code} ({source_name}) "
+                            f"maps to both {net_code_map[source_net_code]} and {target_net_code} ({target_name})"
+                        )
+                else:
+                    net_code_map[source_net_code] = target_net_code
+
+                    # Log mapping for debugging
+                    if logger.isEnabledFor(logging.DEBUG):
+                        source_net = source_board.FindNet(source_net_code)
+                        target_net = target_board.FindNet(target_net_code)
+                        source_name = (
+                            source_net.GetNetname() if source_net else "unknown"
+                        )
+                        target_name = (
+                            target_net.GetNetname() if target_net else "unknown"
+                        )
+                        logger.debug(
+                            f"Mapped net {source_net_code} ({source_name}) -> "
+                            f"{target_net_code} ({target_name})"
+                        )
+
+    return net_code_map
 
 
 def get_kicad_bbox(item: Any) -> VirtualBoundingBox:
@@ -1434,11 +1602,19 @@ class ImportNetlist(Step):
                     if "." not in remainder:
                         direct_child_count += 1
 
-            # Only create group if it has more than one child
-            if direct_child_count > 1:
+            # Check if this module has a layout_path (will have graphics/zones)
+            has_layout = False
+            if path in self.netlist.modules:
+                module = self.netlist.modules[path]
+                if module.layout_path:
+                    has_layout = True
+
+            # Create group if it has children OR if it has a layout (which will have graphics/zones)
+            if direct_child_count > 1 or has_layout:
                 groups_to_create[path] = True
                 logger.debug(
                     f"Will create group {path} with {direct_child_count} children"
+                    + (" and layout" if has_layout else "")
                 )
 
         # Create or update groups, ensuring hierarchical structure
@@ -1598,7 +1774,7 @@ class SyncLayouts(Step):
         self.netlist = netlist
 
     def _sync_group_layout(self, group: VirtualGroup, layout_file: Path):
-        """Sync footprints in a group from a layout file."""
+        """Sync all elements (footprints, zones, graphics) in a group from a layout file."""
         # Load the layout file into a virtual board
         layout_board = pcbnew.LoadBoard(str(layout_file))
         layout_vboard = build_virtual_dom_from_board(layout_board)
@@ -1609,7 +1785,7 @@ class SyncLayouts(Step):
         # Get all footprints from the layout
         source_footprints = self._get_all_footprints(layout_vboard.root)
 
-        # Build maps for matching
+        # Build maps for matching footprints
         target_by_path = {}  # relative_path -> VirtualFootprint
         for fp in target_footprints:
             # Get the footprint's path relative to the group
@@ -1627,8 +1803,8 @@ class SyncLayouts(Step):
         for fp in source_footprints:
             source_by_path[fp.name] = fp
 
-        # Match footprints and sync
-        matched = 0
+        # Match footprints and build matched pairs
+        matched_pairs = []
         unmatched_target = []
         unmatched_source = []
 
@@ -1638,7 +1814,7 @@ class SyncLayouts(Step):
                 # Found a match - sync the footprint
                 source_fp = source_by_path[rel_path]
                 target_fp.replace_with(source_fp)
-                matched += 1
+                matched_pairs.append((source_fp, target_fp))
                 logger.debug(f"  Matched and synced: {target_fp.name}")
             else:
                 unmatched_target.append(target_fp.name)
@@ -1654,8 +1830,8 @@ class SyncLayouts(Step):
             if src_path not in matched_sources:
                 unmatched_source.append(src_path)
 
-                # Log results
-        logger.info(f"  Synced {matched} footprints")
+        # Log footprint results
+        logger.info(f"  Synced {len(matched_pairs)} footprints")
         if unmatched_target:
             logger.warning(
                 f"  {len(unmatched_target)} footprints in group had no match in layout:"
@@ -1670,9 +1846,80 @@ class SyncLayouts(Step):
             for fp in unmatched_source:
                 logger.info(f"    - {fp}")
 
-        # Mark the group as synced if we matched at least one footprint
-        if matched > 0:
+        # Only sync zones and graphics if we matched at least one footprint
+        if matched_pairs:
+            # Build net code mapping from matched footprints
+            net_code_map = build_net_code_mapping(
+                layout_board, self.board, matched_pairs
+            )
+
+            # Get all zones from source layout
+            zones_synced = 0
+            for zone in layout_board.Zones():
+                # Use Duplicate() to copy all zone properties automatically
+                new_zone = zone.Duplicate()
+
+                # Apply net code mapping (this is the only thing we need to update)
+                source_net_code = zone.GetNetCode()
+                if source_net_code in net_code_map:
+                    target_net_code = net_code_map[source_net_code]
+                    target_net = self.board.FindNet(target_net_code)
+                    if target_net:
+                        new_zone.SetNet(target_net)
+                else:
+                    new_zone.SetNetCode(0)
+
+                # Add to board
+                self.board.Add(new_zone)
+
+                # Create virtual zone and add to group
+                zone_uuid = str(uuid.uuid4())
+                vzone = VirtualZone(
+                    zone_uuid, zone.GetZoneName() or f"Zone_{zone_uuid[:8]}", new_zone
+                )
+                vzone.added = True
+                group.add_child(vzone)
+                zones_synced += 1
+
+            # Get all graphics from source layout
+            graphics_synced = 0
+            for drawing in layout_board.GetDrawings():
+                # Skip footprint graphics
+                if drawing.GetParent() and isinstance(
+                    drawing.GetParent(), pcbnew.FOOTPRINT
+                ):
+                    continue
+
+                # Use Duplicate() to copy all graphic properties automatically
+                new_drawing = drawing.Duplicate()
+
+                # Add to board
+                self.board.Add(new_drawing)
+
+                # Create virtual graphic and add to group
+                item_type = drawing.GetClass()
+                graphic_uuid = str(uuid.uuid4())
+                vgraphic = VirtualGraphic(
+                    graphic_uuid, f"{item_type}_{graphic_uuid[:8]}", new_drawing
+                )
+                vgraphic.added = True
+                group.add_child(vgraphic)
+                graphics_synced += 1
+
+            logger.info(f"  Synced {zones_synced} zones and {graphics_synced} graphics")
+
+            # Mark the group as synced
             group.synced = True
+
+            # Find and link to KiCad group if it exists
+            for kicad_group in self.board.Groups():
+                if kicad_group.GetName() == group.id:
+                    # Add zones and graphics to the KiCad group
+                    for child in group.children:
+                        if isinstance(child, (VirtualZone, VirtualGraphic)):
+                            kicad_group.AddItem(child.kicad_item)
+                    break
+
             logger.info(f"  Marked group {group.id} as synced")
 
     def _get_footprints_in_group(self, group: VirtualGroup) -> List[VirtualFootprint]:
@@ -1811,6 +2058,8 @@ class PlaceComponents(Step):
 
             if i == 0:
                 # First item serves as anchor at origin
+                # For synced groups, use rigid body transformation
+                # Move item to origin
                 item.move_to(0, 0)
                 placed_items.append(item)
                 # Add its corners as placement points
@@ -1874,6 +2123,8 @@ class PlaceComponents(Step):
 
                 if best_pt:
                     # Move to the best position found
+                    # For synced groups, use rigid body transformation
+                    # Move item to best position
                     item.move_to(best_pt[0], best_pt[1])
                     placed_items.append(item)
 
@@ -2055,7 +2306,7 @@ class PlaceComponents(Step):
             offset_y = target_y - added_bbox.center_y
 
         # Move all items in the sparse tree
-        # move_by will recursively move children and update parent bboxes
+        # Move all items by the calculated offset
         for item in top_level_added:
             item.move_by(offset_x, offset_y)
 
@@ -2198,7 +2449,26 @@ class FinalizeBoard(Step):
                     for item in get_group_items(group)
                     if isinstance(item, (pcbnew.PCB_SHAPE, pcbnew.PCB_TEXT))
                 ],
-                key=lambda g: (g["position"]["x"], g["position"]["y"]),
+                # Use a comprehensive sort key to ensure deterministic ordering even
+                # when multiple drawings share the same position. This prevents the
+                # output snapshot from changing across runs.
+                key=lambda g: (
+                    g["position"]["x"],
+                    g["position"]["y"],
+                    g.get("type") or "",
+                    g.get("layer") or "",
+                    # Start/end coordinates provide deterministic tie-breakers for shapes
+                    (g.get("start", {}).get("x") if g.get("start") else None) or -1,
+                    (g.get("start", {}).get("y") if g.get("start") else None) or -1,
+                    (g.get("end", {}).get("x") if g.get("end") else None) or -1,
+                    (g.get("end", {}).get("y") if g.get("end") else None) or -1,
+                    # Numeric attributes
+                    (g.get("angle") if g.get("angle") is not None else -1),
+                    (g.get("shape") if g.get("shape") is not None else -1),
+                    (g.get("width") if g.get("width") is not None else -1),
+                    # Text last to avoid impacting geometry-first ordering
+                    g.get("text") or "",
+                ),
             ),
             "locked": group.IsLocked(),
             "name": group.GetName(),
