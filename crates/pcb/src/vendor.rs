@@ -224,7 +224,6 @@ pub fn sync_tracked_files(
             fs::copy(path, dest_path)?;
             synced_files += 1;
         } else {
-            dbg!(&path, &dest_path);
             synced_files += copy_dir_all(path, dest_path)?;
         }
     }
