@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 use allocative::Allocative;
 use anyhow::anyhow;
-use serde_json;
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
 use starlark::eval::Evaluator;
@@ -12,19 +10,18 @@ use starlark::starlark_module;
 use starlark::starlark_simple_value;
 use starlark::values::list::AllocList;
 use starlark::values::starlark_value;
-use starlark::values::types::record::ty_record_type::TyRecordData;
-use starlark::values::types::record::{FrozenRecordType, RecordType};
 use starlark::values::{Demand, Heap, NoSerialize, StarlarkValue, Value, ValueLike};
 
 use crate::lang::eval::DeepCopyToHeap;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputValue;
+use crate::lang::module::validate_or_convert;
 
 /// Helper to access metadata store with error handling
-fn with_metadata_store<T, F>(eval: &Evaluator, f: F) -> anyhow::Result<T>
-where
-    F: FnOnce(&MetadataStore) -> T,
-{
+fn with_metadata_store<T>(
+    eval: &Evaluator,
+    f: impl FnOnce(&MetadataStore) -> T,
+) -> anyhow::Result<T> {
     eval.context_value()
         .ok_or_else(|| anyhow!("No evaluation context available for metadata operation"))?
         .parent_context()
@@ -32,31 +29,24 @@ where
 }
 
 /// Helper to access mutable metadata store with error handling  
-fn with_metadata_store_mut<T, F>(eval: &Evaluator, f: F) -> anyhow::Result<anyhow::Result<T>>
-where
-    F: FnOnce(&mut MetadataStore) -> anyhow::Result<T>,
-{
+fn with_metadata_store_mut<T>(
+    eval: &Evaluator,
+    f: impl FnOnce(&mut MetadataStore) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
     eval.context_value()
         .ok_or_else(|| anyhow!("No evaluation context available for metadata operation"))?
         .parent_context()
-        .with_metadata_store_mut(f)
-}
-
-/// Type information stored in metadata containers
-#[derive(Debug, Clone, Allocative)]
-pub enum MetadataTypeInfo {
-    /// Simple built-in types (str, int, float, bool, etc.)
-    Simple(String),
-    /// Complex record types with full type information
-    Record(Arc<TyRecordData>),
+        .with_metadata_store_mut(f)?
 }
 
 /// Global storage for metadata containers that persists across module boundaries.
-/// Uses JSON strings for storage to ensure values can cross module boundaries.
+/// Uses InputValue for storage to ensure values can cross module boundaries efficiently.
 #[derive(Debug)]
 pub struct MetadataStore {
-    /// Map from reference ID to list of JSON-serialized values
-    containers: HashMap<String, Vec<String>>,
+    /// Map from reference ID to list of InputValue entries
+    containers: HashMap<String, Vec<InputValue>>,
+    /// Map from reference ID to type name strings for validation and deserialization
+    type_names: HashMap<String, String>,
     /// Atomic counter for generating unique reference IDs
     ref_allocator: AtomicU64,
 }
@@ -65,6 +55,7 @@ impl Default for MetadataStore {
     fn default() -> Self {
         Self {
             containers: HashMap::new(),
+            type_names: HashMap::new(),
             ref_allocator: AtomicU64::new(1),
         }
     }
@@ -76,88 +67,55 @@ impl MetadataStore {
         format!("meta_{}", self.ref_allocator.fetch_add(1, Ordering::SeqCst))
     }
 
-    /// Push a JSON-serialized value to a container
-    pub fn push(&mut self, ref_id: &str, json_value: String) -> anyhow::Result<()> {
+    /// Register type name for a container
+    pub fn register_type_name(&mut self, ref_id: &str, type_name: String) {
+        self.type_names.insert(ref_id.to_string(), type_name);
+    }
+
+    /// Get type name for a container
+    pub fn get_type_name(&self, ref_id: &str) -> Option<&String> {
+        self.type_names.get(ref_id)
+    }
+
+    /// Push an InputValue to a container
+    pub fn push(&mut self, ref_id: &str, input_value: InputValue) -> anyhow::Result<()> {
         self.containers
             .entry(ref_id.to_string())
             .or_default()
-            .push(json_value);
+            .push(input_value);
         Ok(())
     }
 
     /// Get the most recently pushed value (latest)
-    pub fn get_latest(&self, ref_id: &str) -> Option<&String> {
+    pub fn get_latest(&self, ref_id: &str) -> Option<&InputValue> {
         self.containers.get(ref_id)?.last()
     }
 
     /// Get all values in chronological order
-    pub fn get_all(&self, ref_id: &str) -> Option<&Vec<String>> {
+    pub fn get_all(&self, ref_id: &str) -> Option<&Vec<InputValue>> {
         self.containers.get(ref_id)
     }
 }
 
-/// A metadata container that holds a reference ID and type information.
-/// The actual data is stored in the global MetadataStore.
+/// A metadata container that holds only a reference ID.
+/// The actual data and type information are stored in the global MetadataStore.
 #[derive(Debug, Clone, NoSerialize, ProvidesStaticType, Allocative)]
 pub struct MetadataContainer {
     /// Unique reference ID for this container
     pub ref_id: String,
-    /// Type information for validation and deserialization
-    pub type_info: MetadataTypeInfo,
 }
 
 impl MetadataContainer {
-    pub fn new(ref_id: String, type_info: MetadataTypeInfo) -> Self {
-        Self { ref_id, type_info }
+    pub fn new(ref_id: String) -> Self {
+        Self { ref_id }
     }
 
-    /// Get the type name for display and validation purposes
-    pub fn type_name(&self) -> &str {
-        match &self.type_info {
-            MetadataTypeInfo::Simple(name) => name,
-            MetadataTypeInfo::Record(ty_record_data) => &ty_record_data.name,
-        }
-    }
-
-    /// Deserialize a JSON string to a Starlark value based on type info
-    fn deserialize_value<'v>(
-        &self,
-        json_str: &str,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
-        let input_value: InputValue = serde_json::from_str(json_str)
-            .map_err(|e| anyhow!("Failed to deserialize JSON: {}", e))?;
-
-        match &self.type_info {
-            MetadataTypeInfo::Simple(_) => input_value.to_value(eval, None),
-            MetadataTypeInfo::Record(ty_record_data) => {
-                let type_value = eval.module().get(&ty_record_data.name);
-                input_value.to_value(eval, type_value)
-            }
-        }
-    }
-
-    /// Validate that a value matches this container's type
-    fn validate_type(&self, value: Value) -> anyhow::Result<()> {
-        let value_type = value.get_type();
-        let expected_type_name = self.type_name();
-
-        let type_matches = match &self.type_info {
-            MetadataTypeInfo::Simple(expected_type) => {
-                validate_simple_type(expected_type, value_type)
-            }
-            MetadataTypeInfo::Record(_) => value_type == "record",
-        };
-
-        if !type_matches && expected_type_name != "typing.Any" {
-            return Err(anyhow!(
-                "Type mismatch: expected {}, got {}",
-                expected_type_name,
-                value_type
-            ));
-        }
-
-        Ok(())
+    /// Get the type name for display purposes - requires access to MetadataStore
+    pub fn type_name(&self, store: &MetadataStore) -> String {
+        store
+            .get_type_name(&self.ref_id)
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string())
     }
 }
 
@@ -165,7 +123,7 @@ starlark_simple_value!(MetadataContainer);
 
 impl std::fmt::Display for MetadataContainer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MetadataContainer({}:{})", self.type_name(), self.ref_id)
+        write!(f, "MetadataContainer({})", self.ref_id)
     }
 }
 
@@ -180,52 +138,59 @@ impl<'v> StarlarkValue<'v> for MetadataContainer {
 
 impl DeepCopyToHeap for MetadataContainer {
     fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // MetadataContainer can be copied directly since it only contains
-        // a reference ID string and type information, both of which are cloneable
+        // MetadataContainer can be copied directly since it only contains a reference ID
         Ok(dst.alloc(self.clone()))
     }
 }
 
-/// Validate that a simple type matches the expected type
-fn validate_simple_type(expected_type: &str, value_type: &str) -> bool {
-    match expected_type {
-        "str" => value_type == "string",
-        "int" => value_type == "int",
-        "float" => value_type == "float",
-        "bool" => value_type == "bool",
-        "list" => value_type == "list",
-        "dict" => value_type == "dict",
-        other => {
-            if other.starts_with("enum(") && value_type == "enum" {
-                true
-            } else {
-                value_type == other
-            }
+/// Extract the type name that should be stored for a type constructor value.
+fn extract_type_name_for_storage<'v>(
+    type_value: Value<'v>,
+    eval: &Evaluator<'v, '_, '_>,
+) -> String {
+    let repr = type_value.to_string();
+
+    match (type_value.get_type(), repr.as_str()) {
+        ("function", builtin @ ("str" | "int" | "float" | "bool" | "list" | "dict")) => {
+            builtin.to_string()
         }
+        ("function", _) => {
+            // For custom types, find the variable name in the module
+            eval.module()
+                .names()
+                .filter_map(|name| {
+                    let name_str = name.as_str();
+                    eval.module()
+                        .get(name_str)
+                        .filter(|&value| value == type_value)
+                        .map(|_| name_str.to_string())
+                })
+                .next()
+                .unwrap_or(repr)
+        }
+        _ => repr, // Built-in types or other types
     }
 }
 
-/// Extract type info from a Starlark value
-fn extract_type_info(type_value: Value) -> anyhow::Result<MetadataTypeInfo> {
-    if let Some(rt) = type_value.downcast_ref::<RecordType>() {
-        let ty_record_data = rt
-            .ty_record_data()
-            .cloned()
-            .ok_or_else(|| anyhow!("Record type must be assigned to a variable"))?;
-        Ok(MetadataTypeInfo::Record(ty_record_data))
-    } else if let Some(frt) = type_value.downcast_ref::<FrozenRecordType>() {
-        let ty_record_data = frt
-            .ty_record_data()
-            .cloned()
-            .ok_or_else(|| anyhow!("Record type must be assigned to a variable"))?;
-        Ok(MetadataTypeInfo::Record(ty_record_data))
-    } else {
-        let type_name = if type_value.get_type() == "function" {
-            type_value.to_string()
-        } else {
-            type_value.get_type().to_string()
-        };
-        Ok(MetadataTypeInfo::Simple(type_name))
+/// Extract MetadataContainer from a Starlark Value
+fn extract_container(value: Value<'_>) -> anyhow::Result<&MetadataContainer> {
+    value
+        .downcast_ref::<MetadataContainer>()
+        .ok_or_else(|| anyhow!("Expected MetadataContainer"))
+}
+
+/// Get the type value for deserialization based on stored type name
+fn get_type_value_for_deserialization<'v>(
+    eval: &mut Evaluator<'v, '_, '_>,
+    ref_id: &str,
+) -> anyhow::Result<Option<Value<'v>>> {
+    let type_name = with_metadata_store(eval, |store| store.get_type_name(ref_id).cloned())?
+        .ok_or_else(|| anyhow!("No type information found for container {}", ref_id))?;
+
+    // Built-in types don't need type guidance for deserialization
+    match type_name.as_str() {
+        "str" | "int" | "float" | "bool" | "list" | "dict" => Ok(None),
+        _ => Ok(eval.module().get(&type_name)), // Look up custom type constructor
     }
 }
 
@@ -237,8 +202,16 @@ pub fn metadata_globals(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let ref_id = with_metadata_store(eval, |store| store.allocate_ref())?;
-        let type_info = extract_type_info(type_value)?;
-        let container = MetadataContainer::new(ref_id, type_info);
+
+        let type_name = extract_type_name_for_storage(type_value, eval);
+
+        // Register the type name in the store
+        with_metadata_store_mut(eval, |store| {
+            store.register_type_name(&ref_id, type_name);
+            Ok(())
+        })?;
+
+        let container = MetadataContainer::new(ref_id);
         Ok(eval.heap().alloc(container))
     }
 
@@ -248,17 +221,17 @@ pub fn metadata_globals(builder: &mut GlobalsBuilder) {
         value: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        let container = container
-            .downcast_ref::<MetadataContainer>()
-            .ok_or_else(|| anyhow!("Expected MetadataContainer"))?;
+        let container = extract_container(container)?;
 
-        container.validate_type(value)?;
+        let type_value_opt = get_type_value_for_deserialization(eval, &container.ref_id)?;
 
-        let input_value = InputValue::from_value(value);
-        let json_value = serde_json::to_string(&input_value)
-            .map_err(|e| anyhow!("Failed to serialize value to JSON: {}", e))?;
+        let validated_value = type_value_opt
+            .map(|type_value| validate_or_convert("metadata_value", value, type_value, None, eval))
+            .transpose()?
+            .unwrap_or(value); // Built-in types - accept as-is
 
-        with_metadata_store_mut(eval, |store| store.push(&container.ref_id, json_value))??;
+        let input_value = InputValue::from_value(validated_value);
+        with_metadata_store_mut(eval, |store| store.push(&container.ref_id, input_value))?;
 
         Ok(Value::new_none())
     }
@@ -268,22 +241,20 @@ pub fn metadata_globals(builder: &mut GlobalsBuilder) {
         container: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        let container = container
-            .downcast_ref::<MetadataContainer>()
-            .ok_or_else(|| anyhow!("Expected MetadataContainer"))?;
+        let container = extract_container(container)?;
 
-        let json_values = with_metadata_store(eval, |store| {
+        let input_values = with_metadata_store(eval, |store| {
             store
                 .get_all(&container.ref_id)
                 .cloned()
                 .unwrap_or_default()
         })?;
 
-        let mut list_values = Vec::new();
-        for json_str in &json_values {
-            let starlark_value = container.deserialize_value(json_str, eval)?;
-            list_values.push(starlark_value);
-        }
+        let type_value = get_type_value_for_deserialization(eval, &container.ref_id)?;
+        let list_values = input_values
+            .iter()
+            .map(|input_value| input_value.to_value(eval, type_value))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(eval.heap().alloc(AllocList(list_values)).to_value())
     }
@@ -293,15 +264,13 @@ pub fn metadata_globals(builder: &mut GlobalsBuilder) {
         container: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        let container = container
-            .downcast_ref::<MetadataContainer>()
-            .ok_or_else(|| anyhow!("Expected MetadataContainer"))?;
+        let container = extract_container(container)?;
 
-        let json_opt =
-            with_metadata_store(eval, |store| store.get_latest(&container.ref_id).cloned())?;
-
-        match json_opt {
-            Some(json_value) => container.deserialize_value(&json_value, eval),
+        match with_metadata_store(eval, |store| store.get_latest(&container.ref_id).cloned())? {
+            Some(input_value) => {
+                let type_value = get_type_value_for_deserialization(eval, &container.ref_id)?;
+                input_value.to_value(eval, type_value)
+            }
             None => Ok(Value::new_none()),
         }
     }
@@ -327,44 +296,39 @@ mod tests {
         let mut store = MetadataStore::default();
         let ref_id = store.allocate_ref();
 
-        store.push(&ref_id, "\"hello\"".to_string()).unwrap();
-        store.push(&ref_id, "\"world\"".to_string()).unwrap();
+        store
+            .push(&ref_id, InputValue::String("hello".to_string()))
+            .unwrap();
+        store
+            .push(&ref_id, InputValue::String("world".to_string()))
+            .unwrap();
 
-        assert_eq!(store.get_latest(&ref_id), Some(&"\"world\"".to_string()));
+        assert_eq!(
+            store.get_latest(&ref_id),
+            Some(&InputValue::String("world".to_string()))
+        );
         assert_eq!(store.get_all(&ref_id).unwrap().len(), 2);
     }
 
     #[test]
     fn test_metadata_container_creation() {
-        let container = MetadataContainer::new(
-            "test_ref".to_string(),
-            MetadataTypeInfo::Simple("str".to_string()),
-        );
+        let container = MetadataContainer::new("test_ref".to_string());
         assert_eq!(container.ref_id, "test_ref");
-        assert_eq!(container.type_name(), "str");
     }
 
     #[test]
-    fn test_metadata_type_info() {
-        // Test simple type info
-        let simple_info = MetadataTypeInfo::Simple("str".to_string());
-        match simple_info {
-            MetadataTypeInfo::Simple(name) => assert_eq!(name, "str"),
-            _ => panic!("Expected Simple type info"),
-        }
+    fn test_metadata_type_name_storage() {
+        let mut store = MetadataStore::default();
+        let ref_id = store.allocate_ref();
 
-        // Test container creation and type_name method
-        let container = MetadataContainer::new(
-            "test_ref".to_string(),
-            MetadataTypeInfo::Simple("int".to_string()),
-        );
+        // Register type name
+        store.register_type_name(&ref_id, "str".to_string());
 
-        assert_eq!(container.ref_id, "test_ref");
-        assert_eq!(container.type_name(), "int");
+        // Check type name retrieval
+        assert_eq!(store.get_type_name(&ref_id), Some(&"str".to_string()));
 
-        match &container.type_info {
-            MetadataTypeInfo::Simple(name) => assert_eq!(name, "int"),
-            _ => panic!("Container should have Simple type info"),
-        }
+        // Test type name display with store
+        let container = MetadataContainer::new(ref_id.clone());
+        assert_eq!(container.type_name(&store), "str");
     }
 }
