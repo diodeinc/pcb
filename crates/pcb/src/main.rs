@@ -24,7 +24,7 @@ mod workspace;
 #[command(version)]
 struct Cli {
     /// Enable debug logging
-    #[arg(short = 'd', long = "debug", global = true)]
+    #[arg(short = 'd', long = "debug", global = true, hide = true)]
     debug: bool,
     #[command(subcommand)]
     command: Commands,
