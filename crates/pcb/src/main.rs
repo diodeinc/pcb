@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
     let env = if cli.debug {
         Env::default().default_filter_or("debug")
     } else {
-        Env::default().default_filter_or("info")
+        Env::default().default_filter_or("error")
     };
     env_logger::Builder::from_env(env).init();
 
