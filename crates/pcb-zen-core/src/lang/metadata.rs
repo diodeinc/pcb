@@ -14,8 +14,9 @@ use starlark::values::list::AllocList;
 use starlark::values::starlark_value;
 use starlark::values::types::record::ty_record_type::TyRecordData;
 use starlark::values::types::record::{FrozenRecordType, RecordType};
-use starlark::values::{NoSerialize, StarlarkValue, Value, ValueLike};
+use starlark::values::{Demand, Heap, NoSerialize, StarlarkValue, Value, ValueLike};
 
+use crate::lang::eval::DeepCopyToHeap;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputValue;
 
@@ -171,6 +172,18 @@ impl std::fmt::Display for MetadataContainer {
 #[starlark_value(type = "MetadataContainer")]
 impl<'v> StarlarkValue<'v> for MetadataContainer {
     type Canonical = MetadataContainer;
+
+    fn provide(&'v self, demand: &mut Demand<'_, 'v>) {
+        demand.provide_value::<&dyn DeepCopyToHeap>(self);
+    }
+}
+
+impl DeepCopyToHeap for MetadataContainer {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // MetadataContainer can be copied directly since it only contains
+        // a reference ID string and type information, both of which are cloneable
+        Ok(dst.alloc(self.clone()))
+    }
 }
 
 /// Validate that a simple type matches the expected type

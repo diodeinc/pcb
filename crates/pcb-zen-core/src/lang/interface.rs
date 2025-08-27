@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::lang::context::ContextValue;
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::interface_validation::ensure_field_compat;
+use crate::lang::metadata::MetadataContainer;
 use crate::lang::net::{generate_net_id, NetValue};
 
 /// Get promotion key for any value
@@ -873,15 +874,17 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
 
                 let type_str = field_value.get_type();
 
-                // Accept Net type, Net instance, Interface factory, Interface instance, field() specs, or using() wrapped values
+                // Accept Net type, Net instance, Interface factory, Interface instance, field() specs, using() wrapped values, or metadata containers
                 if type_str == "NetType"
                     || type_str == "Net"
                     || type_str == "InterfaceValue"
                     || type_str == "field"
+                    || type_str == "MetadataContainer"
                     || field_value.downcast_ref::<InterfaceFactory<'v>>().is_some()
                     || field_value
                         .downcast_ref::<FrozenInterfaceFactory>()
                         .is_some()
+                    || field_value.downcast_ref::<MetadataContainer>().is_some()
                 {
                     // If a Net instance literal was provided as a template field,
                     // unregister it from the current module so it does not count as
@@ -901,7 +904,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     fields.insert(name.clone(), field_value);
                 } else {
                     return Err(anyhow::anyhow!(
-                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, field() specification, or using() wrapped value, got `{}`",
+                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, field() specification, using() wrapped value, or metadata container, got `{}`",
                         name,
                         type_str
                     ));
@@ -984,9 +987,14 @@ fn instantiate_interface<'v>(
         return copy_value(spec, heap);
     }
 
-    // 5. Fallback
+    // 5. Metadata container - copy directly
+    if spec.get_type() == "MetadataContainer" {
+        return copy_value(spec, heap);
+    }
+
+    // 6. Fallback
     Err(anyhow::anyhow!(
-        "internal error: expected spec to be InterfaceFactory/Net/InterfaceValue/NetType, got {}",
+        "internal error: expected spec to be InterfaceFactory/Net/InterfaceValue/NetType/MetadataContainer, got {}",
         spec.get_type()
     ))
 }
