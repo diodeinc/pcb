@@ -668,3 +668,660 @@ snapshot_eval!(config_mixed_numeric_types, {
         )
     "#
 });
+
+snapshot_eval!(record_enum_deserialization, {
+    "test.zen" => r#"
+        # Test record with enum field serialization/deserialization
+        
+        # Define enum and record types
+        UnitEnum = enum("V", "A", "K")
+        UnitRecord = record(
+            value = field(float),
+            unit = field(UnitEnum, UnitEnum("V")),
+            tolerance = field(float, 0.0)
+        )
+        
+        # Create a record instance
+        voltage = UnitRecord(value=3.3, unit=UnitEnum("V"), tolerance=0.05)
+        print("Original voltage record:", voltage)
+        
+        # Test serialize/deserialize round-trip
+        serialized = serialize(voltage)
+        print("Serialized JSON:", serialized)
+        deserialized = deserialize(UnitRecord, serialized)
+        print("Deserialized voltage:", deserialized)
+        
+        # Verify the deserialized values match
+        check(deserialized.value == voltage.value, "Value should match")
+        check(str(deserialized.unit) == str(voltage.unit), "Unit should match")
+        check(deserialized.tolerance == voltage.tolerance, "Tolerance should match")
+        
+        # Test with different enum variant
+        current = UnitRecord(value=0.1, unit=UnitEnum("A"))
+        print("Original current record:", current)
+        curr_serialized = serialize(current)
+        print("Current serialized JSON:", curr_serialized)
+        curr_deserialized = deserialize(UnitRecord, curr_serialized)
+        print("Deserialized current:", curr_deserialized)
+        
+        check(curr_deserialized.value == 0.1, "Current value should be 0.1")
+        check(str(curr_deserialized.unit) == "UnitEnum(\"A\")", "Current unit should be A")
+        check(curr_deserialized.tolerance == 0.0, "Default tolerance should be 0.0")
+    "#
+});
+
+snapshot_eval!(record_enum_metadata_integration, {
+    "test.zen" => r#"
+        # Test record with enum fields in metadata system
+        
+        # Define types
+        TempEnum = enum("K", "C", "F")  
+        TempRecord = record(
+            value = field(float),
+            unit = field(TempEnum, TempEnum("K")),
+            tolerance = field(float, 0.0)
+        )
+        
+        # Create metadata container
+        temp_metadata = metadata(TempRecord)
+        
+        # Store multiple temperature records
+        temp1 = TempRecord(value=25.0, unit=TempEnum("K"), tolerance=0.1)
+        temp2 = TempRecord(value=100.0, unit=TempEnum("C"))  # Use default tolerance
+        
+        push_metadata(temp_metadata, temp1)
+        push_metadata(temp_metadata, temp2)
+        
+        # Retrieve and verify - values are already deserialized
+        latest_temp = get_metadata(temp_metadata)
+        all_temps = list_metadata(temp_metadata)
+        
+        print("Latest temperature (auto-deserialized):", latest_temp)
+        print("Latest temp value:", latest_temp.value)
+        print("Latest temp unit:", latest_temp.unit)
+        print("All temperatures:", all_temps)
+        print("Number of temperatures:", len(all_temps))
+        
+        # Verify latest temperature (already deserialized)
+        check(latest_temp.value == 100.0, "Latest temp value should be 100.0")
+        check(str(latest_temp.unit) == "TempEnum(\"C\")", "Latest temp unit should be C")
+        
+        # Verify all temperatures (already deserialized)
+        check(len(all_temps) == 2, "Should have 2 temperature records")
+        check(all_temps[0].value == 25.0, "First temp should be 25.0")
+        check(str(all_temps[0].unit) == "TempEnum(\"K\")", "First temp unit should be K")
+        check(all_temps[1].value == 100.0, "Second temp should be 100.0")
+        check(str(all_temps[1].unit) == "TempEnum(\"C\")", "Second temp unit should be C")
+    "#
+});
+
+snapshot_eval!(comprehensive_serialization_test, {
+    "test.zen" => r#"
+        # Test comprehensive serialize/deserialize functionality
+        print("=== Comprehensive Serialization Test ===")
+        
+        # Test 1: Simple types serialization
+        print("\n1. Testing simple types...")
+        
+        # String
+        str_val = "hello world"
+        str_json = serialize(str_val)
+        str_deser = deserialize(str, str_json)
+        check(str_val == str_deser, "String serialize/deserialize should work")
+        print("String:", str_val, "->", str_json, "->", str_deser)
+        
+        # Int
+        int_val = 42
+        int_json = serialize(int_val)
+        int_deser = deserialize(int, int_json)
+        check(int_val == int_deser, "Int serialize/deserialize should work")
+        print("Int:", int_val, "->", int_json, "->", int_deser)
+        
+        # Float
+        float_val = 3.14159
+        float_json = serialize(float_val)
+        float_deser = deserialize(float, float_json)
+        check(float_val == float_deser, "Float serialize/deserialize should work")
+        print("Float:", float_val, "->", float_json, "->", float_deser)
+        
+        # Bool
+        bool_val = True
+        bool_json = serialize(bool_val)
+        bool_deser = deserialize(bool, bool_json)
+        check(bool_val == bool_deser, "Bool serialize/deserialize should work")
+        print("Bool:", bool_val, "->", bool_json, "->", bool_deser)
+        
+        # List
+        list_val = [1, 2, "test", True]
+        list_json = serialize(list_val)
+        list_deser = deserialize(list, list_json)
+        check(list_val == list_deser, "List serialize/deserialize should work")
+        print("List length:", len(list_val), "==", len(list_deser))
+        
+        # Dict
+        dict_val = {"key1": "value1", "key2": 42, "key3": False}
+        dict_json = serialize(dict_val)
+        dict_deser = deserialize(dict, dict_json)
+        check(dict_val == dict_deser, "Dict serialize/deserialize should work")
+        print("Dict keys:", len(dict_val), "==", len(dict_deser))
+        
+        print("✓ Simple types serialization works")
+        
+        # Test 2: Record with enum serialization
+        print("\n2. Testing record with enum fields...")
+        
+        ColorEnum = enum("RED", "GREEN", "BLUE")
+        ItemRecord = record(
+            name = field(str),
+            color = field(ColorEnum, ColorEnum("RED")),
+            count = field(int, 1),
+            active = field(bool, True)
+        )
+        
+        item = ItemRecord(name="Widget", color=ColorEnum("BLUE"), count=5, active=False)
+        item_json = serialize(item)
+        item_deser = deserialize(ItemRecord, item_json)
+        
+        print("Original item:", item)
+        print("Serialized:", item_json)
+        print("Deserialized:", item_deser)
+        
+        check(item.name == item_deser.name, "Item name should match")
+        check(str(item.color) == str(item_deser.color), "Item color should match")
+        check(item.count == item_deser.count, "Item count should match")
+        check(item.active == item_deser.active, "Item active should match")
+        
+        print("✓ Record with enum serialization works")
+        
+        # Test 3: Metadata with mixed types
+        print("\n3. Testing metadata with mixed types...")
+        
+        # Simple type metadata
+        str_meta = metadata(str)
+        int_meta = metadata(int)
+        
+        # Record type metadata
+        item_meta = metadata(ItemRecord)
+        
+        # Store values
+        push_metadata(str_meta, "metadata test")
+        push_metadata(int_meta, 999)
+        push_metadata(item_meta, item)
+        
+        # Retrieve (already deserialized)
+        latest_str = get_metadata(str_meta)
+        latest_int = get_metadata(int_meta)
+        latest_item = get_metadata(item_meta)
+        
+        print("Retrieved string:", latest_str)
+        print("Retrieved int:", latest_int)
+        print("Retrieved item:", latest_item)
+        print("Retrieved item name:", latest_item.name)
+        print("Retrieved item color:", latest_item.color)
+        
+        check(latest_str == "metadata test", "String metadata should work")
+        check(latest_int == 999, "Int metadata should work")
+        check(latest_item.name == item.name, "Item metadata should preserve fields")
+        check(str(latest_item.color) == str(item.color), "Item metadata should preserve enum fields")
+        
+        print("✓ Mixed type metadata works")
+        
+        print("\n=== All Serialization Tests Passed! ===")
+    "#
+});
+
+snapshot_eval!(complex_record_enum_fields, {
+    "test.zen" => r#"
+        # Test record with multiple enum fields
+        
+        DirectionEnum = enum("NORTH", "SOUTH", "EAST", "WEST")
+        StatusEnum = enum("ACTIVE", "INACTIVE", "ERROR")
+        
+        DeviceRecord = record(
+            name = field(str),
+            direction = field(DirectionEnum, DirectionEnum("NORTH")),
+            status = field(StatusEnum, StatusEnum("ACTIVE")),
+            value = field(float, 0.0)
+        )
+        
+        # Create and test device record
+        device = DeviceRecord(
+            name="Sensor1",
+            direction=DirectionEnum("EAST"),
+            status=StatusEnum("ACTIVE"),
+            value=42.5
+        )
+        
+        # Test serialization round-trip
+        serialized = serialize(device)
+        deserialized = deserialize(DeviceRecord, serialized)
+        
+        # Verify all fields
+        check(deserialized.name == "Sensor1", "Name should match")
+        check(str(deserialized.direction) == "DirectionEnum(\"EAST\")", "Direction should be EAST")
+        check(str(deserialized.status) == "StatusEnum(\"ACTIVE\")", "Status should be ACTIVE")
+        check(deserialized.value == 42.5, "Value should be 42.5")
+        
+        # Test metadata storage - values are already deserialized
+        device_metadata = metadata(DeviceRecord)
+        push_metadata(device_metadata, device)
+        
+        retrieved = get_metadata(device_metadata)  # Already returns deserialized record
+        print("Retrieved device from metadata:", retrieved)
+        print("Retrieved device name:", retrieved.name)
+        print("Retrieved device direction:", retrieved.direction)
+        print("Retrieved device status:", retrieved.status)
+        print("Retrieved device value:", retrieved.value)
+        
+        check(retrieved.name == device.name, "Retrieved name should match")
+        check(str(retrieved.direction) == str(device.direction), "Retrieved direction should match")
+        check(str(retrieved.status) == str(device.status), "Retrieved status should match")
+    "#
+});
+
+snapshot_eval!(serialize_deserialize_simple_types, {
+    "test.zen" => r#"
+        # Dedicated serialize/deserialize tests for simple types (no metadata)
+        print("=== Simple Types Serialize/Deserialize Test ===")
+        
+        # Test 1: String types
+        print("\n1. Testing string serialization...")
+        test_strings = ["hello", "world with spaces", "unicode: ñ", "", "123"]
+        for s in test_strings:
+            json_str = serialize(s)
+            restored = deserialize(str, json_str)
+            check(s == restored, "String " + s + " should round-trip correctly")
+            print("String:", repr(s), "->", json_str, "->", repr(restored))
+        
+        # Test 2: Numeric types
+        print("\n2. Testing numeric types...")
+        test_ints = [0, 1, -1, 42, -999, 2147483647]
+        for i in test_ints:
+            json_str = serialize(i)
+            restored = deserialize(int, json_str)
+            check(i == restored, "Int " + str(i) + " should round-trip correctly")
+            print("Int:", i, "->", json_str, "->", restored)
+        
+        test_floats = [0.0, 1.0, -1.0, 3.14159, -2.71828, 1e-10, 1e10]
+        for f in test_floats:
+            json_str = serialize(f)
+            restored = deserialize(float, json_str)
+            check(f == restored, "Float " + str(f) + " should round-trip correctly")
+            print("Float:", f, "->", json_str, "->", restored)
+        
+        # Test 3: Boolean types
+        print("\n3. Testing boolean types...")
+        for b in [True, False]:
+            json_str = serialize(b)
+            restored = deserialize(bool, json_str)
+            check(b == restored, "Bool " + str(b) + " should round-trip correctly")
+            print("Bool:", b, "->", json_str, "->", restored)
+        
+        print("✓ Simple types serialize/deserialize correctly")
+    "#
+});
+
+snapshot_eval!(serialize_deserialize_collections, {
+    "test.zen" => r#"
+        # Test serialize/deserialize for collections (no metadata)
+        print("=== Collections Serialize/Deserialize Test ===")
+        
+        # Test 1: Lists
+        print("\n1. Testing list serialization...")
+        test_lists = [
+            [],
+            [1, 2, 3],
+            ["a", "b", "c"],
+            [True, False],
+            [1, "mixed", 3.14, True],
+            [[1, 2], [3, 4]],  # Nested lists
+        ]
+        
+        for lst in test_lists:
+            json_str = serialize(lst)
+            restored = deserialize(list, json_str)
+            check(lst == restored, "List should round-trip correctly")
+            print("List length:", len(lst), "->", len(restored), "equal:", lst == restored)
+        
+        # Test 2: Dictionaries
+        print("\n2. Testing dict serialization...")
+        test_dicts = [
+            {},
+            {"key": "value"},
+            {"a": 1, "b": 2, "c": 3},
+            {"mixed": True, "types": 42, "here": 3.14},
+            {"nested": {"inner": "value"}},
+        ]
+        
+        for d in test_dicts:
+            json_str = serialize(d)
+            restored = deserialize(dict, json_str)
+            check(d == restored, "Dict should round-trip correctly")
+            print("Dict keys:", len(d), "->", len(restored), "equal:", d == restored)
+        
+        print("✓ Collections serialize/deserialize correctly")
+    "#
+});
+
+snapshot_eval!(serialize_deserialize_enums, {
+    "test.zen" => r#"
+        # Test serialize/deserialize for enum types (no metadata)
+        print("=== Enum Serialize/Deserialize Test ===")
+        
+        # Test 1: Basic enum
+        print("\n1. Testing basic enum...")
+        ColorEnum = enum("RED", "GREEN", "BLUE")
+        
+        for color_name in ["RED", "GREEN", "BLUE"]:
+            color = ColorEnum(color_name)
+            json_str = serialize(color)
+            restored = deserialize(ColorEnum, json_str)
+            
+            check(str(color) == str(restored), "Enum " + color_name + " should round-trip correctly")
+            print("Enum:", str(color), "->", json_str, "->", str(restored))
+        
+        # Test 2: Enum with numbers
+        print("\n2. Testing enum with numbers...")
+        StatusEnum = enum("STATUS_0", "STATUS_1", "STATUS_2")
+        
+        for status_name in ["STATUS_0", "STATUS_1", "STATUS_2"]:
+            status = StatusEnum(status_name)
+            json_str = serialize(status)
+            restored = deserialize(StatusEnum, json_str)
+            
+            check(str(status) == str(restored), "Status enum should round-trip correctly")
+            print("Status:", str(status), "->", json_str, "->", str(restored))
+        
+        print("✓ Enums serialize/deserialize correctly")
+    "#
+});
+
+snapshot_eval!(serialize_deserialize_records, {
+    "test.zen" => r#"
+        # Test serialize/deserialize for record types (no metadata)
+        print("=== Record Serialize/Deserialize Test ===")
+        
+        # Test 1: Simple record
+        print("\n1. Testing simple record...")
+        PersonRecord = record(
+            name = field(str),
+            age = field(int, 0),
+            active = field(bool, True)
+        )
+        
+        person = PersonRecord(name="Alice", age=30, active=True)
+        json_str = serialize(person)
+        restored = deserialize(PersonRecord, json_str)
+        
+        check(person.name == restored.name, "Person name should match")
+        check(person.age == restored.age, "Person age should match")
+        check(person.active == restored.active, "Person active should match")
+        print("Person:", person, "->", str(len(json_str)), "chars ->", restored)
+        
+        # Test 2: Record with enum fields
+        print("\n2. Testing record with enum fields...")
+        TypeEnum = enum("TYPE_A", "TYPE_B", "TYPE_C")
+        ItemRecord = record(
+            id = field(int),
+            name = field(str, "default"),
+            type = field(TypeEnum, TypeEnum("TYPE_A")),
+            value = field(float, 0.0)
+        )
+        
+        item = ItemRecord(id=42, name="Test Item", type=TypeEnum("TYPE_B"), value=99.5)
+        json_str = serialize(item)
+        restored = deserialize(ItemRecord, json_str)
+        
+        check(item.id == restored.id, "Item ID should match")
+        check(item.name == restored.name, "Item name should match") 
+        check(str(item.type) == str(restored.type), "Item type should match")
+        check(item.value == restored.value, "Item value should match")
+        print("Item:", item)
+        print("Restored:", restored)
+        
+        # Test 3: Record with defaults
+        print("\n3. Testing record with defaults...")
+        ConfigRecord = record(
+            enabled = field(bool, False),
+            count = field(int, 1),
+            name = field(str, "unnamed")
+        )
+        
+        config = ConfigRecord()  # Use all defaults
+        json_str = serialize(config)
+        restored = deserialize(ConfigRecord, json_str)
+        
+        check(config.enabled == restored.enabled, "Config enabled should match")
+        check(config.count == restored.count, "Config count should match")
+        check(config.name == restored.name, "Config name should match")
+        print("Default config:", config, "->", restored)
+        
+        print("✓ Records serialize/deserialize correctly")
+    "#
+});
+
+snapshot_eval!(serialize_deserialize_complex_types, {
+    "test.zen" => r#"
+        # Test serialize/deserialize for complex type combinations (no metadata)
+        print("=== Complex Type Serialize/Deserialize Test ===")
+        
+        # Test 1: Record with list and dict fields
+        print("\n1. Testing record with collection fields...")
+        
+        DataRecord = record(
+            name = field(str, ""),
+            tags = field(list, []),
+            metadata = field(dict, {}),
+            active = field(bool, True)
+        )
+        
+        data = DataRecord(
+            name="TestData",
+            tags=["tag1", "tag2", "tag3"],
+            metadata={"version": 1, "created": "2024-01-01"},
+            active=True
+        )
+        
+        json_str = serialize(data)
+        restored = deserialize(DataRecord, json_str)
+        
+        check(data.name == restored.name, "Name should match")
+        check(len(data.tags) == len(restored.tags), "Tags length should match")
+        check(len(data.metadata) == len(restored.metadata), "Metadata length should match")
+        check(data.active == restored.active, "Active should match")
+        
+        print("Original data:", data)
+        print("Restored data:", restored)
+        print("Tags match:", data.tags == restored.tags)
+        print("Metadata match:", data.metadata == restored.metadata)
+        
+        # Test 2: Mixed type list serialization
+        print("\n2. Testing mixed type lists...")
+        
+        mixed_list = [1, "hello", 3.14, True, [1, 2], {"key": "value"}]
+        json_str = serialize(mixed_list)
+        restored = deserialize(list, json_str)
+        
+        check(len(mixed_list) == len(restored), "Mixed list length should match")
+        check(mixed_list == restored, "Mixed list content should match")
+        
+        print("Original mixed list:", mixed_list)
+        print("Restored mixed list:", restored)
+        print("Lists equal:", mixed_list == restored)
+        
+        # Test 3: Complex nested dictionaries
+        print("\n3. Testing nested dictionaries...")
+        
+        complex_dict = {
+            "level1": {
+                "level2": {
+                    "values": [1, 2, 3],
+                    "flags": {"a": True, "b": False}
+                },
+                "count": 42
+            },
+            "simple": "value"
+        }
+        
+        json_str = serialize(complex_dict)
+        restored = deserialize(dict, json_str)
+        
+        check(complex_dict == restored, "Complex dict should match")
+        
+        print("Original dict keys:", len(complex_dict))
+        print("Restored dict keys:", len(restored))
+        print("Dicts equal:", complex_dict == restored)
+        print("Nested level2 equal:", complex_dict["level1"]["level2"] == restored["level1"]["level2"])
+        
+        print("✓ Complex types serialize/deserialize correctly")
+    "#
+});
+
+snapshot_eval!(enhanced_metadata_coverage, {
+    "test.zen" => r#"
+        # Enhanced metadata test coverage with comprehensive scenarios
+        print("=== Enhanced Metadata Coverage Test ===")
+        
+        # Test 1: Multiple containers of same type
+        print("\n1. Testing multiple containers of same type...")
+        
+        str_meta1 = metadata(str)
+        str_meta2 = metadata(str)
+        int_meta1 = metadata(int)
+        int_meta2 = metadata(int)
+        
+        push_metadata(str_meta1, "container1_value1")
+        push_metadata(str_meta1, "container1_value2")
+        push_metadata(str_meta2, "container2_value1")
+        
+        push_metadata(int_meta1, 100)
+        push_metadata(int_meta1, 200)
+        push_metadata(int_meta2, 999)
+        
+        # Verify isolation between containers
+        str1_latest = get_metadata(str_meta1)
+        str2_latest = get_metadata(str_meta2)
+        int1_all = list_metadata(int_meta1)
+        int2_all = list_metadata(int_meta2)
+        
+        check(str1_latest == "container1_value2", "String container 1 should have correct latest")
+        check(str2_latest == "container2_value1", "String container 2 should have correct latest")
+        check(len(int1_all) == 2, "Int container 1 should have 2 values")
+        check(len(int2_all) == 1, "Int container 2 should have 1 value")
+        
+        print("Container 1 latest string:", str1_latest)
+        print("Container 2 latest string:", str2_latest)
+        print("Container 1 int count:", len(int1_all))
+        print("Container 2 int count:", len(int2_all))
+        
+        # Test 2: Mixed record and enum metadata
+        print("\n2. Testing mixed record and enum metadata...")
+        
+        PriorityEnum = enum("LOW", "MEDIUM", "HIGH", "CRITICAL")
+        TaskRecord = record(
+            title = field(str, ""),
+            priority = field(PriorityEnum, PriorityEnum("MEDIUM")),
+            completed = field(bool, False),
+            points = field(int, 1)
+        )
+        
+        # Create containers
+        task_meta = metadata(TaskRecord)
+        
+        # Store different tasks
+        task1 = TaskRecord(title="Fix bug", priority=PriorityEnum("HIGH"), completed=False, points=3)
+        task2 = TaskRecord(title="Write docs", priority=PriorityEnum("LOW"), completed=True, points=1)
+        task3 = TaskRecord(title="Release", priority=PriorityEnum("CRITICAL"), points=5)
+        
+        push_metadata(task_meta, task1)
+        push_metadata(task_meta, task2)
+        push_metadata(task_meta, task3)
+        
+        # Retrieve and verify
+        all_tasks = list_metadata(task_meta)
+        latest_task = get_metadata(task_meta)
+        
+        print("Task count:", len(all_tasks))
+        print("Latest task title:", latest_task.title)
+        print("Latest task priority:", latest_task.priority)
+        print("Latest task completed:", latest_task.completed)
+        print("Latest task points:", latest_task.points)
+        
+        check(len(all_tasks) == 3, "Should have 3 tasks")
+        check(latest_task.title == "Release", "Latest task should be Release")
+        check(str(latest_task.priority) == "PriorityEnum(\"CRITICAL\")", "Latest task priority should be CRITICAL")
+        
+        # Test 3: Complex record with multiple enum fields
+        print("\n3. Testing complex record with multiple enum fields...")
+        
+        StatusEnum = enum("PENDING", "PROCESSING", "COMPLETED", "FAILED")
+        TypeEnum = enum("ORDER", "RETURN", "EXCHANGE")
+        
+        RequestRecord = record(
+            id = field(int, 0),
+            type = field(TypeEnum, TypeEnum("ORDER")),
+            status = field(StatusEnum, StatusEnum("PENDING")),
+            amount = field(float, 0.0),
+            notes = field(str, "")
+        )
+        
+        request_meta = metadata(RequestRecord)
+        
+        # Create various request types
+        req1 = RequestRecord(id=1001, type=TypeEnum("ORDER"), status=StatusEnum("COMPLETED"), amount=150.0, notes="First order")
+        req2 = RequestRecord(id=1002, type=TypeEnum("RETURN"), status=StatusEnum("PROCESSING"), amount=75.0, notes="Return item")
+        req3 = RequestRecord(id=1003, type=TypeEnum("EXCHANGE"), amount=200.0)  # Uses default PENDING status
+        
+        push_metadata(request_meta, req1)
+        push_metadata(request_meta, req2)
+        push_metadata(request_meta, req3)
+        
+        all_requests = list_metadata(request_meta)
+        latest_request = get_metadata(request_meta)
+        
+        print("Total requests:", len(all_requests))
+        print("Latest request ID:", latest_request.id)
+        print("Latest request type:", latest_request.type)
+        print("Latest request status:", latest_request.status)
+        
+        # Verify each request preserved correctly
+        check(all_requests[0].id == 1001, "First request ID should be 1001")
+        check(str(all_requests[0].type) == "TypeEnum(\"ORDER\")", "First request should be ORDER")
+        check(str(all_requests[0].status) == "StatusEnum(\"COMPLETED\")", "First request should be COMPLETED")
+        
+        check(all_requests[1].id == 1002, "Second request ID should be 1002")
+        check(str(all_requests[1].type) == "TypeEnum(\"RETURN\")", "Second request should be RETURN")
+        check(str(all_requests[1].status) == "StatusEnum(\"PROCESSING\")", "Second request should be PROCESSING")
+        
+        check(all_requests[2].id == 1003, "Third request ID should be 1003")
+        check(str(all_requests[2].type) == "TypeEnum(\"EXCHANGE\")", "Third request should be EXCHANGE")
+        check(str(all_requests[2].status) == "StatusEnum(\"PENDING\")", "Third request should use default PENDING")
+        
+        # Test 4: Empty metadata containers
+        print("\n4. Testing empty metadata containers...")
+        
+        empty_str_meta = metadata(str)
+        empty_task_meta = metadata(TaskRecord)
+        
+        empty_str_latest = get_metadata(empty_str_meta)
+        empty_str_list = list_metadata(empty_str_meta)
+        empty_task_latest = get_metadata(empty_task_meta)
+        empty_task_list = list_metadata(empty_task_meta)
+        
+        check(empty_str_latest == None, "Empty string metadata should return None")
+        check(len(empty_str_list) == 0, "Empty string metadata list should be empty")
+        check(empty_task_latest == None, "Empty task metadata should return None")
+        check(len(empty_task_list) == 0, "Empty task metadata list should be empty")
+        
+        print("Empty string latest:", empty_str_latest)
+        print("Empty string list length:", len(empty_str_list))
+        print("Empty task latest:", empty_task_latest)
+        print("Empty task list length:", len(empty_task_list))
+        
+        print("\n✓ Enhanced metadata coverage complete!")
+        print("✓ Multiple containers work independently")
+        print("✓ Complex records with multiple enums supported")
+        print("✓ Empty containers handle None correctly")
+        print("✓ All metadata operations preserve type information")
+    "#
+});

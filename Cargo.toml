@@ -10,11 +10,11 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "022889e9" }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "022889e9" }
+starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "022889e9" }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "022889e9" }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "022889e9" }
 
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }

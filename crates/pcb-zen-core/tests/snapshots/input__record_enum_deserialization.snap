@@ -1,0 +1,47 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Original voltage record: record[UnitRecord](value=3.3, unit=UnitEnum("V"), tolerance=0.05)
+Serialized JSON: {
+  "Record": {
+    "fields": {
+      "value": {
+        "Float": 3.3
+      },
+      "unit": {
+        "Enum": {
+          "variant": "V"
+        }
+      },
+      "tolerance": {
+        "Float": 0.05
+      }
+    }
+  }
+}
+Deserialized voltage: record[UnitRecord](value=3.3, unit=UnitEnum("V"), tolerance=0.05)
+Original current record: record[UnitRecord](value=0.1, unit=UnitEnum("A"), tolerance=0.0)
+Current serialized JSON: {
+  "Record": {
+    "fields": {
+      "value": {
+        "Float": 0.1
+      },
+      "unit": {
+        "Enum": {
+          "variant": "A"
+        }
+      },
+      "tolerance": {
+        "Float": 0.0
+      }
+    }
+  }
+}
+Deserialized current: record[UnitRecord](value=0.1, unit=UnitEnum("A"), tolerance=0.0)
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

@@ -47,6 +47,7 @@ fn default_file_provider() -> Arc<dyn crate::FileProvider> {
 use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
+    metadata::metadata_globals,
     module::{module_globals, FrozenModuleValue, ModuleLoader},
 };
 
@@ -180,6 +181,9 @@ struct EvalContextState {
     /// Map of paths that we are currently loading to the source file that triggered the load.
     /// This is used to detect cyclic imports and to skip in-flight files when loading directories.
     load_in_progress: HashMap<PathBuf, PathBuf>,
+
+    /// Global metadata store for mutable state that persists across module boundaries
+    metadata_store: crate::lang::metadata::MetadataStore,
 }
 
 /// RAII guard that automatically removes a path from the load_in_progress set when dropped.
@@ -398,6 +402,7 @@ impl EvalContext {
         .with(component_globals)
         .with(module_globals)
         .with(interface_globals)
+        .with(metadata_globals)
         .with(assert_globals)
         .with(file_globals)
         .with(model_globals)
@@ -1441,6 +1446,24 @@ impl EvalContext {
     /// Append a diagnostic that was produced while this context was active.
     pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
         self.diagnostics.borrow_mut().push(diag.into());
+    }
+
+    /// Access the metadata store mutably (for push operations)
+    pub fn with_metadata_store_mut<F, R>(&self, f: F) -> anyhow::Result<R>
+    where
+        F: FnOnce(&mut crate::lang::metadata::MetadataStore) -> R,
+    {
+        let mut state = self.state.lock().unwrap();
+        Ok(f(&mut state.metadata_store))
+    }
+
+    /// Access the metadata store immutably (for get/list operations)  
+    pub fn with_metadata_store<F, R>(&self, f: F) -> anyhow::Result<R>
+    where
+        F: FnOnce(&crate::lang::metadata::MetadataStore) -> R,
+    {
+        let state = self.state.lock().unwrap();
+        Ok(f(&state.metadata_store))
     }
 }
 

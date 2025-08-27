@@ -1,0 +1,62 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Comprehensive Serialization Test ===
+
+1. Testing simple types...
+String: hello world -> {
+  "String": "hello world"
+} -> hello world
+Int: 42 -> {
+  "Int": 42
+} -> 42
+Float: 3.14159 -> {
+  "Float": 3.14159
+} -> 3.14159
+Bool: True -> {
+  "Bool": true
+} -> True
+List length: 4 == 4
+Dict keys: 3 == 3
+✓ Simple types serialization works
+
+2. Testing record with enum fields...
+Original item: record[ItemRecord](name="Widget", color=ColorEnum("BLUE"), count=5, active=False)
+Serialized: {
+  "Record": {
+    "fields": {
+      "name": {
+        "String": "Widget"
+      },
+      "color": {
+        "Enum": {
+          "variant": "BLUE"
+        }
+      },
+      "count": {
+        "Int": 5
+      },
+      "active": {
+        "Bool": false
+      }
+    }
+  }
+}
+Deserialized: record[ItemRecord](name="Widget", color=ColorEnum("BLUE"), count=5, active=False)
+✓ Record with enum serialization works
+
+3. Testing metadata with mixed types...
+Retrieved string: metadata test
+Retrieved int: 999
+Retrieved item: record[ItemRecord](name="Widget", color=ColorEnum("BLUE"), count=5, active=False)
+Retrieved item name: Widget
+Retrieved item color: ColorEnum("BLUE")
+✓ Mixed type metadata works
+
+=== All Serialization Tests Passed! ===
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

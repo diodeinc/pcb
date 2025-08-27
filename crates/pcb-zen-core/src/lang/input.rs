@@ -164,10 +164,34 @@ impl InputValue {
                     ));
                 }
 
-                // Build named argument slice.
+                // Build named argument slice with proper enum resolution using field introspection
                 let mut named: Vec<(&str, Value<'v>)> = Vec::with_capacity(fields.len());
                 for (k, v) in fields.iter() {
-                    named.push((k.as_str(), v.to_value(eval, None)?));
+                    if matches!(v, InputValue::Unsupported(_)) {
+                        continue;
+                    }
+
+                    // Only provide expected_type for enum fields - get the enum constructor by name
+                    let expected_type = if matches!(v, InputValue::Enum { .. }) {
+                        let result = if let Some(rt) = typ_val.downcast_ref::<RecordType>() {
+                            rt.fields()
+                                .get(k)
+                                .and_then(|field| field.typ().custom_type_name())
+                                .and_then(|name| eval.module().get(name))
+                        } else if let Some(frt) = typ_val.downcast_ref::<FrozenRecordType>() {
+                            frt.fields()
+                                .get(k)
+                                .and_then(|field| field.typ().custom_type_name())
+                                .and_then(|name| eval.module().get(name))
+                        } else {
+                            None
+                        };
+                        result
+                    } else {
+                        None
+                    };
+
+                    named.push((k.as_str(), v.to_value(eval, expected_type)?));
                 }
 
                 eval.eval_function(typ_val, &[], &named)
