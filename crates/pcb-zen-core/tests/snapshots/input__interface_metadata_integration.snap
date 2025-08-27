@@ -1,0 +1,44 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Interface Metadata Integration Test ===
+
+1. Creating interface with metadata containers...
+✓ PowerInterface created with metadata containers
+
+2. Creating interface instance and using metadata...
+✓ Metadata operations on interface fields work
+
+3. Testing metadata retrieval...
+Latest voltage: 3.3
+All voltages: [3.3, 5.0, 3.3]
+Latest status: Voltage restored to 3.3V
+Status count: 3
+Latest measurement: {"timestamp": 2000, "current": 0.7}
+Measurement count: 2
+✓ Metadata retrieval from interface fields works
+
+4. Testing mixed interface with nets and metadata...
+Network traffic: Connection established
+Bandwidth history: [100.0, 150.0]
+Network protocol: UDP
+Data net name: NETWORK_DATA
+✓ Mixed interface with nets, metadata, and fields works
+
+5. Testing interface usage patterns...
+Standalone metadata latest: 100
+Standalone metadata all: [42, 100]
+✓ Standalone metadata containers work alongside interfaces
+
+=== Interface Metadata Integration Complete! ===
+✓ Interfaces can contain metadata container fields
+✓ Metadata operations work on interface fields
+✓ Mixed interfaces with nets, metadata, and regular fields work
+✓ Interface instances preserve metadata container functionality
+✓ Metadata containers integrate seamlessly with existing interface system
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

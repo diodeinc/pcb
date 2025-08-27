@@ -1325,3 +1325,142 @@ snapshot_eval!(enhanced_metadata_coverage, {
         print("✓ All metadata operations preserve type information")
     "#
 });
+
+snapshot_eval!(interface_metadata_integration, {
+    "test.zen" => r#"
+        # Test interface system integration with metadata containers
+        print("=== Interface Metadata Integration Test ===")
+        
+        # Test 1: Interface with metadata container fields
+        print("\n1. Creating interface with metadata containers...")
+        
+        PowerInterface = interface(
+            # Regular fields
+            label = field(str, ""),
+            voltage = field(float, 0.0),
+            
+            # Metadata container fields
+            voltage_history = metadata(float),
+            status_log = metadata(str),
+            measurements = metadata(dict)
+        )
+        
+        print("✓ PowerInterface created with metadata containers")
+        
+        # Test 2: Create interface instance and use metadata
+        print("\n2. Creating interface instance and using metadata...")
+        
+        power = PowerInterface(
+            "POWER_RAIL",
+            label="Main Power Rail",
+            voltage=3.3
+        )
+        
+        # Test metadata operations on interface fields
+        push_metadata(power.voltage_history, 3.3)
+        push_metadata(power.voltage_history, 5.0)
+        push_metadata(power.voltage_history, 3.3)
+        
+        push_metadata(power.status_log, "Power rail initialized")
+        push_metadata(power.status_log, "Voltage adjusted to 5.0V")
+        push_metadata(power.status_log, "Voltage restored to 3.3V")
+        
+        push_metadata(power.measurements, {"timestamp": 1000, "current": 0.5})
+        push_metadata(power.measurements, {"timestamp": 2000, "current": 0.7})
+        
+        print("✓ Metadata operations on interface fields work")
+        
+        # Test 3: Verify metadata access and retrieval
+        print("\n3. Testing metadata retrieval...")
+        
+        latest_voltage = get_metadata(power.voltage_history)
+        all_voltages = list_metadata(power.voltage_history)
+        
+        latest_status = get_metadata(power.status_log)
+        all_status = list_metadata(power.status_log)
+        
+        latest_measurement = get_metadata(power.measurements)
+        all_measurements = list_metadata(power.measurements)
+        
+        print("Latest voltage:", latest_voltage)
+        print("All voltages:", all_voltages)
+        print("Latest status:", latest_status)
+        print("Status count:", len(all_status))
+        print("Latest measurement:", latest_measurement)
+        print("Measurement count:", len(all_measurements))
+        
+        check(latest_voltage == 3.3, "Latest voltage should be 3.3")
+        check(len(all_voltages) == 3, "Should have 3 voltage entries")
+        check(latest_status == "Voltage restored to 3.3V", "Latest status should be restore message")
+        check(len(all_status) == 3, "Should have 3 status entries")
+        check(len(all_measurements) == 2, "Should have 2 measurement entries")
+        
+        print("✓ Metadata retrieval from interface fields works")
+        
+        # Test 4: Mixed interface with nets and metadata
+        print("\n4. Testing mixed interface with nets and metadata...")
+        
+        NetworkInterface = interface(
+            # Net fields
+            data_net = Net("DATA"),
+            control_net = Net("CTRL"),
+            
+            # Metadata fields
+            traffic_log = metadata(str),
+            bandwidth_history = metadata(float),
+            
+            # Regular fields
+            protocol = field(str, "TCP")
+        )
+        
+        network = NetworkInterface(
+            "NETWORK", 
+            protocol="UDP"
+        )
+        
+        # Test metadata on mixed interface
+        push_metadata(network.traffic_log, "Connection established")
+        push_metadata(network.bandwidth_history, 100.0)
+        push_metadata(network.bandwidth_history, 150.0)
+        
+        net_traffic = get_metadata(network.traffic_log)
+        bandwidth_list = list_metadata(network.bandwidth_history)
+        
+        print("Network traffic:", net_traffic)
+        print("Bandwidth history:", bandwidth_list)
+        print("Network protocol:", network.protocol)
+        print("Data net name:", network.data_net.name)
+        
+        check(net_traffic == "Connection established", "Network traffic should match")
+        check(len(bandwidth_list) == 2, "Should have 2 bandwidth entries")
+        check(network.protocol == "UDP", "Protocol should be UDP")
+        
+        print("✓ Mixed interface with nets, metadata, and fields works")
+        
+        # Test 5: Interface inheritance with metadata
+        print("\n5. Testing interface usage patterns...")
+        
+        # Test metadata containers as standalone fields work correctly
+        standalone_meta = metadata(int)
+        push_metadata(standalone_meta, 42)
+        push_metadata(standalone_meta, 100)
+        
+        standalone_latest = get_metadata(standalone_meta)
+        standalone_all = list_metadata(standalone_meta)
+        
+        print("Standalone metadata latest:", standalone_latest)
+        print("Standalone metadata all:", standalone_all)
+        
+        check(standalone_latest == 100, "Standalone metadata should work")
+        check(len(standalone_all) == 2, "Standalone metadata should have 2 entries")
+        
+        print("✓ Standalone metadata containers work alongside interfaces")
+        
+        print("\n=== Interface Metadata Integration Complete! ===")
+        print("✓ Interfaces can contain metadata container fields")
+        print("✓ Metadata operations work on interface fields")
+        print("✓ Mixed interfaces with nets, metadata, and regular fields work")
+        print("✓ Interface instances preserve metadata container functionality")
+        print("✓ Metadata containers integrate seamlessly with existing interface system")
+    "#
+});
