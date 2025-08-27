@@ -1,0 +1,14 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Retrieved device from metadata: record[DeviceRecord](name="Sensor1", direction=DirectionEnum("EAST"), status=StatusEnum("ACTIVE"), value=42.5)
+Retrieved device name: Sensor1
+Retrieved device direction: DirectionEnum("EAST")
+Retrieved device status: StatusEnum("ACTIVE")
+Retrieved device value: 42.5
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

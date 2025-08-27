@@ -1,0 +1,28 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Complex Type Serialize/Deserialize Test ===
+
+1. Testing record with collection fields...
+Original data: record[DataRecord](name="TestData", tags=["tag1", "tag2", "tag3"], metadata={"version": 1, "created": "2024-01-01"}, active=True)
+Restored data: record[DataRecord](name="TestData", tags=["tag1", "tag2", "tag3"], metadata={"version": 1, "created": "2024-01-01"}, active=True)
+Tags match: True
+Metadata match: True
+
+2. Testing mixed type lists...
+Original mixed list: [1, "hello", 3.14, True, [1, 2], {"key": "value"}]
+Restored mixed list: [1, "hello", 3.14, True, [1, 2], {"key": "value"}]
+Lists equal: True
+
+3. Testing nested dictionaries...
+Original dict keys: 2
+Restored dict keys: 2
+Dicts equal: True
+Nested level2 equal: True
+✓ Complex types serialize/deserialize correctly
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

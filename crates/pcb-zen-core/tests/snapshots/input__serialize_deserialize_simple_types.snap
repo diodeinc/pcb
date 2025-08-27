@@ -1,0 +1,77 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Simple Types Serialize/Deserialize Test ===
+
+1. Testing string serialization...
+String: "hello" -> {
+  "String": "hello"
+} -> "hello"
+String: "world with spaces" -> {
+  "String": "world with spaces"
+} -> "world with spaces"
+String: "unicode: \xf1" -> {
+  "String": "unicode: ñ"
+} -> "unicode: \xf1"
+String: "" -> {
+  "String": ""
+} -> ""
+String: "123" -> {
+  "String": "123"
+} -> "123"
+
+2. Testing numeric types...
+Int: 0 -> {
+  "Int": 0
+} -> 0
+Int: 1 -> {
+  "Int": 1
+} -> 1
+Int: -1 -> {
+  "Int": -1
+} -> -1
+Int: 42 -> {
+  "Int": 42
+} -> 42
+Int: -999 -> {
+  "Int": -999
+} -> -999
+Int: 2147483647 -> {
+  "Int": 2147483647
+} -> 2147483647
+Float: 0.0 -> {
+  "Float": 0.0
+} -> 0.0
+Float: 1.0 -> {
+  "Float": 1.0
+} -> 1.0
+Float: -1.0 -> {
+  "Float": -1.0
+} -> -1.0
+Float: 3.14159 -> {
+  "Float": 3.14159
+} -> 3.14159
+Float: -2.71828 -> {
+  "Float": -2.71828
+} -> -2.71828
+Float: 1e-10 -> {
+  "Float": 1e-10
+} -> 1e-10
+Float: 1e+10 -> {
+  "Float": 10000000000.0
+} -> 1e+10
+
+3. Testing boolean types...
+Bool: True -> {
+  "Bool": true
+} -> True
+Bool: False -> {
+  "Bool": false
+} -> False
+✓ Simple types serialize/deserialize correctly
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

@@ -1,0 +1,26 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Collections Serialize/Deserialize Test ===
+
+1. Testing list serialization...
+List length: 0 -> 0 equal: True
+List length: 3 -> 3 equal: True
+List length: 3 -> 3 equal: True
+List length: 2 -> 2 equal: True
+List length: 4 -> 4 equal: True
+List length: 2 -> 2 equal: True
+
+2. Testing dict serialization...
+Dict keys: 0 -> 0 equal: True
+Dict keys: 1 -> 1 equal: True
+Dict keys: 3 -> 3 equal: True
+Dict keys: 3 -> 3 equal: True
+Dict keys: 1 -> 1 equal: True
+✓ Collections serialize/deserialize correctly
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]
