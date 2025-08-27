@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
@@ -22,6 +23,9 @@ mod workspace;
 #[command(about = "PCB tool with build and layout capabilities", long_about = None)]
 #[command(version)]
 struct Cli {
+    /// Enable debug logging
+    #[arg(short = 'd', long = "debug", global = true)]
+    debug: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -78,10 +82,15 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logger
-    env_logger::init();
-
     let cli = Cli::parse();
+
+    // Initialize logger with default level depending on --debug (overridden by RUST_LOG)
+    let env = if cli.debug {
+        Env::default().default_filter_or("debug")
+    } else {
+        Env::default().default_filter_or("info")
+    };
+    env_logger::Builder::from_env(env).init();
 
     match cli.command {
         Commands::Build(args) => build::execute(args),

@@ -1232,14 +1232,26 @@ impl EvalContext {
                 continue;
             }
 
-            for entry in walkdir::WalkDir::new(root)
-                .into_iter()
-                .filter_map(Result::ok)
-            {
+            // Skip hidden directories and files (those whose name starts with ".").
+            // Using filter_entry ensures we don't descend into hidden directories.
+            let iter = walkdir::WalkDir::new(root).into_iter().filter_entry(|e| {
+                if let Some(name) = e.file_name().to_str() {
+                    // Keep entries whose immediate name does not start with a dot
+                    return !name.starts_with('.');
+                }
+                true
+            });
+
+            for entry in iter.filter_map(Result::ok) {
                 if entry.file_type().is_file() {
                     let path = entry.into_path();
                     let ext = path.extension().and_then(|e| e.to_str());
                     let file_name = path.file_name().and_then(|e| e.to_str());
+                    // Also skip files whose own name starts with a dot to be safe
+                    let is_hidden = file_name.map(|n| n.starts_with('.')).unwrap_or(false);
+                    if is_hidden {
+                        continue;
+                    }
                     let is_starlark =
                         matches!((ext, file_name), (Some("star"), _) | (Some("zen"), _));
                     if is_starlark {
