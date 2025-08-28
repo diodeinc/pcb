@@ -1,0 +1,5 @@
+load("@stdlib:v0.2.7/units.zen", "Temperature")
+
+temp = Temperature(value = 100)
+print(temp)
+print(serialize(temp))

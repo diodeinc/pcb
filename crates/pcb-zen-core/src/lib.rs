@@ -53,6 +53,7 @@ pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;
+use log::debug;
 pub use passes::{AggregatePass, FilterHiddenPass, LspFilterPass, PromoteDeniedPass, SortPass};
 
 // Re-export file provider types
@@ -683,6 +684,7 @@ impl CoreLoadResolver {
             ..
         } = &spec
         {
+            debug!("Checking path: {}, workspace_relative: {}", path.display(), workspace_relative);
             let path_str = path.to_string_lossy();
             assert!(path.is_absolute(), "Relative paths are not allowed");
             assert!(!workspace_relative, "Relative paths are not allowed");
@@ -853,6 +855,8 @@ impl LoadResolver for CoreLoadResolver {
             // If already tracked, do nothing
             return;
         }
+        debug!("Tracking file: {}", path.display());
+        debug!("Canonical path: {}", canonical_path.display());
         let load_spec = LoadSpec::local_path(&canonical_path);
         self.insert_load_spec(canonical_path, load_spec);
     }
