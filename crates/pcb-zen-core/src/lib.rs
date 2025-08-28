@@ -684,7 +684,11 @@ impl CoreLoadResolver {
         } = &spec
         {
             let path_str = path.to_string_lossy();
-            assert!(path.is_absolute(), "Relative paths are not allowed");
+
+            // TODO: re-enable after `InMemoryFileProvider::canonicalize` with wasm can give back
+            // absolute paths
+            // assert!(path.is_absolute(), "Relative paths are not allowed");
+
             assert!(!workspace_relative, "Relative paths are not allowed");
             // TODO: remove after we drop support for stdlib <= v0.2.6
             // Workaround for https://github.com/diodeinc/stdlib/pull/35
