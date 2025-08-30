@@ -1276,10 +1276,7 @@ class SetupBoard(Step):
         self.board = board
 
     def run(self):
-        lset = pcbnew.LSET.AllLayersMask()
-        lset.RemoveLayer(pcbnew.F_Fab)
-        lset.RemoveLayer(pcbnew.B_Fab)
-        self.board.SetVisibleLayers(lset)
+        pass
 
 
 ####################################################################################################
