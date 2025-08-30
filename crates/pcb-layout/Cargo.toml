@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-kicad = { workspace = true }
 log = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }
@@ -22,6 +23,5 @@ serial_test = { workspace = true }
 paste = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
-tempfile = { workspace = true }
 serde_json = { workspace = true }
 pcb-zen = { workspace = true }

@@ -3,19 +3,19 @@ use log::debug;
 use pcb_sch::{AttributeValue, Schematic, ATTR_LAYOUT_PATH};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tempfile::TempDir;
 use thiserror::Error;
 
 use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
 /// Result of layout generation/update
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LayoutResult {
     pub source_file: PathBuf,
     pub layout_dir: PathBuf,
     pub pcb_file: PathBuf,
     pub netlist_file: PathBuf,
-    pub json_netlist_file: PathBuf,
     pub snapshot_file: PathBuf,
     pub log_file: PathBuf,
     pub created: bool, // true if new, false if updated
@@ -35,13 +35,14 @@ pub enum LayoutError {
 }
 
 /// Helper struct for layout file paths
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LayoutPaths {
     pub netlist: PathBuf,
     pub pcb: PathBuf,
     pub snapshot: PathBuf,
     pub log: PathBuf,
     pub json_netlist: PathBuf,
+    pub temp_dir: TempDir,
 }
 
 /// Process a schematic and generate/update its layout files
@@ -90,7 +91,7 @@ pub fn process_layout(
     fs::write(&paths.netlist, netlist_content)
         .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
 
-    // Write JSON netlist
+    // Write JSON netlist into the temp directory (owned by LayoutPaths)
     let json_content = schematic
         .to_json()
         .context("Failed to serialize schematic to JSON")?;
@@ -147,7 +148,6 @@ pub fn process_layout(
         layout_dir,
         pcb_file: paths.pcb,
         netlist_file: paths.netlist,
-        json_netlist_file: paths.json_netlist,
         snapshot_file: paths.snapshot,
         log_file: paths.log,
         created: !pcb_exists,
@@ -173,12 +173,15 @@ pub mod utils {
 
     /// Get all the file paths that would be generated for a layout
     pub fn get_layout_paths(layout_dir: &Path) -> LayoutPaths {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory for netlist");
+        let json_netlist = temp_dir.path().join("netlist.json");
         LayoutPaths {
             netlist: layout_dir.join("default.net"),
             pcb: layout_dir.join("layout.kicad_pcb"),
             snapshot: layout_dir.join("snapshot.layout.json"),
             log: layout_dir.join("layout.log"),
-            json_netlist: layout_dir.join("netlist.json"),
+            json_netlist,
+            temp_dir,
         }
     }
 
