@@ -90,7 +90,6 @@ pub fn run(file: &Path, offline: bool) -> WithDiagnostics<Schematic> {
                 .to_schematic()
                 .map_err(|e| EvalMessage::from_error(abs_path.as_path(), &e.into()))
         })
-        .inspect_mut(|s| s.assign_reference_designators())
 }
 
 pub fn lsp() -> anyhow::Result<()> {

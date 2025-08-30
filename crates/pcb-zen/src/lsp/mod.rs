@@ -581,15 +581,12 @@ impl LspContext for LspEvalContext {
                                     .eval()
                             };
 
-                            eval_result.output.and_then(|fmv| {
-                                match fmv.sch_module.to_schematic() {
-                                    Ok(schematic) => {
-                                        // Serialize to JSON
-                                        serde_json::to_value(&schematic).ok()
-                                    }
+                            eval_result
+                                .output
+                                .and_then(|fmv| match fmv.sch_module.to_schematic() {
+                                    Ok(schematic) => serde_json::to_value(&schematic).ok(),
                                     Err(_) => None,
-                                }
-                            })
+                                })
                         }
                         _ => None,
                     };

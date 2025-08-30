@@ -26,7 +26,6 @@ pub(crate) struct ModuleConverter {
     net_to_ports: HashMap<NetId, Vec<InstanceRef>>,
     net_to_name: HashMap<NetId, String>,
     net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
-    refdes_counters: HashMap<String, u32>,
     // Mapping <ref to component instance> -> <spice model>
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
 }
@@ -58,7 +57,6 @@ impl ModuleConverter {
             net_to_ports: HashMap::new(),
             net_to_name: HashMap::new(),
             net_to_properties: HashMap::new(),
-            refdes_counters: HashMap::new(),
             comp_models: Vec::new(),
         }
     }
@@ -152,6 +150,8 @@ impl ModuleConverter {
                 .join(" ");
             comp_inst.add_attribute(crate::attrs::MODEL_ARGS, AttributeValue::String(arg_str));
         }
+
+        self.schematic.assign_reference_designators();
 
         Ok(self.schematic)
     }
@@ -279,12 +279,6 @@ impl ModuleConverter {
         Ok(())
     }
 
-    fn next_refdes(&mut self, prefix: &str) -> String {
-        let counter = self.refdes_counters.entry(prefix.to_string()).or_insert(0);
-        *counter += 1;
-        format!("{}{}", prefix, *counter)
-    }
-
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let entry = self.net_to_ports.entry(net.id()).or_default();
         entry.push(instance_ref.clone());
@@ -406,8 +400,6 @@ impl ModuleConverter {
                 }
             }
         }
-
-        comp_inst.set_reference_designator(self.next_refdes(component.prefix()));
 
         // Get the symbol from the component to access pin mappings
         let symbol = component.symbol();

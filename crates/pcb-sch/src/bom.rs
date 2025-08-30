@@ -121,8 +121,6 @@ impl FromStr for Dielectric {
 
 /// Generate ungrouped BOM entries from a schematic
 pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEntry> {
-    schematic.assign_reference_designators();
-
     let mut bom_entries = BTreeMap::new();
 
     // Iterate through all instances and find components
