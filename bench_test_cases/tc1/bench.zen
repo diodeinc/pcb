@@ -1,0 +1,51 @@
+Foo = Module("./module.zen")
+
+def print_info(nets: dict[str, list[str]], ports: dict[str, str]) -> bool:
+    print("Nets and their connected ports:")
+    for (net_name, port_list) in nets.items():
+        print(f"  {net_name}: {port_list}")
+    print("Ports and their nets:")
+    for (port_name, net_name) in ports.items():
+        print(f"  {port_name} -> {net_name}")
+    return True
+
+def ensure_gnd(nets: dict[str, list[str]], ports: dict[str, str]) -> bool:
+    for (net, _) in nets.items():
+        if "GND" in net:
+            return True
+    return False
+
+def check_power_connections(nets: dict[str, list[str]], ports: dict[str, str]) -> bool:
+    """Check that VCC net has at least 2 connections (components properly powered)"""
+    for (net_name, port_list) in nets.items():
+        if "VCC" in net_name:
+            port_count = len(port_list)
+            if port_count < 2:
+                print("Warning: Power net " + net_name + " only has " + str(port_count) + " connection(s)")
+                return False
+    return True
+
+def check_resistor_grounding(nets: dict[str, list[str]], ports: dict[str, str]) -> bool:
+    """Check that resistor R.P2 is connected to ground using ports dict"""
+    resistor_p2 = "R.R.P2"
+    if resistor_p2 in ports:
+        connected_net = ports[resistor_p2]
+        if "GND" in connected_net:
+            print("✓ Resistor P2 is properly grounded to " + connected_net)
+            return True
+        else:
+            print("✗ Resistor P2 is connected to " + connected_net + ", not ground!")
+            return False
+    else:
+        print("✗ Resistor R.P2 not found")
+        return False
+
+TestBench(
+    name="FOO",
+    module=Foo,
+    checks=[
+        print_info,
+        ensure_gnd,
+        check_resistor_grounding,
+    ],
+)
