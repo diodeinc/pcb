@@ -8,7 +8,7 @@ vcc2 = Power("VCC2")
 gnd2 = Ground("GND2")
 
 Resistor(
-    name="R",
+    name="R1",
     value="1kOhm",
     package="0402",
     P1=vcc2,
@@ -16,7 +16,7 @@ Resistor(
 )
 
 Resistor(
-    name="R",
+    name="R2",
     value="10kOhm",
     package="0402",
     P1=vcc,
@@ -24,7 +24,7 @@ Resistor(
 )
 
 Resistor(
-    name="R",
+    name="R3",
     value="100kOhm",
     package="0402",
     P1=vcc,

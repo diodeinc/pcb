@@ -21,7 +21,7 @@ r1 = Resistor(
 )
 
 Capacitor(
-    name="C",
+    name="CAP1",
     value="100nF",
     package="0402",
     P1=vcc,
