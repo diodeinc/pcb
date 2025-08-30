@@ -189,14 +189,16 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             let checks_list = ListRef::from_value(checks_value)
                 .ok_or_else(|| anyhow::anyhow!("'checks' parameter must be a list of functions"))?;
 
-            // Build nets dictionary and ports dictionary from the evaluated module
+            // Build nets, ports, and components dictionaries from the evaluated module
             let heap = eval.heap();
             let mut nets_dict_entries = Vec::new();
             let mut ports_dict_entries = Vec::new();
+            let mut components_dict_entries = Vec::new();
 
             // Use the existing to_schematic() method to get deduplicated nets
             match module.to_schematic() {
                 Ok(schematic) => {
+                    // Build nets and ports dictionaries
                     for (net_name, net) in schematic.nets.iter() {
                         // Convert each port InstanceRef to a simplified string
                         let mut port_strings = Vec::new();
@@ -221,10 +223,85 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
                         let ports_list = heap.alloc(port_strings);
                         nets_dict_entries.push((heap.alloc_str(net_name).to_value(), ports_list));
                     }
+
+                    // Build components dictionary
+                    for (instance_ref, instance) in schematic.instances.iter() {
+                        // Only include components (not modules, ports, etc.)
+                        if instance.kind == pcb_sch::InstanceKind::Component {
+                            let component_name = if instance_ref.instance_path.is_empty() {
+                                "root".to_string()
+                            } else {
+                                instance_ref.instance_path.join(".")
+                            };
+
+                            // Build attributes dictionary for this component
+                            let mut component_attrs = Vec::new();
+
+                            // Collect all pin names for this component from all nets
+                            let mut pin_names = Vec::new();
+                            for (_net_name, net) in schematic.nets.iter() {
+                                for port in &net.ports {
+                                    if port.instance_path.len() >= 2 {
+                                        // Check if this port belongs to our current component
+                                        let port_component_path = port.instance_path
+                                            [..port.instance_path.len() - 1]
+                                            .join(".");
+                                        if port_component_path == component_name {
+                                            // Extract pin name (last part of instance path)
+                                            if let Some(pin_name) = port.instance_path.last() {
+                                                if !pin_names.contains(pin_name) {
+                                                    pin_names.push(pin_name.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Add pins as a comma-delimited string
+                            if !pin_names.is_empty() {
+                                pin_names.sort(); // Sort for consistent ordering
+                                let pins_str = pin_names.join(",");
+                                component_attrs.push((
+                                    heap.alloc_str("Pins").to_value(),
+                                    heap.alloc_str(&pins_str).to_value(),
+                                ));
+                            }
+
+                            for (key, value) in instance.attributes.iter() {
+                                // Skip verbose/internal attributes
+                                if key == "footprint"
+                                    || (key.starts_with("__") && key.ends_with("__"))
+                                    || key == "symbol_path"
+                                    || key == "symbol_name"
+                                    || key.starts_with("__symbol_")
+                                {
+                                    continue;
+                                }
+
+                                let value_str = match value {
+                                    pcb_sch::AttributeValue::String(s) => s.clone(),
+                                    pcb_sch::AttributeValue::Number(n) => n.to_string(),
+                                    pcb_sch::AttributeValue::Boolean(b) => b.to_string(),
+                                    pcb_sch::AttributeValue::Physical(p) => format!("{:?}", p),
+                                    pcb_sch::AttributeValue::Port(p) => p.clone(),
+                                    _ => format!("{:?}", value), // Fallback for complex types
+                                };
+                                component_attrs.push((
+                                    heap.alloc_str(key).to_value(),
+                                    heap.alloc_str(&value_str).to_value(),
+                                ));
+                            }
+
+                            let attrs_dict = heap.alloc(AllocDict(component_attrs));
+                            components_dict_entries
+                                .push((heap.alloc_str(&component_name).to_value(), attrs_dict));
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!(
-                        "Warning: Failed to convert module to schematic for net collection: {}",
+                        "Warning: Failed to convert module to schematic for collection: {}",
                         e
                     );
                     // Continue with empty dicts
@@ -233,10 +310,12 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
 
             let nets_dict = heap.alloc(AllocDict(nets_dict_entries));
             let ports_dict = heap.alloc(AllocDict(ports_dict_entries));
+            let components_dict = heap.alloc(AllocDict(components_dict_entries));
 
             // Execute each check function
             for check_func in checks_list.iter() {
-                match eval.eval_function(check_func, &[nets_dict, ports_dict], &[]) {
+                match eval.eval_function(check_func, &[nets_dict, ports_dict, components_dict], &[])
+                {
                     Ok(result) => {
                         // Convert result to bool if possible, otherwise store as-is
                         check_results.push(result);
