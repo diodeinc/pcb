@@ -196,10 +196,21 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             // Use the existing to_schematic() method to get deduplicated nets
             match module.to_schematic() {
                 Ok(schematic) => {
-                    for net_name in schematic.nets.keys() {
-                        // Create empty list for each net (for now)
-                        let empty_list = heap.alloc(Vec::<Value>::new());
-                        nets_dict_entries.push((heap.alloc_str(net_name).to_value(), empty_list));
+                    for (net_name, net) in schematic.nets.iter() {
+                        // Convert each port InstanceRef to a simplified string
+                        let mut port_strings = Vec::new();
+                        for port in &net.ports {
+                            // Use just the instance path for cleaner output (skip module path)
+                            let port_string = if port.instance_path.is_empty() {
+                                "root".to_string()
+                            } else {
+                                port.instance_path.join(".")
+                            };
+                            port_strings.push(heap.alloc_str(&port_string).to_value());
+                        }
+
+                        let ports_list = heap.alloc(port_strings);
+                        nets_dict_entries.push((heap.alloc_str(net_name).to_value(), ports_list));
                     }
                 }
                 Err(e) => {
@@ -229,28 +240,29 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             }
         }
 
-        // Print statistics about the evaluated module
+        // Log detailed TestBench info
         if let Some(ref module) = evaluated_module {
-            eprintln!("TestBench '{}' created:", name);
-            eprintln!("  - Module: {}", loader.name);
-            eprintln!("  - Source: {}", loader.source_path);
-            eprintln!("  - Children: {}", module.children().len());
             // Get net count using the same schematic conversion approach
             let net_count = match module.to_schematic() {
                 Ok(schematic) => schematic.nets.len(),
                 Err(_) => 0, // If conversion fails, show 0 nets
             };
-            eprintln!("  - Total nets: {}", net_count);
-            eprintln!("  - Properties: {}", module.properties().len());
-            eprintln!("  - Checks run: {}", check_results.len());
+            log::info!(
+                "TestBench '{}': {} nets, {} checks",
+                name,
+                net_count,
+                check_results.len()
+            );
         } else {
-            eprintln!("TestBench '{}' created (module evaluation failed)", name);
-            eprintln!("  - Module: {}", loader.name);
-            eprintln!("  - Source: {}", loader.source_path);
-            eprintln!("  - Checks run: {}", check_results.len());
+            log::info!(
+                "TestBench '{}': evaluation failed, {} checks",
+                name,
+                check_results.len()
+            );
         }
 
         // Check for failed checks and add error diagnostics
+        let mut all_checks_passed = true;
         if let (Some(checks_value), Some(ctx)) = (checks, eval.context_value()) {
             let checks_list = ListRef::from_value(checks_value).unwrap(); // We already validated this above
 
@@ -260,6 +272,8 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
                 // Check if result is false
                 if let Some(bool_val) = result.unpack_bool() {
                     if !bool_val {
+                        all_checks_passed = false;
+
                         // Get check function name from str() representation
                         let full_name = check_func.to_string();
                         let check_name = full_name
@@ -285,6 +299,16 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
                     }
                 }
             }
+        }
+
+        // Print success message if all checks passed
+        if all_checks_passed && !check_results.is_empty() {
+            let check_count = check_results.len();
+            let check_word = if check_count == 1 { "check" } else { "checks" };
+            println!(
+                "\x1b[1m\x1b[32m✓ {}\x1b[0m: {} {} passed",
+                name, check_count, check_word
+            );
         }
 
         // Create and return the TestBenchValue
