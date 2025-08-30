@@ -186,29 +186,41 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
     }
 }
 
-/// Compute the byte-range `Span` inside `source` (UTF-8 string) that corresponds to `msg.span`.
+/// Convert a ResolvedSpan (line/column) to a character range for Ariadne.
+///
+/// IMPORTANT: Ariadne expects CHARACTER indices, not BYTE indices.
+/// This is crucial for files containing multi-byte UTF-8 characters.
 fn compute_span(source: &str, msg: &Diagnostic) -> Option<Range<usize>> {
-    let Some(span) = &msg.span else { return None };
+    let span = msg.span.as_ref()?;
 
-    // Compute byte offsets for the span based on line + column info.
-    let mut offset = 0usize;
-    let mut begin_byte = None;
-    let mut end_byte = None;
+    let mut char_offset = 0;
+    let mut lines = source.lines().enumerate();
 
-    for (idx, line) in source.lines().enumerate() {
-        let line_len = line.len() + 1; // +1 for newline character
-        if idx == span.begin.line {
-            begin_byte = Some(offset + span.begin.column);
+    // Find the start character offset
+    for (line_idx, line) in &mut lines {
+        if line_idx == span.begin.line {
+            let start = char_offset + span.begin.column;
+            let end = if line_idx == span.end.line {
+                char_offset + span.end.column
+            } else {
+                // Multi-line span: continue counting to find end
+                let mut end_offset = char_offset + line.chars().count() + 1;
+                for (idx, l) in lines {
+                    if idx == span.end.line {
+                        return Some(start..end_offset + span.end.column);
+                    }
+                    end_offset += l.chars().count() + 1;
+                }
+                return None;
+            };
+            return if start < end && end <= source.chars().count() {
+                Some(start..end)
+            } else {
+                None
+            };
         }
-        if idx == span.end.line {
-            end_byte = Some(offset + span.end.column);
-            break;
-        }
-        offset += line_len;
+        char_offset += line.chars().count() + 1; // +1 for newline
     }
 
-    match (begin_byte, end_byte) {
-        (Some(b), Some(e)) if b < e && e <= source.len() => Some(b..e),
-        _ => None,
-    }
+    None
 }
