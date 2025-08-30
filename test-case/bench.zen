@@ -1,19 +1,33 @@
 Foo = Module("./module.zen")
 
+def print_info(nets: dict[str, list[str]]) -> bool:
+    print("Nets and their connected ports:")
+    for (net_name, ports) in nets.items():
+        print(f"  {net_name}: {ports}")
+    return True
+
 def ensure_gnd(nets: dict[str, list[str]]) -> bool:
     for (net, _) in nets.items():
         if "GND" in net:
             return True
     return False
 
-def basic_check(nets: dict[str, list[str]]) -> bool:
+def check_power_connections(nets: dict[str, list[str]]) -> bool:
+    """Check that VCC net has at least 2 connections (components properly powered)"""
+    for (net_name, ports) in nets.items():
+        if "VCC" in net_name:
+            port_count = len(ports)
+            if port_count < 2:
+                print("Warning: Power net " + net_name + " only has " + str(port_count) + " connection(s)")
+                return False
     return True
 
 TestBench(
     name="FOO",
     module=Foo,
     checks=[
+        print_info,
         ensure_gnd,
-        basic_check,
+        check_power_connections,
     ],
 )
