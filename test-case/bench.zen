@@ -1,0 +1,19 @@
+Foo = Module("./module.zen")
+
+def ensure_gnd(nets: dict[str, list[str]]) -> bool:
+    for (net, _) in nets.items():
+        if "GND" in net:
+            return True
+    return False
+
+def basic_check(nets: dict[str, list[str]]) -> bool:
+    return True
+
+TestBench(
+    name="FOO",
+    module=Foo,
+    checks=[
+        ensure_gnd,
+        basic_check,
+    ],
+)
