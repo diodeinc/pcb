@@ -1,0 +1,11 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Ground", "Power")
+Foo = Module("./module.zen")
+
+vcc = Power()
+gnd = Ground()
+
+Foo(
+    name="FOO",
+    VCC=vcc,
+    GND=gnd,
+)
