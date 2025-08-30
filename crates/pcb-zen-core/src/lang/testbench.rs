@@ -8,8 +8,8 @@ use starlark::{
     eval::Evaluator,
     starlark_complex_value, starlark_module,
     values::{
-        dict::AllocDict, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
+        dict::AllocDict, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult, Heap,
+        NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
     },
 };
 
@@ -164,6 +164,167 @@ impl ModuleLoader {
     }
 }
 
+/// Test dictionaries returned by build_test_dictionaries
+struct TestDictionaries<'v> {
+    nets: Vec<(Value<'v>, Value<'v>)>,
+    ports: Vec<(Value<'v>, Value<'v>)>,
+    components: Vec<(Value<'v>, Value<'v>)>,
+}
+
+/// Format an instance path for display
+fn format_instance_path(path: &[pcb_sch::Symbol]) -> String {
+    if path.is_empty() {
+        "<root>".to_string()
+    } else {
+        path.join(".")
+    }
+}
+
+/// Build dictionaries of nets, ports, and components from a schematic
+fn build_test_dictionaries<'v>(
+    schematic: &pcb_sch::Schematic,
+    heap: &'v Heap,
+) -> TestDictionaries<'v> {
+    let mut nets_dict = Vec::new();
+    let mut ports_dict = Vec::new();
+    let mut components_dict = Vec::new();
+
+    // Build nets and ports dictionaries
+    for (net_name, net) in &schematic.nets {
+        let mut port_strings = Vec::new();
+        for port in &net.ports {
+            let port_string = format_instance_path(&port.instance_path);
+            let port_val = heap.alloc_str(&port_string).to_value();
+            let net_val = heap.alloc_str(net_name).to_value();
+            port_strings.push(port_val);
+            ports_dict.push((port_val, net_val));
+        }
+        nets_dict.push((
+            heap.alloc_str(net_name).to_value(),
+            heap.alloc(port_strings),
+        ));
+    }
+
+    // Build components dictionary
+    for (instance_ref, instance) in &schematic.instances {
+        if instance.kind != pcb_sch::InstanceKind::Component {
+            continue;
+        }
+
+        let component_name = format_instance_path(&instance_ref.instance_path);
+        let mut component_attrs = Vec::new();
+
+        // Collect all pin names for this component
+        // TODO: there's gotta be a much better way to do this
+        let mut pin_names = Vec::new();
+        for net in schematic.nets.values() {
+            for port in &net.ports {
+                if port.instance_path.len() >= 2
+                    && format_instance_path(&port.instance_path[..port.instance_path.len() - 1])
+                        == component_name
+                {
+                    if let Some(pin_name) = port.instance_path.last() {
+                        if !pin_names.contains(pin_name) {
+                            pin_names.push(pin_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add pins as a comma-delimited string
+        if !pin_names.is_empty() {
+            pin_names.sort();
+            component_attrs.push((
+                heap.alloc_str("Pins").to_value(),
+                heap.alloc_str(&pin_names.join(",")).to_value(),
+            ));
+        }
+
+        // Add non-internal attributes
+        for (key, value) in &instance.attributes {
+            if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
+                || key.starts_with("__")
+            {
+                continue;
+            }
+
+            let value_str = match value {
+                pcb_sch::AttributeValue::String(s) => s.clone(),
+                pcb_sch::AttributeValue::Number(n) => n.to_string(),
+                pcb_sch::AttributeValue::Boolean(b) => b.to_string(),
+                pcb_sch::AttributeValue::Physical(p) => format!("{p:?}"),
+                pcb_sch::AttributeValue::Port(p) => p.clone(),
+                _ => format!("{value:?}"),
+            };
+            component_attrs.push((
+                heap.alloc_str(key).to_value(),
+                heap.alloc_str(&value_str).to_value(),
+            ));
+        }
+
+        components_dict.push((
+            heap.alloc_str(&component_name).to_value(),
+            heap.alloc(AllocDict(component_attrs)),
+        ));
+    }
+
+    TestDictionaries {
+        nets: nets_dict,
+        ports: ports_dict,
+        components: components_dict,
+    }
+}
+
+/// Execute a single check function and handle the result
+fn execute_check<'v>(
+    eval: &mut Evaluator<'v, '_, '_>,
+    check_func: Value<'v>,
+    args: &[Value<'v>],
+    check_index: usize,
+    testbench_name: &str,
+) -> anyhow::Result<(Value<'v>, Option<String>)> {
+    let testbench_location = eval.call_stack_top_location();
+
+    match eval.eval_function(check_func, args, &[]) {
+        Ok(result) => {
+            // Check if the result is false and create diagnostic
+            if let Some(false) = result.unpack_bool() {
+                let full_name = check_func.to_string();
+                let check_name = full_name
+                    .rsplit('.')
+                    .next()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("Check #{}", check_index + 1));
+
+                if let Some((location, ctx)) = testbench_location.zip(eval.context_value()) {
+                    let diagnostic = Diagnostic {
+                        path: location.filename().to_string(),
+                        span: Some(location.resolve_span()),
+                        severity: EvalSeverity::Error,
+                        body: format!(
+                            "TestBench '{}' check '{}' failed",
+                            testbench_name, check_name
+                        ),
+                        call_stack: Some(eval.call_stack().clone()),
+                        child: None,
+                        source_error: None,
+                    };
+                    ctx.add_diagnostic(diagnostic);
+                }
+
+                Ok((result, Some(check_name)))
+            } else {
+                Ok((result, None))
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: Check function failed: {}", e);
+            Ok((eval.heap().alloc(false).to_value(), None))
+        }
+    }
+}
+
 #[starlark_module]
 pub fn testbench_globals(builder: &mut GlobalsBuilder) {
     /// Create a TestBench that can evaluate modules without required inputs
@@ -189,206 +350,45 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             let checks_list = ListRef::from_value(checks_value)
                 .ok_or_else(|| anyhow::anyhow!("'checks' parameter must be a list of functions"))?;
 
-            // Build nets, ports, and components dictionaries from the evaluated module
+            // Build test dictionaries from the schematic
             let heap = eval.heap();
-            let mut nets_dict_entries = Vec::new();
-            let mut ports_dict_entries = Vec::new();
-            let mut components_dict_entries = Vec::new();
+            let schematic = module
+                .to_schematic()
+                .map_err(|e| anyhow::anyhow!("Failed to convert module to schematic: {}", e))?;
 
-            // Use the existing to_schematic() method to get deduplicated nets
-            match module.to_schematic() {
-                Ok(schematic) => {
-                    // Build nets and ports dictionaries
-                    for (net_name, net) in schematic.nets.iter() {
-                        // Convert each port InstanceRef to a simplified string
-                        let mut port_strings = Vec::new();
-                        for port in &net.ports {
-                            // Use just the instance path for cleaner output (skip module path)
-                            let port_string = if port.instance_path.is_empty() {
-                                "root".to_string()
-                            } else {
-                                port.instance_path.join(".")
-                            };
-
-                            // Add to nets dict (net -> list of ports)
-                            port_strings.push(heap.alloc_str(&port_string).to_value());
-
-                            // Add to ports dict (port -> net)
-                            ports_dict_entries.push((
-                                heap.alloc_str(&port_string).to_value(),
-                                heap.alloc_str(net_name).to_value(),
-                            ));
-                        }
-
-                        let ports_list = heap.alloc(port_strings);
-                        nets_dict_entries.push((heap.alloc_str(net_name).to_value(), ports_list));
-                    }
-
-                    // Build components dictionary
-                    for (instance_ref, instance) in schematic.instances.iter() {
-                        // Only include components (not modules, ports, etc.)
-                        if instance.kind == pcb_sch::InstanceKind::Component {
-                            let component_name = if instance_ref.instance_path.is_empty() {
-                                "root".to_string()
-                            } else {
-                                instance_ref.instance_path.join(".")
-                            };
-
-                            // Build attributes dictionary for this component
-                            let mut component_attrs = Vec::new();
-
-                            // Collect all pin names for this component from all nets
-                            let mut pin_names = Vec::new();
-                            for (_net_name, net) in schematic.nets.iter() {
-                                for port in &net.ports {
-                                    if port.instance_path.len() >= 2 {
-                                        // Check if this port belongs to our current component
-                                        let port_component_path = port.instance_path
-                                            [..port.instance_path.len() - 1]
-                                            .join(".");
-                                        if port_component_path == component_name {
-                                            // Extract pin name (last part of instance path)
-                                            if let Some(pin_name) = port.instance_path.last() {
-                                                if !pin_names.contains(pin_name) {
-                                                    pin_names.push(pin_name.clone());
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Add pins as a comma-delimited string
-                            if !pin_names.is_empty() {
-                                pin_names.sort(); // Sort for consistent ordering
-                                let pins_str = pin_names.join(",");
-                                component_attrs.push((
-                                    heap.alloc_str("Pins").to_value(),
-                                    heap.alloc_str(&pins_str).to_value(),
-                                ));
-                            }
-
-                            for (key, value) in instance.attributes.iter() {
-                                // Skip verbose/internal attributes
-                                if key == "footprint"
-                                    || (key.starts_with("__") && key.ends_with("__"))
-                                    || key == "symbol_path"
-                                    || key == "symbol_name"
-                                    || key.starts_with("__symbol_")
-                                {
-                                    continue;
-                                }
-
-                                let value_str = match value {
-                                    pcb_sch::AttributeValue::String(s) => s.clone(),
-                                    pcb_sch::AttributeValue::Number(n) => n.to_string(),
-                                    pcb_sch::AttributeValue::Boolean(b) => b.to_string(),
-                                    pcb_sch::AttributeValue::Physical(p) => format!("{:?}", p),
-                                    pcb_sch::AttributeValue::Port(p) => p.clone(),
-                                    _ => format!("{:?}", value), // Fallback for complex types
-                                };
-                                component_attrs.push((
-                                    heap.alloc_str(key).to_value(),
-                                    heap.alloc_str(&value_str).to_value(),
-                                ));
-                            }
-
-                            let attrs_dict = heap.alloc(AllocDict(component_attrs));
-                            components_dict_entries
-                                .push((heap.alloc_str(&component_name).to_value(), attrs_dict));
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to convert module to schematic for collection: {}",
-                        e
-                    );
-                    // Continue with empty dicts
-                }
-            }
-
-            let nets_dict = heap.alloc(AllocDict(nets_dict_entries));
-            let ports_dict = heap.alloc(AllocDict(ports_dict_entries));
-            let components_dict = heap.alloc(AllocDict(components_dict_entries));
+            let dicts = build_test_dictionaries(&schematic, heap);
+            let nets_dict = heap.alloc(AllocDict(dicts.nets));
+            let ports_dict = heap.alloc(AllocDict(dicts.ports));
+            let components_dict = heap.alloc(AllocDict(dicts.components));
 
             // Execute each check function
-            for check_func in checks_list.iter() {
-                match eval.eval_function(check_func, &[nets_dict, ports_dict, components_dict], &[])
-                {
-                    Ok(result) => {
-                        // Convert result to bool if possible, otherwise store as-is
-                        check_results.push(result);
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Check function failed: {}", e);
-                        // Store a false value for failed checks
-                        check_results.push(heap.alloc(false).to_value());
-                    }
-                }
+            for (i, check_func) in checks_list.iter().enumerate() {
+                let (result, _failed_check) = execute_check(
+                    eval,
+                    check_func,
+                    &[nets_dict, ports_dict, components_dict],
+                    i,
+                    &name,
+                )?;
+                check_results.push(result);
             }
         }
 
         // Log detailed TestBench info
-        if let Some(ref module) = evaluated_module {
-            // Get net count using the same schematic conversion approach
-            let net_count = match module.to_schematic() {
-                Ok(schematic) => schematic.nets.len(),
-                Err(_) => 0, // If conversion fails, show 0 nets
-            };
+        if evaluated_module.is_some() {
             log::info!(
-                "TestBench '{}': {} nets, {} checks",
+                "TestBench '{}': {} checks executed",
                 name,
-                net_count,
                 check_results.len()
             );
         } else {
-            log::info!(
-                "TestBench '{}': evaluation failed, {} checks",
-                name,
-                check_results.len()
-            );
+            log::info!("TestBench '{}': evaluation failed", name);
         }
 
-        // Check for failed checks and add error diagnostics
-        let mut all_checks_passed = true;
-        if let (Some(checks_value), Some(ctx)) = (checks, eval.context_value()) {
-            let checks_list = ListRef::from_value(checks_value).unwrap(); // We already validated this above
-
-            for (i, (check_func, result)) in
-                checks_list.iter().zip(check_results.iter()).enumerate()
-            {
-                // Check if result is false
-                if let Some(bool_val) = result.unpack_bool() {
-                    if !bool_val {
-                        all_checks_passed = false;
-
-                        // Get check function name from str() representation
-                        let full_name = check_func.to_string();
-                        let check_name = full_name
-                            .rsplit('.')
-                            .next()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| format!("Check #{}", i + 1));
-
-                        let diagnostic = Diagnostic {
-                            path: eval
-                                .call_stack_top_location()
-                                .map(|l| l.filename().to_string())
-                                .unwrap_or_else(|| loader.source_path.clone()),
-                            span: eval.call_stack_top_location().map(|l| l.resolve_span()),
-                            severity: EvalSeverity::Error,
-                            body: format!("TestBench check '{}' failed", check_name),
-                            call_stack: Some(eval.call_stack().clone()),
-                            child: None,
-                            source_error: None,
-                        };
-
-                        ctx.add_diagnostic(diagnostic);
-                    }
-                }
-            }
-        }
+        // Check if all checks passed
+        let all_checks_passed = check_results
+            .iter()
+            .all(|result| result.unpack_bool().unwrap_or(true));
 
         // Print success message if all checks passed
         if all_checks_passed && !check_results.is_empty() {
