@@ -393,17 +393,15 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
 
 /// Copy KiCad layout files
 fn copy_layout(info: &ReleaseInfo) -> Result<()> {
-    let build_dir = info.layout_path.parent().unwrap_or(&info.layout_path);
-
     // If build directory doesn't exist, generate layout files first
-    if !build_dir.exists() {
+    if !info.layout_path.exists() {
         pcb_layout::process_layout(&info.schematic, &info.workspace.zen_path)?;
     }
 
     let layout_staging_dir = info.staging_dir.join("layout");
     fs::create_dir_all(&layout_staging_dir)?;
 
-    for entry in walkdir::WalkDir::new(build_dir)
+    for entry in walkdir::WalkDir::new(&info.layout_path)
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
