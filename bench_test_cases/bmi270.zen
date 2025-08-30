@@ -1,0 +1,6 @@
+BMI270 = Module("@github/diodeinc/registry:cce227d/reference/BMI270x/BMI270x.zen")
+
+TestBench(
+    name="BMI270",
+    module=BMI270,
+)

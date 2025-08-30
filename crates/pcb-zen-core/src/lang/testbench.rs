@@ -189,9 +189,10 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             let checks_list = ListRef::from_value(checks_value)
                 .ok_or_else(|| anyhow::anyhow!("'checks' parameter must be a list of functions"))?;
 
-            // Build nets dictionary from the evaluated module using existing schematic conversion
+            // Build nets dictionary and ports dictionary from the evaluated module
             let heap = eval.heap();
             let mut nets_dict_entries = Vec::new();
+            let mut ports_dict_entries = Vec::new();
 
             // Use the existing to_schematic() method to get deduplicated nets
             match module.to_schematic() {
@@ -206,7 +207,15 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
                             } else {
                                 port.instance_path.join(".")
                             };
+
+                            // Add to nets dict (net -> list of ports)
                             port_strings.push(heap.alloc_str(&port_string).to_value());
+
+                            // Add to ports dict (port -> net)
+                            ports_dict_entries.push((
+                                heap.alloc_str(&port_string).to_value(),
+                                heap.alloc_str(net_name).to_value(),
+                            ));
                         }
 
                         let ports_list = heap.alloc(port_strings);
@@ -218,15 +227,16 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
                         "Warning: Failed to convert module to schematic for net collection: {}",
                         e
                     );
-                    // Continue with empty nets dict
+                    // Continue with empty dicts
                 }
             }
 
             let nets_dict = heap.alloc(AllocDict(nets_dict_entries));
+            let ports_dict = heap.alloc(AllocDict(ports_dict_entries));
 
             // Execute each check function
             for check_func in checks_list.iter() {
-                match eval.eval_function(check_func, &[nets_dict], &[]) {
+                match eval.eval_function(check_func, &[nets_dict, ports_dict], &[]) {
                     Ok(result) => {
                         // Convert result to bool if possible, otherwise store as-is
                         check_results.push(result);
