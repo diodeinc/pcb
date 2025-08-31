@@ -472,15 +472,15 @@ Creates a test bench for validating module connectivity and properties without r
 MyCircuit = Module("./my_circuit.zen")
 
 # Define check functions
-def verify_power_connections(nets, ports, components):
+def verify_power_connections(module):
     """Ensure all power pins are connected to VCC"""
-    vcc_ports = [p for p, net in ports.items() if "VCC" in net]
+    vcc_ports = [p for p, net in module.ports.items() if "VCC" in net]
     check(len(vcc_ports) >= 2, "Need at least 2 VCC connections")
 
-def verify_ground_plane(nets, ports, components):
+def verify_ground_plane(module):
     """Check for proper ground connections"""
-    check("GND" in nets, "Missing GND net")
-    check(len(nets["GND"]) > 3, "GND net needs more than 3 connections")
+    check("GND" in module.nets, "Missing GND net")
+    check(len(module.nets["GND"]) > 3, "GND net needs more than 3 connections")
 
 # Create test bench
 TestBench(
@@ -498,23 +498,24 @@ TestBench(
 
 **Check Function Signature:**
 
-Check functions receive three dictionaries and must return a boolean:
+Check functions receive a single `ModuleView` argument containing circuit data:
 
 ```python
-def check_function(
-    nets: dict[str, list[str]],      # Map of net names to connected ports
-    ports: dict[str, str],            # Map of port names to their nets
-    components: dict[str, dict[str, str]]  # Map of component names to attributes
-) -> bool:
-    # Perform validation
-    return True  # or False if check fails
+def check_function(module):
+    # Access circuit data through the ModuleView
+    nets = module.nets              # Map of net names to connected ports
+    ports = module.ports            # Map of port names to their nets  
+    components = module.components  # Map of component names to attributes
+    
+    # Perform validation - signal failures using check() or error()
+    check(condition, "Failure message")  # Throws error if condition is False
 ```
 
-**Dictionary Contents:**
+**ModuleView Contents:**
 
-- `nets`: Maps each net name to a list of connected port paths (e.g., `{"VCC": ["U1.VDD", "C1.P1"]}`)
-- `ports`: Maps each port path to its connected net (e.g., `{"U1.VDD": "VCC"}`)
-- `components`: Maps component paths to their attributes including pins, values, and properties
+- `module.nets`: Maps each net name to a list of connected port paths (e.g., `{"VCC": ["U1.VDD", "C1.P1"]}`)
+- `module.ports`: Maps each port path to its connected net (e.g., `{"U1.VDD": "VCC"}`)
+- `module.components`: Maps component paths to their attributes including pins, values, and properties
 
 **Check Function Behavior:**
 
@@ -534,21 +535,21 @@ def check_function(
 **Example with Detailed Checks:**
 
 ```python
-def check_resistor_values(nets, ports, components):
+def check_resistor_values(module):
     """Verify all resistors have valid values"""
-    for name, attrs in components.items():
+    for name, attrs in module.components.items():
         if "R" in name:  # Is a resistor
             check("Value" in attrs or "Resistance" in attrs, f"{name} missing resistance value")
             print(f"✓ {name} has resistance: {attrs.get('Value', attrs.get('Resistance'))}")
 
-def check_differential_pairs(nets, ports, components):
+def check_differential_pairs(module):
     """Verify differential pairs are properly routed"""
     diff_pairs = [("USB_DP", "USB_DN"), ("TX_P", "TX_N")]
     for pos, neg in diff_pairs:
-        check(pos in nets and neg in nets, f"Differential pair {pos}/{neg} not found")
+        check(pos in module.nets and neg in module.nets, f"Differential pair {pos}/{neg} not found")
         # Check they connect to same component
-        pos_comps = {p.split('.')[0] for p in nets[pos]}
-        neg_comps = {p.split('.')[0] for p in nets[neg]}
+        pos_comps = {p.split('.')[0] for p in module.nets[pos]}
+        neg_comps = {p.split('.')[0] for p in module.nets[neg]}
         check(pos_comps == neg_comps, f"Differential pair {pos}/{neg} not routed to same components")
 
 TestBench(
@@ -558,7 +559,7 @@ TestBench(
         check_resistor_values,
         check_differential_pairs,
         # Can mix named functions and lambdas
-        lambda n, p, c: "GND" in n,  # Ensure ground exists
+        lambda module: "GND" in module.nets,  # Ensure ground exists
     ]
 )
 ```

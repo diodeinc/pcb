@@ -1,31 +1,31 @@
 BMI270 = Module("@github/diodeinc/registry:v0.1.0/reference/BMI270x/BMI270x.zen")
 
-def print_info_verbose(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
+def print_info_verbose(module):
     print("Nets and their connected ports:")
-    for (net_name, port_list) in nets.items():
+    for (net_name, port_list) in module.nets.items():
         print(f"  {net_name}: {port_list}")
     print("Ports and their nets:")
-    for (port_name, net_name) in ports.items():
+    for (port_name, net_name) in module.ports.items():
         print(f"  {port_name} -> {net_name}")
     print("Components and their attributes:")
-    for (comp_name, attrs) in components.items():
+    for (comp_name, attrs) in module.components.items():
         print(f"  {comp_name}: {attrs}")
 
-def print_info(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
+def print_info(module):
     print("BMI270 Circuit Analysis:")
-    comp_count = len(components)
-    net_count = len(nets)
-    port_count = len(ports)
+    comp_count = len(module.components)
+    net_count = len(module.nets)
+    port_count = len(module.ports)
     print("  Components: " + str(comp_count))
     print("  Nets: " + str(net_count))
     print("  Port connections: " + str(port_count))
 
-def check_power_decoupling(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
+def check_power_decoupling(module):
     """Verify that capacitors properly connect power to ground"""
     # Find capacitors that have one pin on VDD and another on GND
     decoupling_caps = []
     
-    for comp_name, attrs in components.items():
+    for comp_name, attrs in module.components.items():
         if "C" in comp_name and attrs.get("Type") == "capacitor":
             # Check if this capacitor has pins on both VDD and GND
             pins = attrs.get("Pins", "").split(",")
@@ -35,7 +35,7 @@ def check_power_decoupling(nets: dict[str, list[str]], ports: dict[str, str], co
             for pin in pins:
                 if pin.strip():
                     full_pin_name = comp_name + "." + pin.strip()
-                    net = ports.get(full_pin_name)
+                    net = module.ports.get(full_pin_name)
                     if net and "vdd_VCC" in net:
                         power_pin = pin.strip()
                     elif net and "gnd_GND" in net:
@@ -52,11 +52,11 @@ def check_power_decoupling(nets: dict[str, list[str]], ports: dict[str, str], co
     else:
         error("Insufficient power decoupling: only " + str(len(decoupling_caps)) + " capacitors connecting VDD to GND")
 
-def check_bmi270_power_pins(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
+def check_bmi270_power_pins(module):
     """Verify BMI270 power pins are properly connected"""
     # Check VDD and VDDIO are connected to power
-    vdd_net = ports.get("BMI270.BMI270.VDD")
-    vddio_net = ports.get("BMI270.BMI270.VDDIO")
+    vdd_net = module.ports.get("BMI270.BMI270.VDD")
+    vddio_net = module.ports.get("BMI270.BMI270.VDDIO")
     
     if vdd_net and "vdd_VCC" in vdd_net:
         print("✓ BMI270 VDD connected to power rail")
@@ -69,19 +69,19 @@ def check_bmi270_power_pins(nets: dict[str, list[str]], ports: dict[str, str], c
         error("BMI270 VDDIO not properly connected")
     
     # Check ground connections
-    gnd_net = ports.get("BMI270.BMI270.GND")
-    gndio_net = ports.get("BMI270.BMI270.GNDIO")
+    gnd_net = module.ports.get("BMI270.BMI270.GND")
+    gndio_net = module.ports.get("BMI270.BMI270.GNDIO")
     
     if gnd_net and "gnd_GND" in gnd_net and gndio_net and "gnd_GND" in gndio_net:
         print("✓ BMI270 ground pins properly connected")
     else:
         error("BMI270 ground pins not properly connected")
 
-def check_communication_interfaces(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
+def check_communication_interfaces(module):
     """Verify I2C and SPI interface pins are available"""
     # Check I2C pins
-    scl_net = ports.get("BMI270.BMI270.SCX")
-    sda_net = ports.get("BMI270.BMI270.SDX")
+    scl_net = module.ports.get("BMI270.BMI270.SCX")
+    sda_net = module.ports.get("BMI270.BMI270.SDX")
     
     if scl_net and sda_net:
         print("✓ I2C interface available (SCL, SDA)")
@@ -92,7 +92,7 @@ def check_communication_interfaces(nets: dict[str, list[str]], ports: dict[str, 
     cs_pins = ["BMI270.BMI270.CSB", "BMI270.BMI270.OCSB"]
     cs_connected = True
     for pin in cs_pins:
-        if pin not in ports:
+        if pin not in module.ports:
             cs_connected = False
             break
     

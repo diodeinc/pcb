@@ -6,7 +6,7 @@ use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     eval::Evaluator,
-    starlark_complex_value, starlark_module,
+    starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
         dict::AllocDict, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult, Heap,
         NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
@@ -19,6 +19,83 @@ use crate::lang::input::InputMap;
 use crate::lang::module::{FrozenModuleValue, ModuleLoader};
 use crate::Diagnostic;
 use starlark::errors::EvalSeverity;
+
+/// Type marker for ModuleView, used in type annotations
+#[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct ModuleViewType;
+
+starlark_simple_value!(ModuleViewType);
+
+#[starlark_value(type = "ModuleViewType")]
+impl<'v> StarlarkValue<'v> for ModuleViewType {
+    fn eval_type(&self) -> Option<starlark::typing::Ty> {
+        Some(<ModuleView as StarlarkValue>::get_type_starlark_repr())
+    }
+}
+
+impl std::fmt::Display for ModuleViewType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModuleView")
+    }
+}
+
+/// ModuleView provides access to nets, ports, and components data for TestBench check functions
+#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct ModuleViewGen<V: ValueLifetimeless> {
+    /// Dictionary of net names to connected ports
+    nets: V,
+    /// Dictionary of port names to net names
+    ports: V,
+    /// Dictionary of component names to their attributes
+    components: V,
+}
+
+starlark_complex_value!(pub ModuleView);
+
+#[starlark_value(type = "ModuleView")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleViewGen<V>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+        match attr {
+            "nets" => Some(self.nets.to_value()),
+            "ports" => Some(self.ports.to_value()),
+            "components" => Some(self.components.to_value()),
+            _ => None,
+        }
+    }
+
+    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+        matches!(attr, "nets" | "ports" | "components")
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec![
+            "nets".to_string(),
+            "ports".to_string(),
+            "components".to_string(),
+        ]
+    }
+}
+
+impl<'v, V: ValueLike<'v>> std::fmt::Display for ModuleViewGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModuleView(nets, ports, components)")
+    }
+}
+
+impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleViewGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModuleView")
+            .field("nets", &"<dict>")
+            .field("ports", &"<dict>")
+            .field("components", &"<dict>")
+            .finish()
+    }
+}
 
 /// TestBench value that can evaluate modules without requiring inputs
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -164,13 +241,6 @@ impl ModuleLoader {
     }
 }
 
-/// Test dictionaries returned by build_test_dictionaries
-struct TestDictionaries<'v> {
-    nets: Vec<(Value<'v>, Value<'v>)>,
-    ports: Vec<(Value<'v>, Value<'v>)>,
-    components: Vec<(Value<'v>, Value<'v>)>,
-}
-
 /// Format an instance path for display
 fn format_instance_path(path: &[pcb_sch::Symbol]) -> String {
     if path.is_empty() {
@@ -180,11 +250,11 @@ fn format_instance_path(path: &[pcb_sch::Symbol]) -> String {
     }
 }
 
-/// Build dictionaries of nets, ports, and components from a schematic
-fn build_test_dictionaries<'v>(
+/// Build a ModuleView from a schematic
+fn build_module_view<'v>(
     schematic: &pcb_sch::Schematic,
     heap: &'v Heap,
-) -> TestDictionaries<'v> {
+) -> ModuleViewGen<Value<'v>> {
     let mut nets_dict = Vec::new();
     let mut ports_dict = Vec::new();
     let mut components_dict = Vec::new();
@@ -269,10 +339,10 @@ fn build_test_dictionaries<'v>(
         ));
     }
 
-    TestDictionaries {
-        nets: nets_dict,
-        ports: ports_dict,
-        components: components_dict,
+    ModuleViewGen::<Value> {
+        nets: heap.alloc(AllocDict(nets_dict)),
+        ports: heap.alloc(AllocDict(ports_dict)),
+        components: heap.alloc(AllocDict(components_dict)),
     }
 }
 
@@ -333,6 +403,8 @@ fn execute_check<'v>(
 
 #[starlark_module]
 pub fn testbench_globals(builder: &mut GlobalsBuilder) {
+    const ModuleView: ModuleViewType = ModuleViewType;
+
     /// Create a TestBench that can evaluate modules without required inputs
     fn TestBench<'v>(
         #[starlark(require = named)] name: String,
@@ -358,12 +430,8 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
 
             let heap = eval.heap();
             let schematic = module.to_schematic()?;
-            let dicts = build_test_dictionaries(&schematic, heap);
-            let args = [
-                heap.alloc(AllocDict(dicts.nets)),
-                heap.alloc(AllocDict(dicts.ports)),
-                heap.alloc(AllocDict(dicts.components)),
-            ];
+            let module_view = build_module_view(&schematic, heap);
+            let args = [heap.alloc(module_view)];
 
             for check_func in checks_list.iter() {
                 let (_result, failed) = execute_check(eval, check_func, &args, &name)?;
