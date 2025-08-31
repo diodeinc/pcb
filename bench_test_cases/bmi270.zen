@@ -55,7 +55,7 @@ def check_power_decoupling(module):
 def check_bmi270_power_pins(module):
     """Verify BMI270 power pins are properly connected"""
     # Check VDD and VDDIO are connected to power
-    comp = module.components["BMI270.BMI270"]
+    comp = module["BMI270"]["BMI270"]
     if "VCC" not in comp.pins["VDD"].name:
         error("BMI270 VDD not connected to power")
     if "VCC" not in comp.pins["VDDIO"].name:
@@ -68,7 +68,7 @@ def check_bmi270_power_pins(module):
 def check_communication_interfaces(module):
     """Verify I2C and SPI interface pins are available"""
     # Check I2C pins
-    comp = module.components["BMI270.BMI270"]
+    comp = module["BMI270.BMI270"]
     scl_net = comp.pins.get("SCX")
     sda_net = comp.pins.get("SDX")
 

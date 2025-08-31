@@ -332,7 +332,7 @@ Callbacks receive `self` and cannot be overridden during instantiation.
 
 ### Module
 
-Modules represent hierarchical subcircuits that can be instantiated multiple times.
+Modules represent hierarchical subcircuits that can be instantiated multiple times. Module objects support indexing to access child components and submodules directly.
 
 ```python
 # Load a module from a file
@@ -343,10 +343,54 @@ SubCircuit(
     name = "power_supply",
     # ... pass inputs defined by io() and config() in the module
 )
+
+# Access child components and submodules via indexing
+component = module["ComponentName"]     # Access component by name
+submodule = module["SubmoduleName"]     # Access submodule by name
+
+# Chain indexing for nested access
+nested_component = module["SubmoduleName"]["ComponentName"]
+
+# Nested path syntax (equivalent to chained indexing)
+nested_component = module["SubmoduleName.ComponentName"]  # Same as above
+
+# Check if components exist using membership operator
+if "ComponentName" in module:
+    component = module["ComponentName"]
+
+# Check nested paths
+if "SubmoduleName.ComponentName" in module:
+    nested_component = module["SubmoduleName.ComponentName"]
 ```
 
 **Type**: `Module`  
 **Constructor**: `Module(path)`
+
+**Module Indexing**: `module[name]` supports:
+- Single names: `module["ComponentName"]` returns Component or Module objects
+- Nested paths: `module["Sub.Component"]` equivalent to `module["Sub"]["Component"]`
+- Deep nesting: `module["A.B.C"]` equivalent to `module["A"]["B"]["C"]`
+- Returns Component objects for leaf components, Module objects for intermediate submodules
+- Raises an error if any part of the path is not found
+
+**Module Membership**: `name in module` supports:
+- Single names: `"ComponentName" in module` checks if component or submodule exists
+- Nested paths: `"Sub.Component" in module` equivalent to checking nested existence
+- Returns `True` if the path exists, `False` otherwise
+- Works with the same path syntax as indexing
+
+**Module Attributes**:
+- `module.nets`: Dict mapping net names to lists of connected port tuples
+- `module.components`: Dict mapping component paths to component objects
+
+**Naming Conventions**:
+- Component paths in `module.components` follow the pattern `SubmoduleName.ComponentName` (e.g., `"BMI270.BMI270"`, `"C1.C"`)
+- The first part is the submodule name, the second part is the component name within that submodule
+- Indexing supports both single names and nested paths:
+  - `module["BMI270"]` returns the BMI270 submodule
+  - `module["BMI270"]["BMI270"]` returns the component within the submodule (chained)
+  - `module["BMI270.BMI270"]` also returns the component (nested path syntax)
+- All three approaches are equivalent for accessing nested components
 
 ### TestBench
 
@@ -474,8 +518,8 @@ MyCircuit = Module("./my_circuit.zen")
 # Define check functions
 def verify_power_connections(module):
     """Ensure all power pins are connected to VCC"""
-    vcc_ports = [p for p, net in module.ports.items() if "VCC" in net]
-    check(len(vcc_ports) >= 2, "Need at least 2 VCC connections")
+    vcc_connections = module.nets.get("VCC", [])
+    check(len(vcc_connections) >= 2, "Need at least 2 VCC connections")
 
 def verify_ground_plane(module):
     """Check for proper ground connections"""
@@ -498,24 +542,33 @@ TestBench(
 
 **Check Function Signature:**
 
-Check functions receive a single `ModuleView` argument containing circuit data:
+Check functions receive a single `Module` argument containing circuit data:
 
 ```python
-def check_function(module):
-    # Access circuit data through the ModuleView
-    nets = module.nets              # Map of net names to connected ports
-    ports = module.ports            # Map of port names to their nets  
-    components = module.components  # Map of component names to attributes
+def check_function(module: Module):
+    # Access circuit data through the Module
+    nets = module.nets              # Map of net names to connected port tuples
+    components = module.components  # Map of component paths to component objects
+    
+    # Access components via indexing (new preferred method)
+    component = module["ComponentName"]              # Direct component access
+    submodule = module["SubmoduleName"]              # Direct submodule access
+    nested = module["SubmoduleName"]["ComponentName"] # Chained access
+    
+    # Access component attributes
+    component_pins = component.pins     # Component pin connections
+    component_type = component.type     # Component type (if available)
+    component_props = component.properties  # Component properties dict
     
     # Perform validation - signal failures using check() or error()
     check(condition, "Failure message")  # Throws error if condition is False
 ```
 
-**ModuleView Contents:**
+**Module Contents:**
 
-- `module.nets`: Maps each net name to a list of connected port paths (e.g., `{"VCC": ["U1.VDD", "C1.P1"]}`)
-- `module.ports`: Maps each port path to its connected net (e.g., `{"U1.VDD": "VCC"}`)
-- `module.components`: Maps component paths to their attributes including pins, values, and properties
+- `module.nets`: Maps each net name to a list of connected port tuples (e.g., `{"VCC": [("U1", "VDD"), ("C1", "P1")]}`)
+- `module.components`: Maps component paths to component objects (e.g., `{"U1.IC": <Component>, "C1.C": <Component>}`)
+- `module["name"]`: Direct indexing access to child components and submodules by name
 
 **Check Function Behavior:**
 
@@ -532,34 +585,91 @@ def check_function(module):
 - Prints a success message if all checks pass
 - Returns a TestBench value containing results
 
-**Example with Detailed Checks:**
+**Example with Modern Indexing Syntax:**
 
 ```python
-def check_resistor_values(module):
-    """Verify all resistors have valid values"""
-    for name, attrs in module.components.items():
-        if "R" in name:  # Is a resistor
-            check("Value" in attrs or "Resistance" in attrs, f"{name} missing resistance value")
-            print(f"✓ {name} has resistance: {attrs.get('Value', attrs.get('Resistance'))}")
+def check_power_connections(module: Module):
+    """Verify power IC connections using modern indexing syntax"""
+    # Access submodule and then component within it (chained syntax)
+    power_ic = module["PowerIC"]["LDO"]
+    
+    # Equivalent using nested path syntax
+    power_ic_nested = module["PowerIC.LDO"]
+    
+    # Both approaches return the same component
+    check(power_ic.name == power_ic_nested.name, "Chained and nested path syntax should be equivalent")
+    
+    # Check that power pins are connected properly
+    check("VCC" in power_ic.pins["VIN"].name, "LDO input not connected to VCC")
+    check("GND" in power_ic.pins["GND"].name, "LDO ground not connected")
+    
+    print(f"✓ {power_ic.name} power connections verified")
 
-def check_differential_pairs(module):
-    """Verify differential pairs are properly routed"""
-    diff_pairs = [("USB_DP", "USB_DN"), ("TX_P", "TX_N")]
-    for pos, neg in diff_pairs:
-        check(pos in module.nets and neg in module.nets, f"Differential pair {pos}/{neg} not found")
-        # Check they connect to same component
-        pos_comps = {p.split('.')[0] for p in module.nets[pos]}
-        neg_comps = {p.split('.')[0] for p in module.nets[neg]}
-        check(pos_comps == neg_comps, f"Differential pair {pos}/{neg} not routed to same components")
+def check_capacitor_placement(module: Module):
+    """Verify bypass capacitors are properly placed"""
+    # Access capacitor components by name using both syntaxes
+    c1 = module["C1"]["C"]    # Chained syntax
+    c2 = module["C2.C"]       # Nested path syntax
+    
+    # Verify they're connected to power and ground
+    check("VCC" in c1.pins["P1"].name, "C1 not connected to power")
+    check("GND" in c1.pins["P2"].name, "C1 not connected to ground")
+    check("VCC" in c2.pins["P1"].name, "C2 not connected to power")
+    check("GND" in c2.pins["P2"].name, "C2 not connected to ground")
+    
+    print(f"✓ Capacitors {c1.name} and {c2.name} properly placed")
+
+def check_traditional_syntax(module: Module):
+    """Example using traditional components dict access"""
+    for comp_path, component in module.components.items():
+        if component.type == "capacitor":
+            check(hasattr(component, 'capacitance'), f"{comp_path} missing capacitance")
+            print(f"✓ {comp_path} capacitance: {component.capacitance}")
+
+def check_net_connectivity(module: Module):
+    """Verify net connections using nets attribute"""
+    check("VCC" in module.nets, "Missing VCC power net")
+    check("GND" in module.nets, "Missing GND net")
+    
+    vcc_connections = len(module.nets["VCC"])
+    check(vcc_connections >= 2, f"VCC only has {vcc_connections} connections, need at least 2")
+    
+    print(f"✓ VCC net has {vcc_connections} connections")
+
+def check_component_presence(module: Module):
+    """Use membership operator to check component existence"""
+    # Check if components exist before accessing them
+    if "PowerIC" in module:
+        power_ic = module["PowerIC"]
+        print(f"✓ Found PowerIC submodule: {power_ic}")
+        
+        # Check nested component existence
+        if "PowerIC.LDO" in module:
+            ldo = module["PowerIC.LDO"]
+            print(f"✓ Found LDO component: {ldo.name}")
+        else:
+            error("LDO component not found in PowerIC")
+    else:
+        print("PowerIC not present in this module")
+    
+    # Check multiple components at once
+    required_caps = ["C1", "C2", "C3"]
+    missing_caps = [cap for cap in required_caps if cap not in module]
+    
+    if missing_caps:
+        error(f"Missing required capacitors: {missing_caps}")
+    else:
+        print("✓ All required capacitors present")
 
 TestBench(
-    name = "CircuitValidation",
-    module = MyCircuit,
+    name = "PowerCircuitValidation",
+    module = MyPowerCircuit,
     checks = [
-        check_resistor_values,
-        check_differential_pairs,
-        # Can mix named functions and lambdas
-        lambda module: "GND" in module.nets,  # Ensure ground exists
+        check_power_connections,      # Uses modern indexing syntax
+        check_capacitor_placement,    # Uses chained indexing
+        check_traditional_syntax,     # Uses traditional components dict
+        check_net_connectivity,       # Uses nets attribute
+        check_component_presence,     # Uses membership operator
     ]
 )
 ```

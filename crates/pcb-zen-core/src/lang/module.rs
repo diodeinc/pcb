@@ -179,9 +179,119 @@ where
     fn dir_attr(&self) -> Vec<String> {
         vec!["nets".to_string(), "components".to_string()]
     }
+
+    fn at(&self, index: Value<'v>, _heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        let key = index.unpack_str().ok_or_else(|| {
+            starlark::Error::new_other(anyhow::anyhow!(
+                "Module index must be a string, got {}",
+                index.get_type()
+            ))
+        })?;
+
+        self.find_at_path(key)
+    }
+
+    fn is_in(&self, other: Value<'v>) -> starlark::Result<bool> {
+        let key = other.unpack_str().ok_or_else(|| {
+            starlark::Error::new_other(anyhow::anyhow!(
+                "Module membership test requires a string, got {}",
+                other.get_type()
+            ))
+        })?;
+
+        Ok(self.contains_at_path(key))
+    }
 }
 
 impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
+    /// Find a child at the given path (supports nested paths like "foo.bar")
+    fn find_at_path(&self, path: &str) -> starlark::Result<Value<'v>> {
+        // Handle nested paths (e.g., "foo.bar")
+        if let Some(dot_pos) = path.find('.') {
+            let (first, rest) = path.split_at(dot_pos);
+            let rest = &rest[1..]; // Skip the dot
+
+            // Find the first part in children
+            for child in self.children().iter() {
+                if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
+                    if component.name() == first {
+                        return Err(starlark::Error::new_other(anyhow::anyhow!(
+                            "Cannot access '{}' on component '{}' - components don't have child elements",
+                            rest, first
+                        )));
+                    }
+                } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
+                    if submodule.name() == first {
+                        return submodule.find_at_path(rest);
+                    }
+                }
+            }
+
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Module '{}' has no child named '{}'",
+                self.name(),
+                first
+            )));
+        }
+
+        // Single key - look for exact match
+        for child in self.children().iter() {
+            if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
+                if component.name() == path {
+                    return Ok(child.to_value());
+                }
+            } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
+                if submodule.name() == path {
+                    return Ok(child.to_value());
+                }
+            }
+        }
+
+        Err(starlark::Error::new_other(anyhow::anyhow!(
+            "Module '{}' has no child named '{}'",
+            self.name(),
+            path
+        )))
+    }
+
+    /// Check if a path exists in the given module (supports nested paths like "foo.bar")
+    fn contains_at_path(&self, path: &str) -> bool {
+        // Handle nested paths (e.g., "foo.bar")
+        if let Some(dot_pos) = path.find('.') {
+            let (first, rest) = path.split_at(dot_pos);
+            let rest = &rest[1..]; // Skip the dot
+
+            // Find the first part in children
+            for child in self.children().iter() {
+                if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
+                    if component.name() == first {
+                        return false; // Can't go deeper into components
+                    }
+                } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
+                    if submodule.name() == first {
+                        return submodule.contains_at_path(rest);
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Single key - look for exact match
+        for child in self.children().iter() {
+            if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
+                if component.name() == path {
+                    return true;
+                }
+            } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
+                if submodule.name() == path {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// Recursively collect components from this module and its submodules
     fn collect_components(&self, path_prefix: &str) -> HashMap<String, Value<'v>> {
         let mut components = HashMap::new();
