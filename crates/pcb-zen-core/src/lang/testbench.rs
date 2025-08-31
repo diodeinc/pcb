@@ -48,12 +48,8 @@ impl std::fmt::Display for ModuleViewType {
 pub struct ModuleViewGen<V: ValueLifetimeless> {
     /// Dictionary of net names to connected ports
     nets: V,
-    /// Dictionary of port names to net names
-    ports: V,
-    /// Dictionary of component names to their attributes
-    components: V,
     /// Dictionary of component names to their ComponentValue objects
-    component_values: V,
+    components: V,
 }
 
 starlark_complex_value!(pub ModuleView);
@@ -66,24 +62,17 @@ where
     fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
         match attr {
             "nets" => Some(self.nets.to_value()),
-            "ports" => Some(self.ports.to_value()),
             "components" => Some(self.components.to_value()),
-            "component_values" => Some(self.component_values.to_value()),
             _ => None,
         }
     }
 
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
-        matches!(attr, "nets" | "ports" | "components" | "component_values")
+        matches!(attr, "nets" | "components")
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        vec![
-            "nets".to_string(),
-            "ports".to_string(),
-            "components".to_string(),
-            "component_values".to_string(),
-        ]
+        vec!["nets".to_string(), "components".to_string()]
     }
 }
 
@@ -293,11 +282,9 @@ fn build_module_view<'v>(
     heap: &'v Heap,
 ) -> ModuleViewGen<Value<'v>> {
     let mut nets_dict = Vec::new();
-    let mut ports_dict = Vec::new();
-    let mut components_dict = HashMap::<String, HashMap<String, Value<'v>>>::new();
 
     // Collect ComponentValue objects first so we can reference them
-    let component_values_dict = collect_components(module, "");
+    let components_dict = collect_components(module, "");
 
     // Build nets and ports dictionaries
     for (net_name, net) in &schematic.nets {
@@ -305,9 +292,7 @@ fn build_module_view<'v>(
         for port in &net.ports {
             let port_string = format_instance_path(&port.instance_path);
             let port_val = heap.alloc_str(&port_string).to_value();
-            let net_val = heap.alloc_str(net_name).to_value();
             port_strings.push(port_val);
-            ports_dict.push((port_val, net_val));
         }
         nets_dict.push((
             heap.alloc_str(net_name).to_value(),
@@ -315,71 +300,15 @@ fn build_module_view<'v>(
         ));
     }
 
-    // Build components dictionary directly from component_values_dict
-    for (component_name, comp_val) in &component_values_dict {
-        if let Some(frozen_comp) = comp_val.downcast_ref::<crate::FrozenComponentValue>() {
-            let mut component_attrs = HashMap::new();
-
-            // Add pins as a comma-delimited string
-            let pin_names: Vec<String> = frozen_comp.connections().keys().cloned().collect();
-            component_attrs.insert("Pins".to_string(), heap.alloc(pin_names));
-
-            // Add component properties (excluding internal ones)
-            for (key, value) in frozen_comp.properties() {
-                if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
-                    || key.starts_with("__")
-                {
-                    continue;
-                }
-                component_attrs.insert(key.clone(), value.to_value());
-            }
-
-            // Promote typed attributes over string attributes
-            if let Some(capacitance) = frozen_comp.properties().get("__capacitance__") {
-                component_attrs.insert("Capacitance".to_string(), capacitance.to_value());
-            }
-            if let Some(resistance) = frozen_comp.properties().get("__resistance__") {
-                component_attrs.insert("Resistance".to_string(), resistance.to_value());
-            }
-
-            // Add built-in component attributes
-            if let Some(mpn) = frozen_comp.mpn() {
-                component_attrs.insert("MPN".to_string(), heap.alloc_str(mpn).to_value());
-            }
-            component_attrs.insert(
-                "Prefix".to_string(),
-                heap.alloc_str(frozen_comp.prefix()).to_value(),
-            );
-
-            components_dict.insert(component_name.clone(), component_attrs);
-        }
-    }
-
     // Convert HashMaps back to Vecs for Starlark dictionaries
-    let component_values_vec: Vec<(Value<'v>, Value<'v>)> = component_values_dict
+    let component_values_vec: Vec<(Value<'v>, Value<'v>)> = components_dict
         .into_iter()
         .map(|(path, comp_val)| (heap.alloc_str(&path).to_value(), comp_val))
         .collect();
 
-    let components_dict_vec: Vec<(Value<'v>, Value<'v>)> = components_dict
-        .into_iter()
-        .map(|(comp_name, comp_attrs)| {
-            let attrs_vec: Vec<(Value<'v>, Value<'v>)> = comp_attrs
-                .into_iter()
-                .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
-                .collect();
-            (
-                heap.alloc_str(&comp_name).to_value(),
-                heap.alloc(AllocDict(attrs_vec)),
-            )
-        })
-        .collect();
-
     ModuleViewGen::<Value> {
         nets: heap.alloc(AllocDict(nets_dict)),
-        ports: heap.alloc(AllocDict(ports_dict)),
-        components: heap.alloc(AllocDict(components_dict_vec)),
-        component_values: heap.alloc(AllocDict(component_values_vec)),
+        components: heap.alloc(AllocDict(component_values_vec)),
     }
 }
 

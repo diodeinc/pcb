@@ -8,8 +8,9 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        dict::DictRef, starlark_value, Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue,
-        Trace, Value, ValueLike,
+        dict::{AllocDict, DictRef},
+        starlark_value, Coerce, Freeze, FreezeResult, Heap, NoSerialize, StarlarkValue, Trace,
+        Value, ValueLike,
     },
 };
 
@@ -86,9 +87,101 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 starlark_complex_value!(pub ComponentValue);
 
 #[starlark_value(type = "Component")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V> where
-    Self: ProvidesStaticType<'v>
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V>
+where
+    Self: ProvidesStaticType<'v>,
 {
+    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attr {
+            "name" => Some(heap.alloc_str(&self.name).to_value()),
+            "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
+            "mpn" => Some(
+                self.mpn()
+                    .map(|mpn| heap.alloc_str(mpn).to_value())
+                    .or_else(|| self.properties().get("mpn").map(|t| t.to_value()))
+                    .or_else(|| self.properties().get("Mpn").map(|t| t.to_value()))
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "type" => Some(
+                self.ctype()
+                    .map(|ctype| heap.alloc_str(ctype).to_value())
+                    .or_else(|| self.properties().get("type").map(|t| t.to_value()))
+                    .or_else(|| self.properties().get("Type").map(|t| t.to_value()))
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "properties" => {
+                // Build the same properties dictionary as in the testbench components dict
+                let mut component_attrs = std::collections::HashMap::new();
+
+                // Add component properties (excluding internal ones)
+                for (key, value) in &self.properties {
+                    if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
+                        || key.starts_with("__")
+                    {
+                        continue;
+                    }
+                    component_attrs.insert(key.clone(), value.to_value());
+                }
+
+                // Convert HashMap to Starlark dictionary
+                let attrs_vec: Vec<(Value<'v>, Value<'v>)> = component_attrs
+                    .into_iter()
+                    .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
+                    .collect();
+
+                Some(heap.alloc(AllocDict(attrs_vec)))
+            }
+            "pins" => {
+                // Convert connections SmallMap to Starlark dictionary
+                let connections_vec: Vec<(Value<'v>, Value<'v>)> = self
+                    .connections
+                    .iter()
+                    .map(|(pin, net)| (heap.alloc_str(pin).to_value(), net.to_value()))
+                    .collect();
+                Some(heap.alloc(AllocDict(connections_vec)))
+            }
+            "capacitance" => Some(
+                self.properties
+                    .get("__capacitance__")
+                    .map(|v| v.to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "resistance" => Some(
+                self.properties
+                    .get("__resistance__")
+                    .map(|v| v.to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            _ => None,
+        }
+    }
+
+    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+        matches!(
+            attr,
+            "name"
+                | "prefix"
+                | "mpn"
+                | "type"
+                | "properties"
+                | "pins"
+                | "capacitance"
+                | "resistance"
+        )
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec![
+            "name".to_string(),
+            "prefix".to_string(),
+            "mpn".to_string(),
+            "type".to_string(),
+            "properties".to_string(),
+            "pins".to_string(),
+            "capacitance".to_string(),
+            "resistance".to_string(),
+        ]
+    }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
