@@ -1,5 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
+use std::collections::HashMap;
+
 use allocative::Allocative;
 use starlark::environment::GlobalsBuilder;
 use starlark::{
@@ -50,6 +52,8 @@ pub struct ModuleViewGen<V: ValueLifetimeless> {
     ports: V,
     /// Dictionary of component names to their attributes
     components: V,
+    /// Dictionary of component names to their ComponentValue objects
+    component_values: V,
 }
 
 starlark_complex_value!(pub ModuleView);
@@ -64,12 +68,13 @@ where
             "nets" => Some(self.nets.to_value()),
             "ports" => Some(self.ports.to_value()),
             "components" => Some(self.components.to_value()),
+            "component_values" => Some(self.component_values.to_value()),
             _ => None,
         }
     }
 
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
-        matches!(attr, "nets" | "ports" | "components")
+        matches!(attr, "nets" | "ports" | "components" | "component_values")
     }
 
     fn dir_attr(&self) -> Vec<String> {
@@ -77,6 +82,7 @@ where
             "nets".to_string(),
             "ports".to_string(),
             "components".to_string(),
+            "component_values".to_string(),
         ]
     }
 }
@@ -250,14 +256,48 @@ fn format_instance_path(path: &[pcb_sch::Symbol]) -> String {
     }
 }
 
-/// Build a ModuleView from a schematic
+/// Walk the module tree and collect ComponentValue objects with their paths
+fn collect_components<'v>(
+    module: &crate::lang::module::FrozenModuleValue,
+    path_prefix: &str,
+) -> HashMap<String, Value<'v>> {
+    let mut components = HashMap::new();
+
+    for child in module.children() {
+        if let Some(component) = child.downcast_ref::<crate::FrozenComponentValue>() {
+            let path = if path_prefix.is_empty() {
+                component.name().to_string()
+            } else {
+                format!("{}.{}", path_prefix, component.name())
+            };
+            components.insert(path, child.to_value());
+        } else if let Some(submodule) =
+            child.downcast_ref::<crate::lang::module::FrozenModuleValue>()
+        {
+            let subpath = if path_prefix.is_empty() {
+                submodule.name().to_string()
+            } else {
+                format!("{}.{}", path_prefix, submodule.name())
+            };
+            components.extend(collect_components(submodule, &subpath));
+        }
+    }
+
+    components
+}
+
+/// Build a ModuleView from a schematic and module
 fn build_module_view<'v>(
     schematic: &pcb_sch::Schematic,
+    module: &crate::lang::module::FrozenModuleValue,
     heap: &'v Heap,
 ) -> ModuleViewGen<Value<'v>> {
     let mut nets_dict = Vec::new();
     let mut ports_dict = Vec::new();
-    let mut components_dict = Vec::new();
+    let mut components_dict = HashMap::<String, HashMap<String, Value<'v>>>::new();
+
+    // Collect ComponentValue objects first so we can reference them
+    let component_values_dict = collect_components(module, "");
 
     // Build nets and ports dictionaries
     for (net_name, net) in &schematic.nets {
@@ -275,74 +315,71 @@ fn build_module_view<'v>(
         ));
     }
 
-    // Build components dictionary
-    for (instance_ref, instance) in &schematic.instances {
-        if instance.kind != pcb_sch::InstanceKind::Component {
-            continue;
-        }
+    // Build components dictionary directly from component_values_dict
+    for (component_name, comp_val) in &component_values_dict {
+        if let Some(frozen_comp) = comp_val.downcast_ref::<crate::FrozenComponentValue>() {
+            let mut component_attrs = HashMap::new();
 
-        let component_name = format_instance_path(&instance_ref.instance_path);
-        let mut component_attrs = Vec::new();
+            // Add pins as a comma-delimited string
+            let pin_names: Vec<String> = frozen_comp.connections().keys().cloned().collect();
+            component_attrs.insert("Pins".to_string(), heap.alloc(pin_names));
 
-        // Collect all pin names for this component
-        // TODO: there's gotta be a much better way to do this
-        let mut pin_names = Vec::new();
-        for net in schematic.nets.values() {
-            for port in &net.ports {
-                if port.instance_path.len() >= 2
-                    && format_instance_path(&port.instance_path[..port.instance_path.len() - 1])
-                        == component_name
+            // Add component properties (excluding internal ones)
+            for (key, value) in frozen_comp.properties() {
+                if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
+                    || key.starts_with("__")
                 {
-                    if let Some(pin_name) = port.instance_path.last() {
-                        if !pin_names.contains(pin_name) {
-                            pin_names.push(pin_name.clone());
-                        }
-                    }
+                    continue;
                 }
-            }
-        }
-
-        // Add pins as a comma-delimited string
-        if !pin_names.is_empty() {
-            pin_names.sort();
-            component_attrs.push((
-                heap.alloc_str("Pins").to_value(),
-                heap.alloc_str(&pin_names.join(",")).to_value(),
-            ));
-        }
-
-        // Add non-internal attributes
-        for (key, value) in &instance.attributes {
-            if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
-                || key.starts_with("__")
-            {
-                continue;
+                component_attrs.insert(key.clone(), value.to_value());
             }
 
-            let value_str = match value {
-                pcb_sch::AttributeValue::String(s) => s.clone(),
-                pcb_sch::AttributeValue::Number(n) => n.to_string(),
-                pcb_sch::AttributeValue::Boolean(b) => b.to_string(),
-                pcb_sch::AttributeValue::Physical(p) => format!("{p:?}"),
-                pcb_sch::AttributeValue::Port(p) => p.clone(),
-                _ => format!("{value:?}"),
-            };
-            component_attrs.push((
-                heap.alloc_str(key).to_value(),
-                heap.alloc_str(&value_str).to_value(),
-            ));
-        }
+            // Promote typed attributes over string attributes
+            if let Some(capacitance) = frozen_comp.properties().get("__capacitance__") {
+                component_attrs.insert("Capacitance".to_string(), capacitance.to_value());
+            }
+            if let Some(resistance) = frozen_comp.properties().get("__resistance__") {
+                component_attrs.insert("Resistance".to_string(), resistance.to_value());
+            }
 
-        components_dict.push((
-            heap.alloc_str(&component_name).to_value(),
-            heap.alloc(AllocDict(component_attrs)),
-        ));
+            // Add built-in component attributes
+            if let Some(mpn) = frozen_comp.mpn() {
+                component_attrs.insert("MPN".to_string(), heap.alloc_str(mpn).to_value());
+            }
+            component_attrs.insert(
+                "Prefix".to_string(),
+                heap.alloc_str(frozen_comp.prefix()).to_value(),
+            );
+
+            components_dict.insert(component_name.clone(), component_attrs);
+        }
     }
+
+    // Convert HashMaps back to Vecs for Starlark dictionaries
+    let component_values_vec: Vec<(Value<'v>, Value<'v>)> = component_values_dict
+        .into_iter()
+        .map(|(path, comp_val)| (heap.alloc_str(&path).to_value(), comp_val))
+        .collect();
+
+    let components_dict_vec: Vec<(Value<'v>, Value<'v>)> = components_dict
+        .into_iter()
+        .map(|(comp_name, comp_attrs)| {
+            let attrs_vec: Vec<(Value<'v>, Value<'v>)> = comp_attrs
+                .into_iter()
+                .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
+                .collect();
+            (
+                heap.alloc_str(&comp_name).to_value(),
+                heap.alloc(AllocDict(attrs_vec)),
+            )
+        })
+        .collect();
 
     ModuleViewGen::<Value> {
         nets: heap.alloc(AllocDict(nets_dict)),
         ports: heap.alloc(AllocDict(ports_dict)),
-        components: heap.alloc(AllocDict(components_dict)),
+        components: heap.alloc(AllocDict(components_dict_vec)),
+        component_values: heap.alloc(AllocDict(component_values_vec)),
     }
 }
 
@@ -430,7 +467,7 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
 
             let heap = eval.heap();
             let schematic = module.to_schematic()?;
-            let module_view = build_module_view(&schematic, heap);
+            let module_view = build_module_view(&schematic, module, heap);
             let args = [heap.alloc(module_view)];
 
             for check_func in checks_list.iter() {

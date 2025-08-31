@@ -28,22 +28,21 @@ def check_power_decoupling(module):
     for comp_name, attrs in module.components.items():
         if "C" in comp_name and attrs.get("Type") == "capacitor":
             # Check if this capacitor has pins on both VDD and GND
-            pins = attrs.get("Pins", "").split(",")
+            pins = attrs.get("Pins", [])
             power_pin = None
             ground_pin = None
             
             for pin in pins:
-                if pin.strip():
-                    full_pin_name = comp_name + "." + pin.strip()
-                    net = module.ports.get(full_pin_name)
-                    if net and "vdd_VCC" in net:
-                        power_pin = pin.strip()
-                    elif net and "gnd_GND" in net:
-                        ground_pin = pin.strip()
+                full_pin_name = comp_name + "." + pin
+                net = module.ports.get(full_pin_name)
+                if net and "vdd_VCC" in net:
+                    power_pin = pin
+                elif net and "gnd_GND" in net:
+                    ground_pin = pin
             
             if power_pin and ground_pin:
-                value = attrs.get("Value", attrs.get("Capacitance", "unknown"))
-                decoupling_caps.append(comp_name + " (" + value + ")")
+                value = attrs["Capacitance"]
+                decoupling_caps.append(comp_name + " (" + value.__str__(value) + ")")
     
     if len(decoupling_caps) >= 2:
         print("✓ Power decoupling: " + str(len(decoupling_caps)) + " capacitors properly connecting VDD to GND")

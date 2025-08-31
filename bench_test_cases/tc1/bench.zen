@@ -1,6 +1,7 @@
 Foo = Module("./module.zen")
 
 def print_info(module: ModuleView):
+    print(type(module.component_values["sub.R1.R"]))
     print("Nets and their connected ports:")
     for (net_name, port_list) in module.nets.items():
         print(f"  {net_name}: {port_list}")
@@ -33,20 +34,9 @@ def check_resistor_grounding(module):
 def check_resistor_values(module):
     """Check that resistors have valid values using components dict"""
     for (comp_name, attrs) in module.components.items():
-        if "R" in comp_name:  # Is a resistor
-            # Check for various value attribute names
-            value = None
-            if "value" in attrs:
-                value = attrs["value"]
-            elif "Value" in attrs:
-                value = attrs["Value"]
-            elif "Resistance" in attrs:
-                value = attrs["Resistance"]
-            
-            if value:
-                print("✓ " + comp_name + " has resistance: " + value)
-            else:
-                error("Missing resistance value for " + comp_name)
+        if attrs["Type"] == "resistor":
+            resistance = attrs["Resistance"]
+            print("✓ " + comp_name + " has resistance: " + resistance.__str__(resistance))
 
 TestBench(
     name="FOO",
