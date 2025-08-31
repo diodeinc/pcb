@@ -9,7 +9,7 @@ pub mod module;
 pub mod net;
 pub mod spice_model;
 pub mod symbol;
-pub mod testbench;
+pub mod test_bench;
 pub mod type_info;
 
 // Misc helpers (error/check)

@@ -48,7 +48,7 @@ use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
     module::{module_globals, FrozenModuleValue, ModuleLoader},
-    testbench::testbench_globals,
+    test_bench::testbench_globals,
 };
 
 /// A PrintHandler that collects all print output into a vector
