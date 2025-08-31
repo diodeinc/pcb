@@ -1,96 +1,22 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::collections::HashMap;
-
-use allocative::Allocative;
-use starlark::environment::GlobalsBuilder;
-use starlark::{
-    any::ProvidesStaticType,
-    collections::SmallMap,
-    eval::Evaluator,
-    starlark_complex_value, starlark_module, starlark_simple_value,
-    values::{
-        dict::AllocDict, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult, Heap,
-        NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
-    },
-};
-
-use crate::convert::ToSchematic;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputMap;
 use crate::lang::module::{FrozenModuleValue, ModuleLoader};
 use crate::Diagnostic;
+use allocative::Allocative;
+use starlark::environment::GlobalsBuilder;
 use starlark::errors::EvalSeverity;
-
-/// Type marker for ModuleView, used in type annotations
-#[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct ModuleViewType;
-
-starlark_simple_value!(ModuleViewType);
-
-#[starlark_value(type = "ModuleViewType")]
-impl<'v> StarlarkValue<'v> for ModuleViewType {
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<ModuleView as StarlarkValue>::get_type_starlark_repr())
-    }
-}
-
-impl std::fmt::Display for ModuleViewType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ModuleView")
-    }
-}
-
-/// ModuleView provides access to nets, ports, and components data for TestBench check functions
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct ModuleViewGen<V: ValueLifetimeless> {
-    /// Dictionary of net names to connected ports
-    nets: V,
-    /// Dictionary of component names to their ComponentValue objects
-    components: V,
-}
-
-starlark_complex_value!(pub ModuleView);
-
-#[starlark_value(type = "ModuleView")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleViewGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
-        match attr {
-            "nets" => Some(self.nets.to_value()),
-            "components" => Some(self.components.to_value()),
-            _ => None,
-        }
-    }
-
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
-        matches!(attr, "nets" | "components")
-    }
-
-    fn dir_attr(&self) -> Vec<String> {
-        vec!["nets".to_string(), "components".to_string()]
-    }
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Display for ModuleViewGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ModuleView(nets, ports, components)")
-    }
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleViewGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModuleView")
-            .field("nets", &"<dict>")
-            .field("ports", &"<dict>")
-            .field("components", &"<dict>")
-            .finish()
-    }
-}
+use starlark::{
+    any::ProvidesStaticType,
+    collections::SmallMap,
+    eval::Evaluator,
+    starlark_complex_value, starlark_module,
+    values::{
+        list::ListRef, starlark_value, Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue,
+        Trace, Value, ValueLifetimeless, ValueLike,
+    },
+};
 
 /// TestBench value that can evaluate modules without requiring inputs
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -236,82 +162,6 @@ impl ModuleLoader {
     }
 }
 
-/// Format an instance path for display
-fn format_instance_path(path: &[pcb_sch::Symbol]) -> String {
-    if path.is_empty() {
-        "<root>".to_string()
-    } else {
-        path.join(".")
-    }
-}
-
-/// Walk the module tree and collect ComponentValue objects with their paths
-fn collect_components<'v>(
-    module: &crate::lang::module::FrozenModuleValue,
-    path_prefix: &str,
-) -> HashMap<String, Value<'v>> {
-    let mut components = HashMap::new();
-
-    for child in module.children() {
-        if let Some(component) = child.downcast_ref::<crate::FrozenComponentValue>() {
-            let path = if path_prefix.is_empty() {
-                component.name().to_string()
-            } else {
-                format!("{}.{}", path_prefix, component.name())
-            };
-            components.insert(path, child.to_value());
-        } else if let Some(submodule) =
-            child.downcast_ref::<crate::lang::module::FrozenModuleValue>()
-        {
-            let subpath = if path_prefix.is_empty() {
-                submodule.name().to_string()
-            } else {
-                format!("{}.{}", path_prefix, submodule.name())
-            };
-            components.extend(collect_components(submodule, &subpath));
-        }
-    }
-
-    components
-}
-
-/// Build a ModuleView from a schematic and module
-fn build_module_view<'v>(
-    schematic: &pcb_sch::Schematic,
-    module: &crate::lang::module::FrozenModuleValue,
-    heap: &'v Heap,
-) -> ModuleViewGen<Value<'v>> {
-    let mut nets_dict = Vec::new();
-
-    // Collect ComponentValue objects first so we can reference them
-    let components_dict = collect_components(module, "");
-
-    // Build nets and ports dictionaries
-    for (net_name, net) in &schematic.nets {
-        let mut port_strings = Vec::new();
-        for port in &net.ports {
-            let port_string = format_instance_path(&port.instance_path);
-            let port_val = heap.alloc_str(&port_string).to_value();
-            port_strings.push(port_val);
-        }
-        nets_dict.push((
-            heap.alloc_str(net_name).to_value(),
-            heap.alloc(port_strings),
-        ));
-    }
-
-    // Convert HashMaps back to Vecs for Starlark dictionaries
-    let component_values_vec: Vec<(Value<'v>, Value<'v>)> = components_dict
-        .into_iter()
-        .map(|(path, comp_val)| (heap.alloc_str(&path).to_value(), comp_val))
-        .collect();
-
-    ModuleViewGen::<Value> {
-        nets: heap.alloc(AllocDict(nets_dict)),
-        components: heap.alloc(AllocDict(component_values_vec)),
-    }
-}
-
 /// Execute a single check function and handle the result
 fn execute_check<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
@@ -369,8 +219,6 @@ fn execute_check<'v>(
 
 #[starlark_module]
 pub fn testbench_globals(builder: &mut GlobalsBuilder) {
-    const ModuleView: ModuleViewType = ModuleViewType;
-
     /// Create a TestBench that can evaluate modules without required inputs
     fn TestBench<'v>(
         #[starlark(require = named)] name: String,
@@ -394,10 +242,9 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             let checks_list = ListRef::from_value(checks_value)
                 .ok_or_else(|| anyhow::anyhow!("'checks' parameter must be a list of functions"))?;
 
-            let heap = eval.heap();
-            let schematic = module.to_schematic()?;
-            let module_view = build_module_view(&schematic, module, heap);
-            let args = [heap.alloc(module_view)];
+            // Use frozen_heap to allocate the FrozenModuleValue, like in module.rs
+            let module_value = eval.frozen_heap().alloc(module.clone()).to_value();
+            let args = [module_value];
 
             for check_func in checks_list.iter() {
                 let (_result, failed) = execute_check(eval, check_func, &args, &name)?;

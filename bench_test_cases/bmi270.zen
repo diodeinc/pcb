@@ -1,6 +1,6 @@
 BMI270 = Module("@github/diodeinc/registry:v0.1.0/reference/BMI270x/BMI270x.zen")
 
-def print_info(module: ModuleView):
+def print_info(module: Module):
     print("Nets and their connected ports:")
     for (net_name, port_list) in module.nets.items():
         print(f"  {net_name}: {port_list}")
