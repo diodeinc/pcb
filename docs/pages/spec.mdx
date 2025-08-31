@@ -475,11 +475,12 @@ MyCircuit = Module("./my_circuit.zen")
 def verify_power_connections(nets, ports, components):
     """Ensure all power pins are connected to VCC"""
     vcc_ports = [p for p, net in ports.items() if "VCC" in net]
-    return len(vcc_ports) >= 2
+    check(len(vcc_ports) >= 2, "Need at least 2 VCC connections")
 
 def verify_ground_plane(nets, ports, components):
     """Check for proper ground connections"""
-    return "GND" in nets and len(nets["GND"]) > 3
+    check("GND" in nets, "Missing GND net")
+    check(len(nets["GND"]) > 3, "GND net needs more than 3 connections")
 
 # Create test bench
 TestBench(
@@ -515,11 +516,18 @@ def check_function(
 - `ports`: Maps each port path to its connected net (e.g., `{"U1.VDD": "VCC"}`)
 - `components`: Maps component paths to their attributes including pins, values, and properties
 
-**Behavior:**
+**Check Function Behavior:**
+
+- Check functions should use `check(condition, message)` or `error(message)` to signal failures
+- Any unhandled error or exception in a check function is treated as a test failure
+- Check functions do not need to return any specific value
+- Use `print()` for informational output during testing
+
+**TestBench Behavior:**
 
 - Evaluates the module with relaxed input requirements (missing required inputs are allowed)
 - Executes each check function in order
-- Reports failures as diagnostics with precise source location
+- Reports failures as diagnostics with precise source location pointing to the failing `check()` call
 - Prints a success message if all checks pass
 - Returns a TestBench value containing results
 
@@ -530,26 +538,18 @@ def check_resistor_values(nets, ports, components):
     """Verify all resistors have valid values"""
     for name, attrs in components.items():
         if "R" in name:  # Is a resistor
-            if "Value" not in attrs and "Resistance" not in attrs:
-                print(f"✗ {name} missing resistance value")
-                return False
+            check("Value" in attrs or "Resistance" in attrs, f"{name} missing resistance value")
             print(f"✓ {name} has resistance: {attrs.get('Value', attrs.get('Resistance'))}")
-    return True
 
 def check_differential_pairs(nets, ports, components):
     """Verify differential pairs are properly routed"""
     diff_pairs = [("USB_DP", "USB_DN"), ("TX_P", "TX_N")]
     for pos, neg in diff_pairs:
-        if pos not in nets or neg not in nets:
-            print(f"✗ Differential pair {pos}/{neg} not found")
-            return False
+        check(pos in nets and neg in nets, f"Differential pair {pos}/{neg} not found")
         # Check they connect to same component
         pos_comps = {p.split('.')[0] for p in nets[pos]}
         neg_comps = {p.split('.')[0] for p in nets[neg]}
-        if pos_comps != neg_comps:
-            print(f"✗ Differential pair {pos}/{neg} not routed to same components")
-            return False
-    return True
+        check(pos_comps == neg_comps, f"Differential pair {pos}/{neg} not routed to same components")
 
 TestBench(
     name = "CircuitValidation",

@@ -281,46 +281,52 @@ fn execute_check<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
     check_func: Value<'v>,
     args: &[Value<'v>],
-    check_index: usize,
     testbench_name: &str,
-) -> anyhow::Result<(Value<'v>, Option<String>)> {
-    let testbench_location = eval.call_stack_top_location();
-
+) -> anyhow::Result<(Value<'v>, bool)> {
     match eval.eval_function(check_func, args, &[]) {
-        Ok(result) => {
-            // Check if the result is false and create diagnostic
-            if let Some(false) = result.unpack_bool() {
-                let full_name = check_func.to_string();
-                let check_name = full_name
-                    .rsplit('.')
-                    .next()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("Check #{}", check_index + 1));
-
-                if let Some((location, ctx)) = testbench_location.zip(eval.context_value()) {
-                    let diagnostic = Diagnostic {
-                        path: location.filename().to_string(),
-                        span: Some(location.resolve_span()),
-                        severity: EvalSeverity::Error,
-                        body: format!(
-                            "TestBench '{}' check '{}' failed",
-                            testbench_name, check_name
-                        ),
-                        call_stack: Some(eval.call_stack().clone()),
-                        child: None,
-                        source_error: None,
-                    };
-                    ctx.add_diagnostic(diagnostic);
-                }
-
-                Ok((result, Some(check_name)))
-            } else {
-                Ok((result, None))
-            }
-        }
+        Ok(result) => Ok((result, false)), // Success, no failure
         Err(e) => {
-            eprintln!("Warning: Check function failed: {}", e);
-            Ok((eval.heap().alloc(false).to_value(), None))
+            let check_func_str = check_func.to_string();
+            let check_name = check_func_str.rsplit('.').next().unwrap_or("check");
+            let ctx = eval.context_value().unwrap();
+            let testbench_location = eval.call_stack_top_location().unwrap();
+
+            // Extract clean error message
+            let error_string = e.to_string();
+            let error_msg = error_string
+                .lines()
+                .find(|line| line.starts_with("error: "))
+                .and_then(|line| line.strip_prefix("error: "))
+                .unwrap_or("check failed");
+
+            // Child diagnostic for the specific check location
+            let child = e.span().map(|span| {
+                Box::new(Diagnostic {
+                    path: span.file.filename().to_string(),
+                    span: Some(span.resolve_span()),
+                    severity: EvalSeverity::Error,
+                    body: error_msg.to_string(),
+                    call_stack: None,
+                    child: None,
+                    source_error: None,
+                })
+            });
+
+            // Parent diagnostic for TestBench context
+            ctx.add_diagnostic(Diagnostic {
+                path: testbench_location.filename().to_string(),
+                span: Some(testbench_location.resolve_span()),
+                severity: EvalSeverity::Error,
+                body: format!(
+                    "TestBench '{}' check '{}' failed",
+                    testbench_name, check_name
+                ),
+                call_stack: Some(eval.call_stack().clone()),
+                child,
+                source_error: None,
+            });
+
+            Ok((eval.heap().alloc(false).to_value(), true)) // Failure
         }
     }
 }
@@ -343,56 +349,35 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
         let evaluated_module = loader.evaluate_for_testbench(name.clone(), eval)?;
 
         // Execute check functions if provided
-        let mut check_results = Vec::new();
+        let mut check_count = 0;
+        let mut failed_count = 0;
 
         if let (Some(checks_value), Some(ref module)) = (checks, &evaluated_module) {
-            // Convert checks to a list
             let checks_list = ListRef::from_value(checks_value)
                 .ok_or_else(|| anyhow::anyhow!("'checks' parameter must be a list of functions"))?;
 
-            // Build test dictionaries from the schematic
             let heap = eval.heap();
-            let schematic = module
-                .to_schematic()
-                .map_err(|e| anyhow::anyhow!("Failed to convert module to schematic: {}", e))?;
-
+            let schematic = module.to_schematic()?;
             let dicts = build_test_dictionaries(&schematic, heap);
-            let nets_dict = heap.alloc(AllocDict(dicts.nets));
-            let ports_dict = heap.alloc(AllocDict(dicts.ports));
-            let components_dict = heap.alloc(AllocDict(dicts.components));
+            let args = [
+                heap.alloc(AllocDict(dicts.nets)),
+                heap.alloc(AllocDict(dicts.ports)),
+                heap.alloc(AllocDict(dicts.components)),
+            ];
 
-            // Execute each check function
-            for (i, check_func) in checks_list.iter().enumerate() {
-                let (result, _failed_check) = execute_check(
-                    eval,
-                    check_func,
-                    &[nets_dict, ports_dict, components_dict],
-                    i,
-                    &name,
-                )?;
-                check_results.push(result);
+            for check_func in checks_list.iter() {
+                let (_result, failed) = execute_check(eval, check_func, &args, &name)?;
+                check_count += 1;
+                if failed {
+                    failed_count += 1;
+                }
             }
         }
 
-        // Log detailed TestBench info
-        if evaluated_module.is_some() {
-            log::info!(
-                "TestBench '{}': {} checks executed",
-                name,
-                check_results.len()
-            );
-        } else {
-            log::info!("TestBench '{}': evaluation failed", name);
-        }
+        // Log and print results
+        log::info!("TestBench '{}': {} checks executed", name, check_count);
 
-        // Check if all checks passed
-        let all_checks_passed = check_results
-            .iter()
-            .all(|result| result.unpack_bool().unwrap_or(true));
-
-        // Print success message if all checks passed
-        if all_checks_passed && !check_results.is_empty() {
-            let check_count = check_results.len();
+        if failed_count == 0 && check_count > 0 {
             let check_word = if check_count == 1 { "check" } else { "checks" };
             println!(
                 "\x1b[1m\x1b[32m✓ {}\x1b[0m: {} {} passed",
@@ -406,7 +391,7 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
             module_loader: loader.clone(),
             evaluated_module,
             properties: SmallMap::new(),
-            check_results,
+            check_results: Vec::new(), // No longer needed
         };
 
         Ok(eval.heap().alloc(testbench))

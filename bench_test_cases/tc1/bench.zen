@@ -1,6 +1,6 @@
 Foo = Module("./module.zen")
 
-def print_info(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]) -> bool:
+def print_info(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
     print("Nets and their connected ports:")
     for (net_name, port_list) in nets.items():
         print(f"  {net_name}: {port_list}")
@@ -10,40 +10,27 @@ def print_info(nets: dict[str, list[str]], ports: dict[str, str], components: di
     print("Components and their attributes:")
     for (comp_name, attrs) in components.items():
         print(f"  {comp_name}: {attrs}")
-    return True
 
-def ensure_gnd(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]) -> bool:
-    for (net, _) in nets.items():
-        if "GND" in net:
-            return True
-    return False
+def ensure_gnd(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
+    for net_name in nets.keys():
+        if "GND" in net_name:
+            return
+    error("GND net not found")
 
-def check_power_connections(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]) -> bool:
+def check_power_connections(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
     """Check that VCC net has at least 2 connections (components properly powered)"""
     for (net_name, port_list) in nets.items():
         if "VCC" in net_name:
-            port_count = len(port_list)
-            if port_count < 2:
-                print("Warning: Power net " + net_name + " only has " + str(port_count) + " connection(s)")
-                return False
-    return True
+            check(len(port_list) >= 2, "VCC net must have at least 2 connections")
 
-def check_resistor_grounding(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]) -> bool:
+def check_resistor_grounding(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
     """Check that resistor R.P2 is connected to ground using ports dict"""
     resistor_p2 = "R.R.P2"
     if resistor_p2 in ports:
         connected_net = ports[resistor_p2]
-        if "GND" in connected_net:
-            print("✓ Resistor P2 is properly grounded to " + connected_net)
-            return True
-        else:
-            print("✗ Resistor P2 is connected to " + connected_net + ", not ground!")
-            return False
-    else:
-        print("✗ Resistor R.P2 not found")
-        return False
+        check("GND" in connected_net, "Resistor P2 is connected to " + connected_net + ", not ground!")
 
-def check_resistor_values(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]) -> bool:
+def check_resistor_values(nets: dict[str, list[str]], ports: dict[str, str], components: dict[str, dict[str, str]]):
     """Check that resistors have valid values using components dict"""
     for (comp_name, attrs) in components.items():
         if "R" in comp_name:  # Is a resistor
@@ -59,9 +46,7 @@ def check_resistor_values(nets: dict[str, list[str]], ports: dict[str, str], com
             if value:
                 print("✓ " + comp_name + " has resistance: " + value)
             else:
-                print("✗ " + comp_name + " missing resistance value!")
-                return False
-    return True
+                error("Missing resistance value for " + comp_name)
 
 TestBench(
     name="FOO",
