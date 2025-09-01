@@ -260,7 +260,7 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
 
         if failed_count == 0 && check_count > 0 {
             let check_word = if check_count == 1 { "check" } else { "checks" };
-            println!(
+            eprintln!(
                 "\x1b[1m\x1b[32m✓ {}\x1b[0m: {} {} passed",
                 name, check_count, check_word
             );
