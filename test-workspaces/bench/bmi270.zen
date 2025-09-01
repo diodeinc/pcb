@@ -2,10 +2,10 @@ BMI270 = Module("@github/diodeinc/registry:v0.1.0/reference/BMI270x/BMI270x.zen"
 
 def print_info(module: Module):
     print("Nets and their connected ports:")
-    for (net_name, port_list) in module.nets.items():
+    for (net_name, port_list) in module.nets().items():
         print(f"  {net_name}: {port_list}")
     print("Components and their attributes:")
-    for (comp_name, comp) in module.components.items():
+    for (comp_name, comp) in module.components().items():
         print(f"  {comp_name}:")
         print("    Name:", comp.name)
         print("    Prefix:", comp.prefix)
@@ -28,7 +28,7 @@ def check_power_decoupling(module):
     # Find capacitors that have one pin on VDD and another on GND
     decoupling_caps = []
     
-    for comp_name, comp in module.components.items():
+    for comp_name, comp in module.components().items():
         if comp.type != "capacitor":
             continue
         # Check if this capacitor has pins on both VDD and GND

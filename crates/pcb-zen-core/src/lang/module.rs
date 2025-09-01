@@ -129,45 +129,29 @@ where
     fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
         match attr {
             "nets" => {
-                // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
-                let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
-
-                for (comp_path, comp_val) in self.collect_components("").iter() {
-                    if let Some(component) = comp_val.downcast_ref::<FrozenComponentValue>() {
-                        for (pin_name, net_val) in component.connections().iter() {
-                            if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
-                                let port_tuple = heap
-                                    .alloc((heap.alloc_str(comp_path), heap.alloc_str(pin_name)));
-                                net_to_ports
-                                    .entry(net.name().to_string())
-                                    .or_default()
-                                    .push(port_tuple.to_value());
-                            }
-                        }
-                    }
+                let components_map = self.collect_components("");
+                let mut small_map = SmallMap::new();
+                for (k, v) in components_map.into_iter() {
+                    small_map.insert(k, v);
                 }
 
-                // Convert to starlark dict format
-                let nets_dict: Vec<_> = net_to_ports
-                    .into_iter()
-                    .map(|(net_name, port_tuples)| {
-                        (
-                            heap.alloc_str(&net_name).to_value(),
-                            heap.alloc(port_tuples),
-                        )
-                    })
-                    .collect();
-
-                Some(heap.alloc(AllocDict(nets_dict)))
+                let callable = NetsCallableGen {
+                    components: small_map,
+                };
+                Some(heap.alloc_complex(callable))
             }
-            "components" => Some(
-                heap.alloc(AllocDict(
-                    self.collect_components("")
-                        .into_iter()
-                        .map(|(path, comp_val)| (heap.alloc_str(&path).to_value(), comp_val))
-                        .collect::<Vec<_>>(),
-                )),
-            ),
+            "components" => {
+                let components_map = self.collect_components("");
+                let mut small_map = SmallMap::new();
+                for (k, v) in components_map.into_iter() {
+                    small_map.insert(k, v);
+                }
+
+                let callable = ComponentsCallableGen {
+                    components: small_map,
+                };
+                Some(heap.alloc_complex(callable))
+            }
             _ => None,
         }
     }
@@ -1034,6 +1018,119 @@ fn validate_or_convert<'v>(
     //    error for a helpful message.
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
+}
+
+/// Callable wrapper for nets() method on modules
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct NetsCallableGen<V: ValueLifetimeless> {
+    components: SmallMap<String, V>,
+}
+
+starlark_complex_value!(pub NetsCallable);
+
+impl<'v, V: ValueLike<'v>> std::fmt::Display for NetsCallableGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Module.nets")
+    }
+}
+
+#[starlark_value(type = "function")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetsCallableGen<V>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        // Nets method takes no arguments
+        if args.len()? != 0 {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "nets() takes no arguments"
+            )));
+        }
+
+        let heap = eval.heap();
+
+        // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
+        let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
+
+        for (comp_path, comp_val) in self.components.iter() {
+            let comp_val = comp_val.to_value();
+            if let Some(component) = comp_val.downcast_ref::<FrozenComponentValue>() {
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
+                        let port_tuple =
+                            heap.alloc((heap.alloc_str(comp_path), heap.alloc_str(pin_name)));
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_tuple.to_value());
+                    }
+                }
+            }
+        }
+
+        // Convert to starlark dict format
+        let nets_dict: Vec<_> = net_to_ports
+            .into_iter()
+            .map(|(net_name, port_tuples)| {
+                (
+                    heap.alloc_str(&net_name).to_value(),
+                    heap.alloc(port_tuples),
+                )
+            })
+            .collect();
+
+        Ok(heap.alloc(AllocDict(nets_dict)))
+    }
+}
+
+/// Callable wrapper for components() method on modules
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct ComponentsCallableGen<V: ValueLifetimeless> {
+    components: SmallMap<String, V>,
+}
+
+starlark_complex_value!(pub ComponentsCallable);
+
+impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentsCallableGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Module.components")
+    }
+}
+
+#[starlark_value(type = "function")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentsCallableGen<V>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        // Components method takes no arguments
+        if args.len()? != 0 {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "components() takes no arguments"
+            )));
+        }
+
+        let heap = eval.heap();
+
+        Ok(heap.alloc(AllocDict(
+            self.components
+                .iter()
+                .map(|(path, comp_val)| (heap.alloc_str(path).to_value(), comp_val.to_value()))
+                .collect::<Vec<_>>(),
+        )))
+    }
 }
 
 /// ModuleType is used for type annotations (like ComponentType)

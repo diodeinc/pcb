@@ -1,11 +1,13 @@
 Foo = Module("./module.zen")
 
 def print_info(module: Module):
+    nets = module.nets()
+    components = module.components()
     print("Nets and their connected ports:")
-    for (net_name, port_list) in module.nets.items():
+    for (net_name, port_list) in nets.items():
         print(f"  {net_name}: {port_list}")
     print("Components and their attributes:")
-    for (comp_name, comp) in module.components.items():
+    for (comp_name, comp) in components.items():
         print(f"  {comp_name}:")
         print("    Name:", comp.name)
         print("    Prefix:", comp.prefix)
@@ -24,25 +26,29 @@ def print_info(module: Module):
         print("    Pins:", pins)
 
 def ensure_gnd(module):
-    for net_name in module.nets.keys():
+    nets = module.nets()
+    for net_name in nets.keys():
         if "GND" in net_name:
             return
     error("GND net not found")
 
 def check_power_connections(module):
-    """Check that VCC net has at least 2 connections (components properly powered)"""
-    for (net_name, port_list) in module.nets.items():
+    """Check that VCC nets have at least 2 connections total (components properly powered)"""
+    nets = module.nets()
+    for (net_name, port_list) in nets.items():
         if "VCC" in net_name:
             check(len(port_list) >= 2, "VCC net must have at least 2 connections")
 
 def check_resistor_grounding(module):
     """Check that resistor R.P2 is connected to ground using ports dict"""
-    connected_net = module.components["R.R"].pins["P2"].name
+    components = module.components()
+    connected_net = components["R.R"].pins["P2"].name
     check("GND" in connected_net, "Resistor P2 is connected to " + connected_net + ", not ground!")
 
 def check_resistor_values(module):
     """Check that resistors have valid values using components dict"""
-    for (comp_name, comp) in module.components.items():
+    components = module.components()
+    for (comp_name, comp) in components.items():
         if comp.type == "resistor":
             resistance = comp.resistance
             print("✓ " + comp_name + " has resistance: " + resistance.__str__(resistance))
