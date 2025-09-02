@@ -658,5 +658,7 @@ expression: content
       "name": "BMI270"
     }
   ],
+  "tracks": [],
+  "vias": [],
   "zones": []
 }
