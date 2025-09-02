@@ -51,6 +51,7 @@ pub enum PathValidationOp {
     Any,
     All,
     None,
+    Matches,
 }
 
 #[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -61,6 +62,15 @@ pub struct PathValidationCallableGen<V: ValueLifetimeless> {
 }
 
 starlark_complex_value!(pub PathValidationCallable);
+
+/// PathMatchesCallable for sequential component matching
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct PathMatchesCallableGen<V: ValueLifetimeless> {
+    pub path_value: V,
+}
+
+starlark_complex_value!(pub PathMatchesCallable);
 
 // Implementations for ModuleGraphValue
 impl<V: ValueLifetimeless> std::fmt::Display for ModuleGraphValueGen<V> {
@@ -186,6 +196,7 @@ where
             "any" => Some(self.create_validation_callable(heap, PathValidationOp::Any)),
             "all" => Some(self.create_validation_callable(heap, PathValidationOp::All)),
             "none" => Some(self.create_validation_callable(heap, PathValidationOp::None)),
+            "matches" => Some(self.create_matches_callable(heap)),
             _ => None,
         }
     }
@@ -202,6 +213,13 @@ where
         };
         heap.alloc_complex(callable)
     }
+
+    fn create_matches_callable(&self, heap: &'v Heap) -> Value<'v> {
+        let callable = PathMatchesCallableGen {
+            path_value: heap.alloc_complex(self.clone()).to_value(),
+        };
+        heap.alloc_complex(callable)
+    }
 }
 
 // PathValidationCallable implementation
@@ -212,6 +230,7 @@ impl<V: ValueLifetimeless> std::fmt::Display for PathValidationCallableGen<V> {
             PathValidationOp::Any => write!(f, "any"),
             PathValidationOp::All => write!(f, "all"),
             PathValidationOp::None => write!(f, "none"),
+            PathValidationOp::Matches => write!(f, "matches"),
         }
     }
 }
@@ -291,6 +310,107 @@ where
                 // All failed the matcher, which is success for "none"
                 Ok(heap.alloc(starlark::values::none::NoneType))
             }
+            PathValidationOp::Matches => {
+                // This case should never be reached - matches() uses PathMatchesCallable
+                Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "matches() operation should use PathMatchesCallable, not PathValidationCallable"
+                )))
+            }
         }
+    }
+}
+
+// PathMatchesCallable implementation
+impl<V: ValueLifetimeless> std::fmt::Display for PathMatchesCallableGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "matches")
+    }
+}
+
+#[starlark_value(type = "builtin_function_or_method")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PathMatchesCallableGen<V>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = eval.heap();
+
+        // Extract all matchers from positional arguments
+        let matchers: Vec<Value> = args.positions(heap)?.collect();
+
+        if matchers.is_empty() {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "matches() requires at least one matcher function"
+            )));
+        }
+
+        // Get the path value
+        let path_value = self
+            .path_value
+            .to_value()
+            .downcast_ref::<PathValueGen<Value>>()
+            .ok_or_else(|| starlark::Error::new_other(anyhow::anyhow!("Invalid path value")))?;
+
+        let components = &path_value.components;
+        let mut cursor = 0usize;
+
+        // Execute each matcher sequentially
+        for (matcher_idx, matcher) in matchers.iter().enumerate() {
+            // Call matcher(path_object, current_cursor_index)
+            let consumed_value = eval.eval_function(
+                *matcher,
+                &[self.path_value.to_value(), heap.alloc(cursor as i32)],
+                &[],
+            )?;
+
+            // Extract consumed count
+            let consumed = consumed_value.unpack_i32().ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "Matcher {} did not return an int",
+                    matcher_idx + 1
+                ))
+            })?;
+
+            if consumed < 0 {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "Matcher {} returned negative consumption: {}",
+                    matcher_idx + 1,
+                    consumed
+                )));
+            }
+
+            // Advance cursor
+            cursor = cursor.checked_add(consumed as usize).ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "Integer overflow in cursor advancement"
+                ))
+            })?;
+
+            // Check cursor bounds
+            if cursor > components.len() {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "Matcher {} consumed past end of path (cursor {} > path length {})",
+                    matcher_idx + 1,
+                    cursor,
+                    components.len()
+                )));
+            }
+        }
+
+        // Verify all components were consumed
+        if cursor != components.len() {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Unconsumed components remaining ({} left)",
+                components.len() - cursor
+            )));
+        }
+
+        // Success - all matchers executed and consumed entire path
+        Ok(heap.alloc(starlark::values::none::NoneType))
     }
 }
