@@ -785,40 +785,6 @@ def validate_filter_topology(module: Module):
     )
 ```
 
-**Sequential Matcher Functions:**
-
-```python
-# Basic component type matchers
-is_resistor(expected_value=None)  # Match resistor, optionally with specific value
-is_capacitor(expected_value=None) # Match capacitor, optionally with specific value
-is_inductor()                     # Match inductor
-
-# Navigation matchers
-skip(n)                          # Skip exactly n components
-skip_rest()                      # Consume all remaining components
-
-# Quantified matchers
-exactly_n_resistors(n)           # Exactly n consecutive resistors
-has_package(size)                # Component with specific package size
-name_contains(pattern)           # Component name contains pattern
-```
-
-**Sequential Processing Model:**
-
-Each matcher function receives `(path, cursor_index)` and returns the number of components consumed:
-
-```python
-def custom_matcher(path, cursor):
-    # Validate component at current cursor position
-    if cursor >= len(path.components):
-        error("path ended, expected component")
-    
-    component = path.components[cursor]
-    # ... validation logic ...
-    
-    return 1  # Consume 1 component, advance cursor
-```
-
 ### Design Principles
 
 #### Datasheet Requirements Translation
@@ -916,7 +882,74 @@ lc_valid = any(path.matches(is_inductor(), is_capacitor()) for path in filter_pa
 check(rc_valid or lc_valid, "Filter topology required")
 ```
 
+**Error Suppression**: Use `suppress_errors=True` for path identification
+```python
+# Find all paths matching a pattern without failing
+matching_paths = [p for p in all_paths if p.matches(
+    is_resistor(), is_capacitor(), suppress_errors=True
+)]
+check(len(matching_paths) > 0, "No RC filter found")
+```
 
+### path.matches() API Reference
+
+#### Syntax
+
+```python
+path.matches(*matchers, suppress_errors=False)
+```
+
+**Parameters:**
+- `*matchers`: Sequential matcher functions to apply in order
+- `suppress_errors`: If True, returns False on validation failure instead of raising errors
+
+#### Sequential Processing Model
+
+- Matchers consume components sequentially using cursor-based processing
+- Each matcher receives `(path, cursor_index)` and returns components consumed
+- Validation fails if any matcher fails or if components remain after all matchers
+
+#### Built-in Matcher Functions
+
+```python
+# Basic component type matchers
+is_resistor(expected_value=None)     # Match resistor, optionally with specific value
+is_capacitor(expected_value=None)    # Match capacitor, optionally with specific value
+is_inductor(expected_value=None)     # Match inductor, optionally with specific value
+
+# Navigation matchers
+skip(n)                             # Skip exactly n components
+skip_rest()                         # Consume all remaining components
+
+# Quantified matchers
+exactly_n_resistors(n)              # Exactly n consecutive resistors
+at_least_n_capacitors(n)            # At least n consecutive capacitors
+at_most_n_components(n)             # At most n components of any type
+
+# Conditional matching  
+any_of(matcher1, matcher2, ...)     # Match any of the provided matchers
+skip_until(matcher)                 # Skip components until matcher succeeds
+contains_somewhere(matcher)         # Matcher succeeds somewhere in remaining path
+
+# Component properties
+has_package(size)                   # Component with specific package size
+name_contains(pattern)              # Component name contains pattern
+```
+
+#### Custom Matcher Functions
+
+```python
+def custom_matcher(path, cursor):
+    """Custom matcher function template"""
+    if cursor >= len(path.components):
+        error("path ended, expected component")
+    
+    component = path.components[cursor]
+    # Validation logic here
+    check(component.type == "resistor", "Expected resistor")
+    
+    return 1  # Consume 1 component, advance cursor
+```
 
 ## Module System
 
