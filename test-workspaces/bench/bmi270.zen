@@ -166,16 +166,37 @@ def check_communication_interfaces(module):
         if pin not in comp.pins:
             error("SPI chip select pins not connected")
 
+# Matcher functions for path validation
+def is_capacitor(component):
+    """Matcher that asserts component is a capacitor"""
+    if component.type != "capacitor":
+        error("Component " + component.name + " is not a capacitor")
+
+def check_power_paths_have_capacitors(module):
+    """Simple example: verify that power-to-ground paths contain capacitors"""
+    graph = module.graph()
+    paths = graph.paths(start="io_vdd_VCC", end="io_gnd_GND", max_depth=4)
+    
+    check(len(paths) > 0, "No power-to-ground paths found")
+    
+    # Count total capacitors across all power paths
+    total_capacitors = 0
+    for path in paths:
+        total_capacitors += path.count(is_capacitor)
+    
+    check(total_capacitors >= 2, "Expected at least 2 capacitors in power paths, found " + str(total_capacitors))
+
 TestBench(
     name="BMI270",
     module=BMI270,
     checks = [
-        # print_info,
-        # analyze_power_paths,
+        print_info,
+        analyze_power_paths,
         analyze_signal_paths,
-        # check_path_connectivity,
-        # check_power_decoupling,
-        # check_bmi270_power_pins,
-        # check_communication_interfaces,
+        check_path_connectivity,
+        check_power_decoupling,
+        check_bmi270_power_pins,
+        check_communication_interfaces,
+        check_power_paths_have_capacitors,
     ],
 )

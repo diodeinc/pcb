@@ -112,12 +112,42 @@ def explore_paths(module: Module):
                 print("      Path length: " + str(len(path.ports)) + " ports")
                 print("      Component count: " + str(len(path.components)) + " components")
                 
-                # TODO: Add component matcher examples when matchers are implemented
-                # print(f"      Resistor count: {path.count(is_resistor())}")
-                # print(f"      Has capacitors: {path.any(is_capacitor())}")
+                # Now we can use the actual path validators!
+                resistor_count = path.count(is_resistor)
+                capacitor_count = path.count(is_capacitor)
+                print("      Resistor count: " + str(resistor_count))
+                print("      Capacitor count: " + str(capacitor_count))
+
+# Matcher functions for path validation
+def is_resistor(component):
+    """Matcher that asserts component is a resistor"""
+    if component.type != "resistor":
+        error("Component " + component.name + " is not a resistor")
+
+def is_capacitor(component):
+    """Matcher that asserts component is a capacitor"""
+    if component.type != "capacitor":
+        error("Component " + component.name + " is not a capacitor")
+
+def check_path_component_counts(module):
+    """Simple example: count resistors and capacitors in power paths"""
+    graph = module.graph()
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    check(len(paths) > 0, "No power-to-ground paths found")
+    
+    # Count total components across all power paths
+    total_resistors = 0
+    total_capacitors = 0
+    for path in paths:
+        total_resistors += path.count(is_resistor)
+        total_capacitors += path.count(is_capacitor)
+    
+    check(total_resistors >= 3, "Expected at least 3 resistors in power paths, found " + str(total_resistors))
+    check(total_capacitors >= 1, "Expected at least 1 capacitor in power paths, found " + str(total_capacitors))
 
 TestBench(
-    name="FOO",
+    name="FOO", 
     module=Foo,
     checks=[
         print_info,
@@ -127,5 +157,6 @@ TestBench(
         check_resistor_grounding,
         check_resistor_values,
         check_power_connections,
+        check_path_component_counts,
     ],
 )

@@ -242,70 +242,55 @@ where
         match self.operation {
             PathValidationOp::Count => {
                 let mut count = 0;
-                self.eval_components(path_value, matcher, eval, |matches| {
-                    if matches {
+                for component in &path_value.components {
+                    // Catch errors - if matcher succeeds (no error), increment count
+                    if eval
+                        .eval_function(matcher, &[component.to_value()], &[])
+                        .is_ok()
+                    {
                         count += 1;
                     }
-                    None::<Value>
-                })?;
+                }
                 Ok(heap.alloc(count))
             }
-            PathValidationOp::Any => self
-                .eval_components(path_value, matcher, eval, |matches| {
-                    if matches {
-                        Some(Value::new_bool(true))
-                    } else {
-                        None
+            PathValidationOp::Any => {
+                for component in &path_value.components {
+                    // If any matcher succeeds (no error), succeed silently
+                    if eval
+                        .eval_function(matcher, &[component.to_value()], &[])
+                        .is_ok()
+                    {
+                        return Ok(heap.alloc(starlark::values::none::NoneType));
                     }
-                })
-                .or_else(|_| Ok(Value::new_bool(false))),
-            PathValidationOp::All => self
-                .eval_components(path_value, matcher, eval, |matches| {
-                    if !matches {
-                        Some(Value::new_bool(false))
-                    } else {
-                        None
+                }
+                // If no component passed, error
+                Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "No components matched the condition"
+                )))
+            }
+            PathValidationOp::All => {
+                for component in &path_value.components {
+                    // Fail fast on first error
+                    eval.eval_function(matcher, &[component.to_value()], &[])?;
+                }
+                // All succeeded
+                Ok(heap.alloc(starlark::values::none::NoneType))
+            }
+            PathValidationOp::None => {
+                for component in &path_value.components {
+                    // If any matcher succeeds (no error), this is a failure for "none"
+                    if eval
+                        .eval_function(matcher, &[component.to_value()], &[])
+                        .is_ok()
+                    {
+                        return Err(starlark::Error::new_other(anyhow::anyhow!(
+                            "Found component that matched the condition (expected none)"
+                        )));
                     }
-                })
-                .or_else(|_| Ok(Value::new_bool(true))),
-            PathValidationOp::None => self
-                .eval_components(path_value, matcher, eval, |matches| {
-                    if matches {
-                        Some(Value::new_bool(false))
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|_| Ok(Value::new_bool(true))),
-        }
-    }
-}
-
-impl<'v, V: ValueLike<'v>> PathValidationCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-    fn eval_components<F, R>(
-        &self,
-        path_value: &PathValueGen<Value<'v>>,
-        matcher: Value<'v>,
-        eval: &mut Evaluator<'v, '_, '_>,
-        mut handler: F,
-    ) -> starlark::Result<R>
-    where
-        F: FnMut(bool) -> Option<R>,
-    {
-        for component in &path_value.components {
-            let result = eval.eval_function(matcher, &[component.to_value()], &[])?;
-            let matches = result.unpack_bool().unwrap_or(false);
-
-            if let Some(early_return) = handler(matches) {
-                return Ok(early_return);
+                }
+                // All failed the matcher, which is success for "none"
+                Ok(heap.alloc(starlark::values::none::NoneType))
             }
         }
-        // If we get here, no early return occurred - let caller handle the completion case
-        Err(starlark::Error::new_other(anyhow::anyhow!(
-            "No early return in eval_components"
-        )))
     }
 }
