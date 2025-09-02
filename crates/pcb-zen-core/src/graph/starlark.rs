@@ -343,6 +343,13 @@ where
         // Extract all matchers from positional arguments
         let matchers: Vec<Value> = args.positions(heap)?.collect();
 
+        // Extract suppress_errors named parameter
+        let args_map = args.names_map()?;
+        let suppress_errors = args_map
+            .get(&heap.alloc_str("suppress_errors"))
+            .and_then(|v| v.unpack_bool())
+            .unwrap_or(false);
+
         if matchers.is_empty() {
             return Err(starlark::Error::new_other(anyhow::anyhow!(
                 "matches() requires at least one matcher function"
@@ -362,11 +369,21 @@ where
         // Execute each matcher sequentially
         for (matcher_idx, matcher) in matchers.iter().enumerate() {
             // Call matcher(path_object, current_cursor_index)
-            let consumed_value = eval.eval_function(
+            let consumed_value = match eval.eval_function(
                 *matcher,
                 &[self.path_value.to_value(), heap.alloc(cursor as i32)],
                 &[],
-            )?;
+            ) {
+                Ok(value) => value,
+                Err(e) => {
+                    if suppress_errors {
+                        // Return false instead of erroring
+                        return Ok(heap.alloc(false));
+                    } else {
+                        return Err(e);
+                    }
+                }
+            };
 
             // Extract consumed count
             let consumed = consumed_value.unpack_i32().ok_or_else(|| {
@@ -393,24 +410,32 @@ where
 
             // Check cursor bounds
             if cursor > components.len() {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Matcher {} consumed past end of path (cursor {} > path length {})",
-                    matcher_idx + 1,
-                    cursor,
-                    components.len()
-                )));
+                if suppress_errors {
+                    return Ok(heap.alloc(false));
+                } else {
+                    return Err(starlark::Error::new_other(anyhow::anyhow!(
+                        "Matcher {} consumed past end of path (cursor {} > path length {})",
+                        matcher_idx + 1,
+                        cursor,
+                        components.len()
+                    )));
+                }
             }
         }
 
         // Verify all components were consumed
         if cursor != components.len() {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "Unconsumed components remaining ({} left)",
-                components.len() - cursor
-            )));
+            if suppress_errors {
+                return Ok(heap.alloc(false));
+            } else {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "Unconsumed components remaining ({} left)",
+                    components.len() - cursor
+                )));
+            }
         }
 
         // Success - all matchers executed and consumed entire path
-        Ok(heap.alloc(starlark::values::none::NoneType))
+        Ok(heap.alloc(true))
     }
 }
