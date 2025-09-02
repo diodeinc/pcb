@@ -1,6 +1,8 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground", "I2c", "Spi")
+
 BMI270 = Module("@github/diodeinc/registry:v0.1.0/reference/BMI270x/BMI270x.zen")
 
-def print_info(module: Module):
+def print_info(module: Module, inputs):
     print("Nets and their connected ports:")
     for (net_name, port_list) in module.nets().items():
         print(f"  {net_name}: {port_list}")
@@ -23,7 +25,7 @@ def print_info(module: Module):
             pins[pin] = net.name
         print("    Pins:", pins)
 
-def analyze_power_paths(module: Module):
+def analyze_power_paths(module: Module, inputs):
     """Analyze power distribution paths using the new graph API"""
     print("Power Path Analysis:")
     graph = module.graph()
@@ -62,38 +64,51 @@ def analyze_power_paths(module: Module):
             # else:
             #     print("      ! Direct power connection (no decoupling)")
 
-def analyze_signal_paths(module: Module):
+def analyze_signal_paths(module: Module, inputs):
     """Analyze signal integrity using path analysis"""
     print("Signal Path Analysis:")
     graph = module.graph()
     
-    # Analyze I2C signal paths from BMI270
-    scl_net = "io_i2c_SCL"
-    sda_net = "io_i2c_SDA"
-    
-    print("  I2C Signal Analysis:")
-    print("    SCL net: " + scl_net)
-    print("    SDA net: " + sda_net)
-    
-    # Find paths from SCL to SDA nets - there should be no direct connection
-    paths = graph.paths(start=scl_net, end=sda_net, max_depth=6)
-    print("    Found " + str(len(paths)) + " paths between SCL/SDA")
-    for i, path in enumerate(paths):
-        print("    Path " + str(i+1) + ":")
-        print("      Ports: " + str(path.ports))
-        print("      Path length: " + str(len(path.components)) + " components")
-        print("      Nets: " + str(path.nets))
+    # Analyze communication interface paths based on configuration
+    if "io_i2c" in inputs:
+        i2c = inputs["io_i2c"]
+        scl_net = i2c.SCL.name
+        sda_net = i2c.SDA.name
+        
+        print("  I2C Signal Analysis:")
+        print("    SCL net: " + scl_net)
+        print("    SDA net: " + sda_net)
+        
+        # Find paths from SCL to SDA nets - there should be no direct connection
+        paths = graph.paths(start=scl_net, end=sda_net, max_depth=6)
+        print("    Found " + str(len(paths)) + " paths between SCL/SDA")
+        for i, path in enumerate(paths):
+            print("    Path " + str(i+1) + ":")
+            print("      Ports: " + str(path.ports))
+            print("      Path length: " + str(len(path.components)) + " components")
+            print("      Nets: " + str(path.nets))
+    elif "io_spi" in inputs:
+        spi = inputs["io_spi"]
+        print("  SPI Signal Analysis:")
+        print("    CLK net: " + spi.CLK.name)
+        print("    MOSI net: " + spi.MOSI.name)
+        print("    MISO net: " + spi.MISO.name)
+        print("    CS net: " + spi.CS.name)
 
-def check_path_connectivity(module: Module):
+def check_path_connectivity(module: Module, inputs):
     """Verify critical connections exist using path analysis"""
     print("Connectivity Verification:")
     graph = module.graph()
     
+    # Use inputs to get actual net names dynamically
+    vdd_net = inputs["io_vdd"].NET.name
+    gnd_net = inputs["io_gnd"].NET.name
+    
     critical_connections = [
-        # Check power connections between VDD and VDDIO nets (they should be the same net)
-        ("io_vdd_VCC", "io_vdd_VCC"),
-        # Check ground connections between GND and GNDIO nets (they should be the same net)  
-        ("io_gnd_GND", "io_gnd_GND"),
+        # Check power connections (VDD should connect to itself)
+        (vdd_net, vdd_net),
+        # Check ground connections (GND should connect to itself)
+        (gnd_net, gnd_net),
     ]
     
     for start, end in critical_connections:
@@ -106,7 +121,7 @@ def check_path_connectivity(module: Module):
         else:
             print("  ! No path found: " + str(start) + " to " + str(end))
 
-def check_power_decoupling(module):
+def check_power_decoupling(module, inputs):
     """Verify that capacitors properly connect power to ground"""
     # Find capacitors that have one pin on VDD and another on GND
     decoupling_caps = []
@@ -135,7 +150,7 @@ def check_power_decoupling(module):
     else:
         error("Insufficient power decoupling: only " + str(len(decoupling_caps)) + " capacitors connecting VDD to GND")
 
-def check_bmi270_power_pins(module):
+def check_bmi270_power_pins(module, inputs):
     """Verify BMI270 power pins are properly connected"""
     # Check VDD and VDDIO are connected to power
     comp = module.components()["BMI270.BMI270"]
@@ -148,7 +163,7 @@ def check_bmi270_power_pins(module):
     if "GND" not in comp.pins["GNDIO"].name:
         error("BMI270 GNDIO not connected to ground")
 
-def check_communication_interfaces(module):
+def check_communication_interfaces(module, inputs):
     """Verify I2C and SPI interface pins are available"""
     # Check I2C pins
     comp = module.components()["BMI270.BMI270"]
@@ -172,10 +187,14 @@ def is_capacitor(component):
     if component.type != "capacitor":
         error("Component " + component.name + " is not a capacitor")
 
-def check_power_paths_have_capacitors(module):
+def check_power_paths_have_capacitors(module, inputs):
     """Simple example: verify that power-to-ground paths contain capacitors"""
+    # Use inputs to get actual net names dynamically
+    vdd_net = inputs["io_vdd"].NET.name
+    gnd_net = inputs["io_gnd"].NET.name
+    
     graph = module.graph()
-    paths = graph.paths(start="io_vdd_VCC", end="io_gnd_GND", max_depth=4)
+    paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=4)
     
     check(len(paths) > 0, "No power-to-ground paths found")
     
@@ -186,9 +205,29 @@ def check_power_paths_have_capacitors(module):
     
     check(total_capacitors >= 2, "Expected at least 2 capacitors in power paths, found " + str(total_capacitors))
 
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground", "I2c", "Spi")
+
 TestBench(
     name="BMI270",
     module=BMI270,
+    test_cases = {
+        "I2C_mode": {
+            "io_vdd": Power("VDD"),
+            "io_vddio": Power("VDDIO"), 
+            "io_gnd": Ground("GND"),
+            "io_i2c": I2c(SDA=Net("I2C_SDA"), SCL=Net("I2C_SCL")),
+            "config_upstream": BMI270.Upstream("I2c"),
+            "config_downstream": BMI270.Downstream("OIS"),
+        },
+        "SPI_mode": {
+            "io_vdd": Power("VDD"),
+            "io_vddio": Power("VDDIO"),
+            "io_gnd": Ground("GND"), 
+            "io_spi": Spi(CS=Net("SPI_CS"), MISO=Net("SPI_MISO"), MOSI=Net("SPI_MOSI"), CLK=Net("SPI_CLK")),
+            "config_upstream": BMI270.Upstream("Spi"),
+            "config_downstream": BMI270.Downstream("OIS"),
+        },
+    },
     checks = [
         print_info,
         analyze_power_paths,

@@ -1,9 +1,9 @@
-TestModule = Module("./module.zen")
-
-# Use the shared matcher library
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
 load("../matchers.zen", "skip", "skip_rest", "is_resistor", "is_capacitor", "is_inductor", "exactly_n_resistors", "has_package", "name_contains", "debug_print_path")
 
-def test_basic_sequential_patterns(module):
+TestModule = Module("./module.zen")
+
+def test_basic_sequential_patterns(module, inputs):
     """Test basic sequential pattern matching"""
     print("Basic Sequential Patterns:")
     
@@ -29,7 +29,7 @@ def test_basic_sequential_patterns(module):
             print("    ✓ Complete R-C-R-R chain validated")
             break
 
-def test_single_component_paths(module):
+def test_single_component_paths(module, inputs):
     """Test single-component decoupling paths"""
     print("Single-Component Paths:")
     graph = module.graph()
@@ -61,7 +61,7 @@ def test_single_component_paths(module):
     else:
         print("  ERROR: Single path detection is broken")
 
-def test_complex_filter_path(module):
+def test_complex_filter_path(module, inputs):
     """Test complex multi-stage filter"""
     print("Complex Filter Path:")
     graph = module.graph()
@@ -80,7 +80,7 @@ def test_complex_filter_path(module):
     
     check(filter_found, "No R-L-R-C filter path found in circuit")
 
-def test_voltage_divider(module):
+def test_voltage_divider(module, inputs):
     """Test voltage divider patterns"""
     print("Voltage Divider:")
     graph = module.graph()
@@ -99,7 +99,7 @@ def test_voltage_divider(module):
     
     check(divider_found, "No voltage divider path found in circuit")
 
-def test_all_actual_paths(module):
+def test_all_actual_paths(module, inputs):
     """Test all paths that actually exist in the circuit"""
     print("All Actual Paths Analysis:")
     graph = module.graph()
@@ -125,7 +125,7 @@ def test_all_actual_paths(module):
                 path.matches(has_package("0603"))  # Medium package  
                 print("    ✓ 1uF uses 0603 package")
 
-def test_component_properties(module):
+def test_component_properties(module, inputs):
     """Test component properties across all paths"""
     print("Component Properties Analysis:")
     graph = module.graph()
@@ -156,7 +156,7 @@ def test_component_properties(module):
     
     print("    ✓ Found " + str(resistor_count) + " resistors, " + str(capacitor_count) + " capacitors")
 
-def test_specific_component_connectivity(module):
+def test_specific_component_connectivity(module, inputs):
     """Test connectivity of specific components by name"""
     print("Specific Component Connectivity:")
     
@@ -203,7 +203,7 @@ def test_specific_component_connectivity(module):
     check(c2_found, "C2 component not found")
     check(c3_found, "C3 component not found")
 
-def test_net_analysis(module):
+def test_net_analysis(module, inputs):
     """Analyze net connectivity patterns"""
     print("Net Connectivity Analysis:")
     nets = module.nets()
@@ -235,7 +235,7 @@ def test_net_analysis(module):
     
     print("    ✓ Power rail connectivity validated")
 
-def test_path_diversity(module):
+def test_path_diversity(module, inputs):
     """Test different types of paths exist"""
     print("Path Diversity Analysis:")
     graph = module.graph()
@@ -262,7 +262,7 @@ def test_path_diversity(module):
     check(len(path_lengths) > 0, "No paths found at all")
     print("    ✓ Path diversity analysis complete")
 
-def test_suppress_errors_functionality(module):
+def test_suppress_errors_functionality(module, inputs):
     """Test the suppress_errors feature specifically"""
     print("Suppress Errors Feature Test:")
     graph = module.graph()
@@ -291,7 +291,7 @@ def test_suppress_errors_functionality(module):
         
         print("    ✓ suppress_errors functionality validated")
 
-def test_component_to_component_paths(module):
+def test_component_to_component_paths(module, inputs):
     """Exercise component port to component port path finding"""
     print("Component-to-Component Path Finding:")
     graph = module.graph()
@@ -319,7 +319,7 @@ def test_component_to_component_paths(module):
         if path.matches(skip_rest(), suppress_errors=True):
             print("    ✓ R1-to-C2 connection found")
 
-def test_external_net_to_component_paths(module):
+def test_external_net_to_component_paths(module, inputs):
     """Exercise external net to component port path finding"""
     print("External Net to Component Paths:")
     graph = module.graph()
@@ -336,7 +336,7 @@ def test_external_net_to_component_paths(module):
             if path.matches(skip_rest(), suppress_errors=True):
                 print("    ✓ External VCC connects to " + comp_name)
 
-def test_multiple_start_end_combinations(module):
+def test_multiple_start_end_combinations(module, inputs):
     """Test various start/end point combinations"""
     print("Multiple Start/End Combinations:")
     graph = module.graph()
@@ -359,7 +359,7 @@ def test_multiple_start_end_combinations(module):
             if len(paths) > 0:
                 print("    " + net + " to " + str(comp_port) + ": " + str(len(paths)) + " paths")
 
-def test_path_matching_patterns(module):
+def test_path_matching_patterns(module, inputs):
     """Exercise different path matching patterns extensively"""
     print("Path Matching Pattern Testing:")
     graph = module.graph()
@@ -394,7 +394,7 @@ def test_path_matching_patterns(module):
             if path.matches(name_contains(comp.name[0]), suppress_errors=True):
                 print("    ✓ Name pattern matching works")
 
-def test_path_validation_vs_identification(module):
+def test_path_validation_vs_identification(module, inputs):
     """Test using path.matches() for both identification and validation"""
     print("Path Identification vs Validation:")
     graph = module.graph()
@@ -431,7 +431,7 @@ def test_path_validation_vs_identification(module):
     
     print("    ✓ Found " + str(capacitor_paths_found) + " capacitor paths, " + str(resistor_paths_found) + " resistor paths")
 
-def test_max_depth_behavior(module):
+def test_max_depth_behavior(module, inputs):
     """Test how max_depth affects path finding"""
     print("Max Depth Behavior Testing:")
     graph = module.graph()
@@ -448,7 +448,7 @@ def test_max_depth_behavior(module):
     
     print("    ✓ Max depth constraints validated")
 
-def test_component_pin_enumeration(module):
+def test_component_pin_enumeration(module, inputs):
     """Test paths to/from different pins of the same component"""
     print("Component Pin Enumeration:")
     graph = module.graph()
@@ -474,6 +474,12 @@ def test_component_pin_enumeration(module):
 TestBench(
     name="SequentialMatchers",
     module=TestModule,
+    test_cases = {
+        "default": {
+            "VCC": Power("VCC"),
+            "GND": Ground("GND"),
+        },
+    },
     checks=[
         test_basic_sequential_patterns,
         test_all_actual_paths,

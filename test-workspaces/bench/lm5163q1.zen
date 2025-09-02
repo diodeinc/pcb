@@ -5,6 +5,7 @@ Tests critical power supply topology including bootstrap circuit, feedback netwo
 and power decoupling per Texas Instruments datasheet requirements.
 """
 
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
 load("matchers.zen", "is_capacitor", "is_resistor")
 
 LM5163Q1 = Module("@github/diodeinc/registry:v0.1.0/reference/LM5163Q1/LM5163Q1.zen")
@@ -23,7 +24,7 @@ def is_srn6045_inductor():
 
 # Component validation using basic matchers
 
-def print_info(module: Module):
+def print_info(module: Module, inputs):
     """Print module structure for debugging"""
     print("=== LM5163Q1 Module Analysis ===")
     print("Nets and their connected ports:")
@@ -45,9 +46,14 @@ def print_info(module: Module):
             pins[pin] = net.name
         print("    Pins:", pins)
 
-def check_bootstrap_circuit(module: Module):
+def check_bootstrap_circuit(module: Module, inputs):
     """Validate bootstrap capacitor between BST and SW pins per datasheet §6.3.2"""
     print("\n=== Bootstrap Circuit Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # Find all paths from BST pin to SW pin
@@ -70,17 +76,26 @@ def check_bootstrap_circuit(module: Module):
     print("    Ports: " + str(bootstrap_path.ports))
     print("    ✓ Bootstrap circuit validated: 2.2nF ceramic capacitor between BST and SW")
 
-def check_feedback_divider(module: Module):
+def check_feedback_divider(module: Module, inputs):
     """Validate feedback resistor divider per datasheet §6.3.3"""
     print("\n=== Feedback Network Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+    
     # Find VOUT to FB path (upper feedback resistor)
-    vout_fb_paths = graph.paths(start="vout_VCC", end=("LM5163Q1.LM5163QDDARQ1", "FB"), max_depth=5)
+    vout_fb_paths = graph.paths(start=vout_net, end=("LM5163Q1.LM5163QDDARQ1", "FB"), max_depth=5)
     check(len(vout_fb_paths) > 0, "No feedback path found from VOUT to FB pin")
     
     # Find FB to GND path (lower feedback resistor)  
-    fb_gnd_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "FB"), end="gnd_GND", max_depth=5)
+    fb_gnd_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "FB"), end=gnd_net, max_depth=5)
     check(len(fb_gnd_paths) > 0, "No feedback path found from FB to GND")
     
     print("Found " + str(len(vout_fb_paths)) + " VOUT→FB path(s)")
@@ -106,13 +121,21 @@ def check_feedback_divider(module: Module):
     
     print("    ✓ Feedback divider topology validated: 453kΩ/50kΩ for 12V output")
 
-def check_output_filtering(module: Module):
+def check_output_filtering(module: Module, inputs):
     """Validate output inductor and capacitor network per datasheet §7.2.2.3-4"""
     print("\n=== Output Stage Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    
     # Find SW to VOUT paths (output filter - should go through inductor)
-    sw_vout_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "SW"), end="vout_VCC", max_depth=5)
+    sw_vout_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "SW"), end=vout_net, max_depth=5)
     check(len(sw_vout_paths) > 0, "No switching node to output path found")
     
     print("Found " + str(len(sw_vout_paths)) + " SW→VOUT path(s)")
@@ -129,7 +152,8 @@ def check_output_filtering(module: Module):
     print("    ✓ Output inductor validated: SRN6045-470M (120µH)")
     
     # Filter for output capacitor paths with full validation
-    vout_gnd_paths = graph.paths(start="vout_VCC", end="gnd_GND", max_depth=5)
+    gnd_net = inputs["gnd"].NET.name
+    vout_gnd_paths = graph.paths(start=vout_net, end=gnd_net, max_depth=5)
     check(len(vout_gnd_paths) > 0, "No output capacitor paths found")
     print("Found " + str(len(vout_gnd_paths)) + " VOUT→GND path(s)")
     
@@ -143,13 +167,21 @@ def check_output_filtering(module: Module):
     
     print("    ✓ Output filtering topology validated")
 
-def check_complete_power_path(module: Module):
+def check_complete_power_path(module: Module, inputs):
     """Validate complete bootstrap-to-output power path (BST→C_BST→SW→L_OUT→VOUT)"""
     print("\n=== Complete Power Path Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    
     # Find the complete power delivery path from bootstrap to output
-    power_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "BST"), end="vout_VCC", max_depth=8)
+    power_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "BST"), end=vout_net, max_depth=8)
     print("Found " + str(len(power_paths)) + " bootstrap-to-output path(s)")
     
     # Filter for complete power paths with full validation
@@ -167,10 +199,18 @@ def check_complete_power_path(module: Module):
     print("    Sequence: BST → C_BST(2.2nF) → SW → L_OUT(120µH) → VOUT")
     print("    ✓ Complete power delivery path validated")
 
-def check_snubber_network_topology(module: Module):
+def check_snubber_network_topology(module: Module, inputs):
     """Validate snubber RC network (SW → R_SNUB → capacitors)"""  
     print("\n=== Snubber Network Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
+    
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
     
     # Build matchers once and validate snubber network branches
     snubber_resistor = is_resistor("205k 1%")
@@ -178,7 +218,7 @@ def check_snubber_network_topology(module: Module):
     compensation_cap = is_capacitor("47pF 10%")
     
     # Check snubber path: SW → R_SNUB → C_SNUB → VOUT
-    sw_vout_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "SW"), end="vout_VCC", max_depth=8)
+    sw_vout_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "SW"), end=vout_net, max_depth=8)
     
     for path in sw_vout_paths:
         print("  Checking snubber path: " + str([comp.name for comp in path.components]))
@@ -199,13 +239,18 @@ def check_snubber_network_topology(module: Module):
     
     print("    ✓ Complex snubber network validated: SW→R(205kΩ)→{C_SNUB(1.2nF)→VOUT, C_FB(47pF)→FB}")
 
-def check_parallel_output_capacitors(module: Module):
+def check_parallel_output_capacitors(module: Module, inputs):
     """Validate multiple parallel output capacitor paths with different values"""
     print("\n=== Parallel Output Capacitors Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # Find all VOUT to GND paths (should be multiple parallel capacitors)
-    vout_gnd_paths = graph.paths(start="vout_VCC", end="gnd_GND", max_depth=5)
+    vout_gnd_paths = graph.paths(start=vout_net, end=gnd_net, max_depth=5)
     print("Found " + str(len(vout_gnd_paths)) + " VOUT→GND path(s)")
     
     # Build matchers once and categorize capacitor paths
@@ -231,13 +276,18 @@ def check_parallel_output_capacitors(module: Module):
     
     print("    ✓ Parallel output capacitors validated: " + str(len(small_cap_paths)) + "×2.2µF + " + str(len(large_cap_paths)) + "×22µF")
 
-def check_input_decoupling_sequence(module: Module):
+def check_input_decoupling_sequence(module: Module, inputs):
     """Validate input decoupling using sequential pattern matching"""
     print("\n=== Input Decoupling Sequence Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # Find VIN to GND paths (input decoupling)
-    vin_gnd_paths = graph.paths(start="vin_VCC", end="gnd_GND", max_depth=5)
+    vin_gnd_paths = graph.paths(start=vin_net, end=gnd_net, max_depth=5)
     print("Found " + str(len(vin_gnd_paths)) + " VIN→GND path(s)")
     
     # Filter for capacitor paths with full validation
@@ -254,16 +304,21 @@ def check_input_decoupling_sequence(module: Module):
     
     print("    ✓ Input decoupling validated: " + str(len(capacitor_paths)) + "×2.2µF ceramic")
 
-def check_advanced_feedback_compensation(module: Module):
+def check_advanced_feedback_compensation(module: Module, inputs):
     """Validate complex feedback network with compensation using path.matches()"""
     print("\n=== Advanced Feedback Compensation Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # Find the complex feedback compensation path: VOUT → RFB1 → FB → (through snubber) → FB  
     # This validates both the main feedback and the compensation network
     
     # Main feedback path with exact sequence validation
-    main_fb_paths = graph.paths(start="vout_VCC", end=("LM5163Q1.LM5163QDDARQ1", "FB"), max_depth=6)
+    main_fb_paths = graph.paths(start=vout_net, end=("LM5163Q1.LM5163QDDARQ1", "FB"), max_depth=6)
     
     # Find the direct resistor feedback path
     direct_fb_paths = []
@@ -302,9 +357,14 @@ def check_advanced_feedback_compensation(module: Module):
 
 
 
-def check_ground_distribution_network(module: Module):
+def check_ground_distribution_network(module: Module, inputs):
     """Validate ground distribution using advanced path matching"""
     print("\n=== Ground Distribution Network ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # Find all paths from various component grounds to main GND
@@ -318,7 +378,7 @@ def check_ground_distribution_network(module: Module):
     ]
     
     for component, pin in test_points:
-        ground_paths = graph.paths(start=(component, pin), end="gnd_GND", max_depth=6)
+        ground_paths = graph.paths(start=(component, pin), end=gnd_net, max_depth=6)
         print("  " + component + "." + pin + " to GND: " + str(len(ground_paths)) + " path(s)")
         
         # Validate direct ground connections (no components in between)
@@ -330,14 +390,19 @@ def check_ground_distribution_network(module: Module):
 
 
 
-def check_ron_timing_network(module: Module):
+def check_ron_timing_network(module: Module, inputs):
     """Validate RON timing resistor sets switching frequency"""
     print("\n=== RON Timing Network Validation ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # RON pin sets switching frequency per datasheet: Fsw = (VOUT × 2500) / RRON
     # This reference design uses 30.9kΩ for ~1MHz switching frequency
-    ron_gnd_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "RON"), end="gnd_GND", max_depth=5)
+    ron_gnd_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "RON"), end=gnd_net, max_depth=5)
     check(len(ron_gnd_paths) > 0, "RON timing resistor missing")
     
     print("Found " + str(len(ron_gnd_paths)) + " RON→GND path(s)")
@@ -353,9 +418,14 @@ def check_ron_timing_network(module: Module):
     
     print("    ✓ RON timing network validated: 30.9kΩ ±1% (≈1MHz switching)")
 
-def check_end_to_end_regulation_loop(module: Module):
+def check_end_to_end_regulation_loop(module: Module, inputs):
     """Validate complete regulation loop: VOUT→FB→[control]→SW→L→VOUT"""
     print("\n=== End-to-End Regulation Loop ===")
+    # Use inputs to get actual net names dynamically
+    vout_net = inputs["vout"].NET.name
+    vin_net = inputs["vin"].NET.name
+    gnd_net = inputs["gnd"].NET.name
+
     graph = module.graph()
     
     # This is the ultimate test: validate the complete control loop
@@ -366,7 +436,7 @@ def check_end_to_end_regulation_loop(module: Module):
     output_inductor = is_srn6045_inductor()
     
     # Step 1: VOUT to FB (sensing)
-    sense_paths = graph.paths(start="vout_VCC", end=("LM5163Q1.LM5163QDDARQ1", "FB"), max_depth=6)
+    sense_paths = graph.paths(start=vout_net, end=("LM5163Q1.LM5163QDDARQ1", "FB"), max_depth=6)
     sensing_paths = [p for p in sense_paths if p.matches(feedback_resistor, suppress_errors=True)]
     check(len(sensing_paths) > 0, "Voltage sensing path missing")
     
@@ -375,7 +445,7 @@ def check_end_to_end_regulation_loop(module: Module):
     # but don't attempt to trace the internal control loop logic
     
     # Step 3: SW to VOUT (power delivery)  
-    power_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "SW"), end="vout_VCC", max_depth=6)
+    power_paths = graph.paths(start=("LM5163Q1.LM5163QDDARQ1", "SW"), end=vout_net, max_depth=6)
     delivery_paths = [p for p in power_paths if p.matches(output_inductor, suppress_errors=True)]
     check(len(delivery_paths) > 0, "Power delivery path missing")
     
@@ -392,6 +462,15 @@ def check_end_to_end_regulation_loop(module: Module):
 TestBench(
     name="LM5163Q1",
     module=LM5163Q1,
+    test_cases = {
+        "default": {
+            "vin": Power("VIN"),
+            "vout": Power("VOUT"),
+            "gnd": Ground("GND"),
+            "EN": Net("EN"),
+            "PGOOD": Net("PGOOD"),
+        },
+    },
     checks=[
         check_bootstrap_circuit,              # Bootstrap capacitor: BST-SW 2.2nF
         check_feedback_divider,               # Feedback resistor divider: 453kΩ + 50kΩ  

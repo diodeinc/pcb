@@ -1,6 +1,8 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+
 Foo = Module("./module.zen")
 
-def print_info(module: Module):
+def print_info(module: Module, inputs):
     nets = module.nets()
     components = module.components()
     print("Nets and their connected ports:")
@@ -25,27 +27,27 @@ def print_info(module: Module):
             pins[pin] = net.name
         print("    Pins:", pins)
 
-def ensure_gnd(module):
+def ensure_gnd(module, inputs):
     nets = module.nets()
     for net_name in nets.keys():
         if "GND" in net_name:
             return
     error("GND net not found")
 
-def check_power_connections(module):
+def check_power_connections(module, inputs):
     """Check that VCC nets have at least 2 connections total (components properly powered)"""
     nets = module.nets()
     for (net_name, port_list) in nets.items():
         if "VCC" in net_name:
             check(len(port_list) >= 2, "VCC net must have at least 2 connections")
 
-def check_resistor_grounding(module):
+def check_resistor_grounding(module, inputs):
     """Check that resistor R.P2 is connected to ground using ports dict"""
     components = module.components()
     connected_net = components["R.R"].pins["P2"].name
     check("GND" in connected_net, "Resistor P2 is connected to " + connected_net + ", not ground!")
 
-def check_resistor_values(module):
+def check_resistor_values(module, inputs):
     """Check that resistors have valid values using components dict"""
     components = module.components()
     for (comp_name, comp) in components.items():
@@ -53,13 +55,13 @@ def check_resistor_values(module):
             resistance = comp.resistance
             print("✓ " + comp_name + " has resistance: " + resistance.__str__(resistance))
 
-def print_graph_info(module: Module):
+def print_graph_info(module: Module, inputs):
     print("Circuit Graph Information:")
     graph = module.graph()
     print("  Graph object:", graph)
     print("  Graph type:", type(graph))
 
-def explore_paths(module: Module):
+def explore_paths(module: Module, inputs):
     """Demonstrate pathfinding between different points in the circuit"""
     print("Path Analysis:")
     graph = module.graph()
@@ -129,7 +131,7 @@ def is_capacitor(component):
     if component.type != "capacitor":
         error("Component " + component.name + " is not a capacitor")
 
-def check_path_component_counts(module):
+def check_path_component_counts(module, inputs):
     """Simple example: count resistors and capacitors in power paths"""
     graph = module.graph()
     paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
@@ -149,6 +151,12 @@ def check_path_component_counts(module):
 TestBench(
     name="FOO", 
     module=Foo,
+    test_cases = {
+        "default": {
+            "VCC": Power("VCC"),
+            "GND": Ground("GND"),
+        },
+    },
     checks=[
         print_info,
         print_graph_info,
