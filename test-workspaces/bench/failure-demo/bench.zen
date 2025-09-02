@@ -1,0 +1,58 @@
+FailureDemoModule = Module("./module.zen")
+
+# Use shared matcher library - no more duplication!
+load("../simple-matchers.zen", "is_resistor", "is_capacitor")
+
+def expect_fail_wrong_component_type(module):
+    """This test should fail - demonstrates wrong component type error"""
+    print("This test should fail - trying to match capacitor as resistor")
+    graph = module.graph()
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    if paths:
+        path = paths[0]  # Should be 2-component RC path
+        # This will fail because first component is R1 (resistor), not capacitor
+        path.matches(
+            is_capacitor(),  # WRONG! First component is resistor
+            is_resistor()    # This would be correct for second
+        )
+
+def expect_fail_under_consumption(module):
+    """This test should fail - demonstrates under-consumption error"""
+    print("This test should fail - not consuming all components")
+    graph = module.graph()
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    if paths:
+        path = paths[0]  # Should be 2-component RC path
+        # This will fail because we only consume 1 of 2 components
+        path.matches(
+            is_resistor()  # Only consume first component, leave C1 unconsumed
+        )
+
+def test_success_case(module):
+    """This test should succeed - demonstrates correct usage"""
+    print("This test should succeed - correct sequential matching")
+    graph = module.graph()
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    if paths:
+        path = paths[0]  # Should be 2-component RC path
+        print("  Path: " + str([c.name + "(" + str(c.type) + ")" for c in path.components]))
+        path.matches(
+            is_resistor(),   # R1
+            is_capacitor()   # C1
+        )
+        print("  ✅ Correct R-C sequential pattern validated")
+
+# Note: The expect_fail_* functions will actually cause TestBench failures
+# This demonstrates the error handling system working correctly
+TestBench(
+    name="ExpectedFailures", 
+    module=FailureDemoModule,
+    checks=[
+        test_success_case,
+        # expect_fail_wrong_component_type,    # Uncomment to see type error
+        # expect_fail_under_consumption,       # Uncomment to see consumption error
+    ],
+)

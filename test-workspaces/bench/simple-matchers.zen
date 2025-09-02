@@ -1,0 +1,145 @@
+# Simplified Sequential Matcher Library (Working Version)
+
+# ============================================================================
+# BASIC COMPONENT TYPE MATCHERS
+# ============================================================================
+
+def is_resistor(expected_value=None):
+    """Match a resistor, optionally with specific value"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected resistor")
+        component = path.components[cursor]
+        if component.type != "resistor":
+            error(component.name + " is not a resistor (type: " + str(component.type) + ")")
+        if expected_value != None:
+            resistance_str = component.resistance.__str__(component.resistance)
+            if resistance_str != expected_value:
+                error(component.name + " value " + resistance_str + " != " + expected_value)
+        return 1
+    return _matcher
+
+def is_capacitor(expected_value=None):
+    """Match a capacitor, optionally with specific value"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected capacitor")
+        component = path.components[cursor]
+        if component.type != "capacitor":
+            error(component.name + " is not a capacitor (type: " + str(component.type) + ")")
+        if expected_value != None:
+            capacitance_str = component.capacitance.__str__(component.capacitance)
+            if capacitance_str != expected_value:
+                error(component.name + " value " + capacitance_str + " != " + expected_value)
+        return 1
+    return _matcher
+
+def is_inductor(expected_value=None):
+    """Match an inductor, optionally with specific value"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected inductor")
+        component = path.components[cursor]
+        if component.type != "inductor":
+            error(component.name + " is not an inductor (type: " + str(component.type) + ")")
+        return 1
+    return _matcher
+
+def is_component_type(component_type):
+    """Match any component of specified type"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected " + component_type)
+        component = path.components[cursor]
+        if component.type != component_type:
+            error(component.name + " is not a " + component_type + " (type: " + str(component.type) + ")")
+        return 1
+    return _matcher
+
+# ============================================================================
+# BASIC NAVIGATION MATCHERS
+# ============================================================================
+
+def skip(n):
+    """Skip exactly n components"""
+    def _matcher(path, cursor):
+        if cursor + n > len(path.components):
+            error("skip(" + str(n) + ") would consume past end of path")
+        return n
+    return _matcher
+
+def skip_rest():
+    """Consume all remaining components"""
+    def _matcher(path, cursor):
+        return len(path.components) - cursor
+    return _matcher
+
+# ============================================================================
+# PROPERTY-BASED MATCHERS
+# ============================================================================
+
+def has_package(expected_package):
+    """Match component with specific package size"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected component")
+        component = path.components[cursor]
+        if not hasattr(component, "properties") or "Package" not in component.properties:
+            error(component.name + " missing Package property")
+        actual = component.properties["Package"]
+        if actual != expected_package:
+            error(component.name + " package " + actual + " != " + expected_package)
+        return 1
+    return _matcher
+
+def name_contains(pattern):
+    """Match component whose name contains pattern"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected component")
+        component = path.components[cursor]
+        if pattern not in component.name:
+            error(component.name + " does not contain '" + pattern + "'")
+        return 1
+    return _matcher
+
+# ============================================================================
+# QUANTIFIED MATCHERS  
+# ============================================================================
+
+def exactly_n_resistors(n):
+    """Exactly n consecutive resistors"""
+    def _matcher(path, cursor):
+        if cursor + n > len(path.components):
+            error("exactly_n_resistors(" + str(n) + ") would consume past end of path")
+        for i in range(n):
+            component = path.components[cursor + i]
+            if component.type != "resistor":
+                error("Component " + str(i + 1) + "/" + str(n) + " (" + component.name + ") is not a resistor")
+        return n
+    return _matcher
+
+def exactly_n_capacitors(n):
+    """Exactly n consecutive capacitors"""
+    def _matcher(path, cursor):
+        if cursor + n > len(path.components):
+            error("exactly_n_capacitors(" + str(n) + ") would consume past end of path")
+        for i in range(n):
+            component = path.components[cursor + i]
+            if component.type != "capacitor":
+                error("Component " + str(i + 1) + "/" + str(n) + " (" + component.name + ") is not a capacitor")
+        return n
+    return _matcher
+
+# ============================================================================
+# DEBUGGING HELPERS
+# ============================================================================
+
+def debug_print_path(path, cursor=0):
+    """Print path information for debugging"""
+    print("Path Debug Info:")
+    print("  Total components: " + str(len(path.components)))
+    print("  Current cursor: " + str(cursor))
+    for i, component in enumerate(path.components):
+        marker = " -> " if i == cursor else "    "
+        print(marker + str(i) + ": " + component.name + " (" + str(component.type) + ")")

@@ -1,53 +1,7 @@
 TestModule = Module("./module.zen")
 
-# Simple matcher functions that work without try/catch
-def skip(n):
-    def _matcher(path, cursor):
-        if cursor + n > len(path.components):
-            error("skip(" + str(n) + ") would consume past end of path")
-        return n
-    return _matcher
-
-def is_resistor(expected_value=None):
-    def _matcher(path, cursor):
-        if cursor >= len(path.components):
-            error("path ended, expected resistor")
-        component = path.components[cursor]
-        if component.type != "resistor":
-            error(component.name + " is not a resistor (type: " + str(component.type) + ")")
-        if expected_value != None:
-            resistance_str = component.resistance.__str__(component.resistance)
-            if resistance_str != expected_value:
-                error(component.name + " value " + resistance_str + " != " + expected_value)
-        return 1
-    return _matcher
-
-def is_capacitor(expected_value=None):
-    def _matcher(path, cursor):
-        if cursor >= len(path.components):
-            error("path ended, expected capacitor")
-        component = path.components[cursor]
-        if component.type != "capacitor":
-            error(component.name + " is not a capacitor (type: " + str(component.type) + ")")
-        if expected_value != None:
-            capacitance_str = component.capacitance.__str__(component.capacitance)
-            if capacitance_str != expected_value:
-                error(component.name + " value " + capacitance_str + " != " + expected_value)
-        return 1
-    return _matcher
-
-def skip_rest():
-    def _matcher(path, cursor):
-        return len(path.components) - cursor
-    return _matcher
-
-def debug_print_path(path, cursor=0):
-    print("Path Debug Info:")
-    print("  Total components: " + str(len(path.components)))
-    print("  Current cursor: " + str(cursor))
-    for i, component in enumerate(path.components):
-        marker = " -> " if i == cursor else "    "
-        print(marker + str(i) + ": " + component.name + " (" + str(component.type) + ")")
+# Reuse the comprehensive matcher library instead of reimplementing
+load("../simple-matchers.zen", "skip", "skip_rest", "is_resistor", "is_capacitor", "debug_print_path")
 
 def test_sequential_matching(module):
     """Test the new sequential matching functionality"""
