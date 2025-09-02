@@ -1,0 +1,19 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.8/generics/Capacitor.zen")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+mid1 = Net("MID1")
+mid2 = Net("MID2")
+mid3 = Net("MID3")
+
+# Create a simple chain: VCC -> R1(1k) -> C1(100nF) -> R2(10k) -> R3(100k) -> GND
+Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=mid1)
+Capacitor(name="C1", value="100nF", package="0603", P1=mid1, P2=mid2)
+Resistor(name="R2", value="10kOhm", package="0603", P1=mid2, P2=mid3)
+Resistor(name="R3", value="100kOhm", package="0603", P1=mid3, P2=gnd.NET)
+
+VCC = io("VCC", Power, default=vcc)
+GND = io("GND", Ground, default=gnd)
