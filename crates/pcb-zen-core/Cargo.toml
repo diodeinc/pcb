@@ -48,6 +48,8 @@ tar = { workspace = true, optional = true }
 toml = { workspace = true }
 chrono = { workspace = true }
 zip = { workspace = true }
+fixedbitset = { workspace = true }
+smallvec = { workspace = true }
 
 pcb-eda = { workspace = true }
 pcb-sch = { workspace = true }

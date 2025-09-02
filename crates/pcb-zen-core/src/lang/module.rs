@@ -22,6 +22,7 @@ use starlark::{
     },
 };
 
+use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
@@ -29,12 +30,28 @@ use crate::lang::input::InputMap;
 use crate::{Diagnostic, InputValue};
 use starlark::values::dict::{AllocDict, DictRef};
 
+/// Helper macro for frozen module downcasting to reduce repetition
+#[macro_export]
+macro_rules! downcast_frozen_module {
+    ($module:expr) => {
+        $module
+            .to_value()
+            .downcast_ref::<FrozenModuleValue>()
+            .ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "Module methods only work on frozen modules"
+                ))
+            })?
+    };
+}
+
 use super::net::{generate_net_id, NetValue};
 use crate::lang::context::FrozenContextValue;
 use crate::lang::net::NetId;
 use crate::{FrozenComponentValue, FrozenNetValue};
 use starlark::errors::{EvalMessage, EvalSeverity};
 use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -127,28 +144,24 @@ where
     Self: ProvidesStaticType<'v>,
 {
     fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        let module_value = heap.alloc_complex(self.clone()).to_value();
+
         match attr {
             "nets" => {
-                let components_map = self.collect_components("");
-                let mut small_map = SmallMap::new();
-                for (k, v) in components_map.into_iter() {
-                    small_map.insert(k, v);
-                }
-
                 let callable = NetsCallableGen {
-                    components: small_map,
+                    module: module_value,
                 };
                 Some(heap.alloc_complex(callable))
             }
             "components" => {
-                let components_map = self.collect_components("");
-                let mut small_map = SmallMap::new();
-                for (k, v) in components_map.into_iter() {
-                    small_map.insert(k, v);
-                }
-
                 let callable = ComponentsCallableGen {
-                    components: small_map,
+                    module: module_value,
+                };
+                Some(heap.alloc_complex(callable))
+            }
+            "graph" => {
+                let callable = GraphCallableGen {
+                    module: module_value,
                 };
                 Some(heap.alloc_complex(callable))
             }
@@ -157,11 +170,15 @@ where
     }
 
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
-        matches!(attr, "nets" | "components")
+        matches!(attr, "nets" | "components" | "graph")
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        vec!["nets".to_string(), "components".to_string()]
+        vec![
+            "nets".to_string(),
+            "components".to_string(),
+            "graph".to_string(),
+        ]
     }
 
     fn at(&self, index: Value<'v>, _heap: &'v Heap) -> starlark::Result<Value<'v>> {
@@ -277,8 +294,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Recursively collect components from this module and its submodules
-    fn collect_components(&self, path_prefix: &str) -> HashMap<String, Value<'v>> {
-        let mut components = HashMap::new();
+    pub fn collect_components(&self, path_prefix: &str) -> SmallMap<String, Value<'v>> {
+        let mut components = SmallMap::new();
 
         for child in self.children().iter() {
             if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
@@ -1024,12 +1041,12 @@ fn validate_or_convert<'v>(
 #[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct NetsCallableGen<V: ValueLifetimeless> {
-    components: SmallMap<String, V>,
+    module: V,
 }
 
 starlark_complex_value!(pub NetsCallable);
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for NetsCallableGen<V> {
+impl<V: ValueLifetimeless> std::fmt::Display for NetsCallableGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module.nets")
     }
@@ -1055,10 +1072,15 @@ where
 
         let heap = eval.heap();
 
+        // Get the module and collect its components
+        let module_ref = downcast_frozen_module!(self.module);
+
+        let components = module_ref.collect_components("");
+
         // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
         let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
 
-        for (comp_path, comp_val) in self.components.iter() {
+        for (comp_path, comp_val) in components.iter() {
             let comp_val = comp_val.to_value();
             if let Some(component) = comp_val.downcast_ref::<FrozenComponentValue>() {
                 for (pin_name, net_val) in component.connections().iter() {
@@ -1093,12 +1115,20 @@ where
 #[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct ComponentsCallableGen<V: ValueLifetimeless> {
-    components: SmallMap<String, V>,
+    module: V,
+}
+
+/// Callable wrapper for graph() method on modules
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct GraphCallableGen<V: ValueLifetimeless> {
+    module: V,
 }
 
 starlark_complex_value!(pub ComponentsCallable);
+starlark_complex_value!(pub GraphCallable);
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentsCallableGen<V> {
+impl<V: ValueLifetimeless> std::fmt::Display for ComponentsCallableGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module.components")
     }
@@ -1124,12 +1154,89 @@ where
 
         let heap = eval.heap();
 
+        // Get the module and collect its components
+        let module_ref = downcast_frozen_module!(self.module);
+
+        let components = module_ref.collect_components("");
+
         Ok(heap.alloc(AllocDict(
-            self.components
+            components
                 .iter()
                 .map(|(path, comp_val)| (heap.alloc_str(path).to_value(), comp_val.to_value()))
                 .collect::<Vec<_>>(),
         )))
+    }
+}
+
+impl<V: ValueLifetimeless> std::fmt::Display for GraphCallableGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Module.graph")
+    }
+}
+
+#[starlark_value(type = "function")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for GraphCallableGen<V>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        // Graph method takes no arguments
+        if args.len()? != 0 {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "graph() takes no arguments"
+            )));
+        }
+
+        let heap = eval.heap();
+
+        // Get the module and collect its components
+        let module_ref = downcast_frozen_module!(self.module);
+
+        let components = module_ref.collect_components("");
+
+        // Collect all component connections to build nets using proper types
+        use crate::graph::{ComponentPath, PortPath};
+        let mut net_to_ports: HashMap<String, Vec<PortPath>> = HashMap::new();
+        let mut component_pins: HashMap<ComponentPath, Vec<String>> = HashMap::new();
+
+        for (comp_path, comp_val) in components.iter() {
+            let comp_val = comp_val.to_value();
+            if let Some(component) = comp_val.downcast_ref::<crate::FrozenComponentValue>() {
+                let mut pins = Vec::new();
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
+                        let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
+                        pins.push(pin_name.clone());
+
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_path);
+                    }
+                }
+                if !pins.is_empty() {
+                    component_pins.insert(comp_path.clone().into(), pins);
+                }
+            }
+        }
+
+        // Build the CircuitGraph directly from the collected data
+        let graph = crate::graph::CircuitGraph::new(net_to_ports, component_pins).map_err(|e| {
+            starlark::Error::new_other(anyhow::anyhow!("Failed to create circuit graph: {}", e))
+        })?;
+
+        // Create and return ModuleGraph object
+        let module_graph = ModuleGraphValueGen {
+            module: self.module.to_value(),
+            graph: Arc::new(graph),
+        };
+
+        Ok(heap.alloc_complex(module_graph))
     }
 }
 

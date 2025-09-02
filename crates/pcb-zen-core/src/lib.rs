@@ -8,6 +8,7 @@ pub mod config;
 pub mod convert;
 pub mod diagnostics;
 mod file_provider;
+pub mod graph;
 pub mod lang;
 pub mod load_spec;
 pub mod passes;

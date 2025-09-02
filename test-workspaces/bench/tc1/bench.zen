@@ -53,11 +53,73 @@ def check_resistor_values(module):
             resistance = comp.resistance
             print("✓ " + comp_name + " has resistance: " + resistance.__str__(resistance))
 
+def print_graph_info(module: Module):
+    print("Circuit Graph Information:")
+    graph = module.graph()
+    print("  Graph object:", graph)
+    print("  Graph type:", type(graph))
+
+def explore_paths(module: Module):
+    """Demonstrate pathfinding between different points in the circuit"""
+    print("Path Analysis:")
+    graph = module.graph()
+    
+    # Try to find paths between different nets
+    nets = module.nets()
+    net_names = list(nets.keys())
+    
+    if len(net_names) >= 2:
+        start_net = net_names[0]  
+        end_net = net_names[1]
+        print("  Looking for paths from '" + start_net + "' to '" + end_net + "'...")
+        
+        # Note: Error handling simplified for Starlark compatibility
+        paths = graph.paths(start=start_net, end=end_net, max_depth=5)
+        print("  Found " + str(len(paths)) + " paths")
+        
+        for i, path in enumerate(paths):
+            print("    Path " + str(i+1) + ":")
+            print("      Ports: " + str(path.ports))
+            print("      Components: " + str(len(path.components)) + " components")
+            print("      Nets: " + str(path.nets))
+    
+    # Try pathfinding using component port tuples
+    components = module.components()
+    if len(components) >= 2:
+        comp_names = list(components.keys())
+        comp1 = comp_names[0]
+        comp2 = comp_names[1] if len(comp_names) > 1 else comp_names[0]
+        
+        # Get first pin of each component  
+        comp1_pins = list(components[comp1].pins.keys())
+        comp2_pins = list(components[comp2].pins.keys())
+        
+        if comp1_pins and comp2_pins:
+            start_port = (comp1, comp1_pins[0])
+            end_port = (comp2, comp2_pins[0])
+            print("  Looking for paths from " + str(start_port) + " to " + str(end_port) + "...")
+            
+            paths = graph.paths(start=start_port, end=end_port, max_depth=8)
+            print("  Found " + str(len(paths)) + " component-to-component paths")
+            
+            if paths:
+                # Show details of first path and demonstrate validation methods
+                path = paths[0]
+                print("    First path details:")
+                print("      Path length: " + str(len(path.ports)) + " ports")
+                print("      Component count: " + str(len(path.components)) + " components")
+                
+                # TODO: Add component matcher examples when matchers are implemented
+                # print(f"      Resistor count: {path.count(is_resistor())}")
+                # print(f"      Has capacitors: {path.any(is_capacitor())}")
+
 TestBench(
     name="FOO",
     module=Foo,
     checks=[
         print_info,
+        print_graph_info,
+        explore_paths,
         ensure_gnd,
         check_resistor_grounding,
         check_resistor_values,

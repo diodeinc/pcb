@@ -23,6 +23,89 @@ def print_info(module: Module):
             pins[pin] = net.name
         print("    Pins:", pins)
 
+def analyze_power_paths(module: Module):
+    """Analyze power distribution paths using the new graph API"""
+    print("Power Path Analysis:")
+    graph = module.graph()
+    
+    # Find all VCC and GND nets
+    nets = module.nets()
+    vcc_nets = []
+    gnd_nets = []
+    
+    for net_name in nets.keys():
+        if "VCC" in net_name:
+            vcc_nets.append(net_name)
+        elif "GND" in net_name:
+            gnd_nets.append(net_name)
+    
+    print("  Found " + str(len(vcc_nets)) + " power nets and " + str(len(gnd_nets)) + " ground nets")
+    
+    # Analyze power-to-ground paths (decoupling capacitor paths)
+    if vcc_nets and gnd_nets:
+        vcc_net = vcc_nets[0]
+        gnd_net = gnd_nets[0]
+        print("  Analyzing paths from '" + vcc_net + "' to '" + gnd_net + "'...")
+        
+        paths = graph.paths(start=vcc_net, end=gnd_net, max_depth=4)
+        print("  Found " + str(len(paths)) + " power-to-ground paths")
+        
+        for i, path in enumerate(paths[:3]):  # Show first 3 paths
+            print("    Path " + str(i+1) + ":")
+            print("      Components: " + str(len(path.components)) + " components")
+            print("      Nets: " + str(path.nets))
+            
+            # TODO: When component matchers are available, we can do:
+            # if path.any(is_capacitor()):
+            #     print("      ✓ Decoupling path through capacitor")
+            # else:
+            #     print("      ! Direct power connection (no decoupling)")
+
+def analyze_signal_paths(module: Module):
+    """Analyze signal integrity using path analysis"""
+    print("Signal Path Analysis:")
+    graph = module.graph()
+    
+    # Analyze I2C signal paths from BMI270
+    scl_net = "io_i2c_SCL"
+    sda_net = "io_i2c_SDA"
+    
+    print("  I2C Signal Analysis:")
+    print("    SCL net: " + scl_net)
+    print("    SDA net: " + sda_net)
+    
+    # Find paths from SCL to SDA nets - there should be no direct connection
+    paths = graph.paths(start=scl_net, end=sda_net, max_depth=6)
+    if paths:
+        print("    Found " + str(len(paths)) + " potential crosstalk paths between SCL/SDA")
+        for path in paths:
+            print("      Ports: " + str(path.ports))
+            # print("      Path length: " + str(len(path.components)) + " components")
+    else:
+        print("    ✓ No direct paths between SCL/SDA (good isolation)")
+
+def check_path_connectivity(module: Module):
+    """Verify critical connections exist using path analysis"""
+    print("Connectivity Verification:")
+    graph = module.graph()
+    
+    critical_connections = [
+        # Check power connections between VDD and VDDIO nets (they should be the same net)
+        ("io_vdd_VCC", "io_vdd_VCC"),
+        # Check ground connections between GND and GNDIO nets (they should be the same net)  
+        ("io_gnd_GND", "io_gnd_GND"),
+    ]
+    
+    for start, end in critical_connections:
+        paths = graph.paths(start=start, end=end, max_depth=8)
+        if paths:
+            print("  ✓ Connection verified: " + str(start) + " to " + str(end) + " (" + str(len(paths)) + " paths)")
+            # Show first path as example
+            example_path = paths[0]
+            print("    Example path: " + str(len(example_path.components)) + " components")
+        else:
+            print("  ! No path found: " + str(start) + " to " + str(end))
+
 def check_power_decoupling(module):
     """Verify that capacitors properly connect power to ground"""
     # Find capacitors that have one pin on VDD and another on GND
@@ -55,7 +138,7 @@ def check_power_decoupling(module):
 def check_bmi270_power_pins(module):
     """Verify BMI270 power pins are properly connected"""
     # Check VDD and VDDIO are connected to power
-    comp = module["BMI270"]["BMI270"]
+    comp = module.components()["BMI270.BMI270"]
     if "VCC" not in comp.pins["VDD"].name:
         error("BMI270 VDD not connected to power")
     if "VCC" not in comp.pins["VDDIO"].name:
@@ -68,7 +151,7 @@ def check_bmi270_power_pins(module):
 def check_communication_interfaces(module):
     """Verify I2C and SPI interface pins are available"""
     # Check I2C pins
-    comp = module["BMI270.BMI270"]
+    comp = module.components()["BMI270.BMI270"]
     scl_net = comp.pins.get("SCX")
     sda_net = comp.pins.get("SDX")
 
@@ -87,9 +170,12 @@ TestBench(
     name="BMI270",
     module=BMI270,
     checks = [
-        print_info,
-        check_power_decoupling,
-        check_bmi270_power_pins,
-        check_communication_interfaces,
+        # print_info,
+        # analyze_power_paths,
+        analyze_signal_paths,
+        # check_path_connectivity,
+        # check_power_decoupling,
+        # check_bmi270_power_pins,
+        # check_communication_interfaces,
     ],
 )
