@@ -1,5 +1,4 @@
-# Comprehensive Sequential Matcher Utility Library
-# This module provides a rich set of matcher functions for path validation
+# Simplified Sequential Matcher Library (Working Version)
 
 # ============================================================================
 # BASIC COMPONENT TYPE MATCHERS
@@ -70,265 +69,67 @@ def skip(n):
     return _matcher
 
 def skip_rest():
-    """Consume all remaining components (renamed from consume_all)"""
+    """Consume all remaining components"""
     def _matcher(path, cursor):
         return len(path.components) - cursor
     return _matcher
 
-def peek(matcher):
-    """Test matcher at current position without consuming"""
-    def _matcher(path, cursor):
-        # Try the matcher but return 0 consumption
-        test_result = _call_safe(matcher, path, cursor)
-        if test_result == None:
-            error("peek() matcher failed")
-        return 0
-    return _matcher
-
 # ============================================================================
-# CONDITIONAL MATCHERS
+# PROPERTY-BASED MATCHERS
 # ============================================================================
 
-def any_of(matchers):
-    """Try each matcher until one succeeds, consume according to first success"""
+def has_package(expected_package):
+    """Match component with specific package size"""
     def _matcher(path, cursor):
         if cursor >= len(path.components):
-            error("path ended, expected component matching any_of")
-        for i, m in enumerate(matchers):
-            test_result = _call_safe(m, path, cursor)
-            if test_result != None:
-                return test_result
-        error("No matcher in any_of() succeeded")
-    return _matcher
-
-def optional(matcher):
-    """Try matcher, succeed whether it works or not"""
-    def _matcher(path, cursor):
-        test_result = _call_safe(matcher, path, cursor)
-        if test_result != None:
-            return test_result
-        return 0  # Consume nothing if matcher fails
-    return _matcher
-
-def not_this(matcher):
-    """Ensure matcher DOES NOT match current component"""
-    def _matcher(path, cursor):
-        if cursor >= len(path.components):
-            error("path ended, expected component for not_this check")
-        test_result = _call_safe(matcher, path, cursor)
-        if test_result != None:
-            error("not_this() matcher unexpectedly succeeded")
-        return 1  # Consume the component that correctly didn't match
-    return _matcher
-
-# ============================================================================
-# SCANNING/LOOKAHEAD MATCHERS  
-# ============================================================================
-
-def contains_somewhere(matcher):
-    """Scan ahead from current position, succeed if matcher found anywhere"""
-    def _matcher(path, cursor):
-        for i in range(cursor, len(path.components)):
-            test_result = _call_safe(matcher, path, i)
-            if test_result != None:
-                return 0  # Found match, but don't consume anything
-        error("contains_somewhere() failed - predicate not found")
-    return _matcher
-
-def not_contains_ahead(matcher):
-    """Scan ahead and ensure matcher is NOT found anywhere"""
-    def _matcher(path, cursor):
-        for i in range(cursor, len(path.components)):
-            test_result = _call_safe(matcher, path, i)
-            if test_result != None:
-                error("not_contains_ahead() found unexpected match at position " + str(i))
-        return 0  # No matches found, don't consume anything
-    return _matcher
-
-def skip_until(matcher):
-    """Skip components until matcher succeeds, consume up to and including match"""
-    def _matcher(path, cursor):
-        start_cursor = cursor
-        while cursor < len(path.components):
-            test_result = _call_safe(matcher, path, cursor)
-            if test_result != None:
-                # Found match, consume everything up to and including this component
-                return cursor - start_cursor + 1
-            cursor += 1
-        error("skip_until() predicate not found before end of path")
-    return _matcher
-
-def skip_while(matcher):
-    """Skip components while matcher succeeds"""
-    def _matcher(path, cursor):
-        start_cursor = cursor
-        while cursor < len(path.components):
-            test_result = _call_safe(matcher, path, cursor)
-            if test_result == None:
-                # Matcher failed, stop skipping
-                break
-            cursor += 1
-        return cursor - start_cursor
-    return _matcher
-
-# ============================================================================
-# QUANTIFIED MATCHERS
-# ============================================================================
-
-def exactly(n, matcher):
-    """Exactly n components must match matcher consecutively"""
-    def _matcher(path, cursor):
-        if cursor + n > len(path.components):
-            error("exactly(" + str(n) + ") would consume past end of path")
-        for i in range(n):
-            test_result = _call_safe(matcher, path, cursor + i)
-            if test_result == None:
-                error("exactly() failed at component " + str(i + 1) + " of " + str(n))
-        return n
-    return _matcher
-
-def at_least(n, matcher):
-    """At least n consecutive components must match matcher"""
-    def _matcher(path, cursor):
-        start_cursor = cursor
-        count = 0
-        while cursor < len(path.components):
-            test_result = _call_safe(matcher, path, cursor)
-            if test_result == None:
-                break
-            count += 1
-            cursor += 1
-        if count < n:
-            error("at_least(" + str(n) + ") only found " + str(count) + " matches")
-        return count
-    return _matcher
-
-def at_most(n, matcher):
-    """At most n consecutive components may match matcher"""
-    def _matcher(path, cursor):
-        start_cursor = cursor
-        count = 0
-        while cursor < len(path.components) and count < n:
-            test_result = _call_safe(matcher, path, cursor)
-            if test_result == None:
-                break
-            count += 1
-            cursor += 1
-        return count
-    return _matcher
-
-def between(min_count, max_count, matcher):
-    """Between min and max consecutive components must match matcher"""
-    def _matcher(path, cursor):
-        start_cursor = cursor
-        count = 0
-        while cursor < len(path.components) and count < max_count:
-            test_result = _call_safe(matcher, path, cursor)
-            if test_result == None:
-                break
-            count += 1
-            cursor += 1
-        if count < min_count:
-            error("between(" + str(min_count) + "," + str(max_count) + ") only found " + str(count) + " matches")
-        return count
-    return _matcher
-
-# ============================================================================
-# VALUE-BASED MATCHERS
-# ============================================================================
-
-def resistor_in_range(min_val, max_val):
-    """Match resistor with value in specified range (as strings)"""
-    def _matcher(path, cursor):
-        if cursor >= len(path.components):
-            error("path ended, expected resistor")
+            error("path ended, expected component")
         component = path.components[cursor]
-        if component.type != "resistor":
-            error(component.name + " is not a resistor")
-        # Simple string-based range check for demo
-        resistance_str = component.resistance.__str__(component.resistance)
-        # This is a simplified check - in reality you'd parse values properly
+        if not hasattr(component, "properties") or "Package" not in component.properties:
+            error(component.name + " missing Package property")
+        actual = component.properties["Package"]
+        if actual != expected_package:
+            error(component.name + " package " + actual + " != " + expected_package)
         return 1
     return _matcher
 
-def has_property(prop_name, expected_value=None):
-    """Match component that has specified property"""
-    def _matcher(path, cursor):
-        if cursor >= len(path.components):
-            error("path ended, expected component with property")
-        component = path.components[cursor]
-        if not hasattr(component, "properties") or prop_name not in component.properties:
-            error(component.name + " missing property: " + prop_name)
-        if expected_value != None and component.properties[prop_name] != expected_value:
-            error(component.name + " property " + prop_name + " = " + str(component.properties[prop_name]) + " != " + str(expected_value))
-        return 1
-    return _matcher
-
-def name_matches(pattern):
-    """Match component whose name matches pattern"""
+def name_contains(pattern):
+    """Match component whose name contains pattern"""
     def _matcher(path, cursor):
         if cursor >= len(path.components):
             error("path ended, expected component")
         component = path.components[cursor]
         if pattern not in component.name:
-            error(component.name + " does not match pattern: " + pattern)
+            error(component.name + " does not contain '" + pattern + "'")
         return 1
     return _matcher
 
 # ============================================================================
-# COMPLEX PATTERN MATCHERS
+# QUANTIFIED MATCHERS  
 # ============================================================================
 
-def sequence(matchers):
-    """Exact sequence of matchers must match consecutively"""
+def exactly_n_resistors(n):
+    """Exactly n consecutive resistors"""
     def _matcher(path, cursor):
-        total_consumed = 0
-        for i, m in enumerate(matchers):
-            if cursor + total_consumed >= len(path.components):
-                error("sequence() ran out of components at matcher " + str(i + 1))
-            consumed = m(path, cursor + total_consumed)
-            total_consumed += consumed
-        return total_consumed
+        if cursor + n > len(path.components):
+            error("exactly_n_resistors(" + str(n) + ") would consume past end of path")
+        for i in range(n):
+            component = path.components[cursor + i]
+            if component.type != "resistor":
+                error("Component " + str(i + 1) + "/" + str(n) + " (" + component.name + ") is not a resistor")
+        return n
     return _matcher
 
-def repeating(matcher, count):
-    """Repeat matcher exactly count times"""
+def exactly_n_capacitors(n):
+    """Exactly n consecutive capacitors"""
     def _matcher(path, cursor):
-        total_consumed = 0
-        for i in range(count):
-            if cursor + total_consumed >= len(path.components):
-                error("repeating() ran out of components at iteration " + str(i + 1))
-            consumed = matcher(path, cursor + total_consumed)
-            total_consumed += consumed
-        return total_consumed
+        if cursor + n > len(path.components):
+            error("exactly_n_capacitors(" + str(n) + ") would consume past end of path")
+        for i in range(n):
+            component = path.components[cursor + i]
+            if component.type != "capacitor":
+                error("Component " + str(i + 1) + "/" + str(n) + " (" + component.name + ") is not a capacitor")
+        return n
     return _matcher
-
-def alternating(matcher1, matcher2, pairs):
-    """Alternating pattern: matcher1, matcher2, matcher1, matcher2..."""
-    def _matcher(path, cursor):
-        total_consumed = 0
-        for i in range(pairs * 2):
-            if cursor + total_consumed >= len(path.components):
-                error("alternating() ran out of components")
-            if i % 2 == 0:
-                consumed = matcher1(path, cursor + total_consumed)
-            else:
-                consumed = matcher2(path, cursor + total_consumed)
-            total_consumed += consumed
-        return total_consumed
-    return _matcher
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-def _call_safe(matcher, path, cursor):
-    """
-    Helper to safely call a matcher and return result or None on error.
-    Since Starlark doesn't have try/catch, we'll implement simplified versions.
-    """
-    # For now, just call the matcher directly - we'll handle errors at the top level
-    return matcher(path, cursor)
 
 # ============================================================================
 # DEBUGGING HELPERS
@@ -342,7 +143,3 @@ def debug_print_path(path, cursor=0):
     for i, component in enumerate(path.components):
         marker = " -> " if i == cursor else "    "
         print(marker + str(i) + ": " + component.name + " (" + str(component.type) + ")")
-
-def debug_matcher_result(matcher_name, path, cursor, result):
-    """Debug helper to print matcher results"""
-    print("Matcher '" + matcher_name + "' at cursor " + str(cursor) + " consumed " + str(result) + " components")

@@ -1,0 +1,34 @@
+# Comprehensive Sequential Matchers Test Circuit
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.8/generics/Capacitor.zen")
+Inductor = Module("@stdlib:v0.2.8/generics/Inductor.zen")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+
+# Test Pattern 1: Simple RC chain for basic sequential testing
+# VCC -> R1(1k) -> C1(100nF) -> R2(10k) -> R3(100k) -> GND
+Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=Net("N1"))
+Capacitor(name="C1", value="100nF", package="0402", P1=Net("N1"), P2=Net("N2"))
+Resistor(name="R2", value="10kOhm", package="0603", P1=Net("N2"), P2=Net("N3"))
+Resistor(name="R3", value="100kOhm", package="0805", P1=Net("N3"), P2=gnd.NET)
+
+# Test Pattern 2: Direct decoupling caps for single-component path testing
+Capacitor(name="C2", value="10uF", package="0805", P1=vcc.NET, P2=gnd.NET)
+Capacitor(name="C3", value="1uF", package="0603", P1=vcc.NET, P2=gnd.NET)
+
+# Test Pattern 3: Complex filter for advanced pattern testing
+# VCC -> R4(100) -> L1(10uH) -> R5(10k) -> C4(470nF) -> GND
+Resistor(name="R4", value="100Ohm", package="0603", P1=vcc.NET, P2=Net("F1"))
+Inductor(name="L1", value="10uH", package="0805", P1=Net("F1"), P2=Net("F2"))
+Resistor(name="R5", value="10kOhm", package="0603", P1=Net("F2"), P2=Net("F3"))
+Capacitor(name="C4", value="470nF", package="0603", P1=Net("F3"), P2=gnd.NET)
+
+# Test Pattern 4: Voltage divider for two-resistor testing
+Resistor(name="R6", value="2.2kOhm", package="0402", P1=vcc.NET, P2=Net("DIV"))
+Resistor(name="R7", value="1kOhm", package="0402", P1=Net("DIV"), P2=gnd.NET)
+
+VCC = io("VCC", Power, default=vcc)
+GND = io("GND", Ground, default=gnd)

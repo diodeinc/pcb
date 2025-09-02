@@ -1,0 +1,224 @@
+TestModule = Module("./module.zen")
+
+# Use the shared matcher library
+load("../matchers.zen", "skip", "skip_rest", "is_resistor", "is_capacitor", "is_inductor", "exactly_n_resistors", "has_package", "name_contains", "debug_print_path")
+
+def test_basic_sequential_patterns(module):
+    """Test basic sequential pattern matching"""
+    print("Basic Sequential Patterns:")
+    graph = module.graph()
+    
+    # Test the 4-component chain: R1 -> C1 -> R2 -> R3
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=10)
+    chain_path = None
+    
+    for path in paths:
+        if len(path.components) == 4:
+            # Should be our main test chain
+            types = [c.type for c in path.components]
+            if types == ["resistor", "capacitor", "resistor", "resistor"]:
+                chain_path = path
+                break
+    
+    if chain_path:
+        print("  Found 4-component chain path")
+        debug_print_path(chain_path)
+        
+        # Test 1: Exact sequence matching
+        print("  Test: Exact R-C-R-R sequence...")
+        chain_path.matches(
+            is_resistor(),    # R1
+            is_capacitor(),   # C1  
+            is_resistor(),    # R2
+            is_resistor()     # R3
+        )
+        print("    ✓ Sequential pattern validated")
+        
+        # Test 2: Value-specific matching
+        print("  Test: Value-specific matching...")
+        chain_path.matches(
+            is_resistor("1k"),      # R1 specific value
+            is_capacitor("100nF"),  # C1 specific value
+            is_resistor("10k"),     # R2 specific value
+            is_resistor("100k")     # R3 specific value
+        )
+        print("    ✓ Value-specific matching validated")
+        
+        # Test 3: Skip patterns
+        print("  Test: Skip patterns...")
+        chain_path.matches(
+            skip(2),          # Skip R1, C1
+            is_resistor(),    # Match R2
+            is_resistor()     # Match R3
+        )
+        print("    ✓ Skip patterns validated")
+        
+        # Test 4: Package validation
+        print("  Test: Package validation...")
+        chain_path.matches(
+            has_package("0603"),  # R1 package
+            has_package("0402"),  # C1 package
+            has_package("0603"),  # R2 package
+            has_package("0805")   # R3 package
+        )
+        print("    ✓ Package validation works")
+
+def test_single_component_paths(module):
+    """Test single-component decoupling paths"""
+    print("Single-Component Paths:")
+    graph = module.graph()
+    
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=3)
+    single_paths = [p for p in paths if len(p.components) == 1]
+    print("  Found " + str(len(single_paths)) + " single-component paths")
+    
+    # Test each decoupling capacitor
+    for path in single_paths:
+        component = path.components[0]
+        print("  Testing " + component.name + "...")
+        
+        # All should be capacitors
+        path.matches(is_capacitor())
+        
+        # Test specific values and packages
+        if "C2" in component.name:
+            path.matches(is_capacitor("10uF"))
+            path.matches(has_package("0805"))
+        elif "C3" in component.name:
+            path.matches(is_capacitor("1uF"))
+            path.matches(has_package("0603"))
+    
+    print("    ✓ All decoupling capacitors validated")
+
+def test_complex_filter_path(module):
+    """Test complex multi-stage filter"""
+    print("Complex Filter Path:")
+    graph = module.graph()
+    
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=10)
+    
+    # Find the R4-L1-R5-C4 filter path
+    filter_path = None
+    for path in paths:
+        if len(path.components) >= 4:
+            types = [c.type for c in path.components]
+            # Look for R-L-R-C pattern
+            if len(types) >= 4 and types[0] == "resistor" and types[1] == "inductor":
+                filter_path = path
+                break
+    
+    if filter_path:
+        print("  Found filter path: " + str([c.name + "(" + str(c.type) + ")" for c in filter_path.components]))
+        
+        # Test complete filter sequence
+        print("  Test: R-L-R-C filter topology...")
+        if len(filter_path.components) == 4:
+            filter_path.matches(
+                is_resistor("100"),   # R4 input
+                is_inductor(),        # L1 filter  
+                is_resistor("10k"),   # R5 series
+                is_capacitor("470nF") # C4 output
+            )
+            print("    ✓ Complete filter topology validated")
+        
+        # Test skip patterns on filter
+        print("  Test: Filter skip patterns...")
+        filter_path.matches(
+            skip(2),          # Skip R4, L1
+            is_resistor(),    # Match R5
+            skip_rest()       # Consume C4
+        )
+        print("    ✓ Filter skip patterns work")
+
+def test_voltage_divider(module):
+    """Test voltage divider patterns"""
+    print("Voltage Divider:")
+    graph = module.graph()
+    
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    # Find 2-resistor voltage divider path
+    divider_path = None
+    for path in paths:
+        if len(path.components) == 2:
+            types = [c.type for c in path.components]
+            if types == ["resistor", "resistor"]:
+                # Check if it's our R6-R7 divider
+                names = [c.name for c in path.components]
+                if "R6" in names[0] and "R7" in names[1]:
+                    divider_path = path
+                    break
+    
+    if divider_path:
+        print("  Found voltage divider: " + str([c.name for c in divider_path.components]))
+        
+        # Test voltage divider pattern
+        print("  Test: Two-resistor divider...")
+        divider_path.matches(
+            is_resistor("2.2k"),  # Upper resistor
+            is_resistor("1k")     # Lower resistor
+        )
+        print("    ✓ Voltage divider validated")
+        
+        # Test component counting
+        print("  Test: Exact resistor counting...")
+        divider_path.matches(
+            exactly_n_resistors(2)  # Exactly 2 resistors
+        )
+        print("    ✓ Resistor counting works")
+
+def expect_fail_documented_errors(module):
+    """Document expected failure cases"""
+    print("Expected Failure Cases (documented):")
+    graph = module.graph()
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    # Find a simple path for error demonstration
+    simple_path = None
+    for path in paths:
+        if len(path.components) == 1:
+            simple_path = path
+            break
+    
+    if simple_path:
+        component = simple_path.components[0]
+        print("  Using path: " + component.name + " (" + str(component.type) + ")")
+        print("  1. Wrong component type:")
+        print("     # path.matches(is_resistor())")
+        print("     Expected: '" + component.name + " is not a resistor (type: " + str(component.type) + ")'")
+        print("  2. Over-consumption:")  
+        print("     # path.matches(skip(10))")
+        print("     Expected: 'skip(10) would consume past end of path'")
+        print("  3. Under-consumption:")
+        print("     # path.matches(skip(0))")  
+        print("     Expected: 'Unconsumed components remaining (1 left)'")
+
+def test_name_and_package_patterns(module):
+    """Test name and package pattern matching"""
+    print("Name & Package Patterns:")
+    graph = module.graph()
+    
+    # Test name pattern matching on various components
+    paths = graph.paths(start="VCC_VCC", end="GND_GND", max_depth=5)
+    
+    for path in paths:
+        if len(path.components) == 1:
+            component = path.components[0]
+            if "C2" in component.name:
+                print("  Test: Name pattern matching...")
+                path.matches(name_contains("C2"))
+                print("    ✓ Name pattern 'C2' found in " + component.name)
+                break
+
+TestBench(
+    name="SequentialMatchers",
+    module=TestModule,
+    checks=[
+        test_basic_sequential_patterns,
+        test_single_component_paths,
+        test_complex_filter_path,
+        test_voltage_divider,
+        test_name_and_package_patterns,
+        expect_fail_documented_errors,
+    ],
+)
