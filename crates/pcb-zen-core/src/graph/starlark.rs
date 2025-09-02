@@ -129,20 +129,27 @@ where
         let start_port = self.graph.resolve_label_to_port(start, heap)?;
         let end_port = self.graph.resolve_label_to_port(end, heap)?;
 
-        // Find all simple paths using the CircuitGraph
-        let mut paths = Vec::new();
-        self.graph
-            .all_simple_paths(start_port, end_port, max_depth, |path| {
-                paths.push(path.to_vec());
-            });
+        // Find all simple paths using the CircuitGraph with factor tracking
+        let mut paths_with_factors = Vec::new();
+        self.graph.all_simple_paths_with_factors(
+            start_port,
+            end_port,
+            max_depth,
+            |path, factors| {
+                paths_with_factors.push((path.to_vec(), factors.to_vec()));
+            },
+        );
 
         // Convert paths to PathValue objects
         let module_ref = downcast_frozen_module!(self.module);
 
         let components = module_ref.collect_components("");
-        let path_objects: Vec<Value> = paths
+        let path_objects: Vec<Value> = paths_with_factors
             .into_iter()
-            .map(|port_path| self.graph.create_path_value(&port_path, &components, heap))
+            .map(|(port_path, factors)| {
+                self.graph
+                    .create_path_value(&port_path, &factors, &components, heap)
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(heap.alloc(path_objects))

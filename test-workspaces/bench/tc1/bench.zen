@@ -64,13 +64,16 @@ def explore_paths(module: Module):
     print("Path Analysis:")
     graph = module.graph()
     
-    # Try to find paths between different nets
+    # Try to find paths between different nets (use public nets for pathfinding)
     nets = module.nets()
     net_names = list(nets.keys())
     
-    if len(net_names) >= 2:
-        start_net = net_names[0]  
-        end_net = net_names[1]
+    # Use public nets for pathfinding (VCC_VCC and GND_GND are from io() parameters)
+    public_nets = [name for name in net_names if name in ["VCC_VCC", "GND_GND"]]
+    
+    if len(public_nets) >= 2:
+        start_net = public_nets[0]  
+        end_net = public_nets[1]
         print("  Looking for paths from '" + start_net + "' to '" + end_net + "'...")
         
         # Note: Error handling simplified for Starlark compatibility

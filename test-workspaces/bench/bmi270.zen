@@ -52,6 +52,7 @@ def analyze_power_paths(module: Module):
         
         for i, path in enumerate(paths[:3]):  # Show first 3 paths
             print("    Path " + str(i+1) + ":")
+            print("      Ports: " + str(path.ports))
             print("      Components: " + str(len(path.components)) + " components")
             print("      Nets: " + str(path.nets))
             
@@ -76,13 +77,12 @@ def analyze_signal_paths(module: Module):
     
     # Find paths from SCL to SDA nets - there should be no direct connection
     paths = graph.paths(start=scl_net, end=sda_net, max_depth=6)
-    if paths:
-        print("    Found " + str(len(paths)) + " potential crosstalk paths between SCL/SDA")
-        for path in paths:
-            print("      Ports: " + str(path.ports))
-            # print("      Path length: " + str(len(path.components)) + " components")
-    else:
-        print("    ✓ No direct paths between SCL/SDA (good isolation)")
+    print("    Found " + str(len(paths)) + " paths between SCL/SDA")
+    for i, path in enumerate(paths):
+        print("    Path " + str(i+1) + ":")
+        print("      Ports: " + str(path.ports))
+        print("      Path length: " + str(len(path.components)) + " components")
+        print("      Nets: " + str(path.nets))
 
 def check_path_connectivity(module: Module):
     """Verify critical connections exist using path analysis"""

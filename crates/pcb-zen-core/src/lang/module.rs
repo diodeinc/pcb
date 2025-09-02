@@ -494,6 +494,36 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &self.introduced_nets
     }
 
+    /// Extract all net names from a value recursively.
+    /// This handles Net types directly and recursively extracts nets from Interface types.
+    pub fn extract_nets_from_value(value: starlark::values::Value<'_>) -> HashSet<String> {
+        use crate::lang::interface::{FrozenInterfaceValue, InterfaceValue};
+        use crate::lang::net::{FrozenNetValue, NetValue};
+
+        let mut nets = HashSet::new();
+
+        // Check if it's a Net
+        if let Some(net) = value.downcast_ref::<NetValue>() {
+            nets.insert(net.name().to_string());
+        } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+            nets.insert(net.name().to_string());
+        }
+        // Check if it's an Interface
+        else if let Some(iface) = value.downcast_ref::<InterfaceValue>() {
+            // Recursively extract nets from all interface fields
+            for (_field_name, field_value) in iface.fields().iter() {
+                nets.extend(Self::extract_nets_from_value(*field_value));
+            }
+        } else if let Some(iface) = value.downcast_ref::<FrozenInterfaceValue>() {
+            // Recursively extract nets from all interface fields
+            for (_field_name, field_value) in iface.fields().iter() {
+                nets.extend(Self::extract_nets_from_value(field_value.to_value()));
+            }
+        }
+
+        nets
+    }
+
     /// Remove a previously registered net from this module. Intended for
     /// cases where a `Net()` value was used as a template (e.g., inside
     /// `interface(...)`) and should not count as an introduced net for the
@@ -1225,10 +1255,24 @@ where
             }
         }
 
+        // Collect public nets from module signature (io() parameters)
+        let mut public_nets = HashSet::new();
+        for param in module_ref.signature().iter() {
+            if !param.is_config {
+                // This is an io() parameter - extract nets from it
+                if let Some(actual_value) = &param.actual_value {
+                    public_nets.extend(ModuleValueGen::<V>::extract_nets_from_value(
+                        actual_value.to_value(),
+                    ));
+                }
+            }
+        }
+
         // Build the CircuitGraph directly from the collected data
-        let graph = crate::graph::CircuitGraph::new(net_to_ports, component_pins).map_err(|e| {
-            starlark::Error::new_other(anyhow::anyhow!("Failed to create circuit graph: {}", e))
-        })?;
+        let graph = crate::graph::CircuitGraph::new(net_to_ports, component_pins, public_nets)
+            .map_err(|e| {
+                starlark::Error::new_other(anyhow::anyhow!("Failed to create circuit graph: {}", e))
+            })?;
 
         // Create and return ModuleGraph object
         let module_graph = ModuleGraphValueGen {

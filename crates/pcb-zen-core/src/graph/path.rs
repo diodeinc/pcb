@@ -1,6 +1,7 @@
-use crate::graph::{CircuitGraph, PortId, PortPath};
+use crate::graph::{CircuitGraph, FactorId, PortId, PortPath};
 use starlark::collections::SmallMap;
 use starlark::values::{tuple::TupleRef, Heap, Value};
+use std::collections::HashSet;
 
 impl CircuitGraph {
     /// Resolve a label (net name or port tuple) to a PortId
@@ -9,32 +10,19 @@ impl CircuitGraph {
         label: Value<'v>,
         _heap: &'v Heap,
     ) -> starlark::Result<PortId> {
-        // Check if it's a string (net name)
+        // Check if it's a string (net name) - assume it's referring to external net
         if let Some(net_name) = label.unpack_str() {
-            // Find the factor for this net name
-            let factor_id = self.factor_id(net_name).ok_or_else(|| {
-                starlark::Error::new_other(anyhow::anyhow!("Net '{}' not found", net_name))
-            })?;
-
-            // Get all ports connected to this net
-            let ports = self.factor_ports(factor_id);
-            if ports.is_empty() {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Net '{}' has no connected ports",
-                    net_name
-                )));
+            // First try to find the external port for this net
+            let external_port_path = PortPath::new("<external>", net_name);
+            if let Some(external_port_id) = self.port_id(&external_port_path) {
+                return Ok(external_port_id);
             }
 
-            // Net should only be used if there's exactly 1 port
-            if ports.len() > 1 {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Net '{}' has {} ports - use a specific port tuple (component, pin) instead",
-                    net_name,
-                    ports.len()
-                )));
-            }
-
-            Ok(ports[0])
+            // If no external port exists, this net name is not valid for pathfinding
+            Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Net '{}' is not a public (io) net - use a specific port tuple (component, pin) instead",
+                net_name
+            )))
         }
         // Check if it's a tuple (component, pin)
         else if let Some(tuple_ref) = TupleRef::from_value(label) {
@@ -64,10 +52,11 @@ impl CircuitGraph {
         }
     }
 
-    /// Create a PathValue object from a path of PortIds
+    /// Create a PathValue object from a path of PortIds and factors
     pub fn create_path_value<'v>(
         &self,
         port_path: &[PortId],
+        factors: &[FactorId],
         components: &SmallMap<String, Value<'v>>,
         heap: &'v Heap,
     ) -> starlark::Result<Value<'v>> {
@@ -75,8 +64,9 @@ impl CircuitGraph {
 
         let mut ports = Vec::new();
         let mut path_components = Vec::new();
-        let mut nets = Vec::new();
+        let mut path_nets = Vec::new();
 
+        // Build ports list
         for &port_id in port_path {
             // Get port path directly - no string parsing needed!
             let port_path_obj = self.port_path(port_id).ok_or_else(|| {
@@ -90,50 +80,37 @@ impl CircuitGraph {
             let port_tuple =
                 heap.alloc((heap.alloc_str(&component_path), heap.alloc_str(pin_name)));
             ports.push(port_tuple);
+        }
 
-            // Find and add component object
-            let component_value = components.get(&component_path).ok_or_else(|| {
-                starlark::Error::new_other(anyhow::anyhow!(
-                    "Component '{}' not found",
-                    component_path
-                ))
-            })?;
-            path_components.push(*component_value);
+        // Build components list from factors (deduplicated)
+        let mut seen_components = HashSet::new();
+        for &factor_id in factors {
+            if let crate::graph::FactorType::Component(comp_path) = self.factor_type(factor_id) {
+                if !seen_components.contains(comp_path) {
+                    let component_value = components.get(comp_path).ok_or_else(|| {
+                        starlark::Error::new_other(anyhow::anyhow!(
+                            "Component '{}' not found",
+                            comp_path
+                        ))
+                    })?;
+                    path_components.push(*component_value);
+                    seen_components.insert(comp_path.clone());
+                }
+            }
+        }
 
-            // Find net connected to this port
-            let [factor1, factor2] = self.port_factors(port_id);
-
-            // Find the net factor (not component factor)
-            let net_factor =
-                if matches!(self.factor_type(factor1), crate::graph::FactorType::Net(_)) {
-                    factor1
-                } else if matches!(self.factor_type(factor2), crate::graph::FactorType::Net(_)) {
-                    factor2
-                } else {
-                    return Err(starlark::Error::new_other(anyhow::anyhow!(
-                        "Port '{}' has no net factor",
-                        port_path_obj
-                    )));
-                };
-
-            let net_name = if let crate::graph::FactorType::Net(name) = self.factor_type(net_factor)
-            {
-                name
-            } else {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Expected net factor but got component factor"
-                )));
-            };
-
-            // Store the net name as a string
-            nets.push(heap.alloc_str(net_name).to_value());
+        // Build nets list from factors (only net factors)
+        for &factor_id in factors {
+            if let crate::graph::FactorType::Net(net_name) = self.factor_type(factor_id) {
+                path_nets.push(heap.alloc_str(net_name).to_value());
+            }
         }
 
         // Create PathValue object
         let path_value = PathValueGen {
             ports,
             components: path_components,
-            nets,
+            nets: path_nets,
         };
 
         Ok(heap.alloc_complex(path_value))
