@@ -42,7 +42,7 @@ pub enum OutputFormat {
 
 #[derive(Serialize, Clone)]
 pub struct TestResult {
-    pub testbench_name: String,
+    pub test_bench_name: String,
     pub case_name: Option<String>,
     pub check_name: String,
     pub file_path: String,
@@ -128,7 +128,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
     let all_results: Vec<TestResult> = all_test_results
         .iter()
         .map(|result| TestResult {
-            testbench_name: result.testbench_name.clone(),
+            test_bench_name: result.test_bench_name.clone(),
             case_name: result.case_name.clone(),
             check_name: result.check_name.clone(),
             file_path: result.file_path.clone(),
@@ -171,7 +171,7 @@ fn output_tap(results: &[TestResult]) {
 
         println!(
             "{} {} TestBench '{}'{} check '{}'",
-            status, test_num, result.testbench_name, case_suffix, result.check_name
+            status, test_num, result.test_bench_name, case_suffix, result.check_name
         );
     }
 }

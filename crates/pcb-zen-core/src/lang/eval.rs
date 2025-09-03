@@ -57,7 +57,7 @@ use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
     module::{module_globals, FrozenModuleValue, ModuleLoader},
-    test_bench::testbench_globals,
+    test_bench::test_bench_globals,
 };
 
 /// A PrintHandler that collects all print output into a vector
@@ -422,7 +422,7 @@ impl EvalContext {
         .with(assert_globals)
         .with(file_globals)
         .with(model_globals)
-        .with(testbench_globals)
+        .with(test_bench_globals)
         .build()
     }
 

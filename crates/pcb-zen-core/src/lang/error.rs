@@ -40,7 +40,7 @@ pub struct SuppressedDiagnostics {
 #[error("Test result")]
 pub struct BenchTestResult {
     /// The name of the TestBench
-    pub testbench_name: String,
+    pub test_bench_name: String,
 
     /// The name of the test case (if any)
     pub case_name: Option<String>,

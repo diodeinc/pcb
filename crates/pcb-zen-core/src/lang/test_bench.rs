@@ -133,7 +133,7 @@ impl ModuleLoader {
     /// Evaluate this module with specific inputs for TestBench
     pub fn evaluate_with_inputs<'v>(
         &self,
-        testbench_name: String,
+        test_bench_name: String,
         eval: &mut Evaluator<'v, '_, '_>,
         inputs: InputMap,
         case_name: Option<&str>,
@@ -146,8 +146,8 @@ impl ModuleLoader {
             .set_strict_io_config(true); // Strict mode - require all inputs
 
         let module_name = match case_name {
-            Some(name) => format!("{}__{}", testbench_name, name),
-            None => testbench_name,
+            Some(name) => format!("{}__{}", test_bench_name, name),
+            None => test_bench_name,
         };
 
         let ctx = ctx
@@ -258,7 +258,7 @@ fn execute_check<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
     check_func: Value<'v>,
     args: &[Value<'v>],
-    testbench_name: &str,
+    test_bench_name: &str,
     case_name: Option<&str>,
 ) -> anyhow::Result<(Value<'v>, bool)> {
     let check_func_str = check_func.to_string();
@@ -271,25 +271,25 @@ fn execute_check<'v>(
     match eval.eval_function(check_func, args, &[]) {
         Ok(result) => {
             let ctx = eval.context_value().unwrap();
-            let testbench_location = eval.call_stack_top_location().unwrap();
+            let test_bench_location = eval.call_stack_top_location().unwrap();
 
             // Create structured test result for tracking
             let test_result = crate::lang::error::BenchTestResult {
-                testbench_name: testbench_name.to_string(),
+                test_bench_name: test_bench_name.to_string(),
                 case_name: case_name.map(|s| s.to_string()),
                 check_name: check_name.to_string(),
-                file_path: testbench_location.filename().to_string(),
+                file_path: test_bench_location.filename().to_string(),
                 passed: true,
             };
 
             // Add as a non-error diagnostic for collection purposes
             ctx.add_diagnostic(Diagnostic {
-                path: testbench_location.filename().to_string(),
-                span: Some(testbench_location.resolve_span()),
+                path: test_bench_location.filename().to_string(),
+                span: Some(test_bench_location.resolve_span()),
                 severity: EvalSeverity::Advice,
                 body: format!(
                     "TestBench '{}'{} check '{}' passed",
-                    testbench_name, case_suffix, check_name
+                    test_bench_name, case_suffix, check_name
                 ),
                 call_stack: Some(eval.call_stack().clone()),
                 child: None,
@@ -300,7 +300,7 @@ fn execute_check<'v>(
         }
         Err(e) => {
             let ctx = eval.context_value().unwrap();
-            let testbench_location = eval.call_stack_top_location().unwrap();
+            let test_bench_location = eval.call_stack_top_location().unwrap();
 
             // Convert error to diagnostic - this will handle DiagnosticError chains properly
             let child_diagnostic = Diagnostic::from(e);
@@ -308,21 +308,21 @@ fn execute_check<'v>(
 
             // Create structured test result for tracking
             let test_result = crate::lang::error::BenchTestResult {
-                testbench_name: testbench_name.to_string(),
+                test_bench_name: test_bench_name.to_string(),
                 case_name: case_name.map(|s| s.to_string()),
                 check_name: check_name.to_string(),
-                file_path: testbench_location.filename().to_string(),
+                file_path: test_bench_location.filename().to_string(),
                 passed: false,
             };
 
             // Parent diagnostic for TestBench context
             ctx.add_diagnostic(Diagnostic {
-                path: testbench_location.filename().to_string(),
-                span: Some(testbench_location.resolve_span()),
+                path: test_bench_location.filename().to_string(),
+                span: Some(test_bench_location.resolve_span()),
                 severity: EvalSeverity::Error,
                 body: format!(
                     "TestBench '{}'{} check '{}' failed",
-                    testbench_name, case_suffix, check_name
+                    test_bench_name, case_suffix, check_name
                 ),
                 call_stack: Some(eval.call_stack().clone()),
                 child,
@@ -335,7 +335,7 @@ fn execute_check<'v>(
 }
 
 #[starlark_module]
-pub fn testbench_globals(builder: &mut GlobalsBuilder) {
+pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
     /// Create a TestBench that evaluates modules with explicit test cases
     fn TestBench<'v>(
         #[starlark(require = named)] name: String,
