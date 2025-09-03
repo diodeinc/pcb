@@ -12,6 +12,7 @@ Usage: pcb <COMMAND>
 
 Commands:
   build    Build PCB projects
+  test     Run tests in .zen files
   upgrade  Upgrade PCB projects
   bom      Generate Bill of Materials (BOM)
   info     Display workspace and board information

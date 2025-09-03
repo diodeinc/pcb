@@ -58,7 +58,8 @@ fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         // Evaluate the zen file
-        let (output, diagnostics) = pcb_zen::run(&zen_path, false).unpack();
+        let (output, diagnostics) =
+            pcb_zen::run(&zen_path, false, pcb_zen::EvalMode::Build).unpack();
 
         if diagnostics.has_errors() {
             eprintln!("Skipping {file_name} due to build errors");

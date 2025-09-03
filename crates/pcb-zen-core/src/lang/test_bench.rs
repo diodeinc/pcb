@@ -1,5 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
+use crate::lang::eval::EvalMode;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::{InputMap, InputValue};
 use crate::lang::module::{FrozenModuleValue, ModuleLoader};
@@ -302,6 +303,14 @@ pub fn testbench_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] checks: Option<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
+        // Check eval mode - in Build mode, TestBench is a no-op
+        if let Some(ctx) = eval.eval_context() {
+            if ctx.eval_mode == EvalMode::Build {
+                // Return None to indicate no-op
+                return Ok(Value::new_none());
+            }
+        }
+
         // Extract ModuleLoader from the module parameter
         let loader = module.downcast_ref::<ModuleLoader>().ok_or_else(|| {
             anyhow::anyhow!("'module' parameter must be a ModuleLoader (created with Module())")

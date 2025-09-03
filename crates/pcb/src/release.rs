@@ -547,7 +547,7 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     debug!("Validating build of: {}", staged_zen_path.display());
 
     // Use offline mode since all dependencies should be vendored
-    let eval = pcb_zen::run(&staged_zen_path, true);
+    let eval = pcb_zen::run(&staged_zen_path, true, pcb_zen::EvalMode::Build);
 
     if !eval.is_success() {
         anyhow::bail!(

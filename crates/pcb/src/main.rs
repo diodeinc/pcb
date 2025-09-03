@@ -14,6 +14,7 @@ mod open;
 mod release;
 mod sim;
 mod tag;
+mod test;
 mod upgrade;
 mod vendor;
 mod workspace;
@@ -35,6 +36,10 @@ enum Commands {
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
+
+    /// Run tests in .zen files
+    #[command(alias = "t")]
+    Test(test::TestArgs),
 
     /// Upgrade PCB projects
     #[command(alias = "u")]
@@ -94,6 +99,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Build(args) => build::execute(args),
+        Commands::Test(args) => test::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),

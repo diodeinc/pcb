@@ -65,14 +65,13 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let mut schematic =
-        pcb_zen::run(&args.file, false)
-            .output_result()
-            .map_err(|mut diagnostics| {
-                // Apply passes and render diagnostics if there are errors
-                diagnostics.apply_passes(&create_diagnostics_passes(&[]));
-                anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
-            })?;
+    let mut schematic = pcb_zen::run(&args.file, false, pcb_zen::EvalMode::Build)
+        .output_result()
+        .map_err(|mut diagnostics| {
+            // Apply passes and render diagnostics if there are errors
+            diagnostics.apply_passes(&create_diagnostics_passes(&[]));
+            anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
+        })?;
 
     // Generate BOM entries
     spinner.set_message(format!("{file_name}: Generating BOM"));

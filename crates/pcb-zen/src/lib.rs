@@ -19,7 +19,7 @@ use pcb_zen_core::{
 use starlark::errors::EvalMessage;
 
 pub use pcb_zen_core::file_extensions;
-pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
+pub use pcb_zen_core::{Diagnostic, Diagnostics, EvalMode, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;
 
 /// Create an evaluation context with proper load resolver setup for a given workspace.
@@ -65,7 +65,7 @@ pub fn create_eval_context(workspace_root: &Path, offline: bool) -> EvalContext 
 }
 
 /// Evaluate `file` and return a [`Schematic`].
-pub fn run(file: &Path, offline: bool) -> WithDiagnostics<Schematic> {
+pub fn run(file: &Path, offline: bool, mode: EvalMode) -> WithDiagnostics<Schematic> {
     let abs_path = file
         .canonicalize()
         .expect("failed to canonicalise input path");
@@ -83,6 +83,7 @@ pub fn run(file: &Path, offline: bool) -> WithDiagnostics<Schematic> {
     ctx.set_source_path(abs_path.clone())
         .set_module_name("<root>".to_string())
         .set_inputs(inputs)
+        .set_eval_mode(mode)
         .eval()
         .try_map(|m| {
             // Convert schematic conversion error into a Starlark diagnostic
