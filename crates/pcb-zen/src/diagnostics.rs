@@ -12,6 +12,10 @@ pub struct RenderPass;
 impl pcb_zen_core::DiagnosticsPass for RenderPass {
     fn apply(&self, diagnostics: &mut Diagnostics) {
         for diag in &diagnostics.diagnostics {
+            // Skip rendering advice severity diagnostics to reduce noise
+            if matches!(diag.severity, EvalSeverity::Advice) {
+                continue;
+            }
             render_diagnostic(diag);
             eprintln!();
         }

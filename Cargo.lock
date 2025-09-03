@@ -2406,6 +2406,7 @@ dependencies = [
  "pcb-zen",
  "pcb-zen-core",
  "semver",
+ "serde",
  "serde_json",
  "starlark",
  "starlark_syntax",

@@ -34,3 +34,23 @@ pub struct SuppressedDiagnostics {
     /// The diagnostics that were suppressed in favor of a representative diagnostic
     pub suppressed: Vec<crate::Diagnostic>,
 }
+
+/// Structured information about a test result from a TestBench check function
+#[derive(Debug, Error, Clone)]
+#[error("Test result")]
+pub struct BenchTestResult {
+    /// The name of the TestBench
+    pub testbench_name: String,
+
+    /// The name of the test case (if any)
+    pub case_name: Option<String>,
+
+    /// The name of the check function
+    pub check_name: String,
+
+    /// The file path where the TestBench was defined
+    pub file_path: String,
+
+    /// Whether the test passed or failed
+    pub passed: bool,
+}

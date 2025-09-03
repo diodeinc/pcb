@@ -1,5 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
+use std::sync::Arc;
+
 use crate::lang::eval::EvalMode;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::{InputMap, InputValue};
@@ -259,11 +261,44 @@ fn execute_check<'v>(
     testbench_name: &str,
     case_name: Option<&str>,
 ) -> anyhow::Result<(Value<'v>, bool)> {
+    let check_func_str = check_func.to_string();
+    let check_name = check_func_str.rsplit('.').next().unwrap_or("check");
+
+    let case_suffix = case_name
+        .map(|n| format!(" case '{}'", n))
+        .unwrap_or_default();
+
     match eval.eval_function(check_func, args, &[]) {
-        Ok(result) => Ok((result, false)), // Success, no failure
+        Ok(result) => {
+            let ctx = eval.context_value().unwrap();
+            let testbench_location = eval.call_stack_top_location().unwrap();
+
+            // Create structured test result for tracking
+            let test_result = crate::lang::error::BenchTestResult {
+                testbench_name: testbench_name.to_string(),
+                case_name: case_name.map(|s| s.to_string()),
+                check_name: check_name.to_string(),
+                file_path: testbench_location.filename().to_string(),
+                passed: true,
+            };
+
+            // Add as a non-error diagnostic for collection purposes
+            ctx.add_diagnostic(Diagnostic {
+                path: testbench_location.filename().to_string(),
+                span: Some(testbench_location.resolve_span()),
+                severity: EvalSeverity::Advice,
+                body: format!(
+                    "TestBench '{}'{} check '{}' passed",
+                    testbench_name, case_suffix, check_name
+                ),
+                call_stack: Some(eval.call_stack().clone()),
+                child: None,
+                source_error: Some(std::sync::Arc::new(test_result.into())),
+            });
+
+            Ok((result, false)) // Success, no failure
+        }
         Err(e) => {
-            let check_func_str = check_func.to_string();
-            let check_name = check_func_str.rsplit('.').next().unwrap_or("check");
             let ctx = eval.context_value().unwrap();
             let testbench_location = eval.call_stack_top_location().unwrap();
 
@@ -271,10 +306,16 @@ fn execute_check<'v>(
             let child_diagnostic = Diagnostic::from(e);
             let child = Some(Box::new(child_diagnostic));
 
+            // Create structured test result for tracking
+            let test_result = crate::lang::error::BenchTestResult {
+                testbench_name: testbench_name.to_string(),
+                case_name: case_name.map(|s| s.to_string()),
+                check_name: check_name.to_string(),
+                file_path: testbench_location.filename().to_string(),
+                passed: false,
+            };
+
             // Parent diagnostic for TestBench context
-            let case_suffix = case_name
-                .map(|n| format!(" case '{}'", n))
-                .unwrap_or_default();
             ctx.add_diagnostic(Diagnostic {
                 path: testbench_location.filename().to_string(),
                 span: Some(testbench_location.resolve_span()),
@@ -285,7 +326,7 @@ fn execute_check<'v>(
                 ),
                 call_stack: Some(eval.call_stack().clone()),
                 child,
-                source_error: None,
+                source_error: Some(Arc::new(test_result.into())),
             });
 
             Ok((eval.heap().alloc(false).to_value(), true)) // Failure
