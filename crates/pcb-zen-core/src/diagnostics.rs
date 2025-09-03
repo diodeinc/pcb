@@ -275,6 +275,17 @@ impl std::error::Error for Diagnostic {
     }
 }
 
+impl From<Diagnostic> for starlark::Error {
+    fn from(diag: Diagnostic) -> Self {
+        let diag_err = DiagnosticError(diag);
+        let load_err = LoadError {
+            message: diag_err.0.body.clone(),
+            diagnostic: diag_err,
+        };
+        starlark::Error::new_other(anyhow::Error::new(load_err))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WithDiagnostics<T> {
     pub diagnostics: Diagnostics,

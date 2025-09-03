@@ -266,26 +266,9 @@ fn execute_check<'v>(
             let ctx = eval.context_value().unwrap();
             let testbench_location = eval.call_stack_top_location().unwrap();
 
-            // Extract clean error message
-            let error_string = e.to_string();
-            let error_msg = error_string
-                .lines()
-                .find(|line| line.starts_with("error: "))
-                .and_then(|line| line.strip_prefix("error: "))
-                .unwrap_or("check failed");
-
-            // Child diagnostic for the specific check location
-            let child = e.span().map(|span| {
-                Box::new(Diagnostic {
-                    path: span.file.filename().to_string(),
-                    span: Some(span.resolve_span()),
-                    severity: EvalSeverity::Error,
-                    body: error_msg.to_string(),
-                    call_stack: None,
-                    child: None,
-                    source_error: None,
-                })
-            });
+            // Convert error to diagnostic - this will handle DiagnosticError chains properly
+            let child_diagnostic = Diagnostic::from(e);
+            let child = Some(Box::new(child_diagnostic));
 
             // Parent diagnostic for TestBench context
             let case_suffix = case_name

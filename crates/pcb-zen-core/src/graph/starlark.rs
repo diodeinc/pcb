@@ -44,6 +44,13 @@ pub struct PathValueGen<V: ValueLifetimeless> {
 
 starlark_complex_value!(pub PathValue);
 
+impl<V: ValueLifetimeless> PathValueGen<V> {
+    pub fn description(&self) -> String {
+        let port_names: Vec<String> = self.ports.iter().map(|port| format!("{}", port)).collect();
+        format!("Path [{}]", port_names.join(", "))
+    }
+}
+
 /// Callables for Path validation methods
 #[derive(Clone, Debug, PartialEq, Eq, Allocative, Freeze)]
 pub enum PathValidationOp {
@@ -71,6 +78,45 @@ pub struct PathMatchesCallableGen<V: ValueLifetimeless> {
 }
 
 starlark_complex_value!(pub PathMatchesCallable);
+
+impl<V: ValueLifetimeless> PathMatchesCallableGen<V> {
+    fn wrap_matcher_error<'v>(
+        &self,
+        original_error: starlark::Error,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Error
+    where
+        V: ValueLike<'v>,
+    {
+        let Some(cs) = eval.call_stack_top_location() else {
+            return original_error;
+        };
+
+        let Some(path_val) = self
+            .path_value
+            .to_value()
+            .downcast_ref::<PathValueGen<Value>>()
+        else {
+            return original_error;
+        };
+
+        // Build child diagnostic directly from the Starlark error
+        let child = crate::diagnostics::Diagnostic::from(original_error);
+
+        // Create parent diagnostic with path.matches() context
+        let parent = crate::diagnostics::Diagnostic {
+            path: cs.file.filename().to_string(),
+            span: Some(cs.resolve_span()),
+            severity: starlark::errors::EvalSeverity::Error,
+            body: format!("{} failed to match sequence", path_val.description()),
+            call_stack: None,
+            child: Some(Box::new(child)),
+            source_error: None,
+        };
+
+        parent.into()
+    }
+}
 
 // Implementations for ModuleGraphValue
 impl<V: ValueLifetimeless> std::fmt::Display for ModuleGraphValueGen<V> {
@@ -380,7 +426,7 @@ where
                         // Return false instead of erroring
                         return Ok(heap.alloc(false));
                     } else {
-                        return Err(e);
+                        return Err(self.wrap_matcher_error(e, eval));
                     }
                 }
             };
