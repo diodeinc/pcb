@@ -124,7 +124,7 @@ fn clone_net_template<'v>(
     let (template_name, template_props, template_symbol) =
         if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
             (
-                net_val.name().to_string(),
+                net_val.original_name().to_string(),
                 net_val.properties().clone(),
                 net_val.symbol().to_value(),
             )
@@ -133,7 +133,7 @@ fn clone_net_template<'v>(
             let copied_template = copy_value(template, heap)?;
             if let Some(net_val) = copied_template.downcast_ref::<NetValue<'v>>() {
                 (
-                    net_val.name().to_string(),
+                    net_val.original_name().to_string(),
                     net_val.properties().clone(),
                     net_val.symbol().to_value(),
                 )
@@ -819,6 +819,18 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
             || value.downcast_ref::<InterfaceFactory<'v>>().is_some()
             || value.downcast_ref::<FrozenInterfaceFactory>().is_some()
         {
+            // If a Net instance was provided, unregister it from the current module
+            // so it does not count as an introduced net. It will be registered when used.
+            if let Some(net_val) = value.downcast_ref::<NetValue<'v>>() {
+                if let Some(ctx) = eval
+                    .module()
+                    .extra_value()
+                    .and_then(|e| e.downcast_ref::<ContextValue>())
+                {
+                    ctx.unregister_net(net_val.id());
+                }
+            }
+
             Ok(eval.heap().alloc(Using { value }))
         } else {
             Err(anyhow::anyhow!(

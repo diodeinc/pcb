@@ -650,45 +650,6 @@ impl EvalContext {
         }
     }
 
-    /// Introspect a module by evaluating it with empty inputs and non-strict IO config.
-    /// Returns the used inputs and their types.
-    pub fn introspect_module(
-        &self,
-        source_path: &Path,
-        module_name: &str,
-    ) -> WithDiagnostics<HashMap<String, String>> {
-        self.child_context()
-            .set_source_path(source_path.to_path_buf())
-            .set_module_name(module_name.to_string())
-            .set_inputs(InputMap::new()) // Empty inputs
-            .set_strict_io_config(false) // Non-strict so we don't fail on missing inputs
-            .eval()
-            .map(|output| {
-                output
-                    .signature
-                    .iter()
-                    .map(|param| (param.name.clone(), format!("{:?}", param.type_info)))
-                    .collect()
-            })
-    }
-
-    /// Introspect a module and return structured type information.
-    /// This is a richer API that returns TypeInfo instead of just strings.
-    pub fn introspect_module_typed(
-        &self,
-        source_path: &Path,
-        module_name: &str,
-    ) -> WithDiagnostics<Vec<crate::lang::type_info::ParameterInfo>> {
-        // First evaluate the module with empty inputs to get the used inputs
-        self.child_context()
-            .set_source_path(source_path.to_path_buf())
-            .set_module_name(module_name.to_string())
-            .set_inputs(InputMap::new())
-            .set_strict_io_config(false)
-            .eval()
-            .map(|output| output.signature)
-    }
-
     /// Get the file contents from the in-memory cache
     pub fn get_file_contents(&self, path: &Path) -> Option<String> {
         if let Ok(state) = self.state.lock() {

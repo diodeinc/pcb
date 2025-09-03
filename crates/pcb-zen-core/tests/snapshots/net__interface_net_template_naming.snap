@@ -1,0 +1,12 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 112
+expression: output
+---
+regular net: VCC
+interface net: VCC_VCC
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

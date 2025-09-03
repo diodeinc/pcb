@@ -51,6 +51,7 @@ pub fn reset_net_id_counter() {
 pub struct NetValueGen<V> {
     id: NetId,
     name: String,
+    original_name: Option<String>, // The name originally requested before deduplication
     properties: SmallMap<String, V>,
     symbol: V, // The Symbol value if one was provided (None if not)
 }
@@ -91,16 +92,17 @@ where
     fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
         match attribute {
             "name" => Some(heap.alloc(self.name.clone())),
+            "original_name" => self.original_name.as_ref().map(|n| heap.alloc(n.clone())),
             _ => None,
         }
     }
 
     fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
-        matches!(attribute, "name")
+        matches!(attribute, "name" | "original_name")
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        vec!["name".to_string()]
+        vec!["name".to_string(), "original_name".to_string()]
     }
 }
 
@@ -118,6 +120,7 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for NetValueGen<V> {
         Ok(dst.alloc(NetValue {
             id: self.id,
             name: self.name.clone(),
+            original_name: self.original_name.clone(),
             properties,
             symbol: copy_value(self.symbol.to_value(), dst)?,
         }))
@@ -135,6 +138,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         Self {
             id,
             name,
+            original_name: None,
             properties,
             symbol,
         }
@@ -142,6 +146,11 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Return the original requested name, falling back to the final name if no original was stored
+    pub fn original_name(&self) -> &str {
+        self.original_name.as_deref().unwrap_or(&self.name)
     }
 
     /// Return the globally‐unique identifier of this net instance.
@@ -253,7 +262,8 @@ where
         let net_id = generate_net_id();
 
         // Use positional name if provided, otherwise use kwarg name (may be empty).
-        let net_name = name_pos.or(name_kwarg).unwrap_or_default();
+        let original_name = name_pos.or(name_kwarg);
+        let net_name = original_name.clone().unwrap_or_default();
 
         // Initialize with empty properties map
         let mut properties = SmallMap::new();
@@ -300,6 +310,7 @@ where
         Ok(heap.alloc(NetValue {
             id: net_id,
             name: final_name,
+            original_name,
             properties,
             symbol: symbol_val.unwrap_or_else(Value::new_none),
         }))
