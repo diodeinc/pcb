@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Args, ValueEnum};
+use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Color, Table};
 use log::debug;
 use pcb_ui::prelude::*;
 use serde::Serialize;
@@ -29,15 +30,16 @@ pub struct TestArgs {
     pub deny: Vec<String>,
 
     /// Output format for test results
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = OutputFormat::Tap)]
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
 }
 
 #[derive(ValueEnum, Clone, Debug, Default)]
 pub enum OutputFormat {
-    #[default]
     Tap,
     Json,
+    #[default]
+    Table,
 }
 
 #[derive(Serialize, Clone)]
@@ -140,6 +142,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
     match args.format {
         OutputFormat::Tap => output_tap(&all_results),
         OutputFormat::Json => output_json(&all_results)?,
+        OutputFormat::Table => output_table(&all_results),
     }
 
     // Exit with error if there were failures
@@ -172,6 +175,75 @@ fn output_tap(results: &[TestResult]) {
         println!(
             "{} {} TestBench '{}'{} check '{}'",
             status, test_num, result.test_bench_name, case_suffix, result.check_name
+        );
+    }
+}
+
+fn output_table(results: &[TestResult]) {
+    if results.is_empty() {
+        return;
+    }
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+
+    // Set header
+    table.set_header(vec![
+        Cell::new("Status")
+            .fg(Color::Blue)
+            .add_attribute(comfy_table::Attribute::Bold),
+        Cell::new("TestBench")
+            .fg(Color::Blue)
+            .add_attribute(comfy_table::Attribute::Bold),
+        Cell::new("Case")
+            .fg(Color::Blue)
+            .add_attribute(comfy_table::Attribute::Bold),
+        Cell::new("Check")
+            .fg(Color::Blue)
+            .add_attribute(comfy_table::Attribute::Bold),
+    ]);
+
+    // Add rows for each result
+    for result in results {
+        let status_cell = if result.status == "pass" {
+            Cell::new("✓ PASS")
+                .fg(Color::Green)
+                .add_attribute(comfy_table::Attribute::Bold)
+        } else {
+            Cell::new("✗ FAIL")
+                .fg(Color::Red)
+                .add_attribute(comfy_table::Attribute::Bold)
+        };
+
+        let case_name = result.case_name.as_deref().unwrap_or("-");
+
+        table.add_row(vec![
+            status_cell,
+            Cell::new(&result.test_bench_name),
+            Cell::new(case_name),
+            Cell::new(&result.check_name),
+        ]);
+    }
+
+    println!("{table}");
+
+    // Print summary
+    let passed = results.iter().filter(|r| r.status == "pass").count();
+    let failed = results.iter().filter(|r| r.status == "fail").count();
+
+    println!();
+    if failed > 0 {
+        println!(
+            "{} {} passed, {} failed",
+            pcb_ui::icons::error().with_style(Style::Red),
+            passed,
+            failed
+        );
+    } else if passed > 0 {
+        println!(
+            "{} All {} tests passed",
+            pcb_ui::icons::success().with_style(Style::Green),
+            passed
         );
     }
 }
