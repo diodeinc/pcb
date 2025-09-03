@@ -44,8 +44,8 @@ def analyze_power_paths(module: Module, inputs):
     decoupling_paths = []
     
     for path in paths:
-        # Single capacitor decoupling paths - test simple pattern first
-        if len(path.components) == 1 and path.components[0].type == "capacitor":
+        # Single capacitor decoupling paths using path.matches()
+        if path.matches(is_capacitor(), suppress_errors=True):
             decoupling_paths.append(path)
             cap = path.components[0]
             cap_value = cap.capacitance.__str__(cap.capacitance)
@@ -53,6 +53,7 @@ def analyze_power_paths(module: Module, inputs):
             
             # Validate package size based on capacitance  
             if "100nF" in cap_value or "1uF" in cap_value:
+                path.matches(has_package("0402"))
                 print("      ✓ Capacitor uses 0402 package")
     
     check(len(decoupling_paths) >= 2, "Expected at least 2 direct decoupling capacitor paths")
@@ -73,22 +74,21 @@ def analyze_signal_paths(module: Module, inputs):
         print("    SCL net: " + scl_net)
         print("    SDA net: " + sda_net)
         
-        # Analyze pull-up resistor paths to VDD using path.matches()
         vdd_net = inputs["io_vdd"].NET.name
         scl_pullup_paths = graph.paths(start=vdd_net, end=scl_net, max_depth=4)
         sda_pullup_paths = graph.paths(start=vdd_net, end=sda_net, max_depth=4)
         
         print("    Found " + str(len(scl_pullup_paths)) + " SCL pull-up paths, " + str(len(sda_pullup_paths)) + " SDA pull-up paths")
         
-        # Validate I2C pull-up resistors 
+        # Validate I2C pull-up resistors using path.matches()
         for path in scl_pullup_paths:
-            if len(path.components) == 1 and path.components[0].type == "resistor":
+            if path.matches(is_resistor(), suppress_errors=True):
                 pullup = path.components[0]
                 resistance = pullup.resistance.__str__(pullup.resistance)
                 print("      ✓ SCL pull-up resistor: " + pullup.name + " (" + resistance + ")")
         
         for path in sda_pullup_paths:
-            if len(path.components) == 1 and path.components[0].type == "resistor":
+            if path.matches(is_resistor(), suppress_errors=True):
                 pullup = path.components[0]
                 resistance = pullup.resistance.__str__(pullup.resistance)
                 print("      ✓ SDA pull-up resistor: " + pullup.name + " (" + resistance + ")")
@@ -149,10 +149,9 @@ def check_power_decoupling(module, inputs):
     decoupling_paths = []
     high_freq_caps = []
     bulk_caps = []
-    CAP = is_capacitor()
     
     for path in paths:
-        if path.matches(CAP, suppress_errors=True):
+        if path.matches(is_capacitor(), suppress_errors=True):
             decoupling_paths.append(path)
             cap = path.components[0]
             cap_value = cap.capacitance.__str__(cap.capacitance)
@@ -208,7 +207,7 @@ def check_communication_interfaces(module, inputs):
         check(len(scl_paths) > 0, "SCL not connected to BMI270.SCX")
         check(len(sda_paths) > 0, "SDA not connected to BMI270.SDX")
         
-        # Validate direct connections (no intermediate components)
+        # Validate direct connections
         for path in scl_paths:
             if len(path.components) == 0:  # Direct connection
                 print("    ✓ Direct SCL connection to BMI270")
@@ -260,17 +259,16 @@ def check_bmi270_interface_specific_paths(module, inputs):
         # Validate I2C pull-up resistors exist and are appropriate values
         scl_pullup_found = False
         sda_pullup_found = False
-        R = is_resistor()
         
         for path in scl_pullup_paths:
-            if path.matches(R, suppress_errors=True):
+            if path.matches(is_resistor(), suppress_errors=True):
                 scl_pullup_found = True
                 resistor = path.components[0]
                 resistance = resistor.resistance.__str__(resistor.resistance)
                 print("    ✓ SCL pull-up validated: " + resistor.name + " (" + resistance + ")")
         
         for path in sda_pullup_paths:
-            if path.matches(R, suppress_errors=True):
+            if path.matches(is_resistor(), suppress_errors=True):
                 sda_pullup_found = True
                 resistor = path.components[0]
                 resistance = resistor.resistance.__str__(resistor.resistance)
