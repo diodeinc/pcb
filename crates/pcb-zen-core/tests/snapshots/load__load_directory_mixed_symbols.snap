@@ -1,6 +1,0 @@
----
-source: crates/pcb-zen-core/tests/load.rs
-expression: output
----
-Error: test.zen:3:6-15 Error loading module `modules/Broken.zen`
-Error: /modules/Broken.zen:3:1-19 Variable `undefined_variable` not found

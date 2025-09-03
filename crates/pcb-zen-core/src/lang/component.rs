@@ -15,11 +15,11 @@ use starlark::{
 
 use crate::{
     lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
-    EvalContext, FrozenSpiceModelValue,
+    FrozenSpiceModelValue,
 };
 
 use super::net::NetType;
-use super::symbol::{load_symbols_from_library, SymbolType, SymbolValue};
+use super::symbol::{SymbolType, SymbolValue};
 
 use anyhow::anyhow;
 
@@ -727,142 +727,9 @@ where
     }
 }
 
-pub(crate) fn build_component_factory_from_symbol(
-    symbol_path: &std::path::Path,
-    footprint_override: Option<&str>,
-    base_dir: Option<&std::path::Path>,
-    file_provider: &dyn crate::FileProvider,
-    context: &EvalContext,
-) -> anyhow::Result<ComponentFactoryValue> {
-    // Parse all symbols from the library (with caching)
-    // Note: Component factories expect single-symbol files, so we load all symbols
-    // to provide a helpful error if multiple symbols are found
-    let symbols = load_symbols_from_library(symbol_path, file_provider)
-        .map_err(|e| anyhow!("Failed to load symbols: {}", e))?;
-
-    // For single-symbol files (which is the common case for component factories),
-    // use the first symbol
-    let symbol = symbols
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("No symbols found in file '{}'", symbol_path.display()))?;
-
-    // Build pins map
-    let mut pins_map: SmallMap<String, String> = SmallMap::new();
-    for pin in &symbol.pins {
-        // If pin name is ~, use the pin number instead
-        let signal_name = if pin.name == "~" {
-            pin.number.clone()
-        } else {
-            pin.name.clone()
-        };
-        pins_map.insert(signal_name, pin.number.clone());
-    }
-
-    // Determine footprint (override takes precedence over symbol default)
-    let mut final_footprint = footprint_override
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| symbol.footprint.clone());
-
-    // If the footprint looks like a KiCad module file, make the path absolute
-    if final_footprint.ends_with(".kicad_mod") {
-        let candidate = std::path::PathBuf::from(&final_footprint);
-        if !candidate.is_absolute() {
-            if let Some(dir) = base_dir {
-                final_footprint = dir.join(candidate).to_string_lossy().into_owned();
-            }
-        }
-    }
-
-    // Default properties from symbol
-    let mut default_properties: SmallMap<String, String> = SmallMap::new();
-    for (k, v) in symbol.properties.iter() {
-        default_properties.insert(k.clone(), v.clone());
-    }
-
-    // Always record the *absolute* path to the source symbol file so that downstream tooling
-    // (e.g. schematic viewers, netlisters) can trace components back to their definition.
-    // Use the canonicalised path when available, otherwise fall back to the provided path.
-    let abs_symbol_path = match file_provider.canonicalize(symbol_path) {
-        Ok(p) => p,
-        Err(_) => symbol_path.to_path_buf(),
-    };
-
-    default_properties.insert(
-        "symbol_path".to_owned(),
-        abs_symbol_path.to_string_lossy().into_owned(),
-    );
-
-    Ok(ComponentFactoryValue {
-        mpn: symbol.mpn.clone(),
-        ctype: symbol.manufacturer.clone(),
-        footprint: final_footprint,
-        prefix: "U".to_owned(),
-        symbol: SymbolValue::from_args(
-            None,
-            None,
-            Some(abs_symbol_path.to_string_lossy().into_owned()),
-            context,
-        )
-        .map_err(|e| anyhow!("Failed to build symbol: {}", e))?,
-        default_properties,
-    })
-}
-
 #[starlark_module]
 pub fn component_globals(builder: &mut GlobalsBuilder) {
     const Component: ComponentType = ComponentType;
     const Net: NetType = NetType;
     const Symbol: SymbolType = SymbolType;
-
-    fn load_component<'v>(
-        #[starlark(require = pos)] symbol_path: String,
-        #[starlark(require = named)] footprint: Option<String>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
-        // Resolve symbol_path relative to current file directory
-        let resolved_path = {
-            let candidate = std::path::PathBuf::from(&symbol_path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                let current_path = eval
-                    .context_value()
-                    .ok_or_else(|| anyhow!("unexpected context - ContextValue not found"))?
-                    .source_path();
-
-                let current_dir =
-                    std::path::Path::new(&current_path)
-                        .parent()
-                        .ok_or_else(|| {
-                            anyhow!("could not determine parent directory of current file")
-                        })?;
-
-                current_dir.join(candidate)
-            }
-        };
-
-        // Determine the directory of the current source file for resolving relative paths
-        let base_dir_opt: Option<std::path::PathBuf> = eval.context_value().and_then(|cv| {
-            let src_path = cv.source_path();
-            std::path::Path::new(&src_path)
-                .parent()
-                .map(|p| p.to_path_buf())
-        });
-
-        let file_provider = eval
-            .file_provider()
-            .ok_or_else(|| anyhow!("No file provider available"))?;
-
-        // Build ComponentFactoryValue via helper
-        let factory = build_component_factory_from_symbol(
-            &resolved_path,
-            footprint.as_deref(),
-            base_dir_opt.as_deref(),
-            file_provider.as_ref(),
-            eval.eval_context().unwrap(),
-        )?;
-
-        Ok(eval.heap().alloc(factory))
-    }
 }

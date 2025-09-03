@@ -2,5 +2,5 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Error: parent.zen:7:1-33 Error instantiating `Module`
+Error: parent.zen:7:1-30 Error instantiating `Module`
 Error: /Module.zen:2:10-27 Expected 'Net', received: [SingleNet]

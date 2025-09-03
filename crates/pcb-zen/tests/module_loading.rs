@@ -78,61 +78,6 @@ Sub(name = "sub")
     star_snapshot!(env, "top.zen");
 }
 
-// Module loading with component factories
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn module_load_component_factory() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "pcb.toml",
-        r#"
-[module]
-name = "test"
-"#,
-    );
-
-    env.add_file(
-        "C146731.kicad_sym",
-        include_str!("resources/C146731.kicad_sym"),
-    );
-
-    env.add_file(
-        "sub.zen",
-        r#"
-# Import the component factory from the current directory
-load(".", COMP = "C146731")
-
-# Instantiate with required pin connections
-COMP(
-    name = "NB3N551DG",
-    footprint = "SMD:0805",
-    pins = {
-        "ICLK": Net("ICLK"),
-        "Q1": Net("Q1"),
-        "Q2": Net("Q2"),
-        "Q3": Net("Q3"),
-        "Q4": Net("Q4"),
-        "GND": Net("GND"),
-        "VDD": Net("VDD"),
-        "OE": Net("OE"),
-    },
-)
-"#,
-    );
-
-    env.add_file(
-        "top.zen",
-        r#"
-# Import the sub module and alias it
-Sub = Module("sub.zen")
-Sub(name = "sub")
-"#,
-    );
-
-    star_snapshot!(env, "top.zen");
-}
-
 // Module loading with local package aliases
 #[test]
 fn module_with_local_alias() {
@@ -362,7 +307,7 @@ test_package = "@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea"
 load("@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea/Capacitor.star", "Package")
 
 # Load a component from aliased package
-load("@test_package", "Capacitor")
+Capacitor = Module("@test_package/Capacitor.star")
 
 package = Package("0402")
 

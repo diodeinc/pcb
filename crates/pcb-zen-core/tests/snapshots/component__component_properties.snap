@@ -9,7 +9,6 @@ Module {
         FrozenValue(
             Component {
                 name: "U1",
-                mpn: "NB3N551DG",
                 footprint: "SMD:0805",
                 prefix: "U",
                 connections: {
@@ -90,22 +89,7 @@ Module {
                     "CustomProp": FrozenValue(
                         "Value123",
                     ),
-                    "Datasheet": FrozenValue(
-                        "https://lcsc.com/product-detail/Logic-ICs_ON_NB3N551DG_NB3N551DG_C146731.html",
-                    ),
-                    "Description": FrozenValue(
-                        "",
-                    ),
-                    "Footprint": FrozenValue(
-                        "C146731:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL",
-                    ),
-                    "LCSC Part": FrozenValue(
-                        "C146731",
-                    ),
-                    "Reference": FrozenValue(
-                        "U",
-                    ),
-                    "Value": FrozenValue(
+                    "symbol_name": FrozenValue(
                         "NB3N551DG",
                     ),
                     "symbol_path": FrozenValue(

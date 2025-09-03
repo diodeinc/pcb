@@ -2,4 +2,4 @@
 source: crates/pcb-zen/tests/test.rs
 expression: netlist
 ---
-Error: [TEMP_DIR]test_unknown.zen:5:1-19:2 Unknown pin name 'INVALID' (expected one of: ICLK, Q1, Q2, Q3, OE, VDD, GND, Q4)
+Error: [TEMP_DIR]test_unknown.zen:3:1-18:2 Unknown pin name 'INVALID' (expected one of: ICLK, Q1, Q2, Q3, OE, VDD, GND, Q4)

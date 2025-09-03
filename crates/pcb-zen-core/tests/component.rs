@@ -4,11 +4,7 @@ mod common;
 snapshot_eval!(component_properties, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
     "test_props.zen" => r#"
-        # Import component factory from current directory.
-        load(".", MyComponent = "C146731")
-
-        # Instantiate with pin connections and a custom property.
-        MyComponent(
+        Component(
             name = "U1",
             pins = {
                 "ICLK": Net("ICLK"),
@@ -20,6 +16,7 @@ snapshot_eval!(component_properties, {
                 "VDD": Net("VDD"),
                 "OE": Net("OE"),
             },
+            symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
             footprint = "SMD:0805",
             properties = {"CustomProp": "Value123"},
         )

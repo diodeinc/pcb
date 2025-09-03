@@ -102,10 +102,8 @@ impl TestProject {
     /// Example
     /// -------
     /// ```text
-    /// # --- C146731.kicad_sym
-    ///  (kicad symbol content ...)
     /// # --- sub.zen
-    /// COMP = load_component("C146731.kicad_sym", footprint = "SMD:0805")
+    /// Component(symbol = Symbol(library="C146731.kicad_sym", name="C146731"), footprint = "SMD:0805")
     /// # --- top.zen
     /// Sub = Module("sub.zen")
     /// Sub()

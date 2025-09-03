@@ -22,7 +22,7 @@ Component(
 
 # --- top.zen
 # Load the `my_sub` module from the current directory.
-load(".", Sub = "my_sub")
+Sub = Module("my_sub.zen")
 
 Sub(
     name = "sub",
@@ -56,7 +56,7 @@ Component(
 
 # --- top.zen
 # Load the `my_sub` module from the current directory.
-load(".", Sub = "my_sub")
+Sub = Module("my_sub.zen")
 
 Sub(
     name = "sub",
@@ -93,7 +93,7 @@ Component(
 
 # --- top.zen
 # Load the `my_sub` module from the current directory.
-load(".", Sub = "my_sub")
+Sub = Module("my_sub.zen")
 
 Sub(
     name = "sub",
@@ -119,11 +119,10 @@ pdm = io("pdm", PdmMic)
 
 # --- top.zen
 # Load the `sub` module from the current directory.
-load("./sub.zen", "PdmMic")
-Sub = Module("./sub.zen")
+Sub = Module("sub.zen")
 
-print(PdmMic)
-pdm = PdmMic("PDM")
+print(Sub.PdmMic)
+pdm = Sub.PdmMic("PDM")
 print(pdm)
 Sub(name = "sub", pdm = pdm)
 "#,
@@ -185,7 +184,7 @@ Component(
     env.add_file(
         "parent.zen",
         r#"
-load(".", Child = "child")
+Child = Module("child.zen")
 
 SingleNet = interface(signal = Net)
 sig_if = SingleNet("SIG")
@@ -196,49 +195,6 @@ Child(name="child1", signal=sig_if)  # Should fail - interface not accepted for 
     );
 
     star_snapshot!(env, "parent.zen");
-}
-
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn test_component_factory_rejects_interface_even_with_single_net() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "C146731.kicad_sym",
-        include_str!("resources/C146731.kicad_sym"),
-    );
-
-    env.add_file(
-        "test.zen",
-        r#"
-# Load a component factory
-load(".", COMP = "C146731")
-
-# Define an interface with a single net
-SingleNet = interface(signal = Net)
-
-# Create instances
-signal_if = SingleNet(name="sig")
-
-# Use the interface in a component instance - should fail
-COMP(
-    name = "C1",
-    footprint = "SMD:0805",
-    pins = {
-        "ICLK": signal_if,  # This should fail - interface not accepted
-        "Q1": Net("Q1"),
-        "Q2": Net("Q2"),
-        "Q3": Net("Q3"),
-        "Q4": Net("Q4"),
-        "GND": Net("GND"),
-        "VDD": Net("VDD"),
-        "OE": Net("OE"),
-    }
-)
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
 }
 
 #[test]

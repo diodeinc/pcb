@@ -1,6 +1,0 @@
----
-source: crates/pcb-zen-core/tests/load.rs
-expression: output
----
-Error: test.zen:3:6-15 Error loading module `modules/BadModule.zen`
-Error: /modules/BadModule.zen:3:1-40 File not found: /modules/does_not_exist.zen

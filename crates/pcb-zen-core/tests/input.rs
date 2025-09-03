@@ -14,9 +14,9 @@ snapshot_eval!(io_config, {
         )
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
-        Module(
+        Mod(
             name = "U1",
             pwr = Net("VCC"),
             baud = 9600,
@@ -37,9 +37,9 @@ snapshot_eval!(missing_required_io_config, {
         )
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
-        Module(
+        Mod(
             name = "U1",
             # intentionally omit `pwr` and `baud` - should trigger an error
         )
@@ -63,9 +63,9 @@ snapshot_eval!(optional_io_config, {
         )
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
-        Module(
+        Mod(
             name = "U1",
             # omit both inputs - allowed because they are optional
         )
@@ -80,10 +80,10 @@ snapshot_eval!(interface_io, {
         pdm = io("pdm", PdmMic)
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
-        pdm = Module.PdmMic("PDM")
-        Module(name = "U1", pdm = pdm)
+        pdm = Mod.PdmMic("PDM")
+        Mod(name = "U1", pdm = pdm)
     "#
 });
 
@@ -92,12 +92,12 @@ snapshot_eval!(io_interface_incompatible, {
         signal = io("signal", Net)
     "#,
     "parent.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
         SingleNet = interface(signal = Net)
         sig_if = SingleNet("SIG")
 
-        Module(name="U1", signal=sig_if)  # Should fail - interface not accepted for Net io
+        Mod(name="U1", signal=sig_if)  # Should fail - interface not accepted for Net io
     "#
 });
 
@@ -190,9 +190,9 @@ snapshot_eval!(implicit_enum_conversion, {
         )
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
-        Module(
+        Mod(
             name = "child",
             heading = "NORTH",
         )
@@ -391,10 +391,10 @@ snapshot_eval!(config_with_convert_function, {
         add_property("optional_power_is_none", optional_power == None)
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
         # Provide string input that should be converted
-        m = Module(
+        Mod(
             name = "test",
             voltage = "5V",
             # current uses default "2.5A" which should be converted
@@ -415,10 +415,10 @@ snapshot_eval!(config_without_convert_fails_type_check, {
         voltage = config("voltage", UnitType, default = UnitType(value = 0.0, unit = "V"))
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
         # This should fail - string cannot be used for record type without converter
-        m = Module(
+        Mod(
             name = "test",
             voltage = "5V",
         )
@@ -438,10 +438,10 @@ snapshot_eval!(config_convert_with_default, {
         add_property("name_value", name)
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
         # Don't provide input, so default is used and converted
-        m = Module(name = "test")
+        Mod(name = "test")
     "#
 });
 
@@ -502,10 +502,10 @@ snapshot_eval!(config_convert_chain, {
         add_property("converted_value", value)
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
         # Provide string that will be converted through the chain
-        m = Module(
+        Mod(
             name = "test",
             value = "5",
         )
@@ -531,10 +531,10 @@ snapshot_eval!(config_convert_with_enum, {
         add_property("heading_is_north", heading == Direction("NORTH"))
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
 
         # Provide lowercase string that should be converted to enum
-        m = Module(
+        Mod(
             name = "test",
             heading = "north",
         )
@@ -573,10 +573,10 @@ snapshot_eval!(io_config_with_help_text, {
         )
     "#,
     "top.zen" => r#"
-        load(".", "Module")
+        Mod = Module("Module.zen")
         
         # Create module instance with some parameters
-        Module(
+        Mod(
             name = "U1",
             power = Net("VCC"),
             baud_rate = 115200,

@@ -1198,9 +1198,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
 /// Construct a `ModuleLoader` for the Starlark file at `path` by performing a
 /// lightweight introspection pass (empty `InputMap`) so that we can populate
-/// the placeholder parameter list ahead of time.  This helper is shared by
-/// the public `Module()` built-in as well as the directory-style `load()`
-/// implementation in `eval.rs` so that the logic lives in exactly one place.
+/// the placeholder parameter list ahead of time.
 pub fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> ModuleLoader {
     let name = path
         .file_stem()

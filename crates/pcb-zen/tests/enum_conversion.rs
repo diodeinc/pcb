@@ -23,7 +23,7 @@ Component(
 
 # --- top.zen
 # Bring in the `child` module from the current directory and alias it to `Child`.
-load(".", Child = "child")
+Child = Module("child.zen")
 
 # Pass the enum value as a plain string. The implementation should convert this
 # into a Direction enum variant automatically.
@@ -59,7 +59,7 @@ Component(
 
 # --- top.zen
 # Bring in the `child` module from the current directory and alias it to `Child`.
-load(".", Child = "child")
+Child = Module("child.zen")
 
 Child(
     name = "child",

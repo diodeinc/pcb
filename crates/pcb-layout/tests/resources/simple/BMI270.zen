@@ -1,12 +1,12 @@
-load(".", "Capacitor")
-load("eda", _BMI270 = "BMI270")
 load("stdlib.zen", "Ground", "I2C", "Power")
 load("units.zen", "Capacitance")
+
+Capacitor = Module("Capacitor.zen")
 
 power = io("power", Power)
 i2c = io("i2c", I2C)
 
-_BMI270(
+Component(
     name = "IC",
     pins = {
         "VDD": power.vcc,
@@ -24,6 +24,7 @@ _BMI270(
         "SDO": Net(),
         "VDDIO": power.vcc,
     },
+    symbol = Symbol(library = "eda/BMI270.kicad_sym", name = "BMI270"),
     footprint = "eda/BMI270.kicad_mod",
 )
 
