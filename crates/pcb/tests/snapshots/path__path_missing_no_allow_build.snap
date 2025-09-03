@@ -6,6 +6,8 @@ Command: pcb build boards/FailingTest.zen
 Exit Code: 1
 
 --- STDOUT ---
+
+--- STDERR ---
 Error: Failed to resolve path 'this_file_does_not_exist.toml': File not found: <TEMP_DIR>/boards/this_file_does_not_exist.toml
    ╭─[ <TEMP_DIR>/boards/FailingTest.zen:3:18 ]
    │
@@ -13,11 +15,10 @@ Error: Failed to resolve path 'this_file_does_not_exist.toml': File not found: <
    │                  ──────────────────┬──────────────────  
    │                                    ╰──────────────────── Failed to resolve path 'this_file_does_not_exist.toml': File not found: <TEMP_DIR>/boards/this_file_does_not_exist.toml
 ───╯
-✗ FailingTest.zen: Build failed
---- STDERR ---
 
 Stack trace (most recent call last):
     <TEMP_DIR>/boards/FailingTest.zen:3:18 (Failed to resolve path 'this_file_does_not_exist.toml': File not found: <TEMP_DIR>/boards/this_file_does_not_exist.toml)
       ╰─ Path (called from <TEMP_DIR>/boards/FailingTest.zen:3:18-55)
 
+✗ FailingTest.zen: Build failed
 Error: Build failed with errors

@@ -6,10 +6,13 @@ Command: pcb build board.zen
 Exit Code: 1
 
 --- STDOUT ---
+
+--- STDERR ---
 Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:25 ]
  2 │SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
    │                                                   ╰─────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+
 Error: Input 'P2' is required but was not provided and no default value was given
    ╭─[ <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6 ]
    │
@@ -23,13 +26,11 @@ Error: Input 'P2' is required but was not provided and no default value was give
    │ ──────────────────┬──────────────────  
    │                   ╰──────────────────── Error instantiating `SimpleResistor`
 ───╯
-✗ board.zen: Build failed
---- STDERR ---
-
 
 Stack trace (most recent call last):
     <TEMP_DIR>/board.zen:7:1 (Error instantiating `SimpleResistor`)
     <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6 (Input 'P2' is required but was not provided and no default value was given)
       ╰─ io (called from <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6-19)
 
+✗ board.zen: Build failed
 Error: Build failed with errors

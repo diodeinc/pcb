@@ -79,7 +79,7 @@ pub fn build(
 
     eval.output_result()
         .inspect_err(|_| {
-            println!(
+            eprintln!(
                 "{} {}: Build failed",
                 pcb_ui::icons::error(),
                 file_name.with_style(Style::Red).bold()

@@ -6,6 +6,8 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
+
+--- STDERR ---
 Warning: '@github/thirdparty/tools:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/cache/github/mycompany/components/v1.0.0/StableComponent.zen:3:25 ]
  3 │ThirdPartyTool = Module("@github/thirdparty/tools:main/Tool.zen")
@@ -13,6 +15,5 @@ Warning: '@github/thirdparty/tools:main' is an unstable reference. Use a pinned 
    ├─[ <TEMP_DIR>/board.zen:7:1 ]
  7 │StableComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
    │                                ╰───────────────────────────────── Warning from `StableComponent`
---- STDERR ---
 
 ✓ board.zen (1 components)

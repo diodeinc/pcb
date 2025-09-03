@@ -136,7 +136,7 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
     let src_vec: Vec<(String, String)> = sources_map.into_iter().collect();
 
     // Print the report.
-    let _ = report.finish().print(sources(src_vec));
+    let _ = report.finish().eprint(sources(src_vec));
 
     // Build helper for rendering locations.
     let render_loc = |msg: &Diagnostic| -> String {

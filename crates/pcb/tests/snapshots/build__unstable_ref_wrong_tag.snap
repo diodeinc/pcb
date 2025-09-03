@@ -6,10 +6,11 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
+
+--- STDERR ---
 Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:25 ]
  2 │SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
    │                                                   ╰─────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
---- STDERR ---
 
 ✓ board.zen (0 components)

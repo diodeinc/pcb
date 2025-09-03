@@ -6,6 +6,8 @@ Command: pcb build board.zen -Dwarnings
 Exit Code: 1
 
 --- STDOUT ---
+
+--- STDERR ---
 Error: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:25 ]
    │
@@ -13,7 +15,6 @@ Error: '@github/mycompany/components:main' is an unstable reference. Use a pinne
    │                         ───────────────────────────┬──────────────────────────  
    │                                                    ╰──────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
 ───╯
---- STDERR ---
 
 Stack trace (most recent call last):
     <TEMP_DIR>/board.zen:2:25 ('@github/mycompany/components:main' is an unstable reference. Use a pinned version.)

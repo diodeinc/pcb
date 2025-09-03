@@ -6,6 +6,8 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
+
+--- STDERR ---
 Warning: '@github/thirdparty/utils:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/cache/github/mycompany/intermediate/v1.0.0/pcb.toml:3:9 ]
  3 │utils = "@github/thirdparty/utils:main"
@@ -16,6 +18,5 @@ Warning: '@github/thirdparty/utils:main' is an unstable reference. Use a pinned 
    ├─[ <TEMP_DIR>/board.zen:6:1 ]
  6 │IntermediateComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
    │                                   ╰──────────────────────────────────── Warning from `IntermediateComponent`
---- STDERR ---
 
 ✓ board.zen (1 components)

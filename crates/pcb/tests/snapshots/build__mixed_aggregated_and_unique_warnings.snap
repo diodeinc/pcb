@@ -6,6 +6,8 @@ Command: pcb build board.zen
 Exit Code: 0
 
 --- STDOUT ---
+
+--- STDERR ---
 Warning: '@github/company1/components:main' is an unstable reference. Use a pinned version.
 1 similar warning(s) were suppressed
    ╭─[ <TEMP_DIR>/pcb.toml:3:9 ]
@@ -14,11 +16,10 @@ Warning: '@github/company1/components:main' is an unstable reference. Use a pinn
    ├─[ <TEMP_DIR>/board.zen:3:17 ]
  3 │Comp1a = Module("@comp1/Component1.zen")
    │                           ╰──────────── '@comp1' is an unstable reference. Use a pinned version.
+
 Warning: '@github/company2/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:6:16 ]
  6 │Comp2 = Module("@github/company2/components:main/Component2.zen")
    │                                       ╰───────────────────────── '@github/company2/components:main' is an unstable reference. Use a pinned version.
---- STDERR ---
-
 
 ✓ board.zen (3 components)
