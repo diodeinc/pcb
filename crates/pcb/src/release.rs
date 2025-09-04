@@ -84,6 +84,7 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Validating build from staged sources", validate_build),
     ("Copying layout files", copy_layout),
+    ("Copying documentation", copy_docs),
     ("Substituting version variables", substitute_variables),
 ];
 
@@ -411,6 +412,44 @@ fn copy_layout(info: &ReleaseInfo) -> Result<()> {
             fs::copy(entry.path(), layout_staging_dir.join(filename))?;
         }
     }
+    Ok(())
+}
+
+/// Copy documentation files from docs directory adjacent to zen file
+fn copy_docs(info: &ReleaseInfo) -> Result<()> {
+    // Look for docs directory adjacent to zen file
+    let docs_source_dir = info.workspace.zen_path.parent().unwrap().join("docs");
+
+    // Only proceed if docs directory exists
+    if !docs_source_dir.exists() {
+        debug!("No docs directory found at: {}", docs_source_dir.display());
+        return Ok(());
+    }
+
+    // Copy all files from docs source to staging docs directory
+    let docs_staging_dir = info.staging_dir.join("docs");
+    for entry in walkdir::WalkDir::new(&docs_source_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+    {
+        let relative_path = entry.path().strip_prefix(&docs_source_dir)?;
+        let dest_path = docs_staging_dir.join(relative_path);
+
+        // Ensure parent directory exists
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::copy(entry.path(), dest_path)?;
+    }
+
+    debug!(
+        "Copied docs from: {} to: {}",
+        docs_source_dir.display(),
+        docs_staging_dir.display()
+    );
     Ok(())
 }
 
