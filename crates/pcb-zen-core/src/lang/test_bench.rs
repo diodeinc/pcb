@@ -18,8 +18,10 @@ use starlark::{
     values::{
         dict::{AllocDict, DictRef},
         list::ListRef,
-        starlark_value, Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue, Trace, Value,
-        ValueLifetimeless, ValueLike,
+        starlark_value,
+        tuple::TupleRef,
+        Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless,
+        ValueLike,
     },
 };
 
@@ -260,9 +262,18 @@ fn execute_check<'v>(
     args: &[Value<'v>],
     test_bench_name: &str,
     case_name: Option<&str>,
+    custom_name: Option<&str>,
 ) -> anyhow::Result<(Value<'v>, bool)> {
-    let check_func_str = check_func.to_string();
-    let check_name = check_func_str.rsplit('.').next().unwrap_or("check");
+    let check_name = if let Some(name) = custom_name {
+        name.to_string()
+    } else {
+        let check_func_str = check_func.to_string();
+        check_func_str
+            .rsplit('.')
+            .next()
+            .unwrap_or("check")
+            .to_string()
+    };
 
     let case_suffix = case_name
         .map(|n| format!(" case '{}'", n))
@@ -287,7 +298,7 @@ fn execute_check<'v>(
                 let test_result = crate::lang::error::BenchTestResult {
                     test_bench_name: test_bench_name.to_string(),
                     case_name: case_name.map(|s| s.to_string()),
-                    check_name: check_name.to_string(),
+                    check_name: check_name.clone(),
                     file_path: test_bench_location.filename().to_string(),
                     passed: true,
                 };
@@ -322,7 +333,7 @@ fn execute_check<'v>(
                 let test_result = crate::lang::error::BenchTestResult {
                     test_bench_name: test_bench_name.to_string(),
                     case_name: case_name.map(|s| s.to_string()),
-                    check_name: check_name.to_string(),
+                    check_name: check_name.clone(),
                     file_path: test_bench_location.filename().to_string(),
                     passed: false,
                 };
@@ -419,9 +430,36 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
 
                 let args = [module_value, inputs_dict];
 
-                for check_func in checks_list.iter() {
-                    let (result, failed) =
-                        execute_check(eval, check_func, &args, &name, Some(case_name_str))?;
+                for check_item in checks_list.iter() {
+                    // Check if it's a tuple (name, function) or just a function
+                    let (check_func, custom_name) =
+                        if let Some(tuple_ref) = TupleRef::from_value(check_item) {
+                            if tuple_ref.len() == 2 {
+                                let tuple_items: Vec<_> = tuple_ref.iter().collect();
+                                let name = tuple_items[0].unpack_str().ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "First element of check tuple must be a string name"
+                                    )
+                                })?;
+                                let func = tuple_items[1];
+                                (func, Some(name))
+                            } else {
+                                return Err(anyhow::anyhow!(
+                                    "Check tuple must have exactly 2 elements: (name, function)"
+                                ));
+                            }
+                        } else {
+                            (check_item, None)
+                        };
+
+                    let (result, failed) = execute_check(
+                        eval,
+                        check_func,
+                        &args,
+                        &name,
+                        Some(case_name_str),
+                        custom_name,
+                    )?;
                     case_check_results.push(result);
                     total_checks += 1;
                     if failed {

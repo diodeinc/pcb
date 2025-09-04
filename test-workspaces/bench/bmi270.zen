@@ -133,49 +133,53 @@ def check_path_connectivity(module: Module, inputs):
         else:
             print("  ! No path found: " + str(start) + " to " + str(end))
 
-def check_power_decoupling(module, inputs):
-    """Verify decoupling capacitors using advanced path matching"""
-    print("Power Decoupling Analysis:")
-    graph = module.graph()
+def check_power_decoupling():
+    """Factory function that returns a decoupling checker"""
+    def _check(module, inputs):
+        """Verify decoupling capacitors using advanced path matching"""
+        print("Power Decoupling Analysis:")
+        graph = module.graph()
+        
+        # Use inputs to get actual net names dynamically
+        vdd_net = inputs["io_vdd"].NET.name
+        gnd_net = inputs["io_gnd"].NET.name
+        
+        # Find all VDD to GND paths and filter for single capacitors
+        paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=5)
+        
+        # Use path.matches() to identify decoupling capacitors
+        decoupling_paths = []
+        high_freq_caps = []
+        bulk_caps = []
+        
+        for path in paths:
+            if path.matches(is_capacitor(), suppress_errors=True):
+                decoupling_paths.append(path)
+                cap = path.components[0]
+                cap_value = cap.capacitance.__str__(cap.capacitance)
+                
+                # Categorize by capacitance value for proper decoupling analysis
+                if "nF" in cap_value or ("pF" in cap_value):
+                    high_freq_caps.append(cap)
+                    path.matches(has_package("0402"))  # High-freq caps use small packages
+                    print("    ✓ High-frequency decoupling: " + cap.name + " (" + cap_value + ", 0402)")
+                elif "uF" in cap_value:
+                    bulk_caps.append(cap)
+                    # Bulk caps typically use larger packages
+                    if "10uF" in cap_value or "22uF" in cap_value:
+                        path.matches(has_package("0805"))
+                        print("    ✓ Bulk decoupling: " + cap.name + " (" + cap_value + ", 0805)")
+                    else:
+                        path.matches(has_package("0402"))
+                        print("    ✓ Medium decoupling: " + cap.name + " (" + cap_value + ", 0402)")
+        
+        # Validate decoupling strategy
+        check(len(high_freq_caps) >= 1, "Expected at least 1 high-frequency decoupling capacitor")
+        check(len(bulk_caps) >= 1, "Expected at least 1 bulk decoupling capacitor")
+        print("  Found " + str(len(high_freq_caps)) + " high-freq caps, " + str(len(bulk_caps)) + " bulk caps")
+        print("    ✓ Proper decoupling strategy validated")
     
-    # Use inputs to get actual net names dynamically
-    vdd_net = inputs["io_vdd"].NET.name
-    gnd_net = inputs["io_gnd"].NET.name
-    
-    # Find all VDD to GND paths and filter for single capacitors
-    paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=5)
-    
-    # Use path.matches() to identify decoupling capacitors
-    decoupling_paths = []
-    high_freq_caps = []
-    bulk_caps = []
-    
-    for path in paths:
-        if path.matches(is_capacitor(), suppress_errors=True):
-            decoupling_paths.append(path)
-            cap = path.components[0]
-            cap_value = cap.capacitance.__str__(cap.capacitance)
-            
-            # Categorize by capacitance value for proper decoupling analysis
-            if "nF" in cap_value or ("pF" in cap_value):
-                high_freq_caps.append(cap)
-                path.matches(has_package("0402"))  # High-freq caps use small packages
-                print("    ✓ High-frequency decoupling: " + cap.name + " (" + cap_value + ", 0402)")
-            elif "uF" in cap_value:
-                bulk_caps.append(cap)
-                # Bulk caps typically use larger packages
-                if "10uF" in cap_value or "22uF" in cap_value:
-                    path.matches(has_package("0805"))
-                    print("    ✓ Bulk decoupling: " + cap.name + " (" + cap_value + ", 0805)")
-                else:
-                    path.matches(has_package("0402"))
-                    print("    ✓ Medium decoupling: " + cap.name + " (" + cap_value + ", 0402)")
-    
-    # Validate decoupling strategy
-    check(len(high_freq_caps) >= 1, "Expected at least 1 high-frequency decoupling capacitor")
-    check(len(bulk_caps) >= 1, "Expected at least 1 bulk decoupling capacitor")
-    print("  Found " + str(len(high_freq_caps)) + " high-freq caps, " + str(len(bulk_caps)) + " bulk caps")
-    print("    ✓ Proper decoupling strategy validated")
+    return _check
 
 def check_bmi270_power_pins(module, inputs):
     """Verify BMI270 power pins are properly connected"""
@@ -302,38 +306,42 @@ def check_bmi270_interface_specific_paths(module, inputs):
                     path.matches(suppress_errors=True)  # Just ensure path is valid
 
 # Matcher functions for path validation
-def check_advanced_power_filtering(module, inputs):
-    """Advanced power filtering analysis using path.matches()"""
-    print("Advanced Power Filtering Analysis:")
-    graph = module.graph()
+def check_advanced_power_filtering():
+    """Factory function that returns an advanced power filtering checker"""
+    def _check(module, inputs):
+        """Advanced power filtering analysis using path.matches()"""
+        print("Advanced Power Filtering Analysis:")
+        graph = module.graph()
+        
+        # Use inputs to get actual net names dynamically
+        vdd_net = inputs["io_vdd"].NET.name
+        gnd_net = inputs["io_gnd"].NET.name
+        
+        paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=8)
+        
+        # Use path.matches() to identify different filtering patterns
+        single_cap_paths = []
+        dual_cap_paths = []
+        
+        for path in paths:
+            # Test for single capacitor paths
+            if path.matches(is_capacitor(), suppress_errors=True):
+                single_cap_paths.append(path)
+                cap = path.components[0]
+                cap_value = cap.capacitance.__str__(cap.capacitance)
+                print("  ✓ Single capacitor path: " + cap.name + " (" + cap_value + ")")
+                
+            # Test for dual capacitor filtering paths  
+            elif path.matches(is_capacitor(), is_capacitor(), suppress_errors=True):
+                dual_cap_paths.append(path)
+                caps = [c for c in path.components if c.type == "capacitor"]
+                cap_values = [c.capacitance.__str__(c.capacitance) for c in caps]
+                print("  ✓ Dual-capacitor filtering: " + str(cap_values))
+        
+        check(len(single_cap_paths) >= 2, "Expected at least 2 single capacitor decoupling paths")
+        print("  Found " + str(len(single_cap_paths)) + " single-cap paths, " + str(len(dual_cap_paths)) + " dual-cap paths")
     
-    # Use inputs to get actual net names dynamically
-    vdd_net = inputs["io_vdd"].NET.name
-    gnd_net = inputs["io_gnd"].NET.name
-    
-    paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=8)
-    
-    # Use path.matches() to identify different filtering patterns
-    single_cap_paths = []
-    dual_cap_paths = []
-    
-    for path in paths:
-        # Test for single capacitor paths
-        if path.matches(is_capacitor(), suppress_errors=True):
-            single_cap_paths.append(path)
-            cap = path.components[0]
-            cap_value = cap.capacitance.__str__(cap.capacitance)
-            print("  ✓ Single capacitor path: " + cap.name + " (" + cap_value + ")")
-            
-        # Test for dual capacitor filtering paths  
-        elif path.matches(is_capacitor(), is_capacitor(), suppress_errors=True):
-            dual_cap_paths.append(path)
-            caps = [c for c in path.components if c.type == "capacitor"]
-            cap_values = [c.capacitance.__str__(c.capacitance) for c in caps]
-            print("  ✓ Dual-capacitor filtering: " + str(cap_values))
-    
-    check(len(single_cap_paths) >= 2, "Expected at least 2 single capacitor decoupling paths")
-    print("  Found " + str(len(single_cap_paths)) + " single-cap paths, " + str(len(dual_cap_paths)) + " dual-cap paths")
+    return _check
 
 # Intentionally failing check:
 def check_complex_signal_chain(module, inputs):
@@ -426,12 +434,12 @@ TestBench(
         analyze_power_paths,
         analyze_signal_paths,
         check_path_connectivity,
-        check_power_decoupling,
+        ("check_power_decoupling", check_power_decoupling()),
         check_bmi270_power_pins,
         check_communication_interfaces,
         check_bmi270_interface_specific_paths,
         check_bmi270_power_domain_isolation,
-        check_advanced_power_filtering,
+        ("check_advanced_power_filtering", check_advanced_power_filtering()),
         check_complex_signal_chain,
     ],
 )
