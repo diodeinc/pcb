@@ -2,7 +2,7 @@
 source: crates/pcb/tests/tag.rs
 expression: output
 ---
-Command: pcb tag -v 1.2.0
+Command: pcb tag -v 1.2.0 -b TB0001
 Exit Code: 0
 
 --- STDOUT ---

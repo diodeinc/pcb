@@ -15,7 +15,7 @@ use std::path::Path;
 pub struct TagArgs {
     /// Board name (optional, uses default board if not specified)
     #[arg(short = 'b', long)]
-    pub board: Option<String>,
+    pub board: String,
 
     /// Version to tag (must be valid semantic version)
     #[arg(short = 'v', long, required = true)]
@@ -36,31 +36,19 @@ pub struct TagArgs {
 pub fn execute(args: TagArgs) -> Result<()> {
     let start_path = args.path.as_deref().unwrap_or(".");
     let workspace_info = get_workspace_info(&DefaultFileProvider, Path::new(start_path))?;
+    let board_name = args.board;
 
-    let board_name = match args.board {
-        Some(name) => {
-            if !workspace_info.boards.iter().any(|b| b.name == name) {
-                let available: Vec<_> = workspace_info
-                    .boards
-                    .iter()
-                    .map(|b| b.name.as_str())
-                    .collect();
-                anyhow::bail!(
-                    "Board '{name}' not found. Available: [{}]",
-                    available.join(", ")
-                );
-            }
-            name
-        }
-        None => workspace_info
-            .config
-            .as_ref()
-            .and_then(|c| c.default_board.clone())
-            .context(format!(
-                "No default board found in workspace {}",
-                workspace_info.root.display()
-            ))?,
-    };
+    if !workspace_info.boards.iter().any(|b| b.name == board_name) {
+        let available: Vec<_> = workspace_info
+            .boards
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
+        anyhow::bail!(
+            "Board '{board_name}' not found. Available: [{}]",
+            available.join(", ")
+        );
+    }
 
     let version = Version::parse(&args.version)
         .map_err(|_| anyhow::anyhow!("Invalid semantic version: '{}'", args.version))?;

@@ -29,7 +29,7 @@ fn test_pcb_tag_simple_workspace() {
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")
-        .snapshot_run("pcb", ["tag", "-v", "1.0.0"]);
+        .snapshot_run("pcb", ["tag", "-v", "1.0.0", "-b", "TB0001"]);
     assert_snapshot!("tag_simple_workspace", output);
 }
 
@@ -41,7 +41,7 @@ fn test_pcb_tag_invalid_version() {
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")
-        .snapshot_run("pcb", ["tag", "-v", "not-a-version"]);
+        .snapshot_run("pcb", ["tag", "-v", "not-a-version", "-b", "TB0001"]);
     assert_snapshot!("tag_invalid_version", output);
 }
 
@@ -54,7 +54,7 @@ fn test_pcb_tag_duplicate_tag() {
         .init_git()
         .commit("Initial commit")
         .tag("TB0001/v1.0.0") // Pre-existing tag
-        .snapshot_run("pcb", ["tag", "-v", "1.0.0"]);
+        .snapshot_run("pcb", ["tag", "-v", "1.0.0", "-b", "TB0001"]);
     assert_snapshot!("tag_duplicate_tag", output);
 }
 
@@ -67,7 +67,7 @@ fn test_pcb_tag_older_version_allowed() {
         .init_git()
         .commit("Initial commit")
         .tag("TB0001/v1.5.0") // Existing higher version
-        .snapshot_run("pcb", ["tag", "-v", "1.2.0"]);
+        .snapshot_run("pcb", ["tag", "-v", "1.2.0", "-b", "TB0001"]);
     assert_snapshot!("tag_older_version_allowed", output);
 }
 
