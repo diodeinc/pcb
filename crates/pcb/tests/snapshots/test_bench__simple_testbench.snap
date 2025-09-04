@@ -1,0 +1,19 @@
+---
+source: crates/pcb/tests/test_bench.rs
+expression: output
+---
+Command: pcb test simple_testbench.zen
+Exit Code: 0
+
+--- STDOUT ---
+┌────────┬────────────┬───────┬─────────────────────────┐
+│ Status ┆ TestBench  ┆ Case  ┆ Check                   │
+╞════════╪════════════╪═══════╪═════════════════════════╡
+│ ✓ PASS ┆ SimpleTest ┆ basic ┆ check_components_exist  │
+│ ✓ PASS ┆ SimpleTest ┆ basic ┆ check_power_connections │
+│ ✓ PASS ┆ SimpleTest ┆ basic ┆ check_path_finding      │
+└────────┴────────────┴───────┴─────────────────────────┘
+
+✓ All 3 tests passed
+--- STDERR ---
+[1m[32m✓ SimpleTest[0m: 3 checks passed across 1 case

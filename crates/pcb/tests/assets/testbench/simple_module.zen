@@ -1,0 +1,23 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Ground", "Power")
+
+Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.8/generics/Capacitor.zen")
+
+vcc = io("VCC", Power)
+gnd = io("GND", Ground)
+
+Resistor(
+    name="R1",
+    value="10kOhm",
+    package="0603",
+    P1=vcc,
+    P2=gnd,
+)
+
+Capacitor(
+    name="C1",
+    value="100nF",
+    package="0402",
+    P1=vcc,
+    P2=gnd,
+)

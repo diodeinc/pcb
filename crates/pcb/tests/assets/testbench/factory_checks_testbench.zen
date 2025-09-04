@@ -1,0 +1,80 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("matchers.zen", "is_resistor", "is_capacitor")
+
+SimpleModule = Module("simple_module.zen")
+
+def regular_check(module, inputs):
+    """Regular function - should show as 'regular_check'"""
+    components = module.components()
+    check(len(components) >= 1, "Expected at least 1 component")
+
+def create_resistor_checker():
+    """Factory function that returns a check function"""
+    def _check(module, inputs):
+        """Check resistor properties"""
+        components = module.components()
+        resistors = [c for c in components.values() if c.type == "resistor"]
+        check(len(resistors) >= 1, "Expected at least 1 resistor")
+        
+        for resistor in resistors:
+            resistance_str = resistor.resistance.__str__(resistor.resistance)
+            print("Resistor " + resistor.name + " has resistance: " + resistance_str)
+    
+    return _check
+
+def create_capacitor_checker(min_capacitance="1nF"):
+    """Factory function with parameters that returns a check function"""
+    def _check(module, inputs):
+        """Check capacitor properties"""
+        components = module.components()
+        capacitors = [c for c in components.values() if c.type == "capacitor"]
+        check(len(capacitors) >= 1, "Expected at least 1 capacitor")
+        
+        for capacitor in capacitors:
+            cap_str = capacitor.capacitance.__str__(capacitor.capacitance)
+            check("F" in cap_str, "Capacitance should contain 'F'")
+    
+    return _check
+
+def create_path_checker():
+    """Factory function for path testing"""
+    def _check(module, inputs):
+        """Check paths using matchers"""
+        graph = module.graph()
+        nets = module.nets()
+        
+        # Find power nets
+        vcc_net = None
+        gnd_net = None
+        for net_name in nets.keys():
+            if "VCC" in net_name:
+                vcc_net = net_name
+            elif "GND" in net_name:
+                gnd_net = net_name
+        
+        paths = graph.paths(start=vcc_net, end=gnd_net, max_depth=5)
+        
+        # Use matchers to classify paths
+        for path in paths:
+            if path.matches(is_resistor(), suppress_errors=True):
+                resistor = path.components[0]
+                print("Found resistor path through: " + resistor.name)
+    
+    return _check
+
+TestBench(
+    name="FactoryTest",
+    module=SimpleModule,
+    test_cases={
+        "factory_demo": {
+            "VCC": Power("VCC_3V3"),
+            "GND": Ground("GND"),
+        },
+    },
+    checks=[
+        regular_check,  # Regular function
+        ("check_resistors", create_resistor_checker()),  # Factory with custom name
+        ("check_capacitors", create_capacitor_checker("1nF")),  # Factory with params + custom name
+        ("check_paths", create_path_checker()),  # Another factory with custom name
+    ],
+)

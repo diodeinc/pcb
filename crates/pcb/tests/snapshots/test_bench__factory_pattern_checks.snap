@@ -1,0 +1,22 @@
+---
+source: crates/pcb/tests/test_bench.rs
+expression: output
+---
+Command: pcb test factory_checks_testbench.zen
+Exit Code: 0
+
+--- STDOUT ---
+┌────────┬─────────────┬──────────────┬──────────────────┐
+│ Status ┆ TestBench   ┆ Case         ┆ Check            │
+╞════════╪═════════════╪══════════════╪══════════════════╡
+│ ✓ PASS ┆ FactoryTest ┆ factory_demo ┆ regular_check    │
+│ ✓ PASS ┆ FactoryTest ┆ factory_demo ┆ check_resistors  │
+│ ✓ PASS ┆ FactoryTest ┆ factory_demo ┆ check_capacitors │
+│ ✓ PASS ┆ FactoryTest ┆ factory_demo ┆ check_paths      │
+└────────┴─────────────┴──────────────┴──────────────────┘
+
+✓ All 4 tests passed
+--- STDERR ---
+Resistor R has resistance: 10k
+Found resistor path through: R
+[1m[32m✓ FactoryTest[0m: 4 checks passed across 1 case

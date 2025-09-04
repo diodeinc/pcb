@@ -1,0 +1,72 @@
+load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("matchers.zen", "is_resistor", "is_capacitor")
+
+SimpleModule = Module("simple_module.zen")
+
+def check_components_exist(module, inputs):
+    """Verify basic components exist"""
+    components = module.components()
+    check(len(components) >= 2, "Expected at least 2 components")
+    
+    # Check specific components exist
+    check("R1.R" in components, "Resistor R1 not found")
+    check("C1.C" in components, "Capacitor C1 not found")
+
+def check_power_connections(module, inputs):
+    """Verify power connections"""
+    nets = module.nets()
+    vcc_nets = [name for name in nets.keys() if "VCC" in name]
+    gnd_nets = [name for name in nets.keys() if "GND" in name]
+    
+    check(len(vcc_nets) > 0, "No VCC nets found")
+    check(len(gnd_nets) > 0, "No GND nets found")
+
+def check_path_finding(module, inputs):
+    """Test basic path finding between power nets"""
+    graph = module.graph()
+    nets = module.nets()
+    
+    # Find VCC and GND nets
+    vcc_net = None
+    gnd_net = None
+    for net_name in nets.keys():
+        if "VCC" in net_name:
+            vcc_net = net_name
+        elif "GND" in net_name:
+            gnd_net = net_name
+    
+    check(vcc_net != None, "VCC net not found")
+    check(gnd_net != None, "GND net not found")
+    
+    # Find paths between VCC and GND
+    paths = graph.paths(start=vcc_net, end=gnd_net, max_depth=5)
+    check(len(paths) >= 1, "Expected at least 1 path from VCC to GND")
+    
+    # Check that we can match components in paths using matchers
+    resistor_paths = []
+    capacitor_paths = []
+    
+    for path in paths:
+        if path.matches(is_resistor(), suppress_errors=True):
+            resistor_paths.append(path)
+        elif path.matches(is_capacitor(), suppress_errors=True):
+            capacitor_paths.append(path)
+    
+    check(len(resistor_paths) >= 1, "Expected at least one resistor path")
+    check(len(capacitor_paths) >= 1, "Expected at least one capacitor path")
+
+TestBench(
+    name="SimpleTest",
+    module=SimpleModule,
+    test_cases={
+        "basic": {
+            "VCC": Power("VCC_3V3"),
+            "GND": Ground("GND"),
+        },
+    },
+    checks=[
+        check_components_exist,
+        check_power_connections,
+        check_path_finding,
+    ],
+)
