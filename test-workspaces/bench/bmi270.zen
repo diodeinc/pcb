@@ -335,6 +335,23 @@ def check_advanced_power_filtering(module, inputs):
     check(len(single_cap_paths) >= 2, "Expected at least 2 single capacitor decoupling paths")
     print("  Found " + str(len(single_cap_paths)) + " single-cap paths, " + str(len(dual_cap_paths)) + " dual-cap paths")
 
+# Intentionally failing check:
+def check_complex_signal_chain(module, inputs):
+    """Validate complex signal processing chains using sequential path.matches()"""
+    print("Complex Signal Chain Analysis:")
+    graph = module.graph()
+    vdd_net = inputs["io_vdd"].NET.name
+    # Find complex I2C signal conditioning paths
+    # Example: VDD → Pull-up R → I2C line → BMI270 → Internal processing → Output
+    complex_paths = graph.paths(start=vdd_net, end=("BMI270.BMI270", "INT1"), max_depth=8)
+
+    for path in complex_paths:
+        # Intentional mismatch to test 3-level spans
+        path.matches(
+            is_resistor()    # This will fail since paths contain capacitors
+        )
+    print("  ✓ Signal chain analysis completed")
+
 def check_bmi270_power_domain_isolation(module, inputs):
     """Validate BMI270 dual power domain isolation using path matching"""
     print("BMI270 Power Domain Isolation Analysis:")
@@ -415,5 +432,6 @@ TestBench(
         check_bmi270_interface_specific_paths,
         check_bmi270_power_domain_isolation,
         check_advanced_power_filtering,
+        check_complex_signal_chain,
     ],
 )

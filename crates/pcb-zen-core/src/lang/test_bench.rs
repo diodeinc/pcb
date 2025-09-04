@@ -268,66 +268,79 @@ fn execute_check<'v>(
         .map(|n| format!(" case '{}'", n))
         .unwrap_or_default();
 
+    // Validate that check_func is actually callable before trying to call it
+    if check_func.get_type() != "function" && check_func.get_type() != "native_function" {
+        return Err(anyhow::anyhow!(
+            "Check function '{}' is not callable (type: {})",
+            check_func.to_string(),
+            check_func.get_type()
+        ));
+    }
+
     match eval.eval_function(check_func, args, &[]) {
         Ok(result) => {
-            let ctx = eval.context_value().unwrap();
-            let test_bench_location = eval.call_stack_top_location().unwrap();
+            // Only add diagnostics if context is available
+            if let (Some(ctx), Some(test_bench_location)) =
+                (eval.context_value(), eval.call_stack_top_location())
+            {
+                // Create structured test result for tracking
+                let test_result = crate::lang::error::BenchTestResult {
+                    test_bench_name: test_bench_name.to_string(),
+                    case_name: case_name.map(|s| s.to_string()),
+                    check_name: check_name.to_string(),
+                    file_path: test_bench_location.filename().to_string(),
+                    passed: true,
+                };
 
-            // Create structured test result for tracking
-            let test_result = crate::lang::error::BenchTestResult {
-                test_bench_name: test_bench_name.to_string(),
-                case_name: case_name.map(|s| s.to_string()),
-                check_name: check_name.to_string(),
-                file_path: test_bench_location.filename().to_string(),
-                passed: true,
-            };
-
-            // Add as a non-error diagnostic for collection purposes
-            ctx.add_diagnostic(Diagnostic {
-                path: test_bench_location.filename().to_string(),
-                span: Some(test_bench_location.resolve_span()),
-                severity: EvalSeverity::Advice,
-                body: format!(
-                    "TestBench '{}'{} check '{}' passed",
-                    test_bench_name, case_suffix, check_name
-                ),
-                call_stack: Some(eval.call_stack().clone()),
-                child: None,
-                source_error: Some(std::sync::Arc::new(test_result.into())),
-            });
+                // Add as a non-error diagnostic for collection purposes
+                ctx.add_diagnostic(Diagnostic {
+                    path: test_bench_location.filename().to_string(),
+                    span: Some(test_bench_location.resolve_span()),
+                    severity: EvalSeverity::Advice,
+                    body: format!(
+                        "TestBench '{}'{} check '{}' passed",
+                        test_bench_name, case_suffix, check_name
+                    ),
+                    call_stack: Some(eval.call_stack().clone()),
+                    child: None,
+                    source_error: Some(std::sync::Arc::new(test_result.into())),
+                });
+            }
 
             Ok((result, false)) // Success, no failure
         }
         Err(e) => {
-            let ctx = eval.context_value().unwrap();
-            let test_bench_location = eval.call_stack_top_location().unwrap();
+            // Only add diagnostics if context is available
+            if let (Some(ctx), Some(test_bench_location)) =
+                (eval.context_value(), eval.call_stack_top_location())
+            {
+                // Convert error to diagnostic - this will handle DiagnosticError chains properly
+                let child_diagnostic = Diagnostic::from(e);
+                let child = Some(Box::new(child_diagnostic));
 
-            // Convert error to diagnostic - this will handle DiagnosticError chains properly
-            let child_diagnostic = Diagnostic::from(e);
-            let child = Some(Box::new(child_diagnostic));
+                // Create structured test result for tracking
+                let test_result = crate::lang::error::BenchTestResult {
+                    test_bench_name: test_bench_name.to_string(),
+                    case_name: case_name.map(|s| s.to_string()),
+                    check_name: check_name.to_string(),
+                    file_path: test_bench_location.filename().to_string(),
+                    passed: false,
+                };
 
-            // Create structured test result for tracking
-            let test_result = crate::lang::error::BenchTestResult {
-                test_bench_name: test_bench_name.to_string(),
-                case_name: case_name.map(|s| s.to_string()),
-                check_name: check_name.to_string(),
-                file_path: test_bench_location.filename().to_string(),
-                passed: false,
-            };
-
-            // Parent diagnostic for TestBench context
-            ctx.add_diagnostic(Diagnostic {
-                path: test_bench_location.filename().to_string(),
-                span: Some(test_bench_location.resolve_span()),
-                severity: EvalSeverity::Error,
-                body: format!(
-                    "TestBench '{}'{} check '{}' failed",
-                    test_bench_name, case_suffix, check_name
-                ),
-                call_stack: Some(eval.call_stack().clone()),
-                child,
-                source_error: Some(Arc::new(test_result.into())),
-            });
+                // Parent diagnostic for TestBench context
+                ctx.add_diagnostic(Diagnostic {
+                    path: test_bench_location.filename().to_string(),
+                    span: Some(test_bench_location.resolve_span()),
+                    severity: EvalSeverity::Error,
+                    body: format!(
+                        "TestBench '{}'{} check '{}' failed",
+                        test_bench_name, case_suffix, check_name
+                    ),
+                    call_stack: Some(eval.call_stack().clone()),
+                    child,
+                    source_error: Some(Arc::new(test_result.into())),
+                });
+            }
 
             Ok((eval.heap().alloc(false).to_value(), true)) // Failure
         }
