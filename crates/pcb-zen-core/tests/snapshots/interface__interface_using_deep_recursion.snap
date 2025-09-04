@@ -18,8 +18,8 @@ expression: output
                 "fields": {
                   "net": {
                     "Net": {
-                      "id": 2,
-                      "name": "LEVEL1",
+                      "id": 4,
+                      "name": "L3_LEVEL2_LEVEL1_LEVEL1",
                       "properties": {}
                     }
                   }

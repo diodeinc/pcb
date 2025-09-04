@@ -112,6 +112,18 @@ fn interface_instance_factory<'v>(value: Value<'v>, _heap: &'v Heap) -> anyhow::
     }
 }
 
+/// Recursively unregister all nets within an interface instance
+fn unregister_interface_nets<'v>(interface: &InterfaceValue<'v>, ctx: &ContextValue) {
+    for (_field_name, field_value) in interface.fields.iter() {
+        if let Some(net_val) = field_value.downcast_ref::<NetValue<'v>>() {
+            ctx.unregister_net(net_val.id());
+        } else if let Some(nested_interface) = field_value.downcast_ref::<InterfaceValue<'v>>() {
+            // Recursively unregister nets in nested interfaces
+            unregister_interface_nets(nested_interface, ctx);
+        }
+    }
+}
+
 /// Clone a Net template with proper prefix application and name generation
 fn clone_net_template<'v>(
     template: Value<'v>,
@@ -242,18 +254,22 @@ where
                 None => field_name.to_ascii_uppercase(),
             };
 
-            // For interface factories, use extended prefix; for other types use original prefix
-            let prefix_to_use = if spec_value.downcast_ref::<InterfaceFactory>().is_some()
+            // For interface factories and instances, use extended prefix
+            if spec_value.downcast_ref::<InterfaceFactory>().is_some()
                 || spec_value
                     .downcast_ref::<FrozenInterfaceFactory>()
                     .is_some()
             {
-                Some(next_prefix.as_str())
+                instantiate_interface(spec_value, Some(next_prefix.as_str()), heap, eval)?
+            } else if spec_value.downcast_ref::<InterfaceValue>().is_some()
+                || spec_value.downcast_ref::<FrozenInterfaceValue>().is_some()
+            {
+                // Interface instance - extract factory and re-instantiate with extended prefix
+                let factory_val = interface_instance_factory(spec_value, heap)?;
+                instantiate_interface(factory_val, Some(next_prefix.as_str()), heap, eval)?
             } else {
-                prefix_opt
-            };
-
-            instantiate_interface(spec_value, prefix_to_use, heap, eval)?
+                instantiate_interface(spec_value, prefix_opt, heap, eval)?
+            }
         };
 
         fields.insert(field_name.clone(), field_value);
@@ -551,26 +567,20 @@ where
                 } else if spec_type == "InterfaceValue" {
                     // Interface instance - extract factory and instantiate
                     let factory_val = interface_instance_factory(spec_value, heap)?;
-                    instantiate_interface(
-                        factory_val,
-                        instance_name_opt
-                            .as_ref()
-                            .map(|p| make_prefix(p, name))
-                            .as_deref(),
-                        heap,
-                        eval,
-                    )?
+                    // Build prefix: use instance name + field name, or just field name if no instance name
+                    let prefix_to_use = match instance_name_opt.as_ref() {
+                        Some(p) => Some(make_prefix(p, name)),
+                        None => Some(name.to_ascii_uppercase()),
+                    };
+                    instantiate_interface(factory_val, prefix_to_use.as_deref(), heap, eval)?
                 } else {
                     // Interface factories - delegate to instantiate_interface
-                    instantiate_interface(
-                        spec_value,
-                        instance_name_opt
-                            .as_ref()
-                            .map(|p| make_prefix(p, name))
-                            .as_deref(),
-                        heap,
-                        eval,
-                    )?
+                    // Build prefix: use instance name + field name, or just field name if no instance name
+                    let prefix_to_use = match instance_name_opt.as_ref() {
+                        Some(p) => Some(make_prefix(p, name)),
+                        None => Some(name.to_ascii_uppercase()),
+                    };
+                    instantiate_interface(spec_value, prefix_to_use.as_deref(), heap, eval)?
                 }
             };
 
@@ -907,6 +917,20 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                                 .and_then(|e| e.downcast_ref::<ContextValue>())
                             {
                                 ctx.unregister_net(net_val.id());
+                            }
+                        }
+                    } else if type_str == "InterfaceValue" {
+                        // If an Interface instance was provided as a template field,
+                        // recursively unregister all nets inside it
+                        if let Some(interface_val) =
+                            field_value.downcast_ref::<InterfaceValue<'v>>()
+                        {
+                            if let Some(ctx) = eval
+                                .module()
+                                .extra_value()
+                                .and_then(|e| e.downcast_ref::<ContextValue>())
+                            {
+                                unregister_interface_nets(interface_val, ctx);
                             }
                         }
                     }
