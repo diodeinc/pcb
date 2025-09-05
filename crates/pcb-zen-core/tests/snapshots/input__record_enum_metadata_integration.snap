@@ -1,0 +1,14 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Latest temperature (auto-deserialized): record[TempRecord](value=100.0, unit=TempEnum("C"), tolerance=0.0)
+Latest temp value: 100.0
+Latest temp unit: TempEnum("C")
+All temperatures: [record[TempRecord](value=25.0, unit=TempEnum("K"), tolerance=0.1), record[TempRecord](value=100.0, unit=TempEnum("C"), tolerance=0.0)]
+Number of temperatures: 2
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

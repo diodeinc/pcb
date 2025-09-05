@@ -20,3 +20,6 @@ pub(crate) mod file;
 
 // Add public error module and Result alias
 pub mod error;
+
+// Metadata system for global mutable state
+pub mod metadata;

@@ -1,0 +1,21 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Record Serialize/Deserialize Test ===
+
+1. Testing simple record...
+Person: record[PersonRecord](name="Alice", age=30, active=True) -> 183 chars -> record[PersonRecord](name="Alice", age=30, active=True)
+
+2. Testing record with enum fields...
+Item: record[ItemRecord](id=42, name="Test Item", type=TypeEnum("TYPE_B"), value=99.5)
+Restored: record[ItemRecord](id=42, name="Test Item", type=TypeEnum("TYPE_B"), value=99.5)
+
+3. Testing record with defaults...
+Default config: record[ConfigRecord](enabled=False, count=1, name="unnamed") -> record[ConfigRecord](enabled=False, count=1, name="unnamed")
+✓ Records serialize/deserialize correctly
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

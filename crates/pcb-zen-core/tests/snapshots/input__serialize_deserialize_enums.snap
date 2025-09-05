@@ -1,0 +1,45 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Enum Serialize/Deserialize Test ===
+
+1. Testing basic enum...
+Enum: ColorEnum("RED") -> {
+  "Enum": {
+    "variant": "RED"
+  }
+} -> ColorEnum("RED")
+Enum: ColorEnum("GREEN") -> {
+  "Enum": {
+    "variant": "GREEN"
+  }
+} -> ColorEnum("GREEN")
+Enum: ColorEnum("BLUE") -> {
+  "Enum": {
+    "variant": "BLUE"
+  }
+} -> ColorEnum("BLUE")
+
+2. Testing enum with numbers...
+Status: StatusEnum("STATUS_0") -> {
+  "Enum": {
+    "variant": "STATUS_0"
+  }
+} -> StatusEnum("STATUS_0")
+Status: StatusEnum("STATUS_1") -> {
+  "Enum": {
+    "variant": "STATUS_1"
+  }
+} -> StatusEnum("STATUS_1")
+Status: StatusEnum("STATUS_2") -> {
+  "Enum": {
+    "variant": "STATUS_2"
+  }
+} -> StatusEnum("STATUS_2")
+✓ Enums serialize/deserialize correctly
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

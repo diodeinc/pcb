@@ -1,0 +1,41 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+=== Enhanced Metadata Coverage Test ===
+
+1. Testing multiple containers of same type...
+Container 1 latest string: container1_value2
+Container 2 latest string: container2_value1
+Container 1 int count: 2
+Container 2 int count: 1
+
+2. Testing mixed record and enum metadata...
+Task count: 3
+Latest task title: Release
+Latest task priority: PriorityEnum("CRITICAL")
+Latest task completed: False
+Latest task points: 5
+
+3. Testing complex record with multiple enum fields...
+Total requests: 3
+Latest request ID: 1003
+Latest request type: TypeEnum("EXCHANGE")
+Latest request status: StatusEnum("PENDING")
+
+4. Testing empty metadata containers...
+Empty string latest: None
+Empty string list length: 0
+Empty task latest: None
+Empty task list length: 0
+
+✓ Enhanced metadata coverage complete!
+✓ Multiple containers work independently
+✓ Complex records with multiple enums supported
+✓ Empty containers handle None correctly
+✓ All metadata operations preserve type information
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]
