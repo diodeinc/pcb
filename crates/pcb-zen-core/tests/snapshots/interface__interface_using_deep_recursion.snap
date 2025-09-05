@@ -19,7 +19,7 @@ expression: output
                   "net": {
                     "Net": {
                       "id": 4,
-                      "name": "L3_LEVEL2_LEVEL1_LEVEL1",
+                      "name": "L3_LEVEL2_LEVEL1",
                       "properties": {}
                     }
                   }

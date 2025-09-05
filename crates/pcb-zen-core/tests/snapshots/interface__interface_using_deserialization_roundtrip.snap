@@ -15,7 +15,7 @@ expression: output
                   "net": {
                     "Net": {
                       "id": 8,
-                      "name": "DEEP_LEVEL2_LEVEL1_LEVEL1",
+                      "name": "DEEP_LEVEL2_LEVEL1",
                       "properties": {}
                     }
                   }
@@ -80,7 +80,7 @@ expression: output
                   "net": {
                     "Net": {
                       "id": 8,
-                      "name": "DEEP_LEVEL2_LEVEL1_LEVEL1",
+                      "name": "DEEP_LEVEL2_LEVEL1",
                       "properties": {}
                     }
                   }
@@ -133,8 +133,8 @@ expression: output
   }
 }
 === Verification ===
-Original display: Level3(level2=using(Level2(level1=using(Level1(net=using(Net { name: "DEEP_LEVEL2_LEVEL1_LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))), uart=using(Uart(RX=Net { name: "DEEP_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "DEEP_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
-Deserialized display: Level3(level2=using(Level2(level1=using(Level1(net=using(Net { name: "DEEP_LEVEL2_LEVEL1_LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))), uart=using(Uart(RX=Net { name: "DEEP_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "DEEP_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Original display: Level3(level2=using(Level2(level1=using(Level1(net=using(Net { name: "DEEP_LEVEL2_LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))), uart=using(Uart(RX=Net { name: "DEEP_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "DEEP_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Deserialized display: Level3(level2=using(Level2(level1=using(Level1(net=using(Net { name: "DEEP_LEVEL2_LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))), uart=using(Uart(RX=Net { name: "DEEP_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "DEEP_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
 === Factory Integrity Check ===
 New from original: {
   "Interface": {
@@ -148,7 +148,7 @@ New from original: {
                   "net": {
                     "Net": {
                       "id": 11,
-                      "name": "NEW_FROM_ORIGINAL_LEVEL2_LEVEL1_LEVEL1",
+                      "name": "NEW_FROM_ORIGINAL_LEVEL2_LEVEL1",
                       "properties": {}
                     }
                   }
@@ -212,7 +212,7 @@ New from deserialized: {
                   "net": {
                     "Net": {
                       "id": 14,
-                      "name": "NEW_FROM_DESERIALIZED_LEVEL2_LEVEL1_LEVEL1",
+                      "name": "NEW_FROM_DESERIALIZED_LEVEL2_LEVEL1",
                       "properties": {}
                     }
                   }

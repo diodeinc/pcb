@@ -1,0 +1,15 @@
+---
+source: crates/pcb-zen-core/tests/interface.rs
+expression: output
+---
+_INNER
+LEVEL1
+LEVEL2_LEVEL1
+L1
+L2_LEVEL1
+L3_LEVEL2_LEVEL1
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

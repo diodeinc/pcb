@@ -3,13 +3,13 @@ source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
 === Test 1: Net promotion ===
-Power -> Net: Net { name: "VCC", id: "<ID>", symbol: Value(NoneType) }
+Power -> Net: Net { name: "_VCC", id: "<ID>", symbol: Value(NoneType) }
 === Test 2: Interface promotion ===
 Usart -> Uart: Uart(RX=Net { name: "UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })
 === Test 3: Deep transitive promotion ===
-Level3 -> Level2: Level2(level1=using(Level1(net=using(Net { name: "LEVEL2_LEVEL1_L1", id: "<ID>", symbol: Value(NoneType) }))))
-Level3 -> Level1: Level1(net=using(Net { name: "LEVEL2_LEVEL1_L1", id: "<ID>", symbol: Value(NoneType) }))
-Level3 -> Net: Net { name: "LEVEL2_LEVEL1_L1", id: "<ID>", symbol: Value(NoneType) }
+Level3 -> Level2: Level2(level1=using(Level1(net=using(Net { name: "LEVEL2_LEVEL1", id: "<ID>", symbol: Value(NoneType) }))))
+Level3 -> Level1: Level1(net=using(Net { name: "LEVEL2_LEVEL1", id: "<ID>", symbol: Value(NoneType) }))
+Level3 -> Net: Net { name: "LEVEL2_LEVEL1", id: "<ID>", symbol: Value(NoneType) }
 Module {
     name: "<root>",
     source: "test.zen",

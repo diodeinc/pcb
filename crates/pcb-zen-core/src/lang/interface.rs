@@ -19,11 +19,6 @@ use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::{generate_net_id, NetValue};
 
-/// Helper to build a field prefix string ("PARENT_FIELD")
-fn field_prefix(parent: &str, field: &str) -> String {
-    format!("{}_{}", parent, field.to_ascii_uppercase())
-}
-
 /// Unified helper to allocate a net with proper registration
 fn alloc_net<'v>(
     name_hint: &str,
@@ -44,6 +39,24 @@ fn alloc_net<'v>(
     };
 
     Ok(heap.alloc(NetValue::new(net_id, final_name, props, symbol)))
+}
+
+/// Helper to check if an interface factory has exactly one net field
+fn is_single_net_interface<'v, V>(factory: &InterfaceFactoryGen<V>) -> bool
+where
+    V: ValueLike<'v> + InterfaceCell,
+{
+    if factory.fields.len() != 1 {
+        return false;
+    }
+
+    // Check if the single field is a Net type
+    if let Some((_field_name, field_spec)) = factory.fields.iter().next() {
+        let field_type = field_spec.to_value().get_type();
+        field_type == "Net" || field_type == "NetType"
+    } else {
+        false
+    }
 }
 
 /// Get promotion key for any value
@@ -156,6 +169,7 @@ fn clone_net_template<'v>(
     template: Value<'v>,
     prefix_opt: Option<&str>,
     field_name_opt: Option<&str>,
+    suffix_net_name: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
@@ -163,7 +177,7 @@ fn clone_net_template<'v>(
     let (template_name, template_props, template_symbol) =
         if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
             (
-                net_val.original_name().to_string(),
+                net_val.original_name.as_deref(),
                 net_val.properties().clone(),
                 net_val.symbol().to_value(),
             )
@@ -172,7 +186,7 @@ fn clone_net_template<'v>(
             let copied_template = copy_value(template, heap)?;
             if let Some(net_val) = copied_template.downcast_ref::<NetValue<'v>>() {
                 (
-                    net_val.original_name().to_string(),
+                    net_val.original_name.as_deref(),
                     net_val.properties().clone(),
                     net_val.symbol().to_value(),
                 )
@@ -183,22 +197,7 @@ fn clone_net_template<'v>(
             }
         };
 
-    // Apply prefix to template name
-    let is_placeholder =
-        template_name.starts_with('N') && template_name[1..].chars().all(|c| c.is_ascii_digit());
-    let net_name = if !template_name.is_empty() && !is_placeholder {
-        prefix_opt
-            .map(|p| format!("{p}_{template_name}"))
-            .unwrap_or(template_name)
-    } else {
-        // For placeholder nets, use field name if available, otherwise fallback
-        match (prefix_opt, field_name_opt) {
-            (Some(p), Some(f)) => field_prefix(p, f),
-            (Some(p), None) => p.to_string(),
-            (None, Some(f)) => f.to_ascii_uppercase(),
-            (None, None) => "NET".to_string(),
-        }
-    };
+    let net_name = net_name(prefix_opt, template_name, field_name_opt, suffix_net_name);
 
     // Copy properties and symbol
     let mut new_props = SmallMap::new();
@@ -210,12 +209,33 @@ fn clone_net_template<'v>(
     alloc_net(&net_name, new_props, copied_symbol, heap, eval)
 }
 
+fn net_name(
+    prefix_opt: Option<&str>,
+    template_name: Option<&str>,
+    field_name: Option<&str>,
+    suffix_net_name: bool,
+) -> String {
+    let prefix = prefix_opt.unwrap_or_default().to_ascii_uppercase();
+    let suffix_net_name = suffix_net_name || prefix_opt.is_none();
+    let net_name = match (template_name, field_name) {
+        (Some(template_name), _) => template_name,
+        (None, Some(field_name)) => field_name,
+        (None, None) => "NET",
+    };
+    if suffix_net_name {
+        format!("{}_{}", prefix, net_name.to_ascii_uppercase())
+    } else {
+        prefix
+    }
+}
+
 /// Create a single field value from a spec, handling all field types uniformly
 fn create_field_value<'v>(
     field_name: &str,
     field_spec: Value<'v>,
     provided_value: Option<Value<'v>>,
     instance_prefix: Option<&str>,
+    suffix_net_name: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
@@ -238,24 +258,29 @@ fn create_field_value<'v>(
     }
 
     // Handle different field types
+    let prefix_to_use = match instance_prefix {
+        Some(p) => Some(format!("{p}_{}", field_name.to_ascii_uppercase())),
+        None => Some(field_name.to_ascii_uppercase()),
+    };
     if field_spec.get_type() == "InterfaceValue" {
         // Interface instance - extract factory and re-instantiate with extended prefix
         let factory_val = interface_instance_factory(field_spec, heap)?;
-        let prefix_to_use = match instance_prefix {
-            Some(p) => Some(field_prefix(p, field_name)),
-            None => Some(field_name.to_ascii_uppercase()),
-        };
         instantiate_interface(factory_val, prefix_to_use.as_deref(), heap, eval)
     } else if field_spec.get_type() == "Net" {
         // For Net templates, use clone_net_template directly with field name
-        clone_net_template(field_spec, instance_prefix, Some(field_name), heap, eval)
+        clone_net_template(
+            field_spec,
+            instance_prefix,
+            Some(field_name),
+            suffix_net_name,
+            heap,
+            eval,
+        )
+    } else if field_spec.get_type() == "NetType" {
+        let net_name = net_name(instance_prefix, None, Some(field_name), suffix_net_name);
+        alloc_net(&net_name, SmallMap::new(), Value::new_none(), heap, eval)
     } else {
-        // For NetType and InterfaceFactory, delegate to instantiate_interface
-        // For NetType: preserve instance prefix case, uppercase field name
-        let prefix_to_use = match instance_prefix {
-            Some(p) => Some(format!("{p}_{}", field_name.to_ascii_uppercase())),
-            None => Some(field_name.to_ascii_uppercase()),
-        };
+        // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, prefix_to_use.as_deref(), heap, eval)
     }
 }
@@ -281,6 +306,7 @@ where
 
     // Build the field map, recursively creating values where necessary
     let mut fields = SmallMap::with_capacity(factory.fields.len());
+    let single_net_if = is_single_net_interface(factory);
 
     for (field_name, field_spec) in factory.fields.iter() {
         let field_value = create_field_value(
@@ -288,6 +314,7 @@ where
             field_spec.to_value(),
             provided_values.get(field_name).copied(),
             instance_prefix,
+            !single_net_if,
             heap,
             eval,
         )?;
@@ -915,16 +942,9 @@ fn instantiate_interface<'v>(
     }
 
     match spec.get_type() {
-        "NetType" => {
-            let net_name = prefix_opt
-                .map(|p| p.to_ascii_uppercase())
-                .unwrap_or_else(|| "NET".to_string());
-            alloc_net(&net_name, SmallMap::new(), Value::new_none(), heap, eval)
-        }
-        "Net" => clone_net_template(spec, prefix_opt, None, heap, eval),
         "InterfaceValue" => copy_value(spec, heap),
         _ => Err(anyhow::anyhow!(
-            "internal error: expected spec to be InterfaceFactory/Net/InterfaceValue/NetType, got {}",
+            "internal error: expected spec to be InterfaceValue, got {}",
             spec.get_type()
         )),
     }
@@ -1051,7 +1071,7 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
             r#"
 Power1 = interface(vcc = Net)
 instance1 = Power1()
-assert_eq(instance1.vcc.name, "VCC")
+assert_eq(instance1.vcc.name, "_VCC")
 "#,
         );
 
@@ -1060,7 +1080,7 @@ assert_eq(instance1.vcc.name, "VCC")
             r#"
 Power2 = interface(vcc = Net("MY_VCC"))
 instance2 = Power2()
-assert_eq(instance2.vcc.name, "MY_VCC")
+assert_eq(instance2.vcc.name, "_MY_VCC")
 "#,
         );
 
@@ -1070,7 +1090,7 @@ assert_eq(instance2.vcc.name, "MY_VCC")
 Power3 = interface(vcc = Net())
 instance3 = Power3()
 # We want Net() to behave the same as Net type
-assert_eq(instance3.vcc.name, "VCC")
+assert_eq(instance3.vcc.name, "_VCC")
 "#,
         );
 
@@ -1079,7 +1099,7 @@ assert_eq(instance3.vcc.name, "VCC")
             r#"
 Power4 = interface(vcc = Net)
 instance4 = Power4("PWR")
-assert_eq(instance4.vcc.name, "PWR_VCC")
+assert_eq(instance4.vcc.name, "PWR")
 "#,
         );
 
@@ -1089,7 +1109,7 @@ assert_eq(instance4.vcc.name, "PWR_VCC")
 Power5 = interface(vcc = Net())
 instance5 = Power5("PWR")
 # Net() should behave the same as Net type with prefix
-assert_eq(instance5.vcc.name, "PWR_VCC")
+assert_eq(instance5.vcc.name, "PWR")
 "#,
         );
     }
@@ -1119,7 +1139,7 @@ Power = interface(
 )
 
 power = Power()
-assert_eq(power.NET.name, "VCC")
+assert_eq(power.NET.name, "_VCC")
 "#,
         );
     }
@@ -1142,11 +1162,11 @@ Power = interface(
 
 # Create instance with prefix
 power = Power("VCC")
-assert_eq(power.NET.name, "VCC_NET")
+assert_eq(power.NET.name, "VCC")
 
 # Create instance without prefix
 power_default = Power()
-assert_eq(power_default.NET.name, "NET")
+assert_eq(power_default.NET.name, "_NET")
 "#,
         );
     }

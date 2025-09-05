@@ -51,7 +51,7 @@ pub fn reset_net_id_counter() {
 pub struct NetValueGen<V> {
     id: NetId,
     name: String,
-    original_name: Option<String>, // The name originally requested before deduplication
+    pub original_name: Option<String>, // The name originally requested before deduplication
     properties: SmallMap<String, V>,
     symbol: V, // The Symbol value if one was provided (None if not)
 }

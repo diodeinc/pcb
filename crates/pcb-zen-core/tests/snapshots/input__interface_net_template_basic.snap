@@ -15,7 +15,7 @@ Module {
                 connections: {
                     "1": FrozenValue(
                         Net {
-                            name: "PREFIX_MYTEST",
+                            name: "PREFIX",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,
