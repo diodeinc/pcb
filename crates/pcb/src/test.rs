@@ -176,7 +176,7 @@ fn output_tap(results: &[TestResult]) {
         let case_suffix = result
             .case_name
             .as_ref()
-            .map(|name| format!(" case '{}'", name))
+            .map(|name| format!(" case '{name}'"))
             .unwrap_or_default();
 
         println!(
