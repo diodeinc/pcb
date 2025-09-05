@@ -136,7 +136,7 @@ impl CircuitGraph {
         &self,
         start: PortId,
         goal: PortId,
-        max_len: usize,
+        max_len: Option<usize>,
         mut on_path: F,
     ) {
         let p_count = self.port_factors.len();
@@ -152,15 +152,17 @@ impl CircuitGraph {
             g: &CircuitGraph,
             cur: PortId,
             goal: PortId,
-            max_len: usize,
+            max_len: Option<usize>,
             vis_p: &mut FixedBitSet,
             vis_f: &mut FixedBitSet,
             path: &mut SmallVec<[PortId; 64]>,
             factors: &mut SmallVec<[FactorId; 64]>,
             on_path: &mut F,
         ) {
-            if path.len() > max_len {
-                return;
+            if let Some(limit) = max_len {
+                if path.len() > limit {
+                    return;
+                }
             }
             if cur == goal {
                 on_path(path.as_slice(), factors.as_slice());

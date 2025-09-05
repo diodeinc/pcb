@@ -171,7 +171,7 @@ where
         let max_depth = args_map
             .get(&heap.alloc_str("max_depth"))
             .and_then(|v| v.unpack_i32())
-            .unwrap_or(10) as usize;
+            .map(|d| d as usize);
 
         // Validate required arguments
         let start = start.ok_or_else(|| {
