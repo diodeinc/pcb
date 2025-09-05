@@ -70,7 +70,7 @@ pub fn test(
     zen_path: &Path,
     offline: bool,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
-) -> Vec<pcb_zen_core::lang::error::BenchTestResult> {
+) -> (Vec<pcb_zen_core::lang::error::BenchTestResult>, bool) {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     // Show spinner while testing
@@ -95,7 +95,10 @@ pub fn test(
     // Apply all passes including rendering
     diagnostics.apply_passes(&passes);
 
-    test_results
+    // Determine if there were any diagnostics errors (non-test failures)
+    let had_errors = diagnostics.has_errors();
+
+    (test_results, had_errors)
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
@@ -115,15 +118,19 @@ pub fn execute(args: TestArgs) -> Result<()> {
     }
 
     let mut all_test_results: Vec<pcb_zen_core::lang::error::BenchTestResult> = Vec::new();
+    let mut has_errors = false;
 
     // Process each .zen file
     for zen_path in zen_paths {
-        let results = test(
+        let (results, had_errors_file) = test(
             &zen_path,
             args.offline,
             create_diagnostics_passes(&args.deny),
         );
         all_test_results.extend(results);
+        if had_errors_file {
+            has_errors = true;
+        }
     }
 
     // Convert to output format
@@ -147,7 +154,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
 
     // Exit with error if there were failures
     let has_failures = all_test_results.iter().any(|r| !r.passed);
-    if has_failures {
+    if has_failures || has_errors {
         anyhow::bail!("Test run failed");
     }
 
