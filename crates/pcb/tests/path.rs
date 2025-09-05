@@ -174,7 +174,7 @@ gnd = Net("GND")
 
     // Parse JSON output to get staging directory
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"]
+    let staging_dir = json["release"]["staging_directory"]
         .as_str()
         .expect("Missing staging_directory in JSON");
 

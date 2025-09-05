@@ -680,7 +680,7 @@ mod tests {
         );
 
         // Test non-existent alias
-        assert!(aliases.get("nonexistent").is_none());
+        assert!(!aliases.contains_key("nonexistent"));
     }
 
     #[test]

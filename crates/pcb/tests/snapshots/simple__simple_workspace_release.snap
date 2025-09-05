@@ -7,8 +7,43 @@ Exit Code: 0
 
 --- STDOUT ---
 {
-  "archive": "<TEMP_DIR>/.pcb/releases/TestBoard-unknown.zip",
-  "staging_directory": "<TEMP_DIR>/.pcb/releases/TestBoard-unknown",
-  "version": "unknown"
+  "git": {
+    "describe": "unknown",
+    "hash": "unknown",
+    "workspace": "<TEMP_DIR>"
+  },
+  "release": {
+    "created_at": "<TIMESTAMP>",
+    "git_version": "unknown",
+    "layout_path": "<TEMP_DIR>/boards/build/TestBoard",
+    "schema_version": "1",
+    "source_only": false,
+    "staging_directory": "<TEMP_DIR>/.pcb/releases/TestBoard-unknown",
+    "workspace_root": "<TEMP_DIR>",
+    "zen_file": "boards/TestBoard.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "<CLI_VERSION>",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
 }
 --- STDERR ---
+✓ Release information gathered
+✓ Copying source files and dependencies
+✓ Validating build from staged sources
+✓ Copying layout files
+✓ Copying documentation
+✓ Substituting version variables
+✓ Generating design BOM
+✓ Generating gerber files
+✓ Generating pick-and-place file
+✓ Generating assembly drawings
+✓ Generating ODB++ files
+✓ Generating 3D models
+✓ Writing release metadata
+✓ Creating release archive
+✓ Release unknown staged successfully
+Release Summary
+Archive: <TEMP_DIR>/.pcb/releases/TestBoard-unknown.zip
