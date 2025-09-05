@@ -15,7 +15,7 @@ expression: sb.snapshot_dir(staging_dir)
     "layout_path": "<TEMP_DIR>/boards/build/LocalPathTest",
     "schema_version": "1",
     "source_only": true,
-    "staging_directory": "<TEMP_DIR>/.pcb/releases/LocalPathTest/unknown",
+    "staging_directory": "<TEMP_DIR>/.pcb/releases/LocalPathTest-unknown",
     "workspace_root": "<TEMP_DIR>",
     "zen_file": "boards/LocalPathTest.zen"
   },

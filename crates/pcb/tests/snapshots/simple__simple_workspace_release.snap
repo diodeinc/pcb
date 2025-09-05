@@ -1,14 +1,14 @@
 ---
 source: crates/pcb/tests/simple.rs
-expression: "sb.snapshot_run(\"pcb\", [\"release\", \"boards/TestBoard.zen\", \"-f\", \"json\"])"
+expression: "sb.snapshot_run(\"pcb\", [\"release\", \"-b\", \"TestBoard\", \"-f\", \"json\"])"
 ---
-Command: pcb release boards/TestBoard.zen -f json
+Command: pcb release -b TestBoard -f json
 Exit Code: 0
 
 --- STDOUT ---
 {
-  "archive": "<TEMP_DIR>/.pcb/releases/TestBoard/unknown.zip",
-  "staging_directory": "<TEMP_DIR>/.pcb/releases/TestBoard/unknown",
+  "archive": "<TEMP_DIR>/.pcb/releases/TestBoard-unknown.zip",
+  "staging_directory": "<TEMP_DIR>/.pcb/releases/TestBoard-unknown",
   "version": "unknown"
 }
 --- STDERR ---

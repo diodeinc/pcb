@@ -112,7 +112,7 @@ jobs:
         run: |
           # Test workspace with pcb.toml and workspace-relative loads
           cargo run -- bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
-          cargo run -- release test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
+          cargo run -- release -b WorkspaceTestBoard test-workspaces/with-pcb-toml
           cargo run -- vendor test-workspaces/with-pcb-toml
           cargo run -- build test-workspaces/with-pcb-toml/boards --offline
 

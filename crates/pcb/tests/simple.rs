@@ -105,6 +105,13 @@ const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 name = "simple_workspace"
 "#;
 
+const TEST_BOARD_PCB_TOML: &str = r#"
+[board]
+name = "TestBoard"
+path = "TestBoard.zen"
+description = "Main test board for validation"
+"#;
+
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_build_should_fail_without_fixture() {
@@ -146,6 +153,7 @@ fn test_pcb_release_simple_workspace() {
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/pcb.toml", TEST_BOARD_PCB_TOML)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN);
 
     // Test BOM first
@@ -157,7 +165,7 @@ fn test_pcb_release_simple_workspace() {
     // Test release
     assert_snapshot!(
         "simple_workspace_release",
-        sb.snapshot_run("pcb", ["release", "boards/TestBoard.zen", "-f", "json"])
+        sb.snapshot_run("pcb", ["release", "-b", "TestBoard", "-f", "json"])
     );
 }
 

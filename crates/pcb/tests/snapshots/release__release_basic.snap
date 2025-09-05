@@ -15,7 +15,7 @@ expression: sb.snapshot_dir(staging_dir)
     "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
     "schema_version": "1",
     "source_only": true,
-    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard/unknown",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/TestBoard-unknown",
     "workspace_root": "<TEMP_DIR>/src",
     "zen_file": "boards/TestBoard.zen"
   },
@@ -46,6 +46,14 @@ Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3.NET, P2 = 
 LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = led_ctrl)
 
 Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 = led_ctrl.NET)
+=== src/boards/pcb.toml
+
+[board]
+name = "TestBoard"
+path = "TestBoard.zen"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v0.2.4"
 === src/modules/LedModule.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
