@@ -224,21 +224,7 @@ fn gather_release_info(
     let workspace_info = get_workspace_info(&DefaultFileProvider, Path::new(start_path))?;
 
     // Find the zen file for the given board
-    let board_info = workspace_info
-        .boards
-        .iter()
-        .find(|b| b.name == board_name)
-        .ok_or_else(|| {
-            let available: Vec<_> = workspace_info
-                .boards
-                .iter()
-                .map(|b| b.name.as_str())
-                .collect();
-            anyhow::anyhow!(
-                "Board '{board_name}' not found. Available: [{}]",
-                available.join(", ")
-            )
-        })?;
+    let board_info = workspace_info.find_board_by_name(&board_name)?;
 
     let zen_path = board_info.absolute_zen_path(&workspace_info.root);
 

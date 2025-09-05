@@ -414,6 +414,20 @@ impl WorkspaceInfo {
             .find(|b| b.absolute_zen_path(&self.root) == canon)
             .map(|b| b.name.clone())
     }
+
+    /// Find a board by name, returning an error with available boards if not found
+    pub fn find_board_by_name(&self, board_name: &str) -> Result<&BoardInfo> {
+        self.boards
+            .iter()
+            .find(|b| b.name == board_name)
+            .ok_or_else(|| {
+                let available: Vec<_> = self.boards.iter().map(|b| b.name.as_str()).collect();
+                anyhow::anyhow!(
+                    "Board '{board_name}' not found. Available: [{}]",
+                    available.join(", ")
+                )
+            })
+    }
 }
 
 #[cfg(test)]

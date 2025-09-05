@@ -38,17 +38,8 @@ pub fn execute(args: TagArgs) -> Result<()> {
     let workspace_info = get_workspace_info(&DefaultFileProvider, Path::new(start_path))?;
     let board_name = args.board;
 
-    if !workspace_info.boards.iter().any(|b| b.name == board_name) {
-        let available: Vec<_> = workspace_info
-            .boards
-            .iter()
-            .map(|b| b.name.as_str())
-            .collect();
-        anyhow::bail!(
-            "Board '{board_name}' not found. Available: [{}]",
-            available.join(", ")
-        );
-    }
+    // Validate that the board exists
+    workspace_info.find_board_by_name(&board_name)?;
 
     let version = Version::parse(&args.version)
         .map_err(|_| anyhow::anyhow!("Invalid semantic version: '{}'", args.version))?;
