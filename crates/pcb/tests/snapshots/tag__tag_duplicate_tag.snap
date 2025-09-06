@@ -8,4 +8,8 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Error: Tag 'TB0001/v1.0.0' already exists
+✗ Checking tag doesn't exist failed
+Error: Checking tag doesn't exist failed
+
+Caused by:
+    Tag 'TB0001/v1.0.0' already exists

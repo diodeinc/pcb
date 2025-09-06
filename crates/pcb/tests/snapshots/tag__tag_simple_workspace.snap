@@ -6,5 +6,23 @@ Command: pcb tag -v 1.0.0 -b TB0001
 Exit Code: 0
 
 --- STDOUT ---
-✓ Created tag: TB0001/v1.0.0
+
 --- STDERR ---
+✓ Checking tag doesn't exist
+✓ Release information gathered
+✓ Copying source files and dependencies
+✓ Validating build from staged sources
+✓ Copying layout files
+✓ Copying documentation
+✓ Substituting version variables
+✓ Generating design BOM
+✓ Generating gerber files
+✓ Generating pick-and-place file
+✓ Generating assembly drawings
+✓ Generating ODB++ files
+✓ Generating 3D models
+✓ Writing release metadata
+✓ Creating release archive
+✓ Release <COMMIT_HASH> staged successfully
+✓ Creating git tag
+✓ Tag TB0001/v1.0.0 created successfully
