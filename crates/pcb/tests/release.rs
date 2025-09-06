@@ -55,6 +55,36 @@ name = "test_workspace"
 stdlib = "@github/diodeinc/stdlib:v0.2.4"
 "#;
 
+const BOARD_PCB_TOML: &str = r#"
+[board]
+name = "TestBoard"
+path = "TestBoard.zen"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v0.2.4"
+"#;
+
+const TB0001_BOARD_PCB_TOML: &str = r#"
+[board]
+name = "TB0001"
+path = "TB0001.zen"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v0.2.4"
+"#;
+
+const CASE_BOARD_PCB_TOML: &str = r#"
+[board]
+name = "CaseBoard"
+path = "CaseBoard.zen"
+"#;
+
+const TB0002_BOARD_PCB_TOML: &str = r#"
+[board]
+name = "TB0002"
+path = "TB0002.zen"
+"#;
+
 const SIMPLE_COMPONENT: &str = r#"
 value = config("value", str, default = "10kOhm")
 
@@ -97,6 +127,7 @@ fn test_pcb_release_source_only() {
         .seed_stdlib(&["v0.2.4"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
@@ -108,7 +139,8 @@ fn test_pcb_release_source_only() {
             cargo_bin!("pcb"),
             [
                 "release",
-                "boards/TestBoard.zen",
+                "--board",
+                "TestBoard",
                 "--source-only",
                 "-f",
                 "json",
@@ -119,7 +151,7 @@ fn test_pcb_release_source_only() {
 
     // Parse JSON output to get staging directory
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"]
+    let staging_dir = json["release"]["staging_directory"]
         .as_str()
         .expect("Missing staging_directory in JSON");
 
@@ -149,6 +181,7 @@ fn test_pcb_release_with_git() {
         .seed_kicad(&["9.0.0"])
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", TB0001_BOARD_PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TB0001.zen", TEST_BOARD_ZEN)
         .init_git()
@@ -158,7 +191,8 @@ fn test_pcb_release_with_git() {
             cargo_bin!("pcb"),
             [
                 "release",
-                "boards/TB0001.zen",
+                "--board",
+                "TB0001",
                 "--source-only",
                 "-f",
                 "json",
@@ -169,7 +203,7 @@ fn test_pcb_release_with_git() {
 
     // Parse JSON output to get staging directory and verify git version
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"].as_str().unwrap();
+    let staging_dir = json["release"]["staging_directory"].as_str().unwrap();
 
     let metadata_file = File::open(format!("{staging_dir}/metadata.json")).unwrap();
     let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
@@ -201,23 +235,24 @@ fn test_pcb_release_full() {
         .seed_stdlib(&["v0.2.4"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .hash_globs(&["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(&["layout/*", "3d/*"]);
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .ignore_globs(["layout/*", "3d/*"]);
 
     // Run full release with JSON output
     let output = sb
         .cmd(
             cargo_bin!("pcb"),
-            ["release", "boards/TestBoard.zen", "-f", "json"],
+            ["release", "--board", "TestBoard", "-f", "json"],
         )
         .read()
         .expect("Failed to run pcb release command");
 
     // Parse JSON output to get staging directory
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"]
+    let staging_dir = json["release"]["staging_directory"]
         .as_str()
         .expect("Missing staging_directory in JSON");
 
@@ -250,6 +285,7 @@ n2 = Net("N2")
     let output = sb
         .cwd("src")
         .ignore_globs(["layout/*"])
+        .write("boards/pcb.toml", CASE_BOARD_PCB_TOML)
         .write("boards/CaseBoard.zen", board_zen)
         .init_git()
         .commit("Initial commit")
@@ -258,7 +294,8 @@ n2 = Net("N2")
             cargo_bin!("pcb"),
             [
                 "release",
-                "boards/CaseBoard.zen",
+                "--board",
+                "CaseBoard",
                 "--source-only",
                 "-f",
                 "json",
@@ -269,7 +306,7 @@ n2 = Net("N2")
 
     // Parse JSON output to get staging directory
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"].as_str().unwrap();
+    let staging_dir = json["release"]["staging_directory"].as_str().unwrap();
 
     // Snapshot the build from release contents
     let build_ouput = sb.snapshot_run(
@@ -299,6 +336,7 @@ fn test_pcb_release_with_file() {
     const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", TB0002_BOARD_PCB_TOML)
         .write("modules/component.zen", SIMPLE_COMPONENT)
         .write("modules/test.kicad_mod", TEST_KICAD_MOD)
         .write("modules/datasheet.txt", DATASHEET_CONTENTS)
@@ -311,7 +349,8 @@ fn test_pcb_release_with_file() {
             cargo_bin!("pcb"),
             [
                 "release",
-                "boards/TB0002.zen",
+                "--board",
+                "TB0002",
                 "--source-only",
                 "-f",
                 "json",
@@ -322,7 +361,7 @@ fn test_pcb_release_with_file() {
 
     // Parse JSON output to get staging directory
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"]
+    let staging_dir = json["release"]["staging_directory"]
         .as_str()
         .expect("Missing staging_directory in JSON");
 

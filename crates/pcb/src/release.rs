@@ -5,8 +5,12 @@ use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_sch::generate_bom_entries;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
+use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::convert::ToSchematic;
+use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
+
+use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 use std::fs;
 use std::io::Write;
@@ -19,7 +23,6 @@ use zip::{write::FileOptions, ZipWriter};
 
 use crate::bom::write_bom_json;
 use crate::vendor::sync_tracked_files;
-use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -48,8 +51,21 @@ impl std::fmt::Display for ReleaseOutputFormat {
 
 #[derive(Args)]
 pub struct ReleaseArgs {
-    /// Path to .zen file to release
-    pub zen_path: PathBuf,
+    /// Board name to release
+    #[arg(
+        short = 'b',
+        long,
+        conflicts_with = "file",
+        required_unless_present = "file"
+    )]
+    pub board: Option<String>,
+
+    /// Path to .zen file to release (alternative to --board)
+    #[arg(long, conflicts_with = "board", required_unless_present = "board")]
+    pub file: Option<PathBuf>,
+
+    /// Optional path to start discovery from (defaults to current directory)
+    pub path: Option<String>,
 
     /// Output format
     #[arg(short, long, value_enum, default_value_t = ReleaseOutputFormat::Human)]
@@ -58,6 +74,14 @@ pub struct ReleaseArgs {
     /// Create source-only release without manufacturing artifacts
     #[arg(long)]
     pub source_only: bool,
+
+    /// Directory where the release .zip file will be placed (defaults to <workspace_root>/.pcb/releases)
+    #[arg(long)]
+    pub output_dir: Option<PathBuf>,
+
+    /// Name of the output .zip file (defaults to <board>-<version>.zip)
+    #[arg(long)]
+    pub output_name: Option<String>,
 }
 
 /// All information gathered during the release preparation phase
@@ -76,6 +100,10 @@ pub struct ReleaseInfo {
     pub schematic: pcb_sch::Schematic,
     /// Type of release being created
     pub kind: ReleaseKind,
+    /// Directory where the final .zip file will be placed
+    pub output_dir: PathBuf,
+    /// Name of the output .zip file
+    pub output_name: String,
 }
 
 type TaskFn = fn(&ReleaseInfo) -> Result<()>;
@@ -102,101 +130,134 @@ const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
 ];
 
 /// Execute a list of tasks with proper error handling and UI feedback
-fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], human: bool) -> Result<()> {
+fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)]) -> Result<()> {
     for (name, task) in tasks {
-        let maybe_spinner = human.then(|| Spinner::builder(*name).start());
+        let spinner = Spinner::builder(*name).start();
         let res = task(info);
 
-        if let Some(spinner) = maybe_spinner {
-            spinner.finish();
-        }
-
+        spinner.finish();
         match res {
-            Ok(()) if human => println!("{} {name}", "✓".green()),
+            Ok(()) => eprintln!("{} {name}", "✓".green()),
             Err(e) => {
-                if human {
-                    println!("{} {name} failed", "✗".red());
-                }
+                eprintln!("{} {name} failed", "✗".red());
                 return Err(e.context(format!("{name} failed")));
             }
-            _ => {}
         }
     }
     Ok(())
 }
 
 pub fn execute(args: ReleaseArgs) -> Result<()> {
-    let using_human = matches!(args.format, ReleaseOutputFormat::Human);
-
-    // Gather all release information
-    let release_info = if using_human {
+    // Gather all release information based on whether board or file was provided
+    let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
-        let info = gather_release_info(args.zen_path, args.source_only)?;
+        let info = if let Some(board_name) = args.board {
+            gather_release_info(
+                board_name,
+                args.path,
+                args.source_only,
+                args.output_dir,
+                args.output_name,
+            )?
+        } else if let Some(zen_file) = args.file {
+            gather_release_info_from_file(
+                zen_file,
+                args.source_only,
+                args.output_dir,
+                args.output_name,
+            )?
+        } else {
+            unreachable!("Either board or file must be provided due to clap validation")
+        };
         info_spinner.finish();
-        println!("{} Release information gathered", "✓".green());
-        display_release_info(&info, args.source_only);
+        eprintln!("{} Release information gathered", "✓".green());
         info
-    } else {
-        gather_release_info(args.zen_path, args.source_only)?
     };
 
     // Execute base tasks
-    execute_tasks(&release_info, BASE_TASKS, using_human)?;
+    execute_tasks(&release_info, BASE_TASKS)?;
 
     // Execute manufacturing tasks if full release
     if matches!(release_info.kind, ReleaseKind::Full) {
-        execute_tasks(&release_info, MANUFACTURING_TASKS, using_human)?;
+        execute_tasks(&release_info, MANUFACTURING_TASKS)?;
     }
 
     // Execute finalization tasks
-    execute_tasks(&release_info, FINALIZATION_TASKS, using_human)?;
+    execute_tasks(&release_info, FINALIZATION_TASKS)?;
 
     // Calculate archive path
     let zip_path = archive_zip_path(&release_info);
 
-    info!("Release {} staged successfully", release_info.version);
-
-    if using_human {
-        println!();
-        println!(
-            "{} {}",
-            "✓".green().bold(),
-            format!("Release {} staged successfully", release_info.version).bold()
-        );
-        println!("Archive: {}", zip_path.with_style(Style::Cyan));
-    } else {
-        let output = serde_json::json!({
-            "archive": zip_path,
-            "staging_directory": release_info.staging_dir,
-            "version": release_info.version,
-        });
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    }
+    eprintln!(
+        "{} {}",
+        "✓".green().bold(),
+        format!("Release {} staged successfully", release_info.version).bold()
+    );
+    display_release_info(&release_info, args.format);
+    eprintln!(
+        "Archive: {}",
+        zip_path.display().to_string().with_style(Style::Cyan)
+    );
 
     Ok(())
 }
 
-/// Gather all information needed for the release
-fn gather_release_info(zen_path: PathBuf, source_only: bool) -> Result<ReleaseInfo> {
+/// Gather all information needed for the release using board name discovery
+fn gather_release_info(
+    board_name: String,
+    path: Option<String>,
+    source_only: bool,
+    output_dir: Option<PathBuf>,
+    output_name: Option<String>,
+) -> Result<ReleaseInfo> {
     debug!("Starting release information gathering");
 
-    // Use common workspace info gathering
+    // Get workspace info using discovery
+    let start_path = path.as_deref().unwrap_or(".");
+    let workspace_info = get_workspace_info(&DefaultFileProvider, Path::new(start_path))?;
+
+    // Find the zen file for the given board
+    let board_info = workspace_info.find_board_by_name(&board_name)?;
+
+    let zen_path = board_info.absolute_zen_path(&workspace_info.root);
+
+    // Use common workspace info gathering with the found zen file
     let workspace = gather_workspace_info(zen_path, true)?;
 
-    // Get board name from workspace info with fallback to zen filename
-    let board_name = workspace.board_display_name();
+    // Use shared helper to build release info
+    build_release_info(workspace, board_name, source_only, output_dir, output_name)
+}
+
+/// Build ReleaseInfo from workspace info and other parameters
+fn build_release_info(
+    workspace: WorkspaceInfo,
+    board_name: String,
+    source_only: bool,
+    output_dir: Option<PathBuf>,
+    output_name: Option<String>,
+) -> Result<ReleaseInfo> {
     // Get version and git hash from git
     let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
 
-    // Create release staging directory in workspace root:
-    // Structure: {workspace_root}/.pcb/releases/{board_name}/{version}
-    // Example: /workspace/.pcb/releases/test_board/f20ac95-dirty
+    // Create release staging directory in workspace root with flat structure:
+    // Structure: {workspace_root}/.pcb/releases/{board_name}-{version}
+    // Example: /workspace/.pcb/releases/test_board-f20ac95-dirty
     let staging_dir = workspace
         .config
         .root
         .join(".pcb/releases")
-        .join(&board_name)
-        .join(&version);
+        .join(format!("{}-{}", board_name, version));
+
+    // Determine output directory and name
+    let default_output_dir = workspace.config.root.join(".pcb/releases");
+    let output_dir = output_dir.unwrap_or(default_output_dir);
+    let output_name = output_name.unwrap_or_else(|| {
+        if source_only {
+            format!("{}-{}.source.zip", board_name, version)
+        } else {
+            format!("{}-{}.zip", board_name, version)
+        }
+    });
 
     // Delete existing staging dir and recreate
     if staging_dir.exists() {
@@ -228,36 +289,99 @@ fn gather_release_info(zen_path: PathBuf, source_only: bool) -> Result<ReleaseIn
         layout_path,
         schematic,
         kind,
+        output_dir,
+        output_name,
     })
 }
 
+/// Gather all information needed for the release using direct zen file path
+fn gather_release_info_from_file(
+    zen_file_path: PathBuf,
+    source_only: bool,
+    output_dir: Option<PathBuf>,
+    output_name: Option<String>,
+) -> Result<ReleaseInfo> {
+    debug!(
+        "Starting release information gathering from file: {}",
+        zen_file_path.display()
+    );
+
+    // Use common workspace info gathering with the zen file path
+    let workspace = gather_workspace_info(zen_file_path, true)?;
+
+    // Get board name from workspace or fallback to zen file stem
+    let board_name = workspace.board_display_name();
+
+    build_release_info(workspace, board_name, source_only, output_dir, output_name)
+}
+
 /// Display all the gathered release information
-fn display_release_info(info: &ReleaseInfo, _source_only: bool) {
-    println!();
+fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
     let release_type = match info.kind {
         ReleaseKind::SourceOnly => "Source-Only Release",
         ReleaseKind::Full => "Full Release",
     };
-    println!(
+    eprintln!(
         "{}",
-        format!("{release_type} Metadata")
-            .with_style(Style::Blue)
-            .bold()
+        "Release Summary".to_string().with_style(Style::Blue).bold()
     );
 
-    // Create and display the metadata that will be saved
-    let metadata = create_metadata_json(info);
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&metadata).unwrap_or_default()
-    );
+    match format {
+        ReleaseOutputFormat::Human => {
+            let mut table = comfy_table::Table::new();
+            table
+                .load_preset(comfy_table::presets::UTF8_BORDERS_ONLY)
+                .set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
 
-    info!(
-        "Release info gathered - zen: {}, workspace: {}, version: {}",
-        info.workspace.zen_path.display(),
-        info.workspace.root().display(),
-        info.version
-    );
+            // Add release information
+            table.add_row(vec!["Release Type", release_type]);
+            table.add_row(vec!["Version", &info.version]);
+            table.add_row(vec![
+                "Git Hash",
+                &info.git_hash[..8.min(info.git_hash.len())],
+            ]); // Show short hash
+
+            // Add file paths (relative to make them shorter)
+            let zen_file = info
+                .workspace
+                .zen_path
+                .strip_prefix(info.workspace.root())
+                .unwrap_or(&info.workspace.zen_path)
+                .display()
+                .to_string();
+            table.add_row(vec!["Zen File", &zen_file]);
+
+            let staging_dir = info
+                .staging_dir
+                .strip_prefix(info.workspace.root())
+                .unwrap_or(&info.staging_dir)
+                .display()
+                .to_string();
+            table.add_row(vec!["Staging Dir", &staging_dir]);
+
+            // Add system info
+            table.add_row(vec!["Platform", std::env::consts::OS]);
+            table.add_row(vec!["Architecture", std::env::consts::ARCH]);
+            table.add_row(vec!["CLI Version", env!("CARGO_PKG_VERSION")]);
+
+            // Add user and timestamp
+            let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
+            table.add_row(vec!["Created By", &user]);
+
+            let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            table.add_row(vec!["Created At", &timestamp]);
+
+            println!("{table}");
+        }
+        ReleaseOutputFormat::Json => {
+            // Create and display the metadata that will be saved
+            let metadata = create_metadata_json(info);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&metadata).unwrap_or_default()
+            );
+        }
+    }
 }
 
 /// Create the metadata JSON object (shared between display and file writing)
@@ -622,17 +746,19 @@ fn write_metadata(info: &ReleaseInfo) -> Result<()> {
     Ok(())
 }
 
-fn archive_zip_path(info: &ReleaseInfo) -> String {
-    if matches!(info.kind, ReleaseKind::SourceOnly) {
-        format!("{}.source.zip", info.staging_dir.display())
-    } else {
-        format!("{}.zip", info.staging_dir.display())
-    }
+fn archive_zip_path(info: &ReleaseInfo) -> PathBuf {
+    info.output_dir.join(&info.output_name)
 }
 
 /// Create zip archive of release staging directory
 fn zip_release(info: &ReleaseInfo) -> Result<()> {
     let zip_path = archive_zip_path(info);
+
+    // Ensure output directory exists
+    if let Some(parent) = zip_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let zip_file = fs::File::create(&zip_path)?;
     let mut zip = ZipWriter::new(zip_file);
     add_directory_to_zip(&mut zip, &info.staging_dir, &info.staging_dir)?;

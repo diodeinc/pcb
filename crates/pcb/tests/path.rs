@@ -9,6 +9,12 @@ const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 name = "simple_workspace"
 "#;
 
+const LOCAL_PATH_TEST_BOARD_PCB_TOML: &str = r#"
+[board]
+name = "LocalPathTest" 
+path = "LocalPathTest.zen"
+"#;
+
 const PATH_MODULE_ZEN: &str = r#"
 config_path = Path("module_config.toml", allow_not_exist = True) # this file doesn't exist
 data_path = Path("module_data.json")
@@ -139,7 +145,8 @@ gnd = Net("GND")
     )
     .write("boards/existing.toml", "# This file exists")
     .write("config/settings.json", r#"{"debug": true}"#) // Make config dir exist
-    .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML);
+    .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
+    .write("boards/pcb.toml", LOCAL_PATH_TEST_BOARD_PCB_TOML);
 
     // Build should succeed with mixed existing/non-existing paths
     assert_snapshot!(
@@ -155,7 +162,8 @@ gnd = Net("GND")
             cargo_bin!("pcb"),
             [
                 "release",
-                "boards/LocalPathTest.zen",
+                "--board",
+                "LocalPathTest",
                 "--source-only",
                 "-f",
                 "json",
@@ -166,7 +174,7 @@ gnd = Net("GND")
 
     // Parse JSON output to get staging directory
     let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["staging_directory"]
+    let staging_dir = json["release"]["staging_directory"]
         .as_str()
         .expect("Missing staging_directory in JSON");
 
