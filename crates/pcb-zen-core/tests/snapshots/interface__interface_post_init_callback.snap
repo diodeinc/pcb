@@ -2,9 +2,9 @@
 source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
-Validating power interface: MAIN
+Validating power interface: MAIN_VCC
 Power validation: PASS
-Validating power interface: CPU
+Validating power interface: CPU_VCC
 Power validation: PASS
 --- Serialized JSON ---
 {
@@ -13,7 +13,7 @@ Power validation: PASS
       "net": {
         "Net": {
           "id": 2,
-          "name": "MAIN",
+          "name": "MAIN_VCC",
           "properties": {}
         }
       }

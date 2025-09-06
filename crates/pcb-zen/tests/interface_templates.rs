@@ -30,11 +30,10 @@ Component(
     assert!(result.diagnostics.is_empty(), "Should have no errors");
 
     // The netlist output should contain our net with the proper name
-    // For single-net interfaces, the instance name becomes the net name directly
     let netlist = result.output.unwrap();
     assert!(
-        netlist.contains("PREFIX"),
-        "Should contain PREFIX net (single-net interface uses instance name directly)"
+        netlist.contains("PREFIX_MYTEST"),
+        "Should contain PREFIX_MYTEST net"
     );
 }
 
@@ -235,13 +234,6 @@ Component(
     assert!(result.diagnostics.is_empty(), "Should have no errors");
 
     let netlist = result.output.unwrap();
-    // For single-net interfaces, the instance name becomes the net name directly
-    assert!(
-        netlist.contains("A"),
-        "Should contain A net (single-net interface uses instance name directly)"
-    );
-    assert!(
-        netlist.contains("B"),
-        "Should contain B net (single-net interface uses instance name directly)"
-    );
+    assert!(netlist.contains("A_SHARED"), "Should contain A_SHARED net");
+    assert!(netlist.contains("B_SHARED"), "Should contain B_SHARED net");
 }
