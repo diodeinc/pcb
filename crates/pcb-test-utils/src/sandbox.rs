@@ -420,6 +420,12 @@ impl Sandbox {
             .replace_all(&result, r#""hash": "<GIT_HASH>""#)
             .to_string();
 
+        // Sanitize git commit hashes in release output (e.g., "Release c634658-dirty staged successfully")
+        let release_hash_pattern = Regex::new(r"Release [a-f0-9]{7,8}(-dirty)? staged").unwrap();
+        result = release_hash_pattern
+            .replace_all(&result, "Release <COMMIT_HASH> staged")
+            .to_string();
+
         // Sanitize system information that varies across platforms
         let arch_pattern = Regex::new(r#""arch":\s*"[^"]+""#).unwrap();
         result = arch_pattern

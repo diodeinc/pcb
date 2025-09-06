@@ -38,6 +38,7 @@ pub enum ReleaseOutputFormat {
     #[value(name = "human")]
     Human,
     Json,
+    None,
 }
 
 impl std::fmt::Display for ReleaseOutputFormat {
@@ -45,6 +46,7 @@ impl std::fmt::Display for ReleaseOutputFormat {
         match self {
             ReleaseOutputFormat::Human => write!(f, "human"),
             ReleaseOutputFormat::Json => write!(f, "json"),
+            ReleaseOutputFormat::None => write!(f, "none"),
         }
     }
 }
@@ -193,11 +195,15 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         "✓".green().bold(),
         format!("Release {} staged successfully", release_info.version).bold()
     );
-    display_release_info(&release_info, args.format);
-    eprintln!(
-        "Archive: {}",
-        zip_path.display().to_string().with_style(Style::Cyan)
-    );
+    display_release_info(&release_info, args.format.clone());
+
+    // Only show archive path for Human format
+    if !matches!(args.format, ReleaseOutputFormat::None) {
+        eprintln!(
+            "Archive: {}",
+            zip_path.display().to_string().with_style(Style::Cyan)
+        );
+    }
 
     Ok(())
 }
@@ -321,13 +327,12 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
         ReleaseKind::SourceOnly => "Source-Only Release",
         ReleaseKind::Full => "Full Release",
     };
-    eprintln!(
-        "{}",
-        "Release Summary".to_string().with_style(Style::Blue).bold()
-    );
-
     match format {
         ReleaseOutputFormat::Human => {
+            eprintln!(
+                "{}",
+                "Release Summary".to_string().with_style(Style::Blue).bold()
+            );
             let mut table = comfy_table::Table::new();
             table
                 .load_preset(comfy_table::presets::UTF8_BORDERS_ONLY)
@@ -374,6 +379,10 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
             println!("{table}");
         }
         ReleaseOutputFormat::Json => {
+            eprintln!(
+                "{}",
+                "Release Summary".to_string().with_style(Style::Blue).bold()
+            );
             // Create and display the metadata that will be saved
             let metadata = create_metadata_json(info);
             println!(
@@ -381,6 +390,7 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
                 serde_json::to_string_pretty(&metadata).unwrap_or_default()
             );
         }
+        ReleaseOutputFormat::None => {}
     }
 }
 
@@ -709,10 +719,16 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Use offline mode since all dependencies should be vendored
-    let eval = pcb_zen::run(&staged_zen_path, true, pcb_zen::EvalMode::Build);
+    // Use build function with strict settings - offline mode and deny warnings
+    let mut has_errors = false;
+    let _schematic = crate::build::build(
+        &staged_zen_path,
+        true, // offline mode since all dependencies should be vendored
+        crate::build::create_diagnostics_passes(&["warnings".to_string()]), // deny all warnings
+        &mut has_errors,
+    );
 
-    if !eval.is_success() {
+    if has_errors {
         anyhow::bail!(
             "Build validation failed for staged zen file: {}",
             staged_zen_path.display()

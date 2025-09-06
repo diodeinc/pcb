@@ -25,6 +25,7 @@ internal_net = Net("INTERNAL")
 fn test_pcb_tag_simple_workspace() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
+        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
@@ -37,6 +38,7 @@ fn test_pcb_tag_simple_workspace() {
 fn test_pcb_tag_invalid_version() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
+        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
@@ -49,6 +51,7 @@ fn test_pcb_tag_invalid_version() {
 fn test_pcb_tag_duplicate_tag() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
+        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
@@ -62,6 +65,7 @@ fn test_pcb_tag_duplicate_tag() {
 fn test_pcb_tag_older_version_allowed() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
+        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
@@ -75,6 +79,7 @@ fn test_pcb_tag_older_version_allowed() {
 fn test_pcb_tag_invalid_board() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.4"])
+        .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
