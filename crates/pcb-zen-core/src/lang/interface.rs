@@ -20,6 +20,46 @@ use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::{generate_net_id, NetValue};
 use crate::lang::validation::validate_identifier_name;
 
+/// Unified helper to allocate a net with proper registration
+fn alloc_net<'v>(
+    name_hint: &str,
+    props: SmallMap<String, Value<'v>>,
+    symbol: Value<'v>,
+    heap: &'v Heap,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Value<'v>> {
+    let net_id = generate_net_id();
+    let final_name = if let Some(ctx) = eval
+        .module()
+        .extra_value()
+        .and_then(|e| e.downcast_ref::<ContextValue>())
+    {
+        ctx.register_net(net_id, name_hint)?
+    } else {
+        name_hint.to_owned()
+    };
+
+    Ok(heap.alloc(NetValue::new(net_id, final_name, props, symbol)))
+}
+
+/// Helper to check if an interface factory has exactly one net field
+fn is_single_net_interface<'v, V>(factory: &InterfaceFactoryGen<V>) -> bool
+where
+    V: ValueLike<'v> + InterfaceCell,
+{
+    if factory.fields.len() != 1 {
+        return false;
+    }
+
+    // Check if the single field is a Net type
+    if let Some((_field_name, field_spec)) = factory.fields.iter().next() {
+        let field_type = field_spec.to_value().get_type();
+        field_type == "Net" || field_type == "NetType"
+    } else {
+        false
+    }
+}
+
 /// Get promotion key for any value
 pub fn get_promotion_key(value: Value) -> anyhow::Result<String> {
     let value_type = value.get_type();
@@ -113,11 +153,24 @@ fn interface_instance_factory<'v>(value: Value<'v>, _heap: &'v Heap) -> anyhow::
     }
 }
 
+/// Recursively unregister all nets within an interface instance
+fn unregister_interface_nets<'v>(interface: &InterfaceValue<'v>, ctx: &ContextValue) {
+    for (_field_name, field_value) in interface.fields.iter() {
+        if let Some(net_val) = field_value.downcast_ref::<NetValue<'v>>() {
+            ctx.unregister_net(net_val.id());
+        } else if let Some(nested_interface) = field_value.downcast_ref::<InterfaceValue<'v>>() {
+            // Recursively unregister nets in nested interfaces
+            unregister_interface_nets(nested_interface, ctx);
+        }
+    }
+}
+
 /// Clone a Net template with proper prefix application and name generation
 fn clone_net_template<'v>(
     template: Value<'v>,
     prefix_opt: Option<&str>,
     field_name_opt: Option<&str>,
+    suffix_net_name: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
@@ -125,7 +178,7 @@ fn clone_net_template<'v>(
     let (template_name, template_props, template_symbol) =
         if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
             (
-                net_val.original_name().to_string(),
+                net_val.original_name.as_deref(),
                 net_val.properties().clone(),
                 net_val.symbol().to_value(),
             )
@@ -134,7 +187,7 @@ fn clone_net_template<'v>(
             let copied_template = copy_value(template, heap)?;
             if let Some(net_val) = copied_template.downcast_ref::<NetValue<'v>>() {
                 (
-                    net_val.original_name().to_string(),
+                    net_val.original_name.as_deref(),
                     net_val.properties().clone(),
                     net_val.symbol().to_value(),
                 )
@@ -145,33 +198,7 @@ fn clone_net_template<'v>(
             }
         };
 
-    // Apply prefix to template name
-    let is_placeholder =
-        template_name.starts_with('N') && template_name[1..].chars().all(|c| c.is_ascii_digit());
-    let net_name = if !template_name.is_empty() && !is_placeholder {
-        prefix_opt
-            .map(|p| format!("{p}_{template_name}"))
-            .unwrap_or(template_name)
-    } else {
-        // For placeholder nets, use field name if available, otherwise fallback
-        match (prefix_opt, field_name_opt) {
-            (Some(p), Some(f)) => format!("{}_{}", p, f.to_ascii_uppercase()),
-            (Some(p), None) => p.to_string(),
-            (None, Some(f)) => f.to_ascii_uppercase(),
-            (None, None) => "NET".to_string(),
-        }
-    };
-
-    let net_id = generate_net_id();
-    let final_name = if let Some(ctx) = eval
-        .module()
-        .extra_value()
-        .and_then(|e| e.downcast_ref::<ContextValue>())
-    {
-        ctx.register_net(net_id, &net_name)?
-    } else {
-        net_name
-    };
+    let net_name = net_name(prefix_opt, template_name, field_name_opt, suffix_net_name);
 
     // Copy properties and symbol
     let mut new_props = SmallMap::new();
@@ -180,87 +207,123 @@ fn clone_net_template<'v>(
     }
     let copied_symbol = copy_value(template_symbol, heap)?;
 
-    Ok(heap.alloc(NetValue::new(net_id, final_name, new_props, copied_symbol)))
+    alloc_net(&net_name, new_props, copied_symbol, heap, eval)
 }
 
-/// Generic helper to instantiate from any interface factory (frozen or unfrozen)
-fn instantiate_from_factory<'v, V>(
+fn net_name(
+    prefix_opt: Option<&str>,
+    template_name: Option<&str>,
+    field_name: Option<&str>,
+    suffix_net_name: bool,
+) -> String {
+    let prefix = prefix_opt.unwrap_or_default().to_ascii_uppercase();
+    let suffix_net_name = suffix_net_name || prefix_opt.is_none();
+    let net_name = match (template_name, field_name) {
+        (Some(template_name), _) => template_name,
+        (None, Some(field_name)) => field_name,
+        (None, None) => "NET",
+    };
+    if suffix_net_name {
+        format!("{}_{}", prefix, net_name.to_ascii_uppercase())
+    } else {
+        prefix
+    }
+}
+
+/// Create a single field value from a spec, handling all field types uniformly
+fn create_field_value<'v>(
+    field_name: &str,
+    field_spec: Value<'v>,
+    provided_value: Option<Value<'v>>,
+    instance_prefix: Option<&str>,
+    suffix_net_name: bool,
+    heap: &'v Heap,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Value<'v>> {
+    if let Some(provided) = provided_value {
+        // Value supplied by the caller - use it directly (validation should be done by caller)
+        return Ok(provided);
+    }
+
+    // Handle field() specifications specially - extract default value
+    if field_spec.get_type() == "field" {
+        return if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
+            Ok(field_obj.default().unwrap().to_value())
+        } else if let Some(field_obj) =
+            field_spec.downcast_ref::<FieldGen<starlark::values::FrozenValue>>()
+        {
+            Ok(field_obj.default().unwrap().to_value())
+        } else {
+            Err(anyhow::anyhow!("Invalid field specification"))
+        };
+    }
+
+    // Handle different field types
+    let prefix_to_use = match instance_prefix {
+        Some(p) => Some(format!("{p}_{}", field_name.to_ascii_uppercase())),
+        None => Some(field_name.to_ascii_uppercase()),
+    };
+    if field_spec.get_type() == "InterfaceValue" {
+        // Interface instance - extract factory and re-instantiate with extended prefix
+        let factory_val = interface_instance_factory(field_spec, heap)?;
+        instantiate_interface(factory_val, prefix_to_use.as_deref(), heap, eval)
+    } else if field_spec.get_type() == "Net" {
+        // For Net templates, use clone_net_template directly with field name
+        clone_net_template(
+            field_spec,
+            instance_prefix,
+            Some(field_name),
+            suffix_net_name,
+            heap,
+            eval,
+        )
+    } else if field_spec.get_type() == "NetType" {
+        let net_name = net_name(instance_prefix, None, Some(field_name), suffix_net_name);
+        alloc_net(&net_name, SmallMap::new(), Value::new_none(), heap, eval)
+    } else {
+        // For InterfaceFactory, delegate to instantiate_interface
+        instantiate_interface(field_spec, prefix_to_use.as_deref(), heap, eval)
+    }
+}
+
+/// Core function to create an interface instance from a factory
+fn create_interface_instance<'v, V>(
     factory: &InterfaceFactoryGen<V>,
     factory_value: Value<'v>,
-    prefix_opt: Option<&str>,
+    provided_values: SmallMap<String, Value<'v>>,
+    instance_prefix: Option<&str>,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>>
 where
     V: ValueLike<'v> + InterfaceCell,
 {
-    // Build the field map, recursively creating values where necessary.
+    // Validate provided values match field specs
+    for (name, provided_value) in &provided_values {
+        if let Some(field_spec) = factory.fields.get(name) {
+            ensure_field_compat(field_spec.to_value(), *provided_value, name)?;
+        }
+    }
+
+    // Build the field map, recursively creating values where necessary
     let mut fields = SmallMap::with_capacity(factory.fields.len());
+    let single_net_if = is_single_net_interface(factory);
 
     for (field_name, field_spec) in factory.fields.iter() {
-        let spec_value = field_spec.to_value();
-        let spec_type = spec_value.get_type();
-
-        let field_value: Value<'v> = if spec_type == "field" {
-            // Handle field() specifications - extract default value
-            if let Some(field_obj) = spec_value.downcast_ref::<FieldGen<Value<'v>>>() {
-                field_obj.default().unwrap().to_value()
-            } else if let Some(field_obj) =
-                spec_value.downcast_ref::<FieldGen<starlark::values::FrozenValue>>()
-            {
-                field_obj.default().unwrap().to_value()
-            } else {
-                return Err(anyhow::anyhow!("Invalid field specification"));
-            }
-        } else if spec_type == "NetType" {
-            // For backwards compatibility: Net type becomes an empty net
-            let net_name = if let Some(p) = prefix_opt {
-                format!("{}_{}", p, field_name.to_ascii_uppercase())
-            } else {
-                field_name.to_ascii_uppercase()
-            };
-
-            let net_id = generate_net_id();
-            let final_name = if let Some(ctx) = eval
-                .module()
-                .extra_value()
-                .and_then(|e| e.downcast_ref::<ContextValue>())
-            {
-                ctx.register_net(net_id, &net_name)?
-            } else {
-                net_name.clone()
-            };
-            heap.alloc(NetValue::new(
-                net_id,
-                final_name,
-                SmallMap::new(),
-                Value::new_none(),
-            ))
-        } else {
-            // Build extended prefix for nested interfaces
-            let next_prefix = match prefix_opt {
-                Some(p) => format!("{}_{}", p, field_name.to_ascii_uppercase()),
-                None => field_name.to_ascii_uppercase(),
-            };
-
-            // For interface factories, use extended prefix; for other types use original prefix
-            let prefix_to_use = if spec_value.downcast_ref::<InterfaceFactory>().is_some()
-                || spec_value
-                    .downcast_ref::<FrozenInterfaceFactory>()
-                    .is_some()
-            {
-                Some(next_prefix.as_str())
-            } else {
-                prefix_opt
-            };
-
-            instantiate_interface(spec_value, prefix_to_use, heap, eval)?
-        };
+        let field_value = create_field_value(
+            field_name,
+            field_spec.to_value(),
+            provided_values.get(field_name).copied(),
+            instance_prefix,
+            !single_net_if,
+            heap,
+            eval,
+        )?;
 
         fields.insert(field_name.clone(), field_value);
     }
 
-    // Create the interface instance with the original factory value
+    // Create the interface instance
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
         factory: factory_value,
@@ -467,8 +530,6 @@ where
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        let heap = eval.heap();
-
         // Collect provided `name` (optional) and field values using the cached parameter spec.
         let mut provided_values: SmallMap<String, Value<'v>> =
             SmallMap::with_capacity(self.fields.len());
@@ -496,107 +557,16 @@ where
             Ok(())
         })?;
 
-        // Then create the fields map with auto-created values where needed
-        let mut fields = SmallMap::with_capacity(self.fields.len());
-
-        // Helper closure to build a prefix string ("PARENT_FIELD") if instance name provided.
-        let make_prefix = |parent: &str, field: &str| -> String {
-            format!("{}_{}", parent, field.to_ascii_uppercase())
-        };
-
-        for (name, field_spec) in self.fields.iter() {
-            let field_value: Value<'v> = if let Some(v) = provided_values.get(name) {
-                // Value supplied by the caller - validate it matches the expected field type
-                ensure_field_compat(field_spec.to_value(), *v, name)
-                    .map_err(starlark::Error::new_other)?;
-                v.to_value()
-            } else {
-                // Use the field spec to create a value
-                let spec_value = field_spec.to_value();
-                let spec_type = spec_value.get_type();
-
-                if spec_type == "field" {
-                    // Handle field() specifications - extract default value
-                    let field_obj = spec_value.downcast_ref::<FieldGen<Value<'v>>>().unwrap();
-                    field_obj.default().unwrap().to_value()
-                } else if spec_type == "NetType" {
-                    // Auto-generate fresh Net from Net type
-                    let net_name = instance_name_opt
-                        .as_ref()
-                        .map(|p| make_prefix(p, name))
-                        .unwrap_or_else(|| name.to_ascii_uppercase());
-                    let net_id = generate_net_id();
-                    let final_name = if let Some(ctx) = eval
-                        .module()
-                        .extra_value()
-                        .and_then(|e| e.downcast_ref::<ContextValue>())
-                    {
-                        ctx.register_net(net_id, &net_name).map_err(|e| {
-                            starlark::Error::new_other(anyhow::anyhow!(e.to_string()))
-                        })?
-                    } else {
-                        net_name.clone()
-                    };
-                    heap.alloc(NetValue::new(
-                        net_id,
-                        final_name,
-                        SmallMap::new(),
-                        Value::new_none(),
-                    ))
-                } else if spec_type == "Net" {
-                    // Clone Net template with naming rules using shared helper
-                    clone_net_template(
-                        spec_value,
-                        instance_name_opt.as_deref(),
-                        Some(name),
-                        heap,
-                        eval,
-                    )
-                    .map_err(starlark::Error::new_other)?
-                } else if spec_type == "InterfaceValue" {
-                    // Interface instance - extract factory and instantiate
-                    let factory_val = interface_instance_factory(spec_value, heap)?;
-                    instantiate_interface(
-                        factory_val,
-                        instance_name_opt
-                            .as_ref()
-                            .map(|p| make_prefix(p, name))
-                            .as_deref(),
-                        heap,
-                        eval,
-                    )?
-                } else {
-                    // Interface factories - delegate to instantiate_interface
-                    instantiate_interface(
-                        spec_value,
-                        instance_name_opt
-                            .as_ref()
-                            .map(|p| make_prefix(p, name))
-                            .as_deref(),
-                        heap,
-                        eval,
-                    )?
-                }
-            };
-
-            fields.insert(name.clone(), field_value);
-        }
-
-        // Create the interface instance
-        let interface_instance = heap.alloc(InterfaceValue {
-            fields,
-            factory: _me,
-        });
-
-        // Execute __post_init__ if present
-        if let Some(post_init_fn) = self.post_init_fn.as_ref() {
-            let post_init_val = post_init_fn.to_value();
-            if !post_init_val.is_none() {
-                eval.eval_function(post_init_val, &[interface_instance], &[])?;
-            }
-        }
-
-        Ok(interface_instance)
+        // Delegate to the unified creation function
+        create_interface_instance(
+            self,
+            _me,
+            provided_values,
+            instance_name_opt.as_deref(),
+            eval.heap(),
+            eval,
+        )
+        .map_err(starlark::Error::new_other)
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
@@ -914,6 +884,20 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                                 ctx.unregister_net(net_val.id());
                             }
                         }
+                    } else if type_str == "InterfaceValue" {
+                        // If an Interface instance was provided as a template field,
+                        // recursively unregister all nets inside it
+                        if let Some(interface_val) =
+                            field_value.downcast_ref::<InterfaceValue<'v>>()
+                        {
+                            if let Some(ctx) = eval
+                                .module()
+                                .extra_value()
+                                .and_then(|e| e.downcast_ref::<ContextValue>())
+                            {
+                                unregister_interface_nets(interface_val, ctx);
+                            }
+                        }
                     }
                     fields.insert(name.clone(), field_value);
                 } else {
@@ -946,66 +930,29 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
-// Helper function to instantiate an `InterfaceFactory` recursively, applying
-// automatic naming to any `Net` fields as well as to nested `Interface`
-// instances. The `prefix_opt` argument is the name of the *parent* interface
-// instance (if provided by the user).  It is prepended to the individual
-// field names (converted to upper-case) when auto-generating net names so
-// that, for example, `Power("PWR")` will name the automatically-created
-// `vcc` net `PWR_VCC`.
+/// Helper function to instantiate an interface spec recursively
+/// This is a simplified dispatcher that delegates to the appropriate creation function
 fn instantiate_interface<'v>(
     spec: Value<'v>,
     prefix_opt: Option<&str>,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
-    // 1. Interface factories
+    // Handle interface factories first
     if let Some(factory) = spec.downcast_ref::<InterfaceFactory<'v>>() {
-        return instantiate_from_factory(factory, spec, prefix_opt, heap, eval);
+        return create_interface_instance(factory, spec, SmallMap::new(), prefix_opt, heap, eval);
     }
-    if let Some(frozen_factory) = spec.downcast_ref::<FrozenInterfaceFactory>() {
-        return instantiate_from_factory(frozen_factory, spec, prefix_opt, heap, eval);
-    }
-
-    // 2. Net type
-    if spec.get_type() == "NetType" {
-        let net_name = prefix_opt
-            .map(|p| p.to_ascii_uppercase())
-            .unwrap_or_else(|| "NET".to_string());
-        let net_id = generate_net_id();
-        let final_name = if let Some(ctx) = eval
-            .module()
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            ctx.register_net(net_id, &net_name)?
-        } else {
-            net_name
-        };
-
-        return Ok(heap.alloc(NetValue::new(
-            net_id,
-            final_name,
-            SmallMap::new(),
-            Value::new_none(),
-        )));
+    if let Some(factory) = spec.downcast_ref::<FrozenInterfaceFactory>() {
+        return create_interface_instance(factory, spec, SmallMap::new(), prefix_opt, heap, eval);
     }
 
-    // 3. Template Net instance - copy with prefix applied
-    if spec.get_type() == "Net" {
-        return clone_net_template(spec, prefix_opt, None, heap, eval);
+    match spec.get_type() {
+        "InterfaceValue" => copy_value(spec, heap),
+        _ => Err(anyhow::anyhow!(
+            "internal error: expected spec to be InterfaceValue, got {}",
+            spec.get_type()
+        )),
     }
-
-    // 4. Template Interface instance
-    if spec.get_type() == "InterfaceValue" {
-        return copy_value(spec, heap);
-    }
-
-    // 5. Fallback
-    Err(anyhow::anyhow!(
-        "internal error: expected spec to be InterfaceFactory/Net/InterfaceValue/NetType, got {}",
-        spec.get_type()
-    ))
 }
 
 impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
@@ -1129,7 +1076,7 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
             r#"
 Power1 = interface(vcc = Net)
 instance1 = Power1()
-assert_eq(instance1.vcc.name, "VCC")
+assert_eq(instance1.vcc.name, "_VCC")
 "#,
         );
 
@@ -1138,7 +1085,7 @@ assert_eq(instance1.vcc.name, "VCC")
             r#"
 Power2 = interface(vcc = Net("MY_VCC"))
 instance2 = Power2()
-assert_eq(instance2.vcc.name, "MY_VCC")
+assert_eq(instance2.vcc.name, "_MY_VCC")
 "#,
         );
 
@@ -1148,7 +1095,7 @@ assert_eq(instance2.vcc.name, "MY_VCC")
 Power3 = interface(vcc = Net())
 instance3 = Power3()
 # We want Net() to behave the same as Net type
-assert_eq(instance3.vcc.name, "VCC")
+assert_eq(instance3.vcc.name, "_VCC")
 "#,
         );
 
@@ -1157,7 +1104,7 @@ assert_eq(instance3.vcc.name, "VCC")
             r#"
 Power4 = interface(vcc = Net)
 instance4 = Power4("PWR")
-assert_eq(instance4.vcc.name, "PWR_VCC")
+assert_eq(instance4.vcc.name, "PWR")
 "#,
         );
 
@@ -1167,7 +1114,7 @@ assert_eq(instance4.vcc.name, "PWR_VCC")
 Power5 = interface(vcc = Net())
 instance5 = Power5("PWR")
 # Net() should behave the same as Net type with prefix
-assert_eq(instance5.vcc.name, "PWR_VCC")
+assert_eq(instance5.vcc.name, "PWR")
 "#,
         );
     }
@@ -1197,7 +1144,7 @@ Power = interface(
 )
 
 power = Power()
-assert_eq(power.NET.name, "VCC")
+assert_eq(power.NET.name, "_VCC")
 "#,
         );
     }
@@ -1220,11 +1167,11 @@ Power = interface(
 
 # Create instance with prefix
 power = Power("VCC")
-assert_eq(power.NET.name, "VCC_NET")
+assert_eq(power.NET.name, "VCC")
 
 # Create instance without prefix
 power_default = Power()
-assert_eq(power_default.NET.name, "NET")
+assert_eq(power_default.NET.name, "_NET")
 "#,
         );
     }

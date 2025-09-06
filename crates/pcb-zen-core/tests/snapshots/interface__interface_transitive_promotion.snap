@@ -9,7 +9,7 @@ expression: output
       "reset": {
         "Net": {
           "id": 8,
-          "name": "CTRL_RESET",
+          "name": "CTRL",
           "properties": {}
         }
       }

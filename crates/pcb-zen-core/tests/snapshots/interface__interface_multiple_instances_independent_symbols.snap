@@ -2,8 +2,8 @@
 source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
-IO1 net: Net { name: "IO1_IO", id: "<ID>", properties: {"symbol_name": Value("IOSymbol")}, symbol: Value(Symbol { name: Some("IOSymbol"), pins: {"1": "IO"} }) }
-IO2 net: Net { name: "IO2_IO", id: "<ID>", properties: {"symbol_name": Value("IOSymbol")}, symbol: Value(Symbol { name: Some("IOSymbol"), pins: {"1": "IO"} }) }
+IO1 net: Net { name: "IO1", id: "<ID>", properties: {"symbol_name": Value("IOSymbol")}, symbol: Value(Symbol { name: Some("IOSymbol"), pins: {"1": "IO"} }) }
+IO2 net: Net { name: "IO2", id: "<ID>", properties: {"symbol_name": Value("IOSymbol")}, symbol: Value(Symbol { name: Some("IOSymbol"), pins: {"1": "IO"} }) }
 Module {
     name: "<root>",
     source: "test.zen",
