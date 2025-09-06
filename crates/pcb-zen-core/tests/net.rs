@@ -111,23 +111,24 @@ snapshot_eval!(net_duplicate_names_uniq, {
 
 snapshot_eval!(interface_net_template_naming, {
     "test.zen" => r#"
-        # Test single-net interface naming behavior with name conflicts
+        # Test that interface net templates use original names for prefixing, not deduped names
         
-        # Create a regular net with same name as interface instance
+        # Create a regular net with same name as template
         net = Net("VCC")
         
-        # Define single-net interface
+        # Define interface with using(Net("VCC")) - should get deduped name internally
+        # but use original "VCC" for interface prefixing
         Power = interface(
             NET = using(Net("VCC")),
         )
         
-        # Create power interface instance - with single-net naming, uses instance name directly
-        power = Power("POWER")
+        # Create power interface instance - should use "VCC" not "VCC_2" for prefix
+        power = Power("VCC")
         
         print("regular net:", net.name)
         print("interface net:", power.NET.name)
         
-        # Check that single-net interface uses instance name directly
-        check(power.NET.name == "POWER", "Single-net interface should use instance name directly")
+        # Check that interface uses original name for prefixing
+        check(power.NET.name == "VCC_VCC", "Interface should use original name VCC for prefixing")
     "#,
 });
