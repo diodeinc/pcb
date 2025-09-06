@@ -216,7 +216,7 @@ fn net_name(
     field_name: Option<&str>,
     suffix_net_name: bool,
 ) -> String {
-    let prefix = prefix_opt.unwrap_or_default().to_ascii_uppercase();
+    let prefix = prefix_opt.unwrap_or_default().to_string();
     let suffix_net_name = suffix_net_name || prefix_opt.is_none();
     let net_name = match (template_name, field_name) {
         (Some(template_name), _) => template_name,

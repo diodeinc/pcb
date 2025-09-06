@@ -162,12 +162,12 @@ Module {
                 fields: {
                     "vcc": Net {
                         id: 3,
-                        name: "POWER_IO_VCC",
+                        name: "power_io_VCC",
                         properties: {},
                     },
                     "gnd": Net {
                         id: 4,
-                        name: "POWER_IO_GND",
+                        name: "power_io_GND",
                         properties: {},
                     },
                 },
@@ -199,12 +199,12 @@ Module {
                 fields: {
                     "vcc": Net {
                         id: 5,
-                        name: "OPT_POWER_IO_VCC",
+                        name: "opt_power_io_VCC",
                         properties: {},
                     },
                     "gnd": Net {
                         id: 6,
-                        name: "OPT_POWER_IO_GND",
+                        name: "opt_power_io_GND",
                         properties: {},
                     },
                 },
@@ -240,17 +240,17 @@ Module {
                 fields: {
                     "data": Net {
                         id: 7,
-                        name: "BUS_IO_DATA",
+                        name: "bus_io_DATA",
                         properties: {},
                     },
                     "clock": Net {
                         id: 8,
-                        name: "BUS_IO_CLOCK",
+                        name: "bus_io_CLOCK",
                         properties: {},
                     },
                     "enable": Net {
                         id: 9,
-                        name: "BUS_IO_ENABLE",
+                        name: "bus_io_ENABLE",
                         properties: {},
                     },
                 },
@@ -316,12 +316,12 @@ Module {
                         fields: {
                             "vcc": Net {
                                 id: 10,
-                                name: "SYSTEM_IO_POWER_VCC",
+                                name: "system_io_POWER_VCC",
                                 properties: {},
                             },
                             "gnd": Net {
                                 id: 11,
-                                name: "SYSTEM_IO_POWER_GND",
+                                name: "system_io_POWER_GND",
                                 properties: {},
                             },
                         },
@@ -333,17 +333,17 @@ Module {
                         fields: {
                             "data": Net {
                                 id: 12,
-                                name: "SYSTEM_IO_BUS_DATA",
+                                name: "system_io_BUS_DATA",
                                 properties: {},
                             },
                             "clock": Net {
                                 id: 13,
-                                name: "SYSTEM_IO_BUS_CLOCK",
+                                name: "system_io_BUS_CLOCK",
                                 properties: {},
                             },
                             "enable": Net {
                                 id: 14,
-                                name: "SYSTEM_IO_BUS_ENABLE",
+                                name: "system_io_BUS_ENABLE",
                                 properties: {},
                             },
                         },
@@ -353,7 +353,7 @@ Module {
                     },
                     "reset": Net {
                         id: 15,
-                        name: "SYSTEM_IO_RESET",
+                        name: "system_io_RESET",
                         properties: {},
                     },
                 },
