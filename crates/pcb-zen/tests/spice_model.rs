@@ -9,7 +9,7 @@ macro_rules! sim_snapshot {
         let top_path = $env.root().join($entry);
 
         let mut buf = Vec::new();
-        let schematic = pcb_zen::run(&top_path, false, pcb_zen::EvalMode::Build)
+        let schematic = pcb_zen::run(&top_path, pcb_zen::EvalConfig::default())
             .output_result()
             .expect("failed to compile schematic for simulation");
         gen_sim(&schematic, &mut buf)

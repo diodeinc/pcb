@@ -13,8 +13,10 @@ use crate::load::DefaultRemoteFetcher;
 use pcb_sch::Schematic;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
+use pcb_zen_core::FileProvider;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, InputMap, NoopRemoteFetcher,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap, LoadResolver,
+    NoopRemoteFetcher,
 };
 use starlark::errors::EvalMessage;
 
@@ -22,31 +24,33 @@ pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, EvalMode, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;
 
-/// Create an evaluation context with proper load resolver setup for a given workspace.
-///
-/// This helper ensures that the evaluation context has a unified load resolver that handles:
-/// - Remote packages (@package style imports like @kicad-symbols/...)
-/// - Workspace-relative paths (//...)
-/// - Relative paths (./... or ../...)
-/// - Absolute paths
-///
-/// # Arguments
-/// * `workspace_root` - The root directory of the workspace (typically where pcb.toml is located)
-///
-/// # Example
-/// ```no_run
-/// use std::path::Path;
-/// use pcb_zen::create_eval_context;
-///
-/// let workspace = Path::new("/path/to/my/project");
-/// let ctx = create_eval_context(workspace, false);
-/// // Now Module() calls within evaluated files will support all import types
-/// ```
-pub fn create_eval_context(workspace_root: &Path, offline: bool) -> EvalContext {
-    let file_provider = Arc::new(DefaultFileProvider);
+#[derive(Debug, Clone, Copy)]
+pub struct EvalConfig {
+    pub offline: bool,
+    pub mode: EvalMode,
+    pub use_vendor: bool,
+}
 
-    // Choose remote fetcher based on offline mode
-    let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if offline {
+impl Default for EvalConfig {
+    fn default() -> Self {
+        Self {
+            offline: false,
+            mode: EvalMode::Build,
+            use_vendor: true,
+        }
+    }
+}
+
+/// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
+pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
+    let abs_path = file
+        .canonicalize()
+        .expect("failed to canonicalise input path");
+
+    let file_provider = Arc::new(DefaultFileProvider);
+    let workspace_root = find_workspace_root(&*file_provider, &abs_path);
+
+    let remote_fetcher: Arc<dyn pcb_zen_core::RemoteFetcher> = if cfg.offline {
         Arc::new(NoopRemoteFetcher)
     } else {
         Arc::new(DefaultRemoteFetcher::default())
@@ -56,41 +60,34 @@ pub fn create_eval_context(workspace_root: &Path, offline: bool) -> EvalContext 
         file_provider.clone(),
         remote_fetcher,
         workspace_root.to_path_buf(),
-        true,
+        cfg.use_vendor,
     ));
 
+    // Track workspace-level pcb.toml if present for dependency awareness
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+    if file_provider.exists(&pcb_toml_path) {
+        load_resolver.track_file(&pcb_toml_path);
+    }
+
+    let inputs = InputMap::new();
     EvalContext::new()
         .set_file_provider(file_provider)
         .set_load_resolver(load_resolver)
+        .set_source_path(abs_path)
+        .set_module_name("<root>".to_string())
+        .set_inputs(inputs)
+        .set_eval_mode(cfg.mode)
+        .eval()
 }
 
 /// Evaluate `file` and return a [`Schematic`].
-pub fn run(file: &Path, offline: bool, mode: EvalMode) -> WithDiagnostics<Schematic> {
-    let abs_path = file
-        .canonicalize()
-        .expect("failed to canonicalise input path");
-
-    // Create a file provider for finding workspace root
-    let file_provider = DefaultFileProvider;
-
-    // Simple workspace detection: look for pcb.toml, fallback to parent
-    let workspace_root = find_workspace_root(&file_provider, &abs_path);
-
-    let ctx = create_eval_context(&workspace_root, offline);
-
-    // For now we don't inject any external inputs.
-    let inputs = InputMap::new();
-    ctx.set_source_path(abs_path.clone())
-        .set_module_name("<root>".to_string())
-        .set_inputs(inputs)
-        .set_eval_mode(mode)
-        .eval()
-        .try_map(|m| {
-            // Convert schematic conversion error into a Starlark diagnostic
-            m.sch_module
-                .to_schematic()
-                .map_err(|e| EvalMessage::from_error(abs_path.as_path(), &e.into()))
-        })
+pub fn run(file: &Path, cfg: EvalConfig) -> WithDiagnostics<Schematic> {
+    let err_path = file;
+    eval(file, cfg).try_map(|m| {
+        m.sch_module
+            .to_schematic()
+            .map_err(|e| EvalMessage::from_error(err_path, &e.into()))
+    })
 }
 
 pub fn lsp() -> anyhow::Result<()> {

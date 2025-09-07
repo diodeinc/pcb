@@ -154,10 +154,7 @@ pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEn
         .unwrap_or(false);
 
         // Check if it's a test component
-        let is_test_component = designator.starts_with("TP")
-            || get_string_attribute(&instance.attributes, &["type", "Type"])
-                .map(|t| t.to_lowercase().contains("test"))
-                .unwrap_or(false);
+        let is_test_component = designator.starts_with("TP");
 
         let dnp = do_not_populate || is_test_component;
 
@@ -207,7 +204,7 @@ pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEn
 fn detect_well_known_module(
     attributes: &HashMap<String, AttributeValue>,
 ) -> Option<WellKnownModule> {
-    let module_type = get_string_attribute(attributes, &["Type"])?;
+    let module_type = get_string_attribute(attributes, &["type", "Type"])?;
 
     match module_type.to_lowercase().as_str() {
         "resistor" => {

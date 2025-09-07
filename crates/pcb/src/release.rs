@@ -518,7 +518,8 @@ fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> R
 
 /// Copy source files and vendor dependencies
 fn copy_sources(info: &ReleaseInfo) -> Result<()> {
-    let tracked_files = info.workspace.resolver.get_tracked_files();
+    let output = info.workspace.eval_result.output.as_ref().unwrap();
+    let tracked_files = output.core_resolver().unwrap().get_tracked_files();
     let workspace_root = info.workspace.root();
     let src_dir = info.staging_dir.join("src");
     let vendor_dir = src_dir.join("vendor");

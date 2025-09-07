@@ -78,8 +78,15 @@ pub fn test(
     let spinner = Spinner::builder(format!("{file_name}: Testing")).start();
 
     // Evaluate the design in test mode
-    let (_output, mut diagnostics) =
-        pcb_zen::run(zen_path, offline, pcb_zen::EvalMode::Test).unpack();
+    let (_output, mut diagnostics) = pcb_zen::run(
+        zen_path,
+        pcb_zen::EvalConfig {
+            offline,
+            mode: pcb_zen::EvalMode::Test,
+            ..Default::default()
+        },
+    )
+    .unpack();
 
     // Finish spinner before printing diagnostics
     spinner.finish();

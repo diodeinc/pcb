@@ -60,7 +60,11 @@ pub fn build(
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let eval = pcb_zen::run(zen_path, offline, pcb_zen::EvalMode::Build);
+    let eval_config = pcb_zen::EvalConfig {
+        offline,
+        ..Default::default()
+    };
+    let eval = pcb_zen::run(zen_path, eval_config);
 
     // Finish spinner before printing diagnostics
     if eval.is_empty() {

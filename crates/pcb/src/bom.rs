@@ -65,7 +65,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let mut schematic = pcb_zen::run(&args.file, false, pcb_zen::EvalMode::Build)
+    let mut schematic = pcb_zen::run(&args.file, pcb_zen::EvalConfig::default())
         .output_result()
         .map_err(|mut diagnostics| {
             // Apply passes and render diagnostics if there are errors

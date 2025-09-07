@@ -1,5 +1,4 @@
 use log::debug;
-use pcb_sch::generate_bom_entries;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
@@ -548,9 +547,9 @@ impl Module {
             .as_ref()
             .map(|output| output.signature.clone());
 
-        // Generate BOM JSON if schematic is available
+        // Generate BOM JSON from the schematic if available
         let bom_json = schematic_opt.as_ref().and_then(|schematic| {
-            let entries = generate_bom_entries(&mut schematic.clone());
+            let entries = pcb_sch::generate_bom_entries(&mut schematic.clone());
             match serde_json::to_string(&entries) {
                 Ok(json) => Some(json),
                 Err(e) => {

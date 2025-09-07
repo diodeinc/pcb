@@ -1,16 +1,12 @@
 //! Common workspace and dependency handling utilities
 
 use anyhow::Result;
-use log::{debug, info};
-use pcb_zen::load::DefaultRemoteFetcher;
+use log::debug;
+use pcb_zen::EvalConfig;
 use pcb_zen_core::config::{get_workspace_info, WorkspaceInfo as ConfigWorkspaceInfo};
-use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, FileProvider, InputMap,
-    LoadResolver, WithDiagnostics,
-};
+use pcb_zen_core::{DefaultFileProvider, EvalOutput, WithDiagnostics};
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// Common workspace information used by both vendor and release commands
 pub struct WorkspaceInfo {
@@ -18,8 +14,6 @@ pub struct WorkspaceInfo {
     pub config: ConfigWorkspaceInfo,
     /// Canonical path to the .zen file being processed
     pub zen_path: PathBuf,
-    /// Core resolver that tracked all file dependencies during evaluation
-    pub resolver: Arc<CoreLoadResolver>,
     /// Evaluation result containing the parsed zen file
     pub eval_result: WithDiagnostics<EvalOutput>,
 }
@@ -47,7 +41,7 @@ impl WorkspaceInfo {
 }
 
 /// Gather common workspace information for both vendor and release commands
-pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result<WorkspaceInfo> {
+pub fn gather_workspace_info(zen_path: PathBuf, use_vendor: bool) -> Result<WorkspaceInfo> {
     debug!("Starting workspace information gathering");
 
     // Canonicalize the zen path
@@ -57,59 +51,16 @@ pub fn gather_workspace_info(zen_path: PathBuf, use_vendor_path: bool) -> Result
     let config = get_workspace_info(&DefaultFileProvider, &zen_path)?;
 
     // 2. Evaluate the zen file – workspace root comes out of config
-    let (resolver, eval_result) = eval_zen_entrypoint(&zen_path, &config.root, use_vendor_path)?;
+    let cfg = EvalConfig {
+        use_vendor,
+        ..Default::default()
+    };
+    // Keep mode default (Build); offline decided by caller of higher-level flows
+    let eval_result = pcb_zen::eval(&zen_path, cfg);
 
     Ok(WorkspaceInfo {
         config,
         zen_path,
-        resolver,
         eval_result,
     })
-}
-
-/// Evaluate zen file and track dependencies using CoreLoadResolver directly
-pub fn eval_zen_entrypoint(
-    entry: &Path,
-    workspace_root: &Path,
-    use_vendor_path: bool,
-) -> Result<(Arc<CoreLoadResolver>, WithDiagnostics<EvalOutput>)> {
-    debug!("Starting zen file evaluation: {}", entry.display());
-
-    let file_provider = Arc::new(DefaultFileProvider);
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
-
-    let core_resolver = Arc::new(CoreLoadResolver::new(
-        file_provider.clone(),
-        remote_fetcher,
-        workspace_root.to_path_buf(),
-        use_vendor_path,
-    ));
-
-    let pcb_toml_path = workspace_root.join("pcb.toml");
-    if file_provider.exists(&pcb_toml_path) {
-        core_resolver.track_file(&pcb_toml_path);
-    }
-    let eval_context = EvalContext::new()
-        .set_file_provider(file_provider.clone())
-        .set_load_resolver(core_resolver.clone())
-        .set_source_path(entry.to_path_buf())
-        .set_inputs(InputMap::new());
-
-    let eval_result = eval_context.eval();
-
-    // Check for errors and bail if evaluation failed
-    if !eval_result.is_success() {
-        let errors: Vec<String> = eval_result
-            .diagnostics
-            .iter()
-            .filter(|d| d.is_error())
-            .map(|d| d.to_string())
-            .collect();
-        if !errors.is_empty() {
-            anyhow::bail!("Zen file evaluation failed:\n{}", errors.join("\n"));
-        }
-    }
-
-    info!("Zen file evaluation completed successfully");
-    Ok((core_resolver, eval_result))
 }
