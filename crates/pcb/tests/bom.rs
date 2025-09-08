@@ -75,7 +75,77 @@ Capacitor(name = "C2", value = "10uF", package = "0805", voltage = "25V", dielec
 Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
 "#;
 
-#[cfg(not(target_os = "windows"))]
+const SAMPLE_BOM_RULES: &str = r#"[
+  {
+    "key": {
+      "Resistor": {
+        "resistance": {
+          "value": "1000.0",
+          "tolerance": "0.0",
+          "unit": "Ohms"
+        }
+      }
+    },
+    "value": {
+      "distributor": "digikey",
+      "distributor_pn": "311-1.00KHRCT-ND",
+      "manufacturer": "Yageo",
+      "manufacturer_pn": "RC0603FR-071KL"
+    }
+  },
+  {
+    "key": {
+      "Resistor": {
+        "resistance": {
+          "value": "4700.0",
+          "tolerance": "0.0",
+          "unit": "Ohms"
+        }
+      }
+    },
+    "value": {
+      "distributor": "digikey",
+      "distributor_pn": "311-4.70KHRCT-ND",
+      "manufacturer": "Yageo",
+      "manufacturer_pn": "RC0402FR-074K7L"
+    }
+  },
+  {
+    "key": {
+      "Capacitor": {
+        "capacitance": {
+          "value": "100e-9",
+          "tolerance": "0.1",
+          "unit": "Farads"
+        },
+        "voltage": {
+          "value": "16.0",
+          "tolerance": "0.0",
+          "unit": "Volts"
+        },
+        "dielectric": "X7R"
+      }
+    },
+    "value": {
+      "distributor": "digikey",
+      "distributor_pn": "1276-1003-1-ND",
+      "manufacturer": "Samsung Electro-Mechanics",
+      "manufacturer_pn": "CL05B104KO5NNNC"
+    }
+  },
+  {
+    "key": {
+      "Designator": "C2"
+    },
+    "value": {
+      "distributor": "digikey",
+      "distributor_pn": "1276-6455-1-ND",
+      "manufacturer": "Samsung Electro-Mechanics",
+      "manufacturer_pn": "CL21B106KOQNNNC"
+    }
+  }
+]"#;
+
 #[test]
 fn test_bom_json_format() {
     let output = Sandbox::new()
@@ -88,7 +158,6 @@ fn test_bom_json_format() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_bom_table_format() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])
@@ -100,7 +169,6 @@ fn test_bom_table_format() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_bom_default_format() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])
@@ -112,29 +180,48 @@ fn test_bom_default_format() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_bom_simple_resistors() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/SimpleResistors.zen", "-f", "json"]);
+        .write("bom_rules.json", SAMPLE_BOM_RULES)
+        .snapshot_run(
+            "pcb",
+            [
+                "bom",
+                "boards/SimpleResistors.zen",
+                "-r",
+                "bom_rules.json",
+                "-f",
+                "json",
+            ],
+        );
     assert_snapshot!("bom_simple_resistors_json", output);
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_bom_simple_resistors_table() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/SimpleResistors.zen", "-f", "table"]);
+        .write("bom_rules.json", SAMPLE_BOM_RULES)
+        .snapshot_run(
+            "pcb",
+            [
+                "bom",
+                "boards/SimpleResistors.zen",
+                "-r",
+                "bom_rules.json",
+                "-f",
+                "table",
+            ],
+        );
     assert_snapshot!("bom_simple_resistors_table", output);
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_bom_capacitors_with_dielectric() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])
@@ -145,7 +232,6 @@ fn test_bom_capacitors_with_dielectric() {
 }
 
 #[test]
-#[cfg(not(target_os = "windows"))]
 fn test_bom_capacitors_table() {
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.2"])

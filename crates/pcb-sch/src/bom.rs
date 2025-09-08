@@ -484,4 +484,207 @@ mod tests {
         let deserialized: WellKnownComponent = serde_json::from_str(&json).unwrap();
         assert_eq!(original_resistor, deserialized);
     }
+
+    #[test]
+    fn test_resistor_matching() {
+        // Component: 1kΩ ±0% (defaults to ±1%)
+        let component_resistor = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+        };
+
+        // Key: 1kΩ ±1% - should match (exact fit)
+        let matching_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(component_resistor.matches(&matching_key, &None));
+
+        // Key: 1kΩ ±0.5% - should match (tighter tolerance fits)
+        let tighter_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(1000.0, 0.005, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(component_resistor.matches(&tighter_key, &None));
+
+        // Key: 1kΩ ±5% - should NOT match (looser tolerance doesn't fit)
+        let looser_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(!component_resistor.matches(&looser_key, &None));
+
+        // Key: 2kΩ ±1% - should NOT match (different value)
+        let different_value_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(2000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(!component_resistor.matches(&different_value_key, &None));
+    }
+
+    #[test]
+    fn test_resistor_voltage_matching() {
+        let component_resistor = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+        };
+        let component_voltage = Some(PhysicalValue::new(50.0, 0.0, PhysicalUnit::Volts));
+
+        // Key voltage (25V) <= component voltage (50V) - should match
+        let lower_voltage_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(25.0, 0.0, PhysicalUnit::Volts)),
+        };
+        assert!(component_resistor.matches(&lower_voltage_key, &component_voltage));
+
+        // Key voltage (100V) > component voltage (50V) - should NOT match
+        let higher_voltage_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(100.0, 0.0, PhysicalUnit::Volts)),
+        };
+        assert!(!component_resistor.matches(&higher_voltage_key, &component_voltage));
+
+        // No component voltage specified - should match any key voltage
+        let any_voltage_key = ResistorMatchingKey {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Volts)),
+        };
+        assert!(component_resistor.matches(&any_voltage_key, &None));
+    }
+
+    #[test]
+    fn test_capacitor_matching() {
+        // Component: 100nF ±10% X7R
+        let component_capacitor = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            dielectric: Some(Dielectric::X7R),
+            esr: None,
+        };
+
+        // Key: 100nF ±10% X7R - should match (exact)
+        let matching_key = CapacitorMatchingKey {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+        };
+        assert!(component_capacitor.matches(&matching_key, &None));
+
+        // Key: 100nF ±5% X7R - should match (tighter tolerance)
+        let tighter_key = CapacitorMatchingKey {
+            capacitance: PhysicalValue::new(100e-9, 0.05, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+        };
+        assert!(component_capacitor.matches(&tighter_key, &None));
+
+        // Key: 100nF ±20% X7R - should NOT match (looser tolerance)
+        let looser_key = CapacitorMatchingKey {
+            capacitance: PhysicalValue::new(100e-9, 0.2, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+        };
+        assert!(!component_capacitor.matches(&looser_key, &None));
+
+        // Key: 100nF ±10% C0G - should NOT match (different dielectric)
+        let different_dielectric_key = CapacitorMatchingKey {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::C0G),
+        };
+        assert!(!component_capacitor.matches(&different_dielectric_key, &None));
+
+        // Key: No dielectric specified - should match (no requirement)
+        let no_dielectric_key = CapacitorMatchingKey {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: None,
+        };
+        assert!(component_capacitor.matches(&no_dielectric_key, &None));
+    }
+
+    #[test]
+    fn test_capacitor_no_dielectric_component() {
+        // Component: 100nF ±10% (no dielectric specified)
+        let component_capacitor = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            dielectric: None,
+            esr: None,
+        };
+
+        // Key: Any dielectric specified - should match (no component requirement)
+        let x7r_key = CapacitorMatchingKey {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+        };
+        assert!(component_capacitor.matches(&x7r_key, &None));
+    }
+
+    #[test]
+    fn test_bom_matching_rules() {
+        // Create a simple BOM with one resistor
+        let mut bom = Bom {
+            entries: HashMap::new(),
+            designators: HashMap::new(),
+        };
+
+        let resistor_entry = BomEntry {
+            mpn: None,
+            manufacturer: None,
+            description: None,
+            package: Some("0603".to_string()),
+            value: Some("1kOhm".to_string()),
+            alternatives: vec![],
+            well_known_module: Some(WellKnownComponent::Resistor(Resistor {
+                resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+            })),
+            voltage: None,
+            matched_part: None,
+            dnp: false,
+        };
+
+        bom.entries.insert("R1.R".to_string(), resistor_entry);
+        bom.designators.insert("R1.R".to_string(), "R1".to_string());
+
+        // Test resistor matching rule
+        let resistor_rule = BomMatchingRule {
+            key: BomMatchingKey::Resistor(ResistorMatchingKey {
+                resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+                voltage: None,
+            }),
+            value: BomMatchingValue {
+                distributor: "digikey".to_string(),
+                distributor_pn: "311-1.00KHRCT-ND".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            },
+        };
+
+        bom.apply_bom_rule(&resistor_rule);
+
+        // Verify the rule was applied
+        let entry = &bom.entries["R1.R"];
+        assert!(entry.matched_part.is_some());
+        let matched = entry.matched_part.as_ref().unwrap();
+        assert_eq!(matched.distributor, "digikey");
+        assert_eq!(matched.distributor_pn, "311-1.00KHRCT-ND");
+        assert_eq!(matched.manufacturer, Some("Yageo".to_string()));
+
+        // Test designator matching rule
+        let designator_rule = BomMatchingRule {
+            key: BomMatchingKey::Designator("R1".to_string()),
+            value: BomMatchingValue {
+                distributor: "mouser".to_string(),
+                distributor_pn: "603-RC0603FR-071KL".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            },
+        };
+
+        bom.apply_bom_rule(&designator_rule);
+
+        // Verify the designator rule overwrote the previous match
+        let entry = &bom.entries["R1.R"];
+        let matched = entry.matched_part.as_ref().unwrap();
+        assert_eq!(matched.distributor, "mouser");
+        assert_eq!(matched.distributor_pn, "603-RC0603FR-071KL");
+    }
 }
