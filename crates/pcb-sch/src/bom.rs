@@ -37,6 +37,8 @@ struct BomEntry {
     well_known_module: Option<WellKnownComponent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     voltage: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched_part: Option<BomMatchingValue>,
     dnp: bool,
 }
 
@@ -64,9 +66,66 @@ pub struct Capacitor {
     pub esr: Option<PhysicalValue>,
 }
 
+impl Capacitor {
+    pub fn matches(
+        &self,
+        key: &CapacitorMatchingKey,
+        entry_voltage: &Option<PhysicalValue>,
+    ) -> bool {
+        // Check capacitance range (key range must fit within component tolerance)
+        if !key.capacitance.fits_within_default(&self.capacitance) {
+            return false;
+        }
+
+        // Check voltage: key voltage must be <= entry voltage (or entry has no voltage requirement)
+        if let Some(key_voltage) = &key.voltage {
+            if let Some(entry_v) = entry_voltage {
+                if key_voltage.value > entry_v.value {
+                    return false;
+                }
+            }
+        }
+
+        // Check dielectric: key dielectric must match entry dielectric (or entry has no dielectric requirement)
+        if let Some(key_dielectric) = &key.dielectric {
+            if let Some(entry_dielectric) = &self.dielectric {
+                if key_dielectric != entry_dielectric {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Resistor {
     pub resistance: PhysicalValue,
+}
+
+impl Resistor {
+    pub fn matches(
+        &self,
+        key: &ResistorMatchingKey,
+        entry_voltage: &Option<PhysicalValue>,
+    ) -> bool {
+        // Check resistance range (key range must fit within component tolerance)
+        if !key.resistance.fits_within_default(&self.resistance) {
+            return false;
+        }
+
+        // Check voltage: key voltage must be <= entry voltage (or entry has no voltage requirement)
+        if let Some(key_voltage) = &key.voltage {
+            if let Some(entry_v) = entry_voltage {
+                if key_voltage.value > entry_v.value {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -99,6 +158,43 @@ impl FromStr for Dielectric {
     }
 }
 
+// BOM Matching API
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BomMatchingKey {
+    Mpn(String),
+    Resistor(ResistorMatchingKey),
+    Capacitor(CapacitorMatchingKey),
+    Path(String),
+    Designator(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResistorMatchingKey {
+    pub resistance: PhysicalValue,
+    pub voltage: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CapacitorMatchingKey {
+    pub capacitance: PhysicalValue,
+    pub voltage: Option<PhysicalValue>,
+    pub dielectric: Option<Dielectric>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BomMatchingValue {
+    pub distributor: String,
+    pub distributor_pn: String,
+    pub manufacturer: Option<String>,
+    pub manufacturer_pn: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BomMatchingRule {
+    pub key: BomMatchingKey,
+    pub value: BomMatchingValue,
+}
+
 impl Bom {
     pub fn from_schematic(schematic: &Schematic) -> Self {
         let mut designators = HashMap::<String, String>::new();
@@ -120,6 +216,7 @@ impl Bom {
                     alternatives: instance.string_list_attr(&["__alternatives__"]),
                     well_known_module: detect_well_known_module(instance),
                     voltage: instance.physical_attr(&["__voltage__"]),
+                    matched_part: None,
                     dnp: instance.dnp(),
                 };
                 entries.insert(path.clone(), bom_entry);
@@ -169,6 +266,56 @@ impl Bom {
         });
 
         serde_json::to_string_pretty(&grouped_entries).unwrap()
+    }
+
+    pub fn apply_bom_rule(&mut self, rule: &BomMatchingRule) {
+        match &rule.key {
+            BomMatchingKey::Designator(designator) => {
+                // Find path for this designator
+                if let Some((path, _)) = self.designators.iter().find(|(_, d)| *d == designator) {
+                    if let Some(entry) = self.entries.get_mut(path) {
+                        entry.matched_part = Some(rule.value.clone());
+                    }
+                }
+            }
+            BomMatchingKey::Path(target_path) => {
+                if let Some(entry) = self.entries.get_mut(target_path) {
+                    entry.matched_part = Some(rule.value.clone());
+                }
+            }
+            BomMatchingKey::Mpn(mpn) => {
+                for entry in self.entries.values_mut() {
+                    if entry.mpn.as_ref() == Some(mpn) {
+                        entry.matched_part = Some(rule.value.clone());
+                    }
+                }
+            }
+            BomMatchingKey::Resistor(resistor_key) => {
+                for entry in self.entries.values_mut() {
+                    if let Some(WellKnownComponent::Resistor(resistor)) = &entry.well_known_module {
+                        if resistor.matches(resistor_key, &entry.voltage) {
+                            entry.matched_part = Some(rule.value.clone());
+                        }
+                    }
+                }
+            }
+            BomMatchingKey::Capacitor(capacitor_key) => {
+                for entry in self.entries.values_mut() {
+                    if let Some(WellKnownComponent::Capacitor(capacitor)) = &entry.well_known_module
+                    {
+                        if capacitor.matches(capacitor_key, &entry.voltage) {
+                            entry.matched_part = Some(rule.value.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn apply_bom_rules(&mut self, rules: &[BomMatchingRule]) {
+        for rule in rules {
+            self.apply_bom_rule(rule);
+        }
     }
 }
 

@@ -17,7 +17,10 @@ pub mod kicad_netlist;
 pub mod kicad_schematic;
 
 // Re-export BOM functionality
-pub use bom::Bom;
+pub use bom::{
+    Bom, BomMatchingKey, BomMatchingRule, BomMatchingValue, CapacitorMatchingKey,
+    ResistorMatchingKey,
+};
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -191,6 +194,48 @@ impl PhysicalValue {
                 .expect("tolerance not representable as Decimal"),
             unit,
         }
+    }
+
+    /// Get the effective tolerance, using a default if none is specified
+    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
+        if self.tolerance.is_zero() {
+            default
+        } else {
+            self.tolerance
+        }
+    }
+
+    /// Get the minimum value considering tolerance
+    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE - tolerance)
+    }
+
+    /// Get the maximum value considering tolerance
+    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE + tolerance)
+    }
+
+    /// Check if this value's range fits within another value's range
+    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
+        let other_tolerance = other.tolerance_or_default(default_tolerance);
+        let other_min = other.min_value(other_tolerance);
+        let other_max = other.max_value(other_tolerance);
+
+        let self_min = self.min_value(self.tolerance);
+        let self_max = self.max_value(self.tolerance);
+
+        // Self range must fit within other range
+        self_min >= other_min && self_max <= other_max
+    }
+
+    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
+    pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
+        let default_tolerance = match other.unit {
+            PhysicalUnit::Ohms => "0.01".parse().unwrap(), // 1% for resistors
+            PhysicalUnit::Farads => "0.1".parse().unwrap(), // 10% for capacitors
+            _ => "0.01".parse().unwrap(),                  // 1% for others
+        };
+        self.fits_within(other, default_tolerance)
     }
 }
 

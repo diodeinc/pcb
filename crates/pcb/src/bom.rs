@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::build::create_diagnostics_passes;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
@@ -36,6 +36,10 @@ pub struct BomArgs {
     /// Output format
     #[arg(short, long, default_value_t = BomFormat::Table)]
     pub format: BomFormat,
+
+    /// JSON file containing BOM matching rules
+    #[arg(short = 'r', long = "rules", value_hint = clap::ValueHint::FilePath)]
+    pub rules: Option<PathBuf>,
 }
 
 pub fn execute(args: BomArgs) -> Result<()> {
@@ -55,7 +59,18 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // Generate BOM entries
     spinner.set_message(format!("{file_name}: Generating BOM"));
-    let bom = schematic.bom();
+    let mut bom = schematic.bom();
+
+    // Apply BOM matching rules if provided
+    if let Some(rules_path) = &args.rules {
+        spinner.set_message(format!("{file_name}: Applying BOM rules"));
+        let rules_content =
+            std::fs::read_to_string(rules_path).context("Failed to read rules file")?;
+        let rules: Vec<pcb_sch::BomMatchingRule> =
+            serde_json::from_str(&rules_content).context("Failed to parse rules file")?;
+        bom.apply_bom_rules(&rules);
+    }
+
     spinner.finish();
 
     let mut writer = io::stdout().lock();
@@ -79,13 +94,34 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             .unwrap()
             .map(|d| d.as_str().unwrap())
             .join(",");
+        // Use matched part info if available, otherwise use base component info
+        let (mpn, manufacturer, distributor) = if let Some(matched) = entry.get("matched_part") {
+            (
+                matched["manufacturer_pn"].as_str().unwrap_or_default(),
+                matched["manufacturer"].as_str().unwrap_or_default(),
+                matched["distributor"].as_str().unwrap_or_default(),
+            )
+        } else {
+            (
+                entry["mpn"].as_str().unwrap_or_default(),
+                entry["manufacturer"].as_str().unwrap_or_default(),
+                "",
+            )
+        };
+
+        // Use description if available, otherwise fall back to value
+        let description = entry["description"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| entry["value"].as_str().unwrap_or_default());
+
         table.add_row(vec![
             designators.as_str(),
-            entry["mpn"].as_str().unwrap_or_default(),
-            entry["manufacturer"].as_str().unwrap_or_default(),
+            mpn,
+            manufacturer,
             entry["package"].as_str().unwrap_or_default(),
-            entry["value"].as_str().unwrap_or_default(),
-            entry["description"].as_str().unwrap_or_default(),
+            description,
+            distributor,
             if entry["dnp"].as_bool().unwrap() {
                 "Yes"
             } else {
@@ -100,8 +136,8 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
         "MPN",
         "Manufacturer",
         "Package",
-        "Value",
         "Description",
+        "Distributor",
         "DNP",
     ]);
 
