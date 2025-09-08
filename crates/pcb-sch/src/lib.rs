@@ -17,10 +17,7 @@ pub mod kicad_netlist;
 pub mod kicad_schematic;
 
 // Re-export BOM functionality
-pub use bom::{
-    Bom, BomMatchingKey, BomMatchingRule, BomMatchingValue, CapacitorMatchingKey,
-    ResistorMatchingKey,
-};
+pub use bom::{Bom, BomMatchingKey, BomMatchingRule, BomMatchingValue, GenericMatchingKey};
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

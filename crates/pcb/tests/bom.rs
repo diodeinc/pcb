@@ -78,12 +78,14 @@ Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc.NET, P2 = gnd.N
 const SAMPLE_BOM_RULES: &str = r#"[
   {
     "key": {
-      "Resistor": {
+      "Generic": {
+        "component_type": "Resistor",
         "resistance": {
           "value": "1000.0",
           "tolerance": "0.0",
           "unit": "Ohms"
-        }
+        },
+        "voltage": null
       }
     },
     "value": {
@@ -95,12 +97,14 @@ const SAMPLE_BOM_RULES: &str = r#"[
   },
   {
     "key": {
-      "Resistor": {
+      "Generic": {
+        "component_type": "Resistor",
         "resistance": {
           "value": "4700.0",
           "tolerance": "0.0",
           "unit": "Ohms"
-        }
+        },
+        "voltage": null
       }
     },
     "value": {
@@ -112,7 +116,8 @@ const SAMPLE_BOM_RULES: &str = r#"[
   },
   {
     "key": {
-      "Capacitor": {
+      "Generic": {
+        "component_type": "Capacitor",
         "capacitance": {
           "value": "100e-9",
           "tolerance": "0.1",
@@ -123,7 +128,8 @@ const SAMPLE_BOM_RULES: &str = r#"[
           "tolerance": "0.0",
           "unit": "Volts"
         },
-        "dielectric": "X7R"
+        "dielectric": "X7R",
+        "esr": null
       }
     },
     "value": {
@@ -135,7 +141,7 @@ const SAMPLE_BOM_RULES: &str = r#"[
   },
   {
     "key": {
-      "Designator": "C2"
+      "Path": ["LED2.D1.D"]
     },
     "value": {
       "distributor": "digikey",
