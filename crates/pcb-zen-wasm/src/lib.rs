@@ -548,16 +548,9 @@ impl Module {
             .map(|output| output.signature.clone());
 
         // Generate BOM JSON from the schematic if available
-        let bom_json = schematic_opt.as_ref().and_then(|schematic| {
-            let entries = pcb_sch::generate_bom_entries(&mut schematic.clone());
-            match serde_json::to_string(&entries) {
-                Ok(json) => Some(json),
-                Err(e) => {
-                    log::error!("Failed to serialize BOM to JSON: {e}");
-                    None
-                }
-            }
-        });
+        let bom_json = schematic_opt
+            .as_ref()
+            .map(|schematic| schematic.bom().ungrouped_json());
 
         // Build evaluation result
         let evaluation_result = EvaluationResult {

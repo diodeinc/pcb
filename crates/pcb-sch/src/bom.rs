@@ -1,81 +1,61 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AttributeValue, InstanceKind, PhysicalValue, Schematic};
+use crate::{InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BomEntry {
-    pub path: String,
-    pub designator: String,
+pub struct Bom {
+    entries: HashMap<String, BomEntry>,   // path -> BomEntry
+    designators: HashMap<String, String>, // path -> designator
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct GroupedBomEntry {
+    designators: BTreeSet<String>,
+    #[serde(flatten)]
+    entry: BomEntry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>,
+    mpn: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub alternatives: Vec<String>,
+    alternatives: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
+    manufacturer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    package: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub well_known_module: Option<WellKnownModule>,
+    well_known_module: Option<WellKnownComponent>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub voltage: Option<PhysicalValue>,
-    pub dnp: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AggregatedBomEntry {
-    pub designators: BTreeSet<String>,
-    pub manufacturer: Option<String>,
-    pub mpn: Option<String>,
-    pub alternatives: Vec<String>,
-    pub package: Option<String>,
-    pub value: Option<String>,
-    pub description: Option<String>,
-    pub well_known_module: Option<WellKnownModule>,
-    pub voltage: Option<PhysicalValue>,
-    pub dnp: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct GroupKey {
-    mpn: Option<String>,
-    manufacturer: Option<String>,
-    package: Option<String>,
-    value: Option<String>,
-    description: Option<String>,
-    alternatives: Vec<String>,
+    voltage: Option<PhysicalValue>,
     dnp: bool,
 }
 
-impl From<&BomEntry> for GroupKey {
-    fn from(entry: &BomEntry) -> Self {
-        Self {
-            mpn: entry.mpn.clone(),
-            manufacturer: entry.manufacturer.clone(),
-            package: entry.package.clone(),
-            value: entry.value.clone(),
-            description: entry.description.clone(),
-            alternatives: entry.alternatives.clone(),
-            dnp: entry.dnp,
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct UngroupedBomEntry {
+    path: String,
+    designator: String,
+    #[serde(flatten)]
+    entry: BomEntry,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "component_type")]
-pub enum WellKnownModule {
+pub enum WellKnownComponent {
     Capacitor(Capacitor),
     Resistor(Resistor),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Capacitor {
     pub capacitance: PhysicalValue,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,7 +64,7 @@ pub struct Capacitor {
     pub esr: Option<PhysicalValue>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Resistor {
     pub resistance: PhysicalValue,
 }
@@ -119,107 +99,96 @@ impl FromStr for Dielectric {
     }
 }
 
-/// Generate ungrouped BOM entries from a schematic
-pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEntry> {
-    let mut bom_entries = BTreeMap::new();
+impl Bom {
+    pub fn from_schematic(schematic: &Schematic) -> Self {
+        let mut designators = HashMap::<String, String>::new();
+        let mut entries = HashMap::<String, BomEntry>::new();
 
-    // Iterate through all instances and find components
-    for (instance_ref, instance) in &schematic.instances {
-        if instance.kind != InstanceKind::Component {
-            continue;
+        schematic
+            .instances
+            .iter()
+            .filter(|(_, instance)| instance.kind == InstanceKind::Component)
+            .for_each(|(instance_ref, instance)| {
+                let designator = instance.reference_designator.clone().unwrap();
+                let path = instance_ref.instance_path.join(".");
+                let bom_entry = BomEntry {
+                    mpn: instance.mpn(),
+                    manufacturer: instance.manufacturer(),
+                    description: instance.description(),
+                    package: instance.package(),
+                    value: instance.value(),
+                    alternatives: instance.string_list_attr(&["__alternatives__"]),
+                    well_known_module: detect_well_known_module(instance),
+                    voltage: instance.physical_attr(&["__voltage__"]),
+                    dnp: instance.dnp(),
+                };
+                entries.insert(path.clone(), bom_entry);
+                designators.insert(path, designator);
+            });
+
+        Bom {
+            entries,
+            designators,
         }
-
-        let designator = instance
-            .reference_designator
-            .clone()
-            .unwrap_or_else(|| format!("?{}", instance_ref.instance_path.join(".")));
-
-        let path = instance_ref.instance_path.join(".");
-
-        // Extract attributes directly from the original map
-        let mpn = get_string_attribute(&instance.attributes, &["MPN", "Mpn", "mpn"]);
-        let manufacturer =
-            get_string_attribute(&instance.attributes, &["Manufacturer", "manufacturer"]);
-        let package = get_string_attribute(&instance.attributes, &["Package", "package"]);
-        let description =
-            get_string_attribute(&instance.attributes, &["Description", "description"]);
-        let voltage = get_physical_attribute(&instance.attributes, &["__voltage__"]);
-
-        // Determine if component should be populated
-        let do_not_populate = get_string_attribute(
-            &instance.attributes,
-            &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
-        )
-        .map(|s| s.to_lowercase() == "true" || s == "1")
-        .unwrap_or(false);
-
-        // Check if it's a test component
-        let is_test_component = designator.starts_with("TP");
-
-        let dnp = do_not_populate || is_test_component;
-
-        let value = get_string_attribute(&instance.attributes, &["Value"]);
-
-        // Extract alternates from structured AttributeValue::Array
-        let alternatives = instance
-            .attributes
-            .get("__alternatives__")
-            .and_then(|attr| match attr {
-                AttributeValue::Array(arr) => Some(
-                    arr.iter()
-                        .filter_map(|av| match av {
-                            AttributeValue::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<String>>(),
-                ),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let well_known_module = detect_well_known_module(&instance.attributes);
-
-        bom_entries.insert(
-            path.clone(),
-            BomEntry {
-                path: path.clone(),
-                designator,
-                mpn,
-                manufacturer,
-                alternatives,
-                package,
-                value,
-                description,
-                well_known_module,
-                dnp,
-                voltage,
-            },
-        );
     }
 
-    bom_entries
+    pub fn ungrouped_json(&self) -> String {
+        let mut entries = self
+            .entries
+            .iter()
+            .map(|(path, entry)| UngroupedBomEntry {
+                path: path.clone(),
+                designator: self.designators[path].clone(),
+                entry: entry.clone(),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.designator.cmp(&b.designator));
+        serde_json::to_string_pretty(&entries).unwrap()
+    }
+
+    pub fn grouped_json(&self) -> String {
+        // Group entries by their BomEntry content
+        let mut groups = HashMap::<BomEntry, BTreeSet<String>>::new();
+
+        for (path, entry) in &self.entries {
+            groups
+                .entry(entry.clone())
+                .or_default()
+                .insert(self.designators[path].clone());
+        }
+
+        let mut grouped_entries = groups
+            .into_iter()
+            .map(|(entry, designators)| GroupedBomEntry { entry, designators })
+            .collect::<Vec<_>>();
+
+        grouped_entries.sort_by(|a, b| {
+            let a_designator = a.designators.iter().next().unwrap();
+            let b_designator = b.designators.iter().next().unwrap();
+            a_designator.cmp(b_designator)
+        });
+
+        serde_json::to_string_pretty(&grouped_entries).unwrap()
+    }
 }
 
 /// Detect well-known modules based on Type attribute
-fn detect_well_known_module(
-    attributes: &HashMap<String, AttributeValue>,
-) -> Option<WellKnownModule> {
-    let module_type = get_string_attribute(attributes, &["type", "Type"])?;
-
-    match module_type.to_lowercase().as_str() {
+fn detect_well_known_module(instance: &crate::Instance) -> Option<WellKnownComponent> {
+    match instance.component_type()?.as_str() {
         "resistor" => {
-            if let Some(resistance) = get_physical_attribute(attributes, &["__resistance__"]) {
-                return Some(WellKnownModule::Resistor(Resistor { resistance }));
+            if let Some(resistance) = instance.physical_attr(&["__resistance__"]) {
+                return Some(WellKnownComponent::Resistor(Resistor { resistance }));
             }
         }
         "capacitor" => {
-            if let Some(capacitance) = get_physical_attribute(attributes, &["__capacitance__"]) {
-                let dielectric =
-                    get_string_attribute(attributes, &["Dielectric"]).and_then(|d| d.parse().ok());
+            if let Some(capacitance) = instance.physical_attr(&["__capacitance__"]) {
+                let dielectric = instance
+                    .string_attr(&["Dielectric", "dielectric"])
+                    .and_then(|d| d.parse().ok());
 
-                let esr = get_physical_attribute(attributes, &["__esr__"]);
+                let esr = instance.physical_attr(&["__esr__"]);
 
-                return Some(WellKnownModule::Capacitor(Capacitor {
+                return Some(WellKnownComponent::Capacitor(Capacitor {
                     capacitance,
                     dielectric,
                     esr,
@@ -232,77 +201,27 @@ fn detect_well_known_module(
     None
 }
 
-/// Group BOM entries that have identical properties
-pub fn group_bom_entries(entries: BTreeMap<String, BomEntry>) -> Vec<AggregatedBomEntry> {
-    use std::collections::HashMap;
-
-    let mut grouped: HashMap<GroupKey, AggregatedBomEntry> = HashMap::new();
-
-    for (_, entry) in entries {
-        let key = GroupKey::from(&entry);
-
-        grouped
-            .entry(key)
-            .and_modify(|existing| {
-                existing.designators.insert(entry.designator.clone());
-            })
-            .or_insert(AggregatedBomEntry {
-                designators: {
-                    let mut set = BTreeSet::new();
-                    set.insert(entry.designator);
-                    set
-                },
-                manufacturer: entry.manufacturer,
-                mpn: entry.mpn,
-                alternatives: entry.alternatives,
-                package: entry.package,
-                value: entry.value,
-                description: entry.description,
-                well_known_module: entry.well_known_module,
-                voltage: entry.voltage,
-                dnp: entry.dnp,
-            });
-    }
-
-    let mut result: Vec<_> = grouped.into_values().collect();
-    result.sort_by(|a, b| a.designators.first().cmp(&b.designators.first()));
-    result
-}
-
-/// Helper function to extract string values from attributes, trying multiple key variations
-fn get_string_attribute(
-    attributes: &HashMap<String, AttributeValue>,
-    keys: &[&str],
-) -> Option<String> {
-    keys.iter().find_map(|&key| {
-        attributes.get(key).and_then(|attr| match attr {
-            AttributeValue::String(s) => Some(s.clone()),
-            AttributeValue::Physical(pv) => Some(pv.to_string()),
-            _ => None,
-        })
-    })
-}
-
-/// Helper function to extract PhysicalValue from attributes, trying multiple key variations
-fn get_physical_attribute(
-    attributes: &HashMap<String, AttributeValue>,
-    keys: &[&str],
-) -> Option<PhysicalValue> {
-    keys.iter().find_map(|&key| {
-        attributes.get(key).and_then(|attr| match attr {
-            AttributeValue::Physical(pv) => Some(pv.clone()),
-            _ => None,
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PhysicalUnit;
+    use crate::{AttributeValue, Instance, ModuleRef, PhysicalUnit};
     use rust_decimal::prelude::FromPrimitive;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn test_instance(attributes: HashMap<String, AttributeValue>) -> Instance {
+        Instance {
+            type_ref: ModuleRef {
+                source_path: PathBuf::new(),
+                module_name: String::default(),
+            },
+            kind: InstanceKind::Component,
+            attributes,
+            children: Default::default(),
+            reference_designator: Some("U1".to_string()),
+        }
+    }
 
     #[test]
     fn test_detect_well_known_module() {
@@ -317,10 +236,11 @@ mod tests {
             AttributeValue::Physical(PhysicalValue::new(10000.0, 0.01, PhysicalUnit::Ohms)),
         );
 
-        let result = detect_well_known_module(&attributes);
+        let instance = test_instance(attributes);
+        let result = detect_well_known_module(&instance);
 
         match result {
-            Some(WellKnownModule::Resistor(resistor)) => {
+            Some(WellKnownComponent::Resistor(resistor)) => {
                 assert_eq!(
                     resistor.resistance.value,
                     Decimal::from_f64(10000.0).unwrap()
@@ -348,10 +268,11 @@ mod tests {
             AttributeValue::String("X7R".to_string()),
         );
 
-        let result = detect_well_known_module(&capacitor_attributes);
+        let instance = test_instance(capacitor_attributes);
+        let result = detect_well_known_module(&instance);
 
         match result {
-            Some(WellKnownModule::Capacitor(capacitor)) => {
+            Some(WellKnownComponent::Capacitor(capacitor)) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
                     (capacitor.capacitance.value - expected_value).abs()
@@ -377,9 +298,9 @@ mod tests {
             "resistance": {"value": "10000.0", "tolerance": "0.01", "unit": "Ohms"}
         }"#;
 
-        let resistor: WellKnownModule = serde_json::from_str(resistor_json).unwrap();
+        let resistor: WellKnownComponent = serde_json::from_str(resistor_json).unwrap();
         match resistor {
-            WellKnownModule::Resistor(r) => {
+            WellKnownComponent::Resistor(r) => {
                 assert_eq!(r.resistance.value, Decimal::from_f64(10000.0).unwrap());
                 assert_eq!(r.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
             }
@@ -393,9 +314,9 @@ mod tests {
             "dielectric": "X7R"
         }"#;
 
-        let capacitor: WellKnownModule = serde_json::from_str(capacitor_json).unwrap();
+        let capacitor: WellKnownComponent = serde_json::from_str(capacitor_json).unwrap();
         match capacitor {
-            WellKnownModule::Capacitor(c) => {
+            WellKnownComponent::Capacitor(c) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
                     (c.capacitance.value - expected_value).abs()
@@ -408,63 +329,12 @@ mod tests {
         }
 
         // Test round-trip serialization
-        let original_resistor = WellKnownModule::Resistor(Resistor {
+        let original_resistor = WellKnownComponent::Resistor(Resistor {
             resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
         });
 
         let json = serde_json::to_string_pretty(&original_resistor).unwrap();
-        let deserialized: WellKnownModule = serde_json::from_str(&json).unwrap();
+        let deserialized: WellKnownComponent = serde_json::from_str(&json).unwrap();
         assert_eq!(original_resistor, deserialized);
-    }
-
-    #[test]
-    fn test_get_string_attribute() {
-        let mut attributes = HashMap::new();
-        attributes.insert(
-            "Mpn".to_string(),
-            AttributeValue::String("RC0603FR-0710KL".to_string()),
-        );
-        attributes.insert(
-            "__resistance__".to_string(),
-            AttributeValue::Physical(PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms)),
-        );
-
-        // Test string attribute extraction
-        let mpn = get_string_attribute(&attributes, &["MPN", "Mpn", "mpn"]);
-        assert_eq!(mpn, Some("RC0603FR-0710KL".to_string()));
-
-        // Test physical value converted to string
-        let resistance_str = get_string_attribute(&attributes, &["__resistance__"]);
-        assert!(resistance_str.is_some());
-
-        // Test missing attribute
-        let missing = get_string_attribute(&attributes, &["Missing"]);
-        assert_eq!(missing, None);
-    }
-
-    #[test]
-    fn test_get_physical_attribute() {
-        let mut attributes = HashMap::new();
-        let physical_value = PhysicalValue::new(4700.0, 0.01, PhysicalUnit::Ohms);
-        attributes.insert(
-            "__resistance__".to_string(),
-            AttributeValue::Physical(physical_value.clone()),
-        );
-        attributes.insert(
-            "StringValue".to_string(),
-            AttributeValue::String("not physical".to_string()),
-        );
-
-        // Test physical attribute extraction
-        let resistance = get_physical_attribute(&attributes, &["__resistance__"]);
-        assert_eq!(resistance, Some(physical_value));
-
-        // Test non-physical attribute
-        let string_val = get_physical_attribute(&attributes, &["StringValue"]);
-        assert_eq!(string_val, None);
-
-        // Test missing attribute
-        let missing = get_physical_attribute(&attributes, &["Missing"]);
-        assert_eq!(missing, None);
     }
 }

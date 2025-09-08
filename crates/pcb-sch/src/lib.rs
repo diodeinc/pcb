@@ -11,13 +11,13 @@
 //!   stable [`netlist::InstanceRef`].
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
-pub mod bom;
+mod bom;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
 
 // Re-export BOM functionality
-pub use bom::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
+pub use bom::Bom;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -143,7 +143,7 @@ pub enum InstanceKind {
     Pin,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PhysicalUnit {
     Ohms,
     Volts,
@@ -170,7 +170,7 @@ impl std::fmt::Display for PhysicalUnit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PhysicalValue {
     // Serialize as a string to preserve full precision in JSON
     #[serde(with = "rust_decimal::serde::str")]
@@ -346,6 +346,81 @@ impl Instance {
         self.reference_designator = Some(designator.into());
         self
     }
+
+    pub fn string_attr(&self, keys: &[&str]) -> Option<String> {
+        keys.iter().find_map(|&key| {
+            self.attributes.get(key).and_then(|attr| match attr {
+                AttributeValue::String(s) => Some(s.clone()),
+                AttributeValue::Physical(pv) => Some(pv.to_string()),
+                _ => None,
+            })
+        })
+    }
+
+    pub fn string_list_attr(&self, keys: &[&str]) -> Vec<String> {
+        keys.iter()
+            .find_map(|&key| match self.attributes.get(key)? {
+                AttributeValue::Array(arr) => Some(
+                    arr.iter()
+                        .filter_map(|av| match av {
+                            AttributeValue::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<String>>(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
+        keys.iter().find_map(|&key| {
+            self.attributes.get(key).and_then(|attr| match attr {
+                AttributeValue::Physical(pv) => Some(pv.clone()),
+                _ => None,
+            })
+        })
+    }
+
+    pub fn component_type(&self) -> Option<String> {
+        self.string_attr(&["Type", "type"])
+            .map(|s| s.to_lowercase())
+    }
+
+    pub fn mpn(&self) -> Option<String> {
+        self.string_attr(&["MPN", "Mpn", "mpn"])
+    }
+
+    pub fn manufacturer(&self) -> Option<String> {
+        self.string_attr(&["Manufacturer", "manufacturer"])
+    }
+
+    pub fn description(&self) -> Option<String> {
+        self.string_attr(&["Description", "description"])
+    }
+
+    pub fn package(&self) -> Option<String> {
+        self.string_attr(&["Package", "package"])
+    }
+
+    pub fn value(&self) -> Option<String> {
+        self.string_attr(&["Value", "value"])
+    }
+
+    pub fn is_test_component(&self) -> bool {
+        self.reference_designator
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("TP")
+    }
+
+    pub fn dnp(&self) -> bool {
+        self.is_test_component()
+            || self
+                .string_attr(&["do_not_populate", "Do_not_populate", "DNP", "dnp"])
+                .map(|s| s.to_lowercase() == "true" || s == "1")
+                .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -451,6 +526,10 @@ impl Schematic {
         }
 
         ref_map
+    }
+
+    pub fn bom(&self) -> Bom {
+        Bom::from_schematic(self)
     }
 }
 
