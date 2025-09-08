@@ -18,12 +18,14 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     },
-    "matched_part": {
-      "distributor": "digikey",
-      "distributor_pn": "311-1.00KHRCT-ND",
-      "manufacturer": "Yageo",
-      "manufacturer_pn": "RC0603FR-071KL"
-    },
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-1.00KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0603FR-071KL"
+      }
+    ],
     "dnp": false
   },
   {
@@ -37,12 +39,14 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     },
-    "matched_part": {
-      "distributor": "digikey",
-      "distributor_pn": "311-1.00KHRCT-ND",
-      "manufacturer": "Yageo",
-      "manufacturer_pn": "RC0603FR-071KL"
-    },
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-1.00KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0603FR-071KL"
+      }
+    ],
     "dnp": false
   },
   {
@@ -56,12 +60,14 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     },
-    "matched_part": {
-      "distributor": "digikey",
-      "distributor_pn": "311-4.70KHRCT-ND",
-      "manufacturer": "Yageo",
-      "manufacturer_pn": "RC0402FR-074K7L"
-    },
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-4.70KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0402FR-074K7L"
+      }
+    ],
     "dnp": false
   }
 ]

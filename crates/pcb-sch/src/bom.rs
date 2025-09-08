@@ -34,10 +34,40 @@ struct BomEntry {
     description: Option<String>,
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    generic_data: Option<WellKnownComponent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    matched_part: Option<BomMatchingValue>,
+    generic_data: Option<GenericComponent>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    offers: Vec<Offer>,
     dnp: bool,
+}
+
+impl BomEntry {
+    pub fn matches_mpn(&self, mpn: &str) -> bool {
+        // Check main MPN
+        if let Some(entry_mpn) = &self.mpn {
+            if entry_mpn == mpn {
+                return true;
+            }
+        }
+
+        // Check alternatives
+        self.alternatives.iter().any(|alt| alt == mpn)
+    }
+
+    pub fn matches_generic(&self, key: &GenericMatchingKey) -> bool {
+        // Check package compatibility if both specify it
+        if let (Some(key_package), Some(entry_package)) = (&key.package, &self.package) {
+            if key_package != entry_package {
+                return false;
+            }
+        }
+
+        // Check component-specific matching
+        if let Some(generic_data) = &self.generic_data {
+            generic_data.matches(&key.component)
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,9 +80,24 @@ struct UngroupedBomEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "component_type")]
-pub enum WellKnownComponent {
+pub enum GenericComponent {
     Capacitor(Capacitor),
     Resistor(Resistor),
+}
+
+impl GenericComponent {
+    pub fn matches(&self, key: &GenericComponent) -> bool {
+        match (self, key) {
+            (GenericComponent::Resistor(resistor), GenericComponent::Resistor(key_resistor)) => {
+                resistor.matches(key_resistor)
+            }
+            (
+                GenericComponent::Capacitor(capacitor),
+                GenericComponent::Capacitor(key_capacitor),
+            ) => capacitor.matches(key_capacitor),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -73,21 +118,17 @@ impl Capacitor {
             return false;
         }
 
-        // Check voltage: key voltage must be <= component voltage (or component has no voltage requirement)
-        if let Some(key_voltage) = &key.voltage {
-            if let Some(component_voltage) = &self.voltage {
-                if key_voltage.value > component_voltage.value {
-                    return false;
-                }
+        // Check voltage: key voltage must be > component voltage
+        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
+            if key_voltage.value > component_voltage.value {
+                return false;
             }
         }
 
-        // Check dielectric: key dielectric must match component dielectric (or component has no dielectric requirement)
-        if let Some(key_dielectric) = &key.dielectric {
-            if let Some(component_dielectric) = &self.dielectric {
-                if key_dielectric != component_dielectric {
-                    return false;
-                }
+        // Check dielectric: key dielectric must match component dielectric
+        if let (Some(key_dielec), Some(component_dielec)) = (&key.dielectric, &self.dielectric) {
+            if key_dielec != component_dielec {
+                return false;
             }
         }
 
@@ -109,12 +150,10 @@ impl Resistor {
             return false;
         }
 
-        // Check voltage: key voltage must be <= component voltage (or component has no voltage requirement)
-        if let Some(key_voltage) = &key.voltage {
-            if let Some(component_voltage) = &self.voltage {
-                if key_voltage.value > component_voltage.value {
-                    return false;
-                }
+        // Check voltage: key voltage must be > component voltage
+        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
+            if key_voltage.value > component_voltage.value {
+                return false;
             }
         }
 
@@ -161,14 +200,15 @@ pub enum BomMatchingKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "component_type")]
-pub enum GenericMatchingKey {
-    Resistor(Resistor),
-    Capacitor(Capacitor),
+pub struct GenericMatchingKey {
+    #[serde(flatten)]
+    pub component: GenericComponent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BomMatchingValue {
+pub struct Offer {
     pub distributor: String,
     pub distributor_pn: String,
     pub manufacturer: Option<String>,
@@ -178,7 +218,7 @@ pub struct BomMatchingValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BomMatchingRule {
     pub key: BomMatchingKey,
-    pub value: BomMatchingValue,
+    pub offers: Vec<Offer>,
 }
 
 impl Bom {
@@ -200,8 +240,8 @@ impl Bom {
                     package: instance.package(),
                     value: instance.value(),
                     alternatives: instance.string_list_attr(&["__alternatives__"]),
-                    generic_data: detect_well_known_component(instance),
-                    matched_part: None,
+                    generic_data: detect_generic_component(instance),
+                    offers: Vec::new(),
                     dnp: instance.dnp(),
                 };
                 entries.insert(path.clone(), bom_entry);
@@ -258,38 +298,36 @@ impl Bom {
             BomMatchingKey::Path(target_paths) => {
                 for target_path in target_paths {
                     if let Some(entry) = self.entries.get_mut(target_path) {
-                        entry.matched_part = Some(rule.value.clone());
+                        entry.offers.extend(rule.offers.clone());
                     }
                 }
             }
             BomMatchingKey::Mpn(mpn) => {
                 for entry in self.entries.values_mut() {
-                    if entry.mpn.as_ref() == Some(mpn) {
-                        entry.matched_part = Some(rule.value.clone());
+                    if entry.matches_mpn(mpn) {
+                        entry.offers.extend(rule.offers.clone());
                     }
                 }
             }
-            BomMatchingKey::Generic(generic_key) => match generic_key {
-                GenericMatchingKey::Resistor(key_resistor) => {
-                    for entry in self.entries.values_mut() {
-                        if let Some(WellKnownComponent::Resistor(resistor)) = &entry.generic_data {
-                            if resistor.matches(key_resistor) {
-                                entry.matched_part = Some(rule.value.clone());
-                            }
-                        }
-                    }
-                }
-                GenericMatchingKey::Capacitor(key_capacitor) => {
-                    for entry in self.entries.values_mut() {
-                        if let Some(WellKnownComponent::Capacitor(capacitor)) = &entry.generic_data
+            BomMatchingKey::Generic(generic_key) => {
+                for entry in self.entries.values_mut() {
+                    if entry.generic_data.is_some() {
+                        // Check package compatibility if both specify it
+                        if let (Some(key_package), Some(entry_package)) =
+                            (&generic_key.package, &entry.package)
                         {
-                            if capacitor.matches(key_capacitor) {
-                                entry.matched_part = Some(rule.value.clone());
+                            if key_package != entry_package {
+                                continue;
                             }
+                        }
+
+                        // Check component-specific matching
+                        if entry.matches_generic(generic_key) {
+                            entry.offers.extend(rule.offers.clone());
                         }
                     }
                 }
-            },
+            }
         }
     }
 
@@ -300,13 +338,13 @@ impl Bom {
     }
 }
 
-/// Detect well-known components based on Type attribute
-fn detect_well_known_component(instance: &crate::Instance) -> Option<WellKnownComponent> {
+/// Detect generic components based on Type attribute
+fn detect_generic_component(instance: &crate::Instance) -> Option<GenericComponent> {
     match instance.component_type()?.as_str() {
         "resistor" => {
             if let Some(resistance) = instance.physical_attr(&["__resistance__"]) {
                 let voltage = instance.physical_attr(&["__voltage__"]);
-                return Some(WellKnownComponent::Resistor(Resistor {
+                return Some(GenericComponent::Resistor(Resistor {
                     resistance,
                     voltage,
                 }));
@@ -321,7 +359,7 @@ fn detect_well_known_component(instance: &crate::Instance) -> Option<WellKnownCo
                 let esr = instance.physical_attr(&["__esr__"]);
                 let voltage = instance.physical_attr(&["__voltage__"]);
 
-                return Some(WellKnownComponent::Capacitor(Capacitor {
+                return Some(GenericComponent::Capacitor(Capacitor {
                     capacitance,
                     dielectric,
                     esr,
@@ -358,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_well_known_module() {
+    fn test_detect_generic_component() {
         // Create a mock resistor with Type attribute
         let mut attributes = HashMap::new();
         attributes.insert(
@@ -371,10 +409,10 @@ mod tests {
         );
 
         let instance = test_instance(attributes);
-        let result = detect_well_known_component(&instance);
+        let result = detect_generic_component(&instance);
 
         match result {
-            Some(WellKnownComponent::Resistor(resistor)) => {
+            Some(GenericComponent::Resistor(resistor)) => {
                 assert_eq!(
                     resistor.resistance.value,
                     Decimal::from_f64(10000.0).unwrap()
@@ -403,10 +441,10 @@ mod tests {
         );
 
         let instance = test_instance(capacitor_attributes);
-        let result = detect_well_known_component(&instance);
+        let result = detect_generic_component(&instance);
 
         match result {
-            Some(WellKnownComponent::Capacitor(capacitor)) => {
+            Some(GenericComponent::Capacitor(capacitor)) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
                     (capacitor.capacitance.value - expected_value).abs()
@@ -432,9 +470,9 @@ mod tests {
             "resistance": {"value": "10000.0", "tolerance": "0.01", "unit": "Ohms"}
         }"#;
 
-        let resistor: WellKnownComponent = serde_json::from_str(resistor_json).unwrap();
+        let resistor: GenericComponent = serde_json::from_str(resistor_json).unwrap();
         match resistor {
-            WellKnownComponent::Resistor(r) => {
+            GenericComponent::Resistor(r) => {
                 assert_eq!(r.resistance.value, Decimal::from_f64(10000.0).unwrap());
                 assert_eq!(r.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
             }
@@ -448,9 +486,9 @@ mod tests {
             "dielectric": "X7R"
         }"#;
 
-        let capacitor: WellKnownComponent = serde_json::from_str(capacitor_json).unwrap();
+        let capacitor: GenericComponent = serde_json::from_str(capacitor_json).unwrap();
         match capacitor {
-            WellKnownComponent::Capacitor(c) => {
+            GenericComponent::Capacitor(c) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
                     (c.capacitance.value - expected_value).abs()
@@ -463,13 +501,13 @@ mod tests {
         }
 
         // Test round-trip serialization
-        let original_resistor = WellKnownComponent::Resistor(Resistor {
+        let original_resistor = GenericComponent::Resistor(Resistor {
             resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
             voltage: None,
         });
 
         let json = serde_json::to_string_pretty(&original_resistor).unwrap();
-        let deserialized: WellKnownComponent = serde_json::from_str(&json).unwrap();
+        let deserialized: GenericComponent = serde_json::from_str(&json).unwrap();
         assert_eq!(original_resistor, deserialized);
     }
 
@@ -634,11 +672,11 @@ mod tests {
             package: Some("0603".to_string()),
             value: Some("1kOhm".to_string()),
             alternatives: vec![],
-            generic_data: Some(WellKnownComponent::Resistor(Resistor {
+            generic_data: Some(GenericComponent::Resistor(Resistor {
                 resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
                 voltage: None,
             })),
-            matched_part: None,
+            offers: Vec::new(),
             dnp: false,
         };
 
@@ -647,45 +685,49 @@ mod tests {
 
         // Test resistor matching rule
         let resistor_rule = BomMatchingRule {
-            key: BomMatchingKey::Generic(GenericMatchingKey::Resistor(Resistor {
-                resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
-                voltage: None,
-            })),
-            value: BomMatchingValue {
+            key: BomMatchingKey::Generic(GenericMatchingKey {
+                component: GenericComponent::Resistor(Resistor {
+                    resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+                    voltage: None,
+                }),
+                package: None,
+            }),
+            offers: vec![Offer {
                 distributor: "digikey".to_string(),
                 distributor_pn: "311-1.00KHRCT-ND".to_string(),
                 manufacturer: Some("Yageo".to_string()),
                 manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-            },
+            }],
         };
 
         bom.apply_bom_rule(&resistor_rule);
 
         // Verify the rule was applied
         let entry = &bom.entries["R1.R"];
-        assert!(entry.matched_part.is_some());
-        let matched = entry.matched_part.as_ref().unwrap();
-        assert_eq!(matched.distributor, "digikey");
-        assert_eq!(matched.distributor_pn, "311-1.00KHRCT-ND");
-        assert_eq!(matched.manufacturer, Some("Yageo".to_string()));
+        assert_eq!(entry.offers.len(), 1);
+        let offer = &entry.offers[0];
+        assert_eq!(offer.distributor, "digikey");
+        assert_eq!(offer.distributor_pn, "311-1.00KHRCT-ND");
+        assert_eq!(offer.manufacturer, Some("Yageo".to_string()));
 
         // Test path matching rule
         let path_rule = BomMatchingRule {
             key: BomMatchingKey::Path(vec!["R1.R".to_string()]),
-            value: BomMatchingValue {
+            offers: vec![Offer {
                 distributor: "mouser".to_string(),
                 distributor_pn: "603-RC0603FR-071KL".to_string(),
                 manufacturer: Some("Yageo".to_string()),
                 manufacturer_pn: Some("RC0603FR-071KL".to_string()),
-            },
+            }],
         };
 
         bom.apply_bom_rule(&path_rule);
 
-        // Verify the path rule overwrote the previous match
+        // Verify the path rule added another offer (now we have 2 offers)
         let entry = &bom.entries["R1.R"];
-        let matched = entry.matched_part.as_ref().unwrap();
-        assert_eq!(matched.distributor, "mouser");
-        assert_eq!(matched.distributor_pn, "603-RC0603FR-071KL");
+        assert_eq!(entry.offers.len(), 2);
+        let mouser_offer = &entry.offers[1]; // Second offer should be the mouser one
+        assert_eq!(mouser_offer.distributor, "mouser");
+        assert_eq!(mouser_offer.distributor_pn, "603-RC0603FR-071KL");
     }
 }

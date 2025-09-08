@@ -94,20 +94,25 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             .unwrap()
             .map(|d| d.as_str().unwrap())
             .join(",");
-        // Use matched part info if available, otherwise use base component info
-        let (mpn, manufacturer, distributor) = if let Some(matched) = entry.get("matched_part") {
-            (
-                matched["manufacturer_pn"].as_str().unwrap_or_default(),
-                matched["manufacturer"].as_str().unwrap_or_default(),
-                matched["distributor"].as_str().unwrap_or_default(),
-            )
-        } else {
-            (
-                entry["mpn"].as_str().unwrap_or_default(),
-                entry["manufacturer"].as_str().unwrap_or_default(),
-                "",
-            )
-        };
+        // Use first offer info if available, otherwise use base component info
+        let (mpn, manufacturer, distributor) = entry
+            .get("offers")
+            .and_then(|o| o.as_array())
+            .and_then(|arr| arr.first())
+            .map(|offer| {
+                (
+                    offer["manufacturer_pn"].as_str().unwrap_or_default(),
+                    offer["manufacturer"].as_str().unwrap_or_default(),
+                    offer["distributor"].as_str().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    entry["mpn"].as_str().unwrap_or_default(),
+                    entry["manufacturer"].as_str().unwrap_or_default(),
+                    "",
+                )
+            });
 
         // Use description if available, otherwise fall back to value
         let description = entry["description"]

@@ -88,12 +88,14 @@ const SAMPLE_BOM_RULES: &str = r#"[
         "voltage": null
       }
     },
-    "value": {
-      "distributor": "digikey",
-      "distributor_pn": "311-1.00KHRCT-ND",
-      "manufacturer": "Yageo",
-      "manufacturer_pn": "RC0603FR-071KL"
-    }
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-1.00KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0603FR-071KL"
+      }
+    ]
   },
   {
     "key": {
@@ -107,12 +109,14 @@ const SAMPLE_BOM_RULES: &str = r#"[
         "voltage": null
       }
     },
-    "value": {
-      "distributor": "digikey",
-      "distributor_pn": "311-4.70KHRCT-ND",
-      "manufacturer": "Yageo",
-      "manufacturer_pn": "RC0402FR-074K7L"
-    }
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-4.70KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0402FR-074K7L"
+      }
+    ]
   },
   {
     "key": {
@@ -132,23 +136,27 @@ const SAMPLE_BOM_RULES: &str = r#"[
         "esr": null
       }
     },
-    "value": {
-      "distributor": "digikey",
-      "distributor_pn": "1276-1003-1-ND",
-      "manufacturer": "Samsung Electro-Mechanics",
-      "manufacturer_pn": "CL05B104KO5NNNC"
-    }
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "1276-1003-1-ND",
+        "manufacturer": "Samsung Electro-Mechanics",
+        "manufacturer_pn": "CL05B104KO5NNNC"
+      }
+    ]
   },
   {
     "key": {
       "Path": ["LED2.D1.D"]
     },
-    "value": {
-      "distributor": "digikey",
+    "offers": [
+    {
+      "distributor": "digikey", 
       "distributor_pn": "1276-6455-1-ND",
       "manufacturer": "Samsung Electro-Mechanics",
-      "manufacturer_pn": "CL21B106KOQNNNC"
-    }
+        "manufacturer_pn": "CL21B106KOQNNNC"
+      }
+    ]
   }
 ]"#;
 
