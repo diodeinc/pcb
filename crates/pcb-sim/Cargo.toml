@@ -20,7 +20,6 @@ pcb-kicad = { workspace = true }
 open = { workspace = true }
 inquire = { workspace = true }
 pcb-ui = { workspace = true }
-pcb-buildifier = { workspace = true }
 itertools = { workspace = true }
 tempfile = { workspace = true }
 pcb-zen-core = { workspace = true }

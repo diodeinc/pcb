@@ -1,6 +1,6 @@
 """
 Test board demonstrating workspace-relative paths (// syntax).
-This board uses modules referenced via // paths to test that workspace 
+This board uses modules referenced via // paths to test that workspace
 root detection works correctly with pcb.toml files.
 """
 
@@ -42,9 +42,9 @@ LedIndicatorModule(
 )
 
 Flash(
-    name = "FLASH",
-    VCC = vcc_3v3.NET,
-    GND = gnd.NET,
-    HOLD = Net(),
-    spi = Spi(),
+    name="FLASH",
+    VCC=vcc_3v3.NET,
+    GND=gnd.NET,
+    HOLD=Net(),
+    spi=Spi(),
 )

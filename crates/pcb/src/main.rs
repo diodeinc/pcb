@@ -58,7 +58,7 @@ enum Commands {
     /// Clean PCB build artifacts
     Clean(clean::CleanArgs),
 
-    /// Format .zen and .star files
+    /// Format .zen files
     Fmt(fmt::FmtArgs),
 
     /// Language Server Protocol support

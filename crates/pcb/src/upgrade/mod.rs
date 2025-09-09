@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use pcb_buildifier::Buildifier;
+use pcb_fmt::RuffFormatter;
 use pcb_ui::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -16,15 +16,15 @@ pub struct UpgradeArgs {
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
-    /// Recursively traverse directories to find .zen/.star files
+    /// Recursively traverse directories to find .zen files
     #[arg(short = 'r', long = "recursive", default_value_t = false)]
     pub recursive: bool,
 }
 
 /// Execute the `upgrade` command
 pub fn execute(args: UpgradeArgs) -> Result<()> {
-    // Initialize buildifier once to format files after upgrades
-    let buildifier = Buildifier::new()?;
+    // Initialize ruff formatter once to format files after upgrades
+    let formatter = RuffFormatter::default();
     // Determine target files
     let mut zen_paths = if args.recursive {
         crate::build::collect_files_recursive(&args.paths)?
@@ -99,7 +99,7 @@ pub fn execute(args: UpgradeArgs) -> Result<()> {
                 continue;
             }
             // Format file after successful write
-            if let Err(e) = buildifier.format_file(&path) {
+            if let Err(e) = formatter.format_file(&path) {
                 if let Some(sp) = spinner.take() {
                     sp.error(format!("{file_name}: Format failed: {e}"));
                 } else {

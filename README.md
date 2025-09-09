@@ -339,7 +339,7 @@ The open command:
 
 ### `pcb fmt`
 
-Format `.zen` and `.zen` files using the bundled buildifier formatter.
+Format `.zen` files using the ruff formatter.
 
 ```bash
 pcb fmt [OPTIONS] [PATHS...]
@@ -363,8 +363,8 @@ Examples:
 
 The fmt command:
 
-- Uses the bundled buildifier formatter (no external dependencies)
-- Formats files according to Bazel/Starlark style conventions
+- Uses the ruff formatter (no external dependencies)
+- Formats files according to Python PEP 8 style conventions
 - Supports checking mode (`--check`) for CI/CD pipelines
 - Shows diffs (`--diff`) without modifying files
 - Returns non-zero exit code if files need formatting in check mode
@@ -589,7 +589,7 @@ Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ### Third-Party Software
 
-- **buildifier**: The `pcb fmt` command includes a bundled buildifier binary from the [bazelbuild/buildtools](https://github.com/bazelbuild/buildtools) project, which is licensed under the Apache License, Version 2.0. See [crates/pcb-buildifier/LICENSE](crates/pcb-buildifier/LICENSE) for the full license text.
+- **ruff**: The `pcb fmt` command uses `ruff fmt` from the [astral-sh/ruff](https://github.com/astral-sh/ruff) project, which is licensed under the MIT. See [LICENSE](https://github.com/astral-sh/ruff/blob/main/LICENSE) for the full license text.
 
 ## Acknowledgments
 
