@@ -85,7 +85,8 @@ const SAMPLE_BOM_RULES: &str = r#"[
           "tolerance": "0.0",
           "unit": "Ohms"
         },
-        "voltage": null
+        "voltage": null,
+        "package": "0603"
       }
     },
     "offers": [
@@ -106,7 +107,8 @@ const SAMPLE_BOM_RULES: &str = r#"[
           "tolerance": "0.0",
           "unit": "Ohms"
         },
-        "voltage": null
+        "voltage": null,
+        "package": "0402"
       }
     },
     "offers": [
@@ -133,7 +135,8 @@ const SAMPLE_BOM_RULES: &str = r#"[
           "unit": "Volts"
         },
         "dielectric": "X7R",
-        "esr": null
+        "esr": null,
+        "package": "0402"
       }
     },
     "offers": [

@@ -36,7 +36,7 @@ struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     generic_data: Option<GenericComponent>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    offers: Vec<Offer>,
+    offers: Vec<MatchedOffer>,
     dnp: bool,
 }
 
@@ -54,11 +54,14 @@ impl BomEntry {
     }
 
     pub fn matches_generic(&self, key: &GenericMatchingKey) -> bool {
-        // Check package compatibility if both specify it
-        if let (Some(key_package), Some(entry_package)) = (&key.package, &self.package) {
-            if key_package != entry_package {
+        // Check package compatibility
+        if let Some(entry_package) = &self.package {
+            if &key.package != entry_package {
                 return false;
             }
+        } else {
+            // Entry has no package specified, cannot match a specific package requirement
+            return false;
         }
 
         // Check component-specific matching
@@ -67,6 +70,14 @@ impl BomEntry {
         } else {
             false
         }
+    }
+
+    pub fn add_offers(&mut self, key: BomMatchingKey, offers: Vec<Offer>) {
+        self.offers
+            .extend(offers.into_iter().map(|offer| MatchedOffer {
+                offer,
+                matched_by: key.clone(),
+            }));
     }
 }
 
@@ -192,19 +203,18 @@ impl FromStr for Dielectric {
 }
 
 // BOM Matching API
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BomMatchingKey {
     Mpn(String),
     Generic(GenericMatchingKey),
     Path(Vec<String>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GenericMatchingKey {
     #[serde(flatten)]
     pub component: GenericComponent,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
+    pub package: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -213,6 +223,13 @@ pub struct Offer {
     pub distributor_pn: String,
     pub manufacturer: Option<String>,
     pub manufacturer_pn: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MatchedOffer {
+    #[serde(flatten)]
+    pub offer: Offer,
+    pub matched_by: BomMatchingKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -298,33 +315,21 @@ impl Bom {
             BomMatchingKey::Path(target_paths) => {
                 for target_path in target_paths {
                     if let Some(entry) = self.entries.get_mut(target_path) {
-                        entry.offers.extend(rule.offers.clone());
+                        entry.add_offers(rule.key.clone(), rule.offers.clone());
                     }
                 }
             }
             BomMatchingKey::Mpn(mpn) => {
                 for entry in self.entries.values_mut() {
                     if entry.matches_mpn(mpn) {
-                        entry.offers.extend(rule.offers.clone());
+                        entry.add_offers(rule.key.clone(), rule.offers.clone());
                     }
                 }
             }
             BomMatchingKey::Generic(generic_key) => {
                 for entry in self.entries.values_mut() {
-                    if entry.generic_data.is_some() {
-                        // Check package compatibility if both specify it
-                        if let (Some(key_package), Some(entry_package)) =
-                            (&generic_key.package, &entry.package)
-                        {
-                            if key_package != entry_package {
-                                continue;
-                            }
-                        }
-
-                        // Check component-specific matching
-                        if entry.matches_generic(generic_key) {
-                            entry.offers.extend(rule.offers.clone());
-                        }
+                    if entry.matches_generic(generic_key) {
+                        entry.add_offers(rule.key.clone(), rule.offers.clone());
                     }
                 }
             }
@@ -690,7 +695,7 @@ mod tests {
                     resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
                     voltage: None,
                 }),
-                package: None,
+                package: "0603".to_string(),
             }),
             offers: vec![Offer {
                 distributor: "digikey".to_string(),
@@ -705,10 +710,16 @@ mod tests {
         // Verify the rule was applied
         let entry = &bom.entries["R1.R"];
         assert_eq!(entry.offers.len(), 1);
-        let offer = &entry.offers[0];
-        assert_eq!(offer.distributor, "digikey");
-        assert_eq!(offer.distributor_pn, "311-1.00KHRCT-ND");
-        assert_eq!(offer.manufacturer, Some("Yageo".to_string()));
+        let expected_matched_offer = MatchedOffer {
+            offer: Offer {
+                distributor: "digikey".to_string(),
+                distributor_pn: "311-1.00KHRCT-ND".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            },
+            matched_by: resistor_rule.key.clone(),
+        };
+        assert!(entry.offers.contains(&expected_matched_offer));
 
         // Test path matching rule
         let path_rule = BomMatchingRule {
@@ -726,8 +737,15 @@ mod tests {
         // Verify the path rule added another offer (now we have 2 offers)
         let entry = &bom.entries["R1.R"];
         assert_eq!(entry.offers.len(), 2);
-        let mouser_offer = &entry.offers[1]; // Second offer should be the mouser one
-        assert_eq!(mouser_offer.distributor, "mouser");
-        assert_eq!(mouser_offer.distributor_pn, "603-RC0603FR-071KL");
+        let expected_mouser_matched_offer = MatchedOffer {
+            offer: Offer {
+                distributor: "mouser".to_string(),
+                distributor_pn: "603-RC0603FR-071KL".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            },
+            matched_by: path_rule.key.clone(),
+        };
+        assert!(entry.offers.contains(&expected_mouser_matched_offer));
     }
 }

@@ -23,7 +23,18 @@ Exit Code: 0
         "distributor": "digikey",
         "distributor_pn": "311-1.00KHRCT-ND",
         "manufacturer": "Yageo",
-        "manufacturer_pn": "RC0603FR-071KL"
+        "manufacturer_pn": "RC0603FR-071KL",
+        "matched_by": {
+          "Generic": {
+            "component_type": "Resistor",
+            "resistance": {
+              "value": "1000.0",
+              "tolerance": "0.0",
+              "unit": "Ohms"
+            },
+            "package": "0603"
+          }
+        }
       }
     ],
     "dnp": false
@@ -44,7 +55,18 @@ Exit Code: 0
         "distributor": "digikey",
         "distributor_pn": "311-1.00KHRCT-ND",
         "manufacturer": "Yageo",
-        "manufacturer_pn": "RC0603FR-071KL"
+        "manufacturer_pn": "RC0603FR-071KL",
+        "matched_by": {
+          "Generic": {
+            "component_type": "Resistor",
+            "resistance": {
+              "value": "1000.0",
+              "tolerance": "0.0",
+              "unit": "Ohms"
+            },
+            "package": "0603"
+          }
+        }
       }
     ],
     "dnp": false
@@ -65,7 +87,18 @@ Exit Code: 0
         "distributor": "digikey",
         "distributor_pn": "311-4.70KHRCT-ND",
         "manufacturer": "Yageo",
-        "manufacturer_pn": "RC0402FR-074K7L"
+        "manufacturer_pn": "RC0402FR-074K7L",
+        "matched_by": {
+          "Generic": {
+            "component_type": "Resistor",
+            "resistance": {
+              "value": "4700.0",
+              "tolerance": "0.0",
+              "unit": "Ohms"
+            },
+            "package": "0402"
+          }
+        }
       }
     ],
     "dnp": false
