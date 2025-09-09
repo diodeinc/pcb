@@ -3,7 +3,6 @@ use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
-use pcb_sch::generate_bom_entries;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::convert::ToSchematic;
@@ -21,7 +20,6 @@ use std::process::Command;
 
 use zip::{write::FileOptions, ZipWriter};
 
-use crate::bom::write_bom_json;
 use crate::vendor::sync_tracked_files;
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
@@ -518,7 +516,8 @@ fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> R
 
 /// Copy source files and vendor dependencies
 fn copy_sources(info: &ReleaseInfo) -> Result<()> {
-    let tracked_files = info.workspace.resolver.get_tracked_files();
+    let output = info.workspace.eval_result.output.as_ref().unwrap();
+    let tracked_files = output.core_resolver().unwrap().get_tracked_files();
     let workspace_root = info.workspace.root();
     let src_dir = info.staging_dir.join("src");
     let vendor_dir = src_dir.join("vendor");
@@ -740,7 +739,7 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
 /// Generate design BOM JSON file
 fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     // Generate BOM entries from the schematic
-    let bom_entries = generate_bom_entries(&mut info.schematic.clone());
+    let bom = info.schematic.bom();
 
     // Create bom directory in staging
     let bom_dir = info.staging_dir.join("bom");
@@ -748,8 +747,8 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
 
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
-    let file = fs::File::create(&bom_file)?;
-    write_bom_json(&bom_entries, &file)?;
+    let mut file = fs::File::create(&bom_file)?;
+    write!(file, "{}", bom.ungrouped_json())?;
 
     Ok(())
 }

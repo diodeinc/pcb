@@ -146,6 +146,18 @@ pub struct EvalOutput {
     pub signature: Vec<crate::lang::type_info::ParameterInfo>,
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
+    /// Load resolver used for this evaluation, when available
+    pub load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+}
+
+impl EvalOutput {
+    /// If the underlying resolver is a CoreLoadResolver, return a reference to it
+    pub fn core_resolver(&self) -> Option<Arc<crate::CoreLoadResolver>> {
+        let load_resolver = self.load_resolver.clone()?;
+        (load_resolver as Arc<dyn std::any::Any + Send + Sync>)
+            .downcast::<crate::CoreLoadResolver>()
+            .ok()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -657,6 +669,7 @@ impl EvalContext {
                     sch_module: extra.module.clone(),
                     signature,
                     print_output,
+                    load_resolver: self.load_resolver.clone(),
                 };
                 let mut ret = WithDiagnostics::success(output);
                 ret.diagnostics.extend(extra.diagnostics().clone());

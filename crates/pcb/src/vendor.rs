@@ -186,7 +186,9 @@ fn gather_vendor_info(zen_files: Vec<PathBuf>) -> Result<HashMap<PathBuf, LoadSp
     for zen_file in &zen_files {
         // Don't use the vendor path for the workspace info, we're just gathering dependencies
         let workspace_info = gather_workspace_info(zen_file.clone(), false)?;
-        tracked_files.extend(workspace_info.resolver.get_tracked_files());
+        let output = workspace_info.eval_result.output.unwrap();
+        let resolver = output.core_resolver().unwrap();
+        tracked_files.extend(resolver.get_tracked_files());
     }
     Ok(tracked_files)
 }

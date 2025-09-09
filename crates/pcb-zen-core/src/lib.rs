@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
@@ -359,7 +360,7 @@ impl<'a> ResolveContext<'a> {
     }
 }
 
-pub trait LoadResolver: Send + Sync {
+pub trait LoadResolver: Send + Sync + Any {
     /// Convenience method to resolve a load path string directly
     /// This encapsulates the common pattern of parsing a path and creating a ResolveContext
     fn resolve_path(&self, path: &str, current_file: &Path) -> Result<PathBuf, anyhow::Error> {

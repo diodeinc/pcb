@@ -5,10 +5,9 @@ use crate::{
     NetId,
 };
 use itertools::Itertools;
-use pcb_sch::Net;
-use pcb_sch::NetKind;
 use pcb_sch::{
-    AttributeValue, Instance, InstanceRef, ModuleRef, PhysicalUnit, PhysicalValue, Schematic,
+    AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, PhysicalUnit, PhysicalValue,
+    Schematic,
 };
 use serde::{Deserialize, Serialize};
 use starlark::values::float::StarlarkFloat;
@@ -458,6 +457,50 @@ pub trait ToSchematic {
     fn to_schematic(&self) -> anyhow::Result<Schematic>;
 }
 
+/// Extract (value, tolerance, unit_name) from a Starlark unit record
+fn parse_unit_record<'v, V: ValueLike<'v>>(v: V) -> Option<pcb_sch::PhysicalValue> {
+    let val = v.to_value();
+    let rec = val.downcast_ref::<FrozenRecord>()?;
+    let mut value: Option<f64> = None;
+    let mut tol: Option<f64> = None;
+    let mut unit: Option<PhysicalUnit> = None;
+    for (fname, fval) in rec.iter() {
+        let n = fname.to_string();
+        if n == crate::attrs::record_fields::VALUE {
+            if let Some(sf) = fval.downcast_ref::<StarlarkFloat>() {
+                value = Some(sf.0);
+            }
+        } else if n == crate::attrs::record_fields::TOLERANCE {
+            if let Some(sf) = fval.downcast_ref::<StarlarkFloat>() {
+                tol = Some(sf.0);
+            }
+        } else if n == crate::attrs::record_fields::UNIT {
+            let unit_str = fval.to_string();
+            let unit_name = if let Some(start) = unit_str.find('(') {
+                if let Some(end) = unit_str.find(')') {
+                    unit_str[start + 1..end].trim_matches('"').to_string()
+                } else {
+                    unit_str.trim_matches('"').to_string()
+                }
+            } else {
+                unit_str.trim_matches('"').to_string()
+            };
+            unit = match unit_name.as_str() {
+                "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
+                "V" | "Volts" => Some(PhysicalUnit::Volts),
+                "A" | "Amperes" => Some(PhysicalUnit::Amperes),
+                "F" | "Farads" => Some(PhysicalUnit::Farads),
+                "H" | "Henries" => Some(PhysicalUnit::Henries),
+                "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
+                "s" | "Seconds" => Some(PhysicalUnit::Seconds),
+                "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
+                _ => None,
+            };
+        }
+    }
+    Some(PhysicalValue::new(value?, tol?, unit?))
+}
+
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
     // Handle scalars first
     if let Some(s) = v.downcast_frozen_str() {
@@ -468,63 +511,9 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::Boolean(b));
     }
 
-    // Handle unit records (Resistance, Capacitance, Voltage, etc.)
-    if let Some(record) = v.downcast_ref::<FrozenRecord>() {
-        let mut record_value = None;
-        let mut record_tolerance = None;
-        let mut record_unit = None;
-
-        // Extract fields from the record
-        for (field_name, field_value) in record.iter() {
-            let field_name_str = field_name.to_string();
-            if field_name_str == crate::attrs::record_fields::VALUE {
-                // Try f64 first, fall back to i32 converted to f64
-                if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
-                    record_value = Some(f.0);
-                }
-            } else if field_name_str == crate::attrs::record_fields::TOLERANCE {
-                if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
-                    record_tolerance = Some(f.0);
-                }
-            } else if field_name_str == crate::attrs::record_fields::UNIT {
-                // Unit is an enum like Ohms("Ohms"), parse to PhysicalUnit
-                let unit_str = field_value.to_string();
-                // Extract content within parentheses and remove quotes
-                let unit_name = if let Some(start) = unit_str.find('(') {
-                    if let Some(end) = unit_str.find(')') {
-                        let inner = &unit_str[start + 1..end];
-                        inner.trim_matches('"').to_string()
-                    } else {
-                        unit_str.trim_matches('"').to_string()
-                    }
-                } else {
-                    unit_str.trim_matches('"').to_string()
-                };
-
-                record_unit = match unit_name.as_str() {
-                    "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
-                    "V" | "Volts" => Some(PhysicalUnit::Volts),
-                    "A" | "Amperes" => Some(PhysicalUnit::Amperes),
-                    "F" | "Farads" => Some(PhysicalUnit::Farads),
-                    "H" | "Henries" => Some(PhysicalUnit::Henries),
-                    "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
-                    "s" | "Seconds" => Some(PhysicalUnit::Seconds),
-                    "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
-                    _ => None, // Unknown unit, will fall back to string conversion
-                };
-            } else {
-                // Ignore other fields like __str__
-            }
-        }
-
-        // If we have all required fields, this is a unit record
-        if let (Some(value), Some(tolerance), Some(unit)) =
-            (record_value, record_tolerance, record_unit)
-        {
-            return Ok(AttributeValue::Physical(PhysicalValue::new(
-                value, tolerance, unit,
-            )));
-        }
+    // Handle unit records (Resistance, Capacitance, Voltage, etc.) using shared parser
+    if let Some(pv) = parse_unit_record(v) {
+        return Ok(AttributeValue::Physical(pv));
     }
 
     // Handle lists (no nested list support)
