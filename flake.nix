@@ -48,8 +48,6 @@
             pkgs.pkg-config
             pkgs.openssl
           ];
-
-          BUILDIFIER_BIN = "${pkgs.bazel-buildtools}/bin/buildifier";
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;

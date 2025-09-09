@@ -16,7 +16,7 @@ pub struct TestArgs {
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
-    /// Recursively traverse directories to find .zen/.star files
+    /// Recursively traverse directories to find .zen files
     #[arg(short = 'r', long = "recursive", default_value_t = false)]
     pub recursive: bool,
 

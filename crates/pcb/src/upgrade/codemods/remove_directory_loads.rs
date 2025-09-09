@@ -133,7 +133,7 @@ impl Codemod for RemoveDirectoryLoads {
                 }
                 // Neither starlark nor kicad symbol found for this prefix: error
                 anyhow::bail!(
-                    "Cannot convert directory load: '{}' not found as .zen/.star or .kicad_sym in {}",
+                    "Cannot convert directory load: '{}' not found as .zen or .kicad_sym in {}",
                     their,
                     resolved_dir.display()
                 );

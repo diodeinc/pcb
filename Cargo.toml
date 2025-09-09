@@ -16,6 +16,10 @@ starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "af
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
 
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "v0.4.10" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "v0.4.10" }
+similar = "2.7.0"
+
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
 pcb-layout = { path = "crates/pcb-layout" }
@@ -26,7 +30,7 @@ pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
 pcb-sexpr = { path = "crates/pcb-sexpr", features = ["serde"] }
 pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
-pcb-buildifier = { path = "crates/pcb-buildifier" }
+pcb-fmt = { path = "crates/pcb-fmt" }
 pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
 

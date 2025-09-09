@@ -31,7 +31,7 @@ pub struct BuildArgs {
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
 
-    /// Recursively traverse directories to find .zen/.star files
+    /// Recursively traverse directories to find .zen files
     #[arg(short = 'r', long = "recursive", default_value_t = false)]
     pub recursive: bool,
 
