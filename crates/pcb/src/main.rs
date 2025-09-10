@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
@@ -97,6 +98,8 @@ fn main() -> anyhow::Result<()> {
     };
     env_logger::Builder::from_env(env).init();
 
+    check_and_update();
+
     match cli.command {
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
@@ -150,6 +153,28 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+    }
+}
+
+fn check_and_update() {
+    // Silently check and update if needed
+    let mut updater = axoupdater::AxoUpdater::new_for("pcb");
+    if let Ok(updater) = updater.load_receipt() {
+        updater.disable_installer_output();
+        match updater.run_sync() {
+            Ok(Some(result)) => {
+                let old_version = result.old_version;
+                let new_version = result.new_version_tag;
+                if let Some(old_version) = old_version {
+                    let update_string = format!("Updated pcb {} -> {}!", old_version, new_version);
+                    eprintln!("{}", update_string.blue().bold());
+                    eprintln!("Please re-run the command with the new pcb version.");
+                }
+                std::process::exit(1);
+            }
+            Ok(None) => {}
+            Err(_) => {}
         }
     }
 }
