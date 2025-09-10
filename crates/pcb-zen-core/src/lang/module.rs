@@ -27,6 +27,7 @@ use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputMap;
+use crate::lang::validation::validate_identifier_name;
 use crate::{Diagnostic, InputValue};
 use starlark::values::dict::{AllocDict, DictRef};
 
@@ -624,6 +625,10 @@ where
                         ))
                     })?
                     .to_string();
+
+                // Validate the module name
+                validate_identifier_name(&name_str, "Module name")?;
+
                 override_name = Some(name_str);
                 // Do *not* add `name` to the input map.
                 continue;

@@ -88,7 +88,7 @@ Component(
     name = "comp0",
     footprint = "TEST:0402",
     pin_defs = {"V": "1"},
-    pins = {"V": Net("")},
+    pins = {"V": Net()},
 )
 
 # --- top.zen

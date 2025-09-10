@@ -21,6 +21,7 @@ use crate::{
 
 use super::net::NetType;
 use super::symbol::{SymbolType, SymbolValue};
+use super::validation::validate_identifier_name;
 
 use anyhow::anyhow;
 
@@ -294,6 +295,9 @@ where
                 .unpack_str()
                 .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
                 .to_owned();
+
+            // Validate the component name
+            validate_identifier_name(&name, "Component name")?;
 
             let footprint_val: Value = param_parser.next()?;
             let mut footprint = footprint_val
