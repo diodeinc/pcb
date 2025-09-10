@@ -15,6 +15,7 @@ mod bom;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
+pub mod position;
 
 // Re-export BOM functionality
 pub use bom::{Bom, BomMatchingKey, BomMatchingRule, GenericMatchingKey, Offer};
