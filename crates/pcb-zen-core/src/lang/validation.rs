@@ -5,7 +5,6 @@ use anyhow::anyhow;
 /// Valid identifiers must:
 /// - Not be empty
 /// - Not contain whitespace
-/// - Not contain dots
 /// - Only contain ASCII characters
 ///
 /// Returns an error with a descriptive message if validation fails.
@@ -22,15 +21,6 @@ pub fn validate_identifier_name(name: &str, context: &str) -> Result<(), starlar
     if name.contains(char::is_whitespace) {
         return Err(starlark::Error::new_other(anyhow!(
             "{} cannot contain whitespace. Got: {:?}",
-            context,
-            name
-        )));
-    }
-
-    // Check for dots
-    if name.contains('.') {
-        return Err(starlark::Error::new_other(anyhow!(
-            "{} cannot contain dots. Got: {:?}",
             context,
             name
         )));
@@ -82,6 +72,9 @@ mod tests {
             "pin:1",         // Colons allowed
             "path/to/file",  // Path separators now allowed
             "windows\\path", // Backslashes now allowed
+            "power.rail",    // Dots now allowed
+            "file.ext",      // File extensions allowed
+            "net.test.1",    // Multiple dots allowed
         ];
 
         for name in valid_names {
@@ -114,23 +107,6 @@ mod tests {
             assert!(
                 error_msg.contains("cannot contain whitespace"),
                 "Expected whitespace error for '{}', got: {}",
-                name,
-                error_msg
-            );
-        }
-    }
-
-    #[test]
-    fn test_invalid_names_with_dots() {
-        let invalid_names = vec!["power.rail", "file.ext", "net.test", "comp.1"];
-
-        for name in invalid_names {
-            let result = validate_identifier_name(name, "Test name");
-            assert!(result.is_err(), "Expected '{}' to be invalid", name);
-            let error_msg = format!("{}", result.unwrap_err());
-            assert!(
-                error_msg.contains("cannot contain dots"),
-                "Expected dot error for '{}', got: {}",
                 name,
                 error_msg
             );
@@ -197,7 +173,7 @@ mod tests {
             error_msg
         );
 
-        let result = validate_identifier_name("invalid.name", "Net name");
+        let result = validate_identifier_name("café", "Net name");
         assert!(result.is_err());
         let error_msg = format!("{}", result.unwrap_err());
         assert!(
