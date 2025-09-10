@@ -18,6 +18,7 @@ use crate::lang::context::ContextValue;
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::{generate_net_id, NetValue};
+use crate::lang::validation::validate_identifier_name;
 
 /// Get promotion key for any value
 pub fn get_promotion_key(value: Value) -> anyhow::Result<String> {
@@ -479,6 +480,10 @@ where
                 let name_str = name_val.unpack_str().ok_or_else(|| {
                     starlark::Error::new_other(anyhow::anyhow!("Interface name must be a string"))
                 })?;
+
+                // Validate the interface instance name
+                validate_identifier_name(name_str, "Interface name")?;
+
                 instance_name_opt = Some(name_str.to_owned());
             }
 

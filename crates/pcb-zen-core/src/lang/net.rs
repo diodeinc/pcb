@@ -13,6 +13,7 @@ use starlark::{
 use std::cell::RefCell;
 
 use super::eval::{copy_value, DeepCopyToHeap};
+use super::validation::validate_identifier_name;
 use crate::lang::context::ContextValue;
 
 pub type NetId = u64;
@@ -204,13 +205,17 @@ where
             )));
         }
         let name_pos: Option<String> = if let Some(v) = positions.first() {
-            Some(
-                v.unpack_str()
-                    .ok_or_else(|| {
-                        starlark::Error::new_other(anyhow::anyhow!("Expected string for net name"))
-                    })?
-                    .to_owned(),
-            )
+            let name = v
+                .unpack_str()
+                .ok_or_else(|| {
+                    starlark::Error::new_other(anyhow::anyhow!("Expected string for net name"))
+                })?
+                .to_owned();
+
+            // Validate the positional net name
+            validate_identifier_name(&name, "Net name")?;
+
+            Some(name)
         } else {
             None
         };
@@ -225,16 +230,19 @@ where
             match key.as_str() {
                 "name" => {
                     // Special handling for "name" kwarg
-                    name_kwarg = Some(
-                        value
-                            .unpack_str()
-                            .ok_or_else(|| {
-                                starlark::Error::new_other(anyhow::anyhow!(
-                                    "Expected string for net name"
-                                ))
-                            })?
-                            .to_owned(),
-                    );
+                    let name = value
+                        .unpack_str()
+                        .ok_or_else(|| {
+                            starlark::Error::new_other(anyhow::anyhow!(
+                                "Expected string for net name"
+                            ))
+                        })?
+                        .to_owned();
+
+                    // Validate the kwarg net name
+                    validate_identifier_name(&name, "Net name")?;
+
+                    name_kwarg = Some(name);
                 }
                 "symbol" => {
                     // Check that the value is a Symbol
