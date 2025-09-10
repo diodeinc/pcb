@@ -19,6 +19,7 @@ log = { workspace = true }
 pcb-sexpr = { workspace = true }
 rust_decimal = { workspace = true }
 scan_fmt = { workspace = true }
+natord = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

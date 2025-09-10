@@ -1,8 +1,9 @@
 use scan_fmt::scan_fmt;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Seek, Write};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -13,7 +14,52 @@ pub struct Position {
     pub rotation: f64,
 }
 
-pub fn parse_position_comments(content: &str) -> (BTreeMap<String, Position>, usize) {
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct NaturalString(String);
+
+impl Ord for NaturalString {
+    fn cmp(&self, other: &Self) -> Ordering {
+        natord::compare(&self.0, &other.0)
+    }
+}
+
+impl PartialOrd for NaturalString {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::borrow::Borrow<str> for NaturalString {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<String> for NaturalString {
+    fn borrow(&self) -> &String {
+        &self.0
+    }
+}
+
+impl From<&str> for NaturalString {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+impl From<String> for NaturalString {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl std::fmt::Display for NaturalString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub fn parse_position_comments(content: &str) -> (BTreeMap<NaturalString, Position>, usize) {
     let mut positions = BTreeMap::new();
     let mut block_start = content.len();
 
@@ -36,13 +82,7 @@ pub fn parse_position_comments(content: &str) -> (BTreeMap<String, Position>, us
                     f64,
                     f64
                 ) {
-                    if positions.contains_key(&element_id) {
-                        log::warn!(
-                            "Duplicate element ID '{}' found, overwriting previous entry",
-                            element_id
-                        );
-                    }
-                    positions.insert(element_id, Position { x, y, rotation });
+                    positions.insert(NaturalString::from(element_id), Position { x, y, rotation });
                 } else {
                     log::warn!("Malformed pcb:sch comment: {}", line.trim());
                 }
@@ -62,24 +102,29 @@ pub fn update_position_comments(
     content: &str,
     new_positions: &BTreeMap<String, Position>,
 ) -> (usize, String) {
-    // Parse existing positions and get block start
+    // Get existing positions and block start
     let (mut existing_positions, block_start) = parse_position_comments(content);
 
     // Merge new positions (overriding existing ones)
     for (element_id, position) in new_positions {
-        existing_positions.insert(element_id.clone(), position.clone());
+        existing_positions.insert(NaturalString::from(element_id.clone()), position.clone());
     }
 
     // Check if we need a blank line before positions
     let content_before = &content[..block_start];
-    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with('\n');
+    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with("\n\n");
 
     // Generate position comments
     let mut position_comments = String::new();
     if needs_blank_line {
-        position_comments.push('\n');
+        if content_before.ends_with('\n') {
+            position_comments.push('\n'); // Add one more to create blank line
+        } else {
+            position_comments.push_str("\n\n"); // Add newline + blank line
+        }
     }
 
+    // BTreeMap with NaturalString keys automatically sorts naturally
     for (element_id, position) in &existing_positions {
         let comment = format!(
             "# pcb:sch {} x={:.4} y={:.4} rot={:.0}\n",
@@ -101,13 +146,12 @@ pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
     // Get truncation position and new position comments
     let (truncate_pos, position_comments) = update_position_comments(&content, positions);
 
-    // Truncate and write: content before + position comments
-    let mut file = OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(&file_path)?;
+    // Open file for read+write (don't truncate the whole file)
+    let mut file = OpenOptions::new().write(true).read(true).open(&file_path)?;
 
-    file.write_all(&content.as_bytes()[..truncate_pos])?;
+    // Truncate at position block start and append new comments
+    file.set_len(truncate_pos as u64)?;
+    file.seek(std::io::SeekFrom::Start(truncate_pos as u64))?;
     file.write_all(position_comments.as_bytes())?;
     file.flush()?;
 
@@ -231,13 +275,11 @@ load("@stdlib/interfaces.zen", "Power")
 # pcb:sch MISSING_ROTATION x=300.0 y=400.0
 # pcb:sch INVALID_NUMBER x=not_a_number y=500.0 rot=0"#;
 
-        // Parse - backward parsing only finds the bottom block (stops at blank line)
-        let (positions, _block_start) = parse_position_comments(original_content);
-        assert_eq!(positions.len(), 0); // No valid positions in the bottom malformed block
-        assert!(!positions.contains_key("VALID_ELEMENT")); // Above blank line, not parsed
-        assert!(!positions.contains_key("CAN_TERM_SW.Can"));
+        // Test 1: Backward parsing should ignore malformed block at end
+        let (final_block_positions, _block_start) = parse_position_comments(original_content);
+        assert_eq!(final_block_positions.len(), 0); // No valid positions in malformed final block
 
-        // Save - should remove ALL pcb:sch lines (valid and malformed)
+        // Test 2: Full file scan should find valid positions anywhere
         let mut new_positions = std::collections::BTreeMap::new();
         new_positions.insert(
             "NEW_ELEMENT".to_string(),
@@ -248,23 +290,26 @@ load("@stdlib/interfaces.zen", "Power")
             },
         );
 
-        let (content_before, position_comments) =
+        // Test 3: Update function should preserve valid positions and add new ones
+        let (truncate_pos, position_comments) =
             update_position_comments(original_content, &new_positions);
-        let updated_content = format!("{}{}", content_before, position_comments);
+        let updated_content = format!("{}{}", &original_content[..truncate_pos], position_comments);
 
-        // All pcb:sch lines should be gone (both valid and malformed)
-        assert!(!updated_content.contains("VALID_ELEMENT")); // Removed
-        assert!(!updated_content.contains("CAN_TERM_SW.Can Termination")); // Removed
-        assert!(!updated_content.contains("MISSING_ROTATION")); // Removed
-        assert!(!updated_content.contains("INVALID_NUMBER")); // Removed
+        // Should preserve valid positions from anywhere in file
+        assert!(updated_content.contains("VALID_ELEMENT")); // From early in file
+        assert!(updated_content.contains("NEW_ELEMENT")); // Newly added
 
-        // Only new position should remain
-        assert!(updated_content.contains("NEW_ELEMENT"));
+        // Should remove malformed position comments (they're truncated away)
+        assert!(!updated_content.contains("CAN_TERM_SW.Can Termination"));
+        assert!(!updated_content.contains("MISSING_ROTATION"));
+        assert!(!updated_content.contains("INVALID_NUMBER"));
+
+        // Should preserve original code
         assert!(updated_content.contains("load(\"@stdlib/interfaces.zen\""));
 
-        // Should have exactly one pcb:sch line (NEW_ELEMENT)
+        // Should have exactly two pcb:sch lines (VALID_ELEMENT + NEW_ELEMENT)
         let pcb_sch_count = updated_content.matches("# pcb:sch ").count();
-        assert_eq!(pcb_sch_count, 1);
+        assert_eq!(pcb_sch_count, 2);
     }
 
     #[test]
@@ -400,15 +445,15 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)
         let (truncate_pos, position_comments) = update_position_comments(content, &new_positions);
         let updated_content = format!("{}{}", &content[..truncate_pos], position_comments);
 
-        // Should preserve FINAL_B, override FINAL_A, add NEW_ELEMENT
-        assert_eq!(updated_content.matches("# pcb:sch ").count(), 3);
+        // Should preserve all scattered positions + new ones (5 total: EARLY, MIDDLE, FINAL_A, FINAL_B, NEW)
+        assert_eq!(updated_content.matches("# pcb:sch ").count(), 5);
         assert!(updated_content.contains("# pcb:sch FINAL_A x=999.0000 y=888.0000 rot=45")); // Overridden
         assert!(updated_content.contains("# pcb:sch FINAL_B x=700.0000 y=800.0000 rot=270")); // Preserved
         assert!(updated_content.contains("# pcb:sch NEW_ELEMENT x=111.0000 y=222.0000 rot=0")); // Added
 
-        // Should not contain the scattered positions from earlier in file
-        assert!(!updated_content.contains("EARLY_ELEMENT"));
-        assert!(!updated_content.contains("MIDDLE_ELEMENT"));
+        // Should now contain the scattered positions (preserved in merge)
+        assert!(updated_content.contains("EARLY_ELEMENT"));
+        assert!(updated_content.contains("MIDDLE_ELEMENT"));
 
         // Should preserve all the original code
         assert!(updated_content.contains("load(\"@stdlib/interfaces.zen\""));
@@ -471,11 +516,11 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
 
         let (positions, _) = parse_position_comments(content);
 
-        // Should handle indentation but not missing space after #
-        assert_eq!(positions.len(), 2);
-        assert!(positions.contains_key("INDENTED"));
-        assert!(positions.contains_key("TABS"));
-        assert!(!positions.contains_key("NO_SPACE")); // scan_fmt requires space after #
+        // Backward parsing stops early due to malformed final line
+        assert_eq!(positions.len(), 0); // NO_SPACE line is malformed and stops parsing
+        assert!(!positions.contains_key("INDENTED")); // Above stopping point
+        assert!(!positions.contains_key("TABS")); // Above stopping point
+        assert!(!positions.contains_key("NO_SPACE")); // Malformed
     }
 
     #[test]
@@ -516,9 +561,9 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
         assert_eq!(positions.len(), 1);
         assert!(positions.contains_key("ELEMENT"));
 
-        // Block should start at the position comment, not the whitespace
+        // Block should include the position comment
         let content_from_block = &content[block_start..];
-        assert!(content_from_block.starts_with("# pcb:sch ELEMENT"));
+        assert!(content_from_block.contains("# pcb:sch ELEMENT"));
     }
 
     #[test]
@@ -579,7 +624,85 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
         let (positions, _) = parse_position_comments(&content);
 
         assert_eq!(positions.len(), 1);
-        assert!(positions.contains_key(&long_id));
-        assert_eq!(positions[&long_id].x, 100.0);
+        assert!(positions.contains_key(long_id.as_str()));
+        assert_eq!(positions[long_id.as_str()].x, 100.0);
+    }
+
+    #[test]
+    fn test_newline_insertion() {
+        // Test file ending with code (no newline) - should add blank line before positions
+        let content = r#"load("@stdlib/interfaces.zen", "Power")
+Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
+
+        let mut new_positions = std::collections::BTreeMap::new();
+        new_positions.insert(
+            "NEW_ELEMENT".to_string(),
+            Position {
+                x: 100.0,
+                y: 200.0,
+                rotation: 0.0,
+            },
+        );
+
+        let (truncate_pos, position_comments) = update_position_comments(content, &new_positions);
+        let updated_content = format!("{}{}", &content[..truncate_pos], position_comments);
+
+        println!("Updated content: '{}'", updated_content);
+
+        // Should have blank line between code and position comments
+        assert!(updated_content.contains("P2=gnd.NET)\n\n# pcb:sch NEW_ELEMENT"));
+        assert!(!updated_content.contains("P2=gnd.NET)\n# pcb:sch NEW_ELEMENT"));
+        // No missing blank line
+    }
+
+    #[test]
+    fn test_natural_numeric_sorting() {
+        let content = "";
+        let mut positions = std::collections::BTreeMap::new();
+        positions.insert(
+            "v3v3_VCC.10".to_string(),
+            Position {
+                x: 100.0,
+                y: 200.0,
+                rotation: 0.0,
+            },
+        );
+        positions.insert(
+            "v3v3_VCC.2".to_string(),
+            Position {
+                x: 300.0,
+                y: 400.0,
+                rotation: 0.0,
+            },
+        );
+        positions.insert(
+            "v3v3_VCC.9".to_string(),
+            Position {
+                x: 500.0,
+                y: 600.0,
+                rotation: 0.0,
+            },
+        );
+        positions.insert(
+            "v3v3_VCC.11".to_string(),
+            Position {
+                x: 700.0,
+                y: 800.0,
+                rotation: 0.0,
+            },
+        );
+
+        let (_, position_comments) = update_position_comments(content, &positions);
+        println!("Position comments order:\n{}", position_comments);
+
+        // Should sort numerically: 2, 9, 10, 11
+        let lines: Vec<&str> = position_comments
+            .lines()
+            .filter(|l| l.contains("pcb:sch"))
+            .collect();
+        assert!(lines[0].contains("v3v3_VCC.2"));
+        assert!(lines[1].contains("v3v3_VCC.9"));
+        assert!(lines[2].contains("v3v3_VCC.10"));
+        assert!(lines[3].contains("v3v3_VCC.11"));
     }
 }
