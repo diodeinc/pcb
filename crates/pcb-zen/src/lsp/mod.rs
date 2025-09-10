@@ -1,10 +1,12 @@
 pub mod signature;
 
+use log::{debug, info};
 use lsp_server::ResponseError;
 use lsp_types::{
     request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
+use pcb_sch::position::{parse_position_comments, replace_pcb_sch_comments, Position};
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
@@ -17,12 +19,16 @@ use pcb_zen_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::docs::DocModule;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::load::DefaultRemoteFetcher;
 use pcb_zen_core::convert::ToSchematic;
+
+// JSON-RPC 2.0 error codes
+const INVALID_PARAMS: i32 = -32602;
+const INTERNAL_ERROR: i32 = -32603;
 
 /// Wrapper around EvalContext that implements LspContext
 pub struct LspEvalContext {
@@ -470,6 +476,7 @@ impl LspContext for LspEvalContext {
         req: &server::Request,
         _initialize_params: &lsp_types::InitializeParams,
     ) -> Option<Response> {
+        debug!("Received custom request: method={}", req.method);
         // Handle signature help requests
         if req.method == "textDocument/signatureHelp" {
             match serde_json::from_value::<lsp_types::SignatureHelpParams>(req.params.clone()) {
@@ -645,6 +652,98 @@ impl LspContext for LspEvalContext {
                         error: Some(ResponseError {
                             code: 0,
                             message: format!("Failed to parse params: {e}"),
+                            data: None,
+                        }),
+                    });
+                }
+            }
+        }
+
+        // Handle pcb/loadPositions requests
+        if req.method == "pcb/loadPositions" {
+            info!("Received pcb/loadPositions request");
+            match serde_json::from_value::<PcbLoadPositionsParams>(req.params.clone()) {
+                Ok(params) => {
+                    let file_path = &params.file_path;
+                    info!("Loading positions from file: {}", file_path);
+
+                    // Read the file content
+                    match std::fs::read_to_string(file_path) {
+                        Ok(content) => {
+                            let (positions, _block_start) = parse_position_comments(&content);
+                            info!("Parsed {} positions", positions.len(),);
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: Some(serde_json::to_value(positions).unwrap()),
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            info!("File not found or unreadable: {}", e);
+                            // File not found - return null (no positions available)
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: Some(serde_json::Value::Null),
+                                error: None,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(ResponseError {
+                            code: INVALID_PARAMS,
+                            message: format!("Invalid pcb/loadPositions params: {e}"),
+                            data: None,
+                        }),
+                    });
+                }
+            }
+        }
+
+        // Handle pcb/savePositions requests
+        if req.method == "pcb/savePositions" {
+            info!("Received pcb/savePositions request");
+            match serde_json::from_value::<PcbSavePositionsParams>(req.params.clone()) {
+                Ok(params) => {
+                    let file_path = &params.file_path;
+                    info!(
+                        "Saving {} positions to file: {}",
+                        params.positions.len(),
+                        file_path
+                    );
+                    debug!("Position elements to save: {:?}", &params.positions);
+                    match replace_pcb_sch_comments(file_path, &params.positions) {
+                        Ok(()) => {
+                            info!("Successfully wrote positions to file");
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: Some(serde_json::Value::Null), // null indicates success
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: INTERNAL_ERROR,
+                                    message: format!("Failed to update file: {e}"),
+                                    data: None,
+                                }),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(ResponseError {
+                            code: INVALID_PARAMS,
+                            message: format!("Invalid pcb/savePositions params: {e}"),
                             data: None,
                         }),
                     });
@@ -841,4 +940,17 @@ struct DiagnosticInfo {
     line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     child: Option<Box<DiagnosticInfo>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PcbLoadPositionsParams {
+    file_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PcbSavePositionsParams {
+    file_path: String,
+    positions: BTreeMap<String, Position>,
 }
