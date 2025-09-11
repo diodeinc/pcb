@@ -1,6 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use allocative::Allocative;
@@ -51,7 +51,58 @@ use crate::lang::context::FrozenContextValue;
 use crate::lang::net::NetId;
 use crate::{FrozenComponentValue, FrozenNetValue};
 use starlark::errors::{EvalMessage, EvalSeverity};
-use std::collections::HashMap;
+
+/// Position data from pcb:sch comments  
+#[derive(Clone, Debug, ProvidesStaticType, NoSerialize, Allocative)]
+pub struct Position {
+    pub x: f64,
+    pub y: f64,
+    pub rotation: f64,
+}
+
+impl std::fmt::Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Position({:.1}, {:.1}, {:.0})",
+            self.x, self.y, self.rotation
+        )
+    }
+}
+
+impl starlark::values::Freeze for Position {
+    type Frozen = Position;
+    fn freeze(
+        self,
+        _: &starlark::values::Freezer,
+    ) -> Result<Self::Frozen, starlark::values::FreezeError> {
+        Ok(self)
+    }
+}
+
+starlark_simple_value!(Position);
+#[starlark_value(type = "Position")]
+impl<'v> StarlarkValue<'v> for Position {}
+
+pub type PositionMap = SmallMap<String, Position>;
+
+/// Parse position data from pcb:sch comments in file content  
+pub fn parse_positions(content: &str) -> PositionMap {
+    pcb_sch::position::parse_position_comments(content)
+        .0
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                Position {
+                    x: v.x,
+                    y: v.y,
+                    rotation: v.rotation,
+                },
+            )
+        })
+        .collect()
+}
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -135,6 +186,8 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     introduced_nets: starlark::collections::SmallMap<NetId, String>,
     /// Local name → net id, to enforce uniqueness of names within a module.
     net_name_to_id: starlark::collections::SmallMap<String, NetId>,
+    /// Parsed position data from pcb:sch comments in this module's source file
+    positions: PositionMap,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -374,7 +427,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         self.properties.insert(name, value);
     }
 
-    pub fn new(name: String, source_path: &Path) -> Self {
+    pub fn new(name: String, source_path: &Path, positions: PositionMap) -> Self {
         let source_path = source_path.to_string_lossy().into_owned();
         ModuleValueGen {
             name,
@@ -385,11 +438,16 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             signature: Vec::new(),
             introduced_nets: SmallMap::new(),
             net_name_to_id: SmallMap::new(),
+            positions,
         }
     }
 
     pub fn source_path(&self) -> &str {
         &self.source_path
+    }
+
+    pub fn positions(&self) -> &PositionMap {
+        &self.positions
     }
 
     pub fn name(&self) -> &str {

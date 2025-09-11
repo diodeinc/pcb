@@ -12,7 +12,7 @@ use starlark::{
 use super::net::NetId;
 use super::{
     input::InputMap,
-    module::{FrozenModuleValue, ModuleValue},
+    module::{parse_positions, FrozenModuleValue, ModuleValue},
 };
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
@@ -93,6 +93,14 @@ impl<'v> ContextValue<'v> {
             .as_ref()
             .expect("source_path not set on Context");
 
+        // Parse position data if file provider is available
+        let positions = context
+            .file_provider
+            .as_ref()
+            .and_then(|fp| fp.read_file(source_path).ok())
+            .map(|content| parse_positions(&content))
+            .unwrap_or_default();
+
         Self {
             module: RefCell::new(ModuleValue::new(
                 context.name.clone().unwrap_or(
@@ -103,6 +111,7 @@ impl<'v> ContextValue<'v> {
                         .to_string(),
                 ),
                 source_path,
+                positions,
             )),
             strict_io_config: context.strict_io_config,
             missing_inputs: RefCell::new(Vec::new()),

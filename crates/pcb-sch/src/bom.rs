@@ -397,6 +397,8 @@ mod tests {
             attributes,
             children: Default::default(),
             reference_designator: Some("U1".to_string()),
+            component_positions: HashMap::new(),
+            net_positions: HashMap::new(),
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::{
@@ -5,6 +6,7 @@ use crate::{
     NetId,
 };
 use itertools::Itertools;
+use pcb_sch::position::Position;
 use pcb_sch::{
     AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, PhysicalUnit, PhysicalValue,
     Schematic,
@@ -27,6 +29,8 @@ pub(crate) struct ModuleConverter {
     net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
     // Mapping <ref to component instance> -> <spice model>
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
+    // Mapping <module instance ref> -> <module value> for position processing
+    module_instances: Vec<(InstanceRef, FrozenModuleValue)>,
 }
 
 /// Module signature information to be serialized as JSON
@@ -57,6 +61,7 @@ impl ModuleConverter {
             net_to_name: HashMap::new(),
             net_to_properties: HashMap::new(),
             comp_models: Vec::new(),
+            module_instances: Vec::new(),
         }
     }
 
@@ -128,9 +133,9 @@ impl ModuleConverter {
         }
 
         // Finalize the component models now that we have finalized the net names
-        for (instance_ref, model) in self.comp_models {
-            assert!(self.schematic.instances.contains_key(&instance_ref));
-            let comp_inst: &mut Instance = self.schematic.instances.get_mut(&instance_ref).unwrap();
+        for (instance_ref, model) in &self.comp_models {
+            assert!(self.schematic.instances.contains_key(instance_ref));
+            let comp_inst: &mut Instance = self.schematic.instances.get_mut(instance_ref).unwrap();
             comp_inst.add_attribute(crate::attrs::MODEL_DEF, model.definition.clone());
             comp_inst.add_attribute(crate::attrs::MODEL_NAME, model.name.clone());
             let mut net_names = Vec::new();
@@ -151,6 +156,8 @@ impl ModuleConverter {
         }
 
         self.schematic.assign_reference_designators();
+
+        self.post_process_all_positions();
 
         Ok(self.schematic)
     }
@@ -274,6 +281,10 @@ impl ModuleConverter {
 
         // Add instance to schematic.
         self.schematic.add_instance(instance_ref.clone(), inst);
+
+        // Record this module instance for position post-processing
+        self.module_instances
+            .push((instance_ref.clone(), module.clone()));
 
         Ok(())
     }
@@ -450,6 +461,131 @@ impl ModuleConverter {
         self.schematic.add_instance(instance_ref.clone(), comp_inst);
 
         Ok(())
+    }
+
+    fn post_process_all_positions(&mut self) {
+        let module_instances = self.module_instances.clone();
+
+        for (instance_ref, module) in &module_instances {
+            for (key, pos) in module.positions().iter() {
+                let position = Position {
+                    x: pos.x,
+                    y: pos.y,
+                    rotation: pos.rotation,
+                };
+
+                // First check if this is a module/component position
+                if self.is_instance_position(key, instance_ref).is_some() {
+                    if let Some(instance) = self.schematic.instances.get_mut(instance_ref) {
+                        instance
+                            .component_positions
+                            .insert(key.to_owned(), position);
+                    }
+                } else if let Some(net_id) = self.find_net_id_for_key(key, module, instance_ref) {
+                    // This is a net position - can have multiple positions per net
+                    if let Some(instance) = self.schematic.instances.get_mut(instance_ref) {
+                        instance
+                            .net_positions
+                            .entry(net_id)
+                            .or_insert_with(Vec::new)
+                            .push(position);
+                    }
+                }
+                // If neither component nor net, ignore
+            }
+        }
+    }
+
+    fn is_instance_position(&self, key: &str, instance_ref: &InstanceRef) -> Option<()> {
+        // TODO: Remove this complex logic once we disallow "." in component names
+        // This tries all possible splits because component names can contain dots (e.g., "SMF6.0CA")
+        // Once we ban dots in names, we can go back to simple: key.split('.').try_fold(...)
+        let parts: Vec<&str> = key.split('.').collect();
+
+        // Try progressively longer prefixes as the first part
+        for split_idx in 1..=parts.len() {
+            let first_part = parts[0..split_idx].join(".");
+            let remaining_parts = &parts[split_idx..];
+
+            if let Some(child_ref) = self
+                .schematic
+                .instances
+                .get(instance_ref)?
+                .children
+                .get(&first_part)
+            {
+                // Found first part, now traverse remaining parts
+                let final_ref = remaining_parts
+                    .iter()
+                    .try_fold(child_ref, |current_ref, part| {
+                        self.schematic
+                            .instances
+                            .get(current_ref)?
+                            .children
+                            .get(*part)
+                    })
+                    .unwrap_or(child_ref);
+
+                if self.schematic.instances.contains_key(final_ref) {
+                    return Some(());
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_net_id_for_key(
+        &self,
+        key: &str,
+        module: &FrozenModuleValue,
+        instance_ref: &InstanceRef,
+    ) -> Option<u64> {
+        let (net_part, _suffix) = key.rsplit_once('.').unwrap_or((key, ""));
+
+        // First try: public io() nets from signature
+        for param in module.signature().iter().filter(|p| !p.is_config) {
+            if let Some(default_net_name) = param.default_value.and_then(|v| {
+                v.downcast_ref::<FrozenNetValue>()
+                    .map(|n| n.name().to_string())
+                    .or_else(|| {
+                        v.downcast_ref::<FrozenInterfaceValue>()?
+                            .fields()
+                            .get("NET")?
+                            .downcast_ref::<FrozenNetValue>()
+                            .map(|n| n.name().to_string())
+                    })
+            }) {
+                if default_net_name == net_part {
+                    if let Some(net_value) = param.actual_value?.downcast_ref::<FrozenNetValue>() {
+                        return Some(net_value.id());
+                    }
+                    if let Some(net_value) = param
+                        .actual_value?
+                        .downcast_ref::<FrozenInterfaceValue>()?
+                        .fields()
+                        .get("NET")?
+                        .downcast_ref::<FrozenNetValue>()
+                    {
+                        return Some(net_value.id());
+                    }
+                }
+            }
+        }
+
+        // Second try: internal nets
+        let fq_name = if instance_ref.instance_path.is_empty() {
+            // Root module - net name is not prefixed
+            net_part.to_string()
+        } else {
+            // Sub-module - prefix with module path
+            format!("{}.{}", instance_ref.instance_path.join("."), net_part)
+        };
+
+        self.net_to_name
+            .iter()
+            .find(|(_, name)| *name == &fq_name)
+            .map(|(&id, _)| id)
     }
 }
 
