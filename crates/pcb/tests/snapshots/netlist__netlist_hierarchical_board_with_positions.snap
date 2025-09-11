@@ -1,0 +1,56 @@
+---
+source: crates/pcb/tests/netlist.rs
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/HierarchicalBoard.zen:<root>": {
+    "component_positions": {
+      "LED1.D1": {
+        "rotation": 90.0,
+        "x": 150.0,
+        "y": 100.0
+      },
+      "LED1.R1": {
+        "rotation": 0.0,
+        "x": 100.0,
+        "y": 100.0
+      },
+      "LED2.D1": {
+        "rotation": 90.0,
+        "x": 150.0,
+        "y": 200.0
+      },
+      "LED2.R1": {
+        "rotation": 0.0,
+        "x": 100.0,
+        "y": 200.0
+      }
+    },
+    "net_positions": {
+      "347": [
+        {
+          "rotation": 0.0,
+          "x": 50.0,
+          "y": 150.0
+        },
+        {
+          "rotation": 0.0,
+          "x": 200.0,
+          "y": 150.0
+        }
+      ],
+      "348": [
+        {
+          "rotation": 0.0,
+          "x": 50.0,
+          "y": 250.0
+        },
+        {
+          "rotation": 0.0,
+          "x": 200.0,
+          "y": 250.0
+        }
+      ]
+    }
+  }
+}
