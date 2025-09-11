@@ -49,6 +49,8 @@ ignore = { workspace = true }
 semver = { workspace = true }
 crossterm = { workspace = true }
 
+axoupdater = { version = "0.7", features = ["blocking"] }
+
 [dev-dependencies]
 insta = { workspace = true }
 tempfile = { workspace = true }
