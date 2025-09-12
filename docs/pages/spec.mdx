@@ -418,6 +418,52 @@ Properties accessible via the TestBench value:
 
 ## Built-in Functions
 
+### moved
+
+The `moved()` directive allows you to specify path remapping for refactoring support. When modules or components are moved or renamed, downstream artifacts (like layout files) may still reference the old paths. The `moved()` directive provides a mapping from old paths to new paths.
+
+```python
+moved("old_path", "new_path")
+```
+
+#### Module-level Remapping
+
+If the path refers to a module, all children of that module are automatically remapped:
+
+```python
+# This single directive handles:
+# POW.PS1 -> PS1
+# POW.PS1.some_resistor -> PS1.some_resistor  
+# POW.PS1.inner.component -> PS1.inner.component
+moved("POW.PS1", "PS1")
+```
+
+#### Usage Examples
+
+```python
+# Moved a power supply module from POW namespace to root
+moved("POW.PS1", "PS1")
+
+# Renamed a component
+moved("OLD_COMP", "NEW_COMP")
+
+# Moved components between modules
+moved("ModuleA.ComponentX", "ModuleB.ComponentX")
+
+# Net remapping for position comments
+moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
+```
+
+**Type**: `moved`  
+**Constructor**: `moved(old_path, new_path)`
+
+- `old_path`: The old path that should be remapped
+- `new_path`: The new path to remap to
+#### Scoping
+
+`moved()` directives are scoped to the module where they are defined. They affect how paths from that module are resolved in downstream artifacts.
+```
+
 ### io(name, type, default=None, optional=False)
 
 Declares a net or interface input for a module.

@@ -4,7 +4,7 @@ This board uses modules referenced via // paths to test that workspace
 root detection works correctly with pcb.toml files.
 """
 
-load("@stdlib:v0.2.2/interfaces.zen", "Ground", "Power", "Spi")
+load("@stdlib:v0.2.8/interfaces.zen", "Ground", "Power", "Spi")
 
 # Use workspace-relative paths for modules - this tests // path resolution
 PowerSupplyModule = Module("//modules/PowerSupplyModule.zen")
@@ -43,8 +43,8 @@ LedIndicatorModule(
 
 Flash(
     name="FLASH",
-    VCC=vcc_3v3.NET,
-    GND=gnd.NET,
+    VCC=vcc_3v3,
+    GND=gnd,
     HOLD=Net(),
     spi=Spi(),
     properties = {
@@ -52,11 +52,15 @@ Flash(
     },
 )
 
-# pcb:sch FILTERED_VCC_VCC.1 x=1134.3800 y=37.1000 rot=0
+# Fix orphaned position comment - the net was renamed but the comment still uses the old name
+moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
+moved("POW.PS1", "PS1")
+
+# pcb:sch AN_OLD_FILTERED_VCC_VCC.1 x=1134.3800 y=37.1000 rot=0
 # pcb:sch FLASH x=203.2000 y=-127.0000 rot=0
 # pcb:sch GND_GND.1 x=1230.9000 y=341.9000 rot=0
-# pcb:sch PS1.C_FILTER.C x=1299.4800 y=-51.8000 rot=0
-# pcb:sch PS1.R_PULLUP.R x=1233.4400 y=-51.8000 rot=0
+# pcb:sch POW.PS1.C_FILTER.C x=1299.4800 y=-51.8000 rot=0
+# pcb:sch POW.PS1.R_PULLUP.R x=1233.4400 y=-51.8000 rot=0
 # pcb:sch STATUS1.D_STATUS.LED x=1218.2000 y=235.2200 rot=270
 # pcb:sch STATUS1.R_LIMIT.R x=1233.4400 y=113.3000 rot=0
 # pcb:sch VCC_3V3_VCC.1 x=1235.9800 y=-140.7000 rot=0
