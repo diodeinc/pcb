@@ -4,8 +4,8 @@ expression: output
 ---
 {
   "<TEMP_DIR>/boards/ComponentWithDots.zen:<root>": {
-    "component_positions": {
-      "SMF6.0A": {
+    "symbol_positions": {
+      "comp:SMF6.0A": {
         "rotation": 0.0,
         "x": 100.0,
         "y": 100.0

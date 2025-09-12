@@ -474,24 +474,19 @@ impl ModuleConverter {
                     rotation: pos.rotation,
                 };
 
-                // First check if this is a module/component position
-                if self.is_instance_position(key, instance_ref).is_some() {
-                    if let Some(instance) = self.schematic.instances.get_mut(instance_ref) {
-                        instance
-                            .component_positions
-                            .insert(key.to_owned(), position);
-                    }
-                } else if let Some(net_id) = self.find_net_id_for_key(key, module, instance_ref) {
-                    // This is a net position - can have multiple positions per net
-                    if let Some(instance) = self.schematic.instances.get_mut(instance_ref) {
-                        instance
-                            .net_positions
-                            .entry(net_id)
-                            .or_insert_with(Vec::new)
-                            .push(position);
-                    }
+                // Determine position type and convert to unified format
+                let symbol_key = if self.is_instance_position(key, instance_ref).is_some() {
+                    // Component position: component_name -> comp:component_name
+                    Some(format!("comp:{}", key))
+                } else {
+                    self.find_net_symbol_key(key, module, instance_ref)
+                };
+
+                if let (Some(symbol_key), Some(instance)) =
+                    (symbol_key, self.schematic.instances.get_mut(instance_ref))
+                {
+                    instance.symbol_positions.insert(symbol_key, position);
                 }
-                // If neither component nor net, ignore
             }
         }
     }
@@ -535,15 +530,15 @@ impl ModuleConverter {
         None
     }
 
-    fn find_net_id_for_key(
+    fn find_net_symbol_key(
         &self,
         key: &str,
         module: &FrozenModuleValue,
         instance_ref: &InstanceRef,
-    ) -> Option<u64> {
-        let (net_part, _suffix) = key.rsplit_once('.').unwrap_or((key, ""));
+    ) -> Option<String> {
+        let (net_part, suffix) = key.rsplit_once('.').unwrap_or((key, "1"));
 
-        // First try: public io() nets from signature
+        // First try: public io() nets from signature - these need net ID lookup to get actual name
         for param in module.signature().iter().filter(|p| !p.is_config) {
             if let Some(default_net_name) = param.default_value.and_then(|v| {
                 v.downcast_ref::<FrozenNetValue>()
@@ -557,23 +552,32 @@ impl ModuleConverter {
                     })
             }) {
                 if default_net_name == net_part {
-                    if let Some(net_value) = param.actual_value?.downcast_ref::<FrozenNetValue>() {
-                        return Some(net_value.id());
-                    }
-                    if let Some(net_value) = param
+                    // Get the actual net name from the net ID
+                    let net_id = if let Some(net_value) =
+                        param.actual_value?.downcast_ref::<FrozenNetValue>()
+                    {
+                        net_value.id()
+                    } else if let Some(net_value) = param
                         .actual_value?
                         .downcast_ref::<FrozenInterfaceValue>()?
                         .fields()
                         .get("NET")?
                         .downcast_ref::<FrozenNetValue>()
                     {
-                        return Some(net_value.id());
+                        net_value.id()
+                    } else {
+                        continue;
+                    };
+
+                    // Look up actual net name and construct symbol key
+                    if let Some(actual_net_name) = self.net_to_name.get(&net_id) {
+                        return Some(format!("sym:{}#{}", actual_net_name, suffix));
                     }
                 }
             }
         }
 
-        // Second try: internal nets
+        // Second try: internal nets - construct symbol key directly from fq_name
         let fq_name = if instance_ref.instance_path.is_empty() {
             // Root module - net name is not prefixed
             net_part.to_string()
@@ -582,10 +586,12 @@ impl ModuleConverter {
             format!("{}.{}", instance_ref.instance_path.join("."), net_part)
         };
 
-        self.net_to_name
-            .iter()
-            .find(|(_, name)| *name == &fq_name)
-            .map(|(&id, _)| id)
+        // Check if this internal net exists in our net mappings
+        if self.net_to_name.values().any(|name| name == &fq_name) {
+            Some(format!("sym:{}#{}", fq_name, suffix))
+        } else {
+            None
+        }
     }
 }
 

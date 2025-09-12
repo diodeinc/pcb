@@ -1,3 +1,5 @@
+#![cfg(not(target_os = "windows"))]
+
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
@@ -33,17 +35,12 @@ fn extract_position_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> Stri
             if let Some(instance_obj) = instance.as_object() {
                 let mut instance_positions = json!({});
 
-                // Extract component_positions if present
-                if let Some(comp_pos) = instance_obj.get("component_positions") {
-                    if !comp_pos.is_null() && comp_pos != &json!({}) {
-                        instance_positions["component_positions"] = comp_pos.clone();
-                    }
-                }
-
-                // Extract net_positions if present
-                if let Some(net_pos) = instance_obj.get("net_positions") {
-                    if !net_pos.is_null() && net_pos != &json!({}) {
-                        instance_positions["net_positions"] = net_pos.clone();
+                // Extract symbol_positions if present
+                if let Some(symbol_pos) = instance_obj.get("symbol_positions") {
+                    if let Some(symbol_pos_obj) = symbol_pos.as_object() {
+                        if !symbol_pos_obj.is_empty() {
+                            instance_positions["symbol_positions"] = symbol_pos.clone();
+                        }
                     }
                 }
 

@@ -312,9 +312,7 @@ pub struct Instance {
     pub children: HashMap<Symbol, InstanceRef>,
     pub reference_designator: Option<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub component_positions: HashMap<String, Position>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub net_positions: HashMap<u64, Vec<Position>>,
+    pub symbol_positions: HashMap<String, Position>,
 }
 
 impl Instance {
@@ -325,8 +323,7 @@ impl Instance {
             attributes: HashMap::new(),
             children: HashMap::new(),
             reference_designator: None,
-            component_positions: HashMap::new(),
-            net_positions: HashMap::new(),
+            symbol_positions: HashMap::new(),
         }
     }
 
