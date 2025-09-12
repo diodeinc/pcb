@@ -418,6 +418,93 @@ Properties accessible via the TestBench value:
 
 ## Built-in Functions
 
+### moved
+
+The `moved()` function enables graceful refactoring by remapping component and net paths when they change. This is essential for maintaining position data and other downstream artifacts across design evolution.
+
+```python
+# Basic path remapping
+moved("OldComponent", "NewComponent")
+moved("Power.OldRegulator.C1", "PowerMgmt.VoltageReg.C1")
+
+# Hierarchical moves with ** wildcard
+moved("POW.PS1.**", "PS1.**")              # Move entire module hierarchy
+moved("Electrical.**", "**")               # Remove prefix from all paths
+moved("Old.**", "New.Prefix.**")           # Add prefix to all paths
+
+# Single-segment wildcards with *
+moved("Power.*.Regulator", "Power.*.VoltageReg")   # Rename components in any power module
+moved("*.OldFilter.*", "*.NewFilter.*")            # Rename components across all modules
+
+# Net symbol remapping
+moved("AN_OLD_NET_NAME.*", "NEW_NET_NAME.*")       # Fix orphaned position comments
+```
+
+**Type**: `moved`  
+**Constructor**: `moved(old_pattern, new_pattern)`
+
+- `old_pattern`: Pattern to match existing paths (supports `*` and `**` wildcards)
+- `new_pattern`: Replacement pattern (must have matching wildcards)
+
+#### Pattern Syntax
+
+**Literals**: Exact segment matching
+```python
+moved("Power.Regulator.C1", "PWR.VoltageReg.C1")  # Exact path remapping
+```
+
+**Single Wildcard (`*`)**: Matches exactly one path segment
+```python
+moved("Power.*.Filter", "PWR.*.Filt")             # Rename Filter in any Power submodule
+moved("*.OldName.*", "*.NewName.*")               # Rename component in any module
+```
+
+**Deep Wildcard (`**`)**: Matches zero or more path segments  
+```python
+moved("POW.**", "PowerMgmt.**")                   # Move entire POW hierarchy to PowerMgmt
+moved("Electrical.**", "**")                     # Remove Electrical prefix from all paths
+moved("Old.**", "Systems.New.**")                # Add prefix and rename
+```
+
+#### Wildcard Rules
+
+1. **Segment boundaries**: Wildcards match complete segments separated by dots
+2. **Wildcard alignment**: Source and destination must have matching wildcards in the same order
+3. **Priority**: Most specific patterns (longest literal prefix) match first
+
+#### Module Scoping
+
+Moved directives are automatically scoped to their containing module:
+
+```python
+# In module "BoardLevel":
+moved("POW.PS1.**", "PS1.**")
+
+# Actually becomes: "BoardLevel.POW.PS1.**" -> "BoardLevel.PS1.**"
+# Cannot affect paths outside BoardLevel module
+```
+
+#### Common Use Cases
+
+**Module reorganization**:
+```python
+moved("Power.**", "PowerMgmt.**")              # Rename module hierarchy
+moved("Subsystem.Component.**", "Component.**") # Flatten hierarchy
+```
+
+**Component renames**:
+```python
+moved("*.OldRegulator.*", "*.VoltageReg.*")    # Rename component type everywhere
+moved("Power.Main.C*", "Power.Primary.C*")     # Move capacitors to new module
+```
+
+**Artifact repair**:
+```python
+# Fix orphaned position comments after net/component renames
+moved("OLD_NET_NAME.*", "NEW_NET_NAME.*")
+moved("OldModule.**", "NewModule.**")
+```
+
 ### io(name, type, default=None, optional=False)
 
 Declares a net or interface input for a module.

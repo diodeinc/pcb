@@ -3,4 +3,4 @@ name = "WorkspaceTestBoard"
 path = "WorkspaceTestBoard.zen"
 
 [packages]
-kicad = "@github/diodeinc/kicad"
+kicad = "@github/diodeinc/kicad:v0.0.1"

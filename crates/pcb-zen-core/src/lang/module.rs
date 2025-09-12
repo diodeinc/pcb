@@ -183,11 +183,13 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     properties: SmallMap<String, V>,
     signature: Vec<ParameterMetadataGen<V>>,
     /// Nets that are introduced (created) by this module. Map of `net id → local name`.
-    introduced_nets: starlark::collections::SmallMap<NetId, String>,
+    introduced_nets: SmallMap<NetId, String>,
     /// Local name → net id, to enforce uniqueness of names within a module.
-    net_name_to_id: starlark::collections::SmallMap<String, NetId>,
+    net_name_to_id: SmallMap<String, NetId>,
     /// Parsed position data from pcb:sch comments in this module's source file
     positions: PositionMap,
+    /// Path movement directives from moved() calls. Map of `old path → new path`.
+    moved_directives: SmallMap<String, String>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -439,6 +441,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             introduced_nets: SmallMap::new(),
             net_name_to_id: SmallMap::new(),
             positions,
+            moved_directives: SmallMap::new(),
         }
     }
 
@@ -551,6 +554,16 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Return the map of nets introduced by this module.
     pub fn introduced_nets(&self) -> &starlark::collections::SmallMap<NetId, String> {
         &self.introduced_nets
+    }
+
+    /// Add a moved directive to this module.
+    pub fn add_moved_directive(&mut self, old_path: String, new_path: String) {
+        self.moved_directives.insert(old_path, new_path);
+    }
+
+    /// Return the map of moved directives for this module.
+    pub fn moved_directives(&self) -> &starlark::collections::SmallMap<String, String> {
+        &self.moved_directives
     }
 
     /// Extract all net names from a value recursively.
@@ -1734,6 +1747,18 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
     ) -> anyhow::Result<Value<'v>> {
         eval.add_property(&name, value);
 
+        Ok(Value::new_none())
+    }
+
+    /// Record a path movement directive for refactoring support.
+    fn moved<'v>(
+        #[starlark(require = pos)] old_path: String,
+        #[starlark(require = pos)] new_path: String,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_moved_directive(old_path, new_path);
+        }
         Ok(Value::new_none())
     }
 }
