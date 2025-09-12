@@ -5,6 +5,7 @@ use anyhow::anyhow;
 /// Valid identifiers must:
 /// - Not be empty
 /// - Not contain whitespace
+/// - Not contain dots (confusing for hierarchical references)
 /// - Only contain ASCII characters
 ///
 /// Returns an error with a descriptive message if validation fails.
@@ -21,6 +22,15 @@ pub fn validate_identifier_name(name: &str, context: &str) -> Result<(), starlar
     if name.contains(char::is_whitespace) {
         return Err(starlark::Error::new_other(anyhow!(
             "{} cannot contain whitespace. Got: {:?}",
+            context,
+            name
+        )));
+    }
+
+    // Check for dots (confusing for hierarchical references)
+    if name.contains('.') {
+        return Err(starlark::Error::new_other(anyhow!(
+            "{} cannot contain dots. Got: {:?}",
             context,
             name
         )));
@@ -70,11 +80,8 @@ mod tests {
             "SW{1}",         // Braces allowed
             "net=vcc",       // Equals allowed
             "pin:1",         // Colons allowed
-            "path/to/file",  // Path separators now allowed
-            "windows\\path", // Backslashes now allowed
-            "power.rail",    // Dots now allowed
-            "file.ext",      // File extensions allowed
-            "net.test.1",    // Multiple dots allowed
+            "path/to/file",  // Path separators allowed
+            "windows\\path", // Backslashes allowed
         ];
 
         for name in valid_names {
@@ -107,6 +114,30 @@ mod tests {
             assert!(
                 error_msg.contains("cannot contain whitespace"),
                 "Expected whitespace error for '{}', got: {}",
+                name,
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_names_with_dots() {
+        let invalid_names = vec![
+            "power.rail", // Single dot
+            "file.ext",   // File extension
+            "net.test.1", // Multiple dots
+            ".start",     // Dot at start
+            "end.",       // Dot at end
+            "a.b.c.d",    // Multiple dots
+        ];
+
+        for name in invalid_names {
+            let result = validate_identifier_name(name, "Test name");
+            assert!(result.is_err(), "Expected '{}' to be invalid", name);
+            let error_msg = format!("{}", result.unwrap_err());
+            assert!(
+                error_msg.contains("cannot contain dots"),
+                "Expected dot error for '{}', got: {}",
                 name,
                 error_msg
             );
