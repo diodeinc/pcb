@@ -1,5 +1,4 @@
 use log::debug;
-use pcb_sch::position::parse_position_comments;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
@@ -614,31 +613,6 @@ impl Module {
     pub fn list_files(&self) -> Result<String, JsValue> {
         // TODO: Implement file listing through worker
         Ok("[]".to_string())
-    }
-
-    /// Load positions from pcb:sch comments in a source file
-    #[wasm_bindgen(js_name = loadPositions)]
-    pub fn load_positions(&self, file_path: &str) -> Result<JsValue, JsValue> {
-        debug!("Loading positions from file: {}", file_path);
-
-        // Read the file content
-        let path = PathBuf::from(file_path);
-        let content = match self.file_provider.read_file(&path) {
-            Ok(content) => content,
-            Err(e) => {
-                debug!("Failed to read file {}: {:?}", file_path, e);
-                // Return null for file not found, indicating no positions available
-                return Ok(JsValue::NULL);
-            }
-        };
-
-        // Parse position comments
-        let (positions, _block_start) = parse_position_comments(&content);
-        debug!("Parsed {} positions from {}", positions.len(), file_path);
-
-        // Convert to JavaScript object
-        serde_wasm_bindgen::to_value(&positions)
-            .map_err(|e| JsValue::from_str(&format!("Failed to serialize positions: {e}")))
     }
 
     /// Save positions - currently unsupported in WASM
