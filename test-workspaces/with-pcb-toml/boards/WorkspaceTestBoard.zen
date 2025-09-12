@@ -47,4 +47,16 @@ Flash(
     GND=gnd.NET,
     HOLD=Net(),
     spi=Spi(),
+    properties = {
+        "embed": "true",
+    },
 )
+
+# pcb:sch FILTERED_VCC_VCC.1 x=1134.3800 y=37.1000 rot=0
+# pcb:sch FLASH x=203.2000 y=-127.0000 rot=0
+# pcb:sch GND_GND.1 x=1230.9000 y=341.9000 rot=0
+# pcb:sch PS1.C_FILTER.C x=1299.4800 y=-51.8000 rot=0
+# pcb:sch PS1.R_PULLUP.R x=1233.4400 y=-51.8000 rot=0
+# pcb:sch STATUS1.D_STATUS.LED x=1218.2000 y=235.2200 rot=270
+# pcb:sch STATUS1.R_LIMIT.R x=1233.4400 y=113.3000 rot=0
+# pcb:sch VCC_3V3_VCC.1 x=1235.9800 y=-140.7000 rot=0
