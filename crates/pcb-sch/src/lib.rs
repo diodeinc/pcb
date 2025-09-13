@@ -485,6 +485,9 @@ pub struct Schematic {
 
     /// Symbol library - maps symbol paths to their s-expression content
     pub symbols: HashMap<String, String>,
+
+    /// Path remapping rules for moved() directives (old_path -> new_path)
+    pub moved_paths: HashMap<String, String>,
 }
 
 impl Schematic {

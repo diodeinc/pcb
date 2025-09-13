@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::moved::{apply_moved_directives, process_position_remapping};
+use crate::moved::{process_position_remapping, Remapper};
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {
@@ -158,6 +158,10 @@ impl ModuleConverter {
         self.schematic.assign_reference_designators();
 
         self.post_process_all_positions();
+
+        // Populate remapper data from moved directives
+        let remapper = process_position_remapping(&self.module_instances);
+        self.schematic.moved_paths = remapper.moved_paths;
 
         Ok(self.schematic)
     }
@@ -464,14 +468,14 @@ impl ModuleConverter {
     }
 
     fn post_process_all_positions(&mut self) {
-        let module_instances = self.module_instances.clone();
         // Get all moved directives with proper module scoping
-        let all_moved_directives = process_position_remapping(&module_instances);
+        let moved_paths = self.schematic.moved_paths.clone();
+        let remapper = Remapper::from_path_map(moved_paths);
 
-        for (instance_ref, module) in &module_instances {
+        for (instance_ref, module) in &self.module_instances {
             for (key, pos) in module.positions().iter() {
                 // Apply moved directive remapping to the position key
-                let remapped_key = apply_moved_directives(key, &all_moved_directives);
+                let remapped_key = remapper.remap(key);
                 let final_key = remapped_key.as_ref().unwrap_or(key);
                 let position = Position {
                     x: pos.x,

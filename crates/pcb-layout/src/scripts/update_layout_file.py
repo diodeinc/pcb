@@ -66,6 +66,39 @@ if python_path:
 import pcbnew
 
 
+class Remapper:
+    """Longest-prefix remapper for old -> new path mapping."""
+
+    def __init__(self, moved_paths: Dict[str, str]):
+        """Initialize remapper from moved_paths dictionary (old_path -> new_path)."""
+        self.map = moved_paths.copy()
+
+    def remap(self, path: str) -> Optional[str]:
+        """Remap a path using longest-prefix matching."""
+        search_path = path
+
+        while True:
+            if search_path in self.map:
+                # path = prefix + remainder, where remainder is "" or ".foo.bar"
+                new_prefix = self.map[search_path]
+                remainder = path[len(search_path) :]
+                return new_prefix + remainder
+
+            # Find previous dot; stop if none
+            dot_pos = search_path.rfind(".")
+            if dot_pos == -1:
+                break
+            search_path = search_path[:dot_pos]
+
+        return None
+
+    @classmethod
+    def from_schematic(cls, schematic_data: Dict[str, Any]) -> "Remapper":
+        """Build a remapper from schematic JSON data."""
+        moved_paths = schematic_data.get("moved_paths", {})
+        return cls(moved_paths)
+
+
 ####################################################################################################
 # JSON Netlist Parser
 #

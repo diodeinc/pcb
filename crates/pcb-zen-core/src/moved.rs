@@ -2,44 +2,62 @@ use crate::lang::module::FrozenModuleValue;
 use pcb_sch::InstanceRef;
 use std::collections::HashMap;
 
-/// Apply moved directives to remap a path
-///
-/// This simplified implementation supports exact path matching and module hierarchy remapping:
-/// - If the old path matches exactly, it gets remapped to the new path
-/// - If the old path is a prefix (module), all child paths are automatically remapped
-pub fn apply_moved_directives(
-    path: &str,
-    moved_directives: &HashMap<String, String>,
-) -> Option<String> {
-    // Try exact match first
-    if let Some(new_path) = moved_directives.get(path) {
-        return Some(new_path.clone());
-    }
+/// Longest-prefix remapper for old -> new path mapping.
+/// Thread-safe after construction.
+#[derive(Debug, Clone)]
+pub struct Remapper {
+    pub moved_paths: HashMap<String, String>, // old -> new
+}
 
-    // Try prefix matches (module hierarchy remapping)
-    for (old_path, new_path) in moved_directives.iter() {
-        // Check if path starts with old_path as a module prefix
-        if path.starts_with(old_path) {
-            let remaining = &path[old_path.len()..];
-            // Ensure we're matching at module boundaries (either end of string or followed by '.')
-            if remaining.is_empty() {
-                // Exact match - already handled above
-                continue;
-            } else if remaining.starts_with('.') {
-                // Module hierarchy match: old_path.something -> new_path.something
-                return Some(format!("{}{}", new_path, remaining));
-            }
+impl Remapper {
+    pub fn from_path_map(path_map: HashMap<String, String>) -> Self {
+        Self {
+            moved_paths: path_map,
         }
     }
 
-    None
+    fn from_pairs(pairs: &[(String, String)]) -> Self {
+        let mut map = HashMap::new();
+
+        for (old, new) in pairs {
+            if let Some(prev) = map.insert(old.clone(), new.clone()) {
+                eprintln!(
+                    "Warning: duplicate moved() directive old={} prev={} new={}",
+                    old, prev, new
+                );
+            }
+        }
+
+        Self { moved_paths: map }
+    }
+
+    /// Remap a path using longest-prefix matching
+    pub fn remap(&self, path: &str) -> Option<String> {
+        let mut search_path = path;
+
+        loop {
+            if let Some(new_prefix) = self.moved_paths.get(search_path) {
+                // path = prefix + remainder, where remainder is "" or ".foo.bar"
+                let remainder = &path[search_path.len()..];
+                return Some(format!("{}{}", new_prefix, remainder));
+            }
+
+            // Find previous dot; stop if none
+            match search_path.rfind('.') {
+                Some(pos) => search_path = &search_path[..pos],
+                None => break,
+            }
+        }
+
+        None
+    }
 }
 
 /// Process position remapping with module scoping for all modules in a hierarchy
 pub fn process_position_remapping(
     module_instances: &[(InstanceRef, FrozenModuleValue)],
-) -> HashMap<String, String> {
-    let mut all_moved_directives = HashMap::new();
+) -> Remapper {
+    let mut pairs = Vec::new();
 
     for (instance_ref, module) in module_instances {
         let module_path = instance_ref.instance_path.join(".");
@@ -55,131 +73,16 @@ pub fn process_position_remapping(
             } else {
                 format!("{}.{}", module_path, new_path)
             };
-            all_moved_directives.insert(scoped_old_path, scoped_new_path);
+            pairs.push((scoped_old_path, scoped_new_path));
         }
     }
 
-    all_moved_directives
+    Remapper::from_pairs(&pairs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_exact_matching() {
-        let mut directives = HashMap::new();
-        directives.insert("OldComponent".to_string(), "NewComponent".to_string());
-        directives.insert(
-            "Power.OldReg.C1".to_string(),
-            "PowerMgmt.VoltageReg.C1".to_string(),
-        );
-
-        assert_eq!(
-            apply_moved_directives("OldComponent", &directives),
-            Some("NewComponent".to_string())
-        );
-
-        assert_eq!(
-            apply_moved_directives("Power.OldReg.C1", &directives),
-            Some("PowerMgmt.VoltageReg.C1".to_string())
-        );
-
-        assert_eq!(
-            apply_moved_directives("UnknownComponent", &directives),
-            None
-        );
-    }
-
-    #[test]
-    fn test_module_hierarchy_remapping() {
-        let mut directives = HashMap::new();
-        // Move module POW.PS1 to PS1 - this should handle all children automatically
-        directives.insert("POW.PS1".to_string(), "PS1".to_string());
-        directives.insert("Power".to_string(), "PWR".to_string());
-
-        // Direct module match
-        assert_eq!(
-            apply_moved_directives("POW.PS1", &directives),
-            Some("PS1".to_string())
-        );
-
-        // Module hierarchy - children get remapped automatically
-        assert_eq!(
-            apply_moved_directives("POW.PS1.some_resistor", &directives),
-            Some("PS1.some_resistor".to_string())
-        );
-
-        assert_eq!(
-            apply_moved_directives("POW.PS1.inner.component", &directives),
-            Some("PS1.inner.component".to_string())
-        );
-
-        // Different module
-        assert_eq!(
-            apply_moved_directives("Power.Regulator", &directives),
-            Some("PWR.Regulator".to_string())
-        );
-
-        // Partial matches shouldn't work (POW.PS10 shouldn't match POW.PS1)
-        assert_eq!(apply_moved_directives("POW.PS10", &directives), None);
-    }
-
-    #[test]
-    fn test_net_remapping() {
-        let mut directives = HashMap::new();
-        directives.insert(
-            "AN_OLD_FILTERED_VCC_VCC".to_string(),
-            "FILTERED_VCC_VCC".to_string(),
-        );
-
-        // Direct net name remapping
-        assert_eq!(
-            apply_moved_directives("AN_OLD_FILTERED_VCC_VCC", &directives),
-            Some("FILTERED_VCC_VCC".to_string())
-        );
-
-        // Net symbol remapping (for position comments)
-        assert_eq!(
-            apply_moved_directives("AN_OLD_FILTERED_VCC_VCC.1", &directives),
-            Some("FILTERED_VCC_VCC.1".to_string())
-        );
-    }
-
-    #[test]
-    fn test_component_moves() {
-        let mut directives = HashMap::new();
-        directives.insert(
-            "ModuleA.ComponentX".to_string(),
-            "ModuleB.ComponentX".to_string(),
-        );
-
-        assert_eq!(
-            apply_moved_directives("ModuleA.ComponentX", &directives),
-            Some("ModuleB.ComponentX".to_string())
-        );
-
-        // Properties should also get remapped
-        assert_eq!(
-            apply_moved_directives("ModuleA.ComponentX.pin1", &directives),
-            Some("ModuleB.ComponentX.pin1".to_string())
-        );
-    }
-
-    #[test]
-    fn test_no_false_matches() {
-        let mut directives = HashMap::new();
-        directives.insert("Power".to_string(), "PWR".to_string());
-
-        // PowerSupply shouldn't match "Power" prefix
-        assert_eq!(apply_moved_directives("PowerSupply", &directives), None);
-
-        // Power.Main should match
-        assert_eq!(
-            apply_moved_directives("Power.Main", &directives),
-            Some("PWR.Main".to_string())
-        );
-    }
 
     #[test]
     fn test_moved_directive_storage() {
@@ -267,6 +170,164 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
                 let moved_directives = frozen_ctx.module.moved_directives();
                 assert_eq!(moved_directives.len(), 0, "Should have no moved directives");
             }
+        }
+    }
+
+    // Remapper tests
+    #[test]
+    fn test_remapper_exact_matches() {
+        let pairs = vec![
+            ("A".to_string(), "B".to_string()),
+            ("Power.Old".to_string(), "Power.New".to_string()),
+        ];
+        let remapper = Remapper::from_pairs(&pairs);
+
+        // Forward mapping
+        assert_eq!(remapper.remap("A"), Some("B".to_string()));
+        assert_eq!(remapper.remap("Power.Old"), Some("Power.New".to_string()));
+        assert_eq!(remapper.remap("Unknown"), None);
+    }
+
+    #[test]
+    fn test_remapper_longest_prefix_matching() {
+        let pairs = vec![
+            ("Power".to_string(), "PWR".to_string()),
+            ("Power.Supply".to_string(), "PWR.PS".to_string()), // More specific
+            ("Net.Old".to_string(), "Net.New".to_string()),
+        ];
+        let remapper = Remapper::from_pairs(&pairs);
+
+        // More specific match should win
+        assert_eq!(remapper.remap("Power.Supply"), Some("PWR.PS".to_string()));
+        assert_eq!(
+            remapper.remap("Power.Supply.Component"),
+            Some("PWR.PS.Component".to_string())
+        );
+
+        // Less specific match for other cases
+        assert_eq!(remapper.remap("Power.Other"), Some("PWR.Other".to_string()));
+        assert_eq!(
+            remapper.remap("Power.Other.Deep.Path"),
+            Some("PWR.Other.Deep.Path".to_string())
+        );
+    }
+
+    #[test]
+    fn test_remapper_boundary_conditions() {
+        let pairs = vec![("POW.PS1".to_string(), "PS1".to_string())];
+        let remapper = Remapper::from_pairs(&pairs);
+
+        // Exact match
+        assert_eq!(remapper.remap("POW.PS1"), Some("PS1".to_string()));
+
+        // Children should match
+        assert_eq!(
+            remapper.remap("POW.PS1.component"),
+            Some("PS1.component".to_string())
+        );
+        assert_eq!(
+            remapper.remap("POW.PS1.deep.nested.path"),
+            Some("PS1.deep.nested.path".to_string())
+        );
+
+        // Partial matches should NOT work
+        assert_eq!(remapper.remap("POW.PS10"), None); // POW.PS10 != POW.PS1.*
+        assert_eq!(remapper.remap("POW.PS"), None); // POW.PS != POW.PS1.*
+    }
+
+    #[test]
+    fn test_remapper_overlapping_prefixes() {
+        let pairs = vec![
+            ("A".to_string(), "X".to_string()),
+            ("A.B".to_string(), "Y.B".to_string()),
+            ("A.B.C".to_string(), "Z.C".to_string()),
+        ];
+        let remapper = Remapper::from_pairs(&pairs);
+
+        // Longest prefix should win
+        assert_eq!(remapper.remap("A.B.C"), Some("Z.C".to_string()));
+        assert_eq!(remapper.remap("A.B.C.D"), Some("Z.C.D".to_string()));
+
+        assert_eq!(remapper.remap("A.B"), Some("Y.B".to_string()));
+        assert_eq!(remapper.remap("A.B.X"), Some("Y.B.X".to_string()));
+
+        assert_eq!(remapper.remap("A"), Some("X".to_string()));
+        assert_eq!(remapper.remap("A.X"), Some("X.X".to_string()));
+    }
+
+    #[test]
+    fn test_remapper_empty() {
+        let remapper = Remapper::from_pairs(&[]);
+
+        assert_eq!(remapper.remap("anything"), None);
+    }
+
+    #[test]
+    fn test_remapper_net_symbols() {
+        let pairs = vec![(
+            "AN_OLD_FILTERED_VCC_VCC".to_string(),
+            "FILTERED_VCC_VCC".to_string(),
+        )];
+        let remapper = Remapper::from_pairs(&pairs);
+
+        // Net base name
+        assert_eq!(
+            remapper.remap("AN_OLD_FILTERED_VCC_VCC"),
+            Some("FILTERED_VCC_VCC".to_string())
+        );
+
+        // Net with symbol suffix (for position comments)
+        assert_eq!(
+            remapper.remap("AN_OLD_FILTERED_VCC_VCC.1"),
+            Some("FILTERED_VCC_VCC.1".to_string())
+        );
+        assert_eq!(
+            remapper.remap("AN_OLD_FILTERED_VCC_VCC.2"),
+            Some("FILTERED_VCC_VCC.2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_schematic_moved_paths_integration() {
+        use crate::convert::ToSchematic;
+        use crate::lang::eval::EvalContext;
+        use crate::lang::input::InputMap;
+
+        let test_content = r#"
+moved("old.component", "new.component")
+moved("POW.PS1", "PS1")
+
+# Simple content to make a valid module
+"#;
+
+        // Create a temporary file
+        let temp_path = std::env::temp_dir().join("test_schematic_moved.zen");
+        std::fs::write(&temp_path, test_content).unwrap();
+
+        // Evaluate it
+        let result = EvalContext::new()
+            .set_source_path(temp_path.clone())
+            .set_module_name("test_schematic_moved".to_string())
+            .set_inputs(InputMap::new())
+            .eval();
+
+        // Clean up the temp file
+        std::fs::remove_file(&temp_path).ok();
+
+        if let Some(output) = result.output {
+            // Convert to schematic using the ToSchematic trait
+            let schematic = output.sch_module.to_schematic().unwrap();
+
+            // Check that moved_paths were populated
+            assert_eq!(schematic.moved_paths.len(), 2);
+            assert_eq!(
+                schematic.moved_paths.get("old.component"),
+                Some(&"new.component".to_string())
+            );
+            assert_eq!(
+                schematic.moved_paths.get("POW.PS1"),
+                Some(&"PS1".to_string())
+            );
         }
     }
 }
