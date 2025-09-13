@@ -1318,6 +1318,98 @@ class SetupBoard(Step):
 
 
 ####################################################################################################
+# Apply Moved Paths Step
+#
+# This step applies path remapping before ImportNetlist to ensure that renamed modules
+# in the schematic are properly synchronized with their existing footprints and groups
+# on the board. This prevents phantom "new" components and orphaned groups.
+####################################################################################################
+
+
+class ApplyMovedPaths(Step):
+    """Apply old->new path remapping to footprints and groups on the board."""
+
+    def __init__(
+        self, state: SyncState, board: pcbnew.BOARD, schematic_data: Dict[str, Any]
+    ):
+        self.state = state
+        self.board = board
+        self.remapper = Remapper.from_schematic(schematic_data)
+
+    def run(self) -> None:
+        """Apply path remapping to all relevant objects on the board."""
+        if not self.remapper.map:
+            logger.info("No moved paths to apply")
+            return
+
+        logger.info(f"Applying {len(self.remapper.map)} path remappings")
+
+        # Apply remapping to footprints and groups
+        remapped_footprints = self._remap_footprints()
+        remapped_groups = self._remap_groups()
+
+        if remapped_footprints > 0 or remapped_groups > 0:
+            logger.info(
+                f"Applied remapping to {remapped_footprints} footprints and {remapped_groups} groups"
+            )
+
+    def _remap_footprints(self) -> int:
+        """Remap footprint paths and update their UUIDs."""
+        count = 0
+        for fp in self.board.GetFootprints():
+            if self._remap_footprint(fp):
+                count += 1
+        return count
+
+    def _remap_footprint(self, fp: pcbnew.FOOTPRINT) -> bool:
+        """Remap a single footprint's path and UUID. Returns True if remapped."""
+        path_field = fp.GetFieldByName("Path")
+        if not path_field:
+            return False
+
+        old_path = path_field.GetText()
+        if not old_path:
+            return False
+
+        new_path = self.remapper.remap(old_path)
+        if not new_path or new_path == old_path:
+            return False
+
+        logger.debug(f"Remapping footprint path: {old_path} -> {new_path}")
+        path_field.SetText(new_path)
+
+        # Update the KiCad UUID to match the new path (UUID is deterministic from path)
+        new_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, new_path))
+        old_uuid = get_footprint_uuid(fp)
+        logger.debug(f"Updating footprint UUID: {old_uuid} -> {new_uuid}")
+        fp.SetPath(pcbnew.KIID_PATH(f"{new_uuid}/{new_uuid}"))
+
+        return True
+
+    def _remap_groups(self) -> int:
+        """Remap KiCad group names."""
+        count = 0
+        for group in self.board.Groups():
+            if self._remap_group(group):
+                count += 1
+        return count
+
+    def _remap_group(self, group: pcbnew.PCB_GROUP) -> bool:
+        """Remap a single group's name. Returns True if remapped."""
+        old_name = group.GetName()
+        if not old_name:
+            return False
+
+        new_name = self.remapper.remap(old_name)
+        if not new_name or new_name == old_name:
+            return False
+
+        logger.debug(f"Remapping group name: {old_name} -> {new_name}")
+        group.SetName(new_name)
+        return True
+
+
+####################################################################################################
 # Net Rename Mapping System
 #
 # This system tracks net name changes by comparing old and new pad assignments for existing
@@ -2875,6 +2967,11 @@ def main():
     else:
         board = pcbnew.LoadBoard(args.output)
 
+    # Load raw schematic data for moved paths
+    logger.info(f"Loading schematic data from {args.json_input}")
+    with open(args.json_input, "r") as f:
+        schematic_data = json.load(f)
+
     # Parse JSON netlist
     logger.info(f"Parsing JSON netlist from {args.json_input}")
     netlist = JsonNetlistParser.parse_netlist(args.json_input)
@@ -2886,6 +2983,7 @@ def main():
     else:
         steps = [
             SetupBoard(state, board),
+            ApplyMovedPaths(state, board, schematic_data),
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),
             PlaceComponents(state, board, netlist),
