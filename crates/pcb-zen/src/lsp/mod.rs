@@ -590,10 +590,8 @@ impl LspContext for LspEvalContext {
 
                             eval_result
                                 .output
-                                .and_then(|fmv| match fmv.sch_module.to_schematic() {
-                                    Ok(schematic) => serde_json::to_value(&schematic).ok(),
-                                    Err(_) => None,
-                                })
+                                .and_then(|fmv| fmv.sch_module.to_schematic().ok())
+                                .and_then(|schematic| serde_json::to_value(&schematic).ok())
                         }
                         _ => None,
                     };
@@ -787,14 +785,11 @@ impl LspEvalContext {
             .map(|output| output.signature.clone());
 
         // Generate schematic JSON if evaluation succeeded
-        let schematic =
-            eval_result
-                .output
-                .as_ref()
-                .and_then(|output| match output.sch_module.to_schematic() {
-                    Ok(schematic) => serde_json::to_value(&schematic).ok(),
-                    Err(_) => None,
-                });
+        let schematic = eval_result
+            .output
+            .as_ref()
+            .and_then(|output| output.sch_module.to_schematic().ok())
+            .and_then(|schematic| serde_json::to_value(&schematic).ok());
 
         // Convert diagnostics
         let diagnostics = eval_result

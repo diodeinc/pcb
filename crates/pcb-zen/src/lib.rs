@@ -18,7 +18,6 @@ use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap, LoadResolver,
     NoopRemoteFetcher,
 };
-use starlark::errors::EvalMessage;
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, EvalMode, WithDiagnostics};
@@ -82,12 +81,21 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
 
 /// Evaluate `file` and return a [`Schematic`].
 pub fn run(file: &Path, cfg: EvalConfig) -> WithDiagnostics<Schematic> {
-    let err_path = file;
-    eval(file, cfg).try_map(|m| {
-        m.sch_module
-            .to_schematic()
-            .map_err(|e| EvalMessage::from_error(err_path, &e.into()))
-    })
+    let eval_result = eval(file, cfg);
+
+    // Handle evaluation failure
+    if eval_result.output.is_none() {
+        return WithDiagnostics {
+            output: None,
+            diagnostics: eval_result.diagnostics,
+        };
+    }
+
+    let eval_output = eval_result.output.unwrap();
+    let mut schematic_result = eval_output.sch_module.to_schematic_with_diagnostics();
+    // Merge diagnostics from eval and schematic conversion
+    schematic_result.diagnostics.extend(eval_result.diagnostics);
+    schematic_result
 }
 
 pub fn lsp() -> anyhow::Result<()> {

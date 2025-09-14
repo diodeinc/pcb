@@ -1,6 +1,4 @@
-use crate::lang::module::FrozenModuleValue;
-use pcb_sch::InstanceRef;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Longest-prefix remapper for old -> new path mapping.
 /// Thread-safe after construction.
@@ -16,9 +14,9 @@ impl Remapper {
         }
     }
 
+    #[cfg(test)]
     fn from_pairs(pairs: &[(String, String)]) -> Self {
         let mut map = HashMap::new();
-
         for (old, new) in pairs {
             if let Some(prev) = map.insert(old.clone(), new.clone()) {
                 eprintln!(
@@ -27,7 +25,6 @@ impl Remapper {
                 );
             }
         }
-
         Self { moved_paths: map }
     }
 
@@ -53,31 +50,34 @@ impl Remapper {
     }
 }
 
-/// Process position remapping with module scoping for all modules in a hierarchy
-pub fn process_position_remapping(
-    module_instances: &[(InstanceRef, FrozenModuleValue)],
-) -> Remapper {
-    let mut pairs = Vec::new();
+/// Apply module scoping to a path
+pub fn scoped_path(module_path: &str, local_path: &str) -> String {
+    if module_path.is_empty() {
+        local_path.to_string()
+    } else {
+        format!("{}.{}", module_path, local_path)
+    }
+}
 
-    for (instance_ref, module) in module_instances {
-        let module_path = instance_ref.instance_path.join(".");
-        for (old_path, new_path) in module.moved_directives().iter() {
-            // Apply module scope: prefix both old and new paths with module path
-            let scoped_old_path = if module_path.is_empty() {
-                old_path.clone()
-            } else {
-                format!("{}.{}", module_path, old_path)
-            };
-            let scoped_new_path = if module_path.is_empty() {
-                new_path.clone()
-            } else {
-                format!("{}.{}", module_path, new_path)
-            };
-            pairs.push((scoped_old_path, scoped_new_path));
+/// Collect all existing paths from schematic instances and nets
+pub fn collect_existing_paths(
+    instances: &HashMap<pcb_sch::InstanceRef, pcb_sch::Instance>,
+    nets: &HashMap<String, pcb_sch::Net>,
+) -> HashSet<String> {
+    let mut paths = HashSet::new();
+
+    for instance_ref in instances.keys() {
+        let path = instance_ref.instance_path.join(".");
+        if !path.is_empty() {
+            let parts: Vec<&str> = path.split('.').collect();
+            for i in 1..=parts.len() {
+                paths.insert(parts[0..i].join("."));
+            }
         }
     }
 
-    Remapper::from_pairs(&pairs)
+    paths.extend(nets.keys().cloned());
+    paths
 }
 
 #[cfg(test)]
@@ -315,19 +315,15 @@ moved("POW.PS1", "PS1")
         std::fs::remove_file(&temp_path).ok();
 
         if let Some(output) = result.output {
-            // Convert to schematic using the ToSchematic trait
-            let schematic = output.sch_module.to_schematic().unwrap();
+            // Convert to schematic using the diagnostics-aware method
+            let schematic_result = output.sch_module.to_schematic_with_diagnostics();
+            let schematic = schematic_result.output.unwrap();
 
-            // Check that moved_paths were populated
-            assert_eq!(schematic.moved_paths.len(), 2);
-            assert_eq!(
-                schematic.moved_paths.get("old.component"),
-                Some(&"new.component".to_string())
-            );
-            assert_eq!(
-                schematic.moved_paths.get("POW.PS1"),
-                Some(&"PS1".to_string())
-            );
+            // Should get warnings about new paths not existing, and directives should be filtered out
+            assert_eq!(schematic_result.diagnostics.len(), 2); // Two warnings about missing new paths
+
+            // Check that moved_paths were filtered out due to warnings
+            assert_eq!(schematic.moved_paths.len(), 0);
         }
     }
 }
