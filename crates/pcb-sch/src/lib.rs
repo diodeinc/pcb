@@ -584,9 +584,11 @@ impl Schematic {
     }
 }
 
-/// Helper function to determine the prefix for a component's reference designator.
-/// This follows the same logic as `comp_prefix` in kicad_netlist.rs.
-fn get_component_prefix(inst: &Instance) -> String {
+/// Extract a prefix string for a component.
+///
+/// Prefers explicit `prefix` attribute if present, otherwise derives from
+/// component `type` attribute (e.g. `resistor` → `R`), with fallback to `U`.
+pub fn get_component_prefix(inst: &Instance) -> String {
     // Prefer explicit `prefix` attribute if present
     if let Some(AttributeValue::String(s)) = inst.attributes.get("prefix") {
         return s.clone();

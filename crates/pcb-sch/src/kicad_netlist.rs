@@ -33,22 +33,6 @@ struct LibPartInfo {
     pins: Vec<(String, String)>, // (num, name)
 }
 
-// Helper extracting a prefix string for a component.
-fn comp_prefix(inst: &crate::Instance) -> String {
-    // Prefer explicit `prefix` attribute if present.
-    if let Some(AttributeValue::String(s)) = inst.attributes.get("prefix") {
-        return s.clone();
-    }
-    // Derive from component `type` attribute (e.g. `res` ⇒ `R`).
-    if let Some(AttributeValue::String(t)) = inst.attributes.get("type") {
-        if let Some(first) = t.chars().next() {
-            return first.to_ascii_uppercase().to_string();
-        }
-    }
-    // Fallback `U`.
-    "U".to_owned()
-}
-
 /// Escape quotes in a string for KiCad S-expression format.
 /// In S-expressions, quotes within strings are escaped with a backslash.
 fn escape_kicad_string(s: &str) -> String {
@@ -82,7 +66,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
     let mut ref_map: HashMap<&InstanceRef, String> = HashMap::new();
 
     for comp in &components {
-        let prefix = comp_prefix(comp.instance);
+        let prefix = crate::get_component_prefix(comp.instance);
         let counter = ref_counts.entry(prefix.clone()).or_default();
         *counter += 1;
         let refdes = format!("{}{}", prefix, *counter);
