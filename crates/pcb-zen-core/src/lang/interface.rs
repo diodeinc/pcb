@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::lang::context::ContextValue;
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
+use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::{generate_net_id, NetValue};
 use crate::lang::validation::validate_identifier_name;
@@ -198,7 +199,13 @@ fn clone_net_template<'v>(
             }
         };
 
-    let net_name = net_name(prefix_opt, template_name, field_name_opt, suffix_net_name);
+    let net_name = compute_net_name(
+        prefix_opt,
+        template_name,
+        field_name_opt,
+        suffix_net_name,
+        eval,
+    );
 
     // Copy properties and symbol
     let mut new_props = SmallMap::new();
@@ -228,6 +235,28 @@ fn net_name(
     } else {
         prefix
     }
+}
+
+/// Produce the final net name and register a moved() directive if the legacy spelling differs.
+/// Returns the *new* name that should be used for allocation/cloning.
+fn compute_net_name<'v>(
+    prefix: Option<&str>,
+    template_name: Option<&str>,
+    field_name: Option<&str>,
+    suffix_net_name: bool,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> String {
+    // NEW name with the current rules
+    let new_name = net_name(prefix, template_name, field_name, suffix_net_name);
+    // OLD name = always-suffix variant (old code path)
+    let old_name = net_name(prefix, template_name, field_name, /*suffix=*/ true);
+    // Register moved directive if names differ
+    if old_name != new_name {
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_moved_directive(old_name, new_name.clone());
+        }
+    }
+    new_name
 }
 
 /// Create a single field value from a spec, handling all field types uniformly
@@ -278,8 +307,14 @@ fn create_field_value<'v>(
             eval,
         )
     } else if field_spec.get_type() == "NetType" {
-        let net_name = net_name(instance_prefix, None, Some(field_name), suffix_net_name);
-        alloc_net(&net_name, SmallMap::new(), Value::new_none(), heap, eval)
+        let new_name = compute_net_name(
+            instance_prefix,
+            None,
+            Some(field_name),
+            suffix_net_name,
+            eval,
+        );
+        alloc_net(&new_name, SmallMap::new(), Value::new_none(), heap, eval)
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, prefix_to_use.as_deref(), heap, eval)

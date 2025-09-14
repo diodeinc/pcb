@@ -20,7 +20,7 @@ expression: output
         "x": 125.0,
         "y": 150.0
       },
-      "sym:VCC_VCC#1": {
+      "sym:VCC#1": {
         "rotation": 0.0,
         "x": 80.0,
         "y": 80.0
