@@ -15,7 +15,7 @@ Module {
                 connections: {
                     "EN": FrozenValue(
                         Net {
-                            name: "CHIP_CONTROL_EN",
+                            name: "CHIP_control_EN",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,
@@ -24,7 +24,7 @@ Module {
                     ),
                     "RST": FrozenValue(
                         Net {
-                            name: "CHIP_CONTROL_RST",
+                            name: "CHIP_control_RST",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,
@@ -33,7 +33,7 @@ Module {
                     ),
                     "SIG": FrozenValue(
                         Net {
-                            name: "CHIP_SIGNAL",
+                            name: "CHIP_signal",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,

@@ -21,6 +21,71 @@ use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::{generate_net_id, NetValue};
 use crate::lang::validation::validate_identifier_name;
 
+/// Tracks both old and new style instance prefixes for backward compatibility
+#[derive(Debug, Clone, Default)]
+struct InstancePrefix {
+    old_style: String, // legacy: "DEBUG_UART_TX"
+    new_style: String, // modern: "debug_uart_tx"
+}
+
+impl InstancePrefix {
+    #[inline]
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    fn from_root(root: &str) -> Self {
+        Self {
+            old_style: root.to_owned(),
+            new_style: root.to_owned(),
+        }
+    }
+
+    /// Underscore-joins `segment` after `prefix` unless `prefix` is empty
+    #[inline]
+    fn join(prefix: &str, segment: &str) -> String {
+        if prefix.is_empty() {
+            segment.to_owned()
+        } else {
+            format!("{}_{}", prefix, segment)
+        }
+    }
+
+    fn child(&self, field: &str) -> Self {
+        Self {
+            old_style: Self::join(&self.old_style, &field.to_ascii_uppercase()),
+            new_style: Self::join(&self.new_style, field),
+        }
+    }
+
+    /// Compute the pair (new_name, old_name) for a net leaf
+    fn net_names(&self, leaf: &str, suffix_net_name: bool) -> (String, String) {
+        match (suffix_net_name, self.new_style.is_empty()) {
+            // Multi-net interface, no prefix
+            (true, true) => (
+                format!("_{}", leaf),
+                format!("_{}", leaf.to_ascii_uppercase()),
+            ),
+            // Multi-net interface, with prefix
+            (true, false) => (
+                Self::join(&self.new_style, leaf),
+                Self::join(&self.old_style, &leaf.to_ascii_uppercase()),
+            ),
+            // Single-net interface, no prefix
+            (false, true) => (
+                format!("_{}", leaf),
+                format!("_{}", leaf.to_ascii_uppercase()),
+            ),
+            // Single-net interface, with prefix
+            (false, false) => (
+                self.new_style.clone(),
+                Self::join(&self.old_style, &leaf.to_ascii_uppercase()),
+            ),
+        }
+    }
+}
+
 /// Unified helper to allocate a net with proper registration
 fn alloc_net<'v>(
     name_hint: &str,
@@ -169,7 +234,7 @@ fn unregister_interface_nets<'v>(interface: &InterfaceValue<'v>, ctx: &ContextVa
 /// Clone a Net template with proper prefix application and name generation
 fn clone_net_template<'v>(
     template: Value<'v>,
-    prefix_opt: Option<&str>,
+    prefix: &InstancePrefix,
     field_name_opt: Option<&str>,
     suffix_net_name: bool,
     heap: &'v Heap,
@@ -199,13 +264,7 @@ fn clone_net_template<'v>(
             }
         };
 
-    let net_name = compute_net_name(
-        prefix_opt,
-        template_name,
-        field_name_opt,
-        suffix_net_name,
-        eval,
-    );
+    let net_name = compute_net_name(prefix, template_name, field_name_opt, suffix_net_name, eval);
 
     // Copy properties and symbol
     let mut new_props = SmallMap::new();
@@ -217,45 +276,23 @@ fn clone_net_template<'v>(
     alloc_net(&net_name, new_props, copied_symbol, heap, eval)
 }
 
-fn net_name(
-    prefix_opt: Option<&str>,
-    template_name: Option<&str>,
-    field_name: Option<&str>,
-    suffix_net_name: bool,
-) -> String {
-    let prefix = prefix_opt.unwrap_or_default().to_string();
-    let suffix_net_name = suffix_net_name || prefix_opt.is_none();
-    let net_name = match (template_name, field_name) {
-        (Some(template_name), _) => template_name,
-        (None, Some(field_name)) => field_name,
-        (None, None) => "NET",
-    };
-    if suffix_net_name {
-        format!("{}_{}", prefix, net_name.to_ascii_uppercase())
-    } else {
-        prefix
-    }
-}
-
-/// Produce the final net name and register a moved() directive if the legacy spelling differs.
-/// Returns the *new* name that should be used for allocation/cloning.
 fn compute_net_name<'v>(
-    prefix: Option<&str>,
+    prefix: &InstancePrefix,
     template_name: Option<&str>,
     field_name: Option<&str>,
     suffix_net_name: bool,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> String {
-    // NEW name with the current rules
-    let new_name = net_name(prefix, template_name, field_name, suffix_net_name);
-    // OLD name = always-suffix variant (old code path)
-    let old_name = net_name(prefix, template_name, field_name, /*suffix=*/ true);
+    let leaf = template_name.or(field_name).unwrap_or("NET");
+    let (new_name, old_name) = prefix.net_names(leaf, suffix_net_name);
+
     // Register moved directive if names differ
     if old_name != new_name {
         if let Some(ctx) = eval.context_value() {
             ctx.add_moved_directive(old_name, new_name.clone());
         }
     }
+
     new_name
 }
 
@@ -264,7 +301,7 @@ fn create_field_value<'v>(
     field_name: &str,
     field_spec: Value<'v>,
     provided_value: Option<Value<'v>>,
-    instance_prefix: Option<&str>,
+    prefix: &InstancePrefix,
     suffix_net_name: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
@@ -288,36 +325,27 @@ fn create_field_value<'v>(
     }
 
     // Handle different field types
-    let prefix_to_use = match instance_prefix {
-        Some(p) => Some(format!("{p}_{}", field_name.to_ascii_uppercase())),
-        None => Some(field_name.to_ascii_uppercase()),
-    };
+    let child_prefix = prefix.child(field_name);
     if field_spec.get_type() == "InterfaceValue" {
         // Interface instance - extract factory and re-instantiate with extended prefix
         let factory_val = interface_instance_factory(field_spec, heap)?;
-        instantiate_interface(factory_val, prefix_to_use.as_deref(), heap, eval)
+        instantiate_interface(factory_val, &child_prefix, heap, eval)
     } else if field_spec.get_type() == "Net" {
         // For Net templates, use clone_net_template directly with field name
         clone_net_template(
             field_spec,
-            instance_prefix,
+            prefix,
             Some(field_name),
             suffix_net_name,
             heap,
             eval,
         )
     } else if field_spec.get_type() == "NetType" {
-        let new_name = compute_net_name(
-            instance_prefix,
-            None,
-            Some(field_name),
-            suffix_net_name,
-            eval,
-        );
+        let new_name = compute_net_name(prefix, None, Some(field_name), suffix_net_name, eval);
         alloc_net(&new_name, SmallMap::new(), Value::new_none(), heap, eval)
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
-        instantiate_interface(field_spec, prefix_to_use.as_deref(), heap, eval)
+        instantiate_interface(field_spec, &child_prefix, heap, eval)
     }
 }
 
@@ -326,7 +354,7 @@ fn create_interface_instance<'v, V>(
     factory: &InterfaceFactoryGen<V>,
     factory_value: Value<'v>,
     provided_values: SmallMap<String, Value<'v>>,
-    instance_prefix: Option<&str>,
+    prefix: &InstancePrefix,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>>
@@ -349,7 +377,7 @@ where
             field_name,
             field_spec.to_value(),
             provided_values.get(field_name).copied(),
-            instance_prefix,
+            prefix,
             !single_net_if,
             heap,
             eval,
@@ -593,15 +621,13 @@ where
         })?;
 
         // Delegate to the unified creation function
-        create_interface_instance(
-            self,
-            _me,
-            provided_values,
-            instance_name_opt.as_deref(),
-            eval.heap(),
-            eval,
-        )
-        .map_err(starlark::Error::new_other)
+        let prefix = if let Some(name) = instance_name_opt {
+            InstancePrefix::from_root(&name)
+        } else {
+            InstancePrefix::empty()
+        };
+        create_interface_instance(self, _me, provided_values, &prefix, eval.heap(), eval)
+            .map_err(starlark::Error::new_other)
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
@@ -969,16 +995,16 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
 /// This is a simplified dispatcher that delegates to the appropriate creation function
 fn instantiate_interface<'v>(
     spec: Value<'v>,
-    prefix_opt: Option<&str>,
+    prefix: &InstancePrefix,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
     // Handle interface factories first
     if let Some(factory) = spec.downcast_ref::<InterfaceFactory<'v>>() {
-        return create_interface_instance(factory, spec, SmallMap::new(), prefix_opt, heap, eval);
+        return create_interface_instance(factory, spec, SmallMap::new(), prefix, heap, eval);
     }
     if let Some(factory) = spec.downcast_ref::<FrozenInterfaceFactory>() {
-        return create_interface_instance(factory, spec, SmallMap::new(), prefix_opt, heap, eval);
+        return create_interface_instance(factory, spec, SmallMap::new(), prefix, heap, eval);
     }
 
     match spec.get_type() {
@@ -1111,7 +1137,7 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
             r#"
 Power1 = interface(vcc = Net)
 instance1 = Power1()
-assert_eq(instance1.vcc.name, "_VCC")
+assert_eq(instance1.vcc.name, "_vcc")
 "#,
         );
 
@@ -1130,7 +1156,7 @@ assert_eq(instance2.vcc.name, "_MY_VCC")
 Power3 = interface(vcc = Net())
 instance3 = Power3()
 # We want Net() to behave the same as Net type
-assert_eq(instance3.vcc.name, "_VCC")
+assert_eq(instance3.vcc.name, "_vcc")
 "#,
         );
 

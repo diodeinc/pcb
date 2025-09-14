@@ -3,11 +3,11 @@ source: crates/pcb-zen-core/tests/interface.rs
 expression: output
 ---
 _INNER
-LEVEL1
-LEVEL2_LEVEL1
+level1
+level2_level1
 L1
-L2_LEVEL1
-L3_LEVEL2_LEVEL1
+L2_level1
+L3_level2_level1
 Module {
     name: "<root>",
     source: "test.zen",

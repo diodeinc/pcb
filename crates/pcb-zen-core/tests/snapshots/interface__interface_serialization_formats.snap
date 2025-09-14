@@ -56,7 +56,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 5,
-                "name": "SYS_POWER",
+                "name": "SYS_power",
                 "properties": {}
               }
             }

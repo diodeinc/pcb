@@ -75,7 +75,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 12,
-                "name": "SYS_POWER_VCC",
+                "name": "SYS_power_VCC",
                 "properties": {}
               }
             },
@@ -95,14 +95,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 13,
-                "name": "SYS_UART_UART_TX",
+                "name": "SYS_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 14,
-                "name": "SYS_UART_UART_RX",
+                "name": "SYS_uart_UART_RX",
                 "properties": {}
               }
             }

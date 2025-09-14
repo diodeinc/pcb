@@ -33,7 +33,7 @@ Module {
                     ),
                     "GND": FrozenValue(
                         Net {
-                            name: "PORT1_POWER_GND",
+                            name: "PORT1_power_GND",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,
@@ -42,7 +42,7 @@ Module {
                     ),
                     "VBUS": FrozenValue(
                         Net {
-                            name: "PORT1_POWER_VCC",
+                            name: "PORT1_power_VCC",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,

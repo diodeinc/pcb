@@ -12,7 +12,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 7,
-                "name": "ORIGINAL_POWER_VCC",
+                "name": "ORIGINAL_power_VCC",
                 "properties": {}
               }
             },
@@ -32,14 +32,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 8,
-                "name": "ORIGINAL_UART_UART_TX",
+                "name": "ORIGINAL_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 9,
-                "name": "ORIGINAL_UART_UART_RX",
+                "name": "ORIGINAL_uart_UART_RX",
                 "properties": {}
               }
             }
@@ -68,7 +68,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 7,
-                "name": "ORIGINAL_POWER_VCC",
+                "name": "ORIGINAL_power_VCC",
                 "properties": {}
               }
             },
@@ -88,14 +88,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 8,
-                "name": "ORIGINAL_UART_UART_TX",
+                "name": "ORIGINAL_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 9,
-                "name": "ORIGINAL_UART_UART_RX",
+                "name": "ORIGINAL_uart_UART_RX",
                 "properties": {}
               }
             }
@@ -115,8 +115,8 @@ expression: output
   }
 }
 === Comparison ===
-Original: System(power=using(Power(NET=using(Net { name: "ORIGINAL_POWER_VCC", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
-Deserialized: System(power=using(Power(NET=using(Net { name: "ORIGINAL_POWER_VCC", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_UART_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_UART_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Original: System(power=using(Power(NET=using(Net { name: "ORIGINAL_power_VCC", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_uart_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_uart_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Deserialized: System(power=using(Power(NET=using(Net { name: "ORIGINAL_power_VCC", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_uart_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_uart_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
 === Both factories still work ===
 New from original factory: {
   "Interface": {
@@ -127,7 +127,7 @@ New from original factory: {
             "NET": {
               "Net": {
                 "id": 10,
-                "name": "NEW_ORIGINAL_POWER_VCC",
+                "name": "NEW_ORIGINAL_power_VCC",
                 "properties": {}
               }
             },
@@ -147,14 +147,14 @@ New from original factory: {
             "TX": {
               "Net": {
                 "id": 11,
-                "name": "NEW_ORIGINAL_UART_UART_TX",
+                "name": "NEW_ORIGINAL_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 12,
-                "name": "NEW_ORIGINAL_UART_UART_RX",
+                "name": "NEW_ORIGINAL_uart_UART_RX",
                 "properties": {}
               }
             }
@@ -182,7 +182,7 @@ New from deserialized factory: {
             "NET": {
               "Net": {
                 "id": 13,
-                "name": "NEW_DESERIALIZED_POWER_VCC",
+                "name": "NEW_DESERIALIZED_power_VCC",
                 "properties": {}
               }
             },
@@ -202,14 +202,14 @@ New from deserialized factory: {
             "TX": {
               "Net": {
                 "id": 14,
-                "name": "NEW_DESERIALIZED_UART_UART_TX",
+                "name": "NEW_DESERIALIZED_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 15,
-                "name": "NEW_DESERIALIZED_UART_UART_RX",
+                "name": "NEW_DESERIALIZED_uart_UART_RX",
                 "properties": {}
               }
             }

@@ -93,8 +93,8 @@ Component(
     assert!(netlist.contains("MCU_3V3"), "Should contain MCU_3V3 net");
     assert!(netlist.contains("MCU_GND"), "Should contain MCU_GND net");
     assert!(
-        netlist.contains("MCU_ENABLE"),
-        "Should contain MCU_ENABLE net"
+        netlist.contains("MCU_enable"),
+        "Should contain MCU_enable net"
     );
 }
 
@@ -148,12 +148,12 @@ Component(
     let netlist = result.output.unwrap();
     println!("netlist:\n{netlist}");
     assert!(
-        netlist.contains("MAIN_POWER_VCC"),
-        "Should contain MAIN_POWER_VCC net"
+        netlist.contains("MAIN_power_VCC"),
+        "Should contain MAIN_power_VCC net"
     );
     assert!(
-        netlist.contains("MAIN_POWER_GND"),
-        "Should contain MAIN_POWER_GND net"
+        netlist.contains("MAIN_power_GND"),
+        "Should contain MAIN_power_GND net"
     );
     assert!(
         netlist.contains("MAIN_DATA"),

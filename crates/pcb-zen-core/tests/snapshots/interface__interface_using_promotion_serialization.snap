@@ -57,14 +57,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 14,
-                "name": "COMM_UART_UART_TX",
+                "name": "COMM_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 15,
-                "name": "COMM_UART_UART_RX",
+                "name": "COMM_uart_UART_RX",
                 "properties": {}
               }
             }
@@ -98,14 +98,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 17,
-                "name": "COMPLEX_UART_FIELD_UART_TX",
+                "name": "COMPLEX_uart_field_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 18,
-                "name": "COMPLEX_UART_FIELD_UART_RX",
+                "name": "COMPLEX_uart_field_UART_RX",
                 "properties": {}
               }
             }
@@ -121,7 +121,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 19,
-                "name": "COMPLEX_POWER_FIELD_VCC",
+                "name": "COMPLEX_power_field_VCC",
                 "properties": {}
               }
             },
