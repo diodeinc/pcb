@@ -157,11 +157,9 @@ impl ModuleConverter {
 
         self.schematic.assign_reference_designators();
 
-        self.post_process_all_positions();
-
         // Populate remapper data from moved directives
-        let remapper = process_position_remapping(&self.module_instances);
-        self.schematic.moved_paths = remapper.moved_paths;
+        self.schematic.moved_paths = process_position_remapping(&self.module_instances).moved_paths;
+        self.post_process_all_positions();
 
         Ok(self.schematic)
     }
