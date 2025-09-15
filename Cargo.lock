@@ -287,20 +287,20 @@ dependencies = [
 
 [[package]]
 name = "axotag"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d888fac0b73e64cbdf36a743fc5a25af5ae955c357535cb420b389bf1e1a6c54"
+checksum = "dc923121fbc4cc72e9008436b5650b98e56f94b5799df59a1b4f572b5c6a7e6b"
 dependencies = [
  "miette",
  "semver",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
 name = "axoupdater"
-version = "0.7.3"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe17874ee40fb66fe1d2cb7871b14de4d298fbf77ea29a6cedb8027365e1a33"
+checksum = "dc482a1926df098f4e3806b834f3fe73a1ab54b24ab0ac481f72de479af5e982"
 dependencies = [
  "axoasset",
  "axoprocess",
@@ -312,8 +312,9 @@ dependencies = [
  "self-replace",
  "serde",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
  "tokio",
+ "url",
 ]
 
 [[package]]
