@@ -122,7 +122,7 @@ name = "TestBoard"
 path = "TestBoard.zen"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
 === src/modules/LedModule.zen
 
 load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
@@ -148,7 +148,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 name = "test_workspace"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
 === src/vendor/github.com/diodeinc/stdlib/v0.2.4/config.zen <3994 bytes, sha256: 49a58dc>
 === src/vendor/github.com/diodeinc/stdlib/v0.2.4/generics/Capacitor.zen <4082 bytes, sha256: bc6d94a>
 === src/vendor/github.com/diodeinc/stdlib/v0.2.4/generics/Led.zen <3597 bytes, sha256: 9f30609>

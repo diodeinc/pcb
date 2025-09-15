@@ -2,10 +2,10 @@ use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib:v0.2.2/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
 
-Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.2/generics/Led.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.10/generics/Led.zen")
 
 led_color = config("led_color", str, default = "red")
 r_value = config("r_value", str, default = "330Ohm")
@@ -22,12 +22,12 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL.N
 "#;
 
 const TEST_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.2/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
 
 LedModule = Module("../modules/LedModule.zen")
-Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.2/generics/Capacitor.zen")
-Crystal = Module("@stdlib:v0.2.2/generics/Crystal.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
+Crystal = Module("@stdlib:v0.2.10/generics/Crystal.zen")
 
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -50,9 +50,9 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3.NET, P2 =
 "#;
 
 const SIMPLE_RESISTOR_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.2/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 
-Resistor = Module("@stdlib:v0.2.2/generics/Resistor.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -63,9 +63,9 @@ Resistor(name = "R3", value = "4.7kOhm", package = "0402", P1 = vcc.NET, P2 = gn
 "#;
 
 const CAPACITOR_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.2/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 
-Capacitor = Module("@stdlib:v0.2.2/generics/Capacitor.zen")
+Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -166,7 +166,7 @@ const SAMPLE_BOM_RULES: &str = r#"[
 #[test]
 fn test_bom_json_format() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
@@ -177,7 +177,7 @@ fn test_bom_json_format() {
 #[test]
 fn test_bom_table_format() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
@@ -188,7 +188,7 @@ fn test_bom_table_format() {
 #[test]
 fn test_bom_default_format() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
@@ -199,7 +199,7 @@ fn test_bom_default_format() {
 #[test]
 fn test_bom_simple_resistors() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .write("bom_rules.json", SAMPLE_BOM_RULES)
@@ -220,7 +220,7 @@ fn test_bom_simple_resistors() {
 #[test]
 fn test_bom_simple_resistors_table() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .write("bom_rules.json", SAMPLE_BOM_RULES)
@@ -241,7 +241,7 @@ fn test_bom_simple_resistors_table() {
 #[test]
 fn test_bom_capacitors_with_dielectric() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "json"]);
@@ -251,7 +251,7 @@ fn test_bom_capacitors_with_dielectric() {
 #[test]
 fn test_bom_capacitors_table() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.2"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "table"]);
