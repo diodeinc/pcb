@@ -192,8 +192,8 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     net_name_to_id: SmallMap<String, NetId>,
     /// Parsed position data from pcb:sch comments in this module's source file
     positions: PositionMap,
-    /// Path movement directives from moved() calls. Map of `old path → new path`.
-    moved_directives: SmallMap<String, String>,
+    /// Path movement directives from moved() calls. Map of `old path → (new path, auto_generated)`.
+    moved_directives: SmallMap<String, (String, bool)>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -561,12 +561,18 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Add a moved directive to this module.
-    pub fn add_moved_directive(&mut self, old_path: String, new_path: String) {
-        self.moved_directives.insert(old_path, new_path);
+    pub fn add_moved_directive(
+        &mut self,
+        old_path: String,
+        new_path: String,
+        auto_generated: bool,
+    ) {
+        self.moved_directives
+            .insert(old_path, (new_path, auto_generated));
     }
 
     /// Return the map of moved directives for this module.
-    pub fn moved_directives(&self) -> &starlark::collections::SmallMap<String, String> {
+    pub fn moved_directives(&self) -> &starlark::collections::SmallMap<String, (String, bool)> {
         &self.moved_directives
     }
 
@@ -1798,7 +1804,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         if let Some(ctx) = eval.context_value() {
-            ctx.add_moved_directive(old_path, new_path);
+            ctx.add_moved_directive(old_path, new_path, false);
         }
         Ok(Value::new_none())
     }

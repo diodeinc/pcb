@@ -25,22 +25,22 @@ expression: output
         "x": 100.0,
         "y": 200.0
       },
-      "sym:GND_GND#1": {
+      "sym:GND#1": {
         "rotation": 0.0,
         "x": 50.0,
         "y": 250.0
       },
-      "sym:GND_GND#2": {
+      "sym:GND#2": {
         "rotation": 0.0,
         "x": 200.0,
         "y": 250.0
       },
-      "sym:VCC_3V3_VCC#1": {
+      "sym:VCC_3V3#1": {
         "rotation": 0.0,
         "x": 50.0,
         "y": 150.0
       },
-      "sym:VCC_3V3_VCC#2": {
+      "sym:VCC_3V3#2": {
         "rotation": 0.0,
         "x": 200.0,
         "y": 150.0

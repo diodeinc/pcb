@@ -156,10 +156,11 @@ snapshot_eval!(interface_post_init_callback, {
         # Interface with __post_init__ callback
         def validate_power(self):
             print("Validating power interface:", self.net.name)
-            if self.net.name.endswith("_VCC"):
+            # With single-net interface naming, the net gets the instance name directly
+            if self.net.name in ["MAIN", "CPU"]:
                 print("Power validation: PASS")
             else:
-                print("Power validation: FAIL - name should end with _VCC")
+                print("Power validation: FAIL - expected MAIN or CPU, got", self.net.name)
         
         PowerInterface = interface(
             net = Net("VCC"),
@@ -796,5 +797,40 @@ snapshot_eval!(interface_field_validation_net_to_interface, {
         
         # This should error: Net where Ground interface expected
         bad_system = System("BAD", power=net)
+    "#
+});
+
+snapshot_eval!(interface_single_net_naming, {
+    "test.zen" => r#"
+        # Level 1: Single net interface
+        Level1 = interface(
+            net = Net("INNER"),
+        )
+
+        # Level 2: Interface that uses Level1
+        Level2 = interface(
+            level1 = Level1(),
+        )
+
+        # Level 3: Interface that uses Level2
+        Level3 = interface(
+            level2 = Level2(),
+        )
+
+        # Test unnamed instances
+        l1 = Level1()
+        print(l1.net.name)
+        l2 = Level2()
+        print(l2.level1.net.name)
+        l3 = Level3()
+        print(l3.level2.level1.net.name)
+
+        # Test named instances
+        l1_named = Level1("L1")
+        print(l1_named.net.name)
+        l2_named = Level2("L2")
+        print(l2_named.level1.net.name)
+        l3_named = Level3("L3")
+        print(l3_named.level2.level1.net.name)
     "#
 });

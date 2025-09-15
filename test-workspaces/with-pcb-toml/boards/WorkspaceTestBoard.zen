@@ -53,7 +53,7 @@ Flash(
 )
 
 # Fix orphaned position comment - the net was renamed but the comment still uses the old name
-moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
+moved("AN_OLD_FILTERED_VCC", "FILTERED_VCC")
 moved("POW.PS1", "PS1")
 
 # pcb:sch AN_OLD_FILTERED_VCC_VCC.1 x=1134.3800 y=37.1000 rot=0

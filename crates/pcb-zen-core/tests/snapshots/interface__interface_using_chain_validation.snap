@@ -12,7 +12,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 10,
-                "name": "COMPLETE_POWER_VCC",
+                "name": "COMPLETE_power_VCC",
                 "properties": {}
               }
             },
@@ -32,14 +32,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 11,
-                "name": "COMPLETE_UART_UART_TX",
+                "name": "COMPLETE_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 12,
-                "name": "COMPLETE_UART_UART_RX",
+                "name": "COMPLETE_uart_UART_RX",
                 "properties": {}
               }
             }
@@ -68,7 +68,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 13,
-                "name": "BROKEN_POWER_VCC",
+                "name": "BROKEN_power_VCC",
                 "properties": {}
               }
             },
@@ -88,14 +88,14 @@ expression: output
             "TX": {
               "Net": {
                 "id": 14,
-                "name": "BROKEN_UART_UART_TX",
+                "name": "BROKEN_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 15,
-                "name": "BROKEN_UART_UART_RX",
+                "name": "BROKEN_uart_UART_RX",
                 "properties": {}
               }
             }

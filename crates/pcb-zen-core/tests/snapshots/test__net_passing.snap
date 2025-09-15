@@ -25,7 +25,7 @@ Module {
                                         connections: {
                                             "P1": FrozenValue(
                                                 Net {
-                                                    name: "INTERFACE_P1",
+                                                    name: "INTERFACE_p1",
                                                     id: "<ID>",
                                                     symbol: FrozenValue(
                                                         NoneType,
@@ -34,7 +34,7 @@ Module {
                                             ),
                                             "P2": FrozenValue(
                                                 Net {
-                                                    name: "INTERFACE_P2",
+                                                    name: "INTERFACE_p2",
                                                     id: "<ID>",
                                                     symbol: FrozenValue(
                                                         NoneType,

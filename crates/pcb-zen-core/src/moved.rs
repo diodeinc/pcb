@@ -123,12 +123,12 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
             assert_eq!(moved_directives.len(), 3, "Should have 3 moved directives");
 
             assert_eq!(
-                moved_directives.get("old.path.component").unwrap(),
+                moved_directives.get("old.path.component").unwrap().0,
                 "new.path.component"
             );
-            assert_eq!(moved_directives.get("POW.PS1").unwrap(), "PS1");
+            assert_eq!(moved_directives.get("POW.PS1").unwrap().0, "PS1");
             assert_eq!(
-                moved_directives.get("Power.Reg1").unwrap(),
+                moved_directives.get("Power.Reg1").unwrap().0,
                 "PowerMgmt.Reg1"
             );
         } else {
