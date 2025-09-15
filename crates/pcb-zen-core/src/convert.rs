@@ -1,6 +1,9 @@
 use crate::lang::interface::FrozenInterfaceValue;
+use crate::lang::module::find_moved_span;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
+use crate::moved::{collect_existing_paths, scoped_path, Remapper};
+use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{
     FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, InputValue,
     NetId,
@@ -12,6 +15,7 @@ use pcb_sch::{
     Schematic,
 };
 use serde::{Deserialize, Serialize};
+use starlark::errors::EvalSeverity;
 use starlark::values::float::StarlarkFloat;
 use starlark::values::list::ListRef;
 use starlark::values::record::FrozenRecord;
@@ -51,8 +55,6 @@ struct ParameterInfo {
     default_value: Option<InputValue>,
 }
 
-// Name resolution is now deterministic at net creation time; legacy helpers removed.
-
 impl ModuleConverter {
     pub(crate) fn new() -> Self {
         Self {
@@ -65,13 +67,20 @@ impl ModuleConverter {
         }
     }
 
-    pub(crate) fn build(mut self, module: &FrozenModuleValue) -> anyhow::Result<Schematic> {
+    pub(crate) fn build(mut self, module: &FrozenModuleValue) -> crate::WithDiagnostics<Schematic> {
         let root_instance_ref = InstanceRef::new(
             ModuleRef::new(module.source_path(), module.name()),
             Vec::new(),
         );
 
-        self.add_module_at(module, &root_instance_ref)?;
+        if let Err(err) = self.add_module_at(module, &root_instance_ref) {
+            let mut diagnostics = Diagnostics::default();
+            diagnostics.push(err.into());
+            return WithDiagnostics {
+                output: None,
+                diagnostics,
+            };
+        }
         self.schematic.set_root_ref(root_instance_ref);
 
         // Create Net objects directly using the names recorded per-module.
@@ -94,7 +103,16 @@ impl ModuleConverter {
             let mut seen: HashSet<&str> = HashSet::new();
             for (_, name) in ids_and_names.iter() {
                 if !seen.insert(name.as_str()) {
-                    return Err(anyhow::anyhow!("Duplicate net name: {name}"));
+                    let mut diagnostics = Diagnostics::default();
+                    diagnostics.push(Diagnostic::new(
+                        format!("Duplicate net name: {name}"),
+                        EvalSeverity::Error,
+                        Path::new(module.source_path()),
+                    ));
+                    return WithDiagnostics {
+                        output: None,
+                        diagnostics,
+                    };
                 }
             }
         }
@@ -157,9 +175,16 @@ impl ModuleConverter {
 
         self.schematic.assign_reference_designators();
 
+        // Validate moved directives, collect warnings, and filter out problematic ones
+        let (diagnostics, filtered_moved_paths) = self.validate_and_filter_moved_directives();
+
+        self.schematic.moved_paths = filtered_moved_paths;
         self.post_process_all_positions();
 
-        Ok(self.schematic)
+        WithDiagnostics {
+            output: Some(self.schematic),
+            diagnostics,
+        }
     }
 
     fn add_instance_at(
@@ -464,22 +489,27 @@ impl ModuleConverter {
     }
 
     fn post_process_all_positions(&mut self) {
-        let module_instances = self.module_instances.clone();
+        // Get all moved directives with proper module scoping
+        let moved_paths = self.schematic.moved_paths.clone();
+        let remapper = Remapper::from_path_map(moved_paths);
 
-        for (instance_ref, module) in &module_instances {
+        for (instance_ref, module) in &self.module_instances {
             for (key, pos) in module.positions().iter() {
+                // Apply moved directive remapping to the position key
+                let remapped_key = remapper.remap(key);
+                let final_key = remapped_key.as_ref().unwrap_or(key);
                 let position = Position {
                     x: pos.x,
                     y: pos.y,
                     rotation: pos.rotation,
                 };
 
-                // Determine position type and convert to unified format
-                let symbol_key = if self.is_instance_position(key, instance_ref).is_some() {
+                // Determine position type and convert to unified format using the remapped key
+                let symbol_key = if self.is_instance_position(final_key, instance_ref).is_some() {
                     // Component position: component_name -> comp:component_name
-                    Some(format!("comp:{}", key))
+                    Some(format!("comp:{}", final_key))
                 } else {
-                    self.find_net_symbol_key(key, module, instance_ref)
+                    self.find_net_symbol_key(final_key, module, instance_ref)
                 };
 
                 if let (Some(symbol_key), Some(instance)) =
@@ -593,10 +623,40 @@ impl ModuleConverter {
             None
         }
     }
+
+    fn validate_and_filter_moved_directives(&self) -> (Diagnostics, HashMap<String, String>) {
+        let mut diagnostics = Diagnostics::default();
+        let mut filtered = HashMap::new();
+        let existing = collect_existing_paths(&self.schematic.instances, &self.schematic.nets);
+        for (instance_ref, module) in &self.module_instances {
+            let module_path = instance_ref.instance_path.join(".");
+            for (old, new) in module.moved_directives().iter() {
+                let old_scoped = scoped_path(&module_path, old);
+                let new_scoped = scoped_path(&module_path, new);
+                let source = Path::new(module.source_path());
+                if existing.contains(&old_scoped) {
+                    let span = find_moved_span(module.source_path(), old, new, false);
+                    let body = format!("moved() references path '{}' that still exists.", old);
+                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
+                    diagnostics.push(diagnostic.with_span(span));
+                } else if !existing.contains(&new_scoped) {
+                    let span = find_moved_span(module.source_path(), old, new, true);
+                    let body = format!("moved() references path '{}' that doesn't exist.", new);
+                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
+                    diagnostics.push(diagnostic.with_span(span));
+                } else {
+                    filtered.insert(old_scoped, new_scoped.clone());
+                }
+            }
+        }
+
+        (diagnostics, filtered)
+    }
 }
 
 pub trait ToSchematic {
     fn to_schematic(&self) -> anyhow::Result<Schematic>;
+    fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic>;
 }
 
 /// Extract (value, tolerance, unit_name) from a Starlark unit record
@@ -683,6 +743,15 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
 
 impl ToSchematic for FrozenModuleValue {
     fn to_schematic(&self) -> anyhow::Result<Schematic> {
+        let result = self.to_schematic_with_diagnostics();
+        match result.output {
+            Some(schematic) if !result.diagnostics.has_errors() => Ok(schematic),
+            Some(_) => Err(anyhow::anyhow!("Schematic conversion had errors")),
+            None => Err(anyhow::anyhow!("Schematic conversion failed")),
+        }
+    }
+
+    fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic> {
         let converter = ModuleConverter::new();
         converter.build(self)
     }

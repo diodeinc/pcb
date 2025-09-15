@@ -12,6 +12,7 @@ mod file_provider;
 pub mod graph;
 pub mod lang;
 pub mod load_spec;
+mod moved;
 pub mod passes;
 pub mod warnings;
 

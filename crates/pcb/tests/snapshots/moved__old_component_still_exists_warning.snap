@@ -1,0 +1,16 @@
+---
+source: crates/pcb/tests/moved.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: moved() references path 'OLD_RESISTOR' that still exists.
+    ╭─[ <TEMP_DIR>/board.zen:30:7 ]
+ 30 │moved("OLD_RESISTOR", "NEW_RESISTOR")
+    │             ╰─────── moved() references path 'OLD_RESISTOR' that still exists.
+
+✓ board.zen (2 components)

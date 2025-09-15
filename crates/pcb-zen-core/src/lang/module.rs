@@ -29,7 +29,11 @@ use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputMap;
 use crate::lang::validation::validate_identifier_name;
 use crate::{Diagnostic, InputValue};
+use regex::Regex;
+use starlark::codemap::{CodeMap, Pos, Span};
+use starlark::errors::EvalSeverity;
 use starlark::values::dict::{AllocDict, DictRef};
+use std::fs;
 
 /// Helper macro for frozen module downcasting to reduce repetition
 #[macro_export]
@@ -50,7 +54,7 @@ use super::net::{generate_net_id, NetValue};
 use crate::lang::context::FrozenContextValue;
 use crate::lang::net::NetId;
 use crate::{FrozenComponentValue, FrozenNetValue};
-use starlark::errors::{EvalMessage, EvalSeverity};
+use starlark::errors::EvalMessage;
 
 /// Position data from pcb:sch comments  
 #[derive(Clone, Debug, ProvidesStaticType, NoSerialize, Allocative)]
@@ -183,11 +187,13 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     properties: SmallMap<String, V>,
     signature: Vec<ParameterMetadataGen<V>>,
     /// Nets that are introduced (created) by this module. Map of `net id → local name`.
-    introduced_nets: starlark::collections::SmallMap<NetId, String>,
+    introduced_nets: SmallMap<NetId, String>,
     /// Local name → net id, to enforce uniqueness of names within a module.
-    net_name_to_id: starlark::collections::SmallMap<String, NetId>,
+    net_name_to_id: SmallMap<String, NetId>,
     /// Parsed position data from pcb:sch comments in this module's source file
     positions: PositionMap,
+    /// Path movement directives from moved() calls. Map of `old path → new path`.
+    moved_directives: SmallMap<String, String>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -439,6 +445,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             introduced_nets: SmallMap::new(),
             net_name_to_id: SmallMap::new(),
             positions,
+            moved_directives: SmallMap::new(),
         }
     }
 
@@ -551,6 +558,16 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Return the map of nets introduced by this module.
     pub fn introduced_nets(&self) -> &starlark::collections::SmallMap<NetId, String> {
         &self.introduced_nets
+    }
+
+    /// Add a moved directive to this module.
+    pub fn add_moved_directive(&mut self, old_path: String, new_path: String) {
+        self.moved_directives.insert(old_path, new_path);
+    }
+
+    /// Return the map of moved directives for this module.
+    pub fn moved_directives(&self) -> &starlark::collections::SmallMap<String, String> {
+        &self.moved_directives
     }
 
     /// Extract all net names from a value recursively.
@@ -1002,6 +1019,43 @@ fn default_for_type<'v>(
         }
     };
     Ok(default)
+}
+
+pub(crate) fn find_moved_span(
+    source_path: &str,
+    target_old_path: &str,
+    target_new_path: &str,
+    highlight_new_path: bool,
+) -> Option<starlark::codemap::ResolvedSpan> {
+    if let Ok(content) = fs::read_to_string(source_path) {
+        // Flexible regex to match moved("old", "new") calls across multiple lines
+        let re = Regex::new(r#"(?s)moved\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)"#).unwrap();
+
+        for captures in re.captures_iter(&content) {
+            let old_path = captures.get(1).unwrap().as_str();
+            let new_path = captures.get(2).unwrap().as_str();
+
+            // Check if this is the specific moved() call we're looking for
+            if old_path == target_old_path && new_path == target_new_path {
+                // Choose which argument to highlight based on the flag
+                let target_match = if highlight_new_path {
+                    captures.get(2).unwrap() // Second argument (new path)
+                } else {
+                    captures.get(1).unwrap() // First argument (old path)
+                };
+                let target_start = target_match.start() - 1; // Include opening quote
+                let target_end = target_match.end() + 1; // Include closing quote
+
+                let codemap = CodeMap::new(source_path.to_string(), content);
+                let start = Pos::new(target_start as u32);
+                let end = Pos::new(target_end as u32);
+                let span = Span::new(start, end);
+                return Some(codemap.file_span(span).resolve_span());
+            }
+        }
+    }
+
+    None
 }
 
 // Helper: validate that `value` matches the requested `typ` value.
@@ -1734,6 +1788,18 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
     ) -> anyhow::Result<Value<'v>> {
         eval.add_property(&name, value);
 
+        Ok(Value::new_none())
+    }
+
+    /// Record a path movement directive for refactoring support.
+    fn moved<'v>(
+        #[starlark(require = pos)] old_path: String,
+        #[starlark(require = pos)] new_path: String,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_moved_directive(old_path, new_path);
+        }
         Ok(Value::new_none())
     }
 }
