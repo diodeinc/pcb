@@ -49,7 +49,7 @@ ignore = { workspace = true }
 semver = { workspace = true }
 crossterm = { workspace = true }
 
-axoupdater = { version = "0.7", features = ["blocking"] }
+axoupdater = { version = "0.9", features = ["blocking"] }
 
 [dev-dependencies]
 insta = { workspace = true }
