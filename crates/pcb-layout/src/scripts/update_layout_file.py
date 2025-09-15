@@ -2936,23 +2936,9 @@ def main():
     )
     args = parser.parse_args()
 
-    # Respect RUST_LOG environment variable for log level
-    rust_log = os.environ.get("RUST_LOG", "error").lower()
-    log_level_map = {
-        "trace": logging.DEBUG,  # Python doesn't have TRACE, map to DEBUG
-        "debug": logging.DEBUG,
-        "info": logging.INFO,
-        "warn": logging.WARNING,
-        "warning": logging.WARNING,
-        "error": logging.ERROR,
-        "off": logging.CRITICAL + 1,  # Effectively disable logging
-    }
-    log_level = log_level_map.get(rust_log, logging.INFO)
-
-    logger.setLevel(log_level)
+    logger.setLevel(logging.DEBUG)
 
     handler = logging.StreamHandler()
-    handler.setLevel(log_level)
     formatter = logging.Formatter("%(levelname)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
