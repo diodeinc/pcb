@@ -16,8 +16,8 @@ starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "af
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "v0.4.10" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "v0.4.10" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 similar = "2.7.0"
 
 pcb-command-runner = { path = "crates/pcb-command-runner" }
