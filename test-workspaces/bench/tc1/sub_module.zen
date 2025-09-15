@@ -1,6 +1,6 @@
-load("@stdlib:v0.2.8/interfaces.zen", "Ground", "Power")
-Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.8/generics/Capacitor.zen")
+load("@stdlib:v0.2.10/interfaces.zen", "Ground", "Power")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
 
 vcc = io("VCC", Power)
 gnd = io("GND", Ground)

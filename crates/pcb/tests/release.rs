@@ -52,7 +52,7 @@ const PCB_TOML: &str = r#"
 name = "test_workspace"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const BOARD_PCB_TOML: &str = r#"
@@ -61,7 +61,7 @@ name = "TestBoard"
 path = "TestBoard.zen"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const TB0001_BOARD_PCB_TOML: &str = r#"
@@ -70,7 +70,7 @@ name = "TB0001"
 path = "TB0001.zen"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const CASE_BOARD_PCB_TOML: &str = r#"
@@ -124,7 +124,7 @@ SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 fn test_pcb_release_source_only() {
     let mut sb = Sandbox::new();
     sb.cwd("src")
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
@@ -177,7 +177,7 @@ fn test_pcb_release_with_git() {
         .cwd("src")
         .ignore_globs(["layout/*"])
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write(".gitignore", ".pcb")
         .write("pcb.toml", PCB_TOML)
@@ -232,7 +232,7 @@ fn test_pcb_release_with_git() {
 fn test_pcb_release_full() {
     let mut sb = Sandbox::new();
     sb.cwd("src")
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)

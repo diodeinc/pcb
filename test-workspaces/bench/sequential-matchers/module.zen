@@ -1,9 +1,9 @@
 # Comprehensive Sequential Matchers Test Circuit
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 
-Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
-Capacitor = Module("@stdlib:v0.2.8/generics/Capacitor.zen")
-Inductor = Module("@stdlib:v0.2.8/generics/Inductor.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
+Inductor = Module("@stdlib:v0.2.10/generics/Inductor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")

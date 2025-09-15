@@ -1,4 +1,4 @@
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 load("../matchers.zen", "skip", "skip_rest", "is_resistor", "is_capacitor", "is_inductor", "exactly_n_resistors", "has_package", "name_contains", "debug_print_path")
 
 TestModule = Module("./module.zen")

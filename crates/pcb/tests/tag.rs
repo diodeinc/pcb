@@ -7,11 +7,11 @@ const PCB_TOML: &str = r#"
 name = "test_workspace"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
 "#;
 
 const SIMPLE_BOARD_ZEN: &str = r#"
-load("@stdlib:v0.2.4/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
 
 add_property("layout_path", "build/TB0001")
 
@@ -24,7 +24,7 @@ internal_net = Net("INTERNAL")
 #[test]
 fn test_pcb_tag_simple_workspace() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -37,7 +37,7 @@ fn test_pcb_tag_simple_workspace() {
 #[test]
 fn test_pcb_tag_invalid_version() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -50,7 +50,7 @@ fn test_pcb_tag_invalid_version() {
 #[test]
 fn test_pcb_tag_duplicate_tag() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -64,7 +64,7 @@ fn test_pcb_tag_duplicate_tag() {
 #[test]
 fn test_pcb_tag_older_version_allowed() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
@@ -78,7 +78,7 @@ fn test_pcb_tag_older_version_allowed() {
 #[test]
 fn test_pcb_tag_invalid_board() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.4"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)

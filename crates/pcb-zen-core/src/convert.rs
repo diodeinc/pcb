@@ -524,42 +524,17 @@ impl ModuleConverter {
     }
 
     fn is_instance_position(&self, key: &str, instance_ref: &InstanceRef) -> Option<()> {
-        // TODO: Remove this complex logic once we disallow "." in component names
-        // This tries all possible splits because component names can contain dots (e.g., "SMF6.0CA")
-        // Once we ban dots in names, we can go back to simple: key.split('.').try_fold(...)
-        let parts: Vec<&str> = key.split('.').collect();
-
-        // Try progressively longer prefixes as the first part
-        for split_idx in 1..=parts.len() {
-            let first_part = parts[0..split_idx].join(".");
-            let remaining_parts = &parts[split_idx..];
-
-            if let Some(child_ref) = self
-                .schematic
-                .instances
-                .get(instance_ref)?
-                .children
-                .get(&first_part)
-            {
-                // Found first part, now traverse remaining parts
-                let final_ref = remaining_parts
-                    .iter()
-                    .try_fold(child_ref, |current_ref, part| {
-                        self.schematic
-                            .instances
-                            .get(current_ref)?
-                            .children
-                            .get(*part)
-                    })
-                    .unwrap_or(child_ref);
-
-                if self.schematic.instances.contains_key(final_ref) {
-                    return Some(());
-                }
-            }
-        }
-
-        None
+        // Traverse the instance hierarchy using the dot-separated key
+        key.split('.')
+            .try_fold(instance_ref, |current_ref, part| {
+                self.schematic
+                    .instances
+                    .get(current_ref)?
+                    .children
+                    .get(part)
+            })
+            .filter(|final_ref| self.schematic.instances.contains_key(final_ref))
+            .map(|_| ())
     }
 
     fn find_net_symbol_key(
