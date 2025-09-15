@@ -86,7 +86,7 @@ impl ModuleConverter {
         // Create Net objects directly using the names recorded per-module.
         // Ensure global uniqueness and stable creation order by sorting names.
         let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
-        for net_id in self.net_to_ports.keys() {
+        for net_id in self.net_to_name.keys() {
             let name = self
                 .net_to_name
                 .get(net_id)
