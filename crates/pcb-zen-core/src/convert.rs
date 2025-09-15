@@ -86,7 +86,7 @@ impl ModuleConverter {
         // Create Net objects directly using the names recorded per-module.
         // Ensure global uniqueness and stable creation order by sorting names.
         let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
-        for net_id in self.net_to_ports.keys() {
+        for net_id in self.net_to_name.keys() {
             let name = self
                 .net_to_name
                 .get(net_id)
@@ -489,15 +489,17 @@ impl ModuleConverter {
     }
 
     fn post_process_all_positions(&mut self) {
-        // Get all moved directives with proper module scoping
-        let moved_paths = self.schematic.moved_paths.clone();
-        let remapper = Remapper::from_path_map(moved_paths);
+        let remapper = Remapper::from_path_map(self.schematic.moved_paths.clone());
 
         for (instance_ref, module) in &self.module_instances {
+            let module_path = instance_ref.instance_path.join(".");
             for (key, pos) in module.positions().iter() {
-                // Apply moved directive remapping to the position key
-                let remapped_key = remapper.remap(key);
-                let final_key = remapped_key.as_ref().unwrap_or(key);
+                let scoped_key = scoped_path(&module_path, key);
+                let remapped_key = remapper.remap(&scoped_key).unwrap_or(scoped_key);
+                let final_key = remapped_key
+                    .strip_prefix(&format!("{}.", module_path))
+                    .unwrap_or(&remapped_key);
+
                 let position = Position {
                     x: pos.x,
                     y: pos.y,

@@ -32,5 +32,7 @@ expression: netlist
     (net (code "1") (name "sub.N4")
       (node (ref "U1") (pin "1") (pintype "stereo"))
     )
+    (net (code "2") (name "sub.pwr")
+    )
   )
 )
