@@ -289,7 +289,7 @@ fn compute_net_name<'v>(
     // Register moved directive if names differ
     if old_name != new_name {
         if let Some(ctx) = eval.context_value() {
-            ctx.add_moved_directive(old_name, new_name.clone());
+            ctx.add_moved_directive(old_name, new_name.clone(), true);
         }
     }
 

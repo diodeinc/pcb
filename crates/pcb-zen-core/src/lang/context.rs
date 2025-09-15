@@ -140,10 +140,15 @@ impl<'v> ContextValue<'v> {
         self.module.borrow_mut().add_property(name, value);
     }
 
-    pub(crate) fn add_moved_directive(&self, old_path: String, new_path: String) {
+    pub(crate) fn add_moved_directive(
+        &self,
+        old_path: String,
+        new_path: String,
+        auto_generated: bool,
+    ) {
         self.module
             .borrow_mut()
-            .add_moved_directive(old_path, new_path);
+            .add_moved_directive(old_path, new_path, auto_generated);
     }
 
     pub(crate) fn add_missing_input(&self, name: String) {

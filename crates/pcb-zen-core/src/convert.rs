@@ -630,10 +630,19 @@ impl ModuleConverter {
         let existing = collect_existing_paths(&self.schematic.instances, &self.schematic.nets);
         for (instance_ref, module) in &self.module_instances {
             let module_path = instance_ref.instance_path.join(".");
-            for (old, new) in module.moved_directives().iter() {
+            for (old, (new, auto_generated)) in module.moved_directives().iter() {
                 let old_scoped = scoped_path(&module_path, old);
                 let new_scoped = scoped_path(&module_path, new);
                 let source = Path::new(module.source_path());
+
+                // Skip warnings for auto-generated directives
+                if *auto_generated {
+                    if existing.contains(&new_scoped) {
+                        filtered.insert(old_scoped, new_scoped.clone());
+                    }
+                    continue;
+                }
+
                 if existing.contains(&old_scoped) {
                     let span = find_moved_span(module.source_path(), old, new, false);
                     let body = format!("moved() references path '{}' that still exists.", old);
