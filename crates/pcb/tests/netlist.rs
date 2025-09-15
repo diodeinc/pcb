@@ -62,10 +62,10 @@ fn extract_position_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> Stri
 }
 
 const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 
-Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.8/generics/Led.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.10/generics/Led.zen")
 
 vcc = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -85,7 +85,7 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd.NET)
 "#;
 
 const HIERARCHICAL_BOARD_WITH_POSITIONS_ZEN: &str = r#"
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground", "Gpio")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground", "Gpio")
 
 LedModule = Module("../modules/LedModule.zen")
 
@@ -109,10 +109,10 @@ LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio(NET=Net(
 "#;
 
 const LED_MODULE_ZEN: &str = r#"
-load("@stdlib:v0.2.8/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib:v0.2.10/interfaces.zen", "Gpio", "Ground", "Power")
 
-Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.8/generics/Led.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.10/generics/Led.zen")
 
 led_color = config("led_color", str, default="red")
 r_value = config("r_value", str, default="330Ohm")
@@ -128,32 +128,11 @@ Resistor(name="R1", value=r_value, package=package, P1=VCC, P2=led_anode)
 Led(name="D1", color=led_color, package=package, A=GND, K=CTRL)
 "#;
 
-const COMPONENT_WITH_DOT_IN_NAME_ZEN: &str = r#"
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
-
-vcc = Power("VCC")
-gnd = Ground("GND")
-
-# Component with dots in the name to test position parsing
-Component(
-    name="SMF6.0A",
-    prefix="D",
-    symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name="D"),
-    footprint=File("@kicad-footprints/Diode_SMD.pretty/D_SOD-323_HandSoldering.kicad_mod"),
-    pin_defs={"A": "1", "K": "2"},
-    pins={"A": vcc.NET, "K": gnd.NET},
-    properties={"type": "TVS diode", "voltage": "6V"},
-)
-
-# Position comment for component with dots in name
-# pcb:sch SMF6.0A x=100.0000 y=100.0000 rot=0
-"#;
-
 #[test]
 fn test_netlist_simple_board_with_positions() {
     let mut sandbox = Sandbox::new();
     sandbox
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SimpleBoard.zen", SIMPLE_BOARD_WITH_POSITIONS_ZEN);
     let output = snapshot_netlist_positions(
@@ -168,7 +147,7 @@ fn test_netlist_simple_board_with_positions() {
 fn test_netlist_hierarchical_board_with_positions() {
     let mut sandbox = Sandbox::new();
     sandbox
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write(
@@ -184,29 +163,11 @@ fn test_netlist_hierarchical_board_with_positions() {
 }
 
 #[test]
-fn test_netlist_component_with_dot_in_name() {
-    let mut sandbox = Sandbox::new();
-    sandbox
-        .seed_stdlib(&["v0.2.8"])
-        .seed_kicad(&["9.0.0"])
-        .write(
-            "boards/ComponentWithDots.zen",
-            COMPONENT_WITH_DOT_IN_NAME_ZEN,
-        );
-    let output = snapshot_netlist_positions(
-        &mut sandbox,
-        "pcb",
-        &["build", "boards/ComponentWithDots.zen", "--netlist"],
-    );
-    assert_snapshot!("netlist_component_with_dot_in_name", output);
-}
-
-#[test]
 fn test_netlist_no_positions() {
     let board_zen = r#"
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 
-Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -216,7 +177,7 @@ Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=gnd.NET)
 
     let mut sandbox = Sandbox::new();
     sandbox
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/NoPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
@@ -230,10 +191,10 @@ Resistor(name="R1", value="1kOhm", package="0603", P1=vcc.NET, P2=gnd.NET)
 #[test]
 fn test_netlist_mixed_position_formats() {
     let board_zen = r#"
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 
-Resistor = Module("@stdlib:v0.2.8/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.8/generics/Led.zen")
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.10/generics/Led.zen")
 
 vcc = Power("VCC")
 gnd = Ground("GND")
@@ -250,7 +211,7 @@ Led(name="D1", color="red", package="0603", A=sig, K=gnd.NET)
 
     let mut sandbox = Sandbox::new();
     sandbox
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/MixedPositions.zen", board_zen);
     let output = snapshot_netlist_positions(

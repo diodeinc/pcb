@@ -15,7 +15,7 @@ const FAILING_CHECKS_TESTBENCH_ZEN: &str =
 #[test]
 fn test_simple_testbench() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
@@ -28,7 +28,7 @@ fn test_simple_testbench() {
 #[test]
 fn test_factory_pattern_checks() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
@@ -41,7 +41,7 @@ fn test_factory_pattern_checks() {
 #[test]
 fn test_failing_checks() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
@@ -54,7 +54,7 @@ fn test_failing_checks() {
 #[test]
 fn test_json_output() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
@@ -67,7 +67,7 @@ fn test_json_output() {
 #[test]
 fn test_tap_output() {
     let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.8"])
+        .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)

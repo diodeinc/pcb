@@ -66,4 +66,4 @@ Simple component datasheet.
 name = "test_workspace"
 
 [packages]
-stdlib = "@github/diodeinc/stdlib:v0.2.4"
+stdlib = "@github/diodeinc/stdlib:v0.2.10"

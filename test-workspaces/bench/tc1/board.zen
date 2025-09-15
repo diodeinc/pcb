@@ -1,4 +1,4 @@
-load("@stdlib:v0.2.8/interfaces.zen", "Ground", "Power")
+load("@stdlib:v0.2.10/interfaces.zen", "Ground", "Power")
 Foo = Module("./module.zen")
 
 vcc = Power()

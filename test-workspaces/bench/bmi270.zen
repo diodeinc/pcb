@@ -1,4 +1,4 @@
-load("@stdlib:v0.2.8/interfaces.zen", "Power", "Ground", "I2c", "Spi")
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground", "I2c", "Spi")
 load("matchers.zen", "is_capacitor", "is_resistor", "has_package", "exactly_n_capacitors", "skip_ic_components", "name_contains")
 
 BMI270 = Module("@github/diodeinc/registry:v0.1.0/reference/BMI270x/BMI270x.zen")
