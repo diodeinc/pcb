@@ -10,6 +10,7 @@ expression: sb.snapshot_dir(staging_dir)
     "workspace": "<TEMP_DIR>"
   },
   "release": {
+    "board_name": "LocalPathTest",
     "created_at": "<TIMESTAMP>",
     "git_version": "unknown",
     "layout_path": "<TEMP_DIR>/boards/build/LocalPathTest",

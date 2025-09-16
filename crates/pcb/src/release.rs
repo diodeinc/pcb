@@ -88,6 +88,8 @@ pub struct ReleaseArgs {
 pub struct ReleaseInfo {
     /// Common workspace information
     pub workspace: WorkspaceInfo,
+    /// Board name being released
+    pub board_name: String,
     /// Release version (from git or fallback)
     pub version: String,
     /// Git commit hash (for variable substitution)
@@ -287,6 +289,7 @@ fn build_release_info(
 
     Ok(ReleaseInfo {
         workspace,
+        board_name,
         version,
         git_hash,
         staging_dir,
@@ -400,6 +403,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     serde_json::json!({
         "release": {
             "schema_version": RELEASE_SCHEMA_VERSION,
+            "board_name": info.board_name,
             "git_version": info.version,
             "created_at": rfc3339_timestamp,
             "zen_file": info.workspace.zen_path.strip_prefix(info.workspace.root()).expect("zen_file must be within workspace_root"),
