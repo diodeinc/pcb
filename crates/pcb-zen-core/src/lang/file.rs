@@ -103,14 +103,40 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         // If resolved_path doesn't exist, emit a warning diagnostic
         if !load_resolver.file_provider().exists(&resolved_path) {
-            let call_site = eval.call_stack_top_location();
-            let span = call_site.as_ref().map(|cs| cs.resolve_span());
-            let diagnostic = Diagnostic::new(
-                format!("Path '{}' does not exist", path),
-                EvalSeverity::Warning,
-                current_file,
-            )
-            .with_span(span);
+            let call_stack = eval.call_stack();
+
+            // Start with the innermost diagnostic (deepest frame - always has location)
+            let deepest_frame = &call_stack.frames[call_stack.frames.len() - 1];
+            let location = deepest_frame.location.as_ref().unwrap();
+            let mut diagnostic = Diagnostic {
+                path: location.file.filename().to_string(),
+                span: Some(location.resolve_span()),
+                severity: EvalSeverity::Warning,
+                body: format!("Path '{}' does not exist", path),
+                call_stack: None,
+                child: None,
+                source_error: None,
+            };
+
+            // Wrap with each outer frame that has location info
+            for (i, frame) in call_stack.frames.iter().enumerate().rev().skip(1) {
+                if let Some(location) = &frame.location {
+                    diagnostic = Diagnostic {
+                        path: location.file.filename().to_string(),
+                        span: Some(location.resolve_span()),
+                        severity: EvalSeverity::Warning,
+                        body: format!("Path does not exist in {} call", frame.name),
+                        call_stack: if i == 0 {
+                            Some(call_stack.clone())
+                        } else {
+                            None
+                        },
+                        child: Some(Box::new(diagnostic)),
+                        source_error: None,
+                    };
+                }
+            }
+
             eval.add_diagnostic(diagnostic);
         }
 
