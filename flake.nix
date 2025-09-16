@@ -39,14 +39,17 @@
           strictDeps = true;
           doCheck = false;
 
-          nativeBuildInputs = [
-            pkgs.pkg-config
-            pkgs.openssl.dev
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            openssl.dev
+            makeWrapper
           ];
 
-          buildInputs = [
-            pkgs.pkg-config
-            pkgs.openssl
+          buildInputs = with pkgs; [
+            pkg-config
+            openssl
+            python312
+            python312Packages.kicad
           ];
         };
 
@@ -59,6 +62,12 @@
             inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
 
             doCheck = false;
+
+            postFixup = ''
+              wrapProgram $out/bin/pcb \
+                --set KICAD_PYTHON_SITE_PACKAGES "${pkgs.python312Packages.kicad}/${pkgs.python312.sitePackages}" \
+                --set KICAD_PYTHON_INTERPRETER "${pkgs.python312}/bin/python"
+            '';
           }
         );
       in
