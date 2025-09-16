@@ -10,6 +10,7 @@ expression: sb.snapshot_dir(staging_dir)
     "workspace": "<TEMP_DIR>/src/boards"
   },
   "release": {
+    "board_name": "CaseBoard",
     "created_at": "<TIMESTAMP>",
     "git_version": "v9.9.9",
     "layout_path": "<TEMP_DIR>/src/boards/build/CaseBoard",
