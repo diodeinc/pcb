@@ -1,10 +1,12 @@
 use starlark::environment::GlobalsBuilder;
+use starlark::errors::EvalSeverity;
 use starlark::eval::Evaluator;
 use starlark::starlark_module;
 use starlark::values::Value;
 
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::load_spec::LoadSpec;
+use crate::Diagnostic;
 
 /// File system access primitives for Starlark.
 ///
@@ -98,6 +100,19 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
         let resolved_path = load_resolver
             .resolve_spec(&load_spec, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve path '{}': {}", path, e))?;
+
+        // If resolved_path doesn't exist, emit a warning diagnostic
+        if !load_resolver.file_provider().exists(&resolved_path) {
+            let call_site = eval.call_stack_top_location();
+            let span = call_site.as_ref().map(|cs| cs.resolve_span());
+            let diagnostic = Diagnostic::new(
+                format!("Path '{}' does not exist", path),
+                EvalSeverity::Warning,
+                current_file,
+            )
+            .with_span(span);
+            eval.add_diagnostic(diagnostic);
+        }
 
         // Return the absolute path as a string
         Ok(eval
