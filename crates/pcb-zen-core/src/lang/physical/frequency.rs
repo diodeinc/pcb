@@ -15,34 +15,34 @@ use starlark::{
 use super::{PhysicalUnit, PhysicalUnitType, PhysicalValue};
 
 #[derive(Clone, Copy, Debug, PartialEq, ProvidesStaticType, NoSerialize, Freeze, Allocative)]
-pub struct ResistanceType;
+pub struct FrequencyType;
 
-starlark_simple_value!(ResistanceType);
+starlark_simple_value!(FrequencyType);
 
-impl std::fmt::Display for ResistanceType {
+impl std::fmt::Display for FrequencyType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Resistance")
+        write!(f, "Frequency")
     }
 }
 
-impl<'a> PhysicalUnitType<'a> for ResistanceType {
-    const UNIT: PhysicalUnit = PhysicalUnit::Resistance;
+impl<'a> PhysicalUnitType<'a> for FrequencyType {
+    const UNIT: PhysicalUnit = PhysicalUnit::Frequency;
 }
 
-impl ResistanceType {
+impl FrequencyType {
     fn type_id() -> TypeInstanceId {
         static TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
         *TYPE_ID.get_or_init(TypeInstanceId::r#gen)
     }
 
     fn callable_type_id() -> TypeInstanceId {
-        static CALLABLE_TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
-        *CALLABLE_TYPE_ID.get_or_init(TypeInstanceId::r#gen)
+        static TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
+        *TYPE_ID.get_or_init(TypeInstanceId::r#gen)
     }
 }
 
-#[starlark_value(type = "ResistanceType")]
-impl<'v> StarlarkValue<'v> for ResistanceType {
+#[starlark_value(type = "FrequencyType")]
+impl<'v> StarlarkValue<'v> for FrequencyType {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -61,10 +61,8 @@ impl<'v> StarlarkValue<'v> for ResistanceType {
     }
 
     fn typechecker_ty(&self) -> Option<Ty> {
-        Some(PhysicalValue::callable_type::<Self>(
-            Self::type_id(),
-            Self::callable_type_id(),
-        ))
+        let ty = PhysicalValue::callable_type::<Self>(Self::type_id(), Self::callable_type_id());
+        Some(ty)
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {

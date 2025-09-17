@@ -61,8 +61,10 @@ impl<'v> StarlarkValue<'v> for VoltageType {
     }
 
     fn typechecker_ty(&self) -> Option<Ty> {
-        let ty = PhysicalValue::callable_type::<Self>(Self::type_id(), Self::callable_type_id());
-        Some(ty)
+        Some(PhysicalValue::callable_type::<Self>(
+            Self::type_id(),
+            Self::callable_type_id(),
+        ))
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {

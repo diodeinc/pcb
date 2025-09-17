@@ -20,8 +20,13 @@ use starlark::{
     },
 };
 
+mod capacitance;
+mod conductance;
 mod current;
+mod frequency;
+mod inductance;
 mod resistance;
+mod time;
 mod voltage;
 
 /// Convert Starlark value to Decimal for math operations
@@ -848,6 +853,11 @@ pub fn physical_globals(builder: &mut GlobalsBuilder) {
     const Voltage: voltage::VoltageType = voltage::VoltageType;
     const Current: current::CurrentType = current::CurrentType;
     const Resistance: resistance::ResistanceType = resistance::ResistanceType;
+    const Time: time::TimeType = time::TimeType;
+    const Frequency: frequency::FrequencyType = frequency::FrequencyType;
+    const Conductance: conductance::ConductanceType = conductance::ConductanceType;
+    const Inductance: inductance::InductanceType = inductance::InductanceType;
+    const Capacitance: capacitance::CapacitanceType = capacitance::CapacitanceType;
 }
 
 #[cfg(test)]
@@ -876,7 +886,7 @@ mod tests {
     #[test]
     fn test_si_prefix_formatting() {
         let test_cases = [
-            ("4700", PhysicalUnit::Resistance, "4.7k"),
+            ("4700", PhysicalUnit::Resistance, "4.7kOhm"),
             ("1500000", PhysicalUnit::Frequency, "1.5MHz"),
             ("0.001", PhysicalUnit::Capacitance, "1mF"),
             ("0.000001", PhysicalUnit::Capacitance, "1uF"),
@@ -892,14 +902,14 @@ mod tests {
     fn test_formatting_features() {
         let test_cases = [
             // Significant digits: ≥100 (no decimals), ≥10 (one decimal), <10 (two decimals)
-            ("150000", PhysicalUnit::Resistance, "150k"),
-            ("47000", PhysicalUnit::Resistance, "47k"),
-            ("4700", PhysicalUnit::Resistance, "4.7k"),
+            ("150000", PhysicalUnit::Resistance, "150kOhm"),
+            ("47000", PhysicalUnit::Resistance, "47kOhm"),
+            ("4700", PhysicalUnit::Resistance, "4.7kOhm"),
             // Trailing zero removal
-            ("1000", PhysicalUnit::Resistance, "1k"),
-            ("1200", PhysicalUnit::Resistance, "1.2k"),
+            ("1000", PhysicalUnit::Resistance, "1kOhm"),
+            ("1200", PhysicalUnit::Resistance, "1.2kOhm"),
             // Resistance special case (no unit suffix)
-            ("1000", PhysicalUnit::Resistance, "1k"),
+            ("1000", PhysicalUnit::Resistance, "1kOhm"),
             ("1000", PhysicalUnit::Voltage, "1kV"), // Other units show suffix
             // Various units
             ("3300", PhysicalUnit::Voltage, "3.3kV"),
@@ -911,7 +921,7 @@ mod tests {
             ("1", PhysicalUnit::Voltage, "1V"),
             // No prefix needed
             ("100", PhysicalUnit::Voltage, "100V"),
-            ("47", PhysicalUnit::Resistance, "47"),
+            ("47", PhysicalUnit::Resistance, "47Ohm"),
         ];
 
         for (value, unit, expected) in test_cases {
@@ -926,13 +936,13 @@ mod tests {
                 Decimal::from(1000),
                 PhysicalUnit::Resistance,
                 Decimal::new(5, 2),
-                "1k 5%",
+                "1kOhm 5%",
             ), // With tolerance
             (
                 Decimal::from(1000),
                 PhysicalUnit::Resistance,
                 Decimal::ZERO,
-                "1k",
+                "1kOhm",
             ), // Without tolerance
             (
                 Decimal::from(1000),
@@ -1150,7 +1160,7 @@ mod tests {
                 Decimal::from(100000),
                 PhysicalUnit::Resistance,
                 Decimal::new(5, 2),
-                "100k 5%",
+                "100kOhm 5%",
             ),
             (
                 Decimal::new(1, 8),
