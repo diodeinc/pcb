@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use allocative::Allocative;
 use anyhow::anyhow;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
@@ -5,7 +7,6 @@ use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::GlobalsBuilder,
-    eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     typing::{
         ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserFields,
@@ -14,13 +15,33 @@ use starlark::{
     util::ArcStr,
     values::{
         float::StarlarkFloat, starlark_value, string::StarlarkStr, type_repr::StarlarkTypeRepr,
-        typing::TypeInstanceId, Freeze, FreezeResult, NoSerialize, StarlarkValue, Value, ValueLike,
-        ValueTyped,
+        typing::TypeInstanceId, Freeze, FreezeResult, Heap, NoSerialize, StarlarkValue, Value,
+        ValueLike, ValueTyped,
     },
 };
-use std::{str::FromStr, sync::OnceLock};
 
-#[derive(Clone, Debug, ProvidesStaticType, NoSerialize, Freeze, Allocative)]
+mod current;
+mod resistance;
+mod voltage;
+
+/// Convert Starlark value to Decimal for math operations
+fn starlark_value_to_decimal(value: &starlark::values::Value) -> starlark::Result<Decimal> {
+    if let Some(s) = value.unpack_str() {
+        s.parse::<Decimal>()
+            .map_err(|_| starlark::Error::new_other(anyhow!("invalid number '{s}'")))
+    } else if let Some(f) = value.downcast_ref::<StarlarkFloat>() {
+        Decimal::try_from(f.0)
+            .map_err(|_| starlark::Error::new_other(anyhow!("invalid number {}", f.0)))
+    } else if let Some(i) = value.unpack_i32() {
+        Ok(Decimal::from(i))
+    } else {
+        Err(starlark::Error::new_other(anyhow!(
+            "expected int, float or numeric string"
+        )))
+    }
+}
+
+#[derive(Copy, Clone, Debug, ProvidesStaticType, NoSerialize, Freeze, Allocative)]
 pub struct PhysicalValue {
     #[allocative(skip)]
     value: Decimal,
@@ -46,27 +67,11 @@ impl PhysicalValue {
         }
     }
 
-    pub fn from_arguments<'v>(
+    pub fn from_arguments<'v, T: PhysicalUnitType<'v>>(
         positional: &[Value<'v>],
         kwargs: &SmallMap<ValueTyped<'v, StarlarkStr>, Value<'v>>,
-        expected_unit: PhysicalUnit,
     ) -> starlark::Result<Self> {
-        fn as_decimal<'v>(v: Value<'v>) -> starlark::Result<Decimal> {
-            if let Some(s) = v.unpack_str() {
-                s.parse::<Decimal>()
-                    .map_err(|_| starlark::Error::new_other(anyhow!("invalid number '{s}'")))
-            } else if let Some(f) = v.downcast_ref::<StarlarkFloat>() {
-                Decimal::try_from(f.0)
-                    .map_err(|_| starlark::Error::new_other(anyhow!("invalid number {}", f.0)))
-            } else if let Some(i) = v.unpack_i32() {
-                Ok(Decimal::from(i))
-            } else {
-                Err(starlark::Error::new_other(anyhow!(
-                    "expected int, float or numeric string"
-                )))
-            }
-        }
-
+        let expected_unit = T::UNIT;
         match positional {
             // Single positional argument (string or PhysicalValue)
             [single] => {
@@ -85,7 +90,7 @@ impl PhysicalValue {
                             phys_val.unit
                         )));
                     }
-                    return Ok(phys_val.clone());
+                    return Ok(*phys_val);
                 }
 
                 // Otherwise, try to parse as string
@@ -140,9 +145,9 @@ impl PhysicalValue {
                     ))
                 })?;
 
-                let value = as_decimal(value_v)?;
+                let value = starlark_value_to_decimal(&value_v)?;
                 let tolerance = tolerance_v
-                    .map(|v| as_decimal(v))
+                    .map(|v| starlark_value_to_decimal(&v))
                     .transpose()?
                     .unwrap_or(Decimal::ZERO);
 
@@ -168,9 +173,6 @@ impl PhysicalValue {
                 TyStarlarkValue::new::<PhysicalValue>(),
                 type_id,
                 TyUserParams {
-                    supertypes: PhysicalValue::get_type_starlark_repr()
-                        .iter_union()
-                        .to_vec(),
                     fields: TyUserFields {
                         known: [
                             ("value".to_string(), Ty::float()),
@@ -188,7 +190,10 @@ impl PhysicalValue {
         )
     }
 
-    pub fn callable_type<'a, T: PhysicalUnitType<'a>>(type_id: TypeInstanceId) -> Ty {
+    pub fn callable_type<'a, T: PhysicalUnitType<'a>>(
+        type_id: TypeInstanceId,
+        callable_type_id: TypeInstanceId,
+    ) -> Ty {
         let param_spec = ParamSpec::new_parts(
             [(
                 ParamIsRequired::No,
@@ -219,7 +224,7 @@ impl PhysicalValue {
             TyUser::new(
                 T::type_name(),
                 TyStarlarkValue::new::<T>(),
-                type_id,
+                callable_type_id,
                 TyUserParams {
                     callable: Some(TyCallable::new(param_spec, Self::unit_type::<T>(type_id))),
                     ..Default::default()
@@ -227,6 +232,95 @@ impl PhysicalValue {
             )
             .unwrap(),
         )
+    }
+}
+
+impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
+    type Error = starlark::Error;
+
+    fn try_from(value: starlark::values::Value<'_>) -> Result<Self, Self::Error> {
+        // First try to downcast to PhysicalValue
+        if let Some(physical) = value.downcast_ref::<PhysicalValue>() {
+            Ok(*physical)
+        } else {
+            // Otherwise convert scalar to dimensionless physical value
+            let decimal = starlark_value_to_decimal(&value)?;
+            Ok(PhysicalValue::new(decimal, PhysicalUnit::Dimensionless))
+        }
+    }
+}
+
+impl std::ops::Mul for PhysicalValue {
+    type Output = Result<PhysicalValue, PhysicalValueError>;
+    fn mul(self, rhs: Self) -> Self::Output {
+        let value = self.value * rhs.value;
+        let unit = (self.unit * rhs.unit)?;
+
+        // Preserve tolerance only for dimensionless scaling
+        let tolerance = match (self.unit, rhs.unit) {
+            (PhysicalUnit::Dimensionless, _) => rhs.tolerance, // 2 * 3.3V±1% → preserve voltage tolerance
+            (_, PhysicalUnit::Dimensionless) => self.tolerance, // 3.3V±1% * 2 → preserve voltage tolerance
+            _ => Decimal::ZERO,                                 // All other cases drop tolerance
+        };
+
+        Ok(PhysicalValue {
+            value,
+            tolerance,
+            unit,
+        })
+    }
+}
+
+impl std::ops::Div for PhysicalValue {
+    type Output = Result<PhysicalValue, PhysicalValueError>;
+    fn div(self, rhs: Self) -> Self::Output {
+        if rhs.value == Decimal::ZERO {
+            return Err(PhysicalValueError::DivisionByZero);
+        }
+        let value = self.value / rhs.value;
+        let unit = (self.unit / rhs.unit)?;
+
+        // Preserve tolerance only for dimensionless scaling
+        let tolerance = match (self.unit, rhs.unit) {
+            (_, PhysicalUnit::Dimensionless) => self.tolerance, // 3.3V±1% / 2 → preserve voltage tolerance
+            _ => Decimal::ZERO,                                 // All other cases drop tolerance
+        };
+
+        Ok(PhysicalValue {
+            value,
+            tolerance,
+            unit,
+        })
+    }
+}
+
+impl std::ops::Add for PhysicalValue {
+    type Output = Result<PhysicalValue, PhysicalValueError>;
+    fn add(self, rhs: Self) -> Self::Output {
+        let unit = (self.unit + rhs.unit)?;
+        let value = self.value + rhs.value;
+        let tolerance = Decimal::ZERO; // Always drop tolerance for addition
+
+        Ok(PhysicalValue {
+            value,
+            tolerance,
+            unit,
+        })
+    }
+}
+
+impl std::ops::Sub for PhysicalValue {
+    type Output = Result<PhysicalValue, PhysicalValueError>;
+    fn sub(self, rhs: Self) -> Self::Output {
+        let unit = (self.unit - rhs.unit)?;
+        let value = self.value - rhs.value;
+        let tolerance = Decimal::ZERO; // Always drop tolerance for subtraction
+
+        Ok(PhysicalValue {
+            value,
+            tolerance,
+            unit,
+        })
     }
 }
 
@@ -245,6 +339,7 @@ pub enum PhysicalUnit {
     Energy,
     Conductance,
     MagneticFlux,
+    Dimensionless,
 }
 
 pub trait PhysicalUnitType<'a>: StarlarkValue<'a> {
@@ -261,7 +356,7 @@ impl PhysicalUnit {
     fn suffix(self) -> &'static str {
         use PhysicalUnit::*;
         match self {
-            Resistance => "",
+            Resistance => "Ohm",
             Time => "s",
             Current => "A",
             Voltage => "V",
@@ -274,6 +369,7 @@ impl PhysicalUnit {
             Energy => "J",
             Conductance => "S",
             MagneticFlux => "Wb",
+            Dimensionless => "",
         }
     }
 
@@ -293,7 +389,81 @@ impl PhysicalUnit {
             Energy => "Joule",
             Conductance => "Siemens",
             MagneticFlux => "Weber",
+            Dimensionless => "Dimensionless",
         }
+    }
+}
+
+impl std::ops::Div for PhysicalUnit {
+    type Output = Result<Self, PhysicalValueError>;
+    fn div(self, rhs: Self) -> Self::Output {
+        use PhysicalUnit::*;
+        match (self, rhs) {
+            // Ohm's law
+            (Voltage, Current) => Ok(Resistance),
+            (Voltage, Resistance) => Ok(Current),
+
+            // Dimensionless operations (any unit / dimensionless = same unit)
+            (unit, Dimensionless) => Ok(unit),
+
+            _ => Err(PhysicalValueError::UnsupportedOperation),
+        }
+    }
+}
+
+impl std::ops::Mul for PhysicalUnit {
+    type Output = Result<Self, PhysicalValueError>;
+    fn mul(self, rhs: Self) -> Self::Output {
+        use PhysicalUnit::*;
+        match (self, rhs) {
+            // Ohm's law
+            (Current, Resistance) => Ok(Voltage),
+            (Resistance, Current) => Ok(Voltage),
+
+            // Dimensionless operations (multiplication with dimensionless preserves original unit)
+            (unit, Dimensionless) => Ok(unit), // Any unit * dimensionless = same unit
+            (Dimensionless, unit) => Ok(unit), // Dimensionless * any unit = same unit
+
+            _ => Err(PhysicalValueError::UnsupportedOperation),
+        }
+    }
+}
+
+impl std::ops::Add for PhysicalUnit {
+    type Output = Result<Self, PhysicalValueError>;
+    fn add(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            // Addition only allowed for same units
+            (unit1, unit2) if unit1 == unit2 => Ok(unit1),
+
+            _ => Err(PhysicalValueError::UnsupportedOperation),
+        }
+    }
+}
+
+impl std::ops::Sub for PhysicalUnit {
+    type Output = Result<Self, PhysicalValueError>;
+    fn sub(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            // Subtraction only allowed for same units
+            (unit1, unit2) if unit1 == unit2 => Ok(unit1),
+
+            _ => Err(PhysicalValueError::UnsupportedOperation),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PhysicalValueError {
+    #[error("Division by zero")]
+    DivisionByZero,
+    #[error("Unsupported operation")]
+    UnsupportedOperation,
+}
+
+impl From<PhysicalValueError> for starlark::Error {
+    fn from(err: PhysicalValueError) -> Self {
+        starlark::Error::new_other(err)
     }
 }
 
@@ -557,13 +727,13 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         match attribute {
             "value" => {
                 let f = self.value.to_f64()?;
-                Some(heap.alloc(StarlarkFloat(f)).to_value())
+                Some(heap.alloc(StarlarkFloat(f)))
             }
             "tolerance" => {
                 let f = self.tolerance.to_f64()?;
-                Some(heap.alloc(StarlarkFloat(f)).to_value())
+                Some(heap.alloc(StarlarkFloat(f)))
             }
-            "unit" => Some(heap.alloc(self.unit.suffix()).to_value()),
+            "unit" => Some(heap.alloc(self.unit)),
             _ => None,
         }
     }
@@ -575,61 +745,109 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             "unit".to_owned(),
         ]
     }
-}
 
-#[derive(Clone, Copy, Debug, PartialEq, ProvidesStaticType, NoSerialize, Freeze, Allocative)]
-pub struct VoltageType;
-
-starlark_simple_value!(VoltageType);
-
-impl std::fmt::Display for VoltageType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Voltage")
-    }
-}
-
-impl<'a> PhysicalUnitType<'a> for VoltageType {
-    const UNIT: PhysicalUnit = PhysicalUnit::Voltage;
-}
-
-#[starlark_value(type = "VoltageType")]
-impl<'v> StarlarkValue<'v> for VoltageType {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let heap = eval.heap();
-        let kwargs = args.names_map()?;
-        let positional: Vec<_> = args.positions(heap)?.collect();
-
-        let physical_value =
-            PhysicalValue::from_arguments(&positional, &kwargs, PhysicalUnit::Voltage)?;
-        Ok(heap.alloc(physical_value).to_value())
+    fn div(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let other = PhysicalValue::try_from(other).ok()?;
+        let result = (*self / other).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot divide {} by {} - {}",
+                self.unit.name(),
+                other.unit.name(),
+                err
+            ))
+        });
+        Some(result)
     }
 
-    fn get_type_starlark_repr() -> Ty {
-        static TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
-        let type_id = *TYPE_ID.get_or_init(TypeInstanceId::r#gen);
-        PhysicalValue::unit_type::<Self>(type_id)
+    fn rdiv(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let other = PhysicalValue::try_from(other).ok()?;
+        let result = (other / *self).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot divide {} by {} - {}",
+                self.unit.name(),
+                other.unit.name(),
+                err
+            ))
+        });
+        Some(result)
     }
 
-    fn typechecker_ty(&self) -> Option<Ty> {
-        static TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
-        let type_id = *TYPE_ID.get_or_init(TypeInstanceId::r#gen);
-        let ty = PhysicalValue::callable_type::<Self>(type_id);
-        Some(ty)
+    fn mul(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let other = PhysicalValue::try_from(other).ok()?;
+        let result = (*self * other).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot multiply {} by {} - {}",
+                self.unit.name(),
+                other.unit.name(),
+                err
+            ))
+        });
+        Some(result)
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(Self::get_type_starlark_repr())
+    fn rmul(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let other = PhysicalValue::try_from(other).ok()?;
+        let result = (other * *self).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot multiply {} by {} - {}",
+                self.unit.name(),
+                other.unit.name(),
+                err
+            ))
+        });
+        Some(result)
+    }
+
+    fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let other = PhysicalValue::try_from(other).ok()?;
+        let result = (*self + other).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot add {} and {} - {}",
+                self.unit.name(),
+                other.unit.name(),
+                err
+            ))
+        });
+        Some(result)
+    }
+
+    fn radd(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let other = PhysicalValue::try_from(other).ok()?;
+        let result = (other + *self).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot add {} and {} - {}",
+                other.unit.name(),
+                self.unit.name(),
+                err
+            ))
+        });
+        Some(result)
+    }
+
+    fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        let other = PhysicalValue::try_from(other).map_err(|_| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot subtract non-physical value from {}",
+                self.unit.name()
+            ))
+        })?;
+        let result = (*self - other).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot subtract {} from {} - {}",
+                other.unit.name(),
+                self.unit.name(),
+                err
+            ))
+        })?;
+        Ok(result)
     }
 }
 
 #[starlark_module]
 pub fn physical_globals(builder: &mut GlobalsBuilder) {
-    const Voltage: VoltageType = VoltageType;
+    const Voltage: voltage::VoltageType = voltage::VoltageType;
+    const Current: current::CurrentType = current::CurrentType;
+    const Resistance: resistance::ResistanceType = resistance::ResistanceType;
 }
 
 #[cfg(test)]
