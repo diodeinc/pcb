@@ -45,6 +45,11 @@ pub enum PhysicalUnit {
     Inductance,
     Frequency,
     Temperature,
+    Charge,
+    Power,
+    Energy,
+    Conductance,
+    MagneticFlux,
 }
 
 impl PhysicalUnit {
@@ -59,13 +64,37 @@ impl PhysicalUnit {
             Inductance => "H",
             Frequency => "Hz",
             Temperature => "K",
+            Charge => "C",
+            Power => "W",
+            Energy => "J",
+            Conductance => "S",
+            MagneticFlux => "Wb",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        use PhysicalUnit::*;
+        match self {
+            Resistance => "Ohm",
+            Time => "Second",
+            Current => "Ampere",
+            Voltage => "Volt",
+            Capacitance => "Farad",
+            Inductance => "Henry",
+            Frequency => "Hertz",
+            Temperature => "Kelvin",
+            Charge => "Coulomb",
+            Power => "Watt",
+            Energy => "Joule",
+            Conductance => "Siemens",
+            MagneticFlux => "Weber",
         }
     }
 }
 
 impl std::fmt::Display for PhysicalUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{}", self.name())
     }
 }
 
@@ -263,6 +292,11 @@ fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), Par
                 "Hz" => PhysicalUnit::Frequency,
                 "s" => PhysicalUnit::Time,
                 "K" => PhysicalUnit::Temperature,
+                "C" => PhysicalUnit::Charge,
+                "W" => PhysicalUnit::Power,
+                "J" => PhysicalUnit::Energy,
+                "S" => PhysicalUnit::Conductance,
+                "Wb" => PhysicalUnit::MagneticFlux,
                 "Ohm" | "ohm" => PhysicalUnit::Resistance,
                 "" => PhysicalUnit::Resistance, // Handle bare prefix for resistance (like "4k7" -> "4k" + "7")
                 _ => return Err(ParseError::InvalidUnit),
@@ -280,6 +314,11 @@ fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), Par
         "Hz" => PhysicalUnit::Frequency,
         "s" => PhysicalUnit::Time,
         "K" => PhysicalUnit::Temperature,
+        "C" => PhysicalUnit::Charge,
+        "W" => PhysicalUnit::Power,
+        "J" => PhysicalUnit::Energy,
+        "S" => PhysicalUnit::Conductance,
+        "Wb" => PhysicalUnit::MagneticFlux,
         "Ohm" | "ohm" => PhysicalUnit::Resistance,
         _ => return Err(ParseError::InvalidUnit),
     };
@@ -434,6 +473,11 @@ mod tests {
             ("100A", PhysicalUnit::Current, Decimal::from(100)),
             ("47", PhysicalUnit::Resistance, Decimal::from(47)),
             ("100Ohm", PhysicalUnit::Resistance, Decimal::from(100)),
+            ("1C", PhysicalUnit::Charge, Decimal::from(1)),
+            ("100W", PhysicalUnit::Power, Decimal::from(100)),
+            ("50J", PhysicalUnit::Energy, Decimal::from(50)),
+            ("10S", PhysicalUnit::Conductance, Decimal::from(10)),
+            ("5Wb", PhysicalUnit::MagneticFlux, Decimal::from(5)),
         ];
 
         for (input, unit, value) in test_cases {
@@ -448,6 +492,11 @@ mod tests {
             ("100mA", PhysicalUnit::Current, Decimal::new(1, 1)), // 0.1
             ("470nF", PhysicalUnit::Capacitance, Decimal::new(47, 8)), // 470e-9
             ("4k7", PhysicalUnit::Resistance, Decimal::from(4700)), // Special notation
+            ("10mC", PhysicalUnit::Charge, Decimal::new(1, 2)),   // 0.01
+            ("2kW", PhysicalUnit::Power, Decimal::from(2000)),
+            ("500mJ", PhysicalUnit::Energy, Decimal::new(5, 1)), // 0.5
+            ("100mS", PhysicalUnit::Conductance, Decimal::new(1, 1)), // 0.1
+            ("2mWb", PhysicalUnit::MagneticFlux, Decimal::new(2, 3)), // 0.002
         ];
 
         for (input, unit, value) in test_cases {
@@ -654,6 +703,36 @@ mod tests {
                 input.parse::<PhysicalValue>().is_err(),
                 "Expected error for '{}'",
                 input
+            );
+        }
+    }
+
+    #[test]
+    fn test_unit_names() {
+        let test_cases = [
+            (PhysicalUnit::Resistance, "Ohm"),
+            (PhysicalUnit::Time, "Second"),
+            (PhysicalUnit::Current, "Ampere"),
+            (PhysicalUnit::Voltage, "Volt"),
+            (PhysicalUnit::Capacitance, "Farad"),
+            (PhysicalUnit::Inductance, "Henry"),
+            (PhysicalUnit::Frequency, "Hertz"),
+            (PhysicalUnit::Temperature, "Kelvin"),
+            (PhysicalUnit::Charge, "Coulomb"),
+            (PhysicalUnit::Power, "Watt"),
+            (PhysicalUnit::Energy, "Joule"),
+            (PhysicalUnit::Conductance, "Siemens"),
+            (PhysicalUnit::MagneticFlux, "Weber"),
+        ];
+
+        for (unit, expected_name) in test_cases {
+            assert_eq!(unit.name(), expected_name, "Name mismatch for {:?}", unit);
+            // Also test Display implementation uses the name
+            assert_eq!(
+                format!("{}", unit),
+                expected_name,
+                "Display mismatch for {:?}",
+                unit
             );
         }
     }
