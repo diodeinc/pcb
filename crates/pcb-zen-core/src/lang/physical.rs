@@ -2,7 +2,11 @@ use std::str::FromStr;
 
 use allocative::Allocative;
 use anyhow::anyhow;
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use rust_decimal::{
+    prelude::{FromPrimitive, ToPrimitive},
+    Decimal,
+};
+use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -106,25 +110,28 @@ fn starlark_value_to_decimal(value: &starlark::values::Value) -> starlark::Resul
     }
 }
 
-#[derive(Copy, Clone, Debug, ProvidesStaticType, NoSerialize, Freeze, Allocative)]
+#[derive(Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize)]
 pub struct PhysicalValue {
     #[allocative(skip)]
+    #[serde(with = "rust_decimal::serde::str")]
     value: Decimal,
     #[allocative(skip)]
+    #[serde(with = "rust_decimal::serde::str")]
     tolerance: Decimal,
     unit: PhysicalUnit,
 }
 
 impl PhysicalValue {
-    pub fn new(value: Decimal, unit: PhysicalUnit) -> Self {
+    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
         Self {
-            value,
-            tolerance: Decimal::ZERO,
+            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
+            tolerance: Decimal::from_f64(tolerance)
+                .expect("tolerance not representable as Decimal"),
             unit,
         }
     }
 
-    pub fn with_tolerance(value: Decimal, unit: PhysicalUnit, tolerance: Decimal) -> Self {
+    pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnit) -> Self {
         Self {
             value,
             tolerance,
@@ -216,11 +223,7 @@ impl PhysicalValue {
                     .transpose()?
                     .unwrap_or(Decimal::ZERO);
 
-                Ok(PhysicalValue::with_tolerance(
-                    value,
-                    expected_unit,
-                    tolerance,
-                ))
+                Ok(PhysicalValue::from_decimal(value, tolerance, expected_unit))
             }
 
             // Too many args
@@ -310,7 +313,11 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
         } else {
             // Otherwise convert scalar to dimensionless physical value
             let decimal = starlark_value_to_decimal(&value)?;
-            Ok(PhysicalValue::new(decimal, PhysicalUnit::Dimensionless))
+            Ok(PhysicalValue::from_decimal(
+                decimal,
+                Decimal::ZERO,
+                PhysicalUnit::Dimensionless,
+            ))
         }
     }
 }
@@ -328,11 +335,7 @@ impl std::ops::Mul for PhysicalValue {
             _ => Decimal::ZERO,                                 // All other cases drop tolerance
         };
 
-        Ok(PhysicalValue {
-            value,
-            tolerance,
-            unit,
-        })
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
@@ -351,11 +354,7 @@ impl std::ops::Div for PhysicalValue {
             _ => Decimal::ZERO,                                 // All other cases drop tolerance
         };
 
-        Ok(PhysicalValue {
-            value,
-            tolerance,
-            unit,
-        })
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
@@ -366,11 +365,7 @@ impl std::ops::Add for PhysicalValue {
         let value = self.value + rhs.value;
         let tolerance = Decimal::ZERO; // Always drop tolerance for addition
 
-        Ok(PhysicalValue {
-            value,
-            tolerance,
-            unit,
-        })
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
@@ -381,15 +376,13 @@ impl std::ops::Sub for PhysicalValue {
         let value = self.value - rhs.value;
         let tolerance = Decimal::ZERO; // Always drop tolerance for subtraction
 
-        Ok(PhysicalValue {
-            value,
-            tolerance,
-            unit,
-        })
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, ProvidesStaticType, NoSerialize, Freeze, Allocative)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize,
+)]
 pub enum PhysicalUnit {
     Time,
     Current,
@@ -468,6 +461,39 @@ impl std::ops::Div for PhysicalUnit {
             (Voltage, Current) => Ok(Resistance),
             (Voltage, Resistance) => Ok(Current),
 
+            // Time/Frequency inverses
+            (Dimensionless, Time) => Ok(Frequency),
+            (Dimensionless, Frequency) => Ok(Time),
+
+            // Resistance/Conductance inverses
+            (Dimensionless, Resistance) => Ok(Conductance),
+            (Dimensionless, Conductance) => Ok(Resistance),
+
+            // Power relationships
+            (Power, Voltage) => Ok(Current),
+            (Power, Current) => Ok(Voltage),
+            (Energy, Time) => Ok(Power),
+            (Energy, Power) => Ok(Time),      // E/P = (P*t)/P = t
+            (Power, Frequency) => Ok(Energy), // P/f = P/(1/t) = P*t = E
+
+            // Charge relationships
+            (Charge, Time) => Ok(Current),
+            (Charge, Current) => Ok(Time),
+
+            // Capacitance relationships
+            (Charge, Voltage) => Ok(Capacitance),
+            (Charge, Capacitance) => Ok(Voltage),
+
+            // Magnetic flux relationships
+            (MagneticFlux, Time) => Ok(Voltage), // Faraday's law: V = dΦ/dt
+            (MagneticFlux, Voltage) => Ok(Time),
+            (MagneticFlux, Inductance) => Ok(Current),
+            (MagneticFlux, Current) => Ok(Inductance),
+
+            // Energy-charge relationships (exact, no constants needed)
+            (Energy, Voltage) => Ok(Charge), // Q = E/V (from E = Q*V)
+            (Energy, Charge) => Ok(Voltage), // V = E/Q (from E = Q*V)
+
             // Dimensionless operations (any unit / dimensionless = same unit)
             (unit, Dimensionless) => Ok(unit),
 
@@ -484,6 +510,41 @@ impl std::ops::Mul for PhysicalUnit {
             // Ohm's law
             (Current, Resistance) => Ok(Voltage),
             (Resistance, Current) => Ok(Voltage),
+
+            // RC time constant
+            (Resistance, Capacitance) => Ok(Time),
+            (Capacitance, Resistance) => Ok(Time),
+
+            // Power formulas
+            (Voltage, Current) => Ok(Power),
+            (Current, Voltage) => Ok(Power),
+            (Power, Time) => Ok(Energy),
+            (Time, Power) => Ok(Energy),
+            (Energy, Frequency) => Ok(Power), // E*f = E*(1/t) = E/t = P
+
+            // Charge formulas
+            (Current, Time) => Ok(Charge),
+            (Time, Current) => Ok(Charge),
+            (Capacitance, Voltage) => Ok(Charge),
+            (Voltage, Capacitance) => Ok(Charge),
+
+            // Inductance formulas
+            (Inductance, Current) => Ok(MagneticFlux),
+            (Current, Inductance) => Ok(MagneticFlux),
+
+            // Unit inverses (result in dimensionless)
+            (Frequency, Time) => Ok(Dimensionless),
+            (Time, Frequency) => Ok(Dimensionless),
+            (Conductance, Resistance) => Ok(Dimensionless),
+            (Resistance, Conductance) => Ok(Dimensionless),
+
+            // L/R time constant (L * G = L * (1/R) = L/R = Time)
+            (Inductance, Conductance) => Ok(Time),
+            (Conductance, Inductance) => Ok(Time),
+
+            // Additional useful combinations
+            (Voltage, Charge) => Ok(Energy), // E = Q*V (potential energy)
+            (Charge, Voltage) => Ok(Energy), // E = Q*V (potential energy)
 
             // Dimensionless operations (multiplication with dimensionless preserves original unit)
             (unit, Dimensionless) => Ok(unit), // Any unit * dimensionless = same unit
@@ -666,10 +727,10 @@ impl FromStr for PhysicalValue {
                     // Treat as decimal notation: "4k7" -> "4.7k" -> 4700
                     let decimal_num = before_num + after_num / 10_f64.powi(after_k.len() as i32);
                     let combined_value = decimal_num * 1000.0;
-                    return Ok(PhysicalValue::with_tolerance(
-                        Decimal::try_from(combined_value).map_err(|_| ParseError::InvalidNumber)?,
+                    return Ok(PhysicalValue::new(
+                        combined_value,
+                        tolerance.to_f64().unwrap_or(0.0),
                         PhysicalUnit::Resistance,
-                        tolerance,
                     ));
                 }
             }
@@ -697,7 +758,7 @@ impl FromStr for PhysicalValue {
         let (multiplier, unit) = parse_unit_with_prefix(unit_str)?;
         let value = base_number * multiplier;
 
-        Ok(PhysicalValue::with_tolerance(value, unit, tolerance))
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
@@ -705,6 +766,13 @@ fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), Par
     // Handle bare number (empty unit) - defaults to resistance
     if unit_str.is_empty() {
         return Ok((Decimal::ONE, PhysicalUnit::Resistance));
+    }
+
+    // Handle special time units (non-SI but common) first
+    match unit_str {
+        "h" => return Ok((Decimal::from(3600), PhysicalUnit::Time)), // 1 hour = 3600 seconds
+        "min" => return Ok((Decimal::from(60), PhysicalUnit::Time)), // 1 minute = 60 seconds
+        _ => {}
     }
 
     // Try each SI prefix from longest to shortest
@@ -722,6 +790,11 @@ fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), Par
                 "H" => PhysicalUnit::Inductance,
                 "Hz" => PhysicalUnit::Frequency,
                 "s" => PhysicalUnit::Time,
+                "h" => {
+                    // Handle prefixed hours (e.g., "kh" = 1000 hours = 3.6M seconds)
+                    let hour_multiplier = Decimal::from(3600);
+                    return Ok((multiplier * hour_multiplier, PhysicalUnit::Time));
+                }
                 "K" => PhysicalUnit::Temperature,
                 "C" => PhysicalUnit::Charge,
                 "W" => PhysicalUnit::Power,
@@ -759,18 +832,53 @@ fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), Par
 
 impl std::fmt::Display for PhysicalValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (scaled, prefix) = scale_to_si(self.value);
-        let val_str = fmt_significant(scaled);
-
         let tol = self.tolerance * Decimal::from(100);
         let show_tol = tol > Decimal::ZERO;
 
-        let suffix = self.unit.suffix();
+        // Special handling for time units to display hours/minutes when appropriate
+        if self.unit == PhysicalUnit::Time {
+            let seconds = self.value;
 
-        if show_tol {
-            write!(f, "{val_str}{prefix}{} {}%", suffix, tol.round())
+            // Format time in the most natural unit
+            if seconds >= Decimal::from(3600) {
+                // Display in hours if >= 1 hour
+                let hours = seconds / Decimal::from(3600);
+                let val_str = fmt_significant(hours);
+                if show_tol {
+                    write!(f, "{}h {}%", val_str, tol.round())
+                } else {
+                    write!(f, "{}h", val_str)
+                }
+            } else if seconds >= Decimal::from(60) {
+                // Display in minutes if >= 1 minute
+                let minutes = seconds / Decimal::from(60);
+                let val_str = fmt_significant(minutes);
+                if show_tol {
+                    write!(f, "{}min {}%", val_str, tol.round())
+                } else {
+                    write!(f, "{}min", val_str)
+                }
+            } else {
+                // Display in seconds with SI prefixes
+                let (scaled, prefix) = scale_to_si(seconds);
+                let val_str = fmt_significant(scaled);
+                if show_tol {
+                    write!(f, "{}{}s {}%", val_str, prefix, tol.round())
+                } else {
+                    write!(f, "{}{}s", val_str, prefix)
+                }
+            }
         } else {
-            write!(f, "{val_str}{prefix}{}", suffix)
+            // Standard formatting for all other units
+            let (scaled, prefix) = scale_to_si(self.value);
+            let val_str = fmt_significant(scaled);
+            let suffix = self.unit.suffix();
+
+            if show_tol {
+                write!(f, "{val_str}{prefix}{} {}%", suffix, tol.round())
+            } else {
+                write!(f, "{val_str}{prefix}{}", suffix)
+            }
         }
     }
 }
@@ -918,6 +1026,11 @@ pub fn physical_globals(builder: &mut GlobalsBuilder) {
     const Conductance: ConductanceType = ConductanceType;
     const Inductance: InductanceType = InductanceType;
     const Capacitance: CapacitanceType = CapacitanceType;
+    const Temperature: TemperatureType = TemperatureType;
+    const Charge: ChargeType = ChargeType;
+    const Power: PowerType = PowerType;
+    const Energy: EnergyType = EnergyType;
+    const MagneticFlux: MagneticFluxType = MagneticFluxType;
 }
 
 #[cfg(test)]
@@ -926,7 +1039,7 @@ mod tests {
 
     // Helper function for formatting tests
     fn assert_formatting(value_str: &str, unit: PhysicalUnit, expected: &str) {
-        let val = PhysicalValue::new(value_str.parse().unwrap(), unit);
+        let val = PhysicalValue::new(value_str.parse().unwrap(), 0.0, unit);
         assert_eq!(
             format!("{}", val),
             expected,
@@ -1013,7 +1126,7 @@ mod tests {
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
-            let val = PhysicalValue::with_tolerance(value, unit, tolerance);
+            let val = PhysicalValue::from_decimal(value, tolerance, unit);
             assert_eq!(format!("{}", val), expected);
         }
     }
@@ -1237,7 +1350,7 @@ mod tests {
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
-            let val = PhysicalValue::with_tolerance(value, unit, tolerance);
+            let val = PhysicalValue::from_decimal(value, tolerance, unit);
             assert_eq!(format!("{}", val), expected);
         }
     }
@@ -1269,3 +1382,8 @@ define_physical_unit!(InductanceType, PhysicalUnit::Inductance);
 define_physical_unit!(FrequencyType, PhysicalUnit::Frequency);
 define_physical_unit!(TimeType, PhysicalUnit::Time);
 define_physical_unit!(ConductanceType, PhysicalUnit::Conductance);
+define_physical_unit!(TemperatureType, PhysicalUnit::Temperature);
+define_physical_unit!(ChargeType, PhysicalUnit::Charge);
+define_physical_unit!(PowerType, PhysicalUnit::Power);
+define_physical_unit!(EnergyType, PhysicalUnit::Energy);
+define_physical_unit!(MagneticFluxType, PhysicalUnit::MagneticFlux);
