@@ -28,6 +28,7 @@ use crate::lang::input::{InputMap, InputValue};
 use crate::lang::spice_model::model_globals;
 use crate::lang::{
     component::component_globals,
+    physical::physical_globals,
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::{Diagnostic, WithDiagnostics};
@@ -428,6 +429,7 @@ impl EvalContext {
             LibraryExtension::Breakpoint,
             LibraryExtension::SetType,
         ])
+        .with(physical_globals)
         .with(component_globals)
         .with(module_globals)
         .with(interface_globals)
