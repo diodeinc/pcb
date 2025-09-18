@@ -825,7 +825,7 @@ fn parse_base_unit(unit_str: &str) -> Result<PhysicalUnit, ParseError> {
         "J" => Ok(PhysicalUnit::Energy),
         "S" => Ok(PhysicalUnit::Conductance),
         "Wb" => Ok(PhysicalUnit::MagneticFlux),
-        "Ohm" | "ohm" => Ok(PhysicalUnit::Resistance),
+        "Ohm" | "ohm" | "Ohms" | "ohms" => Ok(PhysicalUnit::Resistance),
         "" => Ok(PhysicalUnit::Resistance), // Handle bare prefix for resistance
         _ => Err(ParseError::InvalidUnit),
     }
@@ -1341,6 +1341,7 @@ mod tests {
             ("100A", PhysicalUnit::Current, Decimal::from(100)),
             ("47", PhysicalUnit::Resistance, Decimal::from(47)),
             ("100Ohm", PhysicalUnit::Resistance, Decimal::from(100)),
+            ("100Ohms", PhysicalUnit::Resistance, Decimal::from(100)),
             ("1C", PhysicalUnit::Charge, Decimal::from(1)),
             ("100W", PhysicalUnit::Power, Decimal::from(100)),
             ("50J", PhysicalUnit::Energy, Decimal::from(50)),
@@ -1435,6 +1436,12 @@ mod tests {
                 PhysicalUnit::Resistance,
                 Decimal::from(100000),
                 Decimal::new(5, 2),
+            ),
+            (
+                "158k Ohms 1%",
+                PhysicalUnit::Resistance,
+                Decimal::from(158000),
+                Decimal::new(1, 2),
             ),
             (
                 "10nF 20%",
