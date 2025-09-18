@@ -235,6 +235,17 @@ impl PhysicalValue {
     }
 
     pub fn unit_type<'a, T: PhysicalUnitType<'a>>(type_id: TypeInstanceId) -> Ty {
+        let str_param_spec = ParamSpec::new_parts(
+            [(
+                ParamIsRequired::Yes,
+                PhysicalValue::get_type_starlark_repr(),
+            )],
+            [],
+            None,
+            [],
+            None,
+        )
+        .unwrap();
         Ty::custom(
             TyUser::new(
                 T::name(),
@@ -246,6 +257,10 @@ impl PhysicalValue {
                             ("value".to_string(), Ty::float()),
                             ("tolerance".to_string(), Ty::float()),
                             ("unit".to_string(), PhysicalUnit::starlark_type_repr()),
+                            (
+                                "__str__".to_string(),
+                                Ty::callable(str_param_spec, Ty::string()),
+                            ),
                         ]
                         .into_iter()
                         .collect(),
