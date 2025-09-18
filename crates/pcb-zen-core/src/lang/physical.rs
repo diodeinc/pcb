@@ -119,16 +119,6 @@ pub struct PhysicalValue {
 }
 
 impl PhysicalValue {
-    #[cfg(test)]
-    fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
-        Self {
-            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
-            tolerance: Decimal::from_f64(tolerance)
-                .expect("tolerance not representable as Decimal"),
-            unit,
-        }
-    }
-
     pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnit) -> Self {
         Self {
             value,
@@ -1087,10 +1077,21 @@ define_physical_unit!(MagneticFluxType, PhysicalUnit::MagneticFlux);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal::prelude::*;
+
+    #[cfg(test)]
+    fn physical_value(value: f64, tolerance: f64, unit: PhysicalUnit) -> PhysicalValue {
+        PhysicalValue {
+            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
+            tolerance: Decimal::from_f64(tolerance)
+                .expect("tolerance not representable as Decimal"),
+            unit,
+        }
+    }
 
     // Helper function for formatting tests
     fn assert_formatting(value_str: &str, unit: PhysicalUnit, expected: &str) {
-        let val = PhysicalValue::new(value_str.parse().unwrap(), 0.0, unit);
+        let val = physical_value(value_str.parse().unwrap(), 0.0, unit);
         assert_eq!(
             format!("{}", val),
             expected,
@@ -1110,7 +1111,7 @@ mod tests {
     #[test]
     fn test_si_prefix_formatting() {
         let test_cases = [
-            ("4700", PhysicalUnit::Resistance, "4.7kOhm"),
+            ("4700", PhysicalUnit::Resistance, "4.7k"),
             ("1500000", PhysicalUnit::Frequency, "1.5MHz"),
             ("0.001", PhysicalUnit::Capacitance, "1mF"),
             ("0.000001", PhysicalUnit::Capacitance, "1uF"),
@@ -1126,14 +1127,14 @@ mod tests {
     fn test_formatting_features() {
         let test_cases = [
             // Significant digits: ≥100 (no decimals), ≥10 (one decimal), <10 (two decimals)
-            ("150000", PhysicalUnit::Resistance, "150kOhm"),
-            ("47000", PhysicalUnit::Resistance, "47kOhm"),
-            ("4700", PhysicalUnit::Resistance, "4.7kOhm"),
+            ("150000", PhysicalUnit::Resistance, "150k"),
+            ("47000", PhysicalUnit::Resistance, "47k"),
+            ("4700", PhysicalUnit::Resistance, "4.7k"),
             // Trailing zero removal
-            ("1000", PhysicalUnit::Resistance, "1kOhm"),
-            ("1200", PhysicalUnit::Resistance, "1.2kOhm"),
+            ("1000", PhysicalUnit::Resistance, "1k"),
+            ("1200", PhysicalUnit::Resistance, "1.2k"),
             // Resistance special case (no unit suffix)
-            ("1000", PhysicalUnit::Resistance, "1kOhm"),
+            ("1000", PhysicalUnit::Resistance, "1k"),
             ("1000", PhysicalUnit::Voltage, "1kV"), // Other units show suffix
             // Various units
             ("3300", PhysicalUnit::Voltage, "3.3kV"),
@@ -1145,7 +1146,7 @@ mod tests {
             ("1", PhysicalUnit::Voltage, "1V"),
             // No prefix needed
             ("100", PhysicalUnit::Voltage, "100V"),
-            ("47", PhysicalUnit::Resistance, "47Ohm"),
+            ("47", PhysicalUnit::Resistance, "47"),
         ];
 
         for (value, unit, expected) in test_cases {
@@ -1160,13 +1161,13 @@ mod tests {
                 Decimal::from(1000),
                 PhysicalUnit::Resistance,
                 Decimal::new(5, 2),
-                "1kOhm 5%",
+                "1k 5%",
             ), // With tolerance
             (
                 Decimal::from(1000),
                 PhysicalUnit::Resistance,
                 Decimal::ZERO,
-                "1kOhm",
+                "1k",
             ), // Without tolerance
             (
                 Decimal::from(1000),
@@ -1384,7 +1385,7 @@ mod tests {
                 Decimal::from(100000),
                 PhysicalUnit::Resistance,
                 Decimal::new(5, 2),
-                "100kOhm 5%",
+                "100k 5%",
             ),
             (
                 Decimal::new(1, 8),
@@ -1429,7 +1430,7 @@ mod tests {
 
         // Helper to create test values
         fn val(v: f64, unit: PhysicalUnit) -> PhysicalValue {
-            PhysicalValue::new(v, 0.0, unit)
+            physical_value(v, 0.0, unit)
         }
 
         // Ohm's law
@@ -1456,22 +1457,22 @@ mod tests {
     #[test]
     fn test_power_calculations() {
         // P = V × I
-        let v = PhysicalValue::new(12.0, 0.0, PhysicalUnit::Voltage);
-        let i = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Current);
+        let v = physical_value(12.0, 0.0, PhysicalUnit::Voltage);
+        let i = physical_value(2.0, 0.0, PhysicalUnit::Current);
         let result = v * i;
         assert_eq!(result.unit, PhysicalUnit::Power);
         assert_eq!(result.value, Decimal::from(24));
 
         // I = P / V
-        let p = PhysicalValue::new(100.0, 0.0, PhysicalUnit::Power);
-        let v = PhysicalValue::new(120.0, 0.0, PhysicalUnit::Voltage);
+        let p = physical_value(100.0, 0.0, PhysicalUnit::Power);
+        let v = physical_value(120.0, 0.0, PhysicalUnit::Voltage);
         let result = (p / v).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Current);
         assert!(result.value > Decimal::from_f64(0.8).unwrap());
         assert!(result.value < Decimal::from_f64(0.9).unwrap());
 
         // V = P / I
-        let i = PhysicalValue::new(5.0, 0.0, PhysicalUnit::Current);
+        let i = physical_value(5.0, 0.0, PhysicalUnit::Current);
         let result = (p / i).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(20));
@@ -1480,15 +1481,15 @@ mod tests {
     #[test]
     fn test_energy_and_time() {
         // E = P × t
-        let p = PhysicalValue::new(100.0, 0.0, PhysicalUnit::Power);
-        let t = PhysicalValue::new(3600.0, 0.0, PhysicalUnit::Time);
+        let p = physical_value(100.0, 0.0, PhysicalUnit::Power);
+        let t = physical_value(3600.0, 0.0, PhysicalUnit::Time);
         let result = p * t;
         assert_eq!(result.unit, PhysicalUnit::Energy);
         assert_eq!(result.value, Decimal::from(360000));
 
         // P = E / t
-        let e = PhysicalValue::new(7200.0, 0.0, PhysicalUnit::Energy);
-        let t = PhysicalValue::new(7200.0, 0.0, PhysicalUnit::Time); // 2h
+        let e = physical_value(7200.0, 0.0, PhysicalUnit::Energy);
+        let t = physical_value(7200.0, 0.0, PhysicalUnit::Time); // 2h
         let result = (e / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Power);
         assert_eq!(result.value, Decimal::from(1));
@@ -1502,22 +1503,22 @@ mod tests {
     #[test]
     fn test_frequency_time_inverses() {
         // f = 1 / t
-        let one = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Dimensionless);
-        let t = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Time);
+        let one = physical_value(1.0, 0.0, PhysicalUnit::Dimensionless);
+        let t = physical_value(1.0, 0.0, PhysicalUnit::Time);
         let result = (one / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Frequency);
         assert_eq!(result.value, Decimal::from(1));
 
         // t = 1 / f
-        let f = PhysicalValue::new(60.0, 0.0, PhysicalUnit::Frequency);
+        let f = physical_value(60.0, 0.0, PhysicalUnit::Frequency);
         let result = (one / f).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert!(result.value > Decimal::from_f64(0.016).unwrap());
         assert!(result.value < Decimal::from_f64(0.017).unwrap());
 
         // f × t = 1 (dimensionless)
-        let f = PhysicalValue::new(10.0, 0.0, PhysicalUnit::Frequency);
-        let t = PhysicalValue::new(0.1, 0.0, PhysicalUnit::Time);
+        let f = physical_value(10.0, 0.0, PhysicalUnit::Frequency);
+        let t = physical_value(0.1, 0.0, PhysicalUnit::Time);
         let result = f * t;
         assert_eq!(result.unit, PhysicalUnit::Dimensionless);
         assert_eq!(result.value, Decimal::from(1));
@@ -1526,14 +1527,14 @@ mod tests {
     #[test]
     fn test_resistance_conductance_inverses() {
         // G = 1 / R
-        let one = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Dimensionless);
-        let r = PhysicalValue::new(100.0, 0.0, PhysicalUnit::Resistance);
+        let one = physical_value(1.0, 0.0, PhysicalUnit::Dimensionless);
+        let r = physical_value(100.0, 0.0, PhysicalUnit::Resistance);
         let result = (one / r).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Conductance);
         assert_eq!(result.value, Decimal::from_f64(0.01).unwrap());
 
         // R = 1 / G
-        let g = PhysicalValue::new(0.02, 0.0, PhysicalUnit::Conductance);
+        let g = physical_value(0.02, 0.0, PhysicalUnit::Conductance);
         let result = (one / g).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Resistance);
         assert_eq!(result.value, Decimal::from(50));
@@ -1547,8 +1548,8 @@ mod tests {
     #[test]
     fn test_rc_time_constants() {
         // τ = R × C
-        let r = PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Resistance); // 10kΩ
-        let c = PhysicalValue::new(0.0000001, 0.0, PhysicalUnit::Capacitance); // 100nF
+        let r = physical_value(10000.0, 0.0, PhysicalUnit::Resistance); // 10kΩ
+        let c = physical_value(0.0000001, 0.0, PhysicalUnit::Capacitance); // 100nF
         let result = r * c;
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
@@ -1562,8 +1563,8 @@ mod tests {
     #[test]
     fn test_lr_time_constants() {
         // τ = L × G (L/R time constant)
-        let l = PhysicalValue::new(0.01, 0.0, PhysicalUnit::Inductance); // 10mH
-        let g = PhysicalValue::new(0.1, 0.0, PhysicalUnit::Conductance); // 100mS
+        let l = physical_value(0.01, 0.0, PhysicalUnit::Inductance); // 10mH
+        let g = physical_value(0.1, 0.0, PhysicalUnit::Conductance); // 100mS
         let result = l * g;
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
@@ -1577,28 +1578,28 @@ mod tests {
     #[test]
     fn test_charge_relationships() {
         // Q = I × t
-        let i = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Current);
-        let t = PhysicalValue::new(10.0, 0.0, PhysicalUnit::Time);
+        let i = physical_value(2.0, 0.0, PhysicalUnit::Current);
+        let t = physical_value(10.0, 0.0, PhysicalUnit::Time);
         let result = i * t;
         assert_eq!(result.unit, PhysicalUnit::Charge);
         assert_eq!(result.value, Decimal::from(20));
 
         // Q = C × V
-        let c = PhysicalValue::new(0.001, 0.0, PhysicalUnit::Capacitance); // 1000μF
-        let v = PhysicalValue::new(12.0, 0.0, PhysicalUnit::Voltage);
+        let c = physical_value(0.001, 0.0, PhysicalUnit::Capacitance); // 1000μF
+        let v = physical_value(12.0, 0.0, PhysicalUnit::Voltage);
         let result = c * v;
         assert_eq!(result.unit, PhysicalUnit::Charge);
         assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mC
 
         // I = Q / t
-        let q = PhysicalValue::new(0.1, 0.0, PhysicalUnit::Charge); // 100mC
-        let t = PhysicalValue::new(50.0, 0.0, PhysicalUnit::Time);
+        let q = physical_value(0.1, 0.0, PhysicalUnit::Charge); // 100mC
+        let t = physical_value(50.0, 0.0, PhysicalUnit::Time);
         let result = (q / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Current);
         assert_eq!(result.value, Decimal::from_f64(0.002).unwrap()); // 2mA
 
         // V = Q / C
-        let q = PhysicalValue::new(0.005, 0.0, PhysicalUnit::Charge); // 5mC
+        let q = physical_value(0.005, 0.0, PhysicalUnit::Charge); // 5mC
         let result = (q / c).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(5));
@@ -1607,22 +1608,22 @@ mod tests {
     #[test]
     fn test_magnetic_flux() {
         // Φ = L × I
-        let l = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Inductance); // 1H
-        let i = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Current);
+        let l = physical_value(1.0, 0.0, PhysicalUnit::Inductance); // 1H
+        let i = physical_value(2.0, 0.0, PhysicalUnit::Current);
         let result = l * i;
         assert_eq!(result.unit, PhysicalUnit::MagneticFlux);
         assert_eq!(result.value, Decimal::from(2)); // 2Wb
 
         // I = Φ / L
-        let phi = PhysicalValue::new(0.01, 0.0, PhysicalUnit::MagneticFlux); // 10mWb
-        let l = PhysicalValue::new(0.05, 0.0, PhysicalUnit::Inductance); // 50mH
+        let phi = physical_value(0.01, 0.0, PhysicalUnit::MagneticFlux); // 10mWb
+        let l = physical_value(0.05, 0.0, PhysicalUnit::Inductance); // 50mH
         let result = (phi / l).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Current);
         assert_eq!(result.value, Decimal::from_f64(0.2).unwrap()); // 200mA
 
         // V = Φ / t (Faraday's law)
-        let phi = PhysicalValue::new(0.1, 0.0, PhysicalUnit::MagneticFlux); // 100mWb
-        let t = PhysicalValue::new(0.01, 0.0, PhysicalUnit::Time); // 10ms
+        let phi = physical_value(0.1, 0.0, PhysicalUnit::MagneticFlux); // 100mWb
+        let t = physical_value(0.01, 0.0, PhysicalUnit::Time); // 10ms
         let result = (phi / t).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(10)); // 10V
@@ -1631,20 +1632,20 @@ mod tests {
     #[test]
     fn test_energy_storage() {
         // E = Q × V (potential energy)
-        let q = PhysicalValue::new(0.001, 0.0, PhysicalUnit::Charge); // 1mC
-        let v = PhysicalValue::new(12.0, 0.0, PhysicalUnit::Voltage);
+        let q = physical_value(0.001, 0.0, PhysicalUnit::Charge); // 1mC
+        let v = physical_value(12.0, 0.0, PhysicalUnit::Voltage);
         let result = q * v;
         assert_eq!(result.unit, PhysicalUnit::Energy);
         assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mJ
 
         // Q = E / V
-        let e = PhysicalValue::new(0.024, 0.0, PhysicalUnit::Energy); // 24mJ
+        let e = physical_value(0.024, 0.0, PhysicalUnit::Energy); // 24mJ
         let result = (e / v).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Charge);
         assert_eq!(result.value, Decimal::from_f64(0.002).unwrap()); // 2mC
 
         // V = E / Q
-        let e = PhysicalValue::new(0.006, 0.0, PhysicalUnit::Energy); // 6mJ
+        let e = physical_value(0.006, 0.0, PhysicalUnit::Energy); // 6mJ
         let result = (e / q).unwrap();
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(6)); // 6V
@@ -1653,8 +1654,8 @@ mod tests {
     #[test]
     fn test_dimensionless_operations() {
         // Any unit * dimensionless = same unit
-        let v = PhysicalValue::new(5.0, 0.0, PhysicalUnit::Voltage);
-        let two = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Dimensionless);
+        let v = physical_value(5.0, 0.0, PhysicalUnit::Voltage);
+        let two = physical_value(2.0, 0.0, PhysicalUnit::Dimensionless);
         let result = v * two;
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(10));
@@ -1667,8 +1668,8 @@ mod tests {
 
     #[test]
     fn test_unsupported_operations() {
-        let v = PhysicalValue::new(5.0, 0.0, PhysicalUnit::Voltage);
-        let t = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Time);
+        let v = physical_value(5.0, 0.0, PhysicalUnit::Voltage);
+        let t = physical_value(1.0, 0.0, PhysicalUnit::Time);
 
         // V × T is not supported (no physical meaning)
         assert!((v * t).unit == PhysicalUnit::Dimensionless);
@@ -1683,8 +1684,8 @@ mod tests {
     #[test]
     fn test_tolerance_handling() {
         // Tolerance preserved for dimensionless scaling
-        let v = PhysicalValue::new(5.0, 0.05, PhysicalUnit::Voltage); // 5V ±5%
-        let two = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Dimensionless);
+        let v = physical_value(5.0, 0.05, PhysicalUnit::Voltage); // 5V ±5%
+        let two = physical_value(2.0, 0.0, PhysicalUnit::Dimensionless);
 
         // V / dimensionless preserves tolerance
         let result = (v / two).unwrap();
@@ -1699,7 +1700,7 @@ mod tests {
         assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
 
         // Unit-changing operations drop tolerance
-        let r = PhysicalValue::new(100.0, 0.0, PhysicalUnit::Resistance);
+        let r = physical_value(100.0, 0.0, PhysicalUnit::Resistance);
         let result = (v / r).unwrap(); // V / R = I (unit changes)
         assert_eq!(result.unit, PhysicalUnit::Current);
         assert_eq!(result.tolerance, Decimal::ZERO); // Tolerance dropped
