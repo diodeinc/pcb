@@ -669,13 +669,7 @@ fn scale_to_si(raw: Decimal) -> (Decimal, &'static str) {
 }
 
 fn fmt_significant(x: Decimal) -> String {
-    let formatted = if x.abs() >= Decimal::from(100) {
-        format!("{:.0}", x.round())
-    } else if x.abs() >= Decimal::from(10) {
-        format!("{:.1}", x)
-    } else {
-        format!("{:.2}", x)
-    };
+    let formatted = format!("{}", x);
 
     if formatted.contains('.') {
         formatted
