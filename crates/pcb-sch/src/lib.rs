@@ -156,6 +156,12 @@ pub enum PhysicalUnit {
     Hertz,
     Seconds,
     Kelvin,
+    Coulombs,
+    Watts,
+    Joules,
+    Siemens,
+    Webers,
+    Dimensionless,
 }
 
 impl std::fmt::Display for PhysicalUnit {
@@ -169,6 +175,12 @@ impl std::fmt::Display for PhysicalUnit {
             PhysicalUnit::Hertz => write!(f, "Hz"),
             PhysicalUnit::Seconds => write!(f, "s"),
             PhysicalUnit::Kelvin => write!(f, "K"),
+            PhysicalUnit::Coulombs => write!(f, "C"),
+            PhysicalUnit::Watts => write!(f, "W"),
+            PhysicalUnit::Joules => write!(f, "J"),
+            PhysicalUnit::Siemens => write!(f, "S"),
+            PhysicalUnit::Webers => write!(f, "Wb"),
+            PhysicalUnit::Dimensionless => write!(f, "<>"),
         }
     }
 }

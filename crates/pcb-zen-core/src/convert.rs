@@ -1,5 +1,6 @@
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::module::find_moved_span;
+use crate::lang::physical::PhysicalValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
@@ -10,15 +11,10 @@ use crate::{
 };
 use itertools::Itertools;
 use pcb_sch::position::Position;
-use pcb_sch::{
-    AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, PhysicalUnit, PhysicalValue,
-    Schematic,
-};
+use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
 use serde::{Deserialize, Serialize};
 use starlark::errors::EvalSeverity;
-use starlark::values::float::StarlarkFloat;
 use starlark::values::list::ListRef;
-use starlark::values::record::FrozenRecord;
 use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
@@ -645,50 +641,6 @@ pub trait ToSchematic {
     fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic>;
 }
 
-/// Extract (value, tolerance, unit_name) from a Starlark unit record
-fn parse_unit_record<'v, V: ValueLike<'v>>(v: V) -> Option<pcb_sch::PhysicalValue> {
-    let val = v.to_value();
-    let rec = val.downcast_ref::<FrozenRecord>()?;
-    let mut value: Option<f64> = None;
-    let mut tol: Option<f64> = None;
-    let mut unit: Option<PhysicalUnit> = None;
-    for (fname, fval) in rec.iter() {
-        let n = fname.to_string();
-        if n == crate::attrs::record_fields::VALUE {
-            if let Some(sf) = fval.downcast_ref::<StarlarkFloat>() {
-                value = Some(sf.0);
-            }
-        } else if n == crate::attrs::record_fields::TOLERANCE {
-            if let Some(sf) = fval.downcast_ref::<StarlarkFloat>() {
-                tol = Some(sf.0);
-            }
-        } else if n == crate::attrs::record_fields::UNIT {
-            let unit_str = fval.to_string();
-            let unit_name = if let Some(start) = unit_str.find('(') {
-                if let Some(end) = unit_str.find(')') {
-                    unit_str[start + 1..end].trim_matches('"').to_string()
-                } else {
-                    unit_str.trim_matches('"').to_string()
-                }
-            } else {
-                unit_str.trim_matches('"').to_string()
-            };
-            unit = match unit_name.as_str() {
-                "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
-                "V" | "Volts" => Some(PhysicalUnit::Volts),
-                "A" | "Amperes" => Some(PhysicalUnit::Amperes),
-                "F" | "Farads" => Some(PhysicalUnit::Farads),
-                "H" | "Henries" => Some(PhysicalUnit::Henries),
-                "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
-                "s" | "Seconds" => Some(PhysicalUnit::Seconds),
-                "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
-                _ => None,
-            };
-        }
-    }
-    Some(PhysicalValue::new(value?, tol?, unit?))
-}
-
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
     // Handle scalars first
     if let Some(s) = v.downcast_frozen_str() {
@@ -697,11 +649,8 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::Number(n as f64));
     } else if let Some(b) = v.unpack_bool() {
         return Ok(AttributeValue::Boolean(b));
-    }
-
-    // Handle unit records (Resistance, Capacitance, Voltage, etc.) using shared parser
-    if let Some(pv) = parse_unit_record(v) {
-        return Ok(AttributeValue::Physical(pv));
+    } else if let Some(&physical) = v.downcast_ref::<PhysicalValue>() {
+        return Ok(AttributeValue::Physical(physical.into()));
     }
 
     // Handle lists (no nested list support)

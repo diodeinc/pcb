@@ -22,6 +22,7 @@ use starlark::values::{Trace, Value, ValueLike};
 
 use crate::lang::interface::{get_promotion_map, FrozenInterfaceValue, InterfaceValue};
 use crate::lang::net::NetValue;
+use crate::lang::physical::PhysicalValue;
 use crate::{FrozenNetValue, NetId};
 
 use super::interface::{FrozenInterfaceFactory, InterfaceFactory};
@@ -48,6 +49,9 @@ pub enum InputValue {
     Record {
         fields: SmallMap<String, InputValue>,
     },
+
+    // Stores a physical value
+    Physical(PhysicalValue),
 
     /// Represents a Net value (name + unique id)
     Net {
@@ -79,6 +83,7 @@ impl fmt::Display for InputValue {
             InputValue::Dict(m) => write!(f, "Dict(len={})", m.len()),
             InputValue::Enum { variant } => write!(f, "Enum({variant})"),
             InputValue::Record { fields } => write!(f, "Record(len={})", fields.len()),
+            InputValue::Physical(p) => write!(f, "{p}"),
             InputValue::Net {
                 name, properties, ..
             } => {
@@ -173,6 +178,7 @@ impl InputValue {
                 eval.eval_function(typ_val, &[], &named)
                     .map_err(|e| anyhow!(e.to_string()))
             }
+            InputValue::Physical(p) => Ok(heap.alloc_simple(*p)),
             InputValue::Net {
                 id,
                 name,
@@ -355,6 +361,10 @@ impl InputValue {
                     .map(|(k, v)| (k.to_string(), InputValue::from_value(v.to_value())))
                     .collect(),
             };
+        }
+
+        if let Some(physical) = value.downcast_ref::<PhysicalValue>() {
+            return InputValue::Physical(*physical);
         }
 
         if let Some(net) = value.downcast_ref::<NetValue>() {

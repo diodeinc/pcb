@@ -114,11 +114,11 @@ fn starlark_value_to_decimal(value: &starlark::values::Value) -> starlark::Resul
 pub struct PhysicalValue {
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    value: Decimal,
+    pub(crate) value: Decimal,
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    tolerance: Decimal,
-    unit: PhysicalUnit,
+    pub(crate) tolerance: Decimal,
+    pub(crate) unit: PhysicalUnit,
 }
 
 impl PhysicalValue {
@@ -465,6 +465,27 @@ impl PhysicalUnit {
     }
 }
 
+impl From<PhysicalUnit> for pcb_sch::PhysicalUnit {
+    fn from(value: PhysicalUnit) -> Self {
+        match value {
+            PhysicalUnit::Resistance => pcb_sch::PhysicalUnit::Ohms,
+            PhysicalUnit::Capacitance => pcb_sch::PhysicalUnit::Farads,
+            PhysicalUnit::Inductance => pcb_sch::PhysicalUnit::Henries,
+            PhysicalUnit::Frequency => pcb_sch::PhysicalUnit::Hertz,
+            PhysicalUnit::Temperature => pcb_sch::PhysicalUnit::Kelvin,
+            PhysicalUnit::Charge => pcb_sch::PhysicalUnit::Coulombs,
+            PhysicalUnit::Power => pcb_sch::PhysicalUnit::Watts,
+            PhysicalUnit::Energy => pcb_sch::PhysicalUnit::Joules,
+            PhysicalUnit::Conductance => pcb_sch::PhysicalUnit::Siemens,
+            PhysicalUnit::MagneticFlux => pcb_sch::PhysicalUnit::Webers,
+            PhysicalUnit::Dimensionless => pcb_sch::PhysicalUnit::Dimensionless,
+            PhysicalUnit::Time => pcb_sch::PhysicalUnit::Seconds,
+            PhysicalUnit::Current => pcb_sch::PhysicalUnit::Amperes,
+            PhysicalUnit::Voltage => pcb_sch::PhysicalUnit::Volts,
+        }
+    }
+}
+
 impl std::ops::Div for PhysicalUnit {
     type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
@@ -684,6 +705,21 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+impl From<PhysicalValue> for pcb_sch::PhysicalValue {
+    fn from(value: PhysicalValue) -> Self {
+        let PhysicalValue {
+            value,
+            tolerance,
+            unit,
+        } = value;
+        pcb_sch::PhysicalValue {
+            value,
+            tolerance,
+            unit: unit.into(),
+        }
+    }
+}
 
 impl FromStr for PhysicalValue {
     type Err = ParseError;
