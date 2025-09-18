@@ -323,10 +323,10 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
 }
 
 impl std::ops::Mul for PhysicalValue {
-    type Output = Result<PhysicalValue, PhysicalValueError>;
+    type Output = PhysicalValue;
     fn mul(self, rhs: Self) -> Self::Output {
         let value = self.value * rhs.value;
-        let unit = (self.unit * rhs.unit)?;
+        let unit = self.unit * rhs.unit;
 
         // Preserve tolerance only for dimensionless scaling
         let tolerance = match (self.unit, rhs.unit) {
@@ -335,7 +335,7 @@ impl std::ops::Mul for PhysicalValue {
             _ => Decimal::ZERO,                                 // All other cases drop tolerance
         };
 
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        PhysicalValue::from_decimal(value, tolerance, unit)
     }
 }
 
@@ -346,7 +346,7 @@ impl std::ops::Div for PhysicalValue {
             return Err(PhysicalValueError::DivisionByZero);
         }
         let value = self.value / rhs.value;
-        let unit = (self.unit / rhs.unit)?;
+        let unit = self.unit / rhs.unit;
 
         // Preserve tolerance only for dimensionless scaling
         let tolerance = match (self.unit, rhs.unit) {
@@ -359,24 +359,22 @@ impl std::ops::Div for PhysicalValue {
 }
 
 impl std::ops::Add for PhysicalValue {
-    type Output = Result<PhysicalValue, PhysicalValueError>;
+    type Output = PhysicalValue;
     fn add(self, rhs: Self) -> Self::Output {
-        let unit = (self.unit + rhs.unit)?;
+        let unit = self.unit + rhs.unit;
         let value = self.value + rhs.value;
         let tolerance = Decimal::ZERO; // Always drop tolerance for addition
-
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        PhysicalValue::from_decimal(value, tolerance, unit)
     }
 }
 
 impl std::ops::Sub for PhysicalValue {
-    type Output = Result<PhysicalValue, PhysicalValueError>;
+    type Output = PhysicalValue;
     fn sub(self, rhs: Self) -> Self::Output {
-        let unit = (self.unit - rhs.unit)?;
+        let unit = self.unit - rhs.unit;
         let value = self.value - rhs.value;
         let tolerance = Decimal::ZERO; // Always drop tolerance for subtraction
-
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        PhysicalValue::from_decimal(value, tolerance, unit)
     }
 }
 
@@ -453,128 +451,126 @@ impl PhysicalUnit {
 }
 
 impl std::ops::Div for PhysicalUnit {
-    type Output = Result<Self, PhysicalValueError>;
+    type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
         use PhysicalUnit::*;
         match (self, rhs) {
             // Ohm's law
-            (Voltage, Current) => Ok(Resistance),
-            (Voltage, Resistance) => Ok(Current),
+            (Voltage, Current) => Resistance,
+            (Voltage, Resistance) => Current,
 
             // Time/Frequency inverses
-            (Dimensionless, Time) => Ok(Frequency),
-            (Dimensionless, Frequency) => Ok(Time),
+            (Dimensionless, Time) => Frequency,
+            (Dimensionless, Frequency) => Time,
 
             // Resistance/Conductance inverses
-            (Dimensionless, Resistance) => Ok(Conductance),
-            (Dimensionless, Conductance) => Ok(Resistance),
+            (Dimensionless, Resistance) => Conductance,
+            (Dimensionless, Conductance) => Resistance,
 
             // Power relationships
-            (Power, Voltage) => Ok(Current),
-            (Power, Current) => Ok(Voltage),
-            (Energy, Time) => Ok(Power),
-            (Energy, Power) => Ok(Time),      // E/P = (P*t)/P = t
-            (Power, Frequency) => Ok(Energy), // P/f = P/(1/t) = P*t = E
+            (Power, Voltage) => Current,
+            (Power, Current) => Voltage,
+            (Energy, Time) => Power,
+            (Energy, Power) => Time,      // E/P = (P*t)/P = t
+            (Power, Frequency) => Energy, // P/f = P/(1/t) = P*t = E
 
             // Charge relationships
-            (Charge, Time) => Ok(Current),
-            (Charge, Current) => Ok(Time),
+            (Charge, Time) => Current,
+            (Charge, Current) => Time,
 
             // Capacitance relationships
-            (Charge, Voltage) => Ok(Capacitance),
-            (Charge, Capacitance) => Ok(Voltage),
+            (Charge, Voltage) => Capacitance,
+            (Charge, Capacitance) => Voltage,
 
             // Magnetic flux relationships
-            (MagneticFlux, Time) => Ok(Voltage), // Faraday's law: V = dΦ/dt
-            (MagneticFlux, Voltage) => Ok(Time),
-            (MagneticFlux, Inductance) => Ok(Current),
-            (MagneticFlux, Current) => Ok(Inductance),
+            (MagneticFlux, Time) => Voltage, // Faraday's law: V = dΦ/dt
+            (MagneticFlux, Voltage) => Time,
+            (MagneticFlux, Inductance) => Current,
+            (MagneticFlux, Current) => Inductance,
 
             // Energy-charge relationships (exact, no constants needed)
-            (Energy, Voltage) => Ok(Charge), // Q = E/V (from E = Q*V)
-            (Energy, Charge) => Ok(Voltage), // V = E/Q (from E = Q*V)
+            (Energy, Voltage) => Charge, // Q = E/V (from E = Q*V)
+            (Energy, Charge) => Voltage, // V = E/Q (from E = Q*V)
 
             // Dimensionless operations (any unit / dimensionless = same unit)
-            (unit, Dimensionless) => Ok(unit),
+            (unit, Dimensionless) => unit,
 
-            _ => Err(PhysicalValueError::UnsupportedOperation),
+            _ => Self::Dimensionless,
         }
     }
 }
 
 impl std::ops::Mul for PhysicalUnit {
-    type Output = Result<Self, PhysicalValueError>;
+    type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
         use PhysicalUnit::*;
         match (self, rhs) {
             // Ohm's law
-            (Current, Resistance) => Ok(Voltage),
-            (Resistance, Current) => Ok(Voltage),
+            (Current, Resistance) => Voltage,
+            (Resistance, Current) => Voltage,
 
             // RC time constant
-            (Resistance, Capacitance) => Ok(Time),
-            (Capacitance, Resistance) => Ok(Time),
+            (Resistance, Capacitance) => Time,
+            (Capacitance, Resistance) => Time,
 
             // Power formulas
-            (Voltage, Current) => Ok(Power),
-            (Current, Voltage) => Ok(Power),
-            (Power, Time) => Ok(Energy),
-            (Time, Power) => Ok(Energy),
-            (Energy, Frequency) => Ok(Power), // E*f = E*(1/t) = E/t = P
+            (Voltage, Current) => Power,
+            (Current, Voltage) => Power,
+            (Power, Time) => Energy,
+            (Time, Power) => Energy,
+            (Energy, Frequency) => Power, // E*f = E*(1/t) = E/t = P
 
             // Charge formulas
-            (Current, Time) => Ok(Charge),
-            (Time, Current) => Ok(Charge),
-            (Capacitance, Voltage) => Ok(Charge),
-            (Voltage, Capacitance) => Ok(Charge),
+            (Current, Time) => Charge,
+            (Time, Current) => Charge,
+            (Capacitance, Voltage) => Charge,
+            (Voltage, Capacitance) => Charge,
 
             // Inductance formulas
-            (Inductance, Current) => Ok(MagneticFlux),
-            (Current, Inductance) => Ok(MagneticFlux),
+            (Inductance, Current) => MagneticFlux,
+            (Current, Inductance) => MagneticFlux,
 
             // Unit inverses (result in dimensionless)
-            (Frequency, Time) => Ok(Dimensionless),
-            (Time, Frequency) => Ok(Dimensionless),
-            (Conductance, Resistance) => Ok(Dimensionless),
-            (Resistance, Conductance) => Ok(Dimensionless),
+            (Frequency, Time) => Dimensionless,
+            (Time, Frequency) => Dimensionless,
+            (Conductance, Resistance) => Dimensionless,
+            (Resistance, Conductance) => Dimensionless,
 
             // L/R time constant (L * G = L * (1/R) = L/R = Time)
-            (Inductance, Conductance) => Ok(Time),
-            (Conductance, Inductance) => Ok(Time),
+            (Inductance, Conductance) => Time,
+            (Conductance, Inductance) => Time,
 
             // Additional useful combinations
-            (Voltage, Charge) => Ok(Energy), // E = Q*V (potential energy)
-            (Charge, Voltage) => Ok(Energy), // E = Q*V (potential energy)
+            (Voltage, Charge) => Energy, // E = Q*V (potential energy)
+            (Charge, Voltage) => Energy, // E = Q*V (potential energy)
 
             // Dimensionless operations (multiplication with dimensionless preserves original unit)
-            (unit, Dimensionless) => Ok(unit), // Any unit * dimensionless = same unit
-            (Dimensionless, unit) => Ok(unit), // Dimensionless * any unit = same unit
+            (unit, Dimensionless) => unit, // Any unit * dimensionless = same unit
+            (Dimensionless, unit) => unit, // Dimensionless * any unit = same unit
 
-            _ => Err(PhysicalValueError::UnsupportedOperation),
+            _ => Dimensionless,
         }
     }
 }
 
 impl std::ops::Add for PhysicalUnit {
-    type Output = Result<Self, PhysicalValueError>;
+    type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             // Addition only allowed for same units
-            (unit1, unit2) if unit1 == unit2 => Ok(unit1),
-
-            _ => Err(PhysicalValueError::UnsupportedOperation),
+            (unit1, unit2) if unit1 == unit2 => unit1,
+            _ => Self::Dimensionless,
         }
     }
 }
 
 impl std::ops::Sub for PhysicalUnit {
-    type Output = Result<Self, PhysicalValueError>;
+    type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             // Subtraction only allowed for same units
-            (unit1, unit2) if unit1 == unit2 => Ok(unit1),
-
-            _ => Err(PhysicalValueError::UnsupportedOperation),
+            (unit1, unit2) if unit1 == unit2 => unit1,
+            _ => Self::Dimensionless,
         }
     }
 }
@@ -583,8 +579,6 @@ impl std::ops::Sub for PhysicalUnit {
 pub enum PhysicalValueError {
     #[error("Division by zero")]
     DivisionByZero,
-    #[error("Unsupported operation")]
-    UnsupportedOperation,
 }
 
 impl From<PhysicalValueError> for starlark::Error {
@@ -997,54 +991,26 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
 
     fn mul(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
-        let result = (*self * other).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot multiply {} by {} - {}",
-                self.unit.name(),
-                other.unit.name(),
-                err
-            ))
-        });
-        Some(result)
+        let result = heap.alloc(*self * other);
+        Some(Ok(result))
     }
 
     fn rmul(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
-        let result = (other * *self).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot multiply {} by {} - {}",
-                self.unit.name(),
-                other.unit.name(),
-                err
-            ))
-        });
-        Some(result)
+        let result = heap.alloc(other * *self);
+        Some(Ok(result))
     }
 
     fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
-        let result = (*self + other).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot add {} and {} - {}",
-                self.unit.name(),
-                other.unit.name(),
-                err
-            ))
-        });
-        Some(result)
+        let result = heap.alloc(*self + other);
+        Some(Ok(result))
     }
 
     fn radd(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
-        let result = (other + *self).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot add {} and {} - {}",
-                other.unit.name(),
-                self.unit.name(),
-                err
-            ))
-        });
-        Some(result)
+        let result = heap.alloc(other + *self);
+        Some(Ok(result))
     }
 
     fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
@@ -1054,14 +1020,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
                 self.unit.name()
             ))
         })?;
-        let result = (*self - other).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot subtract {} from {} - {}",
-                other.unit.name(),
-                self.unit.name(),
-                err
-            ))
-        })?;
+        let result = heap.alloc(*self - other);
         Ok(result)
     }
 }
@@ -1435,7 +1394,7 @@ mod tests {
         let r = val(5.0, PhysicalUnit::Resistance);
 
         // V = I × R
-        let result = (i * r).unwrap();
+        let result = i * r;
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(10));
 
@@ -1455,7 +1414,7 @@ mod tests {
         // P = V × I
         let v = PhysicalValue::new(12.0, 0.0, PhysicalUnit::Voltage);
         let i = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Current);
-        let result = (v * i).unwrap();
+        let result = v * i;
         assert_eq!(result.unit, PhysicalUnit::Power);
         assert_eq!(result.value, Decimal::from(24));
 
@@ -1479,7 +1438,7 @@ mod tests {
         // E = P × t
         let p = PhysicalValue::new(100.0, 0.0, PhysicalUnit::Power);
         let t = PhysicalValue::new(3600.0, 0.0, PhysicalUnit::Time);
-        let result = (p * t).unwrap();
+        let result = p * t;
         assert_eq!(result.unit, PhysicalUnit::Energy);
         assert_eq!(result.value, Decimal::from(360000));
 
@@ -1515,7 +1474,7 @@ mod tests {
         // f × t = 1 (dimensionless)
         let f = PhysicalValue::new(10.0, 0.0, PhysicalUnit::Frequency);
         let t = PhysicalValue::new(0.1, 0.0, PhysicalUnit::Time);
-        let result = (f * t).unwrap();
+        let result = f * t;
         assert_eq!(result.unit, PhysicalUnit::Dimensionless);
         assert_eq!(result.value, Decimal::from(1));
     }
@@ -1536,7 +1495,7 @@ mod tests {
         assert_eq!(result.value, Decimal::from(50));
 
         // R × G = 1 (dimensionless)
-        let result = (r * g).unwrap();
+        let result = r * g;
         assert_eq!(result.unit, PhysicalUnit::Dimensionless);
         assert_eq!(result.value, Decimal::from(2));
     }
@@ -1546,12 +1505,12 @@ mod tests {
         // τ = R × C
         let r = PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Resistance); // 10kΩ
         let c = PhysicalValue::new(0.0000001, 0.0, PhysicalUnit::Capacitance); // 100nF
-        let result = (r * c).unwrap();
+        let result = r * c;
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
 
         // τ = C × R
-        let result = (c * r).unwrap();
+        let result = c * r;
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
     }
@@ -1561,12 +1520,12 @@ mod tests {
         // τ = L × G (L/R time constant)
         let l = PhysicalValue::new(0.01, 0.0, PhysicalUnit::Inductance); // 10mH
         let g = PhysicalValue::new(0.1, 0.0, PhysicalUnit::Conductance); // 100mS
-        let result = (l * g).unwrap();
+        let result = l * g;
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
 
         // τ = G × L
-        let result = (g * l).unwrap();
+        let result = g * l;
         assert_eq!(result.unit, PhysicalUnit::Time);
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
     }
@@ -1576,14 +1535,14 @@ mod tests {
         // Q = I × t
         let i = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Current);
         let t = PhysicalValue::new(10.0, 0.0, PhysicalUnit::Time);
-        let result = (i * t).unwrap();
+        let result = i * t;
         assert_eq!(result.unit, PhysicalUnit::Charge);
         assert_eq!(result.value, Decimal::from(20));
 
         // Q = C × V
         let c = PhysicalValue::new(0.001, 0.0, PhysicalUnit::Capacitance); // 1000μF
         let v = PhysicalValue::new(12.0, 0.0, PhysicalUnit::Voltage);
-        let result = (c * v).unwrap();
+        let result = c * v;
         assert_eq!(result.unit, PhysicalUnit::Charge);
         assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mC
 
@@ -1606,7 +1565,7 @@ mod tests {
         // Φ = L × I
         let l = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Inductance); // 1H
         let i = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Current);
-        let result = (l * i).unwrap();
+        let result = l * i;
         assert_eq!(result.unit, PhysicalUnit::MagneticFlux);
         assert_eq!(result.value, Decimal::from(2)); // 2Wb
 
@@ -1630,7 +1589,7 @@ mod tests {
         // E = Q × V (potential energy)
         let q = PhysicalValue::new(0.001, 0.0, PhysicalUnit::Charge); // 1mC
         let v = PhysicalValue::new(12.0, 0.0, PhysicalUnit::Voltage);
-        let result = (q * v).unwrap();
+        let result = q * v;
         assert_eq!(result.unit, PhysicalUnit::Energy);
         assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mJ
 
@@ -1652,7 +1611,7 @@ mod tests {
         // Any unit * dimensionless = same unit
         let v = PhysicalValue::new(5.0, 0.0, PhysicalUnit::Voltage);
         let two = PhysicalValue::new(2.0, 0.0, PhysicalUnit::Dimensionless);
-        let result = (v * two).unwrap();
+        let result = v * two;
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(10));
 
@@ -1668,13 +1627,13 @@ mod tests {
         let t = PhysicalValue::new(1.0, 0.0, PhysicalUnit::Time);
 
         // V × T is not supported (no physical meaning)
-        assert!((v * t).is_err());
+        assert!((v * t).unit == PhysicalUnit::Dimensionless);
 
         // V + T is not supported (different units)
-        assert!((v + t).is_err());
+        assert!((v + t).unit == PhysicalUnit::Dimensionless);
 
         // V - T is not supported (different units)
-        assert!((v - t).is_err());
+        assert!((v - t).unit == PhysicalUnit::Dimensionless);
     }
 
     #[test]
@@ -1690,7 +1649,7 @@ mod tests {
         assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
 
         // V × dimensionless preserves tolerance
-        let result = (v * two).unwrap();
+        let result = v * two;
         assert_eq!(result.unit, PhysicalUnit::Voltage);
         assert_eq!(result.value, Decimal::from(10));
         assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
