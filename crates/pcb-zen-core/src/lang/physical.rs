@@ -11,7 +11,7 @@ use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::GlobalsBuilder,
-eval::{Arguments, Evaluator},
+    eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     typing::{
         ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserFields,
@@ -756,23 +756,60 @@ impl FromStr for PhysicalValue {
         let base_number: Decimal = number_str.parse().map_err(|_| ParseError::InvalidNumber)?;
 
         // Parse unit with prefix
-        let (multiplier, unit) = parse_unit_with_prefix(unit_str)?;
-        let value = base_number * multiplier;
+        let (value, unit) = parse_unit_with_prefix(unit_str, base_number)?;
 
         Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
-fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), ParseError> {
+fn convert_temperature_to_kelvin(value: Decimal, unit: &str) -> Decimal {
+    match unit {
+        "°C" => value + Decimal::from_str("273.15").unwrap(),
+        "°F" => {
+            (value - Decimal::from(32)) * Decimal::from(5) / Decimal::from(9)
+                + Decimal::from_str("273.15").unwrap()
+        }
+        _ => value, // Already in Kelvin or other
+    }
+}
+
+fn parse_base_unit(unit_str: &str) -> Result<PhysicalUnit, ParseError> {
+    match unit_str {
+        "V" => Ok(PhysicalUnit::Voltage),
+        "A" => Ok(PhysicalUnit::Current),
+        "F" => Ok(PhysicalUnit::Capacitance),
+        "H" => Ok(PhysicalUnit::Inductance),
+        "Hz" => Ok(PhysicalUnit::Frequency),
+        "s" => Ok(PhysicalUnit::Time),
+        "K" => Ok(PhysicalUnit::Temperature),
+        "C" => Ok(PhysicalUnit::Charge),
+        "W" => Ok(PhysicalUnit::Power),
+        "J" => Ok(PhysicalUnit::Energy),
+        "S" => Ok(PhysicalUnit::Conductance),
+        "Wb" => Ok(PhysicalUnit::MagneticFlux),
+        "Ohm" | "ohm" => Ok(PhysicalUnit::Resistance),
+        "" => Ok(PhysicalUnit::Resistance), // Handle bare prefix for resistance
+        _ => Err(ParseError::InvalidUnit),
+    }
+}
+
+fn parse_unit_with_prefix(
+    unit_str: &str,
+    base_value: Decimal,
+) -> Result<(Decimal, PhysicalUnit), ParseError> {
     // Handle bare number (empty unit) - defaults to resistance
     if unit_str.is_empty() {
-        return Ok((Decimal::ONE, PhysicalUnit::Resistance));
+        return Ok((base_value, PhysicalUnit::Resistance));
     }
 
-    // Handle special time units (non-SI but common) first
+    // Handle special time units and temperature units (non-SI but common) first
     match unit_str {
-        "h" => return Ok((Decimal::from(3600), PhysicalUnit::Time)), // 1 hour = 3600 seconds
-        "min" => return Ok((Decimal::from(60), PhysicalUnit::Time)), // 1 minute = 60 seconds
+        "h" => return Ok((base_value * Decimal::from(3600), PhysicalUnit::Time)), // 1 hour = 3600 seconds
+        "min" => return Ok((base_value * Decimal::from(60), PhysicalUnit::Time)), // 1 minute = 60 seconds
+        "°C" | "°F" => {
+            let kelvin_value = convert_temperature_to_kelvin(base_value, unit_str);
+            return Ok((kelvin_value, PhysicalUnit::Temperature));
+        }
         _ => {}
     }
 
@@ -784,51 +821,24 @@ fn parse_unit_with_prefix(unit_str: &str) -> Result<(Decimal, PhysicalUnit), Par
 
         if let Some(base_unit) = unit_str.strip_prefix(prefix) {
             let multiplier = pow10(exp);
-            let unit = match base_unit {
-                "V" => PhysicalUnit::Voltage,
-                "A" => PhysicalUnit::Current,
-                "F" => PhysicalUnit::Capacitance,
-                "H" => PhysicalUnit::Inductance,
-                "Hz" => PhysicalUnit::Frequency,
-                "s" => PhysicalUnit::Time,
-                "h" => {
-                    // Handle prefixed hours (e.g., "kh" = 1000 hours = 3.6M seconds)
-                    let hour_multiplier = Decimal::from(3600);
-                    return Ok((multiplier * hour_multiplier, PhysicalUnit::Time));
-                }
-                "K" => PhysicalUnit::Temperature,
-                "C" => PhysicalUnit::Charge,
-                "W" => PhysicalUnit::Power,
-                "J" => PhysicalUnit::Energy,
-                "S" => PhysicalUnit::Conductance,
-                "Wb" => PhysicalUnit::MagneticFlux,
-                "Ohm" | "ohm" => PhysicalUnit::Resistance,
-                "" => PhysicalUnit::Resistance, // Handle bare prefix for resistance (like "4k7" -> "4k" + "7")
-                _ => return Err(ParseError::InvalidUnit),
-            };
-            return Ok((multiplier, unit));
+
+            // Special handling for prefixed hours
+            if base_unit == "h" {
+                let hour_multiplier = Decimal::from(3600);
+                return Ok((
+                    base_value * multiplier * hour_multiplier,
+                    PhysicalUnit::Time,
+                ));
+            }
+
+            let unit = parse_base_unit(base_unit)?;
+            return Ok((base_value * multiplier, unit));
         }
     }
 
     // Handle base units (no prefix)
-    let unit = match unit_str {
-        "V" => PhysicalUnit::Voltage,
-        "A" => PhysicalUnit::Current,
-        "F" => PhysicalUnit::Capacitance,
-        "H" => PhysicalUnit::Inductance,
-        "Hz" => PhysicalUnit::Frequency,
-        "s" => PhysicalUnit::Time,
-        "K" => PhysicalUnit::Temperature,
-        "C" => PhysicalUnit::Charge,
-        "W" => PhysicalUnit::Power,
-        "J" => PhysicalUnit::Energy,
-        "S" => PhysicalUnit::Conductance,
-        "Wb" => PhysicalUnit::MagneticFlux,
-        "Ohm" | "ohm" => PhysicalUnit::Resistance,
-        _ => return Err(ParseError::InvalidUnit),
-    };
-
-    Ok((Decimal::ONE, unit))
+    let unit = parse_base_unit(unit_str)?;
+    Ok((base_value, unit))
 }
 
 impl std::fmt::Display for PhysicalValue {
@@ -836,8 +846,17 @@ impl std::fmt::Display for PhysicalValue {
         let tol = self.tolerance * Decimal::from(100);
         let show_tol = tol > Decimal::ZERO;
 
-        // Special handling for time units to display hours/minutes when appropriate
-        if self.unit == PhysicalUnit::Time {
+        if self.unit == PhysicalUnit::Temperature {
+            // Convert from internal Kelvin to Celsius for display
+            let celsius = self.value - Decimal::from_str("273.15").unwrap();
+            let val_str = fmt_significant(celsius);
+
+            if show_tol {
+                write!(f, "{}°C {}%", val_str, tol.round())
+            } else {
+                write!(f, "{}°C", val_str)
+            }
+        } else if self.unit == PhysicalUnit::Time {
             let seconds = self.value;
 
             // Format time in the most natural unit
@@ -934,7 +953,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
                 Some(heap.alloc(StarlarkFloat(f)))
             }
             "unit" => Some(heap.alloc(self.unit)),
-"__str__" => {
+            "__str__" => {
                 // Return a callable that returns the string representation
                 Some(heap.alloc(PhysicalValueStrMethod { value: *self }))
             }
@@ -947,7 +966,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             "value".to_owned(),
             "tolerance".to_owned(),
             "unit".to_owned(),
-"__str__".to_owned(),
+            "__str__".to_owned(),
         ]
     }
 
