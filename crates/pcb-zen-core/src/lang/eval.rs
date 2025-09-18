@@ -27,6 +27,7 @@ use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
 use crate::lang::spice_model::model_globals;
 use crate::lang::{
+    builtin::builtin_globals,
     component::component_globals,
     physical::*,
     type_info::{ParameterInfo, TypeInfo},
@@ -429,7 +430,7 @@ impl EvalContext {
             LibraryExtension::Breakpoint,
             LibraryExtension::SetType,
         ])
-        .with(physical_globals)
+        .with(builtin_globals)
         .with(component_globals)
         .with(module_globals)
         .with(interface_globals)
