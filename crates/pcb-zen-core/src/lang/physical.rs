@@ -11,6 +11,7 @@ use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::GlobalsBuilder,
+eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     typing::{
         ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserFields,
@@ -890,10 +891,36 @@ impl<'v> StarlarkValue<'v> for PhysicalUnit {}
 
 starlark_simple_value!(PhysicalValue);
 
+/// A callable wrapper for PhysicalValue's __str__ method to match stdlib units.zen API
+#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
+pub struct PhysicalValueStrMethod {
+    value: PhysicalValue,
+}
+
+impl std::fmt::Display for PhysicalValueStrMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<__str__ method for {}>", self.value)
+    }
+}
+
+starlark_simple_value!(PhysicalValueStrMethod);
+
+#[starlark_value(type = "PhysicalValueStrMethod")]
+impl<'v> StarlarkValue<'v> for PhysicalValueStrMethod {
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        _args: &Arguments<'v, '_>,
+        evaluator: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        Ok(evaluator.heap().alloc(self.value.to_string()))
+    }
+}
+
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn has_attr(&self, attribute: &str, _heap: &'v starlark::values::Heap) -> bool {
-        matches!(attribute, "value" | "tolerance" | "unit")
+        matches!(attribute, "value" | "tolerance" | "unit" | "__str__")
     }
 
     fn get_attr(&self, attribute: &str, heap: &'v starlark::values::Heap) -> Option<Value<'v>> {
@@ -907,6 +934,10 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
                 Some(heap.alloc(StarlarkFloat(f)))
             }
             "unit" => Some(heap.alloc(self.unit)),
+"__str__" => {
+                // Return a callable that returns the string representation
+                Some(heap.alloc(PhysicalValueStrMethod { value: *self }))
+            }
             _ => None,
         }
     }
@@ -916,6 +947,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             "value".to_owned(),
             "tolerance".to_owned(),
             "unit".to_owned(),
+"__str__".to_owned(),
         ]
     }
 
