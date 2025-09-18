@@ -15,7 +15,7 @@ use starlark::{
 };
 
 use crate::{
-    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
+    lang::{evaluator_ext::EvaluatorExt, physical::PhysicalValue, spice_model::SpiceModelValue},
     FrozenSpiceModelValue,
 };
 
@@ -477,6 +477,12 @@ where
                             .unpack_str()
                             .map(|s| s.to_owned())
                             .unwrap_or_else(|| k_val.to_string());
+                        try_add_physical_property(
+                            eval_ctx.heap(),
+                            &mut properties_map,
+                            &key_str,
+                            &v_val,
+                        );
                         properties_map.insert(key_str, v_val);
                     }
                 } else {
@@ -539,6 +545,21 @@ where
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
         Some(<ComponentType as StarlarkValue>::get_type_starlark_repr())
     }
+}
+
+fn try_add_physical_property<'a, 'b>(
+    heap: &'a Heap,
+    map: &mut SmallMap<String, Value<'a>>,
+    key: &str,
+    value: &Value<'b>,
+) -> Option<PhysicalValue> {
+    if let Some(val) = value.unpack_str() {
+        if let Ok(physical) = val.parse::<PhysicalValue>() {
+            let key = format!("__{}__", key.to_ascii_lowercase());
+            map.insert(key, heap.alloc(physical));
+        }
+    }
+    None
 }
 
 impl std::fmt::Display for ComponentType {

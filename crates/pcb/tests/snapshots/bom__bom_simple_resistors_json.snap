@@ -78,7 +78,7 @@ Exit Code: 0
     "value": "4.7k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "4700",
+      "value": "4700.0",
       "tolerance": "0",
       "unit": "Ohms"
     },

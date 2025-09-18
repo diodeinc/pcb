@@ -2,10 +2,7 @@ use std::str::FromStr;
 
 use allocative::Allocative;
 use anyhow::anyhow;
-use rust_decimal::{
-    prelude::{FromPrimitive, ToPrimitive},
-    Decimal,
-};
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
@@ -122,7 +119,8 @@ pub struct PhysicalValue {
 }
 
 impl PhysicalValue {
-    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
+    #[cfg(test)]
+    fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
         Self {
             value: Decimal::from_f64(value).expect("value not representable as Decimal"),
             tolerance: Decimal::from_f64(tolerance)
@@ -427,7 +425,7 @@ impl PhysicalUnit {
     fn suffix(self) -> &'static str {
         use PhysicalUnit::*;
         match self {
-            Resistance => "Ohm",
+            Resistance => "", // This should be "Ohm", but keep as empty for backward compatibility
             Time => "s",
             Current => "A",
             Voltage => "V",
@@ -761,14 +759,15 @@ impl FromStr for PhysicalValue {
                 && after_k.chars().all(|c| c.is_ascii_digit() || c == '.')
             {
                 if let (Ok(before_num), Ok(after_num)) =
-                    (before_k.parse::<f64>(), after_k.parse::<f64>())
+                    (before_k.parse::<Decimal>(), after_k.parse::<Decimal>())
                 {
                     // Treat as decimal notation: "4k7" -> "4.7k" -> 4700
-                    let decimal_num = before_num + after_num / 10_f64.powi(after_k.len() as i32);
-                    let combined_value = decimal_num * 1000.0;
-                    return Ok(PhysicalValue::new(
+                    let divisor = pow10(-(after_k.len() as i32));
+                    let decimal_num = before_num + after_num * divisor;
+                    let combined_value = decimal_num * Decimal::from(1000);
+                    return Ok(PhysicalValue::from_decimal(
                         combined_value,
-                        tolerance.to_f64().unwrap_or(0.0),
+                        tolerance,
                         PhysicalUnit::Resistance,
                     ));
                 }
