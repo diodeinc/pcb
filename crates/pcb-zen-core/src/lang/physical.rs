@@ -92,10 +92,7 @@ macro_rules! define_physical_unit {
 
 /// Convert Starlark value to Decimal for math operations
 fn starlark_value_to_decimal(value: &starlark::values::Value) -> starlark::Result<Decimal> {
-    if let Some(s) = value.unpack_str() {
-        s.parse::<Decimal>()
-            .map_err(|_| starlark::Error::new_other(anyhow!("invalid number '{s}'")))
-    } else if let Some(f) = value.downcast_ref::<StarlarkFloat>() {
+    if let Some(f) = value.downcast_ref::<StarlarkFloat>() {
         Decimal::try_from(f.0)
             .map_err(|_| starlark::Error::new_other(anyhow!("invalid number {}", f.0)))
     } else if let Some(i) = value.unpack_i32() {
@@ -223,36 +220,14 @@ impl PhysicalValue {
     }
 
     pub fn unit_type<'a, T: PhysicalUnitType<'a>>(type_id: TypeInstanceId) -> Ty {
-        let str_param_spec = ParamSpec::new_parts(
-            [(
-                ParamIsRequired::Yes,
-                PhysicalValue::get_type_starlark_repr(),
-            )],
-            [],
-            None,
-            [],
-            None,
-        )
-        .unwrap();
-        let with_tolerance_param_spec = ParamSpec::new_parts(
-            [(ParamIsRequired::Yes, Ty::union2(Ty::float(), Ty::string()))],
-            [],
-            None,
-            [],
-            None,
-        )
-        .unwrap();
-        let with_unit_param_spec = ParamSpec::new_parts(
-            [(
-                ParamIsRequired::Yes,
-                Ty::union2(PhysicalUnit::starlark_type_repr(), Ty::string()),
-            )],
-            [],
-            None,
-            [],
-            None,
-        )
-        .unwrap();
+        fn single_param_spec(param_type: Ty) -> ParamSpec {
+            ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
+        }
+
+        let str_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let with_tolerance_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::string()));
+        let with_unit_param_spec =
+            single_param_spec(Ty::union2(PhysicalUnit::starlark_type_repr(), Ty::string()));
         Ty::custom(
             TyUser::new(
                 T::name(),
@@ -346,6 +321,9 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
         // First try to downcast to PhysicalValue
         if let Some(physical) = value.downcast_ref::<PhysicalValue>() {
             Ok(*physical)
+        } else if let Some(s) = value.unpack_str() {
+            // Try to parse as string
+            Self::from_str(s).map_err(|e| starlark::Error::new_other(anyhow!("{}", e)))
         } else {
             // Otherwise convert scalar to dimensionless physical value
             let decimal = starlark_value_to_decimal(&value)?;
@@ -1877,5 +1855,102 @@ mod tests {
         let result = (v / r).unwrap(); // V / R = I (unit changes)
         assert_eq!(result.unit, PhysicalUnit::Current);
         assert_eq!(result.tolerance, Decimal::ZERO); // Tolerance dropped
+    }
+
+    #[test]
+    fn test_try_from_physical_value() {
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+        let original = physical_value(10.0, 0.05, PhysicalUnit::Resistance);
+        let starlark_val = heap.alloc(original);
+
+        let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
+        assert_eq!(result.value, original.value);
+        assert_eq!(result.tolerance, original.tolerance);
+        assert_eq!(result.unit, original.unit);
+    }
+
+    #[test]
+    fn test_try_from_string() {
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+
+        // Test basic string parsing
+        let test_cases = [
+            ("10kOhm", PhysicalUnit::Resistance, 10000.0, 0.0),
+            ("100nF", PhysicalUnit::Capacitance, 0.0000001, 0.0),
+            ("3.3V", PhysicalUnit::Voltage, 3.3, 0.0),
+            ("100mA", PhysicalUnit::Current, 0.1, 0.0),
+            ("16MHz", PhysicalUnit::Frequency, 16000000.0, 0.0),
+        ];
+
+        for (input, expected_unit, expected_value, expected_tolerance) in test_cases {
+            let starlark_val = heap.alloc(input);
+            let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
+
+            assert_eq!(result.unit, expected_unit, "Unit mismatch for '{}'", input);
+            assert_eq!(
+                result.value,
+                Decimal::from_f64(expected_value).unwrap(),
+                "Value mismatch for '{}'",
+                input
+            );
+            assert_eq!(
+                result.tolerance,
+                Decimal::from_f64(expected_tolerance).unwrap(),
+                "Tolerance mismatch for '{}'",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn test_try_from_string_with_tolerance() {
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+        let starlark_val = heap.alloc("10kOhm 5%");
+        let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
+
+        assert_eq!(result.unit, PhysicalUnit::Resistance);
+        assert_eq!(result.value, Decimal::from(10000));
+        assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
+    }
+
+    #[test]
+    fn test_try_from_scalar() {
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+
+        // Test integer
+        let starlark_val = heap.alloc(42);
+        let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
+        assert_eq!(result.unit, PhysicalUnit::Dimensionless);
+        assert_eq!(result.value, Decimal::from(42));
+        assert_eq!(result.tolerance, Decimal::ZERO);
+
+        // Test float
+        let starlark_val = heap.alloc(3.14);
+        let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
+        assert_eq!(result.unit, PhysicalUnit::Dimensionless);
+        assert_eq!(result.value, Decimal::from_f64(3.14).unwrap());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_try_from_string_error() {
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+        let invalid_strings = ["invalid", "10kZzz", "abc%", ""];
+
+        for invalid in invalid_strings {
+            let starlark_val = heap.alloc(invalid);
+            let result = PhysicalValue::try_from(starlark_val.to_value());
+            assert!(result.is_err(), "Expected error for '{}'", invalid);
+        }
     }
 }
