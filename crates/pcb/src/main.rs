@@ -7,6 +7,7 @@ use std::process::Command;
 mod bom;
 mod build;
 mod clean;
+mod file_walker;
 mod fmt;
 mod info;
 mod layout;

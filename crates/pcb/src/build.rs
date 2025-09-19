@@ -3,10 +3,9 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
-use pcb_zen::file_extensions;
-use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::file_walker;
 
 /// Create diagnostics passes for the given deny list
 pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
@@ -22,18 +21,14 @@ pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::D
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
 pub struct BuildArgs {
-    /// One or more .zen files or directories containing .zen files (non-recursive) to build.
-    /// When omitted, all .zen files in the current directory are built.
+    /// One or more .zen files or directories containing .zen files to build.
+    /// When omitted, all .zen files in the current directory tree are built.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
     /// Print JSON netlist to stdout (undocumented)
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
-
-    /// Recursively traverse directories to find .zen files
-    #[arg(short = 'r', long = "recursive", default_value_t = false)]
-    pub recursive: bool,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -98,14 +93,12 @@ pub fn build(
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
-    // Determine which .zen files to compile
-    let zen_paths = if args.recursive {
-        collect_files_recursive(&args.paths)?
-    } else {
-        collect_files(&args.paths)?
-    };
+    let mut has_errors = false;
 
-    if zen_paths.is_empty() {
+    // Process .zen files using shared walker - always recursive for directories
+    let zen_files = file_walker::collect_zen_files(&args.paths, false)?;
+
+    if zen_files.is_empty() {
         let cwd = std::env::current_dir()?;
         anyhow::bail!(
             "No .zen source files found in {}",
@@ -113,13 +106,11 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         );
     }
 
-    let mut has_errors = false;
-
     // Process each .zen file
-    for zen_path in zen_paths {
+    for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let Some(schematic) = build(
-            &zen_path,
+            zen_path,
             args.offline,
             create_diagnostics_passes(&args.deny),
             &mut has_errors,
@@ -155,93 +146,5 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         anyhow::bail!("Build failed with errors");
     }
 
-    Ok(())
-}
-
-/// Collect .zen files from the provided paths
-pub fn collect_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut unique: HashSet<PathBuf> = HashSet::new();
-
-    if !paths.is_empty() {
-        // Collect .zen files from the provided paths (non-recursive)
-        for user_path in paths {
-            // Resolve path relative to current directory if not absolute
-            let resolved = if user_path.is_absolute() {
-                user_path.clone()
-            } else {
-                std::env::current_dir()?.join(user_path)
-            };
-
-            if resolved.is_file() {
-                if file_extensions::is_starlark_file(resolved.extension()) {
-                    unique.insert(resolved);
-                }
-            } else if resolved.is_dir() {
-                // Iterate over files in the directory (non-recursive)
-                for entry in fs::read_dir(resolved)?.flatten() {
-                    let path = entry.path();
-                    if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-                        unique.insert(path);
-                    }
-                }
-            }
-        }
-    } else {
-        // Fallback: find all `.zen` files in the current directory (non-recursive)
-        let cwd = std::env::current_dir()?;
-        for entry in fs::read_dir(cwd)?.flatten() {
-            let path = entry.path();
-            if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-                unique.insert(path);
-            }
-        }
-    }
-
-    // Convert to vec and keep deterministic ordering
-    let mut paths_vec: Vec<_> = unique.into_iter().collect();
-    paths_vec.sort();
-    Ok(paths_vec)
-}
-
-/// Recursively collect Starlark source files (.zen/.star) from the provided paths.
-/// Mirrors `collect_files` semantics but with recursive directory traversal.
-pub fn collect_files_recursive(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut unique: HashSet<PathBuf> = HashSet::new();
-
-    if !paths.is_empty() {
-        for user_path in paths {
-            let resolved = if user_path.is_absolute() {
-                user_path.clone()
-            } else {
-                std::env::current_dir()?.join(user_path)
-            };
-
-            if resolved.is_file() {
-                if file_extensions::is_starlark_file(resolved.extension()) {
-                    unique.insert(resolved);
-                }
-            } else if resolved.is_dir() {
-                visit_dir_recursive(&resolved, &mut unique)?;
-            }
-        }
-    } else {
-        let cwd = std::env::current_dir()?;
-        visit_dir_recursive(&cwd, &mut unique)?;
-    }
-
-    let mut paths_vec: Vec<_> = unique.into_iter().collect();
-    paths_vec.sort();
-    Ok(paths_vec)
-}
-
-fn visit_dir_recursive(dir: &Path, out: &mut HashSet<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir)?.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            visit_dir_recursive(&path, out)?;
-        } else if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-            out.insert(path);
-        }
-    }
     Ok(())
 }
