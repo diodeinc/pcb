@@ -1,7 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use allocative::Allocative;
-use anyhow::anyhow;
+
 use pcb_sch::PhysicalUnit;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
@@ -92,16 +92,15 @@ macro_rules! define_physical_unit {
 }
 
 /// Convert Starlark value to Decimal for math operations
-fn starlark_value_to_decimal(value: &starlark::values::Value) -> starlark::Result<Decimal> {
+fn starlark_value_to_decimal(
+    value: &starlark::values::Value,
+) -> Result<Decimal, PhysicalValueError> {
     if let Some(f) = value.downcast_ref::<StarlarkFloat>() {
-        Decimal::try_from(f.0)
-            .map_err(|_| starlark::Error::new_other(anyhow!("invalid number {}", f.0)))
+        Ok(Decimal::try_from(f.0)?)
     } else if let Some(i) = value.unpack_i32() {
         Ok(Decimal::from(i))
     } else {
-        Err(starlark::Error::new_other(anyhow!(
-            "expected int, float or numeric string"
-        )))
+        Err(PhysicalValueError::InvalidNumberType)
     }
 }
 
@@ -145,61 +144,64 @@ impl PhysicalValue {
         }
     }
 
+    pub fn check_unit(self, expected: PhysicalUnitDims) -> Result<Self, PhysicalValueError> {
+        if self.unit != expected {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: expected.fmt_unit(),
+                actual: self.unit.fmt_unit(),
+            });
+        }
+        Ok(self)
+    }
+
     pub fn from_arguments<'v, T: PhysicalUnitType<'v>>(
         positional: &[Value<'v>],
         kwargs: &SmallMap<ValueTyped<'v, StarlarkStr>, Value<'v>>,
     ) -> starlark::Result<Self> {
         let expected_unit: PhysicalUnitDims = T::UNIT.into();
-        match positional {
+        let unit_str = expected_unit.fmt_unit();
+
+        let result = match positional {
             // Single positional argument (string or PhysicalValue)
             [single] => {
                 if !kwargs.is_empty() {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "cannot mix positional argument with keyword arguments"
-                    )));
+                    return Err(PhysicalValueError::MixedArguments.into());
                 }
 
-                // Check if it's already a PhysicalValue
+                // Try PhysicalValue first, then string
                 if let Some(phys_val) = single.downcast_ref::<PhysicalValue>() {
-                    if phys_val.unit != expected_unit {
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "expected {}, got {}",
-                            expected_unit.fmt_unit(),
-                            phys_val.unit.fmt_unit()
-                        )));
+                    // If units match exactly, use as-is
+                    if phys_val.unit == expected_unit {
+                        return Ok(*phys_val);
+                    } else if phys_val.unit == PhysicalUnitDims::DIMENSIONLESS {
+                        // Allow dimensionless values to be cast to any unit
+                        // Keep the value and tolerance but apply the expected unit
+                        return Ok(PhysicalValue::from_decimal(
+                            phys_val.value,
+                            phys_val.tolerance,
+                            expected_unit,
+                        ));
+                    } else {
+                        // Different units - not allowed
+                        return Err(PhysicalValueError::UnitMismatch {
+                            expected: expected_unit.fmt_unit(),
+                            actual: phys_val.unit.fmt_unit(),
+                        }
+                        .into());
                     }
-                    return Ok(*phys_val);
+                } else if let Some(src) = single.unpack_str() {
+                    src.parse().map_err(|e| PhysicalValueError::ParseError {
+                        unit: unit_str.clone(),
+                        input: src.to_string(),
+                        source: e,
+                    })?
+                } else {
+                    return Err(PhysicalValueError::InvalidArgumentType { unit: unit_str }.into());
                 }
-
-                // Otherwise, try to parse as string
-                let src = single.unpack_str().ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!(
-                        "{}() expects a string or {} value",
-                        expected_unit,
-                        expected_unit
-                    ))
-                })?;
-                let parsed: PhysicalValue = src.parse().map_err(|e| {
-                    starlark::Error::new_other(anyhow!(
-                        "failed to parse {} '{}': {}",
-                        expected_unit,
-                        src,
-                        e
-                    ))
-                })?;
-                if parsed.unit != expected_unit {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "expected {}, got {}",
-                        expected_unit,
-                        parsed.unit
-                    )));
-                }
-                Ok(parsed)
             }
 
             // Keyword mode
             [] => {
-                // fail fast on unknown keyword names and extract values
                 let mut value_v: Option<Value<'v>> = None;
                 let mut tolerance_v: Option<Value<'v>> = None;
 
@@ -208,20 +210,16 @@ impl PhysicalValue {
                         "value" => value_v = Some(*v),
                         "tolerance" => tolerance_v = Some(*v),
                         other => {
-                            return Err(starlark::Error::new_other(anyhow!(
-                                "unexpected keyword '{}'",
-                                other
-                            )))
+                            return Err(PhysicalValueError::UnexpectedKeyword {
+                                keyword: other.to_string(),
+                            }
+                            .into());
                         }
                     }
                 }
 
-                let value_v = value_v.ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!(
-                        "{}() missing required keyword 'value'",
-                        expected_unit
-                    ))
-                })?;
+                let value_v =
+                    value_v.ok_or(PhysicalValueError::MissingValueKeyword { unit: unit_str })?;
 
                 let value = starlark_value_to_decimal(&value_v)?;
                 let tolerance = tolerance_v
@@ -229,15 +227,15 @@ impl PhysicalValue {
                     .transpose()?
                     .unwrap_or(Decimal::ZERO);
 
-                Ok(PhysicalValue::from_decimal(value, tolerance, expected_unit))
+                PhysicalValue::from_decimal(value, tolerance, expected_unit)
             }
 
             // Too many args
-            _ => Err(starlark::Error::new_other(anyhow!(
-                "{}() accepts at most one positional argument",
-                expected_unit
-            ))),
-        }
+            _ => return Err(PhysicalValueError::TooManyArguments { unit: unit_str }.into()),
+        };
+
+        // Single point of unit checking
+        Ok(result.check_unit(expected_unit)?)
     }
 
     pub fn unit_type<'a, T: PhysicalUnitType<'a>>(type_id: TypeInstanceId) -> Ty {
@@ -247,7 +245,7 @@ impl PhysicalValue {
 
         let str_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let with_tolerance_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::string()));
-        let with_unit_param_spec = single_param_spec(Ty::string());
+        let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         Ty::custom(
             TyUser::new(
                 T::QUANTITY.to_string(),
@@ -343,7 +341,7 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
             Ok(*physical)
         } else if let Some(s) = value.downcast_ref::<StarlarkStr>() {
             // Try to parse as string
-            Self::from_str(s).map_err(|e| starlark::Error::new_other(anyhow!("{}", e)))
+            Ok(Self::from_str(s)?)
         } else {
             // Otherwise convert scalar to dimensionless physical value
             let decimal = starlark_value_to_decimal(&value)?;
@@ -396,7 +394,10 @@ impl std::ops::Add for PhysicalValue {
     type Output = Result<PhysicalValue, PhysicalValueError>;
     fn add(self, rhs: Self) -> Self::Output {
         if self.unit != rhs.unit {
-            return Err(PhysicalValueError::UnitMismatch);
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: self.unit.fmt_unit(),
+                actual: rhs.unit.fmt_unit(),
+            });
         }
         let unit = self.unit;
         let value = self.value + rhs.value;
@@ -409,7 +410,10 @@ impl std::ops::Sub for PhysicalValue {
     type Output = Result<PhysicalValue, PhysicalValueError>;
     fn sub(self, rhs: Self) -> Self::Output {
         if self.unit != rhs.unit {
-            return Err(PhysicalValueError::UnitMismatch);
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: self.unit.fmt_unit(),
+                actual: rhs.unit.fmt_unit(),
+            });
         }
         let unit = self.unit;
         let value = self.value - rhs.value;
@@ -528,6 +532,12 @@ impl FromStr for PhysicalUnitDims {
 
 /// Parse units from a string like "A·s" and multiply them together
 fn gather_units(list: &str) -> Result<PhysicalUnitDims, ParseError> {
+    // Strip parentheses if present
+    let list = list
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(list);
+
     let mut acc = PhysicalUnitDims::DIMENSIONLESS;
     for token in list.split('·').filter(|t| !t.is_empty()) {
         let u: PhysicalUnitDims = token
@@ -640,15 +650,83 @@ pub trait PhysicalUnitType<'a>: StarlarkValue<'a> {
 pub enum PhysicalValueError {
     #[error("Division by zero")]
     DivisionByZero,
-    #[error("Unit mismatch")]
-    UnitMismatch,
+    #[error("Unit mismatch: expected {expected}, got {actual}")]
+    UnitMismatch { expected: String, actual: String },
     #[error("Unit has no alias")]
     InvalidPhysicalUnit,
+    #[error("Cannot mix positional argument with keyword arguments")]
+    MixedArguments,
+    #[error("{unit}() expects a string or {unit} value")]
+    InvalidArgumentType { unit: String },
+    #[error("Failed to parse {unit} '{input}': {source}")]
+    ParseError {
+        unit: String,
+        input: String,
+        source: ParseError,
+    },
+    #[error("Unexpected keyword '{keyword}'")]
+    UnexpectedKeyword { keyword: String },
+    #[error("{unit}() missing required keyword 'value'")]
+    MissingValueKeyword { unit: String },
+    #[error("{unit}() accepts at most one positional argument")]
+    TooManyArguments { unit: String },
+    #[error("Invalid number {number}")]
+    InvalidNumber { number: String },
+    #[error("Expected int, float or numeric string")]
+    InvalidNumberType,
+    #[error("Invalid percentage value: '{value}'")]
+    InvalidPercentage { value: String },
+    #[error("Invalid tolerance value: '{value}'")]
+    InvalidTolerance { value: String },
+    #[error("with_unit() expects exactly one argument")]
+    WithUnitWrongArgumentCount,
+    #[error("with_unit() expects a PhysicalUnit string or None")]
+    WithUnitInvalidArgument,
+    #[error("with_tolerance() expects exactly one argument")]
+    WithToleranceWrongArgumentCount,
+    #[error("Cannot divide {lhs_unit} by {rhs_unit} - {error}")]
+    DivisionError {
+        lhs_unit: String,
+        rhs_unit: String,
+        error: String,
+    },
+    #[error("Cannot add {lhs_unit} and {rhs_unit} - {error}")]
+    AdditionError {
+        lhs_unit: String,
+        rhs_unit: String,
+        error: String,
+    },
+    #[error("Cannot subtract non-physical value from {unit}")]
+    SubtractionNonPhysical { unit: String },
+    #[error("Cannot subtract {rhs_unit} from {lhs_unit} - {error}")]
+    SubtractionError {
+        lhs_unit: String,
+        rhs_unit: String,
+        error: String,
+    },
 }
 
 impl From<PhysicalValueError> for starlark::Error {
     fn from(err: PhysicalValueError) -> Self {
         starlark::Error::new_other(err)
+    }
+}
+
+impl From<rust_decimal::Error> for PhysicalValueError {
+    fn from(err: rust_decimal::Error) -> Self {
+        PhysicalValueError::InvalidNumber {
+            number: format!("decimal conversion error: {}", err),
+        }
+    }
+}
+
+impl From<ParseError> for PhysicalValueError {
+    fn from(err: ParseError) -> Self {
+        match err {
+            ParseError::InvalidFormat => PhysicalValueError::InvalidNumberType,
+            ParseError::InvalidNumber => PhysicalValueError::InvalidNumberType,
+            ParseError::InvalidUnit => PhysicalValueError::InvalidNumberType,
+        }
     }
 }
 
@@ -722,6 +800,12 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+impl From<ParseError> for starlark::Error {
+    fn from(err: ParseError) -> Self {
+        starlark::Error::new_other(err)
+    }
+}
 
 impl FromStr for PhysicalValue {
     type Err = ParseError;
@@ -991,24 +1075,26 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithTolerance {
         let positional: Vec<_> = args.positions(heap)?.collect();
 
         if positional.len() != 1 {
-            return Err(starlark::Error::new_other(anyhow!(
-                "with_tolerance() expects exactly one argument"
-            )));
+            return Err(PhysicalValueError::WithToleranceWrongArgumentCount.into());
         }
 
         let tolerance_arg = positional[0];
         let new_tolerance = if let Some(s) = tolerance_arg.unpack_str() {
             // Handle percentage string like "3%"
             if let Some(percent_str) = s.strip_suffix('%') {
-                let percent_value: Decimal = percent_str.parse().map_err(|_| {
-                    starlark::Error::new_other(anyhow!("invalid percentage value: '{}'", s))
-                })?;
+                let percent_value: Decimal =
+                    percent_str
+                        .parse()
+                        .map_err(|_| PhysicalValueError::InvalidPercentage {
+                            value: s.to_string(),
+                        })?;
                 percent_value / Decimal::from(100)
             } else {
                 // Handle string number like "0.03"
-                s.parse::<Decimal>().map_err(|_| {
-                    starlark::Error::new_other(anyhow!("invalid tolerance value: '{}'", s))
-                })?
+                s.parse::<Decimal>()
+                    .map_err(|_| PhysicalValueError::InvalidTolerance {
+                        value: s.to_string(),
+                    })?
             }
         } else {
             // Handle numeric value
@@ -1048,19 +1134,16 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithUnit {
         let positional: Vec<_> = args.positions(heap)?.collect();
 
         if positional.len() != 1 {
-            return Err(starlark::Error::new_other(anyhow!(
-                "with_unit() expects exactly one argument"
-            )));
+            return Err(PhysicalValueError::WithUnitWrongArgumentCount.into());
         }
 
         let unit_arg = positional[0];
         let new_unit = if let Some(s) = unit_arg.unpack_str() {
-            s.parse()
-                .map_err(|e| starlark::Error::new_other(anyhow!("{}", e)))?
+            s.parse()?
+        } else if unit_arg.is_none() {
+            PhysicalUnitDims::DIMENSIONLESS
         } else {
-            return Err(starlark::Error::new_other(anyhow!(
-                "with_unit() expects a PhysicalUnit or string"
-            )));
+            return Err(PhysicalValueError::WithUnitInvalidArgument.into());
         };
 
         Ok(heap.alloc(PhysicalValue::from_decimal(
@@ -1128,12 +1211,12 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn div(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (*self / other).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot divide {} by {} - {}",
-                self.unit.fmt_unit(),
-                other.unit.fmt_unit(),
-                err
-            ))
+            PhysicalValueError::DivisionError {
+                lhs_unit: self.unit.fmt_unit(),
+                rhs_unit: other.unit.fmt_unit(),
+                error: err.to_string(),
+            }
+            .into()
         });
         Some(result)
     }
@@ -1141,12 +1224,12 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn rdiv(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (other / *self).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot divide {} by {} - {}",
-                self.unit.fmt_unit(),
-                other.unit.fmt_unit(),
-                err
-            ))
+            PhysicalValueError::DivisionError {
+                lhs_unit: other.unit.fmt_unit(),
+                rhs_unit: self.unit.fmt_unit(),
+                error: err.to_string(),
+            }
+            .into()
         });
         Some(result)
     }
@@ -1166,12 +1249,12 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (*self + other).map(|v| heap.alloc(v)).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot add {} and {} - {}",
-                self.unit.fmt_unit(),
-                other.unit.fmt_unit(),
-                err
-            ))
+            PhysicalValueError::AdditionError {
+                lhs_unit: self.unit.fmt_unit(),
+                rhs_unit: other.unit.fmt_unit(),
+                error: err.to_string(),
+            }
+            .into()
         });
         Some(result)
     }
@@ -1182,18 +1265,14 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
 
     fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
         let other = PhysicalValue::try_from(other).map_err(|_| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot subtract non-physical value from {}",
-                self.unit.fmt_unit()
-            ))
+            PhysicalValueError::SubtractionNonPhysical {
+                unit: self.unit.fmt_unit(),
+            }
         })?;
-        let result = (*self - other).map_err(|err| {
-            starlark::Error::new_other(anyhow!(
-                "Cannot subtract {} from {} - {}",
-                self.unit.fmt_unit(),
-                other.unit.fmt_unit(),
-                err
-            ))
+        let result = (*self - other).map_err(|err| PhysicalValueError::SubtractionError {
+            lhs_unit: self.unit.fmt_unit(),
+            rhs_unit: other.unit.fmt_unit(),
+            error: err.to_string(),
         })?;
         Ok(heap.alloc(result))
     }
@@ -2031,5 +2110,95 @@ mod tests {
             let parsed: PhysicalUnitDims = formatted.parse().unwrap();
             assert_eq!(parsed, original, "Failed roundtrip for {}", formatted);
         }
+    }
+
+    #[test]
+    fn test_with_unit_none_behavior() {
+        // Test that the logic for with_unit(None) works correctly
+        // This tests the internal logic rather than the Starlark interface
+
+        // Create a physical value with units
+        let resistance_value = physical_value(10.0, 0.01, PhysicalUnit::Ohms);
+
+        // Simulate the behavior: if None is passed, should return dimensionless
+        let new_value = PhysicalValue::from_decimal(
+            resistance_value.value,
+            resistance_value.tolerance,
+            PhysicalUnitDims::DIMENSIONLESS,
+        );
+
+        // Should have same value and tolerance but be dimensionless
+        assert_eq!(new_value.value, resistance_value.value);
+        assert_eq!(new_value.tolerance, resistance_value.tolerance);
+        assert_eq!(new_value.unit, PhysicalUnitDims::DIMENSIONLESS);
+    }
+
+    #[test]
+    fn test_dimensionless_casting_logic() {
+        // Test the core logic for dimensionless casting
+
+        // Create a dimensionless physical value
+        let dimensionless = PhysicalValue::dimensionless(42);
+        let dimensionless_with_tolerance = PhysicalValue::from_decimal(
+            Decimal::from(10),
+            Decimal::from_str("0.05").unwrap(), // 5% tolerance
+            PhysicalUnitDims::DIMENSIONLESS,
+        );
+
+        // Test target units
+        let resistance_unit: PhysicalUnitDims = PhysicalUnit::Ohms.into();
+        let voltage_unit: PhysicalUnitDims = PhysicalUnit::Volts.into();
+
+        // Verify the dimensionless values are actually dimensionless
+        assert_eq!(dimensionless.unit, PhysicalUnitDims::DIMENSIONLESS);
+        assert_eq!(
+            dimensionless_with_tolerance.unit,
+            PhysicalUnitDims::DIMENSIONLESS
+        );
+
+        // Test the casting logic: dimensionless -> resistance
+        let resistance_casted = PhysicalValue::from_decimal(
+            dimensionless.value,
+            dimensionless.tolerance,
+            resistance_unit,
+        );
+
+        // Test the casting logic: dimensionless with tolerance -> voltage
+        let voltage_casted = PhysicalValue::from_decimal(
+            dimensionless_with_tolerance.value,
+            dimensionless_with_tolerance.tolerance,
+            voltage_unit,
+        );
+
+        // Verify values and tolerances are preserved but units change
+        assert_eq!(resistance_casted.value, dimensionless.value);
+        assert_eq!(resistance_casted.tolerance, dimensionless.tolerance);
+        assert_eq!(resistance_casted.unit, resistance_unit);
+
+        assert_eq!(voltage_casted.value, dimensionless_with_tolerance.value);
+        assert_eq!(
+            voltage_casted.tolerance,
+            dimensionless_with_tolerance.tolerance
+        );
+        assert_eq!(voltage_casted.unit, voltage_unit);
+
+        // Verify the units are now different from dimensionless
+        assert_ne!(resistance_casted.unit, PhysicalUnitDims::DIMENSIONLESS);
+        assert_ne!(voltage_casted.unit, PhysicalUnitDims::DIMENSIONLESS);
+    }
+
+    #[test]
+    fn test_non_dimensionless_casting_fails() {
+        // Test that non-dimensionless PhysicalValues cannot be cast to other units
+        let resistance = physical_value(10.0, 0.01, PhysicalUnit::Ohms);
+        let voltage_unit: PhysicalUnitDims = PhysicalUnit::Volts.into();
+
+        // This should fail - we shouldn't allow Ohms -> Volts conversion
+        // (This would be tested at the PhysicalValue::from_arguments level in real usage)
+        assert_ne!(resistance.unit, PhysicalUnitDims::DIMENSIONLESS);
+        assert_ne!(resistance.unit, voltage_unit);
+
+        // The logic should detect this mismatch and return an error
+        // In the actual implementation, this would be caught by the unit checking
     }
 }

@@ -1,4 +1,22 @@
-use anyhow::anyhow;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error("{context} cannot be empty")]
+    EmptyName { context: String },
+    #[error("{context} cannot contain whitespace. Got: {name:?}")]
+    NameContainsWhitespace { context: String, name: String },
+    #[error("{context} cannot contain dots. Got: {name:?}")]
+    NameContainsDots { context: String, name: String },
+    #[error("{context} must contain only ASCII characters. Got: {name:?}")]
+    NameNotAscii { context: String, name: String },
+}
+
+impl From<ValidationError> for starlark::Error {
+    fn from(err: ValidationError) -> Self {
+        starlark::Error::new_other(err)
+    }
+}
 
 /// Validates that a name is a valid identifier for PCB components, nets, modules, etc.
 ///
@@ -9,40 +27,36 @@ use anyhow::anyhow;
 /// - Only contain ASCII characters
 ///
 /// Returns an error with a descriptive message if validation fails.
-pub fn validate_identifier_name(name: &str, context: &str) -> Result<(), starlark::Error> {
+pub fn validate_identifier_name(name: &str, context: &str) -> Result<(), ValidationError> {
     // Check for empty names
     if name.is_empty() {
-        return Err(starlark::Error::new_other(anyhow!(
-            "{} cannot be empty",
-            context
-        )));
+        return Err(ValidationError::EmptyName {
+            context: context.to_string(),
+        });
     }
 
     // Check for any whitespace
     if name.contains(char::is_whitespace) {
-        return Err(starlark::Error::new_other(anyhow!(
-            "{} cannot contain whitespace. Got: {:?}",
-            context,
-            name
-        )));
+        return Err(ValidationError::NameContainsWhitespace {
+            context: context.to_string(),
+            name: name.to_string(),
+        });
     }
 
     // Check for dots (confusing for hierarchical references)
     if name.contains('.') {
-        return Err(starlark::Error::new_other(anyhow!(
-            "{} cannot contain dots. Got: {:?}",
-            context,
-            name
-        )));
+        return Err(ValidationError::NameContainsDots {
+            context: context.to_string(),
+            name: name.to_string(),
+        });
     }
 
     // Check for non-ASCII characters
     if !name.is_ascii() {
-        return Err(starlark::Error::new_other(anyhow!(
-            "{} must contain only ASCII characters. Got: {:?}",
-            context,
-            name
-        )));
+        return Err(ValidationError::NameNotAscii {
+            context: context.to_string(),
+            name: name.to_string(),
+        });
     }
 
     Ok(())

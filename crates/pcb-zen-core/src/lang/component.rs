@@ -24,6 +24,45 @@ use super::symbol::{SymbolType, SymbolValue};
 use super::validation::validate_identifier_name;
 
 use anyhow::anyhow;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ComponentError {
+    #[error("`name` must be a string")]
+    NameNotString,
+    #[error("`footprint` must be a string")]
+    FootprintNotString,
+    #[error("could not determine parent directory of current file")]
+    ParentDirectoryNotFound,
+    #[error("`pins` must be a dict mapping pin names to Net")]
+    PinsNotDict,
+    #[error("`prefix` must be a string")]
+    PrefixNotString,
+    #[error("`pin_defs` must be a dict of name -> pad")]
+    PinDefsNotDict,
+    #[error("pin name must be a string")]
+    PinNameNotString,
+    #[error("pad must be a string")]
+    PadNotString,
+    #[error("Failed to downcast Symbol value")]
+    SymbolDowncastFailed,
+    #[error("no pin '{pin_name}' in symbol")]
+    PinNotInSymbol { pin_name: String },
+    #[error("no pad '{pad}' in symbol pin {pin_name}")]
+    PadNotInSymbolPin { pad: String, pin_name: String },
+    #[error("pin names must be strings")]
+    PinNamesNotStrings,
+    #[error("pin '{pin_name}' referenced but not defined in `pin_defs`")]
+    PinNotInPinDefs { pin_name: String },
+    #[error("pin '{pin_name}' defined in `pin_defs` but not connected")]
+    PinDefinedButNotConnected { pin_name: String },
+}
+
+impl From<ComponentError> for starlark::Error {
+    fn from(err: ComponentError) -> Self {
+        starlark::Error::new_other(err)
+    }
+}
 
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -293,7 +332,7 @@ where
             let name_val: Value = param_parser.next()?;
             let name = name_val
                 .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
+                .ok_or(ComponentError::NameNotString)?
                 .to_owned();
 
             // Validate the component name
@@ -302,7 +341,7 @@ where
             let footprint_val: Value = param_parser.next()?;
             let mut footprint = footprint_val
                 .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`footprint` must be a string")))?
+                .ok_or(ComponentError::FootprintNotString)?
                 .to_owned();
 
             // If the footprint looks like a KiCad module file, make the path absolute
@@ -311,14 +350,9 @@ where
                 if !candidate.is_absolute() {
                     let current_path = eval_ctx.source_path().unwrap_or_default();
 
-                    let current_dir =
-                        std::path::Path::new(&current_path)
-                            .parent()
-                            .ok_or_else(|| {
-                                starlark::Error::new_other(anyhow!(
-                                    "could not determine parent directory of current file"
-                                ))
-                            })?;
+                    let current_dir = std::path::Path::new(&current_path)
+                        .parent()
+                        .ok_or(ComponentError::ParentDirectoryNotFound)?;
 
                     footprint = current_dir.join(candidate).to_string_lossy().into_owned();
                 }
@@ -327,16 +361,12 @@ where
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
 
             let pins_val: Value = param_parser.next()?;
-            let conn_dict = DictRef::from_value(pins_val).ok_or_else(|| {
-                starlark::Error::new_other(anyhow!(
-                    "`pins` must be a dict mapping pin names to Net"
-                ))
-            })?;
+            let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
 
             let prefix_val: Value = param_parser.next()?;
             let prefix = prefix_val
                 .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`prefix` must be a string")))?
+                .ok_or(ComponentError::PrefixNotString)?
                 .to_owned();
 
             // Optional fields
