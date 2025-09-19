@@ -27,7 +27,9 @@ use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
 use crate::lang::spice_model::model_globals;
 use crate::lang::{
+    builtin::builtin_globals,
     component::component_globals,
+    physical::*,
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::{Diagnostic, WithDiagnostics};
@@ -428,6 +430,7 @@ impl EvalContext {
             LibraryExtension::Breakpoint,
             LibraryExtension::SetType,
         ])
+        .with(builtin_globals)
         .with(component_globals)
         .with(module_globals)
         .with(interface_globals)
@@ -632,6 +635,7 @@ impl EvalContext {
 
         match eval_result {
             Ok(_) => {
+                self.hijack_builtins();
                 let frozen_module = self.module.freeze().expect("failed to freeze module");
                 let extra = frozen_module
                     .extra_value()
@@ -1124,6 +1128,63 @@ impl EvalContext {
     /// Append a diagnostic that was produced while this context was active.
     pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
         self.diagnostics.borrow_mut().push(diag.into());
+    }
+
+    fn hijack_builtins(&mut self) {
+        let Some(source_path) = self.get_source_path() else {
+            return;
+        };
+        if source_path.file_name().and_then(|name| name.to_str()) != Some("units.zen") {
+            return;
+        }
+
+        let heap = self.module.heap();
+        if self.module.get("Voltage").is_some() {
+            self.module.set("Voltage", heap.alloc_simple(VoltageType));
+        }
+        if self.module.get("Current").is_some() {
+            self.module.set("Current", heap.alloc_simple(CurrentType));
+        }
+        if self.module.get("Resistance").is_some() {
+            self.module
+                .set("Resistance", heap.alloc_simple(ResistanceType));
+        }
+        if self.module.get("Capacitance").is_some() {
+            self.module
+                .set("Capacitance", heap.alloc_simple(CapacitanceType));
+        }
+        if self.module.get("Inductance").is_some() {
+            self.module
+                .set("Inductance", heap.alloc_simple(InductanceType));
+        }
+        if self.module.get("Frequency").is_some() {
+            self.module
+                .set("Frequency", heap.alloc_simple(FrequencyType));
+        }
+        if self.module.get("Time").is_some() {
+            self.module.set("Time", heap.alloc_simple(TimeType));
+        }
+        if self.module.get("Temperature").is_some() {
+            self.module
+                .set("Temperature", heap.alloc_simple(TemperatureType));
+        }
+        if self.module.get("Charge").is_some() {
+            self.module.set("Charge", heap.alloc_simple(ChargeType));
+        }
+        if self.module.get("Power").is_some() {
+            self.module.set("Power", heap.alloc_simple(PowerType));
+        }
+        if self.module.get("Energy").is_some() {
+            self.module.set("Energy", heap.alloc_simple(EnergyType));
+        }
+        if self.module.get("Conductance").is_some() {
+            self.module
+                .set("Conductance", heap.alloc_simple(ConductanceType));
+        }
+        if self.module.get("MagneticFlux").is_some() {
+            self.module
+                .set("MagneticFlux", heap.alloc_simple(MagneticFluxType));
+        }
     }
 }
 

@@ -5,8 +5,8 @@ use starlark::{
     eval::{Arguments, Evaluator},
     starlark_complex_value,
     values::{
-        starlark_value, Coerce, Freeze, FreezeResult, Heap, NoSerialize, ProvidesStaticType,
-        StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
+        starlark_value, Coerce, Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue,
+        Trace, Value, ValueLifetimeless, ValueLike,
     },
 };
 use std::sync::Arc;

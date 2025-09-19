@@ -8,8 +8,8 @@ use starlark::starlark_module;
 use starlark::values::types::record::field::FieldGen;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
-    starlark_value, Coerce, Freeze, FreezeResult, Heap, NoSerialize, ProvidesStaticType,
-    StarlarkValue, Trace, Value, ValueLike,
+    starlark_value, Coerce, Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
+    Value, ValueLike,
 };
 
 use std::sync::Arc;

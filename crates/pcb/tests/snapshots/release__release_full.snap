@@ -11,7 +11,7 @@ expression: sb.snapshot_dir(staging_dir)
     "value": "100nF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.0000001",
+      "value": "0.000000100",
       "tolerance": "0",
       "unit": "Farads"
     },
@@ -24,7 +24,7 @@ expression: sb.snapshot_dir(staging_dir)
     "value": "10uF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.00001",
+      "value": "0.000010",
       "tolerance": "0",
       "unit": "Farads"
     },

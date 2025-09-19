@@ -1,8 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use pcb_test_utils::assert_snapshot;
-use pcb_test_utils::sandbox::{cargo_bin, Sandbox};
-use serde_json::Value;
+use pcb_test_utils::sandbox::Sandbox;
 
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]

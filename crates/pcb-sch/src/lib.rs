@@ -146,7 +146,7 @@ pub enum InstanceKind {
     Pin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PhysicalUnit {
     Ohms,
     Volts,
@@ -156,19 +156,89 @@ pub enum PhysicalUnit {
     Hertz,
     Seconds,
     Kelvin,
+    Coulombs,
+    Watts,
+    Joules,
+    Siemens,
+    Webers,
+}
+
+impl PhysicalUnit {
+    pub const fn suffix(&self) -> &'static str {
+        match self {
+            PhysicalUnit::Ohms => "", // This should be "Ohm", but keep as empty for backward compatibility
+            PhysicalUnit::Volts => "V",
+            PhysicalUnit::Amperes => "A",
+            PhysicalUnit::Farads => "F",
+            PhysicalUnit::Henries => "H",
+            PhysicalUnit::Hertz => "Hz",
+            PhysicalUnit::Seconds => "s",
+            PhysicalUnit::Kelvin => "K",
+            PhysicalUnit::Coulombs => "C",
+            PhysicalUnit::Watts => "W",
+            PhysicalUnit::Joules => "J",
+            PhysicalUnit::Siemens => "S",
+            PhysicalUnit::Webers => "Wb",
+        }
+    }
+
+    pub const fn quantity(&self) -> &'static str {
+        match self {
+            PhysicalUnit::Ohms => "Resistance",
+            PhysicalUnit::Volts => "Voltage",
+            PhysicalUnit::Amperes => "Current",
+            PhysicalUnit::Farads => "Capacitance",
+            PhysicalUnit::Henries => "Inductance",
+            PhysicalUnit::Hertz => "Frequency",
+            PhysicalUnit::Seconds => "Time",
+            PhysicalUnit::Kelvin => "Temperature",
+            PhysicalUnit::Coulombs => "Charge",
+            PhysicalUnit::Watts => "Power",
+            PhysicalUnit::Joules => "Energy",
+            PhysicalUnit::Siemens => "Conductance",
+            PhysicalUnit::Webers => "Flux",
+        }
+    }
 }
 
 impl std::fmt::Display for PhysicalUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PhysicalUnit::Ohms => write!(f, "Ω"),
-            PhysicalUnit::Volts => write!(f, "V"),
-            PhysicalUnit::Amperes => write!(f, "A"),
-            PhysicalUnit::Farads => write!(f, "F"),
-            PhysicalUnit::Henries => write!(f, "H"),
-            PhysicalUnit::Hertz => write!(f, "Hz"),
-            PhysicalUnit::Seconds => write!(f, "s"),
-            PhysicalUnit::Kelvin => write!(f, "K"),
+            PhysicalUnit::Ohms => write!(f, "Ohm"),
+            PhysicalUnit::Volts => write!(f, "Volt"),
+            PhysicalUnit::Amperes => write!(f, "Ampere"),
+            PhysicalUnit::Farads => write!(f, "Farad"),
+            PhysicalUnit::Henries => write!(f, "Henry"),
+            PhysicalUnit::Hertz => write!(f, "Hertz"),
+            PhysicalUnit::Seconds => write!(f, "Second"),
+            PhysicalUnit::Kelvin => write!(f, "Kelvin"),
+            PhysicalUnit::Coulombs => write!(f, "Coulomb"),
+            PhysicalUnit::Watts => write!(f, "Watt"),
+            PhysicalUnit::Joules => write!(f, "Joule"),
+            PhysicalUnit::Siemens => write!(f, "Siemens"),
+            PhysicalUnit::Webers => write!(f, "Weber"),
+        }
+    }
+}
+
+impl std::str::FromStr for PhysicalUnit {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "" | "ohm" | "Ohm" | "ohms" | "Ohms" => Ok(PhysicalUnit::Ohms),
+            "V" | "volt" | "Volt" | "volts" | "Volts" => Ok(PhysicalUnit::Volts),
+            "A" | "ampere" | "Ampere" | "amperes" | "Amperes" => Ok(PhysicalUnit::Amperes),
+            "F" | "farad" | "Farad" | "farads" | "Farads" => Ok(PhysicalUnit::Farads),
+            "H" | "henry" | "Henry" | "henries" | "Henries" => Ok(PhysicalUnit::Henries),
+            "Hz" | "hertz" | "Hertz" => Ok(PhysicalUnit::Hertz),
+            "s" | "second" | "Second" | "seconds" | "Seconds" => Ok(PhysicalUnit::Seconds),
+            "K" | "kelvin" | "Kelvin" => Ok(PhysicalUnit::Kelvin),
+            "C" | "coulomb" | "Coulomb" | "coulombs" | "Coulombs" => Ok(PhysicalUnit::Coulombs),
+            "W" | "watt" | "Watt" | "watts" | "Watts" => Ok(PhysicalUnit::Watts),
+            "J" | "joule" | "Joule" | "joules" | "Joules" => Ok(PhysicalUnit::Joules),
+            "S" | "siemens" | "Siemens" => Ok(PhysicalUnit::Siemens),
+            "Wb" | "weber" | "Weber" | "webers" | "Webers" => Ok(PhysicalUnit::Webers),
+            _ => Err(format!("Unknown unit: '{}'", s)),
         }
     }
 }
@@ -250,9 +320,9 @@ impl std::fmt::Display for PhysicalValue {
         if self.tolerance > Decimal::ZERO {
             // Convert tolerance to percentage and format
             let pct = (self.tolerance * Decimal::ONE_HUNDRED).round_dp(0);
-            write!(f, "{}{} ±{}%", self.value, self.unit, pct)
+            write!(f, "{}{} ±{}%", self.value, self.unit.suffix(), pct)
         } else {
-            write!(f, "{}{}", self.value, self.unit)
+            write!(f, "{}{}", self.value, self.unit.suffix())
         }
     }
 }

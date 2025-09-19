@@ -39,12 +39,6 @@ pub mod attrs {
             pub const POWER: &str = "power";
         }
     }
-
-    pub mod record_fields {
-        pub const VALUE: &str = "value";
-        pub const TOLERANCE: &str = "tolerance";
-        pub const UNIT: &str = "unit";
-    }
 }
 
 // Re-export commonly used types

@@ -50,7 +50,7 @@ chrono = { workspace = true }
 zip = { workspace = true }
 fixedbitset = { workspace = true }
 smallvec = { workspace = true }
-
+rust_decimal = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true }

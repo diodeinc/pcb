@@ -10,11 +10,11 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
@@ -103,7 +103,7 @@ web-sys = { version = "0.3", features = ["console"] }
 zip = { version = "4.3", default-features = false, features = ["deflate"] }
 flate2 = "1.0.34"
 wasm-bindgen-futures = "0.4"
-rust_decimal = { version = "1", features = ["serde", "serde-with-str"] }
+rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
 comfy-table = "7.1"
 url = "2.5"
 dir-diff = "0.3"

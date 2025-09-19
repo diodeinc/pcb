@@ -14,7 +14,7 @@ Exit Code: 0
     "value": "100nF 16V X7R",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.0000001",
+      "value": "0.000000100",
       "tolerance": "0",
       "unit": "Farads"
     },
@@ -33,7 +33,7 @@ Exit Code: 0
     "value": "10uF 25V X5R",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.00001",
+      "value": "0.000010",
       "tolerance": "0",
       "unit": "Farads"
     },

@@ -20,8 +20,7 @@ use starlark::{
         list::ListRef,
         starlark_value,
         tuple::TupleRef,
-        Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless,
-        ValueLike,
+        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
     },
 };
 
