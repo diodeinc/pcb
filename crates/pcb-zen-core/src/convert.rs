@@ -650,7 +650,7 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
     } else if let Some(b) = v.unpack_bool() {
         return Ok(AttributeValue::Boolean(b));
     } else if let Some(&physical) = v.downcast_ref::<PhysicalValue>() {
-        return Ok(AttributeValue::Physical(physical.into()));
+        return Ok(AttributeValue::Physical(physical.pcb_sch_value()?));
     }
 
     // Handle lists (no nested list support)

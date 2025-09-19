@@ -10,11 +10,11 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "3787288b" }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "3787288b" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "3787288b" }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "3787288b" }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "3787288b" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "ef43585f" }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "ef43585f" }
+starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "ef43585f" }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "ef43585f" }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "ef43585f" }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }

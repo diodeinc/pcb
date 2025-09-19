@@ -39,7 +39,6 @@ impl<'v> StarlarkValue<'v> for Builtin {
             "Power" => Some(heap.alloc_simple(PowerType)),
             "Energy" => Some(heap.alloc_simple(EnergyType)),
             "MagneticFlux" => Some(heap.alloc_simple(MagneticFluxType)),
-            "PhysicalUnit" => Some(heap.alloc(PhysicalUnit::Voltage)),
             _ => None,
         }
     }

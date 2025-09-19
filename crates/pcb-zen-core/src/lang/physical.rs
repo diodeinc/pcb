@@ -1,7 +1,8 @@
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 
 use allocative::Allocative;
 use anyhow::anyhow;
+use pcb_sch::PhysicalUnit;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 use starlark::{
@@ -15,9 +16,8 @@ use starlark::{
     },
     util::ArcStr,
     values::{
-        float::StarlarkFloat, starlark_value, string::StarlarkStr, type_repr::StarlarkTypeRepr,
-        typing::TypeInstanceId, Freeze, FreezeResult, Heap, NoSerialize, StarlarkValue, Value,
-        ValueLike, ValueTyped,
+        float::StarlarkFloat, starlark_value, string::StarlarkStr, typing::TypeInstanceId, Freeze,
+        FreezeResult, Heap, NoSerialize, StarlarkValue, Value, ValueLike, ValueTyped,
     },
 };
 
@@ -25,7 +25,7 @@ use starlark::{
 ///
 /// Usage: define_physical_unit!(TypeName, PhysicalUnit::Variant);
 macro_rules! define_physical_unit {
-    ($type_name:ident, $unit_variant:expr) => {
+    ($type_name:ident, $unit_variant:expr, $quantity_str:expr) => {
         #[derive(
             Clone, Copy, Debug, PartialEq, ProvidesStaticType, NoSerialize, Freeze, Allocative,
         )]
@@ -41,6 +41,7 @@ macro_rules! define_physical_unit {
 
         impl<'a> PhysicalUnitType<'a> for $type_name {
             const UNIT: PhysicalUnit = $unit_variant;
+            const QUANTITY: &'static str = $quantity_str;
         }
 
         impl $type_name {
@@ -112,11 +113,31 @@ pub struct PhysicalValue {
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
     pub(crate) tolerance: Decimal,
-    pub(crate) unit: PhysicalUnit,
+    pub(crate) unit: PhysicalUnitDims,
 }
 
 impl PhysicalValue {
-    pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnit) -> Self {
+    pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
+        Self {
+            value: value.into(),
+            tolerance: 0.into(),
+            unit: PhysicalUnitDims::DIMENSIONLESS,
+        }
+    }
+
+    pub fn pcb_sch_value(&self) -> Result<pcb_sch::PhysicalValue, PhysicalValueError> {
+        let alias = self
+            .unit
+            .alias()
+            .ok_or(PhysicalValueError::InvalidPhysicalUnit)?;
+        Ok(pcb_sch::PhysicalValue {
+            value: self.value,
+            tolerance: self.tolerance,
+            unit: alias,
+        })
+    }
+
+    pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnitDims) -> Self {
         Self {
             value,
             tolerance,
@@ -128,7 +149,7 @@ impl PhysicalValue {
         positional: &[Value<'v>],
         kwargs: &SmallMap<ValueTyped<'v, StarlarkStr>, Value<'v>>,
     ) -> starlark::Result<Self> {
-        let expected_unit = T::UNIT;
+        let expected_unit: PhysicalUnitDims = T::UNIT.into();
         match positional {
             // Single positional argument (string or PhysicalValue)
             [single] => {
@@ -143,8 +164,8 @@ impl PhysicalValue {
                     if phys_val.unit != expected_unit {
                         return Err(starlark::Error::new_other(anyhow!(
                             "expected {}, got {}",
-                            expected_unit,
-                            phys_val.unit
+                            expected_unit.fmt_unit(),
+                            phys_val.unit.fmt_unit()
                         )));
                     }
                     return Ok(*phys_val);
@@ -226,11 +247,10 @@ impl PhysicalValue {
 
         let str_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let with_tolerance_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::string()));
-        let with_unit_param_spec =
-            single_param_spec(Ty::union2(PhysicalUnit::starlark_type_repr(), Ty::string()));
+        let with_unit_param_spec = single_param_spec(Ty::string());
         Ty::custom(
             TyUser::new(
-                T::name(),
+                T::QUANTITY.to_string(),
                 TyStarlarkValue::new::<PhysicalValue>(),
                 type_id,
                 TyUserParams {
@@ -238,7 +258,7 @@ impl PhysicalValue {
                         known: [
                             ("value".to_string(), Ty::float()),
                             ("tolerance".to_string(), Ty::float()),
-                            ("unit".to_string(), PhysicalUnit::starlark_type_repr()),
+                            ("unit".to_string(), Ty::string()),
                             (
                                 "__str__".to_string(),
                                 Ty::callable(str_param_spec, Ty::string()),
@@ -321,7 +341,7 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
         // First try to downcast to PhysicalValue
         if let Some(physical) = value.downcast_ref::<PhysicalValue>() {
             Ok(*physical)
-        } else if let Some(s) = value.unpack_str() {
+        } else if let Some(s) = value.downcast_ref::<StarlarkStr>() {
             // Try to parse as string
             Self::from_str(s).map_err(|e| starlark::Error::new_other(anyhow!("{}", e)))
         } else {
@@ -330,7 +350,7 @@ impl TryFrom<starlark::values::Value<'_>> for PhysicalValue {
             Ok(PhysicalValue::from_decimal(
                 decimal,
                 Decimal::ZERO,
-                PhysicalUnit::Dimensionless,
+                PhysicalUnitDims::DIMENSIONLESS,
             ))
         }
     }
@@ -344,9 +364,9 @@ impl std::ops::Mul for PhysicalValue {
 
         // Preserve tolerance only for dimensionless scaling
         let tolerance = match (self.unit, rhs.unit) {
-            (PhysicalUnit::Dimensionless, _) => rhs.tolerance, // 2 * 3.3V±1% → preserve voltage tolerance
-            (_, PhysicalUnit::Dimensionless) => self.tolerance, // 3.3V±1% * 2 → preserve voltage tolerance
-            _ => Decimal::ZERO,                                 // All other cases drop tolerance
+            (PhysicalUnitDims::DIMENSIONLESS, _) => rhs.tolerance, // 2 * 3.3V±1% → preserve voltage tolerance
+            (_, PhysicalUnitDims::DIMENSIONLESS) => self.tolerance, // 3.3V±1% * 2 → preserve voltage tolerance
+            _ => Decimal::ZERO, // All other cases drop tolerance
         };
 
         PhysicalValue::from_decimal(value, tolerance, unit)
@@ -364,8 +384,8 @@ impl std::ops::Div for PhysicalValue {
 
         // Preserve tolerance only for dimensionless scaling
         let tolerance = match (self.unit, rhs.unit) {
-            (_, PhysicalUnit::Dimensionless) => self.tolerance, // 3.3V±1% / 2 → preserve voltage tolerance
-            _ => Decimal::ZERO,                                 // All other cases drop tolerance
+            (_, PhysicalUnitDims::DIMENSIONLESS) => self.tolerance, // 3.3V±1% / 2 → preserve voltage tolerance
+            _ => Decimal::ZERO, // All other cases drop tolerance
         };
 
         Ok(PhysicalValue::from_decimal(value, tolerance, unit))
@@ -373,240 +393,246 @@ impl std::ops::Div for PhysicalValue {
 }
 
 impl std::ops::Add for PhysicalValue {
-    type Output = PhysicalValue;
+    type Output = Result<PhysicalValue, PhysicalValueError>;
     fn add(self, rhs: Self) -> Self::Output {
-        let unit = self.unit + rhs.unit;
+        if self.unit != rhs.unit {
+            return Err(PhysicalValueError::UnitMismatch);
+        }
+        let unit = self.unit;
         let value = self.value + rhs.value;
         let tolerance = Decimal::ZERO; // Always drop tolerance for addition
-        PhysicalValue::from_decimal(value, tolerance, unit)
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
 impl std::ops::Sub for PhysicalValue {
-    type Output = PhysicalValue;
+    type Output = Result<PhysicalValue, PhysicalValueError>;
     fn sub(self, rhs: Self) -> Self::Output {
-        let unit = self.unit - rhs.unit;
+        if self.unit != rhs.unit {
+            return Err(PhysicalValueError::UnitMismatch);
+        }
+        let unit = self.unit;
         let value = self.value - rhs.value;
         let tolerance = Decimal::ZERO; // Always drop tolerance for subtraction
-        PhysicalValue::from_decimal(value, tolerance, unit)
+        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize,
-)]
-pub enum PhysicalUnit {
-    Time,
-    Current,
-    Voltage,
-    Capacitance,
-    Resistance,
-    Inductance,
-    Frequency,
-    Temperature,
-    Charge,
-    Power,
-    Energy,
-    Conductance,
-    MagneticFlux,
-    Dimensionless,
+#[derive(Clone, Copy, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize)]
+pub struct PhysicalUnitDims {
+    pub current: i8,
+    pub time: i8,
+    pub voltage: i8,
+    pub temp: i8,
+}
+
+impl Freeze for PhysicalUnitDims {
+    type Frozen = Self;
+    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
+        Ok(self)
+    }
+}
+
+impl std::ops::Mul for PhysicalUnitDims {
+    type Output = PhysicalUnitDims;
+    fn mul(self, rhs: Self) -> Self::Output {
+        PhysicalUnitDims {
+            current: self.current + rhs.current,
+            time: self.time + rhs.time,
+            voltage: self.voltage + rhs.voltage,
+            temp: self.temp + rhs.temp,
+        }
+    }
+}
+
+impl std::ops::Div for PhysicalUnitDims {
+    type Output = PhysicalUnitDims;
+    fn div(self, rhs: Self) -> Self::Output {
+        PhysicalUnitDims {
+            current: self.current - rhs.current,
+            time: self.time - rhs.time,
+            voltage: self.voltage - rhs.voltage,
+            temp: self.temp - rhs.temp,
+        }
+    }
+}
+
+impl fmt::Display for PhysicalUnitDims {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.fmt_unit())
+    }
+}
+
+impl From<pcb_sch::PhysicalUnit> for PhysicalUnitDims {
+    fn from(unit: pcb_sch::PhysicalUnit) -> Self {
+        use pcb_sch::PhysicalUnit::*;
+        match unit {
+            Amperes => Self::CURRENT,
+            Seconds => Self::TIME,
+            Volts => Self::VOLTAGE,
+            Kelvin => Self::TEMP,
+            Hertz => Self::DIMENSIONLESS / Self::TIME,
+            Coulombs => Self::CURRENT * Self::TIME,
+            Ohms => Self::VOLTAGE / Self::CURRENT,
+            Siemens => Self::CURRENT / Self::VOLTAGE,
+            Farads => Self::CURRENT * Self::TIME / Self::VOLTAGE,
+            Watts => Self::VOLTAGE * Self::CURRENT,
+            Joules => Self::VOLTAGE * Self::CURRENT * Self::TIME,
+            Webers => Self::VOLTAGE * Self::TIME,
+            Henries => Self::VOLTAGE * Self::TIME / Self::CURRENT,
+        }
+    }
+}
+
+impl FromStr for PhysicalUnitDims {
+    type Err = ParseError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        // 1. Fast path: simple aliases
+        if let Ok(alias) = s.parse::<PhysicalUnit>() {
+            return Ok(alias.into());
+        }
+
+        // 2. Split into numerator/denominator
+        let (num_str_opt, den_str_opt) = match s.find('/') {
+            None => (Some(s), None),
+            Some(idx) => {
+                let (lhs, rhs) = s.split_at(idx);
+                let rhs = &rhs[1..]; // strip the '/'
+                if lhs.is_empty() || lhs == "1" {
+                    (None, Some(rhs))
+                } else {
+                    // Handle both "V·s/(A)" and "V·s/A" formats
+                    let den = rhs
+                        .strip_prefix('(')
+                        .and_then(|r| r.strip_suffix(')'))
+                        .unwrap_or(rhs);
+                    (Some(lhs), Some(den))
+                }
+            }
+        };
+
+        // 3. Parse each side
+        let mut dims = PhysicalUnitDims::DIMENSIONLESS;
+
+        if let Some(num_str) = num_str_opt {
+            dims = dims * gather_units(num_str)?;
+        }
+        if let Some(den_str) = den_str_opt {
+            dims = dims / gather_units(den_str)?;
+        }
+
+        Ok(dims)
+    }
+}
+
+/// Parse units from a string like "A·s" and multiply them together
+fn gather_units(list: &str) -> Result<PhysicalUnitDims, ParseError> {
+    let mut acc = PhysicalUnitDims::DIMENSIONLESS;
+    for token in list.split('·').filter(|t| !t.is_empty()) {
+        let u: PhysicalUnitDims = token
+            .parse::<PhysicalUnit>()
+            .map_err(|_| ParseError::InvalidUnit)?
+            .into();
+        acc = acc * u;
+    }
+    Ok(acc)
+}
+
+impl PhysicalUnitDims {
+    pub const DIMENSIONLESS: Self = Self::new(0, 0, 0, 0);
+    pub const CURRENT: Self = Self::new(1, 0, 0, 0);
+    pub const TIME: Self = Self::new(0, 1, 0, 0);
+    pub const VOLTAGE: Self = Self::new(0, 0, 1, 0);
+    pub const TEMP: Self = Self::new(0, 0, 0, 1);
+
+    const fn new(current: i8, time: i8, voltage: i8, temp: i8) -> Self {
+        Self {
+            current,
+            time,
+            voltage,
+            temp,
+        }
+    }
+
+    fn alias(&self) -> Option<pcb_sch::PhysicalUnit> {
+        use pcb_sch::PhysicalUnit::*;
+        let PhysicalUnitDims {
+            current,
+            time,
+            voltage,
+            temp,
+        } = self;
+        let alias = match (current, time, voltage, temp) {
+            // bases
+            (1, 0, 0, 0) => Amperes, // A
+            (0, 1, 0, 0) => Seconds, // s
+            (0, 0, 1, 0) => Volts,   // V
+            (0, 0, 0, 1) => Kelvin,  // K
+            // derived
+            (0, -1, 0, 0) => Hertz,   // Hz = 1/s
+            (1, 1, 0, 0) => Coulombs, // C = A*s
+            (-1, 0, 1, 0) => Ohms,    // Ohm = V/A
+            (1, 0, -1, 0) => Siemens, // S = A/V
+            (1, 1, -1, 0) => Farads,  // F = A*s/V
+            (-1, 1, 1, 0) => Henries, // H = V*s/A
+            (1, 0, 1, 0) => Watts,    // W = V*A
+            (1, 1, 1, 0) => Joules,   // J = V*A*s
+            (0, 1, 1, 0) => Webers,   // Wb = V*s
+            _ => return None,
+        };
+        Some(alias)
+    }
+
+    fn fmt_unit(&self) -> String {
+        if let Some(alias) = self.alias() {
+            return alias.suffix().to_string();
+        }
+        fn push(exp: i8, sym: &str, num: &mut Vec<String>, den: &mut Vec<String>) {
+            match exp {
+                0 => {}
+                1 => num.push(sym.to_string()),
+                -1 => den.push(sym.to_string()),
+                n if n > 1 => num.push(format!("{sym}^{exp}")),
+                n if n < -1 => den.push(format!("{sym}^{exp}")),
+                _ => unreachable!(),
+            }
+        }
+        let PhysicalUnitDims {
+            current,
+            time,
+            voltage,
+            temp,
+        } = *self;
+        let mut num = Vec::new();
+        let mut den = Vec::new();
+        push(voltage, "V", &mut num, &mut den);
+        push(current, "A", &mut num, &mut den);
+        push(temp, "K", &mut num, &mut den);
+        push(time, "s", &mut num, &mut den);
+        let format_units = |units: &[String]| {
+            let joined = units.join("·");
+            if units.len() > 1 {
+                format!("({})", joined)
+            } else {
+                joined
+            }
+        };
+
+        match (num.is_empty(), den.is_empty()) {
+            (true, true) => "".to_string(),
+            (false, true) => format_units(&num),
+            (true, false) => format!("1/{}", format_units(&den)),
+            (false, false) => format!("{}/{}", format_units(&num), format_units(&den)),
+        }
+    }
 }
 
 pub trait PhysicalUnitType<'a>: StarlarkValue<'a> {
     const UNIT: PhysicalUnit;
-    fn name() -> String {
-        format!("{}", Self::UNIT)
-    }
+    const QUANTITY: &'static str;
     fn type_name() -> String {
-        format!("{}Type", Self::UNIT)
-    }
-}
-
-impl PhysicalUnit {
-    fn suffix(self) -> &'static str {
-        use PhysicalUnit::*;
-        match self {
-            Resistance => "", // This should be "Ohm", but keep as empty for backward compatibility
-            Time => "s",
-            Current => "A",
-            Voltage => "V",
-            Capacitance => "F",
-            Inductance => "H",
-            Frequency => "Hz",
-            Temperature => "K",
-            Charge => "C",
-            Power => "W",
-            Energy => "J",
-            Conductance => "S",
-            MagneticFlux => "Wb",
-            Dimensionless => "",
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        use PhysicalUnit::*;
-        match self {
-            Resistance => "Ohm",
-            Time => "Second",
-            Current => "Ampere",
-            Voltage => "Volt",
-            Capacitance => "Farad",
-            Inductance => "Henry",
-            Frequency => "Hertz",
-            Temperature => "Kelvin",
-            Charge => "Coulomb",
-            Power => "Watt",
-            Energy => "Joule",
-            Conductance => "Siemens",
-            MagneticFlux => "Weber",
-            Dimensionless => "Dimensionless",
-        }
-    }
-}
-
-impl From<PhysicalUnit> for pcb_sch::PhysicalUnit {
-    fn from(value: PhysicalUnit) -> Self {
-        match value {
-            PhysicalUnit::Resistance => pcb_sch::PhysicalUnit::Ohms,
-            PhysicalUnit::Capacitance => pcb_sch::PhysicalUnit::Farads,
-            PhysicalUnit::Inductance => pcb_sch::PhysicalUnit::Henries,
-            PhysicalUnit::Frequency => pcb_sch::PhysicalUnit::Hertz,
-            PhysicalUnit::Temperature => pcb_sch::PhysicalUnit::Kelvin,
-            PhysicalUnit::Charge => pcb_sch::PhysicalUnit::Coulombs,
-            PhysicalUnit::Power => pcb_sch::PhysicalUnit::Watts,
-            PhysicalUnit::Energy => pcb_sch::PhysicalUnit::Joules,
-            PhysicalUnit::Conductance => pcb_sch::PhysicalUnit::Siemens,
-            PhysicalUnit::MagneticFlux => pcb_sch::PhysicalUnit::Webers,
-            PhysicalUnit::Dimensionless => pcb_sch::PhysicalUnit::Dimensionless,
-            PhysicalUnit::Time => pcb_sch::PhysicalUnit::Seconds,
-            PhysicalUnit::Current => pcb_sch::PhysicalUnit::Amperes,
-            PhysicalUnit::Voltage => pcb_sch::PhysicalUnit::Volts,
-        }
-    }
-}
-
-impl std::ops::Div for PhysicalUnit {
-    type Output = Self;
-    fn div(self, rhs: Self) -> Self::Output {
-        use PhysicalUnit::*;
-        match (self, rhs) {
-            // Ohm's law
-            (Voltage, Current) => Resistance,
-            (Voltage, Resistance) => Current,
-
-            // Time/Frequency inverses
-            (Dimensionless, Time) => Frequency,
-            (Dimensionless, Frequency) => Time,
-
-            // Resistance/Conductance inverses
-            (Dimensionless, Resistance) => Conductance,
-            (Dimensionless, Conductance) => Resistance,
-
-            // Power relationships
-            (Power, Voltage) => Current,
-            (Power, Current) => Voltage,
-            (Energy, Time) => Power,
-            (Energy, Power) => Time,      // E/P = (P*t)/P = t
-            (Power, Frequency) => Energy, // P/f = P/(1/t) = P*t = E
-
-            // Charge relationships
-            (Charge, Time) => Current,
-            (Charge, Current) => Time,
-
-            // Capacitance relationships
-            (Charge, Voltage) => Capacitance,
-            (Charge, Capacitance) => Voltage,
-
-            // Magnetic flux relationships
-            (MagneticFlux, Time) => Voltage, // Faraday's law: V = dΦ/dt
-            (MagneticFlux, Voltage) => Time,
-            (MagneticFlux, Inductance) => Current,
-            (MagneticFlux, Current) => Inductance,
-
-            // Energy-charge relationships (exact, no constants needed)
-            (Energy, Voltage) => Charge, // Q = E/V (from E = Q*V)
-            (Energy, Charge) => Voltage, // V = E/Q (from E = Q*V)
-
-            // Dimensionless operations (any unit / dimensionless = same unit)
-            (unit, Dimensionless) => unit,
-
-            _ => Self::Dimensionless,
-        }
-    }
-}
-
-impl std::ops::Mul for PhysicalUnit {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self::Output {
-        use PhysicalUnit::*;
-        match (self, rhs) {
-            // Ohm's law
-            (Current, Resistance) => Voltage,
-            (Resistance, Current) => Voltage,
-
-            // RC time constant
-            (Resistance, Capacitance) => Time,
-            (Capacitance, Resistance) => Time,
-
-            // Power formulas
-            (Voltage, Current) => Power,
-            (Current, Voltage) => Power,
-            (Power, Time) => Energy,
-            (Time, Power) => Energy,
-            (Energy, Frequency) => Power, // E*f = E*(1/t) = E/t = P
-
-            // Charge formulas
-            (Current, Time) => Charge,
-            (Time, Current) => Charge,
-            (Capacitance, Voltage) => Charge,
-            (Voltage, Capacitance) => Charge,
-
-            // Inductance formulas
-            (Inductance, Current) => MagneticFlux,
-            (Current, Inductance) => MagneticFlux,
-
-            // Unit inverses (result in dimensionless)
-            (Frequency, Time) => Dimensionless,
-            (Time, Frequency) => Dimensionless,
-            (Conductance, Resistance) => Dimensionless,
-            (Resistance, Conductance) => Dimensionless,
-
-            // L/R time constant (L * G = L * (1/R) = L/R = Time)
-            (Inductance, Conductance) => Time,
-            (Conductance, Inductance) => Time,
-
-            // Additional useful combinations
-            (Voltage, Charge) => Energy, // E = Q*V (potential energy)
-            (Charge, Voltage) => Energy, // E = Q*V (potential energy)
-
-            // Dimensionless operations (multiplication with dimensionless preserves original unit)
-            (unit, Dimensionless) => unit, // Any unit * dimensionless = same unit
-            (Dimensionless, unit) => unit, // Dimensionless * any unit = same unit
-
-            _ => Dimensionless,
-        }
-    }
-}
-
-impl std::ops::Add for PhysicalUnit {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            // Addition only allowed for same units
-            (unit1, unit2) if unit1 == unit2 => unit1,
-            _ => Self::Dimensionless,
-        }
-    }
-}
-
-impl std::ops::Sub for PhysicalUnit {
-    type Output = Self;
-    fn sub(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            // Subtraction only allowed for same units
-            (unit1, unit2) if unit1 == unit2 => unit1,
-            _ => Self::Dimensionless,
-        }
+        format!("{}Type", Self::QUANTITY)
     }
 }
 
@@ -614,17 +640,15 @@ impl std::ops::Sub for PhysicalUnit {
 pub enum PhysicalValueError {
     #[error("Division by zero")]
     DivisionByZero,
+    #[error("Unit mismatch")]
+    UnitMismatch,
+    #[error("Unit has no alias")]
+    InvalidPhysicalUnit,
 }
 
 impl From<PhysicalValueError> for starlark::Error {
     fn from(err: PhysicalValueError) -> Self {
         starlark::Error::new_other(err)
-    }
-}
-
-impl std::fmt::Display for PhysicalUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
     }
 }
 
@@ -699,21 +723,6 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-impl From<PhysicalValue> for pcb_sch::PhysicalValue {
-    fn from(value: PhysicalValue) -> Self {
-        let PhysicalValue {
-            value,
-            tolerance,
-            unit,
-        } = value;
-        pcb_sch::PhysicalValue {
-            value,
-            tolerance,
-            unit: unit.into(),
-        }
-    }
-}
-
 impl FromStr for PhysicalValue {
     type Err = ParseError;
 
@@ -769,7 +778,7 @@ impl FromStr for PhysicalValue {
                     return Ok(PhysicalValue::from_decimal(
                         combined_value,
                         tolerance,
-                        PhysicalUnit::Resistance,
+                        PhysicalUnit::Ohms.into(),
                     ));
                 }
             }
@@ -811,42 +820,22 @@ fn convert_temperature_to_kelvin(value: Decimal, unit: &str) -> Decimal {
     }
 }
 
-fn parse_base_unit(unit_str: &str) -> Result<PhysicalUnit, ParseError> {
-    match unit_str {
-        "V" => Ok(PhysicalUnit::Voltage),
-        "A" => Ok(PhysicalUnit::Current),
-        "F" => Ok(PhysicalUnit::Capacitance),
-        "H" => Ok(PhysicalUnit::Inductance),
-        "Hz" => Ok(PhysicalUnit::Frequency),
-        "s" => Ok(PhysicalUnit::Time),
-        "K" => Ok(PhysicalUnit::Temperature),
-        "C" => Ok(PhysicalUnit::Charge),
-        "W" => Ok(PhysicalUnit::Power),
-        "J" => Ok(PhysicalUnit::Energy),
-        "S" => Ok(PhysicalUnit::Conductance),
-        "Wb" => Ok(PhysicalUnit::MagneticFlux),
-        "Ohm" | "ohm" | "Ohms" | "ohms" => Ok(PhysicalUnit::Resistance),
-        "" => Ok(PhysicalUnit::Resistance), // Handle bare prefix for resistance
-        _ => Err(ParseError::InvalidUnit),
-    }
-}
-
 fn parse_unit_with_prefix(
     unit_str: &str,
     base_value: Decimal,
-) -> Result<(Decimal, PhysicalUnit), ParseError> {
+) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
     // Handle bare number (empty unit) - defaults to resistance
     if unit_str.is_empty() {
-        return Ok((base_value, PhysicalUnit::Resistance));
+        return Ok((base_value, PhysicalUnit::Ohms.into()));
     }
 
     // Handle special time units and temperature units (non-SI but common) first
     match unit_str {
-        "h" => return Ok((base_value * Decimal::from(3600), PhysicalUnit::Time)), // 1 hour = 3600 seconds
-        "min" => return Ok((base_value * Decimal::from(60), PhysicalUnit::Time)), // 1 minute = 60 seconds
+        "h" => return Ok((base_value * Decimal::from(3600), PhysicalUnitDims::TIME)), // 1 hour = 3600 seconds
+        "min" => return Ok((base_value * Decimal::from(60), PhysicalUnitDims::TIME)), // 1 minute = 60 seconds
         "°C" | "°F" => {
             let kelvin_value = convert_temperature_to_kelvin(base_value, unit_str);
-            return Ok((kelvin_value, PhysicalUnit::Temperature));
+            return Ok((kelvin_value, PhysicalUnitDims::TEMP));
         }
         _ => {}
     }
@@ -865,17 +854,17 @@ fn parse_unit_with_prefix(
                 let hour_multiplier = Decimal::from(3600);
                 return Ok((
                     base_value * multiplier * hour_multiplier,
-                    PhysicalUnit::Time,
+                    PhysicalUnitDims::TIME,
                 ));
             }
 
-            let unit = parse_base_unit(base_unit)?;
+            let unit = base_unit.parse()?;
             return Ok((base_value * multiplier, unit));
         }
     }
 
     // Handle base units (no prefix)
-    let unit = parse_base_unit(unit_str)?;
+    let unit = unit_str.parse()?;
     Ok((base_value, unit))
 }
 
@@ -884,7 +873,9 @@ impl std::fmt::Display for PhysicalValue {
         let tol = self.tolerance * Decimal::from(100);
         let show_tol = tol > Decimal::ZERO;
 
-        if self.unit == PhysicalUnit::Temperature {
+        let alias = self.unit.alias();
+
+        if alias == Some(PhysicalUnit::Kelvin) {
             // Convert from internal Kelvin to Celsius for display
             let celsius = self.value - Decimal::from_str("273.15").unwrap();
             let val_str = fmt_significant(celsius);
@@ -894,7 +885,7 @@ impl std::fmt::Display for PhysicalValue {
             } else {
                 write!(f, "{}°C", val_str)
             }
-        } else if self.unit == PhysicalUnit::Time {
+        } else if alias == Some(PhysicalUnit::Seconds) {
             let seconds = self.value;
 
             // Format time in the most natural unit
@@ -930,7 +921,7 @@ impl std::fmt::Display for PhysicalValue {
             // Standard formatting for all other units
             let (scaled, prefix) = scale_to_si(self.value);
             let val_str = fmt_significant(scaled);
-            let suffix = self.unit.suffix();
+            let suffix = self.unit.fmt_unit();
 
             if show_tol {
                 write!(f, "{val_str}{prefix}{} {}%", suffix, tol.round())
@@ -941,10 +932,10 @@ impl std::fmt::Display for PhysicalValue {
     }
 }
 
-starlark_simple_value!(PhysicalUnit);
+starlark_simple_value!(PhysicalUnitDims);
 
 #[starlark_value(type = "PhysicalUnit")]
-impl<'v> StarlarkValue<'v> for PhysicalUnit {}
+impl<'v> StarlarkValue<'v> for PhysicalUnitDims {}
 
 starlark_simple_value!(PhysicalValue);
 
@@ -1043,26 +1034,6 @@ impl std::fmt::Display for PhysicalValueWithUnit {
     }
 }
 
-fn parse_unit_string(s: &str) -> Result<PhysicalUnit, String> {
-    use PhysicalUnit::*;
-    match s.to_lowercase().as_str() {
-        "v" | "voltage" => Ok(Voltage),
-        "a" | "current" => Ok(Current),
-        "ohm" | "resistance" => Ok(Resistance),
-        "f" | "capacitance" => Ok(Capacitance),
-        "h" | "inductance" => Ok(Inductance),
-        "hz" | "frequency" => Ok(Frequency),
-        "s" | "time" => Ok(Time),
-        "k" | "temperature" => Ok(Temperature),
-        "c" | "charge" => Ok(Charge),
-        "w" | "power" => Ok(Power),
-        "j" | "energy" => Ok(Energy),
-        "siemens" | "conductance" => Ok(Conductance),
-        "wb" | "magneticflux" => Ok(MagneticFlux),
-        _ => Err(format!("Unknown unit: '{}'", s)),
-    }
-}
-
 starlark_simple_value!(PhysicalValueWithUnit);
 
 #[starlark_value(type = "PhysicalValueWithUnit")]
@@ -1083,10 +1054,9 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithUnit {
         }
 
         let unit_arg = positional[0];
-        let new_unit = if let Some(u) = unit_arg.downcast_ref::<PhysicalUnit>() {
-            *u
-        } else if let Some(s) = unit_arg.unpack_str() {
-            parse_unit_string(s).map_err(|e| starlark::Error::new_other(anyhow!("{}", e)))?
+        let new_unit = if let Some(s) = unit_arg.unpack_str() {
+            s.parse()
+                .map_err(|e| starlark::Error::new_other(anyhow!("{}", e)))?
         } else {
             return Err(starlark::Error::new_other(anyhow!(
                 "with_unit() expects a PhysicalUnit or string"
@@ -1120,7 +1090,14 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
                 let f = self.tolerance.to_f64()?;
                 Some(heap.alloc(StarlarkFloat(f)))
             }
-            "unit" => Some(heap.alloc(self.unit)),
+            "unit" => {
+                let unit_str = if self.unit == PhysicalUnit::Ohms.into() {
+                    "Ohm".to_string()
+                } else {
+                    self.unit.fmt_unit()
+                };
+                Some(heap.alloc(unit_str))
+            }
             "__str__" => {
                 // Return a callable that returns the string representation
                 Some(heap.alloc(PhysicalValueStrMethod { value: *self }))
@@ -1153,8 +1130,8 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         let result = (*self / other).map(|v| heap.alloc(v)).map_err(|err| {
             starlark::Error::new_other(anyhow!(
                 "Cannot divide {} by {} - {}",
-                self.unit.name(),
-                other.unit.name(),
+                self.unit.fmt_unit(),
+                other.unit.fmt_unit(),
                 err
             ))
         });
@@ -1166,8 +1143,8 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         let result = (other / *self).map(|v| heap.alloc(v)).map_err(|err| {
             starlark::Error::new_other(anyhow!(
                 "Cannot divide {} by {} - {}",
-                self.unit.name(),
-                other.unit.name(),
+                self.unit.fmt_unit(),
+                other.unit.fmt_unit(),
                 err
             ))
         });
@@ -1188,42 +1165,54 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
 
     fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
         let other = PhysicalValue::try_from(other).ok()?;
-        let result = heap.alloc(*self + other);
-        Some(Ok(result))
+        let result = (*self + other).map(|v| heap.alloc(v)).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot add {} and {} - {}",
+                self.unit.fmt_unit(),
+                other.unit.fmt_unit(),
+                err
+            ))
+        });
+        Some(result)
     }
 
     fn radd(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
-        let other = PhysicalValue::try_from(other).ok()?;
-        let result = heap.alloc(other + *self);
-        Some(Ok(result))
+        self.add(other, heap)
     }
 
     fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
         let other = PhysicalValue::try_from(other).map_err(|_| {
             starlark::Error::new_other(anyhow!(
                 "Cannot subtract non-physical value from {}",
-                self.unit.name()
+                self.unit.fmt_unit()
             ))
         })?;
-        let result = heap.alloc(*self - other);
-        Ok(result)
+        let result = (*self - other).map_err(|err| {
+            starlark::Error::new_other(anyhow!(
+                "Cannot subtract {} from {} - {}",
+                self.unit.fmt_unit(),
+                other.unit.fmt_unit(),
+                err
+            ))
+        })?;
+        Ok(heap.alloc(result))
     }
 }
 
 // Physical unit types generated by macro
-define_physical_unit!(VoltageType, PhysicalUnit::Voltage);
-define_physical_unit!(CurrentType, PhysicalUnit::Current);
-define_physical_unit!(ResistanceType, PhysicalUnit::Resistance);
-define_physical_unit!(CapacitanceType, PhysicalUnit::Capacitance);
-define_physical_unit!(InductanceType, PhysicalUnit::Inductance);
-define_physical_unit!(FrequencyType, PhysicalUnit::Frequency);
-define_physical_unit!(TimeType, PhysicalUnit::Time);
-define_physical_unit!(ConductanceType, PhysicalUnit::Conductance);
-define_physical_unit!(TemperatureType, PhysicalUnit::Temperature);
-define_physical_unit!(ChargeType, PhysicalUnit::Charge);
-define_physical_unit!(PowerType, PhysicalUnit::Power);
-define_physical_unit!(EnergyType, PhysicalUnit::Energy);
-define_physical_unit!(MagneticFluxType, PhysicalUnit::MagneticFlux);
+define_physical_unit!(VoltageType, PhysicalUnit::Volts, "Voltage");
+define_physical_unit!(CurrentType, PhysicalUnit::Amperes, "Current");
+define_physical_unit!(ResistanceType, PhysicalUnit::Ohms, "Resistance");
+define_physical_unit!(CapacitanceType, PhysicalUnit::Farads, "Capacitance");
+define_physical_unit!(InductanceType, PhysicalUnit::Henries, "Inductance");
+define_physical_unit!(FrequencyType, PhysicalUnit::Hertz, "Frequency");
+define_physical_unit!(TimeType, PhysicalUnit::Seconds, "Time");
+define_physical_unit!(ConductanceType, PhysicalUnit::Siemens, "Conductance");
+define_physical_unit!(TemperatureType, PhysicalUnit::Kelvin, "Temperature");
+define_physical_unit!(ChargeType, PhysicalUnit::Coulombs, "Charge");
+define_physical_unit!(PowerType, PhysicalUnit::Watts, "Power");
+define_physical_unit!(EnergyType, PhysicalUnit::Joules, "Energy");
+define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers, "MagneticFlux");
 
 #[cfg(test)]
 mod tests {
@@ -1236,7 +1225,7 @@ mod tests {
             value: Decimal::from_f64(value).expect("value not representable as Decimal"),
             tolerance: Decimal::from_f64(tolerance)
                 .expect("tolerance not representable as Decimal"),
-            unit,
+            unit: unit.into(),
         }
     }
 
@@ -1255,18 +1244,28 @@ mod tests {
     // Helper function for parsing tests
     fn assert_parsing(input: &str, expected_unit: PhysicalUnit, expected_value: Decimal) {
         let val: PhysicalValue = input.parse().unwrap();
-        assert_eq!(val.unit, expected_unit, "Unit mismatch for '{}'", input);
-        assert_eq!(val.value, expected_value, "Value mismatch for '{}'", input);
+        assert_eq!(
+            val.unit,
+            expected_unit.into(),
+            "Unit mismatch for '{}'",
+            input
+        );
+        assert_eq!(
+            val.value,
+            expected_value.into(),
+            "Value mismatch for '{}'",
+            input
+        );
     }
 
     #[test]
     fn test_si_prefix_formatting() {
         let test_cases = [
-            ("4700", PhysicalUnit::Resistance, "4.7k"),
-            ("1500000", PhysicalUnit::Frequency, "1.5MHz"),
-            ("0.001", PhysicalUnit::Capacitance, "1mF"),
-            ("0.000001", PhysicalUnit::Capacitance, "1uF"),
-            ("0.0000001", PhysicalUnit::Capacitance, "100nF"),
+            ("4700", PhysicalUnit::Ohms, "4.7k"),
+            ("1500000", PhysicalUnit::Hertz, "1.5MHz"),
+            ("0.001", PhysicalUnit::Farads, "1mF"),
+            ("0.000001", PhysicalUnit::Farads, "1uF"),
+            ("0.0000001", PhysicalUnit::Farads, "100nF"),
         ];
 
         for (value, unit, expected) in test_cases {
@@ -1278,26 +1277,26 @@ mod tests {
     fn test_formatting_features() {
         let test_cases = [
             // Significant digits: ≥100 (no decimals), ≥10 (one decimal), <10 (two decimals)
-            ("150000", PhysicalUnit::Resistance, "150k"),
-            ("47000", PhysicalUnit::Resistance, "47k"),
-            ("4700", PhysicalUnit::Resistance, "4.7k"),
+            ("150000", PhysicalUnit::Ohms, "150k"),
+            ("47000", PhysicalUnit::Ohms, "47k"),
+            ("4700", PhysicalUnit::Ohms, "4.7k"),
             // Trailing zero removal
-            ("1000", PhysicalUnit::Resistance, "1k"),
-            ("1200", PhysicalUnit::Resistance, "1.2k"),
+            ("1000", PhysicalUnit::Ohms, "1k"),
+            ("1200", PhysicalUnit::Ohms, "1.2k"),
             // Resistance special case (no unit suffix)
-            ("1000", PhysicalUnit::Resistance, "1k"),
-            ("1000", PhysicalUnit::Voltage, "1kV"), // Other units show suffix
+            ("1000", PhysicalUnit::Ohms, "1k"),
+            ("1000", PhysicalUnit::Volts, "1kV"), // Other units show suffix
             // Various units
-            ("3300", PhysicalUnit::Voltage, "3.3kV"),
-            ("0.1", PhysicalUnit::Current, "100mA"),
-            ("1000000", PhysicalUnit::Frequency, "1MHz"),
+            ("3300", PhysicalUnit::Volts, "3.3kV"),
+            ("0.1", PhysicalUnit::Amperes, "100mA"),
+            ("1000000", PhysicalUnit::Hertz, "1MHz"),
             // Edge cases
-            ("0.000000000001", PhysicalUnit::Capacitance, "1pF"),
-            ("1000000000", PhysicalUnit::Frequency, "1GHz"),
-            ("1", PhysicalUnit::Voltage, "1V"),
+            ("0.000000000001", PhysicalUnit::Farads, "1pF"),
+            ("1000000000", PhysicalUnit::Hertz, "1GHz"),
+            ("1", PhysicalUnit::Volts, "1V"),
             // No prefix needed
-            ("100", PhysicalUnit::Voltage, "100V"),
-            ("47", PhysicalUnit::Resistance, "47"),
+            ("100", PhysicalUnit::Volts, "100V"),
+            ("47", PhysicalUnit::Ohms, "47"),
         ];
 
         for (value, unit, expected) in test_cases {
@@ -1310,26 +1309,21 @@ mod tests {
         let test_cases = [
             (
                 Decimal::from(1000),
-                PhysicalUnit::Resistance,
+                PhysicalUnit::Ohms,
                 Decimal::new(5, 2),
                 "1k 5%",
             ), // With tolerance
+            (Decimal::from(1000), PhysicalUnit::Ohms, Decimal::ZERO, "1k"), // Without tolerance
             (
                 Decimal::from(1000),
-                PhysicalUnit::Resistance,
-                Decimal::ZERO,
-                "1k",
-            ), // Without tolerance
-            (
-                Decimal::from(1000),
-                PhysicalUnit::Capacitance,
+                PhysicalUnit::Farads,
                 Decimal::new(1, 1),
                 "1kF 10%",
             ), // Non-resistance with tolerance
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
-            let val = PhysicalValue::from_decimal(value, tolerance, unit);
+            let val = PhysicalValue::from_decimal(value, tolerance, unit.into());
             assert_eq!(format!("{}", val), expected);
         }
     }
@@ -1337,16 +1331,16 @@ mod tests {
     #[test]
     fn test_parsing_basic_units() {
         let test_cases = [
-            ("5V", PhysicalUnit::Voltage, Decimal::from(5)),
-            ("100A", PhysicalUnit::Current, Decimal::from(100)),
-            ("47", PhysicalUnit::Resistance, Decimal::from(47)),
-            ("100Ohm", PhysicalUnit::Resistance, Decimal::from(100)),
-            ("100Ohms", PhysicalUnit::Resistance, Decimal::from(100)),
-            ("1C", PhysicalUnit::Charge, Decimal::from(1)),
-            ("100W", PhysicalUnit::Power, Decimal::from(100)),
-            ("50J", PhysicalUnit::Energy, Decimal::from(50)),
-            ("10S", PhysicalUnit::Conductance, Decimal::from(10)),
-            ("5Wb", PhysicalUnit::MagneticFlux, Decimal::from(5)),
+            ("5V", PhysicalUnit::Volts, Decimal::from(5)),
+            ("100A", PhysicalUnit::Amperes, Decimal::from(100)),
+            ("47", PhysicalUnit::Ohms, Decimal::from(47)),
+            ("100Ohm", PhysicalUnit::Ohms, Decimal::from(100)),
+            ("100Ohms", PhysicalUnit::Ohms, Decimal::from(100)),
+            ("1C", PhysicalUnit::Coulombs, Decimal::from(1)),
+            ("100W", PhysicalUnit::Watts, Decimal::from(100)),
+            ("50J", PhysicalUnit::Joules, Decimal::from(50)),
+            ("10S", PhysicalUnit::Siemens, Decimal::from(10)),
+            ("5Wb", PhysicalUnit::Webers, Decimal::from(5)),
         ];
 
         for (input, unit, value) in test_cases {
@@ -1357,15 +1351,15 @@ mod tests {
     #[test]
     fn test_parsing_with_prefixes() {
         let test_cases = [
-            ("5kV", PhysicalUnit::Voltage, Decimal::from(5000)),
-            ("100mA", PhysicalUnit::Current, Decimal::new(1, 1)), // 0.1
-            ("470nF", PhysicalUnit::Capacitance, Decimal::new(47, 8)), // 470e-9
-            ("4k7", PhysicalUnit::Resistance, Decimal::from(4700)), // Special notation
-            ("10mC", PhysicalUnit::Charge, Decimal::new(1, 2)),   // 0.01
-            ("2kW", PhysicalUnit::Power, Decimal::from(2000)),
-            ("500mJ", PhysicalUnit::Energy, Decimal::new(5, 1)), // 0.5
-            ("100mS", PhysicalUnit::Conductance, Decimal::new(1, 1)), // 0.1
-            ("2mWb", PhysicalUnit::MagneticFlux, Decimal::new(2, 3)), // 0.002
+            ("5kV", PhysicalUnit::Volts, Decimal::from(5000)),
+            ("100mA", PhysicalUnit::Amperes, Decimal::new(1, 1)), // 0.1
+            ("470nF", PhysicalUnit::Farads, Decimal::new(47, 8)), // 470e-9
+            ("4k7", PhysicalUnit::Ohms, Decimal::from(4700)),     // Special notation
+            ("10mC", PhysicalUnit::Coulombs, Decimal::new(1, 2)), // 0.01
+            ("2kW", PhysicalUnit::Watts, Decimal::from(2000)),
+            ("500mJ", PhysicalUnit::Joules, Decimal::new(5, 1)), // 0.5
+            ("100mS", PhysicalUnit::Siemens, Decimal::new(1, 1)), // 0.1
+            ("2mWb", PhysicalUnit::Webers, Decimal::new(2, 3)),  // 0.002
         ];
 
         for (input, unit, value) in test_cases {
@@ -1376,8 +1370,8 @@ mod tests {
     #[test]
     fn test_parsing_decimal_numbers() {
         let test_cases = [
-            ("3.3V", PhysicalUnit::Voltage, Decimal::new(33, 1)), // 3.3
-            ("4.7kOhm", PhysicalUnit::Resistance, Decimal::from(4700)),
+            ("3.3V", PhysicalUnit::Volts, Decimal::new(33, 1)), // 3.3
+            ("4.7kOhm", PhysicalUnit::Ohms, Decimal::from(4700)),
         ];
 
         for (input, unit, value) in test_cases {
@@ -1418,7 +1412,12 @@ mod tests {
         expected_tolerance: Decimal,
     ) {
         let val: PhysicalValue = input.parse().unwrap();
-        assert_eq!(val.unit, expected_unit, "Unit mismatch for '{}'", input);
+        assert_eq!(
+            val.unit,
+            expected_unit.into(),
+            "Unit mismatch for '{}'",
+            input
+        );
         assert_eq!(val.value, expected_value, "Value mismatch for '{}'", input);
         assert_eq!(
             val.tolerance, expected_tolerance,
@@ -1433,67 +1432,67 @@ mod tests {
         let test_cases = [
             (
                 "100kOhm 5%",
-                PhysicalUnit::Resistance,
+                PhysicalUnit::Ohms,
                 Decimal::from(100000),
                 Decimal::new(5, 2),
             ),
             (
                 "158k Ohms 1%",
-                PhysicalUnit::Resistance,
+                PhysicalUnit::Ohms,
                 Decimal::from(158000),
                 Decimal::new(1, 2),
             ),
             (
                 "10nF 20%",
-                PhysicalUnit::Capacitance,
+                PhysicalUnit::Farads,
                 Decimal::new(1, 8),
                 Decimal::new(2, 1),
             ),
             (
                 "3.3V 1%",
-                PhysicalUnit::Voltage,
+                PhysicalUnit::Volts,
                 Decimal::new(33, 1),
                 Decimal::new(1, 2),
             ),
             (
                 "12V 0.5%",
-                PhysicalUnit::Voltage,
+                PhysicalUnit::Volts,
                 Decimal::from(12),
                 Decimal::new(5, 3),
             ),
             (
                 "100mA 5%",
-                PhysicalUnit::Current,
+                PhysicalUnit::Amperes,
                 Decimal::new(1, 1),
                 Decimal::new(5, 2),
             ),
             (
                 "1MHz 10%",
-                PhysicalUnit::Frequency,
+                PhysicalUnit::Hertz,
                 Decimal::from(1000000),
                 Decimal::new(1, 1),
             ),
             (
                 "10uH 20%",
-                PhysicalUnit::Inductance,
+                PhysicalUnit::Henries,
                 Decimal::new(1, 5),
                 Decimal::new(2, 1),
             ),
             (
                 "100s 1%",
-                PhysicalUnit::Time,
+                PhysicalUnit::Seconds,
                 Decimal::from(100),
                 Decimal::new(1, 2),
             ),
             (
                 "300K 2%",
-                PhysicalUnit::Temperature,
+                PhysicalUnit::Kelvin,
                 Decimal::from(300),
                 Decimal::new(2, 2),
             ),
             (
                 "4k7 1%",
-                PhysicalUnit::Resistance,
+                PhysicalUnit::Ohms,
                 Decimal::from(4700),
                 Decimal::new(1, 2),
             ), // Special notation
@@ -1529,7 +1528,7 @@ mod tests {
         for input in test_cases {
             assert_tolerance_parsing(
                 input,
-                PhysicalUnit::Resistance,
+                PhysicalUnit::Ohms,
                 Decimal::from(100000),
                 Decimal::new(5, 2),
             );
@@ -1541,26 +1540,26 @@ mod tests {
         let test_cases = [
             (
                 Decimal::from(100000),
-                PhysicalUnit::Resistance,
+                PhysicalUnit::Ohms,
                 Decimal::new(5, 2),
                 "100k 5%",
             ),
             (
                 Decimal::new(1, 8),
-                PhysicalUnit::Capacitance,
+                PhysicalUnit::Farads,
                 Decimal::new(2, 1),
                 "10nF 20%",
             ),
             (
                 Decimal::from(3300),
-                PhysicalUnit::Voltage,
+                PhysicalUnit::Volts,
                 Decimal::new(1, 2),
                 "3.3kV 1%",
             ),
         ];
 
         for (value, unit, tolerance, expected) in test_cases {
-            let val = PhysicalValue::from_decimal(value, tolerance, unit);
+            let val = PhysicalValue::from_decimal(value, tolerance, unit.into());
             assert_eq!(format!("{}", val), expected);
         }
     }
@@ -1592,275 +1591,271 @@ mod tests {
         }
 
         // Ohm's law
-        let v = val(10.0, PhysicalUnit::Voltage);
-        let i = val(2.0, PhysicalUnit::Current);
-        let r = val(5.0, PhysicalUnit::Resistance);
+        let v = val(10.0, PhysicalUnit::Volts);
+        let i = val(2.0, PhysicalUnit::Amperes);
+        let r = val(5.0, PhysicalUnit::Ohms);
 
         // V = I × R
         let result = i * r;
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(10));
 
         // I = V / R
         let result = (v / r).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Current);
+        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
         assert_eq!(result.value, Decimal::from(2));
 
         // R = V / I
         let result = (v / i).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Resistance);
+        assert_eq!(result.unit, PhysicalUnit::Ohms.into());
         assert_eq!(result.value, Decimal::from(5));
     }
 
     #[test]
     fn test_power_calculations() {
         // P = V × I
-        let v = physical_value(12.0, 0.0, PhysicalUnit::Voltage);
-        let i = physical_value(2.0, 0.0, PhysicalUnit::Current);
+        let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
+        let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
         let result = v * i;
-        assert_eq!(result.unit, PhysicalUnit::Power);
+        assert_eq!(result.unit, PhysicalUnit::Watts.into());
         assert_eq!(result.value, Decimal::from(24));
 
         // I = P / V
-        let p = physical_value(100.0, 0.0, PhysicalUnit::Power);
-        let v = physical_value(120.0, 0.0, PhysicalUnit::Voltage);
+        let p = physical_value(100.0, 0.0, PhysicalUnit::Watts);
+        let v = physical_value(120.0, 0.0, PhysicalUnit::Volts);
         let result = (p / v).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Current);
+        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
         assert!(result.value > Decimal::from_f64(0.8).unwrap());
         assert!(result.value < Decimal::from_f64(0.9).unwrap());
 
         // V = P / I
-        let i = physical_value(5.0, 0.0, PhysicalUnit::Current);
+        let i = physical_value(5.0, 0.0, PhysicalUnit::Amperes);
         let result = (p / i).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(20));
     }
 
     #[test]
     fn test_energy_and_time() {
         // E = P × t
-        let p = physical_value(100.0, 0.0, PhysicalUnit::Power);
-        let t = physical_value(3600.0, 0.0, PhysicalUnit::Time);
+        let p = physical_value(100.0, 0.0, PhysicalUnit::Watts);
+        let t = physical_value(3600.0, 0.0, PhysicalUnit::Seconds);
         let result = p * t;
-        assert_eq!(result.unit, PhysicalUnit::Energy);
+        assert_eq!(result.unit, PhysicalUnit::Joules.into());
         assert_eq!(result.value, Decimal::from(360000));
 
         // P = E / t
-        let e = physical_value(7200.0, 0.0, PhysicalUnit::Energy);
-        let t = physical_value(7200.0, 0.0, PhysicalUnit::Time); // 2h
+        let e = physical_value(7200.0, 0.0, PhysicalUnit::Joules);
+        let t = physical_value(7200.0, 0.0, PhysicalUnit::Seconds); // 2h
         let result = (e / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Power);
+        assert_eq!(result.unit, PhysicalUnit::Watts.into());
         assert_eq!(result.value, Decimal::from(1));
 
         // t = E / P
         let result = (e / p).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Time);
+        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
         assert_eq!(result.value, Decimal::from(72));
     }
 
     #[test]
     fn test_frequency_time_inverses() {
         // f = 1 / t
-        let one = physical_value(1.0, 0.0, PhysicalUnit::Dimensionless);
-        let t = physical_value(1.0, 0.0, PhysicalUnit::Time);
-        let result = (one / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Frequency);
+        let t = physical_value(1.0, 0.0, PhysicalUnit::Seconds);
+        let result = (PhysicalValue::dimensionless(1) / t).unwrap();
+        assert_eq!(result.unit, PhysicalUnit::Hertz.into());
         assert_eq!(result.value, Decimal::from(1));
 
         // t = 1 / f
-        let f = physical_value(60.0, 0.0, PhysicalUnit::Frequency);
-        let result = (one / f).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Time);
+        let f = physical_value(60.0, 0.0, PhysicalUnit::Hertz);
+        let result = (PhysicalValue::dimensionless(1) / f).unwrap();
+        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
         assert!(result.value > Decimal::from_f64(0.016).unwrap());
         assert!(result.value < Decimal::from_f64(0.017).unwrap());
 
         // f × t = 1 (dimensionless)
-        let f = physical_value(10.0, 0.0, PhysicalUnit::Frequency);
-        let t = physical_value(0.1, 0.0, PhysicalUnit::Time);
+        let f = physical_value(10.0, 0.0, PhysicalUnit::Hertz);
+        let t = physical_value(0.1, 0.0, PhysicalUnit::Seconds);
         let result = f * t;
-        assert_eq!(result.unit, PhysicalUnit::Dimensionless);
+        assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
         assert_eq!(result.value, Decimal::from(1));
     }
 
     #[test]
     fn test_resistance_conductance_inverses() {
         // G = 1 / R
-        let one = physical_value(1.0, 0.0, PhysicalUnit::Dimensionless);
-        let r = physical_value(100.0, 0.0, PhysicalUnit::Resistance);
+        let one = PhysicalValue::from_decimal(1.into(), 0.into(), PhysicalUnitDims::DIMENSIONLESS);
+        let r = physical_value(100.0, 0.0, PhysicalUnit::Ohms);
         let result = (one / r).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Conductance);
+        assert_eq!(result.unit, PhysicalUnit::Siemens.into());
         assert_eq!(result.value, Decimal::from_f64(0.01).unwrap());
 
         // R = 1 / G
-        let g = physical_value(0.02, 0.0, PhysicalUnit::Conductance);
+        let g = physical_value(0.02, 0.0, PhysicalUnit::Siemens);
         let result = (one / g).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Resistance);
+        assert_eq!(result.unit, PhysicalUnit::Ohms.into());
         assert_eq!(result.value, Decimal::from(50));
 
         // R × G = 1 (dimensionless)
         let result = r * g;
-        assert_eq!(result.unit, PhysicalUnit::Dimensionless);
+        assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
         assert_eq!(result.value, Decimal::from(2));
     }
 
     #[test]
     fn test_rc_time_constants() {
         // τ = R × C
-        let r = physical_value(10000.0, 0.0, PhysicalUnit::Resistance); // 10kΩ
-        let c = physical_value(0.0000001, 0.0, PhysicalUnit::Capacitance); // 100nF
+        let r = physical_value(10000.0, 0.0, PhysicalUnit::Ohms); // 10kΩ
+        let c = physical_value(0.0000001, 0.0, PhysicalUnit::Farads); // 100nF
         let result = r * c;
-        assert_eq!(result.unit, PhysicalUnit::Time);
+        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
 
         // τ = C × R
         let result = c * r;
-        assert_eq!(result.unit, PhysicalUnit::Time);
+        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
     }
 
     #[test]
     fn test_lr_time_constants() {
         // τ = L × G (L/R time constant)
-        let l = physical_value(0.01, 0.0, PhysicalUnit::Inductance); // 10mH
-        let g = physical_value(0.1, 0.0, PhysicalUnit::Conductance); // 100mS
+        let l = physical_value(0.01, 0.0, PhysicalUnit::Henries); // 10mH
+        let g = physical_value(0.1, 0.0, PhysicalUnit::Siemens); // 100mS
         let result = l * g;
-        assert_eq!(result.unit, PhysicalUnit::Time);
+        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
 
         // τ = G × L
         let result = g * l;
-        assert_eq!(result.unit, PhysicalUnit::Time);
+        assert_eq!(result.unit, PhysicalUnit::Seconds.into());
         assert_eq!(result.value, Decimal::from_f64(0.001).unwrap()); // 1ms
     }
 
     #[test]
     fn test_charge_relationships() {
         // Q = I × t
-        let i = physical_value(2.0, 0.0, PhysicalUnit::Current);
-        let t = physical_value(10.0, 0.0, PhysicalUnit::Time);
+        let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
+        let t = physical_value(10.0, 0.0, PhysicalUnit::Seconds);
         let result = i * t;
-        assert_eq!(result.unit, PhysicalUnit::Charge);
+        assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
         assert_eq!(result.value, Decimal::from(20));
 
         // Q = C × V
-        let c = physical_value(0.001, 0.0, PhysicalUnit::Capacitance); // 1000μF
-        let v = physical_value(12.0, 0.0, PhysicalUnit::Voltage);
+        let c = physical_value(0.001, 0.0, PhysicalUnit::Farads); // 1000μF
+        let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
         let result = c * v;
-        assert_eq!(result.unit, PhysicalUnit::Charge);
+        assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
         assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mC
 
         // I = Q / t
-        let q = physical_value(0.1, 0.0, PhysicalUnit::Charge); // 100mC
-        let t = physical_value(50.0, 0.0, PhysicalUnit::Time);
+        let q = physical_value(0.1, 0.0, PhysicalUnit::Coulombs); // 100mC
+        let t = physical_value(50.0, 0.0, PhysicalUnit::Seconds);
         let result = (q / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Current);
+        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
         assert_eq!(result.value, Decimal::from_f64(0.002).unwrap()); // 2mA
 
         // V = Q / C
-        let q = physical_value(0.005, 0.0, PhysicalUnit::Charge); // 5mC
+        let q = physical_value(0.005, 0.0, PhysicalUnit::Coulombs); // 5mC
         let result = (q / c).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(5));
     }
 
     #[test]
     fn test_magnetic_flux() {
         // Φ = L × I
-        let l = physical_value(1.0, 0.0, PhysicalUnit::Inductance); // 1H
-        let i = physical_value(2.0, 0.0, PhysicalUnit::Current);
+        let l = physical_value(1.0, 0.0, PhysicalUnit::Henries); // 1H
+        let i = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
         let result = l * i;
-        assert_eq!(result.unit, PhysicalUnit::MagneticFlux);
+        assert_eq!(result.unit, PhysicalUnit::Webers.into());
         assert_eq!(result.value, Decimal::from(2)); // 2Wb
 
         // I = Φ / L
-        let phi = physical_value(0.01, 0.0, PhysicalUnit::MagneticFlux); // 10mWb
-        let l = physical_value(0.05, 0.0, PhysicalUnit::Inductance); // 50mH
+        let phi = physical_value(0.01, 0.0, PhysicalUnit::Webers); // 10mWb
+        let l = physical_value(0.05, 0.0, PhysicalUnit::Henries); // 50mH
         let result = (phi / l).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Current);
+        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
         assert_eq!(result.value, Decimal::from_f64(0.2).unwrap()); // 200mA
 
         // V = Φ / t (Faraday's law)
-        let phi = physical_value(0.1, 0.0, PhysicalUnit::MagneticFlux); // 100mWb
-        let t = physical_value(0.01, 0.0, PhysicalUnit::Time); // 10ms
+        let phi = physical_value(0.1, 0.0, PhysicalUnit::Webers); // 100mWb
+        let t = physical_value(0.01, 0.0, PhysicalUnit::Seconds); // 10ms
         let result = (phi / t).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(10)); // 10V
     }
 
     #[test]
     fn test_energy_storage() {
         // E = Q × V (potential energy)
-        let q = physical_value(0.001, 0.0, PhysicalUnit::Charge); // 1mC
-        let v = physical_value(12.0, 0.0, PhysicalUnit::Voltage);
+        let q = physical_value(0.001, 0.0, PhysicalUnit::Coulombs); // 1mC
+        let v = physical_value(12.0, 0.0, PhysicalUnit::Volts);
         let result = q * v;
-        assert_eq!(result.unit, PhysicalUnit::Energy);
+        assert_eq!(result.unit, PhysicalUnit::Joules.into());
         assert_eq!(result.value, Decimal::from_f64(0.012).unwrap()); // 12mJ
 
         // Q = E / V
-        let e = physical_value(0.024, 0.0, PhysicalUnit::Energy); // 24mJ
+        let e = physical_value(0.024, 0.0, PhysicalUnit::Joules); // 24mJ
         let result = (e / v).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Charge);
+        assert_eq!(result.unit, PhysicalUnit::Coulombs.into());
         assert_eq!(result.value, Decimal::from_f64(0.002).unwrap()); // 2mC
 
         // V = E / Q
-        let e = physical_value(0.006, 0.0, PhysicalUnit::Energy); // 6mJ
+        let e = physical_value(0.006, 0.0, PhysicalUnit::Joules); // 6mJ
         let result = (e / q).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(6)); // 6V
     }
 
     #[test]
     fn test_dimensionless_operations() {
         // Any unit * dimensionless = same unit
-        let v = physical_value(5.0, 0.0, PhysicalUnit::Voltage);
-        let two = physical_value(2.0, 0.0, PhysicalUnit::Dimensionless);
+        let v = physical_value(5.0, 0.0, PhysicalUnit::Volts);
+        let two = PhysicalValue::dimensionless(2);
         let result = v * two;
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(10));
 
         // Any unit / dimensionless = same unit
         let result = (v / two).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from_f64(2.5).unwrap());
     }
 
     #[test]
     fn test_unsupported_operations() {
-        let v = physical_value(5.0, 0.0, PhysicalUnit::Voltage);
-        let t = physical_value(1.0, 0.0, PhysicalUnit::Time);
-
-        // V × T is not supported (no physical meaning)
-        assert!((v * t).unit == PhysicalUnit::Dimensionless);
+        let v = physical_value(5.0, 0.0, PhysicalUnit::Volts);
+        let t = physical_value(1.0, 0.0, PhysicalUnit::Seconds);
 
         // V + T is not supported (different units)
-        assert!((v + t).unit == PhysicalUnit::Dimensionless);
+        assert!((v + t).is_err());
 
         // V - T is not supported (different units)
-        assert!((v - t).unit == PhysicalUnit::Dimensionless);
+        assert!((v - t).is_err());
     }
 
     #[test]
     fn test_tolerance_handling() {
         // Tolerance preserved for dimensionless scaling
-        let v = physical_value(5.0, 0.05, PhysicalUnit::Voltage); // 5V ±5%
-        let two = physical_value(2.0, 0.0, PhysicalUnit::Dimensionless);
+        let v = physical_value(5.0, 0.05, PhysicalUnit::Volts); // 5V ±5%
+        let two = PhysicalValue::dimensionless(2);
 
         // V / dimensionless preserves tolerance
         let result = (v / two).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from_f64(2.5).unwrap());
         assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
 
         // V × dimensionless preserves tolerance
         let result = v * two;
-        assert_eq!(result.unit, PhysicalUnit::Voltage);
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
         assert_eq!(result.value, Decimal::from(10));
         assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
 
         // Unit-changing operations drop tolerance
-        let r = physical_value(100.0, 0.0, PhysicalUnit::Resistance);
+        let r = physical_value(100.0, 0.0, PhysicalUnit::Ohms);
         let result = (v / r).unwrap(); // V / R = I (unit changes)
-        assert_eq!(result.unit, PhysicalUnit::Current);
+        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
         assert_eq!(result.tolerance, Decimal::ZERO); // Tolerance dropped
     }
 
@@ -1869,7 +1864,7 @@ mod tests {
         use starlark::values::Heap;
 
         let heap = Heap::new();
-        let original = physical_value(10.0, 0.05, PhysicalUnit::Resistance);
+        let original = physical_value(10.0, 0.05, PhysicalUnit::Ohms);
         let starlark_val = heap.alloc(original);
 
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
@@ -1886,18 +1881,23 @@ mod tests {
 
         // Test basic string parsing
         let test_cases = [
-            ("10kOhm", PhysicalUnit::Resistance, 10000.0, 0.0),
-            ("100nF", PhysicalUnit::Capacitance, 0.0000001, 0.0),
-            ("3.3V", PhysicalUnit::Voltage, 3.3, 0.0),
-            ("100mA", PhysicalUnit::Current, 0.1, 0.0),
-            ("16MHz", PhysicalUnit::Frequency, 16000000.0, 0.0),
+            ("10kOhm", PhysicalUnit::Ohms, 10000.0, 0.0),
+            ("100nF", PhysicalUnit::Farads, 0.0000001, 0.0),
+            ("3.3V", PhysicalUnit::Volts, 3.3, 0.0),
+            ("100mA", PhysicalUnit::Amperes, 0.1, 0.0),
+            ("16MHz", PhysicalUnit::Hertz, 16000000.0, 0.0),
         ];
 
         for (input, expected_unit, expected_value, expected_tolerance) in test_cases {
             let starlark_val = heap.alloc(input);
             let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
 
-            assert_eq!(result.unit, expected_unit, "Unit mismatch for '{}'", input);
+            assert_eq!(
+                result.unit,
+                expected_unit.into(),
+                "Unit mismatch for '{}'",
+                input
+            );
             assert_eq!(
                 result.value,
                 Decimal::from_f64(expected_value).unwrap(),
@@ -1921,7 +1921,7 @@ mod tests {
         let starlark_val = heap.alloc("10kOhm 5%");
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
 
-        assert_eq!(result.unit, PhysicalUnit::Resistance);
+        assert_eq!(result.unit, PhysicalUnit::Ohms.into());
         assert_eq!(result.value, Decimal::from(10000));
         assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
     }
@@ -1935,14 +1935,14 @@ mod tests {
         // Test integer
         let starlark_val = heap.alloc(42);
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Dimensionless);
+        assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
         assert_eq!(result.value, Decimal::from(42));
         assert_eq!(result.tolerance, Decimal::ZERO);
 
         // Test float
         let starlark_val = heap.alloc(3.14);
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
-        assert_eq!(result.unit, PhysicalUnit::Dimensionless);
+        assert_eq!(result.unit, PhysicalUnitDims::DIMENSIONLESS);
         assert_eq!(result.value, Decimal::from_f64(3.14).unwrap());
         assert_eq!(result.tolerance, Decimal::ZERO);
     }
@@ -1958,6 +1958,78 @@ mod tests {
             let starlark_val = heap.alloc(invalid);
             let result = PhysicalValue::try_from(starlark_val.to_value());
             assert!(result.is_err(), "Expected error for '{}'", invalid);
+        }
+    }
+
+    #[test]
+    fn test_physical_unit_dims_from_str() {
+        // Test simple aliases
+        assert_eq!(
+            "V".parse::<PhysicalUnitDims>().unwrap(),
+            PhysicalUnit::Volts.into()
+        );
+        assert_eq!(
+            "A".parse::<PhysicalUnitDims>().unwrap(),
+            PhysicalUnit::Amperes.into()
+        );
+        assert_eq!(
+            "Hz".parse::<PhysicalUnitDims>().unwrap(),
+            PhysicalUnit::Hertz.into()
+        );
+        assert_eq!(
+            "s".parse::<PhysicalUnitDims>().unwrap(),
+            PhysicalUnit::Seconds.into()
+        );
+
+        // Test compound numerator units
+        let charge_dims = "A·s".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(charge_dims, PhysicalUnit::Coulombs.into());
+
+        // Test denominator-only units
+        let freq_dims = "1/s".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(freq_dims, PhysicalUnit::Hertz.into());
+
+        // Test mixed numerator/denominator
+        let resistance_dims = "V/A".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(resistance_dims, PhysicalUnit::Ohms.into());
+
+        let capacitance_dims = "(A·s)/V".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(capacitance_dims, PhysicalUnit::Farads.into());
+
+        // Test with parentheses
+        let capacitance_paren = "(A·s)/V".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(capacitance_paren, PhysicalUnit::Farads.into());
+
+        // Test error cases
+        assert!("UnknownUnit".parse::<PhysicalUnitDims>().is_err());
+        assert!("A·UnknownUnit".parse::<PhysicalUnitDims>().is_err());
+    }
+
+    #[test]
+    fn test_physical_unit_dims_roundtrip() {
+        // Test that fmt_unit output can be parsed back
+        let test_cases: [PhysicalUnitDims; 13] = [
+            PhysicalUnit::Volts.into(),
+            PhysicalUnit::Amperes.into(),
+            PhysicalUnit::Ohms.into(),
+            PhysicalUnit::Farads.into(),
+            PhysicalUnit::Henries.into(),
+            PhysicalUnit::Hertz.into(),
+            PhysicalUnit::Seconds.into(),
+            PhysicalUnit::Kelvin.into(),
+            PhysicalUnit::Coulombs.into(),
+            PhysicalUnit::Watts.into(),
+            PhysicalUnit::Joules.into(),
+            PhysicalUnit::Siemens.into(),
+            PhysicalUnit::Webers.into(),
+        ];
+
+        for original in test_cases {
+            println!("original {:?}", original);
+            let formatted = original.fmt_unit();
+            println!("formatted {:?}", formatted);
+            let parsed: PhysicalUnitDims = formatted.parse().unwrap();
+            assert_eq!(parsed, original, "Failed roundtrip for {}", formatted);
         }
     }
 }
