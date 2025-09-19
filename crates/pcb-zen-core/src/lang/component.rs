@@ -9,8 +9,7 @@ use starlark::{
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
         dict::{AllocDict, DictRef},
-        starlark_value, Coerce, Freeze, FreezeResult, Heap, NoSerialize, StarlarkValue, Trace,
-        Value, ValueLike,
+        starlark_value, Coerce, Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
     },
 };
 

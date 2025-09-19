@@ -2,7 +2,7 @@
 
 use allocative::Allocative;
 use starlark::starlark_complex_value;
-use starlark::values::{Coerce, FreezeResult, Heap, ValueLike};
+use starlark::values::{Coerce, Heap, ValueLike};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,

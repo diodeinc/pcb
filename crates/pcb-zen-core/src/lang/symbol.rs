@@ -11,8 +11,8 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
     values::{
-        list::ListRef, starlark_value, tuple::TupleRef, Freeze, FreezeResult, Heap, NoSerialize,
-        StarlarkValue, Trace, Value,
+        list::ListRef, starlark_value, tuple::TupleRef, Freeze, Heap, NoSerialize, StarlarkValue,
+        Trace, Value,
     },
 };
 

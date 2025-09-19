@@ -17,8 +17,8 @@ use starlark::{
     eval::{Arguments, Evaluator},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        float::StarlarkFloat, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult,
-        NoSerialize, StarlarkValue, Trace, Value, ValueLike,
+        float::StarlarkFloat, list::ListRef, starlark_value, Coerce, Freeze, NoSerialize,
+        StarlarkValue, Trace, Value, ValueLike,
     },
 };
 

@@ -6,7 +6,7 @@ use starlark::{
     any::ProvidesStaticType,
     environment::GlobalsBuilder,
     starlark_module, starlark_simple_value,
-    values::{starlark_value, Freeze, FreezeResult, Heap, StarlarkValue, Value},
+    values::{starlark_value, Freeze, Heap, StarlarkValue, Value},
 };
 
 use crate::lang::physical::*;

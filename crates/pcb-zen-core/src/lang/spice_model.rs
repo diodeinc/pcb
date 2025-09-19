@@ -11,8 +11,8 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        dict::DictRef, list::ListRef, starlark_value, Coerce, Freeze, FreezeResult, NoSerialize,
-        StarlarkValue, Trace, Value, ValueLike,
+        dict::DictRef, list::ListRef, starlark_value, Coerce, Freeze, NoSerialize, StarlarkValue,
+        Trace, Value, ValueLike,
     },
 };
 
