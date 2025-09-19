@@ -62,20 +62,12 @@ impl InstancePrefix {
     /// Compute the pair (new_name, old_name) for a net leaf
     fn net_names(&self, leaf: &str, suffix_net_name: bool) -> (String, String) {
         match (suffix_net_name, self.new_style.is_empty()) {
-            // Multi-net interface, no prefix
-            (true, true) => (
-                format!("_{}", leaf),
-                format!("_{}", leaf.to_ascii_uppercase()),
-            ),
+            // Single/Multi-net interface, no prefix
+            (_, true) => (format!("_{}", leaf), leaf.to_ascii_uppercase()),
             // Multi-net interface, with prefix
             (true, false) => (
                 Self::join(&self.new_style, leaf),
                 Self::join(&self.old_style, &leaf.to_ascii_uppercase()),
-            ),
-            // Single-net interface, no prefix
-            (false, true) => (
-                format!("_{}", leaf),
-                format!("_{}", leaf.to_ascii_uppercase()),
             ),
             // Single-net interface, with prefix
             (false, false) => (
