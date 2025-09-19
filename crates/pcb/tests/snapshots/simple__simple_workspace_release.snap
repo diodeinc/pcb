@@ -13,6 +13,7 @@ Exit Code: 0
     "workspace": "<TEMP_DIR>"
   },
   "release": {
+    "board_name": "TestBoard",
     "created_at": "<TIMESTAMP>",
     "git_version": "unknown",
     "layout_path": "<TEMP_DIR>/boards/build/TestBoard",
@@ -25,6 +26,7 @@ Exit Code: 0
   "system": {
     "arch": "<ARCH>",
     "cli_version": "<CLI_VERSION>",
+    "kicad_version": "<KICAD_VERSION>",
     "platform": "<PLATFORM>",
     "user": "<USER>"
   }

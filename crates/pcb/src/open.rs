@@ -4,7 +4,7 @@ use inquire::Select;
 use pcb_layout::utils;
 use std::path::{Path, PathBuf};
 
-use crate::build::collect_files;
+use crate::file_walker;
 
 #[derive(Args, Debug)]
 pub struct OpenArgs {
@@ -19,9 +19,9 @@ pub fn execute(args: OpenArgs) -> Result<()> {
 
 fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
     // Collect .zen files to process
-    let zen_paths = collect_files(&zen_paths)?;
+    let zen_files = file_walker::collect_zen_files(&zen_paths, false)?;
 
-    if zen_paths.is_empty() {
+    if zen_files.is_empty() {
         // Try to find a layout file in the current directory
         let cwd = std::env::current_dir()?;
         let layout_files: Vec<_> = std::fs::read_dir(&cwd)?
@@ -54,7 +54,7 @@ fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
     let mut available_layouts = Vec::new();
 
     // Process each .zen/.zen file to find available layouts
-    for zen_path in zen_paths {
+    for zen_path in zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         // Evaluate the zen file

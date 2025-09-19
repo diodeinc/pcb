@@ -515,6 +515,27 @@ config_path = File("./config.json")
 stdlib_path = File("@stdlib/components")
 ```
 
+### Path(path, allow_not_exist=False)
+
+Advanced path resolution supporting all LoadSpec formats with optional existence checking.
+
+```python
+# Basic path resolution (same as File)
+config_path = Path("./config.json")
+
+# LoadSpec format support
+stdlib_path = Path("@stdlib/components")
+github_path = Path("@github/user/repo:branch/path.zen")
+
+# Allow non-existent paths (only works with local paths)
+optional_file = Path("./optional.zen", allow_not_exist=True)
+```
+
+**Parameters:**
+
+- `path`: String path to resolve (supports any LoadSpec format)
+- `allow_not_exist`: Optional boolean (default: False). If True, allows non-existent paths. Can only be used with local path LoadSpecs, not package/GitHub/GitLab specs.
+
 ### error(msg)
 
 Raises a runtime error with the given message.

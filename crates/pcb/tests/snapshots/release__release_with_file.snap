@@ -10,6 +10,7 @@ expression: sb.snapshot_dir(staging_dir)
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {
+    "board_name": "TB0002",
     "created_at": "<TIMESTAMP>",
     "git_version": "unknown",
     "layout_path": "<TEMP_DIR>/src/boards/build/TestBoard",
@@ -22,6 +23,7 @@ expression: sb.snapshot_dir(staging_dir)
   "system": {
     "arch": "<ARCH>",
     "cli_version": "<CLI_VERSION>",
+    "kicad_version": "<KICAD_VERSION>",
     "platform": "<PLATFORM>",
     "user": "<USER>"
   }

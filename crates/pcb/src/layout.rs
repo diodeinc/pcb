@@ -5,7 +5,8 @@ use pcb_layout::{process_layout, LayoutError};
 use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
-use crate::build::{build, collect_files, collect_files_recursive, create_diagnostics_passes};
+use crate::build::{build, create_diagnostics_passes};
+use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Generate PCB layout files from .zen files")]
@@ -21,13 +22,9 @@ pub struct LayoutArgs {
     pub select: bool,
 
     /// One or more .zen files to process for layout generation.
-    /// When omitted, all .zen files in the current directory are processed.
+    /// When omitted, all .zen files in the current directory tree are processed.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
-
-    /// Recursively traverse directories to find .zen files
-    #[arg(short = 'r', long = "recursive", default_value_t = false)]
-    pub recursive: bool,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -35,12 +32,8 @@ pub struct LayoutArgs {
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
-    // Collect .zen files to process
-    let zen_paths = if args.recursive {
-        collect_files_recursive(&args.paths)?
-    } else {
-        collect_files(&args.paths)?
-    };
+    // Collect .zen files to process - always recursive for directories
+    let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
 
     if zen_paths.is_empty() {
         let cwd = std::env::current_dir()?;

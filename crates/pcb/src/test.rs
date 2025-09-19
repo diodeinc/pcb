@@ -6,19 +6,16 @@ use pcb_ui::prelude::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::build::{collect_files, collect_files_recursive, create_diagnostics_passes};
+use crate::build::create_diagnostics_passes;
+use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Run tests in .zen files")]
 pub struct TestArgs {
-    /// One or more .zen files or directories containing .zen files (non-recursive) to test.
-    /// When omitted, all .zen files in the current directory are tested.
+    /// One or more .zen files or directories containing .zen files to test.
+    /// When omitted, all .zen files in the current directory tree are tested.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
-
-    /// Recursively traverse directories to find .zen files
-    #[arg(short = 'r', long = "recursive", default_value_t = false)]
-    pub recursive: bool,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -109,12 +106,8 @@ pub fn test(
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {
-    // Determine which .zen files to test
-    let zen_paths = if args.recursive {
-        collect_files_recursive(&args.paths)?
-    } else {
-        collect_files(&args.paths)?
-    };
+    // Determine which .zen files to test - always recursive for directories
+    let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
 
     if zen_paths.is_empty() {
         let cwd = std::env::current_dir()?;

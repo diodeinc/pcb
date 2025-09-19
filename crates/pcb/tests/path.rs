@@ -155,31 +155,22 @@ gnd = Net("GND")
     );
 
     // Test release functionality - run source-only release with JSON output
-    let output = sb
-        .hash_globs(["*.kicad_mod"])
-        .ignore_globs(["layout/*"])
-        .cmd(
-            cargo_bin!("pcb"),
-            [
-                "release",
-                "--board",
-                "LocalPathTest",
-                "--source-only",
-                "-f",
-                "json",
-            ],
-        )
-        .read()
-        .expect("Failed to run pcb release command");
-
-    // Parse JSON output to get staging directory
-    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
-    let staging_dir = json["release"]["staging_directory"]
-        .as_str()
-        .expect("Missing staging_directory in JSON");
-
-    // Snapshot the staging directory contents
-    assert_snapshot!("path_local_mixed_release", sb.snapshot_dir(staging_dir));
+    assert_snapshot!(
+        "path_local_mixed_release",
+        sb.hash_globs(["*.kicad_mod"])
+            .ignore_globs(["layout/*"])
+            .snapshot_run(
+                "pcb",
+                [
+                    "release",
+                    "--board",
+                    "LocalPathTest",
+                    "--source-only",
+                    "-f",
+                    "json",
+                ],
+            )
+    );
 }
 
 #[test]

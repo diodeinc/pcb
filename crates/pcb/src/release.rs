@@ -88,6 +88,8 @@ pub struct ReleaseArgs {
 pub struct ReleaseInfo {
     /// Common workspace information
     pub workspace: WorkspaceInfo,
+    /// Board name being released
+    pub board_name: String,
     /// Release version (from git or fallback)
     pub version: String,
     /// Git commit hash (for variable substitution)
@@ -287,6 +289,7 @@ fn build_release_info(
 
     Ok(ReleaseInfo {
         workspace,
+        board_name,
         version,
         git_hash,
         staging_dir,
@@ -366,6 +369,7 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
             table.add_row(vec!["Platform", std::env::consts::OS]);
             table.add_row(vec!["Architecture", std::env::consts::ARCH]);
             table.add_row(vec!["CLI Version", env!("CARGO_PKG_VERSION")]);
+            table.add_row(vec!["KiCad Version", &get_kicad_version()]);
 
             // Add user and timestamp
             let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
@@ -392,6 +396,18 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
     }
 }
 
+/// Get KiCad CLI version
+fn get_kicad_version() -> String {
+    KiCadCliBuilder::new()
+        .command("version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|version| version.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Create the metadata JSON object (shared between display and file writing)
 fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     let source_only = matches!(info.kind, ReleaseKind::SourceOnly);
@@ -400,6 +416,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     serde_json::json!({
         "release": {
             "schema_version": RELEASE_SCHEMA_VERSION,
+            "board_name": info.board_name,
             "git_version": info.version,
             "created_at": rfc3339_timestamp,
             "zen_file": info.workspace.zen_path.strip_prefix(info.workspace.root()).expect("zen_file must be within workspace_root"),
@@ -412,7 +429,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
             "user": std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
             "platform": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "cli_version": env!("CARGO_PKG_VERSION")
+            "cli_version": env!("CARGO_PKG_VERSION"),
+            "kicad_version": get_kicad_version()
         },
         "git": {
             "describe": info.version.clone(),
