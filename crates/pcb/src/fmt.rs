@@ -1,11 +1,11 @@
 use anyhow::Result;
 use clap::Args;
-use ignore::WalkBuilder;
 use log::debug;
 use pcb_fmt::RuffFormatter;
 use pcb_ui::prelude::*;
-use pcb_zen::file_extensions;
 use std::path::{Path, PathBuf};
+
+use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Format .zen files")]
@@ -47,7 +47,7 @@ fn format_file(formatter: &RuffFormatter, file_path: &Path, args: &FmtArgs) -> R
     }
 }
 
-/// Process .zen files using ignore crate for efficient traversal
+/// Process .zen files using shared file walker
 fn process_files(
     formatter: &RuffFormatter,
     paths: &[PathBuf],
@@ -56,96 +56,9 @@ fn process_files(
     let mut all_formatted = true;
     let mut files_needing_format = Vec::new();
 
-    // Determine root paths to walk
-    let walk_paths = if paths.is_empty() {
-        vec![std::env::current_dir()?]
-    } else {
-        paths.to_vec()
-    };
+    let zen_files = file_walker::collect_zen_files(paths, args.hidden)?;
 
-    let mut found_files = false;
-
-    for root in walk_paths {
-        let mut builder = WalkBuilder::new(&root);
-
-        // Configure the walker
-        builder
-            .hidden(!args.hidden)
-            .git_ignore(true)
-            .git_exclude(true)
-            .git_global(true)
-            // Explicitly add vendor/ to ignored patterns
-            .add_custom_ignore_filename(".pcbignore")
-            .filter_entry(|entry| {
-                // Skip vendor directories
-                if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name == "vendor" {
-                            return false;
-                        }
-                    }
-                }
-                true
-            });
-
-        for result in builder.build() {
-            let entry = result?;
-            let path = entry.path();
-
-            // Only process .zen files
-            if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
-                found_files = true;
-                let file_name = path.file_name().unwrap().to_string_lossy();
-
-                // Show spinner while processing
-                let spinner = if args.check {
-                    Spinner::builder(format!("{file_name}: Checking format")).start()
-                } else if args.diff {
-                    Spinner::builder(format!("{file_name}: Checking diff")).start()
-                } else {
-                    Spinner::builder(format!("{file_name}: Formatting")).start()
-                };
-
-                match format_file(formatter, path, args) {
-                    Ok(is_formatted) => {
-                        spinner.finish();
-
-                        if args.check {
-                            if is_formatted {
-                                println!(
-                                    "{} {} (needs formatting)",
-                                    pcb_ui::icons::warning(),
-                                    file_name.with_style(Style::Yellow).bold()
-                                );
-                                all_formatted = false;
-                                files_needing_format.push(path.to_path_buf());
-                            } else {
-                                println!(
-                                    "{} {}",
-                                    pcb_ui::icons::success(),
-                                    file_name.with_style(Style::Green).bold()
-                                );
-                            }
-                        } else {
-                            // For both diff mode and regular format mode, show success
-                            println!(
-                                "{} {}",
-                                pcb_ui::icons::success(),
-                                file_name.with_style(Style::Green).bold()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        spinner.error(format!("{file_name}: Format failed"));
-                        eprintln!("Error: {e}");
-                        all_formatted = false;
-                    }
-                }
-            }
-        }
-    }
-
-    if !found_files {
+    if zen_files.is_empty() {
         let root_display = if paths.is_empty() {
             let cwd = std::env::current_dir()?;
             cwd.canonicalize().unwrap_or(cwd).display().to_string()
@@ -157,6 +70,55 @@ fn process_files(
                 .join(", ")
         };
         anyhow::bail!("No .zen files found in {}", root_display);
+    }
+
+    for path in &zen_files {
+        let file_name = path.file_name().unwrap().to_string_lossy();
+
+        // Show spinner while processing
+        let spinner = if args.check {
+            Spinner::builder(format!("{file_name}: Checking format")).start()
+        } else if args.diff {
+            Spinner::builder(format!("{file_name}: Checking diff")).start()
+        } else {
+            Spinner::builder(format!("{file_name}: Formatting")).start()
+        };
+
+        match format_file(formatter, path, args) {
+            Ok(is_formatted) => {
+                spinner.finish();
+
+                if args.check {
+                    if is_formatted {
+                        println!(
+                            "{} {} (needs formatting)",
+                            pcb_ui::icons::warning(),
+                            file_name.with_style(Style::Yellow).bold()
+                        );
+                        all_formatted = false;
+                        files_needing_format.push(path.clone());
+                    } else {
+                        println!(
+                            "{} {}",
+                            pcb_ui::icons::success(),
+                            file_name.with_style(Style::Green).bold()
+                        );
+                    }
+                } else {
+                    // For both diff mode and regular format mode, show success
+                    println!(
+                        "{} {}",
+                        pcb_ui::icons::success(),
+                        file_name.with_style(Style::Green).bold()
+                    );
+                }
+            }
+            Err(e) => {
+                spinner.error(format!("{file_name}: Format failed"));
+                eprintln!("Error: {e}");
+                all_formatted = false;
+            }
+        }
     }
 
     Ok((all_formatted, files_needing_format))
