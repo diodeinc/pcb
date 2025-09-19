@@ -448,6 +448,19 @@ impl Sandbox {
             .replace_all(&result, r#""cli_version": "<CLI_VERSION>""#)
             .to_string();
 
+        // Sanitize KiCad version fields in JSON (but not "unknown")
+        let kicad_version_pattern = Regex::new(r#""kicad_version"\s*:\s*"([^"]+)""#).unwrap();
+        result = kicad_version_pattern
+            .replace_all(&result, |caps: &regex::Captures| {
+                let version = &caps[1];
+                if version == "unknown" {
+                    caps[0].to_string() // Keep the original match unchanged
+                } else {
+                    r#""kicad_version": "<KICAD_VERSION>""#.to_string()
+                }
+            })
+            .to_string();
+
         result
     }
 
