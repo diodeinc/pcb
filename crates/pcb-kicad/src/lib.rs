@@ -272,6 +272,30 @@ impl KiCadCliBuilder {
 
         Ok(())
     }
+
+    /// Execute the KiCad CLI command and return the output
+    pub fn output(self) -> Result<std::process::Output> {
+        // Check if KiCad is installed before trying to run
+        check_kicad_installed()?;
+
+        let args_refs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
+
+        // Build command with environment variables
+        let mut cmd = std::process::Command::new(paths::kicad_cli());
+
+        // Add all arguments
+        for arg in &args_refs {
+            cmd.arg(*arg);
+        }
+
+        // Add environment variables
+        for (key, value) in self.env_vars {
+            cmd.env(key, value);
+        }
+
+        // Execute and return output
+        cmd.output().context("Failed to execute kicad-cli")
+    }
 }
 
 /// Direct function for simple KiCad CLI calls

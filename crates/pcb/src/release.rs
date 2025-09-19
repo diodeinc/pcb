@@ -369,6 +369,7 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
             table.add_row(vec!["Platform", std::env::consts::OS]);
             table.add_row(vec!["Architecture", std::env::consts::ARCH]);
             table.add_row(vec!["CLI Version", env!("CARGO_PKG_VERSION")]);
+            table.add_row(vec!["KiCad Version", &get_kicad_version()]);
 
             // Add user and timestamp
             let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
@@ -395,6 +396,18 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
     }
 }
 
+/// Get KiCad CLI version
+fn get_kicad_version() -> String {
+    KiCadCliBuilder::new()
+        .command("version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|version| version.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Create the metadata JSON object (shared between display and file writing)
 fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     let source_only = matches!(info.kind, ReleaseKind::SourceOnly);
@@ -416,7 +429,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
             "user": std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
             "platform": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
-            "cli_version": env!("CARGO_PKG_VERSION")
+            "cli_version": env!("CARGO_PKG_VERSION"),
+            "kicad_version": get_kicad_version()
         },
         "git": {
             "describe": info.version.clone(),
