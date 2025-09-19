@@ -223,7 +223,8 @@ pub fn sync_tracked_files(
         if path.is_file() {
             let parent = dest_path.parent().unwrap();
             fs::create_dir_all(parent)?;
-            fs::copy(path, dest_path)?;
+            fs::copy(path, &dest_path)?;
+            make_readonly(&dest_path)?;
             synced_files += 1;
         } else {
             synced_files += copy_dir_all(path, dest_path)?;
@@ -232,15 +233,18 @@ pub fn sync_tracked_files(
     Ok(synced_files)
 }
 
-fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<usize> {
+fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<usize> {
     fs::create_dir_all(&dst)?;
     let mut synced_files = 0;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
+        let dest_path = dst.as_ref().join(entry.file_name());
         if entry.file_type()?.is_dir() {
-            synced_files += copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
+            synced_files += copy_dir_all(entry.path(), &dest_path)?;
+            make_readonly(&dest_path)?;
         } else {
-            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+            fs::copy(entry.path(), &dest_path)?;
+            make_readonly(&dest_path)?;
             synced_files += 1;
         }
     }
@@ -281,4 +285,12 @@ fn check_vendor_directory(
         debug!("Vendor directory matches expected content");
         Ok(true)
     }
+}
+
+/// Make a single file or directory read-only
+fn make_readonly(path: &Path) -> Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_readonly(true);
+    fs::set_permissions(path, perms)?;
+    Ok(())
 }
