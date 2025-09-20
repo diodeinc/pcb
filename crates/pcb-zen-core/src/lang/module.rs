@@ -24,7 +24,7 @@ use starlark::{
 
 use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::ContextValue;
-use crate::lang::eval::EvalContext;
+use crate::lang::eval::{validate_path_case, EvalContext};
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputMap;
 use crate::lang::validation::validate_identifier_name;
@@ -1478,6 +1478,9 @@ where
                 resolved_path.display()
             )));
         }
+
+        // Validate case
+        validate_path_case(file_provider.as_ref(), &resolved_path)?;
 
         let loader = build_module_loader_from_path(&resolved_path, parent_context);
 
