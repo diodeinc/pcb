@@ -140,6 +140,41 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
     ))
 }
 
+/// Validate filename case matches exactly on disk.
+/// Prevents macOS/Windows working but Linux CI failing.
+pub(crate) fn validate_path_case(
+    file_provider: &dyn crate::FileProvider,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let Some(expected_filename) = path.file_name() else {
+        return Ok(());
+    };
+
+    let entries = file_provider.list_directory(parent)?;
+
+    for entry_path in entries {
+        if let Some(actual_filename) = entry_path.file_name() {
+            if actual_filename.to_string_lossy().to_lowercase()
+                == expected_filename.to_string_lossy().to_lowercase()
+            {
+                if actual_filename != expected_filename {
+                    return Err(anyhow::anyhow!(
+                        "Case mismatch: expected '{}', found '{}'",
+                        expected_filename.to_string_lossy(),
+                        actual_filename.to_string_lossy()
+                    ));
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("File not found: {}", path.display()))
+}
+
 pub struct EvalOutput {
     pub ast: AstModule,
     pub star_module: starlark::environment::FrozenModule,
@@ -1233,6 +1268,9 @@ impl FileLoader for EvalContext {
         ) {
             self.diagnostics.borrow_mut().push(warning_diag);
         }
+
+        // Validate case before canonicalization
+        validate_path_case(file_provider.as_ref(), &absolute_path)?;
 
         // Canonicalize the path for cache lookup
         let canonical_path = file_provider
