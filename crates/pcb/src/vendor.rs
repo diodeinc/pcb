@@ -1,3 +1,4 @@
+use crate::build::create_diagnostics_passes;
 use crate::workspace::gather_workspace_info;
 use anyhow::{Context, Result};
 use clap::Args;
@@ -19,6 +20,10 @@ pub struct VendorArgs {
     /// Check if vendor directory is up-to-date (useful for CI)
     #[arg(long)]
     pub check: bool,
+
+    /// Continue vendoring even if some designs have build errors
+    #[arg(long = "ignore-errors")]
+    pub ignore_errors: bool,
 }
 
 pub fn execute(args: VendorArgs) -> Result<()> {
@@ -44,7 +49,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     // Gather vendor information from all zen files
     let info_spinner = Spinner::builder("Analyzing dependencies").start();
     let zen_files_count = zen_files.len();
-    let tracked_files = gather_vendor_info(zen_files)?;
+    let tracked_files = gather_vendor_info(zen_files, args.ignore_errors)?;
     let vendor_dir = workspace_root.join("vendor");
     info_spinner.finish();
     println!("{} Dependencies analyzed", "✓".green());
@@ -177,19 +182,58 @@ fn find_zen_files_in_directory(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Gather and aggregate vendor information from multiple zen files
-fn gather_vendor_info(zen_files: Vec<PathBuf>) -> Result<HashMap<PathBuf, LoadSpec>> {
+fn gather_vendor_info(
+    zen_files: Vec<PathBuf>,
+    ignore_errors: bool,
+) -> Result<HashMap<PathBuf, LoadSpec>> {
     if zen_files.is_empty() {
         anyhow::bail!("No zen files to process");
     }
     // Evaluate each zen file and collect tracked files
     let mut tracked_files: HashMap<PathBuf, LoadSpec> = HashMap::default();
+    let mut has_errors = false;
+    // Prepare passes once if we are going to render diagnostics
+    let passes = if ignore_errors {
+        None
+    } else {
+        Some(create_diagnostics_passes(&Vec::new()))
+    };
     for zen_file in &zen_files {
         // Don't use the vendor path for the workspace info, we're just gathering dependencies
         let workspace_info = gather_workspace_info(zen_file.clone(), false)?;
-        let output = workspace_info.eval_result.output.unwrap();
-        let resolver = output.core_resolver().unwrap();
-        tracked_files.extend(resolver.get_tracked_files());
+
+        // Decide if this file has errors (render diagnostics only when not ignoring errors)
+        let mut diagnostics = workspace_info.eval_result.diagnostics.clone();
+        if let Some(passes) = &passes {
+            diagnostics.apply_passes(passes);
+        }
+        let file_has_errors = diagnostics.has_errors();
+
+        if file_has_errors && ignore_errors {
+            println!(
+                "{} {}: Build failed; skipping dependencies",
+                "⚠".yellow(),
+                zen_file.display().to_string().with_style(Style::Yellow)
+            );
+            continue;
+        }
+
+        if file_has_errors {
+            has_errors = true;
+            continue;
+        }
+
+        // Collect dependencies from successful evaluations
+        if let Some(output) = workspace_info.eval_result.output.as_ref() {
+            let resolver = output.core_resolver().unwrap();
+            tracked_files.extend(resolver.get_tracked_files());
+        }
     }
+
+    if has_errors {
+        anyhow::bail!("Build failed with errors");
+    }
+
     Ok(tracked_files)
 }
 
