@@ -230,7 +230,7 @@ impl std::str::FromStr for PhysicalUnit {
             "A" | "ampere" | "Ampere" | "amperes" | "Amperes" => Ok(PhysicalUnit::Amperes),
             "F" | "farad" | "Farad" | "farads" | "Farads" => Ok(PhysicalUnit::Farads),
             "H" | "henry" | "Henry" | "henries" | "Henries" => Ok(PhysicalUnit::Henries),
-            "Hz" | "hertz" | "Hertz" => Ok(PhysicalUnit::Hertz),
+            "Hz" | "hz" | "hertz" | "Hertz" => Ok(PhysicalUnit::Hertz),
             "s" | "second" | "Second" | "seconds" | "Seconds" => Ok(PhysicalUnit::Seconds),
             "K" | "kelvin" | "Kelvin" => Ok(PhysicalUnit::Kelvin),
             "C" | "coulomb" | "Coulomb" | "coulombs" | "Coulombs" => Ok(PhysicalUnit::Coulombs),
