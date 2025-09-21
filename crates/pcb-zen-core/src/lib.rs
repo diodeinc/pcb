@@ -837,6 +837,11 @@ impl LoadResolver for CoreLoadResolver {
             ));
         }
 
+        // Validate filename case matches exactly on disk (but only if file exists or is required to exist)
+        if context.file_provider.exists(&resolved_path) {
+            validate_path_case(context.file_provider, &resolved_path)?;
+        }
+
         Ok(resolved_path)
     }
 
@@ -861,4 +866,36 @@ impl LoadResolver for CoreLoadResolver {
     fn get_load_spec(&self, path: &Path) -> Option<LoadSpec> {
         self.path_to_spec.lock().unwrap().get(path).cloned()
     }
+}
+
+/// Validate filename case matches exactly on disk.
+/// Prevents macOS/Windows working but Linux CI failing.
+fn validate_path_case(file_provider: &dyn FileProvider, path: &Path) -> anyhow::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let Some(expected_filename) = path.file_name() else {
+        return Ok(());
+    };
+
+    let entries = file_provider.list_directory(parent)?;
+
+    for entry_path in entries {
+        if let Some(actual_filename) = entry_path.file_name() {
+            if actual_filename.to_string_lossy().to_lowercase()
+                == expected_filename.to_string_lossy().to_lowercase()
+            {
+                if actual_filename != expected_filename {
+                    return Err(anyhow::anyhow!(
+                        "Case mismatch: expected '{}', found '{}'",
+                        expected_filename.to_string_lossy(),
+                        actual_filename.to_string_lossy()
+                    ));
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("File not found: {}", path.display()))
 }
