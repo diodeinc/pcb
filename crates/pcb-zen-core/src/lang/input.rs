@@ -29,7 +29,7 @@ use super::interface::{FrozenInterfaceFactory, InterfaceFactory};
 
 /// A heap-agnostic representation of a Starlark value that can be recreated on
 /// any heap later.
-#[derive(Debug, Clone, Trace, Allocative, Serialize, Deserialize)]
+#[derive(Debug, Clone, Trace, Allocative, Serialize, Deserialize, PartialEq)]
 #[repr(C)]
 pub enum InputValue {
     None,
