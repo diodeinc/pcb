@@ -455,6 +455,24 @@ fn extract_sheet_files(parsed_sch: &pcb_sexpr::Sexpr) -> Result<Vec<String>, KiC
     Ok(sheet_files)
 }
 
+/// Generate BOM with KiCad fallback if design BOM is empty
+pub fn generate_bom_with_fallback(
+    design_bom: Bom,
+    layout_path: Option<&std::path::Path>,
+) -> Result<Bom, KiCadBomError> {
+    if design_bom.is_empty() {
+        if let Some(layout_dir) = layout_path {
+            let kicad_sch_path = layout_dir.join("layout.kicad_sch");
+
+            if kicad_sch_path.exists() {
+                return bom_from_kicad_schematic_file(&kicad_sch_path);
+            }
+        }
+    }
+
+    Ok(design_bom)
+}
+
 /// Extract all symbol S-expressions from KiCad schematic
 fn extract_kicad_symbols(
     parsed_sch: &pcb_sexpr::Sexpr,
@@ -984,15 +1002,8 @@ mod tests {
                 (property "Reference" "R1"
                     (at 100 100 0)
                 )
-                (property "Value" "10k"
-                    (at 100 100 0)
-                )
-                (property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-                    (at 100 100 0)
-                )
-                (property "MPN" "RC0603FR-0710KL"
-                    (at 100 100 0)
-                )
+                (property "Value" "RC0603FR-0710KL")
+                (property "Footprint" "MyLib:R_0603_1608Metric")
                 (instances
                     (project "test"
                         (path "/test"
@@ -1024,18 +1035,13 @@ mod tests {
         let bom = result.unwrap();
 
         // Should only have the resistor (in_bom = yes), not the power symbol (in_bom = no)
-        assert_eq!(bom.entries.len(), 1);
-        assert_eq!(bom.designators.len(), 1);
+        assert_eq!(bom.len(), 1);
 
-        let (path, entry) = bom.entries.iter().next().unwrap();
-        assert_eq!(path, "kicad::R1");
-        assert_eq!(entry.value, Some("10k".to_string()));
-        assert_eq!(
-            entry.package,
-            Some("Resistor_SMD:R_0603_1608Metric".to_string())
-        );
-        assert_eq!(entry.mpn, Some("RC0603FR-0710KL".to_string()));
-        assert!(!entry.dnp);
+        let r1_entry = &bom.entries["kicad::R1"];
+        assert_eq!(r1_entry.value, Some("RC0603FR-0710KL".to_string()));
+        assert_eq!(r1_entry.mpn, Some("RC0603FR-0710KL".to_string())); // Value → MPN (no spaces)
+        assert_eq!(r1_entry.package, Some("R_0603_1608Metric".to_string())); // Library prefix stripped
+        assert!(!r1_entry.dnp);
 
         assert_eq!(bom.designators["kicad::R1"], "R1");
     }

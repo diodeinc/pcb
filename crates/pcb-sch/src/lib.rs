@@ -19,8 +19,8 @@ pub mod position;
 
 // Re-export BOM functionality
 pub use bom::{
-    bom_from_kicad_schematic, bom_from_kicad_schematic_file, Bom, BomMatchingKey, BomMatchingRule,
-    GenericMatchingKey, KiCadBomError, Offer,
+    bom_from_kicad_schematic, bom_from_kicad_schematic_file, generate_bom_with_fallback, Bom,
+    BomMatchingKey, BomMatchingRule, GenericMatchingKey, KiCadBomError, Offer,
 };
 
 use std::collections::HashMap;

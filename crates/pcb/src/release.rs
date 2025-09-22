@@ -3,7 +3,7 @@ use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
-use pcb_sch::bom_from_kicad_schematic_file;
+use pcb_sch::generate_bom_with_fallback;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::convert::ToSchematic;
@@ -510,7 +510,7 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
 }
 
 /// Extract layout path from zen evaluation result
-fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Result<PathBuf> {
+pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Result<PathBuf> {
     let output = eval
         .output
         .as_ref()
@@ -768,36 +768,9 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     let bom_dir = info.staging_dir.join("bom");
     fs::create_dir_all(&bom_dir)?;
 
-    // If design BOM is empty, try to extract from KiCad schematic as fallback
-    let final_bom = if bom.is_empty() {
-        let kicad_sch_path = info.layout_path.join("layout.kicad_sch");
-
-        if kicad_sch_path.exists() {
-            debug!(
-                "Design BOM is empty, extracting from hierarchical KiCad schematics: {}",
-                kicad_sch_path.display()
-            );
-
-            let kicad_bom = bom_from_kicad_schematic_file(&kicad_sch_path).with_context(|| {
-                format!(
-                    "Failed to extract BOM from KiCad schematic: {}",
-                    kicad_sch_path.display()
-                )
-            })?;
-
-            debug!(
-                "Extracted {} entries from KiCad hierarchical schematics as design BOM fallback",
-                kicad_bom.len()
-            );
-            kicad_bom
-        } else {
-            debug!("Design BOM is empty and no KiCad schematic found, using empty BOM");
-            bom
-        }
-    } else {
-        debug!("Using design BOM with {} entries", bom.len());
-        bom
-    };
+    // Apply fallback logic
+    let final_bom = generate_bom_with_fallback(bom, Some(&info.layout_path))
+        .with_context(|| "Failed to generate BOM with KiCad fallback")?;
 
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
