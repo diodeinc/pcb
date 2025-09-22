@@ -6,6 +6,7 @@ pub(crate) mod evaluator_ext;
 pub mod input;
 pub(crate) mod interface;
 pub(crate) mod interface_validation;
+pub mod metadata;
 pub mod module;
 pub mod net;
 pub mod physical;
