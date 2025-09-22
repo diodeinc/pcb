@@ -390,9 +390,12 @@ pub trait LoadResolver: Send + Sync + Any {
     ) -> Result<ResolveContext<'a>, anyhow::Error> {
         let current_file = self.file_provider().canonicalize(current_file)?;
         self.track_file(&current_file);
-        let current_spec = self
-            .get_load_spec(&current_file)
-            .expect("Current file should have a LoadSpec");
+        let current_spec = self.get_load_spec(&current_file).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Current file should have a LoadSpec: {}",
+                current_file.display()
+            )
+        })?;
         let context = ResolveContext::new(
             self.file_provider(),
             current_file,
@@ -693,10 +696,6 @@ impl CoreLoadResolver {
             if path_str.contains("gitlab/kicad/libraries/kicad-footprints") && path.is_absolute() {
                 return;
             }
-        }
-        if !self.file_provider.exists(&resolved_path) {
-            // No point tracking files that don't exist
-            return;
         }
         self.path_to_spec
             .lock()
