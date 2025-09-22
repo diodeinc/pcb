@@ -267,7 +267,11 @@ fn build_release_info(
 
     // Delete existing staging dir and recreate
     if staging_dir.exists() {
-        fs::remove_dir_all(&staging_dir)?;
+        debug!(
+            "Removing existing staging directory: {}",
+            staging_dir.display()
+        );
+remove_dir_all_with_permissions(&staging_dir)?;
     }
     fs::create_dir_all(&staging_dir)?;
 
@@ -776,6 +780,43 @@ fn write_metadata(info: &ReleaseInfo) -> Result<()> {
     let metadata = create_metadata_json(info);
     let metadata_str = serde_json::to_string_pretty(&metadata)?;
     fs::write(info.staging_dir.join("metadata.json"), metadata_str)?;
+    Ok(())
+}
+
+/// Remove a directory tree, making files and directories writable first to avoid permission issues
+/// This is needed because vendor sync makes files readonly, which prevents normal removal
+fn remove_dir_all_with_permissions(dir: &Path) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    // Make the directory itself writable
+    if let Ok(mut perms) = fs::metadata(dir).map(|m| m.permissions()) {
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        let _ = fs::set_permissions(dir, perms);
+    }
+
+    // Recursively process directory contents
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            remove_dir_all_with_permissions(&path)?;
+        } else {
+            // Make file writable before removal
+            if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
+                #[allow(clippy::permissions_set_readonly_false)]
+                perms.set_readonly(false);
+                let _ = fs::set_permissions(&path, perms);
+            }
+            fs::remove_file(&path)?;
+        }
+    }
+
+    // Remove the now-empty directory
+    fs::remove_dir(dir)?;
     Ok(())
 }
 
