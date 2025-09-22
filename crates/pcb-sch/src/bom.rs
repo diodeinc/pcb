@@ -535,7 +535,7 @@ fn extract_kicad_symbol_entry(
         package: properties
             .get("Footprint")
             .or_else(|| properties.get("Package"))
-            .cloned(),
+            .map(|pkg| pkg.split(':').next_back().unwrap_or(pkg).to_string()),
         value: properties.get("Value").cloned(),
         description: properties.get("Description").cloned(),
         generic_data: None,
