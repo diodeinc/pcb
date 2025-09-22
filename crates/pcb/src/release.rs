@@ -3,6 +3,7 @@ use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
+use pcb_sch::bom_from_kicad_schematic_file;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::convert::ToSchematic;
@@ -271,7 +272,7 @@ fn build_release_info(
             "Removing existing staging directory: {}",
             staging_dir.display()
         );
-remove_dir_all_with_permissions(&staging_dir)?;
+        remove_dir_all_with_permissions(&staging_dir)?;
     }
     fs::create_dir_all(&staging_dir)?;
 
@@ -758,7 +759,7 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     Ok(())
 }
 
-/// Generate design BOM JSON file
+/// Generate design BOM JSON file with KiCad fallback
 fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     // Generate BOM entries from the schematic
     let bom = info.schematic.bom();
@@ -767,10 +768,41 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     let bom_dir = info.staging_dir.join("bom");
     fs::create_dir_all(&bom_dir)?;
 
+    // If design BOM is empty, try to extract from KiCad schematic as fallback
+    let final_bom = if bom.is_empty() {
+        let kicad_sch_path = info.layout_path.join("layout.kicad_sch");
+
+        if kicad_sch_path.exists() {
+            debug!(
+                "Design BOM is empty, extracting from hierarchical KiCad schematics: {}",
+                kicad_sch_path.display()
+            );
+
+            let kicad_bom = bom_from_kicad_schematic_file(&kicad_sch_path).with_context(|| {
+                format!(
+                    "Failed to extract BOM from KiCad schematic: {}",
+                    kicad_sch_path.display()
+                )
+            })?;
+
+            debug!(
+                "Extracted {} entries from KiCad hierarchical schematics as design BOM fallback",
+                kicad_bom.len()
+            );
+            kicad_bom
+        } else {
+            debug!("Design BOM is empty and no KiCad schematic found, using empty BOM");
+            bom
+        }
+    } else {
+        debug!("Using design BOM with {} entries", bom.len());
+        bom
+    };
+
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
     let mut file = fs::File::create(&bom_file)?;
-    write!(file, "{}", bom.ungrouped_json())?;
+    write!(file, "{}", final_bom.ungrouped_json())?;
 
     Ok(())
 }
