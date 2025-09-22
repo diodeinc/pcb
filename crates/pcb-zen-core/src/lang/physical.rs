@@ -1416,6 +1416,7 @@ mod tests {
             ("1h", PhysicalUnit::Seconds, 3600.0, "1h"), // Time
             ("100nF", PhysicalUnit::Farads, 1e-7, "100nF"),
             ("1MHz", PhysicalUnit::Hertz, 1e6, "1MHz"),
+            ("16Mhz", PhysicalUnit::Hertz, 16e6, "16MHz"), // lowercase hz should work
         ] {
             test_cycle(input, unit, value, display);
         }
