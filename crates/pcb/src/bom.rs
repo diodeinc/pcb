@@ -2,12 +2,14 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::build::create_diagnostics_passes;
+use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
-use pcb_sch::Bom;
+use pcb_sch::{generate_bom_with_fallback, Bom};
 use pcb_ui::prelude::*;
+use pcb_zen_core::convert::ToSchematic;
 use starlark_syntax::slice_vec_ext::SliceExt;
 
 #[derive(ValueEnum, Debug, Clone, Default)]
@@ -49,17 +51,22 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let schematic = pcb_zen::run(&args.file, pcb_zen::EvalConfig::default())
-        .output_result()
-        .map_err(|mut diagnostics| {
-            // Apply passes and render diagnostics if there are errors
-            diagnostics.apply_passes(&create_diagnostics_passes(&[]));
-            anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
-        })?;
+    let eval_result = pcb_zen::eval(&args.file, pcb_zen::EvalConfig::default());
+    let layout_path = extract_layout_path(&args.file, &eval_result).ok();
+    let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
+        // Apply passes and render diagnostics if there are errors
+        diagnostics.apply_passes(&create_diagnostics_passes(&[]));
+        anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
+    })?;
 
-    // Generate BOM entries
+    // Generate BOM entries with KiCad fallback
     spinner.set_message(format!("{file_name}: Generating BOM"));
-    let mut bom = schematic.bom();
+    let schematic = eval_output
+        .sch_module
+        .to_schematic()
+        .context("Failed to convert to schematic")?;
+    let mut bom = generate_bom_with_fallback(schematic.bom(), layout_path.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to generate BOM: {}", e))?;
 
     // Apply BOM matching rules if provided
     if let Some(rules_path) = &args.rules {

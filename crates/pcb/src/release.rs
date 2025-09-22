@@ -3,6 +3,7 @@ use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
+use pcb_sch::generate_bom_with_fallback;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::convert::ToSchematic;
@@ -267,7 +268,11 @@ fn build_release_info(
 
     // Delete existing staging dir and recreate
     if staging_dir.exists() {
-        fs::remove_dir_all(&staging_dir)?;
+        debug!(
+            "Removing existing staging directory: {}",
+            staging_dir.display()
+        );
+        remove_dir_all_with_permissions(&staging_dir)?;
     }
     fs::create_dir_all(&staging_dir)?;
 
@@ -505,7 +510,7 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
 }
 
 /// Extract layout path from zen evaluation result
-fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Result<PathBuf> {
+pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Result<PathBuf> {
     let output = eval
         .output
         .as_ref()
@@ -754,7 +759,7 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     Ok(())
 }
 
-/// Generate design BOM JSON file
+/// Generate design BOM JSON file with KiCad fallback
 fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     // Generate BOM entries from the schematic
     let bom = info.schematic.bom();
@@ -763,10 +768,14 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
     let bom_dir = info.staging_dir.join("bom");
     fs::create_dir_all(&bom_dir)?;
 
+    // Apply fallback logic
+    let final_bom = generate_bom_with_fallback(bom, Some(&info.layout_path))
+        .with_context(|| "Failed to generate BOM with KiCad fallback")?;
+
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
     let mut file = fs::File::create(&bom_file)?;
-    write!(file, "{}", bom.ungrouped_json())?;
+    write!(file, "{}", final_bom.ungrouped_json())?;
 
     Ok(())
 }
@@ -776,6 +785,43 @@ fn write_metadata(info: &ReleaseInfo) -> Result<()> {
     let metadata = create_metadata_json(info);
     let metadata_str = serde_json::to_string_pretty(&metadata)?;
     fs::write(info.staging_dir.join("metadata.json"), metadata_str)?;
+    Ok(())
+}
+
+/// Remove a directory tree, making files and directories writable first to avoid permission issues
+/// This is needed because vendor sync makes files readonly, which prevents normal removal
+fn remove_dir_all_with_permissions(dir: &Path) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    // Make the directory itself writable
+    if let Ok(mut perms) = fs::metadata(dir).map(|m| m.permissions()) {
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        let _ = fs::set_permissions(dir, perms);
+    }
+
+    // Recursively process directory contents
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            remove_dir_all_with_permissions(&path)?;
+        } else {
+            // Make file writable before removal
+            if let Ok(mut perms) = fs::metadata(&path).map(|m| m.permissions()) {
+                #[allow(clippy::permissions_set_readonly_false)]
+                perms.set_readonly(false);
+                let _ = fs::set_permissions(&path, perms);
+            }
+            fs::remove_file(&path)?;
+        }
+    }
+
+    // Remove the now-empty directory
+    fs::remove_dir(dir)?;
     Ok(())
 }
 

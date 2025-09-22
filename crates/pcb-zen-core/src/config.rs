@@ -58,7 +58,9 @@ pub struct BoardConfig {
     pub name: String,
 
     /// Path to the .zen file for this board (relative to pcb.toml)
-    pub path: String,
+    /// If None, defaults to the single .zen file in the directory
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 
     /// Optional description of the board
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -181,6 +183,27 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Pa
         .unwrap_or(start_dir)
 }
 
+/// Helper function to find single .zen file in a directory
+fn find_single_zen_file(dir: &Path) -> Option<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    let zen_files: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "zen"))
+        .collect();
+
+    if zen_files.len() == 1 {
+        zen_files[0]
+            .file_name()
+            .to_string_lossy()
+            .to_string()
+            .into()
+    } else {
+        None
+    }
+}
+
 /// Discover all boards in a workspace using glob patterns
 pub fn discover_boards(
     file_provider: &dyn FileProvider,
@@ -257,8 +280,25 @@ pub fn discover_boards(
                         Ok(config) => {
                             if let Some(board_config) = config.board {
                                 visited_directories.insert(path.to_path_buf());
-                                let workspace_relative_zen_path =
-                                    relative_path.join(&board_config.path);
+
+                                // Determine the zen file path
+                                let zen_path = if let Some(configured_path) = board_config.path {
+                                    configured_path
+                                } else {
+                                    // Look for single .zen file in directory
+                                    match find_single_zen_file(path) {
+                                        Some(zen_file) => zen_file,
+                                        None => {
+                                            errors.push(DiscoveryError {
+                                                path: pcb_toml_path.clone(),
+                                                error: "No path specified and no single .zen file found in directory".to_string(),
+                                            });
+                                            continue;
+                                        }
+                                    }
+                                };
+
+                                let workspace_relative_zen_path = relative_path.join(&zen_path);
                                 let board = BoardInfo {
                                     name: board_config.name,
                                     zen_path: workspace_relative_zen_path
@@ -309,44 +349,29 @@ pub fn discover_boards(
                 continue;
             }
 
-            // Find .zen files in this directory
-            if let Ok(zen_entries) = std::fs::read_dir(&path) {
-                let zen_files: Vec<_> = zen_entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "zen")
-                    })
-                    .collect();
+            // Look for single .zen file in this directory
+            if let Some(zen_filename) = find_single_zen_file(&path) {
+                // Board name is the filename without extension
+                let board_name = zen_filename
+                    .strip_suffix(".zen")
+                    .unwrap_or(&zen_filename)
+                    .to_string();
 
-                // Only consider directories with exactly one .zen file
-                if zen_files.len() == 1 {
-                    let zen_file = &zen_files[0];
-                    let zen_filename = zen_file.file_name();
-                    let zen_path_str = zen_filename.to_string_lossy();
-
-                    // Board name is the filename without extension
-                    let board_name = zen_path_str
-                        .strip_suffix(".zen")
-                        .unwrap_or(&zen_path_str)
-                        .to_string();
-
-                    // Calculate workspace-relative path
-                    let board_dir_relative = path.strip_prefix(workspace_root).unwrap_or(&path);
-                    let workspace_relative_zen_path = board_dir_relative.join(&*zen_path_str);
-
-                    let board = BoardInfo {
-                        name: board_name,
-                        zen_path: workspace_relative_zen_path.to_string_lossy().to_string(),
-                        description: String::new(),
-                    };
-                    insert_board(
-                        &mut boards_by_name,
-                        &mut errors,
-                        board,
-                        zen_file.path(),
-                        true,
-                    );
-                }
+                // Calculate workspace-relative path
+                let board_dir_relative = path.strip_prefix(workspace_root).unwrap_or(&path);
+                let workspace_relative_zen_path = board_dir_relative.join(&zen_filename);
+                let board = BoardInfo {
+                    name: board_name,
+                    zen_path: workspace_relative_zen_path.to_string_lossy().to_string(),
+                    description: String::new(),
+                };
+                insert_board(
+                    &mut boards_by_name,
+                    &mut errors,
+                    board,
+                    path.join(&zen_filename),
+                    true,
+                );
             }
         }
     }
@@ -499,7 +524,7 @@ description = "A test board"
 
         let board = config.board.unwrap();
         assert_eq!(board.name, "TestBoard");
-        assert_eq!(board.path, "test_board.zen");
+        assert_eq!(board.path, Some("test_board.zen".to_string()));
         assert_eq!(board.description, "A test board");
     }
 
@@ -539,6 +564,21 @@ stdlib = "@github/diodeinc/stdlib:v1.0.0"
             config.packages.get("stdlib"),
             Some(&"@github/diodeinc/stdlib:v1.0.0".to_string())
         );
+    }
+
+    #[test]
+    fn test_parse_board_config_no_path() {
+        let content = r#"
+[board]
+name = "TestBoard"
+description = "A test board"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let board = config.board.unwrap();
+        assert_eq!(board.name, "TestBoard");
+        assert_eq!(board.path, None);
+        assert_eq!(board.description, "A test board");
     }
 
     #[test]
