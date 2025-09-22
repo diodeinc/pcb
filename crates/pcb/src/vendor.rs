@@ -245,6 +245,11 @@ pub fn sync_tracked_files(
 ) -> Result<usize> {
     let mut synced_files = 0;
     for (path, load_spec) in tracked_files {
+        // Skip paths that don't exist to avoid panics
+        if !path.exists() {
+            log::debug!("Skipping non-existent path: {}", path.display());
+            continue;
+        }
         let dest_path = if load_spec.is_remote() {
             // remote file
             vendor_dir.join(load_spec.vendor_path()?)
