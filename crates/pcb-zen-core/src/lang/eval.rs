@@ -1225,15 +1225,6 @@ impl FileLoader for EvalContext {
         let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
         let absolute_path = load_resolver.resolve(&mut resolve_context)?;
 
-        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
-            load_resolver.as_ref(),
-            current_file,
-            &resolve_context,
-            self.resolve_span_for_current_load(path),
-        ) {
-            self.diagnostics.borrow_mut().push(warning_diag);
-        }
-
         // Canonicalize the path for cache lookup
         let canonical_path = file_provider
             .canonicalize(&absolute_path)
@@ -1251,6 +1242,15 @@ impl FileLoader for EvalContext {
         // instance so that callers share the same definitions.
         if let Some(frozen) = self.state.lock().unwrap().load_cache.get(&canonical_path) {
             return Ok(frozen.clone());
+        }
+
+        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
+            load_resolver.as_ref(),
+            current_file,
+            &resolve_context,
+            self.resolve_span_for_current_load(path),
+        ) {
+            self.diagnostics.borrow_mut().push(warning_diag);
         }
 
         if file_provider.is_directory(&canonical_path) {

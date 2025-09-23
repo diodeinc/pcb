@@ -13,6 +13,7 @@ Exit Code: 0
 Vendor directory: <TEMP_DIR>/src/vendor
 --- STDERR ---
 Warning: Path 'module_config.toml' does not exist
+1 similar warning(s) were suppressed
    ╭─[ <TEMP_DIR>/cache/github/testcompany/pathtest/v1.0.0/PathModule.zen:2:15 ]
  2 │config_path = Path("module_config.toml", allow_not_exist = True) # this file doesn't exist
    │                                       ╰───────────────────────── Path 'module_config.toml' does not exist
@@ -21,6 +22,7 @@ Warning: Path 'module_config.toml' does not exist
    │            ╰───────────── Warning from `PathModule`
 
 Warning: Path 'build/Module' does not exist
+1 similar warning(s) were suppressed
    ╭─[ <TEMP_DIR>/cache/github/testcompany/pathtest/v1.0.0/PathModule.zen:4:29 ]
  4 │add_property("layout_path", Path("build/Module", allow_not_exist = True))
    │                                                  ╰────────────────────── Path 'build/Module' does not exist
