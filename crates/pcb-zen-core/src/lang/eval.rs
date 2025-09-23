@@ -22,10 +22,10 @@ use starlark::{
 use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 use starlark::{environment::FrozenModule, typing::Interface};
 
-use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
 use crate::lang::spice_model::model_globals;
+use crate::lang::{assert::assert_globals, metadata::MetadataStore};
 use crate::lang::{
     builtin::builtin_globals,
     component::component_globals,
@@ -208,7 +208,7 @@ struct EvalContextState {
     load_in_progress: HashMap<PathBuf, PathBuf>,
 
     /// Global metadata store for mutable state that persists across module boundaries
-    metadata_store: crate::lang::metadata::MetadataStore,
+    metadata_store: MetadataStore,
 }
 
 /// RAII guard that automatically removes a path from the load_in_progress set when dropped.
@@ -1075,7 +1075,7 @@ impl EvalContext {
     /// Access the metadata store mutably (for push operations)
     pub fn with_metadata_store_mut<F, R>(&self, f: F) -> anyhow::Result<R>
     where
-        F: FnOnce(&mut crate::lang::metadata::MetadataStore) -> R,
+        F: FnOnce(&mut MetadataStore) -> R,
     {
         let mut state = self.state.lock().unwrap();
         Ok(f(&mut state.metadata_store))
@@ -1084,7 +1084,7 @@ impl EvalContext {
     /// Access the metadata store immutably (for get/list operations)  
     pub fn with_metadata_store<F, R>(&self, f: F) -> anyhow::Result<R>
     where
-        F: FnOnce(&crate::lang::metadata::MetadataStore) -> R,
+        F: FnOnce(&MetadataStore) -> R,
     {
         let state = self.state.lock().unwrap();
         Ok(f(&state.metadata_store))
