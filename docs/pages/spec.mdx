@@ -77,12 +77,14 @@ Zener provides built-in package aliases for commonly used libraries:
 These can be used directly:
 
 ```python
-# Load from stdlib
-load("@stdlib/units.zen", "kohm", "uF")
+# Load from stdlib - these are aliases to builtin physical unit types
+load("@stdlib/units.zen", "Voltage", "Resistance")  # Same as builtin.Voltage, builtin.Resistance
 
 # Load from KiCad symbols library
 R_symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name = "R")
 ```
+
+**Note**: The `@stdlib/units.zen` module provides convenient aliases to the language's builtin physical unit types. When you import symbols like `Voltage`, `Resistance`, etc. from `units.zen`, you're actually getting references to `builtin.Voltage`, `builtin.Resistance`, etc. The stdlib unit symbols are automatically replaced with their native builtin counterparts during module evaluation for optimal performance.
 
 #### Custom Package Aliases
 
@@ -391,6 +393,86 @@ if "SubmoduleName.ComponentName" in module:
   - `module["BMI270"]["BMI270"]` returns the component within the submodule (chained)
   - `module["BMI270.BMI270"]` also returns the component (nested path syntax)
 - All three approaches are equivalent for accessing nested components
+
+### PhysicalValue
+
+Physical values represent electrical quantities with units and tolerances, enabling unit-aware arithmetic and dimensional analysis.
+
+```python
+# Create physical values using unit type constructors
+voltage = Voltage("3.3V")
+resistance = Resistance("10kOhm")
+capacitance = Capacitance("100nF")
+
+# Unit-aware arithmetic
+power = voltage * voltage / resistance  # Result: Power type
+time_constant = resistance * capacitance  # Result: Time type
+
+# Convert units and add tolerances
+voltage_mv = voltage.with_unit("mV")      # Convert to millivolts
+resistor = resistance.with_tolerance("5%")  # Add 5% tolerance
+
+# Parse from strings with automatic unit detection
+freq = Frequency("100MHz")
+temp = Temperature("25°C")
+
+# Single argument constructors
+voltage_5v = Voltage(5)           # 5V (numeric)
+resistance_1k = Resistance("1k")  # 1kΩ (string with unit)
+
+# Dimensionless values and casting
+dimensionless = voltage.with_unit(None)  # Remove units
+new_current = Current(dimensionless)     # Cast dimensionless to current
+```
+
+**Type**: `PhysicalValue`
+
+**Available Unit Types**:
+- `Voltage` - electrical potential (V, mV, kV)
+- `Current` - electrical current (A, mA, µA)
+- `Resistance` - electrical resistance (Ω, kΩ, MΩ)
+- `Capacitance` - electrical capacitance (F, µF, nF, pF)
+- `Inductance` - electrical inductance (H, mH, µH)
+- `Frequency` - frequency (Hz, kHz, MHz, GHz)
+- `Time` - time duration (s, ms, µs, ns)
+- `Temperature` - temperature (°C, °F, K)
+- `Charge` - electrical charge (C, mC, µC)
+- `Power` - electrical power (W, mW, µW)
+- `Energy` - energy (J, Wh, kWh)
+- `Conductance` - electrical conductance (S)
+- `MagneticFlux` - magnetic flux (Wb)
+
+**Constructor**: `UnitType(value, tolerance=None)` or `UnitType(value_only)`
+
+- `value`: String with value and unit (e.g., "3.3V", "10kΩ"), numeric value, or existing PhysicalValue
+- `tolerance`: Optional tolerance specification (e.g., "5%", "±0.1V")
+
+**Single Argument Constructor**:
+- `UnitType(5)` - Creates value with numeric 5 in the unit type (e.g., `Voltage(5)` = 5V)
+- `UnitType("5V")` - Parses string with unit (e.g., `Voltage("5V")` = 5V)
+- `UnitType(other_physical_value)` - Converts between compatible units or casts dimensionless values
+
+**Methods**:
+- `with_unit(unit)` - Convert to specified unit, returns new PhysicalValue
+- `with_unit(None)` - Convert to dimensionless value, returns new PhysicalValue
+- `with_tolerance(tolerance)` - Add/modify tolerance, returns new PhysicalValue
+
+**Unit-Aware Operations**:
+- Arithmetic operations automatically handle unit conversions and dimensional analysis
+- Compatible units are automatically converted (e.g., V + mV = V)
+- Dimensional analysis creates appropriate result types (e.g., V/A = Ω, R×C = s)
+- Supports all electrical relationships: Ohm's law (V=I×R), power (P=V×I), time constants (τ=RC), etc.
+- Invalid operations (e.g., V + Hz) produce dimensionless results
+- Physical values can be mixed with strings and numbers in arithmetic operations
+
+**Dimensionless Values**:
+- Dimensionless physical values can be cast to any unit type
+- Use `with_unit(None)` to convert any physical value to dimensionless
+- Dimensionless results are produced by unit cancellation (e.g., R×G = 1, V/V = 1)
+- Numeric literals are treated as dimensionless when mixed with physical values
+
+**String Representation**:
+Physical values maintain lossless string conversion, preserving original units and tolerances.
 
 ### TestBench
 
