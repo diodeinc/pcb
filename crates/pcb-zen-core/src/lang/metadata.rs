@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use allocative::Allocative;
 use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
 use starlark::any::ProvidesStaticType;
 use starlark::environment::GlobalsBuilder;
 use starlark::eval::{Arguments, Evaluator};
@@ -16,7 +17,7 @@ use starlark::values::{Freeze, Heap, NoSerialize, StarlarkValue, Value, ValueLik
 
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputValue;
-use crate::lang::physical::PhysicalValue;
+use crate::lang::physical::{physical_unit_from_ty, PhysicalValue};
 
 /// Helper to access metadata store with error handling
 fn with_metadata_store<T>(
@@ -96,7 +97,9 @@ impl MetadataStore {
 }
 
 /// A metadata container that holds a reference ID
-#[derive(Debug, Copy, Clone, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, ProvidesStaticType, Serialize, Deserialize, Allocative, Freeze,
+)]
 pub struct MetadataContainer {
     pub ref_id: u64,
 }
@@ -201,8 +204,10 @@ impl<'v> StarlarkValue<'v> for MetadataContainerPush {
             );
         }
         // If physical value, do unit checking in addition to type checking
-        if let Some(physical_value) = value.downcast_ref::<PhysicalValue>() {
-            physical_value.check_unit_ty(type_compiled.as_ty())?;
+        if let Some(expected) = physical_unit_from_ty(type_compiled.as_ty()) {
+            if let Some(physical_value) = value.downcast_ref::<PhysicalValue>() {
+                physical_value.check_unit(expected.into())?;
+            }
         }
 
         let input_value = InputValue::from_value(value);
