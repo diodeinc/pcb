@@ -48,7 +48,7 @@ pub fn gather_workspace_info(zen_path: PathBuf, use_vendor: bool) -> Result<Work
     let zen_path = zen_path.canonicalize()?;
 
     // 1. Reuse config.rs to get workspace + board list
-    let config = get_workspace_info(&DefaultFileProvider, &zen_path)?;
+    let config = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
 
     // 2. Evaluate the zen file – workspace root comes out of config
     let cfg = EvalConfig {

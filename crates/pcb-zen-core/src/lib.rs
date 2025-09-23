@@ -115,10 +115,40 @@ pub enum SymbolKind {
     Component,
 }
 
-/// Default implementation of FileProvider that uses the actual file system
+/// Default implementation of FileProvider that uses the actual file system with caching
 #[cfg(feature = "native")]
-#[derive(Debug, Clone)]
-pub struct DefaultFileProvider;
+#[derive(Clone)]
+pub struct DefaultFileProvider {
+    canonicalize_cache: Arc<Mutex<lru::LruCache<PathBuf, Result<PathBuf, FileProviderError>>>>,
+}
+
+#[cfg(feature = "native")]
+impl DefaultFileProvider {
+    pub fn new() -> Self {
+        Self {
+            canonicalize_cache: Arc::new(Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(1000).unwrap(),
+            ))),
+        }
+    }
+}
+
+#[cfg(feature = "native")]
+impl Default for DefaultFileProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "native")]
+impl std::fmt::Debug for DefaultFileProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cache_size = self.canonicalize_cache.lock().unwrap().len();
+        f.debug_struct("DefaultFileProvider")
+            .field("cache_size", &cache_size)
+            .finish()
+    }
+}
 
 #[cfg(feature = "native")]
 impl FileProvider for DefaultFileProvider {
@@ -166,7 +196,18 @@ impl FileProvider for DefaultFileProvider {
         &self,
         path: &std::path::Path,
     ) -> Result<std::path::PathBuf, FileProviderError> {
-        path.canonicalize().or_else(|e| match e.kind() {
+        let path_buf = path.to_path_buf();
+
+        // Check cache first
+        {
+            let mut cache = self.canonicalize_cache.lock().unwrap();
+            if let Some(cached_result) = cache.get(&path_buf) {
+                return cached_result.clone();
+            }
+        }
+
+        // Cache miss - compute the result
+        let result = path.canonicalize().or_else(|e| match e.kind() {
             std::io::ErrorKind::NotFound => {
                 // Normalize path components (handle . and ..)
                 Ok(normalize_path(path))
@@ -175,7 +216,15 @@ impl FileProvider for DefaultFileProvider {
                 Err(FileProviderError::PermissionDenied(path.to_path_buf()))
             }
             _ => Err(FileProviderError::IoError(e.to_string())),
-        })
+        });
+
+        // Store result in cache (LRU handles eviction automatically)
+        {
+            let mut cache = self.canonicalize_cache.lock().unwrap();
+            cache.put(path_buf, result.clone());
+        }
+
+        result
     }
 }
 

@@ -78,7 +78,7 @@ impl Default for LspEvalContext {
             }
         }
 
-        let file_provider = Arc::new(DefaultFileProvider);
+        let file_provider = Arc::new(DefaultFileProvider::new());
         let inner = EvalContext::with_file_provider(file_provider.clone());
 
         Self {

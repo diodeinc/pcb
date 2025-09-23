@@ -221,7 +221,7 @@ fn gather_release_info(
 
     // Get workspace info using discovery
     let start_path = path.as_deref().unwrap_or(".");
-    let workspace_info = get_workspace_info(&DefaultFileProvider, Path::new(start_path))?;
+    let workspace_info = get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
 
     // Find the zen file for the given board
     let board_info = workspace_info.find_board_by_name(&board_name)?;

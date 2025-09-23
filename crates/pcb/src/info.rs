@@ -31,7 +31,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         None => env::current_dir()?,
     };
 
-    let file_provider = DefaultFileProvider;
+    let file_provider = DefaultFileProvider::new();
     let workspace_info = get_workspace_info(&file_provider, &start_path)?;
 
     match args.format {
