@@ -1,0 +1,16 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build InterfaceCrossModule.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Interface power module configured: 5V at 1A
+Interface voltage metadata: [5V]
+Interface current metadata: [1A]
+Updated via shared interface - voltage: [5V]
+Updated via shared interface - current: [1A]
+✓ InterfaceCrossModule.zen (0 components)

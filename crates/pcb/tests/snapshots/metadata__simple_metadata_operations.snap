@@ -1,0 +1,19 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build SimpleMetadata.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Latest voltage: 3.3V 1%
+Latest current: 100mA 5%
+Latest resistance: 1k 5%
+All voltages: [5V 5%, 3.3V 1%]
+All currents: [100mA 5%]
+All resistances: [1k 5%]
+Empty get: None
+Empty list: []
+✓ SimpleMetadata.zen (0 components)
