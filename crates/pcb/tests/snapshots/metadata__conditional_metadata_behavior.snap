@@ -1,0 +1,22 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build ConditionalBehavior.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+All voltages: [3.3V, 5V, 12V]
+Processing voltage value: 3.3
+Processing voltage value: 5.0
+Processing voltage value: 12.0
+Maximum voltage found: 12.0 V
+HIGH VOLTAGE DESIGN - adding isolation
+Added isolation voltage: 1kV
+Total voltage domains: 4
+COMPLEX POWER DESIGN
+Consider power management IC
+Final voltage list: [3.3V, 5V, 12V, 1kV]
+✓ ConditionalBehavior.zen (0 components)
