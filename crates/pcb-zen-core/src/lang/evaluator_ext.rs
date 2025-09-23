@@ -1,7 +1,4 @@
-use std::{
-    cell::{Ref, RefMut},
-    sync::Arc,
-};
+use std::cell::{Ref, RefMut};
 
 use starlark::{
     eval::Evaluator,
@@ -43,13 +40,10 @@ pub(crate) trait EvaluatorExt<'v> {
     fn module_value_mut(&self) -> Option<RefMut<'_, ModuleValue<'v>>>;
 
     /// Add a diagnostic to the module value.
-    fn add_diagnostic(&self, diagnostic: Diagnostic);
+    fn add_diagnostic<D: Into<Diagnostic>>(&self, diagnostic: D);
 
     /// Return the [`Context`] that is currently being used.
     fn eval_context(&self) -> Option<&EvalContext>;
-
-    /// Return the FileProvider from the EvalContext if available.
-    fn file_provider(&self) -> Option<Arc<dyn crate::FileProvider>>;
 }
 
 impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
@@ -85,9 +79,9 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
         }
     }
 
-    fn add_diagnostic(&self, diagnostic: Diagnostic) {
+    fn add_diagnostic<D: Into<Diagnostic>>(&self, diagnostic: D) {
         if let Some(ctx) = self.context_value() {
-            ctx.add_diagnostic(diagnostic);
+            ctx.add_diagnostic(diagnostic.into());
         }
     }
 
@@ -105,10 +99,5 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
 
     fn eval_context(&self) -> Option<&EvalContext> {
         self.context_value().map(|ctx| ctx.parent_context())
-    }
-
-    fn file_provider(&self) -> Option<Arc<dyn crate::FileProvider>> {
-        self.eval_context()
-            .and_then(|ctx| ctx.file_provider.clone())
     }
 }

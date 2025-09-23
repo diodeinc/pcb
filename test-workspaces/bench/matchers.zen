@@ -1,0 +1,246 @@
+# Simplified Sequential Matcher Library (Working Version)
+
+# ============================================================================
+# BASIC COMPONENT TYPE MATCHERS
+# ============================================================================
+
+def is_resistor(expected_value=None):
+    """Match a resistor, optionally with specific value"""
+    def _matcher(path, cursor):
+        check(cursor < len(path.components), "path ended, expected resistor")
+        component = path.components[cursor]
+        check(component.type == "resistor", component.name + " is not a resistor (type: " + str(component.type) + ")")
+        if expected_value != None:
+            resistance_str = component.resistance.__str__(component.resistance)
+            check(resistance_str == expected_value, component.name + " value " + resistance_str + " != " + expected_value)
+        return 1
+    return _matcher
+
+def is_capacitor(expected_value=None):
+    """Match a capacitor, optionally with specific value"""
+    def _matcher(path, cursor):
+        check(cursor < len(path.components), "path ended, expected capacitor")
+        component = path.components[cursor]
+        check(component.type == "capacitor", component.name + " is not a capacitor (type: " + str(component.type) + ")")
+        if expected_value != None:
+            capacitance_str = component.capacitance.__str__(component.capacitance)
+            check(capacitance_str == expected_value, component.name + " value " + capacitance_str + " != " + expected_value)
+        return 1
+    return _matcher
+
+def is_inductor(expected_value=None):
+    """Match an inductor, optionally with specific value"""
+    def _matcher(path, cursor):
+        check(cursor < len(path.components), "path ended, expected inductor")
+        component = path.components[cursor]
+        check(component.type == "inductor", component.name + " is not an inductor (type: " + str(component.type) + ")")
+        return 1
+    return _matcher
+
+def is_component_type(component_type):
+    """Match any component of specified type"""
+    def _matcher(path, cursor):
+        check(cursor < len(path.components), "path ended, expected " + component_type)
+        component = path.components[cursor]
+        check(component.type == component_type, component.name + " is not a " + component_type + " (type: " + str(component.type) + ")")
+        return 1
+    return _matcher
+
+# ============================================================================
+# BASIC NAVIGATION MATCHERS
+# ============================================================================
+
+def skip(n):
+    """Skip exactly n components"""
+    def _matcher(path, cursor):
+        check(cursor + n <= len(path.components), "skip(" + str(n) + ") would consume past end of path")
+        return n
+    return _matcher
+
+def skip_rest():
+    """Consume all remaining components"""
+    def _matcher(path, cursor):
+        return len(path.components) - cursor
+    return _matcher
+
+# ============================================================================
+# PROPERTY-BASED MATCHERS
+# ============================================================================
+
+def has_package(expected_package):
+    """Match component with specific package size"""
+    def _matcher(path, cursor):
+        check(cursor < len(path.components), "path ended, expected component")
+        component = path.components[cursor]
+        check(hasattr(component, "properties") and "Package" in component.properties, component.name + " missing Package property")
+        actual = component.properties["Package"]
+        check(actual == expected_package, component.name + " package " + actual + " != " + expected_package)
+        return 1
+    return _matcher
+
+def name_contains(pattern):
+    """Match component whose name contains pattern"""
+    def _matcher(path, cursor):
+        check(cursor < len(path.components), "path ended, expected component")
+        component = path.components[cursor]
+        check(pattern in component.name, component.name + " does not contain '" + pattern + "'")
+        return 1
+    return _matcher
+
+# ============================================================================
+# QUANTIFIED MATCHERS  
+# ============================================================================
+
+def exactly_n_resistors(n):
+    """Exactly n consecutive resistors"""
+    def _matcher(path, cursor):
+        if cursor + n > len(path.components):
+            error("exactly_n_resistors(" + str(n) + ") would consume past end of path")
+        for i in range(n):
+            component = path.components[cursor + i]
+            if component.type != "resistor":
+                error("Component " + str(i + 1) + "/" + str(n) + " (" + component.name + ") is not a resistor")
+        return n
+    return _matcher
+
+def exactly_n_capacitors(n):
+    """Exactly n consecutive capacitors"""
+    def _matcher(path, cursor):
+        if cursor + n > len(path.components):
+            error("exactly_n_capacitors(" + str(n) + ") would consume past end of path")
+        for i in range(n):
+            component = path.components[cursor + i]
+            if component.type != "capacitor":
+                error("Component " + str(i + 1) + "/" + str(n) + " (" + component.name + ") is not a capacitor")
+        return n
+    return _matcher
+
+# ============================================================================
+# ADVANCED COMBINATORS
+# ============================================================================
+
+def sequence(*matchers):
+    """Consume every matcher in order"""
+    def _matcher(path, cursor):
+        n = 0
+        for m in matchers:
+            n += m(path, cursor + n)
+        return n
+    return _matcher
+
+def any_type(*component_types):
+    """Match any component of the specified types"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected component")
+        component = path.components[cursor]
+        
+        for comp_type in component_types:
+            if component.type == comp_type:
+                return 1
+        
+        error(component.name + " type '" + str(component.type) + "' not in " + str(component_types))
+    return _matcher
+
+# Smart IC detection
+_DISCRETE_TYPES = ["resistor", "capacitor", "inductor", "diode", "ferrite", "transistor", "led", 
+                   "mosfet", "bjt", "connector", "testpoint", "header"]
+
+_IC_NAME_HINTS = (
+    "lm", "stm", "rp20", "tps", "ltc", "max", "mp",  # common vendors
+)
+
+def _looks_like_ic(comp):
+    """Heuristic: true ⇢ IC/ASIC/MCU/Regulator, false ⇢ discrete/passive/magnetics"""
+    if comp.type and comp.type.strip() != "" and comp.type.lower() not in _DISCRETE_TYPES:
+        return True                       # explicit 'ic', 'mcu', etc.
+    if comp.type == None or comp.type.strip() == "":
+        # fall back to name heuristics
+        low = comp.name.lower()
+        for hint in _IC_NAME_HINTS:
+            if hint in low:
+                return True
+        return False
+    return False
+
+def skip_ic_components(max_skip=10):
+    """Skip up to max_skip consecutive IC-type parts. Always succeeds (returns 0-max_skip)"""
+    def _matcher(path, cursor):
+        skipped = 0
+        for i in range(max_skip):
+            if cursor + skipped >= len(path.components):
+                break
+            if _looks_like_ic(path.components[cursor + skipped]):
+                skipped += 1
+            else:
+                break
+        return skipped
+    return _matcher
+
+def has_value_contains(substring):
+    """Match component whose value string contains substring"""
+    def _matcher(path, cursor):
+        if cursor >= len(path.components):
+            error("path ended, expected component")
+        component = path.components[cursor]
+        
+        # Get value string from component
+        value_str = ""
+        if hasattr(component, 'resistance') and component.resistance:
+            value_str = component.resistance.__str__(component.resistance)
+        elif hasattr(component, 'capacitance') and component.capacitance:
+            value_str = component.capacitance.__str__(component.capacitance)
+        elif hasattr(component, 'inductance') and component.inductance:
+            value_str = component.inductance.__str__(component.inductance)
+        
+        if substring not in value_str:
+            error(component.name + " value '" + value_str + "' does not contain '" + substring + "'")
+        return 1
+    return _matcher
+
+def alternating(matcher1, matcher2, count):
+    """Alternating pattern: matcher1, matcher2, matcher1, matcher2, ... for count total"""
+    def _matcher(path, cursor):
+        consumed = 0
+        for i in range(count):
+            if i % 2 == 0:
+                consumed += matcher1(path, cursor + consumed)
+            else:
+                consumed += matcher2(path, cursor + consumed)
+        return consumed
+    return _matcher
+
+def contains_type(component_type):
+    """Wildcard-skip until we meet a component of the desired type"""
+    def _matcher(path, cursor):
+        for i in range(cursor, len(path.components)):
+            if path.components[i].type == component_type:
+                # consume everything *through* the matching component
+                return (i - cursor) + 1
+        error("contains_type(" + component_type + ") - not present")
+    return _matcher
+
+def contains_name(name_pattern):
+    """Wildcard-skip until we meet a component with name containing pattern"""
+    def _matcher(path, cursor):
+        for i in range(cursor, len(path.components)):
+            if name_pattern in path.components[i].name:
+                # consume everything *through* the matching component
+                return (i - cursor) + 1
+        error("contains_name(" + name_pattern + ") - not present")
+    return _matcher
+
+# subsequence() was removed - had hardcoded matcher checks
+
+# ============================================================================
+# DEBUGGING HELPERS
+# ============================================================================
+
+def debug_print_path(path, cursor=0):
+    """Print path information for debugging"""
+    print("Path Debug Info:")
+    print("  Total components: " + str(len(path.components)))
+    print("  Current cursor: " + str(cursor))
+    for i, component in enumerate(path.components):
+        marker = " -> " if i == cursor else "    "
+        print(marker + str(i) + ": " + component.name + " (" + str(component.type) + ")")

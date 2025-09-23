@@ -2,4 +2,4 @@
 source: crates/pcb-zen/tests/test.rs
 expression: netlist
 ---
-Error: [TEMP_DIR]test_missing.zen:5:1-12:2 Unconnected pin(s): GND, OE, Q2, Q3, Q4, VDD
+Error: [TEMP_DIR]test_missing.zen:3:1-11:2 Unconnected pin(s): GND, OE, Q2, Q3, Q4, VDD

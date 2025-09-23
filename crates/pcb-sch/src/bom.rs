@@ -1,92 +1,175 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AttributeValue, InstanceKind, PhysicalValue, Schematic};
+use crate::{InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BomEntry {
-    pub path: String,
-    pub designator: String,
+pub struct Bom {
+    entries: HashMap<String, BomEntry>,   // path -> BomEntry
+    designators: HashMap<String, String>, // path -> designator
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct GroupedBomEntry {
+    designators: BTreeSet<String>,
+    #[serde(flatten)]
+    entry: BomEntry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>,
+    mpn: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub alternatives: Vec<String>,
+    alternatives: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
+    manufacturer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    package: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub well_known_module: Option<WellKnownModule>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub voltage: Option<PhysicalValue>,
-    pub dnp: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AggregatedBomEntry {
-    pub designators: BTreeSet<String>,
-    pub manufacturer: Option<String>,
-    pub mpn: Option<String>,
-    pub alternatives: Vec<String>,
-    pub package: Option<String>,
-    pub value: Option<String>,
-    pub description: Option<String>,
-    pub well_known_module: Option<WellKnownModule>,
-    pub voltage: Option<PhysicalValue>,
-    pub dnp: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct GroupKey {
-    mpn: Option<String>,
-    manufacturer: Option<String>,
-    package: Option<String>,
-    value: Option<String>,
-    description: Option<String>,
-    alternatives: Vec<String>,
+    generic_data: Option<GenericComponent>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    offers: Vec<MatchedOffer>,
     dnp: bool,
 }
 
-impl From<&BomEntry> for GroupKey {
-    fn from(entry: &BomEntry) -> Self {
-        Self {
-            mpn: entry.mpn.clone(),
-            manufacturer: entry.manufacturer.clone(),
-            package: entry.package.clone(),
-            value: entry.value.clone(),
-            description: entry.description.clone(),
-            alternatives: entry.alternatives.clone(),
-            dnp: entry.dnp,
+impl BomEntry {
+    pub fn matches_mpn(&self, mpn: &str) -> bool {
+        // Check main MPN
+        if let Some(entry_mpn) = &self.mpn {
+            if entry_mpn == mpn {
+                return true;
+            }
         }
+
+        // Check alternatives
+        self.alternatives.iter().any(|alt| alt == mpn)
+    }
+
+    pub fn matches_generic(&self, key: &GenericMatchingKey) -> bool {
+        // Check package compatibility
+        if let Some(entry_package) = &self.package {
+            if &key.package != entry_package {
+                return false;
+            }
+        } else {
+            // Entry has no package specified, cannot match a specific package requirement
+            return false;
+        }
+
+        // Check component-specific matching
+        if let Some(generic_data) = &self.generic_data {
+            generic_data.matches(&key.component)
+        } else {
+            false
+        }
+    }
+
+    pub fn add_offers(&mut self, key: BomMatchingKey, offers: Vec<Offer>) {
+        self.offers
+            .extend(offers.into_iter().map(|offer| MatchedOffer {
+                offer,
+                matched_by: key.clone(),
+            }));
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct UngroupedBomEntry {
+    path: String,
+    designator: String,
+    #[serde(flatten)]
+    entry: BomEntry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "component_type")]
-pub enum WellKnownModule {
+pub enum GenericComponent {
     Capacitor(Capacitor),
     Resistor(Resistor),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl GenericComponent {
+    pub fn matches(&self, key: &GenericComponent) -> bool {
+        match (self, key) {
+            (GenericComponent::Resistor(resistor), GenericComponent::Resistor(key_resistor)) => {
+                resistor.matches(key_resistor)
+            }
+            (
+                GenericComponent::Capacitor(capacitor),
+                GenericComponent::Capacitor(key_capacitor),
+            ) => capacitor.matches(key_capacitor),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Capacitor {
     pub capacitance: PhysicalValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dielectric: Option<Dielectric>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub esr: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voltage: Option<PhysicalValue>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl Capacitor {
+    pub fn matches(&self, key: &Capacitor) -> bool {
+        // Check capacitance range (key range must fit within component tolerance)
+        if !key.capacitance.fits_within_default(&self.capacitance) {
+            return false;
+        }
+
+        // Check voltage: key voltage must be > component voltage
+        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
+            if key_voltage.value > component_voltage.value {
+                return false;
+            }
+        }
+
+        // Check dielectric: key dielectric must match component dielectric
+        if let (Some(key_dielec), Some(component_dielec)) = (&key.dielectric, &self.dielectric) {
+            if key_dielec != component_dielec {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Resistor {
     pub resistance: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voltage: Option<PhysicalValue>,
+}
+
+impl Resistor {
+    pub fn matches(&self, key: &Resistor) -> bool {
+        // Check resistance range (key range must fit within component tolerance)
+        if !key.resistance.fits_within_default(&self.resistance) {
+            return false;
+        }
+
+        // Check voltage: key voltage must be > component voltage
+        if let (Some(key_voltage), Some(component_voltage)) = (&key.voltage, &self.voltage) {
+            if key_voltage.value > component_voltage.value {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -119,115 +202,411 @@ impl FromStr for Dielectric {
     }
 }
 
-/// Generate ungrouped BOM entries from a schematic
-pub fn generate_bom_entries(schematic: &mut Schematic) -> BTreeMap<String, BomEntry> {
-    schematic.assign_reference_designators();
-
-    let mut bom_entries = BTreeMap::new();
-
-    // Iterate through all instances and find components
-    for (instance_ref, instance) in &schematic.instances {
-        if instance.kind != InstanceKind::Component {
-            continue;
-        }
-
-        let designator = instance
-            .reference_designator
-            .clone()
-            .unwrap_or_else(|| format!("?{}", instance_ref.instance_path.join(".")));
-
-        let path = instance_ref.instance_path.join(".");
-
-        // Extract attributes directly from the original map
-        let mpn = get_string_attribute(&instance.attributes, &["MPN", "Mpn", "mpn"]);
-        let manufacturer =
-            get_string_attribute(&instance.attributes, &["Manufacturer", "manufacturer"]);
-        let package = get_string_attribute(&instance.attributes, &["Package", "package"]);
-        let description =
-            get_string_attribute(&instance.attributes, &["Description", "description"]);
-        let voltage = get_physical_attribute(&instance.attributes, &["__voltage__"]);
-
-        // Determine if component should be populated
-        let do_not_populate = get_string_attribute(
-            &instance.attributes,
-            &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
-        )
-        .map(|s| s.to_lowercase() == "true" || s == "1")
-        .unwrap_or(false);
-
-        // Check if it's a test component
-        let is_test_component = designator.starts_with("TP")
-            || get_string_attribute(&instance.attributes, &["type", "Type"])
-                .map(|t| t.to_lowercase().contains("test"))
-                .unwrap_or(false);
-
-        let dnp = do_not_populate || is_test_component;
-
-        let value = get_string_attribute(&instance.attributes, &["Value"]);
-
-        // Extract alternates from structured AttributeValue::Array
-        let alternatives = instance
-            .attributes
-            .get("__alternatives__")
-            .and_then(|attr| match attr {
-                AttributeValue::Array(arr) => Some(
-                    arr.iter()
-                        .filter_map(|av| match av {
-                            AttributeValue::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<String>>(),
-                ),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let well_known_module = detect_well_known_module(&instance.attributes);
-
-        bom_entries.insert(
-            path.clone(),
-            BomEntry {
-                path: path.clone(),
-                designator,
-                mpn,
-                manufacturer,
-                alternatives,
-                package,
-                value,
-                description,
-                well_known_module,
-                dnp,
-                voltage,
-            },
-        );
-    }
-
-    bom_entries
+// BOM Matching API
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BomMatchingKey {
+    Mpn(String),
+    Generic(GenericMatchingKey),
+    Path(Vec<String>),
 }
 
-/// Detect well-known modules based on Type attribute
-fn detect_well_known_module(
-    attributes: &HashMap<String, AttributeValue>,
-) -> Option<WellKnownModule> {
-    let module_type = get_string_attribute(attributes, &["Type"])?;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GenericMatchingKey {
+    #[serde(flatten)]
+    pub component: GenericComponent,
+    pub package: String,
+}
 
-    match module_type.to_lowercase().as_str() {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Offer {
+    pub distributor: String,
+    pub distributor_pn: String,
+    pub manufacturer: Option<String>,
+    pub manufacturer_pn: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MatchedOffer {
+    #[serde(flatten)]
+    pub offer: Offer,
+    pub matched_by: BomMatchingKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BomMatchingRule {
+    pub key: BomMatchingKey,
+    pub offers: Vec<Offer>,
+}
+
+impl Bom {
+    /// Get the number of entries in the BOM
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the BOM is empty
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn from_schematic(schematic: &Schematic) -> Self {
+        let mut designators = HashMap::<String, String>::new();
+        let mut entries = HashMap::<String, BomEntry>::new();
+
+        schematic
+            .instances
+            .iter()
+            .filter(|(_, instance)| instance.kind == InstanceKind::Component)
+            .for_each(|(instance_ref, instance)| {
+                let designator = instance.reference_designator.clone().unwrap();
+                let path = instance_ref.instance_path.join(".");
+                let bom_entry = BomEntry {
+                    mpn: instance.mpn(),
+                    manufacturer: instance.manufacturer(),
+                    description: instance.description(),
+                    package: instance.package(),
+                    value: instance.value(),
+                    alternatives: instance.string_list_attr(&["__alternatives__"]),
+                    generic_data: detect_generic_component(instance),
+                    offers: Vec::new(),
+                    dnp: instance.dnp(),
+                };
+                entries.insert(path.clone(), bom_entry);
+                designators.insert(path, designator);
+            });
+
+        Bom {
+            entries,
+            designators,
+        }
+    }
+
+    pub fn ungrouped_json(&self) -> String {
+        let mut entries = self
+            .entries
+            .iter()
+            .map(|(path, entry)| UngroupedBomEntry {
+                path: path.clone(),
+                designator: self.designators[path].clone(),
+                entry: entry.clone(),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.designator.cmp(&b.designator));
+        serde_json::to_string_pretty(&entries).unwrap()
+    }
+
+    pub fn grouped_json(&self) -> String {
+        // Group entries by their BomEntry content
+        let mut groups = HashMap::<BomEntry, BTreeSet<String>>::new();
+
+        for (path, entry) in &self.entries {
+            groups
+                .entry(entry.clone())
+                .or_default()
+                .insert(self.designators[path].clone());
+        }
+
+        let mut grouped_entries = groups
+            .into_iter()
+            .map(|(entry, designators)| GroupedBomEntry { entry, designators })
+            .collect::<Vec<_>>();
+
+        grouped_entries.sort_by(|a, b| {
+            let a_designator = a.designators.iter().next().unwrap();
+            let b_designator = b.designators.iter().next().unwrap();
+            a_designator.cmp(b_designator)
+        });
+
+        serde_json::to_string_pretty(&grouped_entries).unwrap()
+    }
+
+    pub fn apply_bom_rule(&mut self, rule: &BomMatchingRule) {
+        match &rule.key {
+            BomMatchingKey::Path(target_paths) => {
+                for target_path in target_paths {
+                    if let Some(entry) = self.entries.get_mut(target_path) {
+                        entry.add_offers(rule.key.clone(), rule.offers.clone());
+                    }
+                }
+            }
+            BomMatchingKey::Mpn(mpn) => {
+                for entry in self.entries.values_mut() {
+                    if entry.matches_mpn(mpn) {
+                        entry.add_offers(rule.key.clone(), rule.offers.clone());
+                    }
+                }
+            }
+            BomMatchingKey::Generic(generic_key) => {
+                for entry in self.entries.values_mut() {
+                    if entry.matches_generic(generic_key) {
+                        entry.add_offers(rule.key.clone(), rule.offers.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn apply_bom_rules(&mut self, rules: &[BomMatchingRule]) {
+        for rule in rules {
+            self.apply_bom_rule(rule);
+        }
+    }
+}
+
+/// Errors that can occur during KiCad schematic BOM parsing
+#[derive(Debug, thiserror::Error)]
+pub enum KiCadBomError {
+    #[error("Failed to parse KiCad schematic S-expression: {0}")]
+    ParseError(#[from] pcb_sexpr::ParseError),
+
+    #[error("Invalid KiCad schematic format")]
+    InvalidFormat,
+}
+
+/// Parse KiCad schematic file contents and extract BOM
+pub fn bom_from_kicad_schematic(kicad_sch_content: &str) -> Result<Bom, KiCadBomError> {
+    let parsed_sch = pcb_sexpr::parse(kicad_sch_content)?;
+
+    let components = extract_kicad_symbols(&parsed_sch)?
+        .into_iter()
+        .filter_map(|symbol| extract_kicad_symbol_entry(symbol).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let (entries, designators) = components
+        .into_iter()
+        .map(|(path, designator, entry)| ((path.clone(), entry), (path, designator)))
+        .unzip();
+
+    Ok(Bom {
+        entries,
+        designators,
+    })
+}
+
+/// Parse KiCad schematic from file path, including hierarchical sheets
+pub fn bom_from_kicad_schematic_file(
+    kicad_sch_path: &std::path::Path,
+) -> Result<Bom, KiCadBomError> {
+    let mut all_entries = HashMap::new();
+    let mut all_designators = HashMap::new();
+
+    // Process the root schematic and all hierarchical sheets
+    collect_hierarchical_bom(kicad_sch_path, &mut all_entries, &mut all_designators)?;
+
+    Ok(Bom {
+        entries: all_entries,
+        designators: all_designators,
+    })
+}
+
+/// Recursively collect BOM from hierarchical KiCad schematics
+fn collect_hierarchical_bom(
+    sch_path: &std::path::Path,
+    entries: &mut HashMap<String, BomEntry>,
+    designators: &mut HashMap<String, String>,
+) -> Result<(), KiCadBomError> {
+    use std::fs;
+
+    let sch_content = fs::read_to_string(sch_path).map_err(|_| KiCadBomError::InvalidFormat)?;
+
+    let parsed_sch = pcb_sexpr::parse(&sch_content)?;
+
+    // Extract components from this schematic
+    let components = extract_kicad_symbols(&parsed_sch)?
+        .into_iter()
+        .filter_map(|symbol| extract_kicad_symbol_entry(symbol).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Add components to the overall BOM
+    for (path, designator, entry) in components {
+        entries.insert(path.clone(), entry);
+        designators.insert(path, designator);
+    }
+
+    // Find and process hierarchical sheets
+    let sheet_files = extract_sheet_files(&parsed_sch)?;
+    let base_dir = sch_path.parent().ok_or(KiCadBomError::InvalidFormat)?;
+
+    for sheet_file in sheet_files {
+        let sheet_path = base_dir.join(&sheet_file);
+        if sheet_path.exists() {
+            collect_hierarchical_bom(&sheet_path, entries, designators)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract referenced sheet files from KiCad schematic
+fn extract_sheet_files(parsed_sch: &pcb_sexpr::Sexpr) -> Result<Vec<String>, KiCadBomError> {
+    let root_list = parsed_sch.as_list().ok_or(KiCadBomError::InvalidFormat)?;
+
+    let sheet_files = root_list
+        .iter()
+        .filter_map(|expr| expr.as_list())
+        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("sheet"))
+        .flat_map(|sheet| sheet.iter())
+        .filter_map(|item| item.as_list())
+        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("property"))
+        .filter(|list| list.len() >= 3 && list[1].as_atom() == Some("Sheetfile"))
+        .filter_map(|list| list[2].as_atom().map(|s| s.to_string()))
+        .collect();
+
+    Ok(sheet_files)
+}
+
+/// Generate BOM with KiCad fallback if design BOM is empty
+pub fn generate_bom_with_fallback(
+    design_bom: Bom,
+    layout_path: Option<&std::path::Path>,
+) -> Result<Bom, KiCadBomError> {
+    if design_bom.is_empty() {
+        if let Some(layout_dir) = layout_path {
+            let kicad_sch_path = layout_dir.join("layout.kicad_sch");
+
+            if kicad_sch_path.exists() {
+                return bom_from_kicad_schematic_file(&kicad_sch_path);
+            }
+        }
+    }
+
+    Ok(design_bom)
+}
+
+/// Extract all symbol S-expressions from KiCad schematic
+fn extract_kicad_symbols(
+    parsed_sch: &pcb_sexpr::Sexpr,
+) -> Result<Vec<&[pcb_sexpr::Sexpr]>, KiCadBomError> {
+    let root_list = parsed_sch.as_list().ok_or(KiCadBomError::InvalidFormat)?;
+
+    let symbols = root_list
+        .iter()
+        .filter_map(|expr| expr.as_list())
+        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("symbol"))
+        .collect();
+
+    Ok(symbols)
+}
+
+/// Extract BOM entry from a KiCad symbol S-expression
+fn extract_kicad_symbol_entry(
+    symbol_list: &[pcb_sexpr::Sexpr],
+) -> Result<Option<(String, String, BomEntry)>, KiCadBomError> {
+    // Parse symbol attributes using functional approach
+    let in_bom = symbol_list
+        .iter()
+        .filter_map(|item| item.as_list())
+        .find(|list| !list.is_empty() && list[0].as_atom() == Some("in_bom"))
+        .and_then(|list| list.get(1)?.as_atom())
+        .map(|v| v == "yes")
+        .unwrap_or(false);
+
+    if !in_bom {
+        return Ok(None);
+    }
+
+    let properties: HashMap<String, String> = symbol_list
+        .iter()
+        .filter_map(|item| item.as_list())
+        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("property"))
+        .filter_map(|list| {
+            if list.len() >= 3 {
+                Some((
+                    list[1].as_atom()?.to_string(),
+                    list[2].as_atom()?.to_string(),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let reference = symbol_list
+        .iter()
+        .filter_map(|item| item.as_list())
+        .find(|list| !list.is_empty() && list[0].as_atom() == Some("instances"))
+        .and_then(extract_kicad_reference_from_instances);
+
+    let designator = reference
+        .or_else(|| properties.get("Reference").cloned())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    // Filter out power symbols and net labels (designators starting with #)
+    if designator.starts_with('#') {
+        return Ok(None);
+    }
+
+    let path = format!("kicad::{}", designator);
+
+    // Use Value as MPN if no explicit MPN and Value has no spaces (looks like part number)
+    let mpn = properties.get("MPN").cloned().or_else(|| {
+        properties
+            .get("Value")
+            .filter(|value| !value.contains(' '))
+            .cloned()
+    });
+
+    let entry = BomEntry {
+        mpn,
+        alternatives: Vec::new(),
+        manufacturer: properties.get("Manufacturer").cloned(),
+        package: properties
+            .get("Footprint")
+            .or_else(|| properties.get("Package"))
+            .map(|pkg| pkg.split(':').next_back().unwrap_or(pkg).to_string()),
+        value: properties.get("Value").cloned(),
+        description: properties.get("Description").cloned(),
+        generic_data: None,
+        offers: Vec::new(),
+        dnp: ["DNP", "Do_not_populate"]
+            .iter()
+            .any(|key| properties.get(*key).map(|v| v == "yes").unwrap_or(false)),
+    };
+
+    Ok(Some((path, designator, entry)))
+}
+
+/// Extract reference designator from instances section
+fn extract_kicad_reference_from_instances(instances_list: &[pcb_sexpr::Sexpr]) -> Option<String> {
+    instances_list
+        .iter()
+        .filter_map(|item| item.as_list())
+        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("project"))
+        .flat_map(|project| &project[1..])
+        .filter_map(|item| item.as_list())
+        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("path"))
+        .flat_map(|path| &path[1..])
+        .filter_map(|item| item.as_list())
+        .find(|list| !list.is_empty() && list[0].as_atom() == Some("reference") && list.len() > 1)
+        .and_then(|ref_list| ref_list[1].as_atom().map(|s| s.to_string()))
+}
+
+/// Detect generic components based on Type attribute
+fn detect_generic_component(instance: &crate::Instance) -> Option<GenericComponent> {
+    match instance.component_type()?.as_str() {
         "resistor" => {
-            if let Some(resistance) = get_physical_attribute(attributes, &["__resistance__"]) {
-                return Some(WellKnownModule::Resistor(Resistor { resistance }));
+            if let Some(resistance) = instance.physical_attr(&["__resistance__"]) {
+                let voltage = instance.physical_attr(&["__voltage__"]);
+                return Some(GenericComponent::Resistor(Resistor {
+                    resistance,
+                    voltage,
+                }));
             }
         }
         "capacitor" => {
-            if let Some(capacitance) = get_physical_attribute(attributes, &["__capacitance__"]) {
-                let dielectric =
-                    get_string_attribute(attributes, &["Dielectric"]).and_then(|d| d.parse().ok());
+            if let Some(capacitance) = instance.physical_attr(&["__capacitance__"]) {
+                let dielectric = instance
+                    .string_attr(&["Dielectric", "dielectric"])
+                    .and_then(|d| d.parse().ok());
 
-                let esr = get_physical_attribute(attributes, &["__esr__"]);
+                let esr = instance.physical_attr(&["__esr__"]);
+                let voltage = instance.physical_attr(&["__voltage__"]);
 
-                return Some(WellKnownModule::Capacitor(Capacitor {
+                return Some(GenericComponent::Capacitor(Capacitor {
                     capacitance,
                     dielectric,
                     esr,
+                    voltage,
                 }));
             }
         }
@@ -237,80 +616,31 @@ fn detect_well_known_module(
     None
 }
 
-/// Group BOM entries that have identical properties
-pub fn group_bom_entries(entries: BTreeMap<String, BomEntry>) -> Vec<AggregatedBomEntry> {
-    use std::collections::HashMap;
-
-    let mut grouped: HashMap<GroupKey, AggregatedBomEntry> = HashMap::new();
-
-    for (_, entry) in entries {
-        let key = GroupKey::from(&entry);
-
-        grouped
-            .entry(key)
-            .and_modify(|existing| {
-                existing.designators.insert(entry.designator.clone());
-            })
-            .or_insert(AggregatedBomEntry {
-                designators: {
-                    let mut set = BTreeSet::new();
-                    set.insert(entry.designator);
-                    set
-                },
-                manufacturer: entry.manufacturer,
-                mpn: entry.mpn,
-                alternatives: entry.alternatives,
-                package: entry.package,
-                value: entry.value,
-                description: entry.description,
-                well_known_module: entry.well_known_module,
-                voltage: entry.voltage,
-                dnp: entry.dnp,
-            });
-    }
-
-    let mut result: Vec<_> = grouped.into_values().collect();
-    result.sort_by(|a, b| a.designators.first().cmp(&b.designators.first()));
-    result
-}
-
-/// Helper function to extract string values from attributes, trying multiple key variations
-fn get_string_attribute(
-    attributes: &HashMap<String, AttributeValue>,
-    keys: &[&str],
-) -> Option<String> {
-    keys.iter().find_map(|&key| {
-        attributes.get(key).and_then(|attr| match attr {
-            AttributeValue::String(s) => Some(s.clone()),
-            AttributeValue::Physical(pv) => Some(pv.to_string()),
-            _ => None,
-        })
-    })
-}
-
-/// Helper function to extract PhysicalValue from attributes, trying multiple key variations
-fn get_physical_attribute(
-    attributes: &HashMap<String, AttributeValue>,
-    keys: &[&str],
-) -> Option<PhysicalValue> {
-    keys.iter().find_map(|&key| {
-        attributes.get(key).and_then(|attr| match attr {
-            AttributeValue::Physical(pv) => Some(pv.clone()),
-            _ => None,
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PhysicalUnit;
+    use crate::{AttributeValue, Instance, ModuleRef, PhysicalUnit};
     use rust_decimal::prelude::FromPrimitive;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn test_instance(attributes: HashMap<String, AttributeValue>) -> Instance {
+        Instance {
+            type_ref: ModuleRef {
+                source_path: PathBuf::new(),
+                module_name: String::default(),
+            },
+            kind: InstanceKind::Component,
+            attributes,
+            children: Default::default(),
+            reference_designator: Some("U1".to_string()),
+            symbol_positions: HashMap::new(),
+        }
+    }
 
     #[test]
-    fn test_detect_well_known_module() {
+    fn test_detect_generic_component() {
         // Create a mock resistor with Type attribute
         let mut attributes = HashMap::new();
         attributes.insert(
@@ -322,10 +652,11 @@ mod tests {
             AttributeValue::Physical(PhysicalValue::new(10000.0, 0.01, PhysicalUnit::Ohms)),
         );
 
-        let result = detect_well_known_module(&attributes);
+        let instance = test_instance(attributes);
+        let result = detect_generic_component(&instance);
 
         match result {
-            Some(WellKnownModule::Resistor(resistor)) => {
+            Some(GenericComponent::Resistor(resistor)) => {
                 assert_eq!(
                     resistor.resistance.value,
                     Decimal::from_f64(10000.0).unwrap()
@@ -353,10 +684,11 @@ mod tests {
             AttributeValue::String("X7R".to_string()),
         );
 
-        let result = detect_well_known_module(&capacitor_attributes);
+        let instance = test_instance(capacitor_attributes);
+        let result = detect_generic_component(&instance);
 
         match result {
-            Some(WellKnownModule::Capacitor(capacitor)) => {
+            Some(GenericComponent::Capacitor(capacitor)) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
                     (capacitor.capacitance.value - expected_value).abs()
@@ -382,9 +714,9 @@ mod tests {
             "resistance": {"value": "10000.0", "tolerance": "0.01", "unit": "Ohms"}
         }"#;
 
-        let resistor: WellKnownModule = serde_json::from_str(resistor_json).unwrap();
+        let resistor: GenericComponent = serde_json::from_str(resistor_json).unwrap();
         match resistor {
-            WellKnownModule::Resistor(r) => {
+            GenericComponent::Resistor(r) => {
                 assert_eq!(r.resistance.value, Decimal::from_f64(10000.0).unwrap());
                 assert_eq!(r.resistance.tolerance, Decimal::from_f64(0.01).unwrap());
             }
@@ -398,9 +730,9 @@ mod tests {
             "dielectric": "X7R"
         }"#;
 
-        let capacitor: WellKnownModule = serde_json::from_str(capacitor_json).unwrap();
+        let capacitor: GenericComponent = serde_json::from_str(capacitor_json).unwrap();
         match capacitor {
-            WellKnownModule::Capacitor(c) => {
+            GenericComponent::Capacitor(c) => {
                 let expected_value = Decimal::from_f64(100e-9).unwrap();
                 assert!(
                     (c.capacitance.value - expected_value).abs()
@@ -413,63 +745,359 @@ mod tests {
         }
 
         // Test round-trip serialization
-        let original_resistor = WellKnownModule::Resistor(Resistor {
+        let original_resistor = GenericComponent::Resistor(Resistor {
             resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
+            voltage: None,
         });
 
         let json = serde_json::to_string_pretty(&original_resistor).unwrap();
-        let deserialized: WellKnownModule = serde_json::from_str(&json).unwrap();
+        let deserialized: GenericComponent = serde_json::from_str(&json).unwrap();
         assert_eq!(original_resistor, deserialized);
     }
 
     #[test]
-    fn test_get_string_attribute() {
-        let mut attributes = HashMap::new();
-        attributes.insert(
-            "Mpn".to_string(),
-            AttributeValue::String("RC0603FR-0710KL".to_string()),
-        );
-        attributes.insert(
-            "__resistance__".to_string(),
-            AttributeValue::Physical(PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms)),
-        );
+    fn test_resistor_matching() {
+        // Component: 1kΩ ±0% (defaults to ±1%)
+        let component_resistor = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+            voltage: None,
+        };
 
-        // Test string attribute extraction
-        let mpn = get_string_attribute(&attributes, &["MPN", "Mpn", "mpn"]);
-        assert_eq!(mpn, Some("RC0603FR-0710KL".to_string()));
+        // Key: 1kΩ ±1% - should match (exact fit)
+        let matching_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(component_resistor.matches(&matching_key));
 
-        // Test physical value converted to string
-        let resistance_str = get_string_attribute(&attributes, &["__resistance__"]);
-        assert!(resistance_str.is_some());
+        // Key: 1kΩ ±0.5% - should match (tighter tolerance fits)
+        let tighter_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.005, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(component_resistor.matches(&tighter_key));
 
-        // Test missing attribute
-        let missing = get_string_attribute(&attributes, &["Missing"]);
-        assert_eq!(missing, None);
+        // Key: 1kΩ ±5% - should NOT match (looser tolerance doesn't fit)
+        let looser_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(!component_resistor.matches(&looser_key));
+
+        // Key: 2kΩ ±1% - should NOT match (different value)
+        let different_value_key = Resistor {
+            resistance: PhysicalValue::new(2000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        assert!(!component_resistor.matches(&different_value_key));
     }
 
     #[test]
-    fn test_get_physical_attribute() {
-        let mut attributes = HashMap::new();
-        let physical_value = PhysicalValue::new(4700.0, 0.01, PhysicalUnit::Ohms);
-        attributes.insert(
-            "__resistance__".to_string(),
-            AttributeValue::Physical(physical_value.clone()),
+    fn test_resistor_voltage_matching() {
+        let component_resistor = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(50.0, 0.0, PhysicalUnit::Volts)),
+        };
+
+        // Key voltage (25V) <= component voltage (50V) - should match
+        let lower_voltage_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(25.0, 0.0, PhysicalUnit::Volts)),
+        };
+        assert!(component_resistor.matches(&lower_voltage_key));
+
+        // Key voltage (100V) > component voltage (50V) - should NOT match
+        let higher_voltage_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(100.0, 0.0, PhysicalUnit::Volts)),
+        };
+        assert!(!component_resistor.matches(&higher_voltage_key));
+
+        // No component voltage specified - should match any key voltage
+        let no_voltage_component = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: None,
+        };
+        let any_voltage_key = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: Some(PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Volts)),
+        };
+        assert!(no_voltage_component.matches(&any_voltage_key));
+    }
+
+    #[test]
+    fn test_capacitor_matching() {
+        // Component: 100nF ±10% X7R
+        let component_capacitor = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            dielectric: Some(Dielectric::X7R),
+            esr: None,
+            voltage: None,
+        };
+
+        // Key: 100nF ±10% X7R - should match (exact)
+        let matching_key = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+            esr: None,
+        };
+        assert!(component_capacitor.matches(&matching_key));
+
+        // Key: 100nF ±5% X7R - should match (tighter tolerance)
+        let tighter_key = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.05, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+            esr: None,
+        };
+        assert!(component_capacitor.matches(&tighter_key));
+
+        // Key: 100nF ±20% X7R - should NOT match (looser tolerance)
+        let looser_key = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.2, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+            esr: None,
+        };
+        assert!(!component_capacitor.matches(&looser_key));
+
+        // Key: 100nF ±10% C0G - should NOT match (different dielectric)
+        let different_dielectric_key = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::C0G),
+            esr: None,
+        };
+        assert!(!component_capacitor.matches(&different_dielectric_key));
+
+        // Key: No dielectric specified - should match (no requirement)
+        let no_dielectric_key = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: None,
+            esr: None,
+        };
+        assert!(component_capacitor.matches(&no_dielectric_key));
+    }
+
+    #[test]
+    fn test_capacitor_no_dielectric_component() {
+        // Component: 100nF ±10% (no dielectric specified)
+        let component_capacitor = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            dielectric: None,
+            esr: None,
+            voltage: None,
+        };
+
+        // Key: Any dielectric specified - should match (no component requirement)
+        let x7r_key = Capacitor {
+            capacitance: PhysicalValue::new(100e-9, 0.1, PhysicalUnit::Farads),
+            voltage: None,
+            dielectric: Some(Dielectric::X7R),
+            esr: None,
+        };
+        assert!(component_capacitor.matches(&x7r_key));
+    }
+
+    #[test]
+    fn test_bom_matching_rules() {
+        // Create a simple BOM with one resistor
+        let mut bom = Bom {
+            entries: HashMap::new(),
+            designators: HashMap::new(),
+        };
+
+        let resistor_entry = BomEntry {
+            mpn: None,
+            manufacturer: None,
+            description: None,
+            package: Some("0603".to_string()),
+            value: Some("1kOhm".to_string()),
+            alternatives: vec![],
+            generic_data: Some(GenericComponent::Resistor(Resistor {
+                resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
+                voltage: None,
+            })),
+            offers: Vec::new(),
+            dnp: false,
+        };
+
+        bom.entries.insert("R1.R".to_string(), resistor_entry);
+        bom.designators.insert("R1.R".to_string(), "R1".to_string());
+
+        // Test resistor matching rule
+        let resistor_rule = BomMatchingRule {
+            key: BomMatchingKey::Generic(GenericMatchingKey {
+                component: GenericComponent::Resistor(Resistor {
+                    resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+                    voltage: None,
+                }),
+                package: "0603".to_string(),
+            }),
+            offers: vec![Offer {
+                distributor: "digikey".to_string(),
+                distributor_pn: "311-1.00KHRCT-ND".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            }],
+        };
+
+        bom.apply_bom_rule(&resistor_rule);
+
+        // Verify the rule was applied
+        let entry = &bom.entries["R1.R"];
+        assert_eq!(entry.offers.len(), 1);
+        let expected_matched_offer = MatchedOffer {
+            offer: Offer {
+                distributor: "digikey".to_string(),
+                distributor_pn: "311-1.00KHRCT-ND".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            },
+            matched_by: resistor_rule.key.clone(),
+        };
+        assert!(entry.offers.contains(&expected_matched_offer));
+
+        // Test path matching rule
+        let path_rule = BomMatchingRule {
+            key: BomMatchingKey::Path(vec!["R1.R".to_string()]),
+            offers: vec![Offer {
+                distributor: "mouser".to_string(),
+                distributor_pn: "603-RC0603FR-071KL".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            }],
+        };
+
+        bom.apply_bom_rule(&path_rule);
+
+        // Verify the path rule added another offer (now we have 2 offers)
+        let entry = &bom.entries["R1.R"];
+        assert_eq!(entry.offers.len(), 2);
+        let expected_mouser_matched_offer = MatchedOffer {
+            offer: Offer {
+                distributor: "mouser".to_string(),
+                distributor_pn: "603-RC0603FR-071KL".to_string(),
+                manufacturer: Some("Yageo".to_string()),
+                manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+            },
+            matched_by: path_rule.key.clone(),
+        };
+        assert!(entry.offers.contains(&expected_mouser_matched_offer));
+    }
+
+    #[test]
+    fn test_kicad_bom_parsing() {
+        let kicad_sch_content = r#"
+        (kicad_sch
+            (version 20250114)
+            (symbol
+                (lib_id "Library:R")
+                (at 100 100 0)
+                (unit 1)
+                (in_bom yes)
+                (on_board yes)
+                (property "Reference" "R1"
+                    (at 100 100 0)
+                )
+                (property "Value" "RC0603FR-0710KL")
+                (property "Footprint" "MyLib:R_0603_1608Metric")
+                (instances
+                    (project "test"
+                        (path "/test"
+                            (reference "R1")
+                            (unit 1)
+                        )
+                    )
+                )
+            )
+            (symbol
+                (lib_id "Library:GND")
+                (at 200 200 0)
+                (unit 1)
+                (in_bom no)
+                (on_board yes)
+                (property "Reference" "PWR01"
+                    (at 200 200 0)
+                )
+            )
+        )"#;
+
+        let result = bom_from_kicad_schematic(kicad_sch_content);
+        assert!(
+            result.is_ok(),
+            "Failed to parse KiCad schematic: {:?}",
+            result.err()
         );
-        attributes.insert(
-            "StringValue".to_string(),
-            AttributeValue::String("not physical".to_string()),
-        );
 
-        // Test physical attribute extraction
-        let resistance = get_physical_attribute(&attributes, &["__resistance__"]);
-        assert_eq!(resistance, Some(physical_value));
+        let bom = result.unwrap();
 
-        // Test non-physical attribute
-        let string_val = get_physical_attribute(&attributes, &["StringValue"]);
-        assert_eq!(string_val, None);
+        // Should only have the resistor (in_bom = yes), not the power symbol (in_bom = no)
+        assert_eq!(bom.len(), 1);
 
-        // Test missing attribute
-        let missing = get_physical_attribute(&attributes, &["Missing"]);
-        assert_eq!(missing, None);
+        let r1_entry = &bom.entries["kicad::R1"];
+        assert_eq!(r1_entry.value, Some("RC0603FR-0710KL".to_string()));
+        assert_eq!(r1_entry.mpn, Some("RC0603FR-0710KL".to_string())); // Value → MPN (no spaces)
+        assert_eq!(r1_entry.package, Some("R_0603_1608Metric".to_string())); // Library prefix stripped
+        assert!(!r1_entry.dnp);
+
+        assert_eq!(bom.designators["kicad::R1"], "R1");
+    }
+
+    #[test]
+    fn test_filter_power_symbols() {
+        // Test with concatenated string to avoid raw string parsing issues
+        let mut kicad_sch_content = r#"
+        (kicad_sch
+            (version 20250114)
+            (symbol
+                (lib_id "Library:R")
+                (at 100 100 0)
+                (unit 1)
+                (in_bom yes)
+                (on_board yes)
+                (property "Reference" "R1")
+                (property "Value" "10k")
+                (instances
+                    (project "test"
+                        (path "/test"
+                            (reference "R1")
+                        )
+                    )
+                )
+            )
+            (symbol
+                (lib_id "Library:PWR")
+                (at 200 200 0)
+                (unit 1)
+                (in_bom yes)
+                (on_board yes)
+                (property "Reference" "PWR01")
+                (property "Value" "GND")
+                (instances
+                    (project "test"
+                        (path "/test"
+                            (reference "PWR01")
+                        )
+                    )
+                )
+            )
+        )"#
+        .to_string();
+
+        // Replace PWR01 with #PWR01 to test power symbol filtering
+        kicad_sch_content = kicad_sch_content.replace("PWR01", "#PWR01");
+
+        let result = bom_from_kicad_schematic(&kicad_sch_content);
+        assert!(result.is_ok());
+
+        let bom = result.unwrap();
+
+        // Should only have the resistor, not the power symbol
+        assert_eq!(bom.len(), 1);
+        assert!(bom.designators.contains_key("kicad::R1"));
+        assert!(!bom.designators.values().any(|d| d.starts_with('#')));
     }
 }

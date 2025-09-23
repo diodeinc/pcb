@@ -1,10 +1,12 @@
 pub mod signature;
 
+use log::{debug, info};
 use lsp_server::ResponseError;
 use lsp_types::{
     request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
+use pcb_sch::position::{replace_pcb_sch_comments, Position};
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
@@ -17,12 +19,16 @@ use pcb_zen_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use starlark::docs::DocModule;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::load::DefaultRemoteFetcher;
 use pcb_zen_core::convert::ToSchematic;
+
+// JSON-RPC 2.0 error codes
+const INVALID_PARAMS: i32 = -32602;
+const INTERNAL_ERROR: i32 = -32603;
 
 /// Wrapper around EvalContext that implements LspContext
 pub struct LspEvalContext {
@@ -38,7 +44,7 @@ fn create_standard_load_resolver(
 ) -> Arc<CoreLoadResolver> {
     let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
 
-    let remote_fetcher = Arc::new(DefaultRemoteFetcher);
+    let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
     Arc::new(CoreLoadResolver::new(
         file_provider,
         remote_fetcher,
@@ -87,6 +93,18 @@ impl LspEvalContext {
     pub fn set_eager(mut self, eager: bool) -> Self {
         self.inner = self.inner.set_eager(eager);
         self
+    }
+
+    /// Create LSP-specific diagnostic passes
+    fn create_lsp_diagnostic_passes(
+        &self,
+        current_file: &std::path::Path,
+    ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+        let workspace_root = find_workspace_root(self.file_provider.as_ref(), current_file);
+        vec![
+            Box::new(pcb_zen_core::FilterHiddenPass),
+            Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
+        ]
     }
 
     fn diagnostic_to_lsp(&self, diag: &pcb_zen_core::Diagnostic) -> lsp_types::Diagnostic {
@@ -220,11 +238,15 @@ impl LspContext for LspEvalContext {
                     create_standard_load_resolver(self.file_provider.clone(), uri.path());
 
                 // Parse and analyze the file with the load resolver set
-                let result = self
+                let mut result = self
                     .inner
                     .child_context()
                     .set_load_resolver(load_resolver)
                     .parse_and_analyze_file(path.clone(), content.clone());
+
+                // Apply LSP-specific diagnostic passes
+                let passes = self.create_lsp_diagnostic_passes(path);
+                result.diagnostics.apply_passes(&passes);
 
                 // Convert diagnostics to LSP format
                 let diagnostics = result
@@ -259,8 +281,7 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                let resolved =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), path, current_path)?;
+                let resolved = load_resolver.resolve_path(path, current_path)?;
                 Ok(LspUrl::File(resolved))
             }
             _ => Err(anyhow::anyhow!("Cannot resolve load from non-file URL")),
@@ -303,8 +324,9 @@ impl LspContext for LspEvalContext {
                 // Try to resolve as a file path
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                if let Ok(resolved) =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), literal, current_path)
+                if let Ok(resolved) = load_resolver
+                    .resolve_context(literal, current_path)
+                    .and_then(|mut c| load_resolver.resolve(&mut c))
                 {
                     if resolved.exists() {
                         return Ok(Some(StringLiteralResult {
@@ -429,8 +451,9 @@ impl LspContext for LspEvalContext {
             LspUrl::File(current_path) => {
                 let load_resolver =
                     create_standard_load_resolver(self.file_provider.clone(), current_path);
-                if let Ok(resolved) =
-                    load_resolver.resolve_path(self.file_provider.as_ref(), load_path, current_path)
+                if let Ok(resolved) = load_resolver
+                    .resolve_context(load_path, current_path)
+                    .and_then(|mut c| load_resolver.resolve(&mut c))
                 {
                     if resolved.is_dir() {
                         return Ok(Some(Hover {
@@ -453,6 +476,7 @@ impl LspContext for LspEvalContext {
         req: &server::Request,
         _initialize_params: &lsp_types::InitializeParams,
     ) -> Option<Response> {
+        debug!("Received custom request: method={}", req.method);
         // Handle signature help requests
         if req.method == "textDocument/signatureHelp" {
             match serde_json::from_value::<lsp_types::SignatureHelpParams>(req.params.clone()) {
@@ -564,15 +588,10 @@ impl LspContext for LspEvalContext {
                                     .eval()
                             };
 
-                            eval_result.output.and_then(|fmv| {
-                                match fmv.sch_module.to_schematic() {
-                                    Ok(schematic) => {
-                                        // Serialize to JSON
-                                        serde_json::to_value(&schematic).ok()
-                                    }
-                                    Err(_) => None,
-                                }
-                            })
+                            eval_result
+                                .output
+                                .and_then(|fmv| fmv.sch_module.to_schematic().ok())
+                                .and_then(|schematic| serde_json::to_value(&schematic).ok())
                         }
                         _ => None,
                     };
@@ -638,6 +657,76 @@ impl LspContext for LspEvalContext {
             }
         }
 
+        // Handle pcb/savePositions requests
+        if req.method == "pcb/savePositions" {
+            info!("Received pcb/savePositions request");
+            match serde_json::from_value::<PcbSavePositionsParams>(req.params.clone()) {
+                Ok(params) => {
+                    let file_path = &params.file_path;
+                    info!(
+                        "Saving {} symbol positions to file: {}",
+                        params.symbol_positions.len(),
+                        file_path
+                    );
+
+                    // Convert symbol positions to comment format
+                    let mut flat_positions = BTreeMap::new();
+                    for (symbol_id, position) in params.symbol_positions {
+                        let comment_name =
+                            if let Some(component_name) = symbol_id.strip_prefix("comp:") {
+                                component_name.to_string()
+                            } else if let Some(net_symbol) = symbol_id.strip_prefix("sym:") {
+                                net_symbol.replace('#', ".")
+                            } else {
+                                return Some(Response {
+                                    id: req.id.clone(),
+                                    result: None,
+                                    error: Some(ResponseError {
+                                        code: INVALID_PARAMS,
+                                        message: format!("Invalid symbol ID format: {}", symbol_id),
+                                        data: None,
+                                    }),
+                                });
+                            };
+                        flat_positions.insert(comment_name, position);
+                    }
+
+                    match replace_pcb_sch_comments(file_path, &flat_positions) {
+                        Ok(()) => {
+                            info!("Successfully wrote positions to file");
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: Some(serde_json::Value::Null), // null indicates success
+                                error: None,
+                            });
+                        }
+                        Err(e) => {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: INTERNAL_ERROR,
+                                    message: format!("Failed to update file: {e}"),
+                                    data: None,
+                                }),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(ResponseError {
+                            code: INVALID_PARAMS,
+                            message: format!("Invalid pcb/savePositions params: {e}"),
+                            data: None,
+                        }),
+                    });
+                }
+            }
+        }
+
         None
     }
 }
@@ -696,14 +785,11 @@ impl LspEvalContext {
             .map(|output| output.signature.clone());
 
         // Generate schematic JSON if evaluation succeeded
-        let schematic =
-            eval_result
-                .output
-                .as_ref()
-                .and_then(|output| match output.sch_module.to_schematic() {
-                    Ok(schematic) => serde_json::to_value(&schematic).ok(),
-                    Err(_) => None,
-                });
+        let schematic = eval_result
+            .output
+            .as_ref()
+            .and_then(|output| output.sch_module.to_schematic().ok())
+            .and_then(|schematic| serde_json::to_value(&schematic).ok());
 
         // Convert diagnostics
         let diagnostics = eval_result
@@ -827,4 +913,11 @@ struct DiagnosticInfo {
     line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     child: Option<Box<DiagnosticInfo>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PcbSavePositionsParams {
+    file_path: String,
+    symbol_positions: BTreeMap<String, Position>,
 }

@@ -13,7 +13,7 @@ TestExport = "test"
 
 # --- top.zen
 # Import `sub` module with alias `Sub`.
-load(".", Sub = "sub")
+Sub = Module("sub.zen")
 
 check(Sub.TestExport == "test", "TestExport should be 'test'")
 "#,

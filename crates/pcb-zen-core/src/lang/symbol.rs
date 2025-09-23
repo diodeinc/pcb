@@ -11,8 +11,8 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
     values::{
-        list::ListRef, starlark_value, tuple::TupleRef, Freeze, FreezeResult, Heap, NoSerialize,
-        StarlarkValue, Trace, Value,
+        list::ListRef, starlark_value, tuple::TupleRef, Freeze, Heap, NoSerialize, StarlarkValue,
+        Trace, Value,
     },
 };
 
@@ -191,11 +191,7 @@ impl<'v> SymbolValue {
                 .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
             let resolved_path = load_resolver
-                .resolve_path(
-                    eval_ctx.file_provider.as_ref().unwrap().as_ref(),
-                    &library_path,
-                    std::path::Path::new(&current_file),
-                )
+                .resolve_path(&library_path, std::path::Path::new(&current_file))
                 .map_err(|e| {
                     starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", e))
                 })?;

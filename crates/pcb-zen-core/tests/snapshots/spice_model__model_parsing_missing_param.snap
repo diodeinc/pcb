@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/spice_model.rs
+expression: output
+---
+Error: test.zen:4:1-59 Required argument(s) ["RVAL"] not provided

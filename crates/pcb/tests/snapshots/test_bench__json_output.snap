@@ -1,0 +1,40 @@
+---
+source: crates/pcb/tests/test_bench.rs
+expression: output
+---
+Command: pcb test simple_testbench.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "results": [
+    {
+      "test_bench_name": "SimpleTest",
+      "case_name": "basic",
+      "check_name": "check_components_exist",
+      "file_path": "<TEMP_DIR>/simple_testbench.zen",
+      "status": "pass"
+    },
+    {
+      "test_bench_name": "SimpleTest",
+      "case_name": "basic",
+      "check_name": "check_power_connections",
+      "file_path": "<TEMP_DIR>/simple_testbench.zen",
+      "status": "pass"
+    },
+    {
+      "test_bench_name": "SimpleTest",
+      "case_name": "basic",
+      "check_name": "check_path_finding",
+      "file_path": "<TEMP_DIR>/simple_testbench.zen",
+      "status": "pass"
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0
+  }
+}
+--- STDERR ---
+[1m[32m✓ SimpleTest[0m: 3 checks passed across 1 case

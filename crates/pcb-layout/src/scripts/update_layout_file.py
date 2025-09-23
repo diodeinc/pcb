@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple
 from enum import Enum
 from typing import Any
+from collections import defaultdict
 
 # Global logger.
 logger = logging.getLogger("pcb")
@@ -63,6 +64,39 @@ if python_path:
 
 # Available in KiCad's Python environment.
 import pcbnew
+
+
+class Remapper:
+    """Longest-prefix remapper for old -> new path mapping."""
+
+    def __init__(self, moved_paths: Dict[str, str]):
+        """Initialize remapper from moved_paths dictionary (old_path -> new_path)."""
+        self.map = moved_paths.copy()
+
+    def remap(self, path: str) -> Optional[str]:
+        """Remap a path using longest-prefix matching."""
+        search_path = path
+
+        while True:
+            if search_path in self.map:
+                # path = prefix + remainder, where remainder is "" or ".foo.bar"
+                new_prefix = self.map[search_path]
+                remainder = path[len(search_path) :]
+                return new_prefix + remainder
+
+            # Find previous dot; stop if none
+            dot_pos = search_path.rfind(".")
+            if dot_pos == -1:
+                break
+            search_path = search_path[:dot_pos]
+
+        return None
+
+    @classmethod
+    def from_schematic(cls, schematic_data: Dict[str, Any]) -> "Remapper":
+        """Build a remapper from schematic JSON data."""
+        moved_paths = schematic_data.get("moved_paths", {})
+        return cls(moved_paths)
 
 
 ####################################################################################################
@@ -1247,6 +1281,10 @@ class SyncState:
         # Virtual DOM representation of the board
         self.virtual_board = VirtualBoard()
 
+        # Net rename mapping and old net codes for orphan cleanup
+        self.net_rename_mapping: Optional[Dict[str, Dict[str, int]]] = None
+        self.old_net_codes: Dict[str, int] = {}
+
     def track_footprint_removed(self, fp: pcbnew.FOOTPRINT):
         """Track that a footprint was removed from the board."""
         uuid = get_footprint_uuid(fp)
@@ -1321,10 +1359,163 @@ class SetupBoard(Step):
         self.board = board
 
     def run(self):
-        lset = pcbnew.LSET.AllLayersMask()
-        lset.RemoveLayer(pcbnew.F_Fab)
-        lset.RemoveLayer(pcbnew.B_Fab)
-        self.board.SetVisibleLayers(lset)
+        pass
+
+
+####################################################################################################
+# Apply Moved Paths Step
+#
+# This step applies path remapping before ImportNetlist to ensure that renamed modules
+# in the schematic are properly synchronized with their existing footprints and groups
+# on the board. This prevents phantom "new" components and orphaned groups.
+####################################################################################################
+
+
+class ApplyMovedPaths(Step):
+    """Apply old->new path remapping to footprints and groups on the board."""
+
+    def __init__(
+        self, state: SyncState, board: pcbnew.BOARD, schematic_data: Dict[str, Any]
+    ):
+        self.state = state
+        self.board = board
+        self.remapper = Remapper.from_schematic(schematic_data)
+
+    def run(self) -> None:
+        """Apply path remapping to all relevant objects on the board."""
+        if not self.remapper.map:
+            logger.info("No moved paths to apply")
+            return
+
+        logger.info(f"Applying {len(self.remapper.map)} path remappings")
+
+        # Apply remapping to footprints and groups
+        remapped_footprints = self._remap_footprints()
+        remapped_groups = self._remap_groups()
+
+        if remapped_footprints > 0 or remapped_groups > 0:
+            logger.info(
+                f"Applied remapping to {remapped_footprints} footprints and {remapped_groups} groups"
+            )
+
+    def _remap_footprints(self) -> int:
+        """Remap footprint paths and update their UUIDs."""
+        count = 0
+        for fp in self.board.GetFootprints():
+            if self._remap_footprint(fp):
+                count += 1
+        return count
+
+    def _remap_footprint(self, fp: pcbnew.FOOTPRINT) -> bool:
+        """Remap a single footprint's path and UUID. Returns True if remapped."""
+        path_field = fp.GetFieldByName("Path")
+        if not path_field:
+            return False
+
+        old_path = path_field.GetText()
+        if not old_path:
+            return False
+
+        new_path = self.remapper.remap(old_path)
+        if not new_path or new_path == old_path:
+            return False
+
+        logger.debug(f"Remapping footprint path: {old_path} -> {new_path}")
+        path_field.SetText(new_path)
+
+        # Update the KiCad UUID to match the new path (UUID is deterministic from path)
+        new_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, new_path))
+        old_uuid = get_footprint_uuid(fp)
+        logger.debug(f"Updating footprint UUID: {old_uuid} -> {new_uuid}")
+        fp.SetPath(pcbnew.KIID_PATH(f"{new_uuid}/{new_uuid}"))
+
+        return True
+
+    def _remap_groups(self) -> int:
+        """Remap KiCad group names."""
+        count = 0
+        for group in self.board.Groups():
+            if self._remap_group(group):
+                count += 1
+        return count
+
+    def _remap_group(self, group: pcbnew.PCB_GROUP) -> bool:
+        """Remap a single group's name. Returns True if remapped."""
+        old_name = group.GetName()
+        if not old_name:
+            return False
+
+        new_name = self.remapper.remap(old_name)
+        if not new_name or new_name == old_name:
+            return False
+
+        logger.debug(f"Remapping group name: {old_name} -> {new_name}")
+        group.SetName(new_name)
+        return True
+
+
+####################################################################################################
+# Net Rename Mapping System
+#
+# This system tracks net name changes by comparing old and new pad assignments for existing
+# footprints, enabling analysis and eventual automatic updating of zones.
+####################################################################################################
+
+
+class NetRenameMapper:
+    def __init__(self):
+        self.old_pad_nets: Dict[str, Dict[str, str]] = {}
+        self.new_pad_nets: Dict[str, Dict[str, str]] = {}
+
+    def capture_current_state(self, board: pcbnew.BOARD, existing_footprints: Set[str]):
+        for fp in board.GetFootprints():
+            fp_uuid = get_footprint_uuid(fp)
+            if fp_uuid not in existing_footprints:
+                continue
+
+            pad_nets = {}
+            for pad in fp.Pads():
+                net = pad.GetNet()
+                if net and net.GetNetname():
+                    pad_nets[pad.GetPadName()] = net.GetNetname()
+
+            if pad_nets:
+                self.old_pad_nets[fp_uuid] = pad_nets
+
+    def capture_new_state(self, board: pcbnew.BOARD):
+        for fp in board.GetFootprints():
+            fp_uuid = get_footprint_uuid(fp)
+            if fp_uuid not in self.old_pad_nets:
+                continue
+
+            pad_nets = {}
+            for pad in fp.Pads():
+                net = pad.GetNet()
+                if net and net.GetNetname():
+                    pad_nets[pad.GetPadName()] = net.GetNetname()
+
+            self.new_pad_nets[fp_uuid] = pad_nets
+
+    def build_net_rename_mapping(self) -> Dict[str, Dict[str, int]]:
+        net_mapping = defaultdict(lambda: defaultdict(int))
+
+        for fp_uuid in self.old_pad_nets:
+            if fp_uuid not in self.new_pad_nets:
+                continue
+
+            old_pads = self.old_pad_nets[fp_uuid]
+            new_pads = self.new_pad_nets[fp_uuid]
+
+            for pad_name in old_pads:
+                old_net = old_pads[pad_name]
+                new_net = new_pads.get(pad_name)
+                if new_net:
+                    net_mapping[old_net][new_net] += 1
+
+        return {
+            old_net: dict(new_net_counts)
+            for old_net, new_net_counts in net_mapping.items()
+        }
 
 
 ####################################################################################################
@@ -1352,6 +1543,9 @@ class ImportNetlist(Step):
 
         # Map from footprint library name to library path.
         self.footprint_lib_map = {}
+
+        self.net_rename_mapper: Optional[NetRenameMapper] = None
+        self.old_nets_by_name: Dict[str, Any] = {}
 
     def _setup_env(self):
         """Set up environment variables for footprint resolution."""
@@ -1737,7 +1931,6 @@ class ImportNetlist(Step):
                 self.board.Remove(group)
 
     def _refresh_board(self):
-        """Refresh the board to update the UI."""
         self.board.BuildListOfNets()
         pcbnew.Refresh()
 
@@ -1755,6 +1948,72 @@ class ImportNetlist(Step):
         """Log the contents of the virtual DOM."""
         logger.info("Virtual DOM structure:")
         logger.info(self.state.virtual_board.render())
+
+    def _build_net_rename_mapping(self):
+        existing_footprints = set()
+        netlist_footprints = set(part.sheetpath.tstamps for part in self.netlist.parts)
+
+        for fp in self.board.GetFootprints():
+            fp_uuid = get_footprint_uuid(fp)
+            if (
+                fp_uuid in netlist_footprints
+                and fp_uuid not in self.state.added_footprint_uuids
+            ):
+                existing_footprints.add(fp_uuid)
+
+        if not existing_footprints:
+            return
+
+        self.net_rename_mapper = NetRenameMapper()
+        self.net_rename_mapper.capture_current_state(self.board, existing_footprints)
+
+        # Capture old nets
+        for fp in self.board.GetFootprints():
+            for pad in fp.Pads():
+                net = pad.GetNet()
+                if (
+                    net
+                    and net.GetNetname()
+                    and net.GetNetname() not in self.old_nets_by_name
+                ):
+                    self.old_nets_by_name[net.GetNetname()] = net
+
+    def _analyze_net_renames(self):
+        if not self.net_rename_mapper:
+            return
+
+        self.net_rename_mapper.capture_new_state(self.board)
+        mapping = self.net_rename_mapper.build_net_rename_mapping()
+
+        if mapping:
+            unchanged = renamed = split = 0
+
+            for old_net, new_net_counts in mapping.items():
+                total_pads = sum(new_net_counts.values())
+
+                if len(new_net_counts) == 1:
+                    new_net = list(new_net_counts.keys())[0]
+                    if old_net == new_net:
+                        unchanged += 1
+                    else:
+                        renamed += 1
+                        print(f"RENAME: '{old_net}' -> '{new_net}' ({total_pads} pads)")
+                else:
+                    split += 1
+                    print(f"SPLIT: '{old_net}' ({total_pads} pads) split into:")
+                    for new_net, count in sorted(
+                        new_net_counts.items(), key=lambda x: -x[1]
+                    ):
+                        print(
+                            f"  -> '{new_net}' ({count} pads, {count / total_pads:.1%})"
+                        )
+
+            print(f"SUMMARY: {unchanged} unchanged, {renamed} renamed, {split} split")
+
+        self.state.net_rename_mapping = mapping
+        self.state.old_net_codes = {
+            name: net.GetNetCode() for name, net in self.old_nets_by_name.items()
+        }
 
     def run(self):
         """Run the import process."""
@@ -1777,10 +2036,16 @@ class ImportNetlist(Step):
             f"Footprint synchronization took {time.time() - sync_start:.3f} seconds"
         )
 
+        # Build net rename mapping BEFORE syncing nets
+        self._build_net_rename_mapping()
+
         # Sync nets
         nets_start = time.time()
         self._sync_nets()
         logger.info(f"Net synchronization took {time.time() - nets_start:.3f} seconds")
+
+        # Analyze net renames AFTER syncing nets
+        self._analyze_net_renames()
 
         # Sync groups
         groups_start = time.time()
@@ -2689,10 +2954,98 @@ class FinalizeBoard(Step):
         self._export_layout_snapshot()
         logger.info(f"Snapshot export took {time.time() - snapshot_start:.3f} seconds")
 
-        # Save board
+        # Trigger KiCad's connectivity updates and fix orphaned items
+        try:
+            self.board.GetConnectivity().Build(self.board)
+        except Exception:
+            pass
+        self._fix_remaining_orphaned_items()
+
+        # Save board only once at the very end
         save_start = time.time()
         pcbnew.SaveBoard(self.board.GetFileName(), self.board)
         logger.info(f"Board saving took {time.time() - save_start:.3f} seconds")
+
+    def _fix_remaining_orphaned_items(self):
+        if (
+            not hasattr(self.state, "net_rename_mapping")
+            or not self.state.net_rename_mapping
+        ):
+            return
+
+        # Get current nets
+        new_nets = {}
+        for fp in self.board.GetFootprints():
+            for pad in fp.Pads():
+                net = pad.GetNet()
+                if net and net.GetNetname() and net.GetNetname() not in new_nets:
+                    new_nets[net.GetNetname()] = net
+
+        zones_updated = vias_updated = polygons_updated = 0
+
+        for old_net, new_net_counts in self.state.net_rename_mapping.items():
+            if not new_net_counts:
+                continue
+
+            new_net_name, count = max(new_net_counts.items(), key=lambda x: x[1])
+            confidence = count / sum(new_net_counts.values())
+
+            if confidence < 0.8 or old_net == new_net_name:
+                continue
+
+            old_net_code = getattr(self.state, "old_net_codes", {}).get(old_net)
+            new_pcb_net = new_nets.get(new_net_name)
+
+            if not old_net_code or not new_pcb_net:
+                continue
+
+            zones_count = vias_count = polygons_count = 0
+
+            for zone in self.board.Zones():
+                if zone.GetNetCode() == old_net_code:
+                    zone.SetNet(new_pcb_net)
+                    zones_count += 1
+
+            for track in self.board.GetTracks():
+                if (
+                    isinstance(track, pcbnew.PCB_VIA)
+                    and track.GetNetCode() == old_net_code
+                ):
+                    track.SetNet(new_pcb_net)
+                    vias_count += 1
+
+            for drawing in self.board.GetDrawings():
+                if hasattr(drawing, "GetNetCode") and hasattr(drawing, "SetNet"):
+                    if drawing.GetNetCode() == old_net_code:
+                        drawing.SetNet(new_pcb_net)
+                        polygons_count += 1
+
+            zones_updated += zones_count
+            vias_updated += vias_count
+            polygons_updated += polygons_count
+
+            if zones_count > 0:
+                print(
+                    f"ZONES: {zones_count} orphaned items fixed '{old_net}' -> '{new_net_name}' ({confidence:.1%} confidence)"
+                )
+            if vias_count > 0:
+                print(
+                    f"VIAS: {vias_count} orphaned items fixed '{old_net}' -> '{new_net_name}' ({confidence:.1%} confidence)"
+                )
+            if polygons_count > 0:
+                print(
+                    f"POLYGONS: {polygons_count} orphaned items fixed '{old_net}' -> '{new_net_name}' ({confidence:.1%} confidence)"
+                )
+
+        if zones_updated + vias_updated + polygons_updated > 0:
+            summary = []
+            if zones_updated > 0:
+                summary.append(f"{zones_updated} zones")
+            if vias_updated > 0:
+                summary.append(f"{vias_updated} vias")
+            if polygons_updated > 0:
+                summary.append(f"{polygons_updated} polygons")
+            print(f"FINAL CLEANUP: {', '.join(summary)} orphaned items fixed")
 
 
 ####################################################################################################
@@ -2734,23 +3087,9 @@ def main():
     )
     args = parser.parse_args()
 
-    # Respect RUST_LOG environment variable for log level
-    rust_log = os.environ.get("RUST_LOG", "error").lower()
-    log_level_map = {
-        "trace": logging.DEBUG,  # Python doesn't have TRACE, map to DEBUG
-        "debug": logging.DEBUG,
-        "info": logging.INFO,
-        "warn": logging.WARNING,
-        "warning": logging.WARNING,
-        "error": logging.ERROR,
-        "off": logging.CRITICAL + 1,  # Effectively disable logging
-    }
-    log_level = log_level_map.get(rust_log, logging.INFO)
-
-    logger.setLevel(log_level)
+    logger.setLevel(logging.DEBUG)
 
     handler = logging.StreamHandler()
-    handler.setLevel(log_level)
     formatter = logging.Formatter("%(levelname)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -2765,6 +3104,11 @@ def main():
     else:
         board = pcbnew.LoadBoard(args.output)
 
+    # Load raw schematic data for moved paths
+    logger.info(f"Loading schematic data from {args.json_input}")
+    with open(args.json_input, "r") as f:
+        schematic_data = json.load(f)
+
     # Parse JSON netlist
     logger.info(f"Parsing JSON netlist from {args.json_input}")
     netlist = JsonNetlistParser.parse_netlist(args.json_input)
@@ -2776,6 +3120,7 @@ def main():
     else:
         steps = [
             SetupBoard(state, board),
+            ApplyMovedPaths(state, board, schematic_data),
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),
             PlaceComponents(state, board, netlist),

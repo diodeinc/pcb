@@ -1,16 +1,22 @@
 use clap::{Parser, Subcommand};
+use colored::Colorize;
+use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
 mod bom;
 mod build;
 mod clean;
+mod file_walker;
 mod fmt;
 mod info;
 mod layout;
 mod lsp;
 mod open;
 mod release;
+mod sim;
+mod tag;
+mod test;
 mod upgrade;
 mod vendor;
 mod workspace;
@@ -20,6 +26,9 @@ mod workspace;
 #[command(about = "PCB tool with build and layout capabilities", long_about = None)]
 #[command(version)]
 struct Cli {
+    /// Enable debug logging
+    #[arg(short = 'd', long = "debug", global = true, hide = true)]
+    debug: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -29,6 +38,10 @@ enum Commands {
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
+
+    /// Run tests in .zen files
+    #[command(alias = "t")]
+    Test(test::TestArgs),
 
     /// Upgrade PCB projects
     #[command(alias = "u")]
@@ -47,7 +60,7 @@ enum Commands {
     /// Clean PCB build artifacts
     Clean(clean::CleanArgs),
 
-    /// Format .zen and .star files
+    /// Format .zen files
     Fmt(fmt::FmtArgs),
 
     /// Language Server Protocol support
@@ -61,8 +74,14 @@ enum Commands {
     #[command(alias = "r")]
     Release(release::ReleaseArgs),
 
+    /// Create and manage PCB version tags
+    Tag(tag::TagArgs),
+
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
+
+    /// Run SPICE simulations
+    Sim(sim::SimArgs),
 
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
@@ -70,13 +89,21 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logger
-    env_logger::init();
-
     let cli = Cli::parse();
+
+    // Initialize logger with default level depending on --debug (overridden by RUST_LOG)
+    let env = if cli.debug {
+        Env::default().default_filter_or("debug")
+    } else {
+        Env::default().default_filter_or("error")
+    };
+    env_logger::Builder::from_env(env).init();
+
+    check_and_update();
 
     match cli.command {
         Commands::Build(args) => build::execute(args),
+        Commands::Test(args) => test::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
@@ -86,7 +113,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::Release(args) => release::execute(args),
+        Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
+        Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");
@@ -125,6 +154,28 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+    }
+}
+
+fn check_and_update() {
+    // Silently check and update if needed
+    let mut updater = axoupdater::AxoUpdater::new_for("pcb");
+    if let Ok(updater) = updater.load_receipt() {
+        updater.disable_installer_output();
+        match updater.run_sync() {
+            Ok(Some(result)) => {
+                let old_version = result.old_version;
+                let new_version = result.new_version_tag;
+                if let Some(old_version) = old_version {
+                    let update_string = format!("Updated pcb {} -> {}!", old_version, new_version);
+                    eprintln!("{}", update_string.blue().bold());
+                    eprintln!("Please re-run the command with the new pcb version.");
+                }
+                std::process::exit(1);
+            }
+            Ok(None) => {}
+            Err(_) => {}
         }
     }
 }

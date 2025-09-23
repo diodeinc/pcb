@@ -1,0 +1,45 @@
+---
+source: crates/pcb/tests/netlist.rs
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/SimpleBoard.zen:<root>": {
+    "symbol_positions": {
+      "comp:D1": {
+        "rotation": 90.0,
+        "x": 150.0,
+        "y": 200.0
+      },
+      "comp:R1": {
+        "rotation": 0.0,
+        "x": 100.0,
+        "y": 200.0
+      },
+      "sym:GND#1": {
+        "rotation": 0.0,
+        "x": 80.0,
+        "y": 220.0
+      },
+      "sym:GND#2": {
+        "rotation": 0.0,
+        "x": 170.0,
+        "y": 220.0
+      },
+      "sym:LED_ANODE#1": {
+        "rotation": 0.0,
+        "x": 125.0,
+        "y": 200.0
+      },
+      "sym:VCC_3V3#1": {
+        "rotation": 0.0,
+        "x": 80.0,
+        "y": 180.0
+      },
+      "sym:VCC_3V3#2": {
+        "rotation": 0.0,
+        "x": 120.0,
+        "y": 180.0
+      }
+    }
+  }
+}

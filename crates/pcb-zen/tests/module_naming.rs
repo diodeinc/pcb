@@ -10,7 +10,7 @@ fn module_loader_name_override() {
     env.add_file(
         "top.zen",
         r#"
-load(".", Sub = "sub")
+Sub = Module("sub.zen")
 Sub(name = "PowerStage")
 "#,
     );

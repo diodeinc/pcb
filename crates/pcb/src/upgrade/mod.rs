@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use pcb_buildifier::Buildifier;
+use pcb_fmt::RuffFormatter;
 use pcb_ui::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -11,30 +11,18 @@ pub mod codemods;
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Upgrade PCB projects from .zen files")]
 pub struct UpgradeArgs {
-    /// One or more .zen files or directories containing .zen files (non-recursive) to upgrade.
-    /// When omitted, all .zen files in the current directory are considered.
+    /// One or more .zen files or directories containing .zen files to upgrade.
+    /// When omitted, all .zen files in the current directory tree are considered.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
-
-    /// Recursively traverse directories to find .zen/.star files
-    #[arg(short = 'r', long = "recursive", default_value_t = false)]
-    pub recursive: bool,
 }
 
 /// Execute the `upgrade` command
 pub fn execute(args: UpgradeArgs) -> Result<()> {
-    // Initialize buildifier once to format files after upgrades
-    let buildifier = Buildifier::new()?;
-    // Determine target files
-    let mut zen_paths = if args.recursive {
-        crate::build::collect_files_recursive(&args.paths)?
-    } else {
-        // Reuse build's file collection logic to honor the same semantics
-        crate::build::collect_files(&args.paths)?
-    };
-
-    // Deterministic order for stable output
-    zen_paths.sort();
+    // Initialize ruff formatter once to format files after upgrades
+    let formatter = RuffFormatter::default();
+    // Determine target files - always recursive for directories
+    let zen_paths = crate::file_walker::collect_zen_files(&args.paths, false)?;
 
     if zen_paths.is_empty() {
         let cwd = std::env::current_dir()?;
@@ -99,7 +87,7 @@ pub fn execute(args: UpgradeArgs) -> Result<()> {
                 continue;
             }
             // Format file after successful write
-            if let Err(e) = buildifier.format_file(&path) {
+            if let Err(e) = formatter.format_file(&path) {
                 if let Some(sp) = spinner.take() {
                     sp.error(format!("{file_name}: Format failed: {e}"));
                 } else {

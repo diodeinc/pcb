@@ -6,6 +6,8 @@ Command: pcb build boards/TestBoard.zen
 Exit Code: 1
 
 --- STDOUT ---
+
+--- STDERR ---
 Error: error sending request for url (https://codeload.github.com/nonexistent/repo/tar.gz/main)
    ╭─[ <TEMP_DIR>/boards/TestBoard.zen:2:1 ]
    │
@@ -13,10 +15,9 @@ Error: error sending request for url (https://codeload.github.com/nonexistent/re
    │ ───────────────────────────────────────┬───────────────────────────────────────  
    │                                        ╰───────────────────────────────────────── error sending request for url (https://codeload.github.com/nonexistent/repo/tar.gz/main)
 ───╯
-✗ TestBoard.zen: Build failed
---- STDERR ---
 
 Stack trace (most recent call last):
     <TEMP_DIR>/boards/TestBoard.zen:2:1 (error sending request for url (https://codeload.github.com/nonexistent/repo/tar.gz/main))
 
+✗ TestBoard.zen: Build failed
 Error: Build failed with errors

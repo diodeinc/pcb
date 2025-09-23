@@ -11,13 +11,17 @@
 //!   stable [`netlist::InstanceRef`].
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
-pub mod bom;
+mod bom;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
+pub mod position;
 
 // Re-export BOM functionality
-pub use bom::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
+pub use bom::{
+    bom_from_kicad_schematic, bom_from_kicad_schematic_file, generate_bom_with_fallback, Bom,
+    BomMatchingKey, BomMatchingRule, GenericMatchingKey, KiCadBomError, Offer,
+};
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -25,6 +29,8 @@ use std::path::{Path, PathBuf};
 
 use rust_decimal::{prelude::FromPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
+
+use crate::position::Position;
 
 /// Helper type alias – we map the original Atopile `Symbol` to a plain
 /// UTF-8 `String`.
@@ -143,7 +149,7 @@ pub enum InstanceKind {
     Pin,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PhysicalUnit {
     Ohms,
     Volts,
@@ -153,24 +159,94 @@ pub enum PhysicalUnit {
     Hertz,
     Seconds,
     Kelvin,
+    Coulombs,
+    Watts,
+    Joules,
+    Siemens,
+    Webers,
+}
+
+impl PhysicalUnit {
+    pub const fn suffix(&self) -> &'static str {
+        match self {
+            PhysicalUnit::Ohms => "", // This should be "Ohm", but keep as empty for backward compatibility
+            PhysicalUnit::Volts => "V",
+            PhysicalUnit::Amperes => "A",
+            PhysicalUnit::Farads => "F",
+            PhysicalUnit::Henries => "H",
+            PhysicalUnit::Hertz => "Hz",
+            PhysicalUnit::Seconds => "s",
+            PhysicalUnit::Kelvin => "K",
+            PhysicalUnit::Coulombs => "C",
+            PhysicalUnit::Watts => "W",
+            PhysicalUnit::Joules => "J",
+            PhysicalUnit::Siemens => "S",
+            PhysicalUnit::Webers => "Wb",
+        }
+    }
+
+    pub const fn quantity(&self) -> &'static str {
+        match self {
+            PhysicalUnit::Ohms => "Resistance",
+            PhysicalUnit::Volts => "Voltage",
+            PhysicalUnit::Amperes => "Current",
+            PhysicalUnit::Farads => "Capacitance",
+            PhysicalUnit::Henries => "Inductance",
+            PhysicalUnit::Hertz => "Frequency",
+            PhysicalUnit::Seconds => "Time",
+            PhysicalUnit::Kelvin => "Temperature",
+            PhysicalUnit::Coulombs => "Charge",
+            PhysicalUnit::Watts => "Power",
+            PhysicalUnit::Joules => "Energy",
+            PhysicalUnit::Siemens => "Conductance",
+            PhysicalUnit::Webers => "Flux",
+        }
+    }
 }
 
 impl std::fmt::Display for PhysicalUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PhysicalUnit::Ohms => write!(f, "Ω"),
-            PhysicalUnit::Volts => write!(f, "V"),
-            PhysicalUnit::Amperes => write!(f, "A"),
-            PhysicalUnit::Farads => write!(f, "F"),
-            PhysicalUnit::Henries => write!(f, "H"),
-            PhysicalUnit::Hertz => write!(f, "Hz"),
-            PhysicalUnit::Seconds => write!(f, "s"),
-            PhysicalUnit::Kelvin => write!(f, "K"),
+            PhysicalUnit::Ohms => write!(f, "Ohm"),
+            PhysicalUnit::Volts => write!(f, "Volt"),
+            PhysicalUnit::Amperes => write!(f, "Ampere"),
+            PhysicalUnit::Farads => write!(f, "Farad"),
+            PhysicalUnit::Henries => write!(f, "Henry"),
+            PhysicalUnit::Hertz => write!(f, "Hertz"),
+            PhysicalUnit::Seconds => write!(f, "Second"),
+            PhysicalUnit::Kelvin => write!(f, "Kelvin"),
+            PhysicalUnit::Coulombs => write!(f, "Coulomb"),
+            PhysicalUnit::Watts => write!(f, "Watt"),
+            PhysicalUnit::Joules => write!(f, "Joule"),
+            PhysicalUnit::Siemens => write!(f, "Siemens"),
+            PhysicalUnit::Webers => write!(f, "Weber"),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl std::str::FromStr for PhysicalUnit {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "" | "ohm" | "Ohm" | "ohms" | "Ohms" => Ok(PhysicalUnit::Ohms),
+            "V" | "volt" | "Volt" | "volts" | "Volts" => Ok(PhysicalUnit::Volts),
+            "A" | "ampere" | "Ampere" | "amperes" | "Amperes" => Ok(PhysicalUnit::Amperes),
+            "F" | "farad" | "Farad" | "farads" | "Farads" => Ok(PhysicalUnit::Farads),
+            "H" | "henry" | "Henry" | "henries" | "Henries" => Ok(PhysicalUnit::Henries),
+            "Hz" | "hz" | "hertz" | "Hertz" => Ok(PhysicalUnit::Hertz),
+            "s" | "second" | "Second" | "seconds" | "Seconds" => Ok(PhysicalUnit::Seconds),
+            "K" | "kelvin" | "Kelvin" => Ok(PhysicalUnit::Kelvin),
+            "C" | "coulomb" | "Coulomb" | "coulombs" | "Coulombs" => Ok(PhysicalUnit::Coulombs),
+            "W" | "watt" | "Watt" | "watts" | "Watts" => Ok(PhysicalUnit::Watts),
+            "J" | "joule" | "Joule" | "joules" | "Joules" => Ok(PhysicalUnit::Joules),
+            "S" | "siemens" | "Siemens" => Ok(PhysicalUnit::Siemens),
+            "Wb" | "weber" | "Weber" | "webers" | "Webers" => Ok(PhysicalUnit::Webers),
+            _ => Err(format!("Unknown unit: '{}'", s)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PhysicalValue {
     // Serialize as a string to preserve full precision in JSON
     #[serde(with = "rust_decimal::serde::str")]
@@ -192,6 +268,48 @@ impl PhysicalValue {
             unit,
         }
     }
+
+    /// Get the effective tolerance, using a default if none is specified
+    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
+        if self.tolerance.is_zero() {
+            default
+        } else {
+            self.tolerance
+        }
+    }
+
+    /// Get the minimum value considering tolerance
+    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE - tolerance)
+    }
+
+    /// Get the maximum value considering tolerance
+    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE + tolerance)
+    }
+
+    /// Check if this value's range fits within another value's range
+    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
+        let other_tolerance = other.tolerance_or_default(default_tolerance);
+        let other_min = other.min_value(other_tolerance);
+        let other_max = other.max_value(other_tolerance);
+
+        let self_min = self.min_value(self.tolerance);
+        let self_max = self.max_value(self.tolerance);
+
+        // Self range must fit within other range
+        self_min >= other_min && self_max <= other_max
+    }
+
+    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
+    pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
+        let default_tolerance = match other.unit {
+            PhysicalUnit::Ohms => "0.01".parse().unwrap(), // 1% for resistors
+            PhysicalUnit::Farads => "0.1".parse().unwrap(), // 10% for capacitors
+            _ => "0.01".parse().unwrap(),                  // 1% for others
+        };
+        self.fits_within(other, default_tolerance)
+    }
 }
 
 impl From<(f64, f64, PhysicalUnit)> for PhysicalValue {
@@ -205,9 +323,9 @@ impl std::fmt::Display for PhysicalValue {
         if self.tolerance > Decimal::ZERO {
             // Convert tolerance to percentage and format
             let pct = (self.tolerance * Decimal::ONE_HUNDRED).round_dp(0);
-            write!(f, "{}{} ±{}%", self.value, self.unit, pct)
+            write!(f, "{}{} ±{}%", self.value, self.unit.suffix(), pct)
         } else {
-            write!(f, "{}{}", self.value, self.unit)
+            write!(f, "{}{}", self.value, self.unit.suffix())
         }
     }
 }
@@ -266,6 +384,8 @@ pub struct Instance {
     pub attributes: HashMap<Symbol, AttributeValue>,
     pub children: HashMap<Symbol, InstanceRef>,
     pub reference_designator: Option<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub symbol_positions: HashMap<String, Position>,
 }
 
 impl Instance {
@@ -276,6 +396,7 @@ impl Instance {
             attributes: HashMap::new(),
             children: HashMap::new(),
             reference_designator: None,
+            symbol_positions: HashMap::new(),
         }
     }
 
@@ -346,6 +467,81 @@ impl Instance {
         self.reference_designator = Some(designator.into());
         self
     }
+
+    pub fn string_attr(&self, keys: &[&str]) -> Option<String> {
+        keys.iter().find_map(|&key| {
+            self.attributes.get(key).and_then(|attr| match attr {
+                AttributeValue::String(s) => Some(s.clone()),
+                AttributeValue::Physical(pv) => Some(pv.to_string()),
+                _ => None,
+            })
+        })
+    }
+
+    pub fn string_list_attr(&self, keys: &[&str]) -> Vec<String> {
+        keys.iter()
+            .find_map(|&key| match self.attributes.get(key)? {
+                AttributeValue::Array(arr) => Some(
+                    arr.iter()
+                        .filter_map(|av| match av {
+                            AttributeValue::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<String>>(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
+        keys.iter().find_map(|&key| {
+            self.attributes.get(key).and_then(|attr| match attr {
+                AttributeValue::Physical(pv) => Some(pv.clone()),
+                _ => None,
+            })
+        })
+    }
+
+    pub fn component_type(&self) -> Option<String> {
+        self.string_attr(&["Type", "type"])
+            .map(|s| s.to_lowercase())
+    }
+
+    pub fn mpn(&self) -> Option<String> {
+        self.string_attr(&["MPN", "Mpn", "mpn"])
+    }
+
+    pub fn manufacturer(&self) -> Option<String> {
+        self.string_attr(&["Manufacturer", "manufacturer"])
+    }
+
+    pub fn description(&self) -> Option<String> {
+        self.string_attr(&["Description", "description"])
+    }
+
+    pub fn package(&self) -> Option<String> {
+        self.string_attr(&["Package", "package"])
+    }
+
+    pub fn value(&self) -> Option<String> {
+        self.string_attr(&["Value", "value"])
+    }
+
+    pub fn is_test_component(&self) -> bool {
+        self.reference_designator
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("TP")
+    }
+
+    pub fn dnp(&self) -> bool {
+        self.is_test_component()
+            || self
+                .string_attr(&["do_not_populate", "Do_not_populate", "DNP", "dnp"])
+                .map(|s| s.to_lowercase() == "true" || s == "1")
+                .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -362,6 +558,9 @@ pub struct Schematic {
 
     /// Symbol library - maps symbol paths to their s-expression content
     pub symbols: HashMap<String, String>,
+
+    /// Path remapping rules for moved() directives (old_path -> new_path)
+    pub moved_paths: HashMap<String, String>,
 }
 
 impl Schematic {
@@ -452,11 +651,17 @@ impl Schematic {
 
         ref_map
     }
+
+    pub fn bom(&self) -> Bom {
+        Bom::from_schematic(self)
+    }
 }
 
-/// Helper function to determine the prefix for a component's reference designator.
-/// This follows the same logic as `comp_prefix` in kicad_netlist.rs.
-fn get_component_prefix(inst: &Instance) -> String {
+/// Extract a prefix string for a component.
+///
+/// Prefers explicit `prefix` attribute if present, otherwise derives from
+/// component `type` attribute (e.g. `resistor` → `R`), with fallback to `U`.
+pub fn get_component_prefix(inst: &Instance) -> String {
     // Prefer explicit `prefix` attribute if present
     if let Some(AttributeValue::String(s)) = inst.attributes.get("prefix") {
         return s.clone();

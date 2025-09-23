@@ -8,17 +8,60 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        dict::DictRef, starlark_value, Coerce, Freeze, FreezeResult, NoSerialize, StarlarkValue,
-        Trace, Value, ValueLike,
+        dict::{AllocDict, DictRef},
+        starlark_value, Coerce, Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
     },
 };
 
-use crate::{lang::evaluator_ext::EvaluatorExt, EvalContext};
+use crate::{
+    lang::{evaluator_ext::EvaluatorExt, physical::PhysicalValue, spice_model::SpiceModelValue},
+    FrozenSpiceModelValue,
+};
 
 use super::net::NetType;
-use super::symbol::{load_symbols_from_library, SymbolType, SymbolValue};
+use super::symbol::{SymbolType, SymbolValue};
+use super::validation::validate_identifier_name;
 
 use anyhow::anyhow;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ComponentError {
+    #[error("`name` must be a string")]
+    NameNotString,
+    #[error("`footprint` must be a string")]
+    FootprintNotString,
+    #[error("could not determine parent directory of current file")]
+    ParentDirectoryNotFound,
+    #[error("`pins` must be a dict mapping pin names to Net")]
+    PinsNotDict,
+    #[error("`prefix` must be a string")]
+    PrefixNotString,
+    #[error("`pin_defs` must be a dict of name -> pad")]
+    PinDefsNotDict,
+    #[error("pin name must be a string")]
+    PinNameNotString,
+    #[error("pad must be a string")]
+    PadNotString,
+    #[error("Failed to downcast Symbol value")]
+    SymbolDowncastFailed,
+    #[error("no pin '{pin_name}' in symbol")]
+    PinNotInSymbol { pin_name: String },
+    #[error("no pad '{pad}' in symbol pin {pin_name}")]
+    PadNotInSymbolPin { pad: String, pin_name: String },
+    #[error("pin names must be strings")]
+    PinNamesNotStrings,
+    #[error("pin '{pin_name}' referenced but not defined in `pin_defs`")]
+    PinNotInPinDefs { pin_name: String },
+    #[error("pin '{pin_name}' defined in `pin_defs` but not connected")]
+    PinDefinedButNotConnected { pin_name: String },
+}
+
+impl From<ComponentError> for starlark::Error {
+    fn from(err: ComponentError) -> Self {
+        starlark::Error::new_other(err)
+    }
+}
 
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -32,6 +75,7 @@ pub struct ComponentValueGen<V> {
     properties: SmallMap<String, V>,
     source_path: String,
     symbol: V,
+    spice_model: Option<V>,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -70,6 +114,11 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
         // Show symbol field
         debug.field("symbol", &self.symbol);
 
+        // Show spice_model if present
+        if let Some(spice_model) = &self.spice_model {
+            debug.field("spice_model", spice_model);
+        }
+
         debug.finish()
     }
 }
@@ -77,9 +126,101 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 starlark_complex_value!(pub ComponentValue);
 
 #[starlark_value(type = "Component")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V> where
-    Self: ProvidesStaticType<'v>
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V>
+where
+    Self: ProvidesStaticType<'v>,
 {
+    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attr {
+            "name" => Some(heap.alloc_str(&self.name).to_value()),
+            "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
+            "mpn" => Some(
+                self.mpn()
+                    .map(|mpn| heap.alloc_str(mpn).to_value())
+                    .or_else(|| self.properties().get("mpn").map(|t| t.to_value()))
+                    .or_else(|| self.properties().get("Mpn").map(|t| t.to_value()))
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "type" => Some(
+                self.ctype()
+                    .map(|ctype| heap.alloc_str(ctype).to_value())
+                    .or_else(|| self.properties().get("type").map(|t| t.to_value()))
+                    .or_else(|| self.properties().get("Type").map(|t| t.to_value()))
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "properties" => {
+                // Build the same properties dictionary as in the testbench components dict
+                let mut component_attrs = std::collections::HashMap::new();
+
+                // Add component properties (excluding internal ones)
+                for (key, value) in &self.properties {
+                    if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
+                        || key.starts_with("__")
+                    {
+                        continue;
+                    }
+                    component_attrs.insert(key.clone(), value.to_value());
+                }
+
+                // Convert HashMap to Starlark dictionary
+                let attrs_vec: Vec<(Value<'v>, Value<'v>)> = component_attrs
+                    .into_iter()
+                    .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
+                    .collect();
+
+                Some(heap.alloc(AllocDict(attrs_vec)))
+            }
+            "pins" => {
+                // Convert connections SmallMap to Starlark dictionary
+                let connections_vec: Vec<(Value<'v>, Value<'v>)> = self
+                    .connections
+                    .iter()
+                    .map(|(pin, net)| (heap.alloc_str(pin).to_value(), net.to_value()))
+                    .collect();
+                Some(heap.alloc(AllocDict(connections_vec)))
+            }
+            "capacitance" => Some(
+                self.properties
+                    .get("__capacitance__")
+                    .map(|v| v.to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "resistance" => Some(
+                self.properties
+                    .get("__resistance__")
+                    .map(|v| v.to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            _ => None,
+        }
+    }
+
+    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+        matches!(
+            attr,
+            "name"
+                | "prefix"
+                | "mpn"
+                | "type"
+                | "properties"
+                | "pins"
+                | "capacitance"
+                | "resistance"
+        )
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec![
+            "name".to_string(),
+            "prefix".to_string(),
+            "mpn".to_string(),
+            "type".to_string(),
+            "properties".to_string(),
+            "pins".to_string(),
+            "capacitance".to_string(),
+            "resistance".to_string(),
+        ]
+    }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
@@ -141,6 +282,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
     pub fn symbol(&self) -> &V {
         &self.symbol
     }
+
+    pub fn spice_model(&self) -> Option<&V> {
+        self.spice_model.as_ref()
+    }
 }
 
 /// ComponentFactory is a value that represents a factory for a component.
@@ -178,6 +323,7 @@ where
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
+                ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -185,13 +331,16 @@ where
             let name_val: Value = param_parser.next()?;
             let name = name_val
                 .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
+                .ok_or(ComponentError::NameNotString)?
                 .to_owned();
+
+            // Validate the component name
+            validate_identifier_name(&name, "Component name")?;
 
             let footprint_val: Value = param_parser.next()?;
             let mut footprint = footprint_val
                 .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`footprint` must be a string")))?
+                .ok_or(ComponentError::FootprintNotString)?
                 .to_owned();
 
             // If the footprint looks like a KiCad module file, make the path absolute
@@ -200,14 +349,9 @@ where
                 if !candidate.is_absolute() {
                     let current_path = eval_ctx.source_path().unwrap_or_default();
 
-                    let current_dir =
-                        std::path::Path::new(&current_path)
-                            .parent()
-                            .ok_or_else(|| {
-                                starlark::Error::new_other(anyhow!(
-                                    "could not determine parent directory of current file"
-                                ))
-                            })?;
+                    let current_dir = std::path::Path::new(&current_path)
+                        .parent()
+                        .ok_or(ComponentError::ParentDirectoryNotFound)?;
 
                     footprint = current_dir.join(candidate).to_string_lossy().into_owned();
                 }
@@ -216,16 +360,12 @@ where
             let pin_defs_val: Option<Value> = param_parser.next_opt()?;
 
             let pins_val: Value = param_parser.next()?;
-            let conn_dict = DictRef::from_value(pins_val).ok_or_else(|| {
-                starlark::Error::new_other(anyhow!(
-                    "`pins` must be a dict mapping pin names to Net"
-                ))
-            })?;
+            let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
 
             let prefix_val: Value = param_parser.next()?;
             let prefix = prefix_val
                 .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`prefix` must be a string")))?
+                .ok_or(ComponentError::PrefixNotString)?
                 .to_owned();
 
             // Optional fields
@@ -233,6 +373,7 @@ where
             let mpn: Option<Value> = param_parser.next_opt()?;
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
+            let spice_model_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
@@ -365,6 +506,12 @@ where
                             .unpack_str()
                             .map(|s| s.to_owned())
                             .unwrap_or_else(|| k_val.to_string());
+                        try_add_physical_property(
+                            eval_ctx.heap(),
+                            &mut properties_map,
+                            &key_str,
+                            &v_val,
+                        );
                         properties_map.insert(key_str, v_val);
                     }
                 } else {
@@ -389,6 +536,17 @@ where
                 );
             }
 
+            if let Some(ref sm) = spice_model_val {
+                if sm.downcast_ref::<SpiceModelValue>().is_none()
+                    && sm.downcast_ref::<FrozenSpiceModelValue>().is_none()
+                {
+                    return Err(starlark::Error::new_other(anyhow!(format!(
+                        "`spice_model` must be a SpiceModel, got {}",
+                        sm.get_type()
+                    ))));
+                }
+            }
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
@@ -399,6 +557,7 @@ where
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
+                spice_model: spice_model_val,
             });
 
             Ok(component)
@@ -415,6 +574,21 @@ where
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
         Some(<ComponentType as StarlarkValue>::get_type_starlark_repr())
     }
+}
+
+fn try_add_physical_property<'a, 'b>(
+    heap: &'a Heap,
+    map: &mut SmallMap<String, Value<'a>>,
+    key: &str,
+    value: &Value<'b>,
+) -> Option<PhysicalValue> {
+    if let Some(val) = value.unpack_str() {
+        if let Ok(physical) = val.parse::<PhysicalValue>() {
+            let key = format!("__{}__", key.to_ascii_lowercase());
+            map.insert(key, heap.alloc(physical));
+        }
+    }
+    None
 }
 
 impl std::fmt::Display for ComponentType {
@@ -512,6 +686,7 @@ where
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
+                ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -636,6 +811,7 @@ where
             };
 
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
+            let spice_model_val: Option<Value> = param_parser.next_opt()?;
             let mut properties_map: SmallMap<String, Value<'v>> = SmallMap::new();
 
             // Start with default_properties from factory.
@@ -659,6 +835,16 @@ where
                 }
             }
 
+            // Validate spice_model type if provided
+            if let Some(ref sm) = spice_model_val {
+                if sm.get_type() != "SpiceModel" {
+                    return Err(starlark::Error::new_other(anyhow!(format!(
+                        "`spice_model` must be a SpiceModel, got {}",
+                        sm.get_type()
+                    ))));
+                }
+            }
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: final_mpn,
@@ -669,6 +855,7 @@ where
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(self.symbol.clone()),
+                spice_model: spice_model_val,
             });
 
             Ok(component)
@@ -687,142 +874,9 @@ where
     }
 }
 
-pub(crate) fn build_component_factory_from_symbol(
-    symbol_path: &std::path::Path,
-    footprint_override: Option<&str>,
-    base_dir: Option<&std::path::Path>,
-    file_provider: &dyn crate::FileProvider,
-    context: &EvalContext,
-) -> anyhow::Result<ComponentFactoryValue> {
-    // Parse all symbols from the library (with caching)
-    // Note: Component factories expect single-symbol files, so we load all symbols
-    // to provide a helpful error if multiple symbols are found
-    let symbols = load_symbols_from_library(symbol_path, file_provider)
-        .map_err(|e| anyhow!("Failed to load symbols: {}", e))?;
-
-    // For single-symbol files (which is the common case for component factories),
-    // use the first symbol
-    let symbol = symbols
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("No symbols found in file '{}'", symbol_path.display()))?;
-
-    // Build pins map
-    let mut pins_map: SmallMap<String, String> = SmallMap::new();
-    for pin in &symbol.pins {
-        // If pin name is ~, use the pin number instead
-        let signal_name = if pin.name == "~" {
-            pin.number.clone()
-        } else {
-            pin.name.clone()
-        };
-        pins_map.insert(signal_name, pin.number.clone());
-    }
-
-    // Determine footprint (override takes precedence over symbol default)
-    let mut final_footprint = footprint_override
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| symbol.footprint.clone());
-
-    // If the footprint looks like a KiCad module file, make the path absolute
-    if final_footprint.ends_with(".kicad_mod") {
-        let candidate = std::path::PathBuf::from(&final_footprint);
-        if !candidate.is_absolute() {
-            if let Some(dir) = base_dir {
-                final_footprint = dir.join(candidate).to_string_lossy().into_owned();
-            }
-        }
-    }
-
-    // Default properties from symbol
-    let mut default_properties: SmallMap<String, String> = SmallMap::new();
-    for (k, v) in symbol.properties.iter() {
-        default_properties.insert(k.clone(), v.clone());
-    }
-
-    // Always record the *absolute* path to the source symbol file so that downstream tooling
-    // (e.g. schematic viewers, netlisters) can trace components back to their definition.
-    // Use the canonicalised path when available, otherwise fall back to the provided path.
-    let abs_symbol_path = match file_provider.canonicalize(symbol_path) {
-        Ok(p) => p,
-        Err(_) => symbol_path.to_path_buf(),
-    };
-
-    default_properties.insert(
-        "symbol_path".to_owned(),
-        abs_symbol_path.to_string_lossy().into_owned(),
-    );
-
-    Ok(ComponentFactoryValue {
-        mpn: symbol.mpn.clone(),
-        ctype: symbol.manufacturer.clone(),
-        footprint: final_footprint,
-        prefix: "U".to_owned(),
-        symbol: SymbolValue::from_args(
-            None,
-            None,
-            Some(abs_symbol_path.to_string_lossy().into_owned()),
-            context,
-        )
-        .map_err(|e| anyhow!("Failed to build symbol: {}", e))?,
-        default_properties,
-    })
-}
-
 #[starlark_module]
 pub fn component_globals(builder: &mut GlobalsBuilder) {
     const Component: ComponentType = ComponentType;
     const Net: NetType = NetType;
     const Symbol: SymbolType = SymbolType;
-
-    fn load_component<'v>(
-        #[starlark(require = pos)] symbol_path: String,
-        #[starlark(require = named)] footprint: Option<String>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
-        // Resolve symbol_path relative to current file directory
-        let resolved_path = {
-            let candidate = std::path::PathBuf::from(&symbol_path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                let current_path = eval
-                    .context_value()
-                    .ok_or_else(|| anyhow!("unexpected context - ContextValue not found"))?
-                    .source_path();
-
-                let current_dir =
-                    std::path::Path::new(&current_path)
-                        .parent()
-                        .ok_or_else(|| {
-                            anyhow!("could not determine parent directory of current file")
-                        })?;
-
-                current_dir.join(candidate)
-            }
-        };
-
-        // Determine the directory of the current source file for resolving relative paths
-        let base_dir_opt: Option<std::path::PathBuf> = eval.context_value().and_then(|cv| {
-            let src_path = cv.source_path();
-            std::path::Path::new(&src_path)
-                .parent()
-                .map(|p| p.to_path_buf())
-        });
-
-        let file_provider = eval
-            .file_provider()
-            .ok_or_else(|| anyhow!("No file provider available"))?;
-
-        // Build ComponentFactoryValue via helper
-        let factory = build_component_factory_from_symbol(
-            &resolved_path,
-            footprint.as_deref(),
-            base_dir_opt.as_deref(),
-            file_provider.as_ref(),
-            eval.eval_context().unwrap(),
-        )?;
-
-        Ok(eval.heap().alloc(factory))
-    }
 }

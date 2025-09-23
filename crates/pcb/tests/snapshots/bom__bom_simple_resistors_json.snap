@@ -2,7 +2,7 @@
 source: crates/pcb/tests/bom.rs
 expression: output
 ---
-Command: pcb bom boards/SimpleResistors.zen -f json
+Command: pcb bom boards/SimpleResistors.zen -r bom_rules.json -f json
 Exit Code: 0
 
 --- STDOUT ---
@@ -18,6 +18,25 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     },
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-1.00KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0603FR-071KL",
+        "matched_by": {
+          "Generic": {
+            "component_type": "Resistor",
+            "resistance": {
+              "value": "1000.0",
+              "tolerance": "0.0",
+              "unit": "Ohms"
+            },
+            "package": "0603"
+          }
+        }
+      }
+    ],
     "dnp": false
   },
   {
@@ -31,6 +50,25 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     },
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-1.00KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0603FR-071KL",
+        "matched_by": {
+          "Generic": {
+            "component_type": "Resistor",
+            "resistance": {
+              "value": "1000.0",
+              "tolerance": "0.0",
+              "unit": "Ohms"
+            },
+            "package": "0603"
+          }
+        }
+      }
+    ],
     "dnp": false
   },
   {
@@ -40,10 +78,29 @@ Exit Code: 0
     "value": "4.7k",
     "component_type": "Resistor",
     "resistance": {
-      "value": "4700",
+      "value": "4700.0",
       "tolerance": "0",
       "unit": "Ohms"
     },
+    "offers": [
+      {
+        "distributor": "digikey",
+        "distributor_pn": "311-4.70KHRCT-ND",
+        "manufacturer": "Yageo",
+        "manufacturer_pn": "RC0402FR-074K7L",
+        "matched_by": {
+          "Generic": {
+            "component_type": "Resistor",
+            "resistance": {
+              "value": "4700.0",
+              "tolerance": "0.0",
+              "unit": "Ohms"
+            },
+            "package": "0402"
+          }
+        }
+      }
+    ],
     "dnp": false
   }
 ]

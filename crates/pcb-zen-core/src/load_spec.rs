@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Default tag that is assumed when the caller does not specify one in a
 /// package spec, e.g. `@mypkg/utils.zen`.
@@ -32,21 +32,132 @@ pub enum LoadSpec {
         rev: String,
         path: PathBuf,
     },
-    /// Raw file path (relative or absolute)
-    Path { path: PathBuf },
-    /// Workspace-relative path (starts with //)
-    WorkspacePath { path: PathBuf },
+    Path {
+        path: PathBuf,
+        workspace_relative: bool,
+        allow_not_exist: bool,
+    },
+}
+
+impl std::fmt::Display for LoadSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadSpec::Package { package, tag, path } => {
+                let base = if tag == DEFAULT_PKG_TAG {
+                    format!("@{package}")
+                } else {
+                    format!("@{package}:{tag}")
+                };
+                if path.as_os_str().is_empty() {
+                    write!(f, "{base}")
+                } else {
+                    write!(f, "{base}/{}", path.display())
+                }
+            }
+            LoadSpec::Github {
+                user,
+                repo,
+                rev,
+                path,
+            } => {
+                let base = if rev == DEFAULT_GITHUB_REV {
+                    format!("@github/{user}/{repo}")
+                } else {
+                    format!("@github/{user}/{repo}:{rev}")
+                };
+                if path.as_os_str().is_empty() {
+                    write!(f, "{base}")
+                } else {
+                    write!(f, "{base}/{}", path.display())
+                }
+            }
+            LoadSpec::Gitlab {
+                project_path,
+                rev,
+                path,
+            } => {
+                let base = if rev == DEFAULT_GITLAB_REV {
+                    format!("@gitlab/{project_path}")
+                } else {
+                    format!("@gitlab/{project_path}:{rev}")
+                };
+                if path.as_os_str().is_empty() {
+                    write!(f, "{base}")
+                } else {
+                    write!(f, "{base}/{}", path.display())
+                }
+            }
+            LoadSpec::Path {
+                path,
+                workspace_relative,
+                ..
+            } => {
+                if *workspace_relative {
+                    write!(f, "//{}", path.display())
+                } else {
+                    write!(f, "{}", path.display())
+                }
+            }
+        }
+    }
 }
 
 impl LoadSpec {
+    /// Create a new local path LoadSpec (workspace_relative = false)
+    pub fn local_path<P: Into<PathBuf>>(path: P) -> Self {
+        LoadSpec::Path {
+            path: path.into(),
+            workspace_relative: false,
+            allow_not_exist: false,
+        }
+    }
+
+    /// Create a new workspace-relative path LoadSpec (workspace_relative = true)
+    pub fn workspace_path<P: Into<PathBuf>>(path: P) -> Self {
+        LoadSpec::Path {
+            path: path.into(),
+            workspace_relative: true,
+            allow_not_exist: false,
+        }
+    }
+
+    /// Returns true if this LoadSpec allows the path to not exist.
+    pub fn allow_not_exist(&self) -> bool {
+        match self {
+            LoadSpec::Path {
+                allow_not_exist, ..
+            } => *allow_not_exist,
+            _ => false,
+        }
+    }
+
     /// Get the path from this LoadSpec.
     pub fn path(&self) -> &PathBuf {
         match self {
             LoadSpec::Package { path, .. } => path,
             LoadSpec::Github { path, .. } => path,
             LoadSpec::Gitlab { path, .. } => path,
-            LoadSpec::Path { path } => path,
-            LoadSpec::WorkspacePath { path } => path,
+            LoadSpec::Path { path, .. } => path,
+        }
+    }
+
+    /// Generate a structured remote reference for this LoadSpec.
+    pub fn remote_ref(&self) -> Option<crate::RemoteRef> {
+        match self {
+            LoadSpec::Github {
+                user, repo, rev, ..
+            } => Some(crate::RemoteRef::GitHub {
+                user: user.clone(),
+                repo: repo.clone(),
+                rev: rev.clone(),
+            }),
+            LoadSpec::Gitlab {
+                project_path, rev, ..
+            } => Some(crate::RemoteRef::GitLab {
+                project_path: project_path.clone(),
+                rev: rev.clone(),
+            }),
+            _ => None,
         }
     }
 
@@ -76,8 +187,15 @@ impl LoadSpec {
                 tag: tag.clone(),
                 path: new_path,
             },
-            LoadSpec::Path { .. } => LoadSpec::Path { path: new_path },
-            LoadSpec::WorkspacePath { .. } => LoadSpec::WorkspacePath { path: new_path },
+            LoadSpec::Path {
+                workspace_relative,
+                allow_not_exist,
+                ..
+            } => LoadSpec::Path {
+                path: new_path,
+                workspace_relative: *workspace_relative,
+                allow_not_exist: *allow_not_exist,
+            },
         }
     }
 
@@ -233,31 +351,36 @@ impl LoadSpec {
             })
         } else if let Some(workspace_path) = s.strip_prefix("//") {
             // Workspace-relative path: //path/to/file.zen
-            Some(LoadSpec::WorkspacePath {
-                path: PathBuf::from(workspace_path),
-            })
+            Some(LoadSpec::workspace_path(workspace_path))
         } else {
             // Raw file path (relative or absolute)
-            Some(LoadSpec::Path {
-                path: PathBuf::from(s),
-            })
+            Some(LoadSpec::local_path(s))
         }
     }
 
     /// Default package aliases that are always available
-    pub fn default_package_aliases() -> HashMap<String, String> {
+    pub fn default_package_aliases() -> HashMap<String, crate::AliasInfo> {
         let mut map = HashMap::new();
         map.insert(
             "kicad-symbols".to_string(),
-            "@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string(),
+            crate::AliasInfo {
+                target: "@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string(),
+                source_path: None, // None for built-in default aliases
+            },
         );
         map.insert(
             "kicad-footprints".to_string(),
-            "@gitlab/kicad/libraries/kicad-footprints:9.0.0".to_string(),
+            crate::AliasInfo {
+                target: "@gitlab/kicad/libraries/kicad-footprints:9.0.0".to_string(),
+                source_path: None, // None for built-in default aliases
+            },
         );
         map.insert(
             "stdlib".to_string(),
-            "@github/diodeinc/stdlib:HEAD".to_string(),
+            crate::AliasInfo {
+                target: "@github/diodeinc/stdlib:HEAD".to_string(),
+                source_path: None, // None for built-in default aliases
+            },
         );
         map
     }
@@ -267,100 +390,125 @@ impl LoadSpec {
     ///
     /// For Package specs, it checks for aliases in the workspace configuration and default aliases.
     /// If an alias is found, it parses the target and applies any tag overrides and path joining.
-    /// Other spec types (Github, Gitlab, Path, WorkspacePath) are returned unchanged.
+    /// If an alias is not found, it returns an error.
+    /// If called with a non-package spec, it returns an error.
     ///
     /// # Arguments
-    /// * `spec` - The LoadSpec to resolve
-    /// * `workspace_aliases` - Optional workspace-specific aliases (overrides defaults)
+    /// * `aliases` - Optional workspace-specific aliases (overrides defaults)
     ///
     /// # Returns
     /// A resolved LoadSpec, which may be the same as the input or a new spec based on alias resolution.
     pub fn resolve(
         &self,
-        workspace_aliases: Option<&HashMap<String, String>>,
+        aliases: Option<&HashMap<String, crate::AliasInfo>>,
     ) -> Result<LoadSpec, anyhow::Error> {
-        match self {
-            LoadSpec::Package { package, tag, path } => {
-                // Check for package aliases (workspace or default)
-                let aliases = if let Some(ws_aliases) = workspace_aliases {
-                    // Use provided workspace aliases
-                    ws_aliases
-                } else {
-                    // Fall back to default aliases only
-                    &Self::default_package_aliases()
-                };
+        let LoadSpec::Package { package, tag, path } = self else {
+            anyhow::bail!("LoadSpec::resolve() called on non-package spec")
+        };
+        // Check for package aliases (workspace or default)
+        let aliases_map = if let Some(ws_aliases) = aliases {
+            // Use provided workspace aliases
+            ws_aliases
+        } else {
+            // Fall back to default aliases only
+            &Self::default_package_aliases()
+        };
 
-                if let Some(target) = aliases.get(package) {
-                    // Parse the alias target
-                    if let Some(mut resolved_spec) = LoadSpec::parse(target) {
-                        // If caller explicitly specified a tag (non-default), override the alias's tag
-                        if tag != DEFAULT_PKG_TAG {
-                            match &mut resolved_spec {
-                                LoadSpec::Package { tag: alias_tag, .. } => {
-                                    *alias_tag = tag.clone();
-                                }
-                                LoadSpec::Github { rev: alias_rev, .. } => {
-                                    *alias_rev = tag.clone();
-                                }
-                                LoadSpec::Gitlab { rev: alias_rev, .. } => {
-                                    *alias_rev = tag.clone();
-                                }
-                                // Path and WorkspacePath specs don't support tags
-                                LoadSpec::Path { .. } | LoadSpec::WorkspacePath { .. } => {
-                                    return Err(anyhow::anyhow!(
-                                        "Cannot apply tag '{}' to path-based alias target '{}'",
-                                        tag,
-                                        target
-                                    ));
-                                }
-                            }
-                        }
+        let Some(alias_info) = aliases_map.get(package) else {
+            anyhow::bail!("Failed to resolve alias for spec: {}", self)
+        };
 
-                        // Append the path if needed
-                        if !path.as_os_str().is_empty() {
-                            match &mut resolved_spec {
-                                LoadSpec::Package {
-                                    path: alias_path, ..
-                                } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::Github {
-                                    path: alias_path, ..
-                                } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::Gitlab {
-                                    path: alias_path, ..
-                                } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::Path { path: alias_path } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                                LoadSpec::WorkspacePath { path: alias_path } => {
-                                    *alias_path = alias_path.join(path);
-                                }
-                            }
-                        }
-
-                        Ok(resolved_spec)
-                    } else {
-                        // Invalid alias target
-                        Err(anyhow::anyhow!(
-                            "Invalid alias target for package '{}': '{}'",
-                            package,
-                            target
-                        ))
+        let target = &alias_info.target;
+        // Parse the alias target
+        if let Some(mut resolved_spec) = LoadSpec::parse(target) {
+            // If caller explicitly specified a tag (non-default), override the alias's tag
+            if tag != DEFAULT_PKG_TAG {
+                match &mut resolved_spec {
+                    LoadSpec::Package { tag: alias_tag, .. } => {
+                        *alias_tag = tag.clone();
                     }
-                } else {
-                    // No alias found, return original spec
-                    Ok(self.clone())
+                    LoadSpec::Github { rev: alias_rev, .. } => {
+                        *alias_rev = tag.clone();
+                    }
+                    LoadSpec::Gitlab { rev: alias_rev, .. } => {
+                        *alias_rev = tag.clone();
+                    }
+                    // Path specs don't support tags
+                    LoadSpec::Path { .. } => {
+                        return Err(anyhow::anyhow!(
+                            "Cannot apply tag '{}' to path-based alias target '{}'",
+                            tag,
+                            target
+                        ));
+                    }
                 }
             }
-            // Other spec types pass through unchanged
-            _ => Ok(self.clone()),
+
+            // Append the path if needed
+            if !path.as_os_str().is_empty() {
+                resolved_spec = resolved_spec.with_path(resolved_spec.path().join(path));
+            }
+            // Path alias targets are always workspace-relative
+            if let LoadSpec::Path {
+                workspace_relative, ..
+            } = &mut resolved_spec
+            {
+                *workspace_relative = true;
+            }
+            Ok(resolved_spec)
+        } else {
+            // Invalid alias target
+            Err(anyhow::anyhow!(
+                "Invalid alias target for package '{}': '{}'",
+                package,
+                target
+            ))
         }
     }
+
+    pub fn vendor_path(&self) -> anyhow::Result<PathBuf> {
+        match self {
+            LoadSpec::Github {
+                user,
+                repo,
+                rev,
+                path,
+            } => {
+                let mut vendor_path = PathBuf::from("github.com").join(user).join(repo).join(rev);
+                // Normalize and add path components (handles .. and . components)
+                if !path.as_os_str().is_empty() && path != Path::new(".") {
+                    vendor_path.push(crate::normalize_path(path));
+                }
+                Ok(vendor_path)
+            }
+            LoadSpec::Gitlab {
+                project_path,
+                rev,
+                path,
+            } => {
+                let mut vendor_path = PathBuf::from("gitlab.com").join(project_path).join(rev);
+                // Normalize and add path components (handles .. and . components)
+                if !path.as_os_str().is_empty() && path != Path::new(".") {
+                    vendor_path.push(crate::normalize_path(path));
+                }
+                Ok(vendor_path)
+            }
+            LoadSpec::Package { .. } => {
+                anyhow::bail!("Package spec not supported during vendoring. This is most likely a compiler bug.")
+            }
+            LoadSpec::Path { .. } => {
+                anyhow::bail!(
+                "Local path dependency detected during vendoring. This typically indicates zen files \
+                from different workspaces are being processed together.\n\
+                \n\
+                Local dependencies should not be vendored - they belong to your workspace.\n\
+                \n\
+                Solution: Run 'pcb vendor' separately for each workspace, or ensure all zen files \
+                belong to the same workspace.")
+            }
+        }
+    }
+
     /// Check if this LoadSpec represents a remote resource that needs to be downloaded.
     /// Returns true for Package, Github, and Gitlab specs.
     /// Returns false for Path and WorkspacePath specs.
@@ -371,58 +519,31 @@ impl LoadSpec {
         )
     }
 
+    /// Check if this LoadSpec represents a local resource.
+    pub fn is_local(&self) -> bool {
+        matches!(self, LoadSpec::Path { .. })
+    }
+
+    /// Check if this LoadSpec represents a workspace-relative path.
+    pub fn is_workspace_relative(&self) -> bool {
+        matches!(
+            self,
+            LoadSpec::Path {
+                workspace_relative: true,
+                ..
+            }
+        )
+    }
+
+    /// Drop the path from the LoadSpec for all variants
+    pub fn without_path(&self) -> Self {
+        self.with_path(PathBuf::new())
+    }
+
     /// Convert the LoadSpec back to a load string representation.
     /// This is useful for error messages and debugging.
     pub fn to_load_string(&self) -> String {
-        match self {
-            LoadSpec::Package { package, tag, path } => {
-                let base = if tag == DEFAULT_PKG_TAG {
-                    format!("@{package}")
-                } else {
-                    format!("@{package}:{tag}")
-                };
-                if path.as_os_str().is_empty() {
-                    base
-                } else {
-                    format!("{}/{}", base, path.display())
-                }
-            }
-            LoadSpec::Github {
-                user,
-                repo,
-                rev,
-                path,
-            } => {
-                let base = if rev == DEFAULT_GITHUB_REV {
-                    format!("@github/{user}/{repo}")
-                } else {
-                    format!("@github/{user}/{repo}:{rev}")
-                };
-                if path.as_os_str().is_empty() {
-                    base
-                } else {
-                    format!("{}/{}", base, path.display())
-                }
-            }
-            LoadSpec::Gitlab {
-                project_path,
-                rev,
-                path,
-            } => {
-                let base = if rev == DEFAULT_GITLAB_REV {
-                    format!("@gitlab/{project_path}")
-                } else {
-                    format!("@gitlab/{project_path}:{rev}")
-                };
-                if path.as_os_str().is_empty() {
-                    base
-                } else {
-                    format!("{}/{}", base, path.display())
-                }
-            }
-            LoadSpec::Path { path } => path.display().to_string(),
-            LoadSpec::WorkspacePath { path } => format!("//{}", path.display()),
-        }
+        self.to_string()
     }
 
     /// Generate a cache key for a LoadSpec.
@@ -467,11 +588,16 @@ impl LoadSpec {
                     format!("gl:{}:{}:{}", project_path, rev, path.display())
                 }
             }
-            LoadSpec::Path { path } => {
-                format!("path:{}", path.display())
-            }
-            LoadSpec::WorkspacePath { path } => {
-                format!("ws:{}", path.display())
+            LoadSpec::Path {
+                path,
+                workspace_relative,
+                ..
+            } => {
+                if *workspace_relative {
+                    format!("ws:{}", path.display())
+                } else {
+                    format!("path:{}", path.display())
+                }
             }
         }
     }
@@ -647,88 +773,51 @@ mod tests {
         let spec = LoadSpec::parse("//src/components/resistor.zen");
         assert_eq!(
             spec,
-            Some(LoadSpec::WorkspacePath {
-                path: PathBuf::from("src/components/resistor.zen"),
-            })
+            Some(LoadSpec::workspace_path("src/components/resistor.zen"))
         );
     }
 
     #[test]
     fn test_parse_load_spec_workspace_path_root() {
         let spec = LoadSpec::parse("//math.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::WorkspacePath {
-                path: PathBuf::from("math.zen"),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::workspace_path("math.zen")));
     }
 
     #[test]
     fn test_parse_load_spec_workspace_path_empty() {
         let spec = LoadSpec::parse("//");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::WorkspacePath {
-                path: PathBuf::from(""),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::workspace_path("")));
     }
 
     #[test]
     fn test_parse_load_spec_relative_path() {
         let spec = LoadSpec::parse("./math.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Path {
-                path: PathBuf::from("./math.zen"),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::local_path("./math.zen")));
     }
 
     #[test]
     fn test_parse_load_spec_relative_path_parent() {
         let spec = LoadSpec::parse("../utils/helper.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Path {
-                path: PathBuf::from("../utils/helper.zen"),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::local_path("../utils/helper.zen")));
     }
 
     #[test]
     fn test_parse_load_spec_absolute_path() {
         let spec = LoadSpec::parse("/absolute/path/file.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Path {
-                path: PathBuf::from("/absolute/path/file.zen"),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::local_path("/absolute/path/file.zen")));
     }
 
     #[test]
     fn test_parse_load_spec_simple_filename() {
         let spec = LoadSpec::parse("math.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Path {
-                path: PathBuf::from("math.zen"),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::local_path("math.zen")));
     }
 
     #[test]
     fn test_parse_load_spec_invalid() {
         // These should still return Some(LoadSpec::Path) since we now handle all strings
         let spec = LoadSpec::parse("not_a_load_spec");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Path {
-                path: PathBuf::from("not_a_load_spec"),
-            })
-        );
+        assert_eq!(spec, Some(LoadSpec::local_path("not_a_load_spec")));
 
         // Invalid @ specs should still return None
         assert_eq!(LoadSpec::parse("@"), None);
@@ -794,9 +883,7 @@ mod tests {
 
     #[test]
     fn test_path_spec_serialization() {
-        let spec = LoadSpec::Path {
-            path: PathBuf::from("./relative/path/file.zen"),
-        };
+        let spec = LoadSpec::local_path("./relative/path/file.zen");
 
         // Test serialization
         let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
@@ -810,9 +897,7 @@ mod tests {
 
     #[test]
     fn test_path_spec_serialization_absolute() {
-        let spec = LoadSpec::Path {
-            path: PathBuf::from("/absolute/path/file.zen"),
-        };
+        let spec = LoadSpec::local_path("/absolute/path/file.zen");
 
         // Test serialization
         let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
@@ -826,9 +911,7 @@ mod tests {
 
     #[test]
     fn test_workspace_path_spec_serialization() {
-        let spec = LoadSpec::WorkspacePath {
-            path: PathBuf::from("src/components/resistor.zen"),
-        };
+        let spec = LoadSpec::workspace_path("src/components/resistor.zen");
 
         // Test serialization
         let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
@@ -859,12 +942,8 @@ mod tests {
                 rev: "v1.0.0".to_string(),
                 path: PathBuf::from("lib/module.zen"),
             },
-            LoadSpec::Path {
-                path: PathBuf::from("./relative/file.zen"),
-            },
-            LoadSpec::WorkspacePath {
-                path: PathBuf::from("workspace/file.zen"),
-            },
+            LoadSpec::local_path("./relative/file.zen"),
+            LoadSpec::workspace_path("workspace/file.zen"),
         ];
 
         for spec in specs {
@@ -891,8 +970,7 @@ mod tests {
                 path: PathBuf::from("math.zen"),
             };
 
-            let resolved = spec.resolve(None).unwrap();
-            assert_eq!(resolved, spec); // Should return unchanged
+            assert!(spec.resolve(None).is_err());
         }
 
         #[test]
@@ -950,7 +1028,10 @@ mod tests {
             let mut workspace_aliases = HashMap::new();
             workspace_aliases.insert(
                 "custom-lib".to_string(),
-                "@github/myorg/custom-lib:main".to_string(),
+                crate::AliasInfo {
+                    target: "@github/myorg/custom-lib:main".to_string(),
+                    source_path: None,
+                },
             );
 
             let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
@@ -977,7 +1058,10 @@ mod tests {
             let mut workspace_aliases = HashMap::new();
             workspace_aliases.insert(
                 "stdlib".to_string(),
-                "@github/myorg/my-stdlib:v2.0.0".to_string(),
+                crate::AliasInfo {
+                    target: "@github/myorg/my-stdlib:v2.0.0".to_string(),
+                    source_path: None,
+                },
             );
 
             let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
@@ -1024,16 +1108,17 @@ mod tests {
             };
 
             let mut workspace_aliases = HashMap::new();
-            workspace_aliases.insert("local-lib".to_string(), "./local/lib".to_string());
+            workspace_aliases.insert(
+                "local-lib".to_string(),
+                crate::AliasInfo {
+                    target: "./local/lib".to_string(),
+                    source_path: None,
+                },
+            );
 
             let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
 
-            assert_eq!(
-                resolved,
-                LoadSpec::Path {
-                    path: PathBuf::from("./local/lib/utils.zen"),
-                }
-            );
+            assert_eq!(resolved, LoadSpec::workspace_path("./local/lib/utils.zen"));
         }
 
         #[test]
@@ -1047,16 +1132,17 @@ mod tests {
             let mut workspace_aliases = HashMap::new();
             workspace_aliases.insert(
                 "workspace-lib".to_string(),
-                "//libs/workspace-lib".to_string(),
+                crate::AliasInfo {
+                    target: "//libs/workspace-lib".to_string(),
+                    source_path: None,
+                },
             );
 
             let resolved = spec.resolve(Some(&workspace_aliases)).unwrap();
 
             assert_eq!(
                 resolved,
-                LoadSpec::WorkspacePath {
-                    path: PathBuf::from("libs/workspace-lib/utils.zen"),
-                }
+                LoadSpec::workspace_path("libs/workspace-lib/utils.zen")
             );
         }
 
@@ -1093,7 +1179,10 @@ mod tests {
             let mut workspace_aliases = HashMap::new();
             workspace_aliases.insert(
                 "local-lib".to_string(),
-                "./local/lib".to_string(), // Path-based alias
+                crate::AliasInfo {
+                    target: "./local/lib".to_string(), // Path-based alias
+                    source_path: None,
+                },
             );
 
             let result = spec.resolve(Some(&workspace_aliases));
@@ -1114,7 +1203,10 @@ mod tests {
             let mut workspace_aliases = HashMap::new();
             workspace_aliases.insert(
                 "bad-alias".to_string(),
-                "@".to_string(), // Invalid load spec - just @ with nothing after
+                crate::AliasInfo {
+                    target: "@".to_string(), // Invalid load spec - just @ with nothing after
+                    source_path: None,
+                },
             );
 
             let result = spec.resolve(Some(&workspace_aliases));
@@ -1128,7 +1220,7 @@ mod tests {
         }
 
         #[test]
-        fn test_resolve_non_package_specs_unchanged() {
+        fn test_resolve_non_package_specs_error() {
             let specs = vec![
                 LoadSpec::Github {
                     user: "user".to_string(),
@@ -1141,17 +1233,13 @@ mod tests {
                     rev: "v1.0.0".to_string(),
                     path: PathBuf::from("lib/module.zen"),
                 },
-                LoadSpec::Path {
-                    path: PathBuf::from("./relative/file.zen"),
-                },
-                LoadSpec::WorkspacePath {
-                    path: PathBuf::from("workspace/file.zen"),
-                },
+                LoadSpec::local_path("./relative/file.zen"),
+                LoadSpec::workspace_path("workspace/file.zen"),
             ];
 
             for spec in specs {
-                let resolved = spec.resolve(None).unwrap();
-                assert_eq!(resolved, spec); // Should return unchanged
+                // Error because non-package specs cannot be resolved
+                assert!(spec.resolve(None).is_err());
             }
         }
     }
@@ -1236,9 +1324,7 @@ mod tests {
 
         #[test]
         fn test_cache_key_path() {
-            let spec = LoadSpec::Path {
-                path: PathBuf::from("./relative/file.zen"),
-            };
+            let spec = LoadSpec::local_path("./relative/file.zen");
 
             let key = spec.cache_key();
             assert_eq!(key, "path:./relative/file.zen");
@@ -1246,9 +1332,7 @@ mod tests {
 
         #[test]
         fn test_cache_key_workspace_path() {
-            let spec = LoadSpec::WorkspacePath {
-                path: PathBuf::from("src/components/resistor.zen"),
-            };
+            let spec = LoadSpec::workspace_path("src/components/resistor.zen");
 
             let key = spec.cache_key();
             assert_eq!(key, "ws:src/components/resistor.zen");
@@ -1279,12 +1363,8 @@ mod tests {
                     rev: "main".to_string(),
                     path: PathBuf::from("lib.zen"),
                 },
-                LoadSpec::Path {
-                    path: PathBuf::from("lib.zen"),
-                },
-                LoadSpec::WorkspacePath {
-                    path: PathBuf::from("lib.zen"),
-                },
+                LoadSpec::local_path("lib.zen"),
+                LoadSpec::workspace_path("lib.zen"),
             ];
 
             let mut keys = std::collections::HashSet::new();
@@ -1306,6 +1386,46 @@ mod tests {
             let key1 = spec.cache_key();
             let key2 = spec.cache_key();
             assert_eq!(key1, key2);
+        }
+    }
+
+    // Tests for helper methods
+    mod helper_tests {
+        use super::*;
+
+        #[test]
+        fn test_local_path_helper() {
+            let spec = LoadSpec::local_path("src/lib.zen");
+            assert_eq!(spec, LoadSpec::local_path("src/lib.zen"));
+            assert!(!spec.is_workspace_relative());
+            assert!(spec.is_local());
+        }
+
+        #[test]
+        fn test_workspace_path_helper() {
+            let spec = LoadSpec::workspace_path("src/components/resistor.zen");
+            assert_eq!(
+                spec,
+                LoadSpec::workspace_path("src/components/resistor.zen")
+            );
+            assert!(spec.is_workspace_relative());
+            assert!(spec.is_local());
+        }
+
+        #[test]
+        fn test_workspace_relative_check() {
+            let local_spec = LoadSpec::local_path("test.zen");
+            let workspace_spec = LoadSpec::workspace_path("test.zen");
+            let github_spec = LoadSpec::Github {
+                user: "user".to_string(),
+                repo: "repo".to_string(),
+                rev: "main".to_string(),
+                path: PathBuf::from("test.zen"),
+            };
+
+            assert!(!local_spec.is_workspace_relative());
+            assert!(workspace_spec.is_workspace_relative());
+            assert!(!github_spec.is_workspace_relative());
         }
     }
 }

@@ -1,5 +1,4 @@
 use log::debug;
-use pcb_sch::generate_bom_entries;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
@@ -85,12 +84,18 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
                 req.path = Some(path.to_string_lossy().to_string());
             }),
 
-            pcb_zen_core::LoadSpec::Path { path }
-            | pcb_zen_core::LoadSpec::WorkspacePath { path } => {
+            pcb_zen_core::LoadSpec::Path { path, .. } => {
                 // Regular path - just return it
                 Ok(path.clone())
             }
         }
+    }
+
+    fn remote_ref_meta(
+        &self,
+        _remote_ref: &pcb_zen_core::RemoteRef,
+    ) -> Option<pcb_zen_core::RemoteRefMeta> {
+        None
     }
 }
 
@@ -542,17 +547,10 @@ impl Module {
             .as_ref()
             .map(|output| output.signature.clone());
 
-        // Generate BOM JSON if schematic is available
-        let bom_json = schematic_opt.as_ref().and_then(|schematic| {
-            let entries = generate_bom_entries(&mut schematic.clone());
-            match serde_json::to_string(&entries) {
-                Ok(json) => Some(json),
-                Err(e) => {
-                    log::error!("Failed to serialize BOM to JSON: {e}");
-                    None
-                }
-            }
-        });
+        // Generate BOM JSON from the schematic if available
+        let bom_json = schematic_opt
+            .as_ref()
+            .map(|schematic| schematic.bom().ungrouped_json());
 
         // Build evaluation result
         let evaluation_result = EvaluationResult {
@@ -615,6 +613,18 @@ impl Module {
     pub fn list_files(&self) -> Result<String, JsValue> {
         // TODO: Implement file listing through worker
         Ok("[]".to_string())
+    }
+
+    /// Save positions - currently unsupported in WASM
+    #[wasm_bindgen(js_name = savePositions)]
+    pub fn save_positions(
+        &self,
+        _file_path: &str,
+        _positions_json: JsValue,
+    ) -> Result<(), JsValue> {
+        Err(JsValue::from_str(
+            "Position saving is not supported in WASM environment",
+        ))
     }
 }
 

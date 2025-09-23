@@ -16,11 +16,8 @@ fn snapshot_component_properties() {
     env.add_file(
         "test_props.zen",
         r#"
-# Import component factory from current directory.
-load(".", COMP = "C146731")
-
 # Instantiate with pin connections and a custom property.
-COMP(
+Component(
     name = "NB3N551DG",
     pins = {
         "ICLK": Net("ICLK"),
@@ -32,6 +29,7 @@ COMP(
         "VDD": Net("VDD"),
         "OE": Net("OE"),
     },
+    symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
     footprint = "SMD:0805",
     properties = {"CustomProp": "Value123"},
 )

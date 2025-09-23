@@ -1,21 +1,25 @@
+use crate::lang::interface::FrozenInterfaceValue;
+use crate::lang::module::find_moved_span;
+use crate::lang::physical::PhysicalValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
-use crate::{FrozenComponentValue, FrozenModuleValue, FrozenNetValue, InputValue, NetId};
-use pcb_sch::Net;
-use pcb_sch::NetKind;
-use pcb_sch::{
-    AttributeValue, Instance, InstanceRef, ModuleRef, PhysicalUnit, PhysicalValue, Schematic,
+use crate::moved::{collect_existing_paths, scoped_path, Remapper};
+use crate::{Diagnostic, Diagnostics, WithDiagnostics};
+use crate::{
+    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, InputValue,
+    NetId,
 };
+use itertools::Itertools;
+use pcb_sch::position::Position;
+use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
 use serde::{Deserialize, Serialize};
-use starlark::values::float::StarlarkFloat;
+use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
-use starlark::values::record::FrozenRecord;
 use starlark::values::FrozenValue;
 use starlark::values::ValueLike;
 use std::collections::HashMap;
 use std::collections::HashSet;
-// removed unused BTree imports after refactor
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
 pub(crate) struct ModuleConverter {
@@ -23,7 +27,10 @@ pub(crate) struct ModuleConverter {
     net_to_ports: HashMap<NetId, Vec<InstanceRef>>,
     net_to_name: HashMap<NetId, String>,
     net_to_properties: HashMap<NetId, HashMap<String, AttributeValue>>,
-    refdes_counters: HashMap<String, u32>,
+    // Mapping <ref to component instance> -> <spice model>
+    comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
+    // Mapping <module instance ref> -> <module value> for position processing
+    module_instances: Vec<(InstanceRef, FrozenModuleValue)>,
 }
 
 /// Module signature information to be serialized as JSON
@@ -44,8 +51,6 @@ struct ParameterInfo {
     default_value: Option<InputValue>,
 }
 
-// Name resolution is now deterministic at net creation time; legacy helpers removed.
-
 impl ModuleConverter {
     pub(crate) fn new() -> Self {
         Self {
@@ -53,23 +58,31 @@ impl ModuleConverter {
             net_to_ports: HashMap::new(),
             net_to_name: HashMap::new(),
             net_to_properties: HashMap::new(),
-            refdes_counters: HashMap::new(),
+            comp_models: Vec::new(),
+            module_instances: Vec::new(),
         }
     }
 
-    pub(crate) fn build(mut self, module: &FrozenModuleValue) -> anyhow::Result<Schematic> {
+    pub(crate) fn build(mut self, module: &FrozenModuleValue) -> crate::WithDiagnostics<Schematic> {
         let root_instance_ref = InstanceRef::new(
             ModuleRef::new(module.source_path(), module.name()),
             Vec::new(),
         );
 
-        self.add_module_at(module, &root_instance_ref)?;
+        if let Err(err) = self.add_module_at(module, &root_instance_ref) {
+            let mut diagnostics = Diagnostics::default();
+            diagnostics.push(err.into());
+            return WithDiagnostics {
+                output: None,
+                diagnostics,
+            };
+        }
         self.schematic.set_root_ref(root_instance_ref);
 
         // Create Net objects directly using the names recorded per-module.
         // Ensure global uniqueness and stable creation order by sorting names.
         let mut ids_and_names: Vec<(NetId, String)> = Vec::new();
-        for net_id in self.net_to_ports.keys() {
+        for net_id in self.net_to_name.keys() {
             let name = self
                 .net_to_name
                 .get(net_id)
@@ -86,7 +99,16 @@ impl ModuleConverter {
             let mut seen: HashSet<&str> = HashSet::new();
             for (_, name) in ids_and_names.iter() {
                 if !seen.insert(name.as_str()) {
-                    return Err(anyhow::anyhow!("Duplicate net name: {name}"));
+                    let mut diagnostics = Diagnostics::default();
+                    diagnostics.push(Diagnostic::new(
+                        format!("Duplicate net name: {name}"),
+                        EvalSeverity::Error,
+                        Path::new(module.source_path()),
+                    ));
+                    return WithDiagnostics {
+                        output: None,
+                        diagnostics,
+                    };
                 }
             }
         }
@@ -94,10 +116,10 @@ impl ModuleConverter {
         for (net_id, unique_name) in ids_and_names {
             // Determine net kind from properties.
             let net_kind = if let Some(props) = self.net_to_properties.get(&net_id) {
-                if let Some(type_prop) = props.get("type") {
+                if let Some(type_prop) = props.get(crate::attrs::TYPE) {
                     match type_prop.string() {
-                        Some("ground") => NetKind::Ground,
-                        Some("power") => NetKind::Power,
+                        Some(crate::attrs::net::kind::GROUND) => NetKind::Ground,
+                        Some(crate::attrs::net::kind::POWER) => NetKind::Power,
                         _ => NetKind::Normal,
                     }
                 } else {
@@ -124,7 +146,41 @@ impl ModuleConverter {
             self.schematic.add_net(net);
         }
 
-        Ok(self.schematic)
+        // Finalize the component models now that we have finalized the net names
+        for (instance_ref, model) in &self.comp_models {
+            assert!(self.schematic.instances.contains_key(instance_ref));
+            let comp_inst: &mut Instance = self.schematic.instances.get_mut(instance_ref).unwrap();
+            comp_inst.add_attribute(crate::attrs::MODEL_DEF, model.definition.clone());
+            comp_inst.add_attribute(crate::attrs::MODEL_NAME, model.name.clone());
+            let mut net_names = Vec::new();
+            for net in model.nets() {
+                let net_id = net.downcast_ref::<FrozenNetValue>().unwrap().id();
+                assert!(self.net_to_name.contains_key(&net_id));
+                net_names.push(AttributeValue::String(
+                    self.net_to_name.get(&net_id).unwrap().to_string(),
+                ));
+            }
+            comp_inst.add_attribute(crate::attrs::MODEL_NETS, AttributeValue::Array(net_names));
+            let arg_str = model
+                .args()
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .join(" ");
+            comp_inst.add_attribute(crate::attrs::MODEL_ARGS, AttributeValue::String(arg_str));
+        }
+
+        self.schematic.assign_reference_designators();
+
+        // Validate moved directives, collect warnings, and filter out problematic ones
+        let (diagnostics, filtered_moved_paths) = self.validate_and_filter_moved_directives();
+
+        self.schematic.moved_paths = filtered_moved_paths;
+        self.post_process_all_positions();
+
+        WithDiagnostics {
+            output: Some(self.schematic),
+            diagnostics,
+        }
     }
 
     fn add_instance_at(
@@ -164,7 +220,7 @@ impl ModuleConverter {
         for (key, val) in module.properties().iter() {
             // HACK: If this is a layout_path attribute and we're not at the root,
             // prepend the module's directory path to the layout path
-            if key == "layout_path" && !instance_ref.instance_path.is_empty() {
+            if key == crate::attrs::LAYOUT_PATH && !instance_ref.instance_path.is_empty() {
                 if let Ok(AttributeValue::String(layout_path)) = to_attribute_value(*val) {
                     // Get the directory of the module's source file
                     let module_dir = Path::new(module.source_path())
@@ -172,11 +228,12 @@ impl ModuleConverter {
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
 
-                    let full_layout_path = if module_dir.is_empty() {
-                        layout_path
-                    } else {
-                        format!("{module_dir}/{layout_path}")
-                    };
+                    let full_layout_path =
+                        if module_dir.is_empty() || PathBuf::from(&layout_path).is_absolute() {
+                            layout_path
+                        } else {
+                            format!("{module_dir}/{layout_path}")
+                        };
 
                     inst.add_attribute(key.clone(), AttributeValue::String(full_layout_path));
                 } else {
@@ -215,7 +272,10 @@ impl ModuleConverter {
         // Add the signature as a JSON attribute
         if !signature.parameters.is_empty() {
             let signature_json = serde_json::to_value(&signature).unwrap_or_default();
-            inst.add_attribute("__signature", AttributeValue::Json(signature_json));
+            inst.add_attribute(
+                crate::attrs::SIGNATURE,
+                AttributeValue::Json(signature_json),
+            );
         }
 
         // Record final names for nets introduced by this module using the instance path.
@@ -243,13 +303,11 @@ impl ModuleConverter {
         // Add instance to schematic.
         self.schematic.add_instance(instance_ref.clone(), inst);
 
-        Ok(())
-    }
+        // Record this module instance for position post-processing
+        self.module_instances
+            .push((instance_ref.clone(), module.clone()));
 
-    fn next_refdes(&mut self, prefix: &str) -> String {
-        let counter = self.refdes_counters.entry(prefix.to_string()).or_insert(0);
-        *counter += 1;
-        format!("{}{}", prefix, *counter)
+        Ok(())
     }
 
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
@@ -308,27 +366,38 @@ impl ModuleConverter {
 
         // Add component's built-in attributes.
         comp_inst.add_attribute(
-            "footprint",
+            crate::attrs::FOOTPRINT,
             AttributeValue::String(component.footprint().to_owned()),
         );
 
         comp_inst.add_attribute(
-            "prefix",
+            crate::attrs::PREFIX,
             AttributeValue::String(component.prefix().to_owned()),
         );
 
         if let Some(mpn) = component.mpn() {
-            comp_inst.add_attribute("mpn", AttributeValue::String(mpn.to_owned()));
+            comp_inst.add_attribute(crate::attrs::MPN, AttributeValue::String(mpn.to_owned()));
         }
 
         if let Some(ctype) = component.ctype() {
-            comp_inst.add_attribute("type", AttributeValue::String(ctype.to_owned()));
+            comp_inst.add_attribute(crate::attrs::TYPE, AttributeValue::String(ctype.to_owned()));
         }
 
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
             let attr_value = to_attribute_value(*val)?;
             comp_inst.add_attribute(key.clone(), attr_value);
+        }
+
+        if let Some(model_val) = component.spice_model() {
+            let model =
+                model_val
+                    .downcast_ref::<FrozenSpiceModelValue>()
+                    .ok_or(anyhow::anyhow!(
+                        "Expected spice model for component {}",
+                        component.name()
+                    ))?;
+            self.comp_models.push((instance_ref.clone(), model.clone()));
         }
 
         // Add symbol information if the component has a symbol
@@ -338,7 +407,7 @@ impl ModuleConverter {
                 // Add symbol_name for backwards compatibility
                 if let Some(name) = symbol.name() {
                     comp_inst.add_attribute(
-                        "symbol_name".to_string(),
+                        crate::attrs::SYMBOL_NAME.to_string(),
                         AttributeValue::String(name.to_string()),
                     );
                 }
@@ -346,7 +415,7 @@ impl ModuleConverter {
                 // Add symbol_path for backwards compatibility
                 if let Some(path) = symbol.source_path() {
                     comp_inst.add_attribute(
-                        "symbol_path".to_string(),
+                        crate::attrs::SYMBOL_PATH.to_string(),
                         AttributeValue::String(path.to_string()),
                     );
                 }
@@ -356,14 +425,12 @@ impl ModuleConverter {
                 if let Some(sexp_string) = raw_sexp {
                     // The raw_sexp is stored as a string value in the SymbolValue
                     comp_inst.add_attribute(
-                        "__symbol_value".to_string(),
+                        crate::attrs::SYMBOL_VALUE.to_string(),
                         AttributeValue::String(sexp_string.to_string()),
                     );
                 }
             }
         }
-
-        comp_inst.set_reference_designator(self.next_refdes(component.prefix()));
 
         // Get the symbol from the component to access pin mappings
         let symbol = component.symbol();
@@ -385,7 +452,7 @@ impl ModuleConverter {
                 let mut pin_inst = Instance::port(comp_type_ref.clone());
 
                 pin_inst.add_attribute(
-                    "pads",
+                    crate::attrs::PADS,
                     AttributeValue::Array(
                         pads.iter()
                             .map(|p| AttributeValue::String(p.clone()))
@@ -401,7 +468,7 @@ impl ModuleConverter {
                     let net = net_val
                         .downcast_ref::<FrozenNetValue>()
                         .ok_or(anyhow::anyhow!(
-                            "Expected net value for pin '{}', found '{}'",
+                            "Expected net value for pin '{}' , found '{}'",
                             signal_name,
                             net_val
                         ))?;
@@ -416,10 +483,162 @@ impl ModuleConverter {
 
         Ok(())
     }
+
+    fn post_process_all_positions(&mut self) {
+        let remapper = Remapper::from_path_map(self.schematic.moved_paths.clone());
+
+        for (instance_ref, module) in &self.module_instances {
+            let module_path = instance_ref.instance_path.join(".");
+            for (key, pos) in module.positions().iter() {
+                let scoped_key = scoped_path(&module_path, key);
+                let remapped_key = remapper.remap(&scoped_key).unwrap_or(scoped_key);
+                let final_key = remapped_key
+                    .strip_prefix(&format!("{}.", module_path))
+                    .unwrap_or(&remapped_key);
+
+                let position = Position {
+                    x: pos.x,
+                    y: pos.y,
+                    rotation: pos.rotation,
+                };
+
+                // Determine position type and convert to unified format using the remapped key
+                let symbol_key = if self.is_instance_position(final_key, instance_ref).is_some() {
+                    // Component position: component_name -> comp:component_name
+                    Some(format!("comp:{}", final_key))
+                } else {
+                    self.find_net_symbol_key(final_key, module, instance_ref)
+                };
+
+                if let (Some(symbol_key), Some(instance)) =
+                    (symbol_key, self.schematic.instances.get_mut(instance_ref))
+                {
+                    instance.symbol_positions.insert(symbol_key, position);
+                }
+            }
+        }
+    }
+
+    fn is_instance_position(&self, key: &str, instance_ref: &InstanceRef) -> Option<()> {
+        // Traverse the instance hierarchy using the dot-separated key
+        key.split('.')
+            .try_fold(instance_ref, |current_ref, part| {
+                self.schematic
+                    .instances
+                    .get(current_ref)?
+                    .children
+                    .get(part)
+            })
+            .filter(|final_ref| self.schematic.instances.contains_key(final_ref))
+            .map(|_| ())
+    }
+
+    fn find_net_symbol_key(
+        &self,
+        key: &str,
+        module: &FrozenModuleValue,
+        instance_ref: &InstanceRef,
+    ) -> Option<String> {
+        let (net_part, suffix) = key.rsplit_once('.').unwrap_or((key, "1"));
+
+        // First try: public io() nets from signature - these need net ID lookup to get actual name
+        for param in module.signature().iter().filter(|p| !p.is_config) {
+            if let Some(default_net_name) = param.default_value.and_then(|v| {
+                v.downcast_ref::<FrozenNetValue>()
+                    .map(|n| n.name().to_string())
+                    .or_else(|| {
+                        v.downcast_ref::<FrozenInterfaceValue>()?
+                            .fields()
+                            .get("NET")?
+                            .downcast_ref::<FrozenNetValue>()
+                            .map(|n| n.name().to_string())
+                    })
+            }) {
+                if default_net_name == net_part {
+                    // Get the actual net name from the net ID
+                    let net_id = if let Some(net_value) =
+                        param.actual_value?.downcast_ref::<FrozenNetValue>()
+                    {
+                        net_value.id()
+                    } else if let Some(net_value) = param
+                        .actual_value?
+                        .downcast_ref::<FrozenInterfaceValue>()?
+                        .fields()
+                        .get("NET")?
+                        .downcast_ref::<FrozenNetValue>()
+                    {
+                        net_value.id()
+                    } else {
+                        continue;
+                    };
+
+                    // Look up actual net name and construct symbol key
+                    if let Some(actual_net_name) = self.net_to_name.get(&net_id) {
+                        return Some(format!("sym:{}#{}", actual_net_name, suffix));
+                    }
+                }
+            }
+        }
+
+        // Second try: internal nets - construct symbol key directly from fq_name
+        let fq_name = if instance_ref.instance_path.is_empty() {
+            // Root module - net name is not prefixed
+            net_part.to_string()
+        } else {
+            // Sub-module - prefix with module path
+            format!("{}.{}", instance_ref.instance_path.join("."), net_part)
+        };
+
+        // Check if this internal net exists in our net mappings
+        if self.net_to_name.values().any(|name| name == &fq_name) {
+            Some(format!("sym:{}#{}", fq_name, suffix))
+        } else {
+            None
+        }
+    }
+
+    fn validate_and_filter_moved_directives(&self) -> (Diagnostics, HashMap<String, String>) {
+        let mut diagnostics = Diagnostics::default();
+        let mut filtered = HashMap::new();
+        let existing = collect_existing_paths(&self.schematic.instances, &self.schematic.nets);
+        for (instance_ref, module) in &self.module_instances {
+            let module_path = instance_ref.instance_path.join(".");
+            for (old, (new, auto_generated)) in module.moved_directives().iter() {
+                let old_scoped = scoped_path(&module_path, old);
+                let new_scoped = scoped_path(&module_path, new);
+                let source = Path::new(module.source_path());
+
+                // Skip warnings for auto-generated directives
+                if *auto_generated {
+                    if existing.contains(&new_scoped) {
+                        filtered.insert(old_scoped, new_scoped.clone());
+                    }
+                    continue;
+                }
+
+                if existing.contains(&old_scoped) {
+                    let span = find_moved_span(module.source_path(), old, new, false);
+                    let body = format!("moved() references path '{}' that still exists.", old);
+                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
+                    diagnostics.push(diagnostic.with_span(span));
+                } else if !existing.contains(&new_scoped) {
+                    let span = find_moved_span(module.source_path(), old, new, true);
+                    let body = format!("moved() references path '{}' that doesn't exist.", new);
+                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
+                    diagnostics.push(diagnostic.with_span(span));
+                } else {
+                    filtered.insert(old_scoped, new_scoped.clone());
+                }
+            }
+        }
+
+        (diagnostics, filtered)
+    }
 }
 
 pub trait ToSchematic {
     fn to_schematic(&self) -> anyhow::Result<Schematic>;
+    fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic>;
 }
 
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
@@ -430,68 +649,8 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::Number(n as f64));
     } else if let Some(b) = v.unpack_bool() {
         return Ok(AttributeValue::Boolean(b));
-    }
-
-    // Handle unit records (Resistance, Capacitance, Voltage, etc.)
-    if let Some(record) = v.downcast_ref::<FrozenRecord>() {
-        let mut record_value = None;
-        let mut record_tolerance = None;
-        let mut record_unit = None;
-
-        // Extract fields from the record
-        for (field_name, field_value) in record.iter() {
-            let field_name_str = field_name.to_string();
-            match field_name_str.as_str() {
-                "value" => {
-                    // Try f64 first, fall back to i32 converted to f64
-                    if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
-                        record_value = Some(f.0);
-                    }
-                }
-                "tolerance" => {
-                    if let Some(f) = field_value.downcast_ref::<StarlarkFloat>() {
-                        record_tolerance = Some(f.0);
-                    }
-                }
-                "unit" => {
-                    // Unit is an enum like Ohms("Ohms"), parse to PhysicalUnit
-                    let unit_str = field_value.to_string();
-                    // Extract content within parentheses and remove quotes
-                    let unit_name = if let Some(start) = unit_str.find('(') {
-                        if let Some(end) = unit_str.find(')') {
-                            let inner = &unit_str[start + 1..end];
-                            inner.trim_matches('"').to_string()
-                        } else {
-                            unit_str.trim_matches('"').to_string()
-                        }
-                    } else {
-                        unit_str.trim_matches('"').to_string()
-                    };
-
-                    record_unit = match unit_name.as_str() {
-                        "Ohms" | "Ohm" => Some(PhysicalUnit::Ohms),
-                        "V" | "Volts" => Some(PhysicalUnit::Volts),
-                        "A" | "Amperes" => Some(PhysicalUnit::Amperes),
-                        "F" | "Farads" => Some(PhysicalUnit::Farads),
-                        "H" | "Henries" => Some(PhysicalUnit::Henries),
-                        "Hz" | "Hertz" => Some(PhysicalUnit::Hertz),
-                        "s" | "Seconds" => Some(PhysicalUnit::Seconds),
-                        "K" | "Kelvin" => Some(PhysicalUnit::Kelvin),
-                        _ => None, // Unknown unit, will fall back to string conversion
-                    };
-                }
-                _ => {} // Ignore other fields like __str__
-            }
-        }
-
-        // If we have all required fields, this is a unit record
-        if let (Some(value), Some(tolerance), Some(unit)) =
-            (record_value, record_tolerance, record_unit)
-        {
-            return Ok(AttributeValue::Physical(PhysicalValue::new(
-                value, tolerance, unit,
-            )));
-        }
+    } else if let Some(&physical) = v.downcast_ref::<PhysicalValue>() {
+        return Ok(AttributeValue::Physical(physical.pcb_sch_value()?));
     }
 
     // Handle lists (no nested list support)
@@ -519,6 +678,15 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
 
 impl ToSchematic for FrozenModuleValue {
     fn to_schematic(&self) -> anyhow::Result<Schematic> {
+        let result = self.to_schematic_with_diagnostics();
+        match result.output {
+            Some(schematic) if !result.diagnostics.has_errors() => Ok(schematic),
+            Some(_) => Err(anyhow::anyhow!("Schematic conversion had errors")),
+            None => Err(anyhow::anyhow!("Schematic conversion failed")),
+        }
+    }
+
+    fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic> {
         let converter = ModuleConverter::new();
         converter.build(self)
     }

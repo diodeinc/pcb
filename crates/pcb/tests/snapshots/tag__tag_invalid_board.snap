@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/tag.rs
+expression: output
+---
+Command: pcb tag -b NonExistentBoard -v 1.0.0
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ Checking tag doesn't exist
+Error: Release validation failed
+
+Caused by:
+    Board 'NonExistentBoard' not found. Available: [TB0001]

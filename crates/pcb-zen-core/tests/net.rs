@@ -108,3 +108,26 @@ snapshot_eval!(net_duplicate_names_uniq, {
         print("en2:", en2.name)
     "#,
 });
+
+snapshot_eval!(interface_net_template_naming, {
+    "test.zen" => r#"
+        # Test single-net interface naming behavior with name conflicts
+        
+        # Create a regular net with same name as interface instance
+        net = Net("VCC")
+        
+        # Define single-net interface
+        Power = interface(
+            NET = using(Net("VCC")),
+        )
+        
+        # Create power interface instance - with single-net naming, uses instance name directly
+        power = Power("POWER")
+        
+        print("regular net:", net.name)
+        print("interface net:", power.NET.name)
+        
+        # Check that single-net interface uses instance name directly
+        check(power.NET.name == "POWER", "Single-net interface should use instance name directly")
+    "#,
+});

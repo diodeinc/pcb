@@ -1,9 +1,26 @@
 use ariadne::{sources, ColorGenerator, Label, Report, ReportKind};
+use pcb_ui::Colorize;
 use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::Diagnostic;
+use crate::{Diagnostic, Diagnostics};
+
+/// A pass that renders diagnostics to the console using Ariadne
+pub struct RenderPass;
+
+impl pcb_zen_core::DiagnosticsPass for RenderPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diag in &diagnostics.diagnostics {
+            // Skip rendering advice severity diagnostics to reduce noise
+            if matches!(diag.severity, EvalSeverity::Advice) {
+                continue;
+            }
+            render_diagnostic(diag);
+            eprintln!();
+        }
+    }
+}
 
 /// Render a [`Diagnostic`] using the `ariadne` crate.
 ///
@@ -11,11 +28,7 @@ use crate::Diagnostic;
 /// single coloured report so that the context is easy to follow.
 /// Diagnostics that originate from a different file fall back to a separate
 /// Ariadne report (or a plain `eprintln!` when source code cannot be read).
-pub fn render_diagnostic(diag: &Diagnostic) {
-    if diag.body.contains("<hidden>") {
-        return;
-    }
-
+fn render_diagnostic(diagnostic: &Diagnostic) {
     // Collect all EvalMessages in the diagnostic chain (primary + children) for convenience.
     fn collect_messages<'a>(d: &'a Diagnostic, out: &mut Vec<&'a Diagnostic>) {
         out.push(d);
@@ -25,7 +38,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 
     let mut messages: Vec<&Diagnostic> = Vec::new();
-    collect_messages(diag, &mut messages);
+    collect_messages(diagnostic, &mut messages);
 
     // 0. Attempt to read source for every file referenced by any message that has a span.
     let mut sources_map: HashMap<String, String> = HashMap::new();
@@ -39,7 +52,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 
     // If we failed to read the primary file source, fall back to plain printing.
-    let primary_src = sources_map.get(&diag.path);
+    let primary_src = sources_map.get(&diagnostic.path);
     if primary_src.is_none() {
         for m in &messages {
             eprintln!("{m}");
@@ -48,7 +61,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 
     // Identify deepest message in the chain.
-    let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diag);
+    let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diagnostic);
 
     // Determine ReportKind from deepest error severity (more relevant).
     let kind = match deepest_error_msg.severity {
@@ -75,11 +88,29 @@ pub fn render_diagnostic(diag: &Diagnostic) {
 
     let primary_path_id = deepest_error_msg.path.clone();
 
+    let compact = !matches!(deepest_error_msg.severity, EvalSeverity::Error);
+
+    // Create message with suppressed count if any
+    let message = if let Some(count) = diagnostic.suppressed_count() {
+        format!(
+            "{}\n{}",
+            deepest_error_msg.body,
+            format!(
+                "{} similar warning(s) were suppressed",
+                format!("{count}").bold()
+            )
+            .blue()
+        )
+    } else {
+        deepest_error_msg.body.clone()
+    };
+
     let mut report = Report::build(
         kind,
         (primary_path_id.clone(), primary_span.clone().unwrap()),
     )
-    .with_message(&deepest_error_msg.body)
+    .with_config(ariadne::Config::default().with_compact(compact))
+    .with_message(&message)
     .with_label(
         Label::new((primary_path_id.clone(), primary_span.unwrap()))
             .with_message(&deepest_error_msg.body)
@@ -109,7 +140,7 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     let src_vec: Vec<(String, String)> = sources_map.into_iter().collect();
 
     // Print the report.
-    let _ = report.finish().print(sources(src_vec));
+    let _ = report.finish().eprint(sources(src_vec));
 
     // Build helper for rendering locations.
     let render_loc = |msg: &Diagnostic| -> String {
@@ -122,13 +153,13 @@ pub fn render_diagnostic(diag: &Diagnostic) {
 
     // Gather diagnostics from outer-most to inner-most.
     let mut chain: Vec<&Diagnostic> = Vec::new();
-    let mut current: Option<&Diagnostic> = Some(diag);
+    let mut current: Option<&Diagnostic> = Some(diagnostic);
     while let Some(d) = current {
         chain.push(d);
         current = d.child.as_deref();
     }
 
-    if !chain.is_empty() {
+    if !chain.is_empty() && !compact {
         eprintln!("\nStack trace (most recent call last):");
 
         for (idx, d) in chain.iter().enumerate() {
@@ -159,29 +190,41 @@ pub fn render_diagnostic(diag: &Diagnostic) {
     }
 }
 
-/// Compute the byte-range `Span` inside `source` (UTF-8 string) that corresponds to `msg.span`.
+/// Convert a ResolvedSpan (line/column) to a character range for Ariadne.
+///
+/// IMPORTANT: Ariadne expects CHARACTER indices, not BYTE indices.
+/// This is crucial for files containing multi-byte UTF-8 characters.
 fn compute_span(source: &str, msg: &Diagnostic) -> Option<Range<usize>> {
-    let Some(span) = &msg.span else { return None };
+    let span = msg.span.as_ref()?;
 
-    // Compute byte offsets for the span based on line + column info.
-    let mut offset = 0usize;
-    let mut begin_byte = None;
-    let mut end_byte = None;
+    let mut char_offset = 0;
+    let mut lines = source.lines().enumerate();
 
-    for (idx, line) in source.lines().enumerate() {
-        let line_len = line.len() + 1; // +1 for newline character
-        if idx == span.begin.line {
-            begin_byte = Some(offset + span.begin.column);
+    // Find the start character offset
+    for (line_idx, line) in &mut lines {
+        if line_idx == span.begin.line {
+            let start = char_offset + span.begin.column;
+            let end = if line_idx == span.end.line {
+                char_offset + span.end.column
+            } else {
+                // Multi-line span: continue counting to find end
+                let mut end_offset = char_offset + line.chars().count() + 1;
+                for (idx, l) in lines {
+                    if idx == span.end.line {
+                        return Some(start..end_offset + span.end.column);
+                    }
+                    end_offset += l.chars().count() + 1;
+                }
+                return None;
+            };
+            return if start < end && end <= source.chars().count() {
+                Some(start..end)
+            } else {
+                None
+            };
         }
-        if idx == span.end.line {
-            end_byte = Some(offset + span.end.column);
-            break;
-        }
-        offset += line_len;
+        char_offset += line.chars().count() + 1; // +1 for newline
     }
 
-    match (begin_byte, end_byte) {
-        (Some(b), Some(e)) if b < e && e <= source.len() => Some(b..e),
-        _ => None,
-    }
+    None
 }

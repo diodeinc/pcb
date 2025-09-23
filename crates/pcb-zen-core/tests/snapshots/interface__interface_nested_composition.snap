@@ -4,12 +4,12 @@ expression: output
 ---
 UART TX: MCU_UART_UART_TX
 UART RX: MCU_UART_UART_RX
-USART embedded UART TX: MCU_USART_UART_UART_TX
-USART embedded UART RX: MCU_USART_UART_UART_RX
+USART embedded UART TX: MCU_USART_uart_UART_TX
+USART embedded UART RX: MCU_USART_uart_UART_RX
 USART CK: MCU_USART_USART_CK
 USART RTS: MCU_USART_USART_RTS
 USART CTS: MCU_USART_USART_CTS
-Enhanced UART TX: ENHANCED_UART_UART_TX
+Enhanced UART TX: ENHANCED_uart_UART_TX
 Enhanced clock_source: internal
 Enhanced baud_rate: 115200
 Enhanced flow_control: True
@@ -23,14 +23,14 @@ Enhanced flow_control: True
             "TX": {
               "Net": {
                 "id": 10,
-                "name": "MCU_USART_UART_UART_TX",
+                "name": "MCU_USART_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 11,
-                "name": "MCU_USART_UART_UART_RX",
+                "name": "MCU_USART_uart_UART_RX",
                 "properties": {}
               }
             }
@@ -77,14 +77,14 @@ Enhanced flow_control: True
             "TX": {
               "Net": {
                 "id": 17,
-                "name": "ENHANCED_UART_UART_TX",
+                "name": "ENHANCED_uart_UART_TX",
                 "properties": {}
               }
             },
             "RX": {
               "Net": {
                 "id": 18,
-                "name": "ENHANCED_UART_UART_RX",
+                "name": "ENHANCED_uart_UART_RX",
                 "properties": {}
               }
             }

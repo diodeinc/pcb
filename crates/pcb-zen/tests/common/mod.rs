@@ -81,7 +81,7 @@ impl TestProject {
     #[allow(dead_code)]
     pub fn eval_netlist_from_absolute(&self, top_path: &Path) -> WithDiagnostics<String> {
         use pcb_sch::kicad_netlist::to_kicad_netlist;
-        pcb_zen::run(top_path, false).map(|s| to_kicad_netlist(&s))
+        pcb_zen::run(top_path, pcb_zen::EvalConfig::default()).map(|s| to_kicad_netlist(&s))
     }
 
     /// Parse a single text blob that contains multiple files and write them into
@@ -102,10 +102,8 @@ impl TestProject {
     /// Example
     /// -------
     /// ```text
-    /// # --- C146731.kicad_sym
-    ///  (kicad symbol content ...)
     /// # --- sub.zen
-    /// COMP = load_component("C146731.kicad_sym", footprint = "SMD:0805")
+    /// Component(symbol = Symbol(library="C146731.kicad_sym", name="C146731"), footprint = "SMD:0805")
     /// # --- top.zen
     /// Sub = Module("sub.zen")
     /// Sub()

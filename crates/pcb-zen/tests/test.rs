@@ -2,43 +2,6 @@ mod common;
 use common::TestProject;
 
 #[test]
-#[cfg(not(target_os = "windows"))]
-fn snapshot_load_component_factory() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "C146731.kicad_sym",
-        include_str!("resources/C146731.kicad_sym"),
-    );
-
-    // Compose the Starlark code with the absolute path.
-    env.add_file(
-        "test.zen",
-        r#"
-# Import factory and instantiate.
-load(".", M123 = "C146731")
-
-M123(
-    name = "M123",
-    pins = {
-        "ICLK": Net("ICLK"),
-        "Q1": Net("Q1"),
-        "Q2": Net("Q2"),
-        "Q3": Net("Q3"),
-        "Q4": Net("Q4"),
-        "GND": Net("GND"),
-        "VDD": Net("VDD"),
-        "OE": Net("OE"),
-    },
-    footprint = "SMD:0805",
-)
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
-}
-
-#[test]
 fn test_net_passing() {
     let env = TestProject::new();
 
@@ -62,7 +25,7 @@ Component(
         "test.zen",
         r#"
 load("MyComponent.zen", "ComponentInterface")
-load(".", MyComponent = "MyComponent")
+MyComponent = Module("MyComponent.zen")
 
 MyComponent(
     name = "MyComponent",
@@ -74,7 +37,7 @@ MyComponent(
     env.add_file(
         "top.zen",
         r#"
-load(".", Test = "test")
+Test = Module("test.zen")
 
 Test(
     name = "Test",
@@ -96,7 +59,7 @@ fn snapshot_unused_inputs_should_error() {
     env.add_file(
         "top.zen",
         r#"
-load(".", MyModule = "my_module")
+MyModule = Module("my_module.zen")
 
 MyModule(
     name = "MyModule",
@@ -122,15 +85,14 @@ fn snapshot_missing_pins_should_error() {
     env.add_file(
         "test_missing.zen",
         r#"
-load(".", COMP = "C146731")
-
 # Instantiate the component while omitting several required pins.
-COMP(
+Component(
     name = "Component",
     pins = {
         "ICLK": Net("ICLK"),
         "Q1": Net("Q1"),
     },
+    symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
     footprint = "SMD:0805",
 )
 "#,
@@ -153,10 +115,8 @@ fn snapshot_unknown_pin_should_error() {
     env.add_file(
         "test_unknown.zen",
         r#"
-load(".", COMP = "C146731")
-
 # Instantiate the component with an invalid pin included.
-COMP(
+Component(
     name = "Comp",
     pins = {
         "ICLK": Net("ICLK"),
@@ -169,6 +129,7 @@ COMP(
         "OE": Net("OE"),
         "INVALID": Net("X"),
     },
+    symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
     footprint = "SMD:0805",
 )
 "#,
@@ -198,14 +159,14 @@ Component(
 )
 
 # --- Module.zen
-load(".", MyComponent = "Component")
+MyComponent = Module("Component.zen")
 
 MyComponent(
     name = "MyComponent",
 )
 
 # --- Top.zen
-load(".", MyModule = "Module")
+MyModule = Module("Module.zen")
 
 MyModule(
     name = "MyModule",
@@ -236,7 +197,7 @@ Component(
 )
 
 # --- Top.zen
-load(".", MyModule = "MyModule")
+MyModule = Module("MyModule.zen")
 MyModule(name = "MyModule1")
 MyModule(name = "MyModule2")
 MyModule(name = "MyModule3")

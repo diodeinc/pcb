@@ -1,5 +1,5 @@
 ---
-source: projects/cli/crates/diode_star/tests/input.rs
+source: crates/pcb-zen/tests/input.rs
 expression: netlist
 ---
 (export (version "E")
@@ -12,5 +12,21 @@ expression: netlist
   (libparts
   )
   (nets
+    (net (code "1") (name "PDM_clock")
+    )
+    (net (code "2") (name "PDM_data")
+    )
+    (net (code "3") (name "PDM_power")
+    )
+    (net (code "4") (name "PDM_select")
+    )
+    (net (code "5") (name "sub.pdm_clock")
+    )
+    (net (code "6") (name "sub.pdm_data")
+    )
+    (net (code "7") (name "sub.pdm_power")
+    )
+    (net (code "8") (name "sub.pdm_select")
+    )
   )
 )

@@ -32,7 +32,7 @@ Component(
     name = "comp0",
     footprint = "TEST:0402",
     pin_defs = {"P": "1"},
-    pins = {"P": Net("")},
+    pins = {"P": Net()},
 )
 "#,
     );

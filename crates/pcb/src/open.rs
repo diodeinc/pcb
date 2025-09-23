@@ -4,7 +4,7 @@ use inquire::Select;
 use pcb_layout::utils;
 use std::path::{Path, PathBuf};
 
-use crate::build::{collect_files, evaluate_zen_file};
+use crate::file_walker;
 
 #[derive(Args, Debug)]
 pub struct OpenArgs {
@@ -19,9 +19,9 @@ pub fn execute(args: OpenArgs) -> Result<()> {
 
 fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
     // Collect .zen files to process
-    let zen_paths = collect_files(&zen_paths)?;
+    let zen_files = file_walker::collect_zen_files(&zen_paths, false)?;
 
-    if zen_paths.is_empty() {
+    if zen_files.is_empty() {
         // Try to find a layout file in the current directory
         let cwd = std::env::current_dir()?;
         let layout_files: Vec<_> = std::fs::read_dir(&cwd)?
@@ -54,19 +54,20 @@ fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
     let mut available_layouts = Vec::new();
 
     // Process each .zen/.zen file to find available layouts
-    for zen_path in zen_paths {
+    for zen_path in zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         // Evaluate the zen file
-        let (eval_result, has_errors) = evaluate_zen_file(&zen_path, false);
+        let (output, diagnostics) =
+            pcb_zen::run(&zen_path, pcb_zen::EvalConfig::default()).unpack();
 
-        if has_errors {
+        if diagnostics.has_errors() {
             eprintln!("Skipping {file_name} due to build errors");
             continue;
         }
 
         // Check if the schematic has a layout
-        if let Some(schematic) = &eval_result.output {
+        if let Some(schematic) = &output {
             if let Some(layout_path_attr) = utils::extract_layout_path(schematic) {
                 // Convert relative path to absolute based on star file location
                 let layout_dir = if layout_path_attr.is_relative() {

@@ -1,29 +1,6 @@
 #[macro_use]
 mod common;
 
-snapshot_eval!(load_component_factory, {
-    "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
-    "test.zen" => r#"
-        # Import factory and instantiate.
-        load(".", M123 = "C146731")
-
-        M123(
-            name = "M123",
-            pins = {
-                "ICLK": Net("ICLK"),
-                "Q1": Net("Q1"),
-                "Q2": Net("Q2"),
-                "Q3": Net("Q3"),
-                "Q4": Net("Q4"),
-                "GND": Net("GND"),
-                "VDD": Net("VDD"),
-                "OE": Net("OE"),
-            },
-            footprint = "SMD:0805",
-        )
-    "#
-});
-
 snapshot_eval!(net_passing, {
     "MyComponent.zen" => r#"
         ComponentInterface = interface(p1 = Net, p2 = Net)
@@ -39,7 +16,7 @@ snapshot_eval!(net_passing, {
     "#,
     "test.zen" => r#"
         load("MyComponent.zen", "ComponentInterface")
-        load(".", MyComponent = "MyComponent")
+        MyComponent = Module("MyComponent.zen")
 
         MyComponent(
             name = "MyComponent",
@@ -47,7 +24,7 @@ snapshot_eval!(net_passing, {
         )
     "#,
     "top.zen" => r#"
-        load(".", Test = "test")
+        Test = Module("test.zen")
 
         Test(
             name = "Test",
@@ -60,7 +37,7 @@ snapshot_eval!(unused_inputs_should_error, {
         # empty module with no inputs
     "#,
     "top.zen" => r#"
-        load(".", MyModule = "my_module")
+        MyModule = Module("my_module.zen")
 
         MyModule(
             name = "MyModule",
@@ -72,15 +49,14 @@ snapshot_eval!(unused_inputs_should_error, {
 snapshot_eval!(missing_pins_should_error, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
     "test_missing.zen" => r#"
-        load(".", COMP = "C146731")
-
         # Instantiate the component while omitting several required pins.
-        COMP(
+        Component(
             name = "Component",
             pins = {
                 "ICLK": Net("ICLK"),
                 "Q1": Net("Q1"),
             },
+            symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
             footprint = "SMD:0805",
         )
     "#
@@ -89,10 +65,8 @@ snapshot_eval!(missing_pins_should_error, {
 snapshot_eval!(unknown_pin_should_error, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
     "test_unknown.zen" => r#"
-        load(".", COMP = "C146731")
-
         # Instantiate the component with an invalid pin included.
-        COMP(
+        Component(
             name = "Comp",
             pins = {
                 "ICLK": Net("ICLK"),
@@ -105,6 +79,7 @@ snapshot_eval!(unknown_pin_should_error, {
                 "OE": Net("OE"),
                 "INVALID": Net("X"),
             },
+            symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
             footprint = "SMD:0805",
         )
     "#
@@ -126,14 +101,14 @@ snapshot_eval!(nested_components, {
         )
     "#,
     "Module.zen" => r#"
-        load(".", MyComponent = "Component")
+        MyComponent = Module("Component.zen")
 
         MyComponent(
             name = "MyComponent",
         )
     "#,
     "Top.zen" => r#"
-        load(".", MyModule = "Module")
+        MyModule = Module("Module.zen")
 
         MyModule(
             name = "MyModule",
@@ -156,7 +131,7 @@ snapshot_eval!(net_name_deduplication, {
         )
     "#,
     "Top.zen" => r#"
-        load(".", MyModule = "MyModule")
+        MyModule = Module("MyModule.zen")
         MyModule(name = "MyModule1")
         MyModule(name = "MyModule2")
         MyModule(name = "MyModule3")

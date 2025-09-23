@@ -1,15 +1,16 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use crate::build::create_diagnostics_passes;
+use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
-use pcb_sch::{generate_bom_entries, group_bom_entries, AggregatedBomEntry, BomEntry};
+use pcb_sch::{generate_bom_with_fallback, Bom};
 use pcb_ui::prelude::*;
-use std::collections::BTreeMap;
-
-use crate::build::evaluate_zen_file;
+use pcb_zen_core::convert::ToSchematic;
+use starlark_syntax::slice_vec_ext::SliceExt;
 
 #[derive(ValueEnum, Debug, Clone, Default)]
 pub enum BomFormat {
@@ -27,26 +28,6 @@ impl std::fmt::Display for BomFormat {
     }
 }
 
-impl BomFormat {
-    fn write_ungrouped<W: Write>(
-        &self,
-        entries: &BTreeMap<String, BomEntry>,
-        writer: W,
-    ) -> Result<()> {
-        match self {
-            BomFormat::Json => write_bom_json(entries, writer),
-            BomFormat::Table => panic!("Use write_grouped for table format"),
-        }
-    }
-
-    fn write_grouped<W: Write>(&self, entries: &[AggregatedBomEntry], writer: W) -> Result<()> {
-        match self {
-            BomFormat::Json => panic!("Use write_ungrouped for JSON format"),
-            BomFormat::Table => write_bom_table(entries, writer),
-        }
-    }
-}
-
 #[derive(Args, Debug, Clone)]
 #[command(about = "Generate Bill of Materials (BOM) from PCB projects")]
 pub struct BomArgs {
@@ -57,57 +38,109 @@ pub struct BomArgs {
     /// Output format
     #[arg(short, long, default_value_t = BomFormat::Table)]
     pub format: BomFormat,
+
+    /// JSON file containing BOM matching rules
+    #[arg(short = 'r', long = "rules", value_hint = clap::ValueHint::FilePath)]
+    pub rules: Option<PathBuf>,
 }
 
 pub fn execute(args: BomArgs) -> Result<()> {
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
     // Show spinner while processing
-    let spinner = Spinner::builder(format!("{file_name}: Generating BOM")).start();
+    let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let (eval_result, has_errors) = evaluate_zen_file(&args.file, false);
+    let eval_result = pcb_zen::eval(&args.file, pcb_zen::EvalConfig::default());
+    let layout_path = extract_layout_path(&args.file, &eval_result).ok();
+    let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
+        // Apply passes and render diagnostics if there are errors
+        diagnostics.apply_passes(&create_diagnostics_passes(&[]));
+        anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
+    })?;
 
-    if has_errors {
-        spinner.error(format!("{file_name}: Build failed"));
-        anyhow::bail!("Failed to build {} - cannot generate BOM", file_name);
+    // Generate BOM entries with KiCad fallback
+    spinner.set_message(format!("{file_name}: Generating BOM"));
+    let schematic = eval_output
+        .sch_module
+        .to_schematic()
+        .context("Failed to convert to schematic")?;
+    let mut bom = generate_bom_with_fallback(schematic.bom(), layout_path.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to generate BOM: {}", e))?;
+
+    // Apply BOM matching rules if provided
+    if let Some(rules_path) = &args.rules {
+        spinner.set_message(format!("{file_name}: Applying BOM rules"));
+        let rules_content =
+            std::fs::read_to_string(rules_path).context("Failed to read rules file")?;
+        let rules: Vec<pcb_sch::BomMatchingRule> =
+            serde_json::from_str(&rules_content).context("Failed to parse rules file")?;
+        bom.apply_bom_rules(&rules);
     }
-
-    let mut schematic = eval_result
-        .output
-        .ok_or_else(|| anyhow::anyhow!("No schematic generated from {}", file_name))?;
-
-    // Generate BOM entries
-    let ungrouped_entries = generate_bom_entries(&mut schematic);
 
     spinner.finish();
 
-    // Write output to stdout
+    let mut writer = io::stdout().lock();
     match args.format {
-        BomFormat::Json => args
-            .format
-            .write_ungrouped(&ungrouped_entries, io::stdout().lock())?,
-        BomFormat::Table => {
-            let grouped_entries = group_bom_entries(ungrouped_entries);
-            args.format
-                .write_grouped(&grouped_entries, io::stdout().lock())?;
-        }
-    }
+        BomFormat::Json => write!(writer, "{}", bom.ungrouped_json())?,
+        BomFormat::Table => write_bom_table(&bom, writer)?,
+    };
 
     Ok(())
 }
 
-pub fn write_bom_json<W: Write>(entries: &BTreeMap<String, BomEntry>, writer: W) -> Result<()> {
-    // Output a list of BOM entries sorted by path
-    let list: Vec<&BomEntry> = entries.values().collect();
-    serde_json::to_writer_pretty(writer, &list).context("Failed to write JSON BOM")?;
-    Ok(())
-}
-
-fn write_bom_table<W: Write>(entries: &[AggregatedBomEntry], mut writer: W) -> Result<()> {
+fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
+
+    let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
+    for entry in json.as_array().unwrap() {
+        let designators = entry["designators"]
+            .as_array()
+            .unwrap()
+            .map(|d| d.as_str().unwrap())
+            .join(",");
+        // Use first offer info if available, otherwise use base component info
+        let (mpn, manufacturer, distributor) = entry
+            .get("offers")
+            .and_then(|o| o.as_array())
+            .and_then(|arr| arr.first())
+            .map(|offer| {
+                (
+                    offer["manufacturer_pn"].as_str().unwrap_or_default(),
+                    offer["manufacturer"].as_str().unwrap_or_default(),
+                    offer["distributor"].as_str().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    entry["mpn"].as_str().unwrap_or_default(),
+                    entry["manufacturer"].as_str().unwrap_or_default(),
+                    "",
+                )
+            });
+
+        // Use description if available, otherwise fall back to value
+        let description = entry["description"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| entry["value"].as_str().unwrap_or_default());
+
+        table.add_row(vec![
+            designators.as_str(),
+            mpn,
+            manufacturer,
+            entry["package"].as_str().unwrap_or_default(),
+            description,
+            distributor,
+            if entry["dnp"].as_bool().unwrap() {
+                "Yes"
+            } else {
+                "No"
+            },
+        ]);
+    }
 
     // Set headers
     table.set_header(vec![
@@ -115,28 +148,10 @@ fn write_bom_table<W: Write>(entries: &[AggregatedBomEntry], mut writer: W) -> R
         "MPN",
         "Manufacturer",
         "Package",
-        "Value",
         "Description",
+        "Distributor",
         "DNP",
     ]);
-
-    // Add rows
-    for entry in entries {
-        table.add_row(vec![
-            entry
-                .designators
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(","),
-            entry.mpn.as_deref().unwrap_or("").to_string(),
-            entry.manufacturer.as_deref().unwrap_or("").to_string(),
-            entry.package.as_deref().unwrap_or("").to_string(),
-            entry.value.as_deref().unwrap_or("").to_string(),
-            entry.description.as_deref().unwrap_or("").to_string(),
-            if entry.dnp { "Yes" } else { "No" }.to_string(),
-        ]);
-    }
 
     writeln!(writer, "{table}")?;
     Ok(())

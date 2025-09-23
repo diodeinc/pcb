@@ -1,0 +1,50 @@
+name: Build CLI
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: build-main
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-large
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+      
+      - name: Build PCB CLI
+        run: cargo build --release --bin pcb
+      
+      - name: Upload PCB CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcb-cli-linux-${{ github.sha }}
+          path: target/release/pcb
+          retention-days: 30
+
+      - name: Update latest prerelease
+        run: |
+          # Delete existing prerelease and tag if they exist
+          gh release delete latest --yes || true
+          git push origin --delete refs/tags/latest || true
+          # Create new prerelease
+          gh release create latest target/release/pcb \
+            --title "Latest Main Build" \
+            --notes "Automated build from main branch (commit: ${{ github.sha }})" \
+            --prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

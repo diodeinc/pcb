@@ -1,0 +1,445 @@
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground", "I2c", "Spi")
+load("matchers.zen", "is_capacitor", "is_resistor", "has_package", "exactly_n_capacitors", "skip_ic_components", "name_contains")
+
+BMI270 = Module("@github/diodeinc/registry:v0.1.0/reference/BMI270x/BMI270x.zen")
+
+def print_info(module: Module, inputs):
+    print("Nets and their connected ports:")
+    for (net_name, port_list) in module.nets().items():
+        print(f"  {net_name}: {port_list}")
+    print("Components and their attributes:")
+    for (comp_name, comp) in module.components().items():
+        print(f"  {comp_name}:")
+        print("    Name:", comp.name)
+        print("    Prefix:", comp.prefix)
+        if comp.mpn:
+            print("    MPN:", comp.mpn)
+        if comp.type:
+            print("    Type:", comp.type)
+        if comp.type == "capacitor":
+            print("    Capacitance:", comp.capacitance.__str__(comp.capacitance))
+        elif comp.type == "resistor":
+            print("    Resistance:", comp.resistance.__str__(comp.resistance))
+        print("    Properties:", comp.properties)
+        pins = {}
+        for (pin, net) in comp.pins.items():
+            pins[pin] = net.name
+        print("    Pins:", pins)
+
+def analyze_power_paths(module: Module, inputs):
+    """Analyze power distribution paths using path matching"""
+    print("Power Path Analysis:")
+    graph = module.graph()
+    
+    # Use inputs to get actual net names dynamically
+    vdd_net = inputs["io_vdd"].NET.name
+    gnd_net = inputs["io_gnd"].NET.name
+    
+    print("  Analyzing paths from '" + vdd_net + "' to '" + gnd_net + "'...")
+    
+    paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=6)
+    print("  Found " + str(len(paths)) + " power-to-ground paths")
+    
+    # Use path.matches() to identify and validate decoupling patterns
+    decoupling_paths = []
+    
+    for path in paths:
+        # Single capacitor decoupling paths using path.matches()
+        if path.matches(is_capacitor(), suppress_errors=True):
+            decoupling_paths.append(path)
+            cap = path.components[0]
+            cap_value = cap.capacitance.__str__(cap.capacitance)
+            print("    ✓ Decoupling capacitor: " + cap.name + " (" + cap_value + ")")
+            
+            # Validate package size based on capacitance  
+            if "100nF" in cap_value or "1uF" in cap_value:
+                path.matches(has_package("0402"))
+                print("      ✓ Capacitor uses 0402 package")
+    
+    check(len(decoupling_paths) >= 2, "Expected at least 2 direct decoupling capacitor paths")
+    print("  Found " + str(len(decoupling_paths)) + " decoupling paths")
+
+def analyze_signal_paths(module: Module, inputs):
+    """Analyze communication signal integrity using path matching"""
+    print("Signal Path Analysis:")
+    graph = module.graph()
+    
+    # Analyze communication interface paths based on configuration
+    if "io_i2c" in inputs:
+        i2c = inputs["io_i2c"]
+        scl_net = i2c.SCL.name
+        sda_net = i2c.SDA.name
+        
+        print("  I2C Signal Integrity:")
+        print("    SCL net: " + scl_net)
+        print("    SDA net: " + sda_net)
+        
+        vdd_net = inputs["io_vdd"].NET.name
+        scl_pullup_paths = graph.paths(start=vdd_net, end=scl_net, max_depth=4)
+        sda_pullup_paths = graph.paths(start=vdd_net, end=sda_net, max_depth=4)
+        
+        print("    Found " + str(len(scl_pullup_paths)) + " SCL pull-up paths, " + str(len(sda_pullup_paths)) + " SDA pull-up paths")
+        
+        # Validate I2C pull-up resistors using path.matches()
+        for path in scl_pullup_paths:
+            if path.matches(is_resistor(), suppress_errors=True):
+                pullup = path.components[0]
+                resistance = pullup.resistance.__str__(pullup.resistance)
+                print("      ✓ SCL pull-up resistor: " + pullup.name + " (" + resistance + ")")
+        
+        for path in sda_pullup_paths:
+            if path.matches(is_resistor(), suppress_errors=True):
+                pullup = path.components[0]
+                resistance = pullup.resistance.__str__(pullup.resistance)
+                print("      ✓ SDA pull-up resistor: " + pullup.name + " (" + resistance + ")")
+    
+    elif "io_spi" in inputs:
+        spi = inputs["io_spi"]
+        print("  SPI Signal Integrity:")
+        print("    CLK net: " + spi.CLK.name)
+        print("    MOSI net: " + spi.MOSI.name)
+        print("    MISO net: " + spi.MISO.name)
+        print("    CS net: " + spi.CS.name)
+        
+        # Analyze SPI signal paths for proper termination
+        gnd_net = inputs["io_gnd"].NET.name
+        
+        # Note: CS pull-up analysis skipped (net access limitations)
+        print("      Note: CS pull-up analysis skipped for SPI mode")
+
+def check_path_connectivity(module: Module, inputs):
+    """Verify critical connections exist using path analysis"""
+    print("Connectivity Verification:")
+    graph = module.graph()
+    
+    # Use inputs to get actual net names dynamically
+    vdd_net = inputs["io_vdd"].NET.name
+    gnd_net = inputs["io_gnd"].NET.name
+    
+    critical_connections = [
+        # Check power connections (VDD should connect to itself)
+        (vdd_net, vdd_net),
+        # Check ground connections (GND should connect to itself)
+        (gnd_net, gnd_net),
+    ]
+    
+    for start, end in critical_connections:
+        paths = graph.paths(start=start, end=end, max_depth=8)
+        if paths:
+            print("  ✓ Connection verified: " + str(start) + " to " + str(end) + " (" + str(len(paths)) + " paths)")
+            # Show first path as example
+            example_path = paths[0]
+            print("    Example path: " + str(len(example_path.components)) + " components")
+        else:
+            print("  ! No path found: " + str(start) + " to " + str(end))
+
+def check_power_decoupling():
+    """Factory function that returns a decoupling checker"""
+    def _check(module, inputs):
+        """Verify decoupling capacitors using advanced path matching"""
+        print("Power Decoupling Analysis:")
+        graph = module.graph()
+        
+        # Use inputs to get actual net names dynamically
+        vdd_net = inputs["io_vdd"].NET.name
+        gnd_net = inputs["io_gnd"].NET.name
+        
+        # Find all VDD to GND paths and filter for single capacitors
+        paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=5)
+        
+        # Use path.matches() to identify decoupling capacitors
+        decoupling_paths = []
+        high_freq_caps = []
+        bulk_caps = []
+        
+        for path in paths:
+            if path.matches(is_capacitor(), suppress_errors=True):
+                decoupling_paths.append(path)
+                cap = path.components[0]
+                cap_value = cap.capacitance.__str__(cap.capacitance)
+                
+                # Categorize by capacitance value for proper decoupling analysis
+                if "nF" in cap_value or ("pF" in cap_value):
+                    high_freq_caps.append(cap)
+                    path.matches(has_package("0402"))  # High-freq caps use small packages
+                    print("    ✓ High-frequency decoupling: " + cap.name + " (" + cap_value + ", 0402)")
+                elif "uF" in cap_value:
+                    bulk_caps.append(cap)
+                    # Bulk caps typically use larger packages
+                    if "10uF" in cap_value or "22uF" in cap_value:
+                        path.matches(has_package("0805"))
+                        print("    ✓ Bulk decoupling: " + cap.name + " (" + cap_value + ", 0805)")
+                    else:
+                        path.matches(has_package("0402"))
+                        print("    ✓ Medium decoupling: " + cap.name + " (" + cap_value + ", 0402)")
+        
+        # Validate decoupling strategy
+        check(len(high_freq_caps) >= 1, "Expected at least 1 high-frequency decoupling capacitor")
+        check(len(bulk_caps) >= 1, "Expected at least 1 bulk decoupling capacitor")
+        print("  Found " + str(len(high_freq_caps)) + " high-freq caps, " + str(len(bulk_caps)) + " bulk caps")
+        print("    ✓ Proper decoupling strategy validated")
+    
+    return _check
+
+def check_bmi270_power_pins(module, inputs):
+    """Verify BMI270 power pins are properly connected"""
+    # Check VDD and VDDIO are connected to power
+    comp = module.components()["BMI270.BMI270"]
+    if "VCC" not in comp.pins["VDD"].name:
+        error("BMI270 VDD not connected to power")
+    if "VCC" not in comp.pins["VDDIO"].name:
+        error("BMI270 VDDIO not connected to power")
+    if "GND" not in comp.pins["GND"].name:
+        error("BMI270 GND not connected to ground")
+    if "GND" not in comp.pins["GNDIO"].name:
+        error("BMI270 GNDIO not connected to ground")
+
+def check_communication_interfaces(module, inputs):
+    """Validate BMI270 communication interface connectivity using path matching"""
+    print("Communication Interface Validation:")
+    graph = module.graph()
+    comp = module.components()["BMI270.BMI270"]
+    
+    if "io_i2c" in inputs:
+        print("  I2C Mode Validation:")
+        i2c = inputs["io_i2c"]
+        
+        # Verify I2C signals connect properly to BMI270
+        scl_paths = graph.paths(start=i2c.SCL.name, end=("BMI270.BMI270", "SCX"), max_depth=3)
+        sda_paths = graph.paths(start=i2c.SDA.name, end=("BMI270.BMI270", "SDX"), max_depth=3)
+        
+        check(len(scl_paths) > 0, "SCL not connected to BMI270.SCX")
+        check(len(sda_paths) > 0, "SDA not connected to BMI270.SDX")
+        
+        # Validate direct connections
+        for path in scl_paths:
+            if len(path.components) == 0:  # Direct connection
+                print("    ✓ Direct SCL connection to BMI270")
+        
+        for path in sda_paths:
+            if len(path.components) == 0:  # Direct connection
+                print("    ✓ Direct SDA connection to BMI270")
+    
+    elif "io_spi" in inputs:
+        print("  SPI Mode Validation:")
+        spi = inputs["io_spi"]
+        
+        # Verify SPI signals connect properly to BMI270 (skip CS for now)
+        spi_connections = [
+            (spi.CLK.name, "SCX"),
+            (spi.MOSI.name, "SDX"), 
+            (spi.MISO.name, "SDO"),
+        ]
+        
+        for ext_net, bmi_pin in spi_connections:
+            spi_paths = graph.paths(start=ext_net, end=("BMI270.BMI270", bmi_pin), max_depth=3)
+            check(len(spi_paths) > 0, ext_net + " not connected to BMI270." + bmi_pin)
+            
+            # Validate direct connections
+            for path in spi_paths:
+                if len(path.components) == 0:  # Direct connection
+                    print("    ✓ Direct " + ext_net + " connection to BMI270." + bmi_pin)
+        
+        # Note about CS connection
+        print("    Note: SPI CS connection validation skipped (net access limitations)")
+
+def check_bmi270_interface_specific_paths(module, inputs):
+    """Advanced BMI270-specific validation based on interface mode"""
+    print("BMI270 Interface-Specific Path Analysis:")
+    graph = module.graph()
+    
+    # Get BMI270 component for pin access
+    bmi270_comp = module.components()["BMI270.BMI270"]
+    
+    if "io_i2c" in inputs:
+        print("  I2C Mode Advanced Validation:")
+        i2c = inputs["io_i2c"]
+        vdd_net = inputs["io_vdd"].NET.name
+        
+        # Check for proper I2C pull-up topology using path.matches()
+        scl_pullup_paths = graph.paths(start=vdd_net, end=i2c.SCL.name, max_depth=4)
+        sda_pullup_paths = graph.paths(start=vdd_net, end=i2c.SDA.name, max_depth=4)
+        
+        # Validate I2C pull-up resistors exist and are appropriate values
+        scl_pullup_found = False
+        sda_pullup_found = False
+        
+        for path in scl_pullup_paths:
+            if path.matches(is_resistor(), suppress_errors=True):
+                scl_pullup_found = True
+                resistor = path.components[0]
+                resistance = resistor.resistance.__str__(resistor.resistance)
+                print("    ✓ SCL pull-up validated: " + resistor.name + " (" + resistance + ")")
+        
+        for path in sda_pullup_paths:
+            if path.matches(is_resistor(), suppress_errors=True):
+                sda_pullup_found = True
+                resistor = path.components[0]
+                resistance = resistor.resistance.__str__(resistor.resistance)
+                print("    ✓ SDA pull-up validated: " + resistor.name + " (" + resistance + ")")
+        
+        if not (scl_pullup_found and sda_pullup_found):
+            print("    Note: External I2C pull-up resistors not found (may be external to this module)")
+    
+    elif "io_spi" in inputs:
+        print("  SPI Mode Advanced Validation:")
+        spi = inputs["io_spi"]
+        
+        # Check SPI signal integrity - validate no unexpected series components
+        spi_signals = [
+            (spi.CLK.name, "SCX", "SPI Clock"),
+            (spi.MOSI.name, "SDX", "SPI MOSI"),
+            (spi.MISO.name, "SDO", "SPI MISO"),
+        ]
+        
+        for ext_net, bmi_pin, signal_name in spi_signals:
+            signal_paths = graph.paths(start=ext_net, end=("BMI270.BMI270", bmi_pin), max_depth=3)
+            
+            for path in signal_paths:
+                # SPI signals should be direct connections (no series components)
+                if len(path.components) == 0:
+                    print("    ✓ " + signal_name + " direct connection validated")
+                else:
+                    # If there are components, they should be appropriate for high-speed signals
+                    print("    " + signal_name + " path components: " + str([c.name for c in path.components]))
+                    # Validate using path matching that any series components are appropriate
+                    path.matches(suppress_errors=True)  # Just ensure path is valid
+
+# Matcher functions for path validation
+def check_advanced_power_filtering():
+    """Factory function that returns an advanced power filtering checker"""
+    def _check(module, inputs):
+        """Advanced power filtering analysis using path.matches()"""
+        print("Advanced Power Filtering Analysis:")
+        graph = module.graph()
+        
+        # Use inputs to get actual net names dynamically
+        vdd_net = inputs["io_vdd"].NET.name
+        gnd_net = inputs["io_gnd"].NET.name
+        
+        paths = graph.paths(start=vdd_net, end=gnd_net, max_depth=8)
+        
+        # Use path.matches() to identify different filtering patterns
+        single_cap_paths = []
+        dual_cap_paths = []
+        
+        for path in paths:
+            # Test for single capacitor paths
+            if path.matches(is_capacitor(), suppress_errors=True):
+                single_cap_paths.append(path)
+                cap = path.components[0]
+                cap_value = cap.capacitance.__str__(cap.capacitance)
+                print("  ✓ Single capacitor path: " + cap.name + " (" + cap_value + ")")
+                
+            # Test for dual capacitor filtering paths  
+            elif path.matches(is_capacitor(), is_capacitor(), suppress_errors=True):
+                dual_cap_paths.append(path)
+                caps = [c for c in path.components if c.type == "capacitor"]
+                cap_values = [c.capacitance.__str__(c.capacitance) for c in caps]
+                print("  ✓ Dual-capacitor filtering: " + str(cap_values))
+        
+        check(len(single_cap_paths) >= 2, "Expected at least 2 single capacitor decoupling paths")
+        print("  Found " + str(len(single_cap_paths)) + " single-cap paths, " + str(len(dual_cap_paths)) + " dual-cap paths")
+    
+    return _check
+
+# Intentionally failing check:
+def check_complex_signal_chain(module, inputs):
+    """Validate complex signal processing chains using sequential path.matches()"""
+    print("Complex Signal Chain Analysis:")
+    graph = module.graph()
+    vdd_net = inputs["io_vdd"].NET.name
+    # Find complex I2C signal conditioning paths
+    # Example: VDD → Pull-up R → I2C line → BMI270 → Internal processing → Output
+    complex_paths = graph.paths(start=vdd_net, end=("BMI270.BMI270", "INT1"), max_depth=8)
+
+    for path in complex_paths:
+        # Intentional mismatch to test 3-level spans
+        path.matches(
+            is_resistor()    # This will fail since paths contain capacitors
+        )
+    print("  ✓ Signal chain analysis completed")
+
+def check_bmi270_power_domain_isolation(module, inputs):
+    """Validate BMI270 dual power domain isolation using path matching"""
+    print("BMI270 Power Domain Isolation Analysis:")
+    graph = module.graph()
+    
+    # BMI270 has separate VDD (analog) and VDDIO (digital I/O) domains
+    vdd_net = inputs["io_vdd"].NET.name
+    vddio_net = inputs["io_vddio"].NET.name
+    gnd_net = inputs["io_gnd"].NET.name
+    
+    # Check that VDD and VDDIO have independent decoupling
+    vdd_decoupling = graph.paths(start=vdd_net, end=gnd_net, max_depth=4)
+    vddio_decoupling = graph.paths(start=vddio_net, end=gnd_net, max_depth=4)
+    
+    vdd_caps = []
+    vddio_caps = []
+    
+    # Use path.matches() to identify decoupling capacitors for each domain  
+    for path in vdd_decoupling:
+        if path.matches(is_capacitor(), suppress_errors=True):
+            cap = path.components[0]
+            cap_value = cap.capacitance.__str__(cap.capacitance)
+            vdd_caps.append(cap)
+            print("    ✓ VDD decoupling: " + cap.name + " (" + cap_value + ")")
+    
+    for path in vddio_decoupling:
+        if path.matches(is_capacitor(), suppress_errors=True):
+            cap = path.components[0]
+            cap_value = cap.capacitance.__str__(cap.capacitance)
+            vddio_caps.append(cap)
+            print("    ✓ VDDIO decoupling: " + cap.name + " (" + cap_value + ")")
+    
+    check(len(vdd_caps) >= 1, "VDD domain needs at least 1 decoupling capacitor")
+    # Note: VDDIO might share VDD power domain in this test case
+    if len(vddio_caps) == 0:
+        print("    Note: VDDIO domain shares VDD power (common in simple designs)")
+    else:
+        print("    ✓ VDDIO has dedicated decoupling")
+    
+    # Check that domains don't have unwanted cross-connections
+    cross_paths = graph.paths(start=vdd_net, end=vddio_net, max_depth=6)
+    direct_shorts = [p for p in cross_paths if len(p.components) == 0]
+    
+    if direct_shorts:
+        print("    ! Warning: Direct connection between VDD and VDDIO domains")
+    else:
+        print("    ✓ VDD and VDDIO domains properly isolated")
+
+TestBench(
+    name="BMI270",
+    module=BMI270,
+    test_cases = {
+        "I2C_mode": {
+            "io_vdd": Power("VDD"),
+            "io_vddio": Power("VDDIO"), 
+            "io_gnd": Ground("GND"),
+            "io_i2c": I2c(SDA=Net("I2C_SDA"), SCL=Net("I2C_SCL")),
+            "config_upstream": BMI270.Upstream("I2c"),
+            "config_downstream": BMI270.Downstream("OIS"),
+        },
+        "SPI_mode": {
+            "io_vdd": Power("VDD"),
+            "io_vddio": Power("VDDIO"),
+            "io_gnd": Ground("GND"), 
+            "io_spi": Spi(CS=Net("SPI_CS"), MISO=Net("SPI_MISO"), MOSI=Net("SPI_MOSI"), CLK=Net("SPI_CLK")),
+            "config_upstream": BMI270.Upstream("Spi"),
+            "config_downstream": BMI270.Downstream("OIS"),
+        },
+    },
+    checks = [
+        print_info,
+        analyze_power_paths,
+        analyze_signal_paths,
+        check_path_connectivity,
+        ("check_power_decoupling", check_power_decoupling()),
+        check_bmi270_power_pins,
+        check_communication_interfaces,
+        check_bmi270_interface_specific_paths,
+        check_bmi270_power_domain_isolation,
+        ("check_advanced_power_filtering", check_advanced_power_filtering()),
+        check_complex_signal_chain,
+    ],
+)

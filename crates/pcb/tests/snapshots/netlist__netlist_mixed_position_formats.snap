@@ -1,0 +1,30 @@
+---
+source: crates/pcb/tests/netlist.rs
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/MixedPositions.zen:<root>": {
+    "symbol_positions": {
+      "comp:R1": {
+        "rotation": 0.0,
+        "x": 100.0,
+        "y": 100.0
+      },
+      "sym:SIGNAL#1": {
+        "rotation": 0.0,
+        "x": 125.0,
+        "y": 100.0
+      },
+      "sym:SIGNAL#2": {
+        "rotation": 0.0,
+        "x": 125.0,
+        "y": 150.0
+      },
+      "sym:VCC#1": {
+        "rotation": 0.0,
+        "x": 80.0,
+        "y": 80.0
+      }
+    }
+  }
+}

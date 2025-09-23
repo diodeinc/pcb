@@ -14,7 +14,7 @@ Exit Code: 0
     "value": "100nF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.0000001",
+      "value": "0.000000100",
       "tolerance": "0",
       "unit": "Farads"
     },
@@ -27,7 +27,7 @@ Exit Code: 0
     "value": "10uF",
     "component_type": "Capacitor",
     "capacitance": {
-      "value": "0.00001",
+      "value": "0.000010",
       "tolerance": "0",
       "unit": "Farads"
     },
@@ -67,6 +67,13 @@ Exit Code: 0
     "dnp": false
   },
   {
+    "path": "LED2.D1.LED",
+    "designator": "D2",
+    "package": "0603",
+    "value": "LED RED",
+    "dnp": false
+  },
+  {
     "path": "LED1.R1.R",
     "designator": "R1",
     "package": "0603",
@@ -77,13 +84,6 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     },
-    "dnp": false
-  },
-  {
-    "path": "LED2.D1.LED",
-    "designator": "D2",
-    "package": "0603",
-    "value": "LED RED",
     "dnp": false
   },
   {

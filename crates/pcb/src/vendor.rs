@@ -1,8 +1,10 @@
-use crate::workspace::{gather_workspace_info, is_vendor_dependency, loadspec_to_vendor_path};
+use crate::build::create_diagnostics_passes;
+use crate::workspace::gather_workspace_info;
 use anyhow::{Context, Result};
 use clap::Args;
-use log::{debug, info};
+use log::debug;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
+use pcb_zen_core::LoadSpec;
 use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::collections::HashMap;
 use std::fs;
@@ -18,14 +20,10 @@ pub struct VendorArgs {
     /// Check if vendor directory is up-to-date (useful for CI)
     #[arg(long)]
     pub check: bool,
-}
 
-/// Information needed for vendoring dependencies from multiple designs
-pub struct VendorInfo {
-    /// Path to the vendor directory in workspace  
-    pub vendor_dir: PathBuf,
-    /// Dependencies: vendor path -> source file path
-    pub dependencies: HashMap<PathBuf, PathBuf>,
+    /// Continue vendoring even if some designs have build errors
+    #[arg(long = "ignore-errors")]
+    pub ignore_errors: bool,
 }
 
 pub fn execute(args: VendorArgs) -> Result<()> {
@@ -51,18 +49,16 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     // Gather vendor information from all zen files
     let info_spinner = Spinner::builder("Analyzing dependencies").start();
     let zen_files_count = zen_files.len();
-    let vendor_info = gather_vendor_info(zen_files, workspace_root)?;
+    let tracked_files = gather_vendor_info(zen_files, args.ignore_errors)?;
+    let vendor_dir = workspace_root.join("vendor");
     info_spinner.finish();
     println!("{} Dependencies analyzed", "✓".green());
 
     // Handle check mode for CI
     if args.check {
         let check_spinner = Spinner::builder("Checking vendor directory").start();
-        debug!(
-            "Checking vendor directory: {}",
-            vendor_info.vendor_dir.display()
-        );
-        let is_up_to_date = check_vendor_directory(&vendor_info)?;
+        debug!("Checking vendor directory: {}", vendor_dir.display());
+        let is_up_to_date = check_vendor_directory(&tracked_files, &workspace_root, &vendor_dir)?;
         check_spinner.finish();
 
         if is_up_to_date {
@@ -75,19 +71,14 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     }
 
     // Create vendor directory
-    let _ = fs::remove_dir_all(&vendor_info.vendor_dir);
-    fs::create_dir_all(&vendor_info.vendor_dir)?;
+    let _ = fs::remove_dir_all(&vendor_dir);
+    fs::create_dir_all(&vendor_dir)?;
 
     // Copy vendor dependencies
     let vendor_spinner = Spinner::builder("Copying vendor dependencies").start();
-    let vendor_count = copy_vendor_dependencies(&vendor_info)?;
+    let vendor_count = sync_tracked_files(&tracked_files, &workspace_root, &vendor_dir, None)?;
     vendor_spinner.finish();
 
-    info!(
-        "Vendored {} dependencies to {}",
-        vendor_count,
-        vendor_info.vendor_dir.display()
-    );
     println!();
     println!(
         "{} {}",
@@ -96,11 +87,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     );
     println!(
         "Vendor directory: {}",
-        vendor_info
-            .vendor_dir
-            .display()
-            .to_string()
-            .with_style(Style::Cyan)
+        vendor_dir.display().to_string().with_style(Style::Cyan)
     );
 
     Ok(())
@@ -195,46 +182,133 @@ fn find_zen_files_in_directory(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Gather and aggregate vendor information from multiple zen files
-fn gather_vendor_info(zen_files: Vec<PathBuf>, workspace_root: PathBuf) -> Result<VendorInfo> {
+fn gather_vendor_info(
+    zen_files: Vec<PathBuf>,
+    ignore_errors: bool,
+) -> Result<HashMap<PathBuf, LoadSpec>> {
     if zen_files.is_empty() {
         anyhow::bail!("No zen files to process");
     }
-
-    let mut dependencies = HashMap::new();
-    let vendor_dir = workspace_root.join("vendor");
-
-    // Evaluate each zen file and collect dependencies
+    // Evaluate each zen file and collect tracked files
+    let mut tracked_files: HashMap<PathBuf, LoadSpec> = HashMap::default();
+    let mut has_errors = false;
+    // Prepare passes once if we are going to render diagnostics
+    let passes = if ignore_errors {
+        None
+    } else {
+        Some(create_diagnostics_passes(&Vec::new()))
+    };
     for zen_file in &zen_files {
         // Don't use the vendor path for the workspace info, we're just gathering dependencies
         let workspace_info = gather_workspace_info(zen_file.clone(), false)?;
 
-        for path in workspace_info.resolver.get_tracked_files() {
-            if is_vendor_dependency(&workspace_root, &path, &workspace_info.resolver) {
-                if let Some(load_spec) = workspace_info.resolver.get_load_spec_for_path(&path) {
-                    let vendor_path = loadspec_to_vendor_path(&load_spec)?;
+        // Decide if this file has errors (render diagnostics only when not ignoring errors)
+        let mut diagnostics = workspace_info.eval_result.diagnostics.clone();
+        if let Some(passes) = &passes {
+            diagnostics.apply_passes(passes);
+        }
+        let file_has_errors = diagnostics.has_errors();
 
-                    dependencies
-                        .entry(vendor_path)
-                        .or_insert(path.to_path_buf());
-                }
-            }
+        if file_has_errors && ignore_errors {
+            println!(
+                "{} {}: Build failed; skipping dependencies",
+                "⚠".yellow(),
+                zen_file.display().to_string().with_style(Style::Yellow)
+            );
+            continue;
+        }
+
+        if file_has_errors {
+            has_errors = true;
+            continue;
+        }
+
+        // Collect dependencies from successful evaluations
+        if let Some(output) = workspace_info.eval_result.output.as_ref() {
+            let resolver = output.core_resolver().unwrap();
+            tracked_files.extend(resolver.get_tracked_files());
         }
     }
 
-    Ok(VendorInfo {
-        vendor_dir,
-        dependencies,
-    })
+    if has_errors {
+        anyhow::bail!("Build failed with errors");
+    }
+
+    Ok(tracked_files)
+}
+
+pub fn sync_tracked_files(
+    tracked_files: &HashMap<PathBuf, LoadSpec>,
+    workspace_root: &Path,
+    vendor_dir: &Path,
+    src_dir: Option<&Path>,
+) -> Result<usize> {
+    let mut synced_files = 0;
+    for (path, load_spec) in tracked_files {
+        // Skip paths that don't exist to avoid panics
+        if !path.exists() {
+            log::debug!("Skipping non-existent path: {}", path.display());
+            continue;
+        }
+        let dest_path = if load_spec.is_remote() {
+            // remote file
+            vendor_dir.join(load_spec.vendor_path()?)
+        } else {
+            // local file
+            let Some(src_dir) = src_dir else {
+                // no src dir was provided, so skip local files
+                continue;
+            };
+            let Ok(rel_path) = path.strip_prefix(workspace_root) else {
+                anyhow::bail!("Failed to strip prefix from path: {}", path.display())
+            };
+            src_dir.join(rel_path)
+        };
+        log::info!(
+            "Syncing file: {} to {}",
+            path.display(),
+            dest_path.display()
+        );
+        if path.is_file() {
+            let parent = dest_path.parent().unwrap();
+            fs::create_dir_all(parent)?;
+            fs::copy(path, &dest_path)?;
+            make_readonly(&dest_path)?;
+            synced_files += 1;
+        } else {
+            synced_files += copy_dir_all(path, dest_path)?;
+        }
+    }
+    Ok(synced_files)
+}
+
+fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<usize> {
+    fs::create_dir_all(&dst)?;
+    let mut synced_files = 0;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let dest_path = dst.as_ref().join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            synced_files += copy_dir_all(entry.path(), &dest_path)?;
+            make_readonly(&dest_path)?;
+        } else {
+            fs::copy(entry.path(), &dest_path)?;
+            make_readonly(&dest_path)?;
+            synced_files += 1;
+        }
+    }
+    Ok(synced_files)
 }
 
 /// Check if vendor directory is up-to-date by vendoring to a temp directory and comparing
-fn check_vendor_directory(info: &VendorInfo) -> Result<bool> {
+fn check_vendor_directory(
+    tracked_files: &HashMap<PathBuf, LoadSpec>,
+    workspace_root: &Path,
+    vendor_dir: &Path,
+) -> Result<bool> {
     // If vendor directory doesn't exist, it's not up-to-date
-    if !info.vendor_dir.exists() {
-        debug!(
-            "Vendor directory does not exist: {}",
-            info.vendor_dir.display()
-        );
+    if !vendor_dir.exists() {
+        debug!("Vendor directory does not exist: {}", vendor_dir.display());
         return Ok(false);
     }
 
@@ -243,24 +317,17 @@ fn check_vendor_directory(info: &VendorInfo) -> Result<bool> {
     let temp_vendor_dir = temp_dir.path().join("vendor");
     fs::create_dir_all(&temp_vendor_dir)?;
 
-    // Create a temporary VendorInfo with the temp directory
-    let temp_info = VendorInfo {
-        vendor_dir: temp_vendor_dir.clone(),
-        dependencies: info.dependencies.clone(),
-    };
-
-    // Vendor dependencies to temp directory
-    copy_vendor_dependencies(&temp_info).context("Failed to vendor to temporary directory")?;
+    sync_tracked_files(tracked_files, workspace_root, &temp_vendor_dir, None)?;
 
     // Compare temp directory with actual vendor directory using dir-diff
-    let are_different = dir_diff::is_different(&temp_vendor_dir, &info.vendor_dir)
+    let are_different = dir_diff::is_different(&temp_vendor_dir, vendor_dir)
         .context("Failed to compare vendor directories")?;
 
     if are_different {
         debug!(
             "Vendor directory differs from expected (temp: {}, actual: {})",
             temp_vendor_dir.display(),
-            info.vendor_dir.display()
+            vendor_dir.display()
         );
         Ok(false)
     } else {
@@ -269,20 +336,10 @@ fn check_vendor_directory(info: &VendorInfo) -> Result<bool> {
     }
 }
 
-/// Copy vendor dependencies to vendor directory
-fn copy_vendor_dependencies(info: &VendorInfo) -> Result<usize> {
-    for (vendor_path, src_path) in &info.dependencies {
-        let dest_path = info.vendor_dir.join(vendor_path);
-
-        // Create parent directory
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // Copy the file
-        fs::copy(src_path, &dest_path)
-            .with_context(|| format!("copy {} -> {}", src_path.display(), dest_path.display()))?;
-    }
-
-    Ok(info.dependencies.len())
+/// Make a single file or directory read-only
+fn make_readonly(path: &Path) -> Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_readonly(true);
+    fs::set_permissions(path, perms)?;
+    Ok(())
 }

@@ -1,0 +1,13 @@
+[package]
+name = "pcb-fmt"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ruff_python_formatter = { workspace = true }
+ruff_formatter = { workspace = true }
+anyhow = { workspace = true }
+similar = { workspace = true }

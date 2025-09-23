@@ -1,0 +1,5 @@
+---
+source: crates/pcb/tests/netlist.rs
+expression: output
+---
+No position data found in netlist

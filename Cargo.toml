@@ -3,18 +3,22 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0-prerelease.5"
+version = "0.2.0-prerelease.11"
 edition = "2021"
 repository = "https://github.com/diodeinc/pcb"
 homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "af998d7" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
+similar = "2.7.0"
 
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
@@ -26,8 +30,9 @@ pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
 pcb-sexpr = { path = "crates/pcb-sexpr", features = ["serde"] }
 pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
-pcb-buildifier = { path = "crates/pcb-buildifier" }
+pcb-fmt = { path = "crates/pcb-fmt" }
 pcb-test-utils = { path = "crates/pcb-test-utils" }
+pcb-sim = { path = "crates/pcb-sim" }
 
 anyhow = "1.0"
 ariadne = { version = "0.5", features = ["auto-color"] }
@@ -47,6 +52,8 @@ log = "0.4"
 once_cell = "1.21.3"
 open = "5"
 regex = "1.11.0"
+scan_fmt = "0.2.6"
+natord = "1.0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.10.1"
@@ -66,6 +73,7 @@ debugserver-types = "0.5.0"
 derivative = "2.2"
 display_container = "0.9.0"
 either = "1.8"
+fixedbitset = "0.4"
 getrandom = "0.2"
 globset = "0.4.13"
 js-sys = "0.3"
@@ -82,6 +90,7 @@ reqwest = { version = "0.12.19", features = ["blocking", "json"] }
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
 serial_test = "3.0"
+smallvec = "1.15"
 strip-ansi-escapes = "0.2"
 tar = "0.4"
 terminal_size = "0.4.0"
@@ -94,14 +103,20 @@ web-sys = { version = "0.3", features = ["console"] }
 zip = { version = "4.3", default-features = false, features = ["deflate"] }
 flate2 = "1.0.34"
 wasm-bindgen-futures = "0.4"
-rust_decimal = { version = "1", features = ["serde", "serde-with-str"] }
+rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
 comfy-table = "7.1"
 url = "2.5"
 dir-diff = "0.3"
 ignore = "0.4"
 sha2 = "0.10"
+semver = "1.0"
 
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"
+
+# Optimize for size + performance
+[profile.release]
+lto = "fat"           # Maximum link-time optimization
+codegen-units = 1     # Better optimization
+strip = "debuginfo"   # Strip debug symbols

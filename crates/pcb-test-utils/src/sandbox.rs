@@ -360,18 +360,35 @@ impl Sandbox {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // Sanitize temp paths and timestamps to make snapshots deterministic
-        let sanitized_stdout = self.sanitize_output(&stdout);
-        let sanitized_stderr = self.sanitize_output(&stderr);
-
-        format!(
+        let manifest = format!(
             "Command: {} {}\nExit Code: {}\n\n--- STDOUT ---\n{}\n--- STDERR ---\n{}",
             program,
             args.join(" "),
             exit_code,
-            sanitized_stdout.trim_end(),
-            sanitized_stderr.trim_end()
-        )
+            stdout.trim_end(),
+            stderr.trim_end()
+        );
+        // Sanitize temp paths and timestamps to make snapshots deterministic
+        self.sanitize_output(&manifest)
+    }
+
+    pub fn run<I>(&mut self, program: &str, args: I) -> Expression
+    where
+        I: IntoIterator,
+        I::Item: AsRef<OsStr>,
+    {
+        let cargo_bin_path = assert_cmd::cargo::cargo_bin(program)
+            .to_string_lossy()
+            .to_string();
+        let args: Vec<_> = args
+            .into_iter()
+            .map(|arg| arg.as_ref().to_string_lossy().to_string())
+            .collect();
+
+        let mut expr = duct::cmd(&cargo_bin_path, args.clone());
+        expr = expr.dir(&self.default_cwd);
+        expr = self.inject_env(expr);
+        expr
     }
 
     /// Sanitize temporary paths and timestamps in output to make snapshots deterministic
@@ -381,9 +398,9 @@ impl Sandbox {
         let mut result = content.to_string();
 
         // Replace temp directory paths with a placeholder
-        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ
+        // macOS: /private/var/folders/XX/YY/T/.tmpZZZ or /var/folders/XX/YY/T/.tmpZZZ
         let macos_pattern =
-            Regex::new(r"/private/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
+            Regex::new(r"(?:/private)?/var/folders/[^/]+/[^/]+/T/\.tmp[a-zA-Z0-9]+").unwrap();
         result = macos_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
         // Linux: /tmp/.tmpXXX
@@ -401,6 +418,12 @@ impl Sandbox {
         let git_hash_json_pattern = Regex::new(r#""hash":\s*"[a-f0-9]{7}""#).unwrap();
         result = git_hash_json_pattern
             .replace_all(&result, r#""hash": "<GIT_HASH>""#)
+            .to_string();
+
+        // Sanitize git commit hashes in release output (e.g., "Release c634658-dirty staged successfully")
+        let release_hash_pattern = Regex::new(r"Release [a-f0-9]{7,8}(-dirty)? staged").unwrap();
+        result = release_hash_pattern
+            .replace_all(&result, "Release <COMMIT_HASH> staged")
             .to_string();
 
         // Sanitize system information that varies across platforms
@@ -423,6 +446,19 @@ impl Sandbox {
         let cli_version_pattern = Regex::new(r#""cli_version"\s*:\s*"[^"]+""#).unwrap();
         result = cli_version_pattern
             .replace_all(&result, r#""cli_version": "<CLI_VERSION>""#)
+            .to_string();
+
+        // Sanitize KiCad version fields in JSON (but not "unknown")
+        let kicad_version_pattern = Regex::new(r#""kicad_version"\s*:\s*"([^"]+)""#).unwrap();
+        result = kicad_version_pattern
+            .replace_all(&result, |caps: &regex::Captures| {
+                let version = &caps[1];
+                if version == "unknown" {
+                    caps[0].to_string() // Keep the original match unchanged
+                } else {
+                    r#""kicad_version": "<KICAD_VERSION>""#.to_string()
+                }
+            })
             .to_string();
 
         result
@@ -619,8 +655,9 @@ impl FixtureRepo {
     }
 
     /// Mirror-push all refs to the bare “remote”.
-    pub fn push_mirror(&mut self) {
+    pub fn push_mirror(&mut self) -> &mut Self {
         run_git(&["-C", self.work_str(), "push", "--mirror", "origin"]);
+        self
     }
 
     pub fn work_dir(&self) -> &Path {
@@ -628,6 +665,13 @@ impl FixtureRepo {
     }
     pub fn bare_dir(&self) -> &Path {
         &self.bare
+    }
+
+    pub fn rev_parse_head(&self) -> String {
+        let output = duct::cmd("git", ["-C", self.work_str(), "rev-parse", "HEAD"])
+            .read()
+            .expect("get HEAD");
+        output.trim().to_string()
     }
 
     fn work_str(&self) -> &str {
@@ -719,8 +763,7 @@ mod tests {
         let sb = Sandbox::new();
 
         // Create a fixture repository with some test files
-        let _fixture = sb
-            .git_fixture("https://github.com/test/repo.git")
+        sb.git_fixture("https://github.com/test/repo.git")
             .write("README.md", "# Test Repository\n\nThis is a test.")
             .write(
                 "src/main.rs",

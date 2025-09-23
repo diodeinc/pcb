@@ -1,13 +1,11 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    ops::Deref,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
-use starlark::collections::SmallMap;
 use starlark::typing::Interface;
 use starlark::{
     any::ProvidesStaticType,
@@ -22,15 +20,28 @@ use starlark::{
     },
     PrintHandler,
 };
+use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 
+use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
 use crate::lang::input::{InputMap, InputValue};
+use crate::lang::spice_model::model_globals;
 use crate::lang::{
-    component::{build_component_factory_from_symbol, component_globals},
+    builtin::builtin_globals,
+    component::component_globals,
+    physical::*,
     type_info::{ParameterInfo, TypeInfo},
 };
-use crate::{file_extensions, lang::assert::assert_globals};
 use crate::{Diagnostic, WithDiagnostics};
+
+/// Evaluation mode determines which features are active during evaluation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalMode {
+    /// Build mode: ignores testbench() calls, focuses on artifact generation
+    Build,
+    /// Test mode: evaluates testbench() calls, skips artifact generation
+    Test,
+}
 
 #[cfg(feature = "native")]
 fn default_file_provider() -> Arc<dyn crate::FileProvider> {
@@ -48,6 +59,7 @@ use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
     module::{module_globals, FrozenModuleValue, ModuleLoader},
+    test_bench::test_bench_globals,
 };
 
 /// A PrintHandler that collects all print output into a vector
@@ -136,6 +148,18 @@ pub struct EvalOutput {
     pub signature: Vec<crate::lang::type_info::ParameterInfo>,
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
+    /// Load resolver used for this evaluation, when available
+    pub load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+}
+
+impl EvalOutput {
+    /// If the underlying resolver is a CoreLoadResolver, return a reference to it
+    pub fn core_resolver(&self) -> Option<Arc<crate::CoreLoadResolver>> {
+        let load_resolver = self.load_resolver.clone()?;
+        (load_resolver as Arc<dyn std::any::Any + Send + Sync>)
+            .downcast::<crate::CoreLoadResolver>()
+            .ok()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -276,6 +300,15 @@ pub struct EvalContext {
 
     /// Load resolver for resolving load() paths
     pub(crate) load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+
+    /// Index to track which load statement we're currently processing (for span resolution)
+    current_load_index: RefCell<usize>,
+
+    /// Index to track which Module() call we're currently processing (for span resolution)
+    current_module_index: RefCell<usize>,
+
+    /// Evaluation mode determining which features are active
+    pub(crate) eval_mode: EvalMode,
 }
 
 impl Default for EvalContext {
@@ -312,6 +345,9 @@ impl EvalContext {
             diagnostics: RefCell::new(Vec::new()),
             file_provider: None,
             load_resolver: None,
+            current_load_index: RefCell::new(0),
+            current_module_index: RefCell::new(0),
+            eval_mode: EvalMode::Build,
         }
     }
 
@@ -346,6 +382,12 @@ impl EvalContext {
         self
     }
 
+    /// Set the evaluation mode.
+    pub fn set_eval_mode(mut self, mode: EvalMode) -> Self {
+        self.eval_mode = mode;
+        self
+    }
+
     /// Create a new Context that shares caches with this one
     pub fn child_context(&self) -> Self {
         Self {
@@ -362,6 +404,9 @@ impl EvalContext {
             diagnostics: RefCell::new(Vec::new()),
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
+            current_load_index: RefCell::new(0),
+            current_module_index: RefCell::new(0),
+            eval_mode: self.eval_mode,
         }
     }
 
@@ -385,11 +430,14 @@ impl EvalContext {
             LibraryExtension::Breakpoint,
             LibraryExtension::SetType,
         ])
+        .with(builtin_globals)
         .with(component_globals)
         .with(module_globals)
         .with(interface_globals)
         .with(assert_globals)
         .with(file_globals)
+        .with(model_globals)
+        .with(test_bench_globals)
         .build()
     }
 
@@ -453,335 +501,6 @@ impl EvalContext {
         None
     }
 
-    /// Build a synthetic module that exposes one `ModuleLoader` per `.zen` file
-    /// found directly inside `dir`.  This is used to implement the shorthand
-    /// `load("path/to/folder", "Foo", "Bar")`, which behaves as if the
-    /// caller had written `Foo = Module("path/to/folder/Foo.zen")` for
-    /// each requested symbol.
-    ///
-    /// Returns a tuple of (frozen_module, errors_by_symbol) where errors_by_symbol
-    /// maps symbol names to the diagnostics that occurred while loading that symbol.
-    fn load_directory_as_module(
-        &self,
-        dir: &std::path::Path,
-        original_load_path: &str,
-    ) -> starlark::Result<(
-        starlark::environment::FrozenModule,
-        HashMap<String, Vec<Diagnostic>>,
-    )> {
-        // Get or create a default file provider if none was set
-        let file_provider = self
-            .file_provider
-            .clone()
-            .unwrap_or_else(|| default_file_provider());
-
-        // Ensure the directory exists.
-        if !file_provider.is_directory(dir) {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(format!(
-                "Directory {} does not exist or is not a directory",
-                dir.display()
-            ))));
-        }
-
-        // Gather all immediate *.zen entries.
-        let dir_entries = file_provider.list_directory(dir).map_err(|e| {
-            starlark::Error::new_other(anyhow::anyhow!(format!(
-                "Failed to read directory {}: {e}",
-                dir.display()
-            )))
-        })?;
-
-        let mut entries: Vec<std::path::PathBuf> = dir_entries
-            .into_iter()
-            .filter(|p| {
-                file_provider.exists(p)
-                    && !file_provider.is_directory(p)
-                    && file_extensions::is_starlark_file(p.extension())
-            })
-            .collect();
-
-        // Deterministic order – keeps cache keys stable.
-        entries.sort();
-
-        // Prepare an environment to host the exported loaders.
-        let env = starlark::environment::Module::new();
-        let heap = env.heap();
-
-        // Get the set of files currently being loaded
-        let in_progress_files = self.state.lock().unwrap().load_in_progress.clone();
-
-        // Collect errors keyed by symbol name
-        let mut errors_by_symbol: HashMap<String, Vec<Diagnostic>> = HashMap::new();
-
-        for star_path in entries {
-            // Determine symbol name (file stem without extension).
-            let symbol_name = star_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Construct the load path for this file within the directory
-            // If the original load path was "@something/my/directory",
-            // this becomes "@something/my/directory/file.zen"
-            let file_load_path = format!(
-                "{}/{}",
-                original_load_path,
-                star_path.file_name().unwrap().to_string_lossy()
-            );
-
-            // Use the load resolver to resolve this specific file's load path
-            let resolved_star_path = if let Some(load_resolver) = &self.load_resolver {
-                match load_resolver.resolve_path(
-                    file_provider.as_ref(),
-                    &file_load_path,
-                    self.source_path.as_ref().unwrap_or(&PathBuf::from(".")),
-                ) {
-                    Ok(resolved) => resolved,
-                    Err(e) => {
-                        // Create a diagnostic for resolution errors
-                        let diag = Diagnostic {
-                            path: file_load_path.clone(),
-                            span: None,
-                            severity: starlark::analysis::EvalSeverity::Error,
-                            body: format!("Failed to resolve load path '{file_load_path}': {e}"),
-                            call_stack: None,
-                            child: None,
-                        };
-                        errors_by_symbol
-                            .entry(symbol_name.clone())
-                            .or_default()
-                            .push(diag);
-                        continue;
-                    }
-                }
-            } else {
-                // No load resolver, use the path as-is
-                star_path.clone()
-            };
-
-            // Canonicalize the resolved path for comparison
-            let canonical_star_path = match file_provider.canonicalize(&resolved_star_path) {
-                Ok(p) => p,
-                Err(_) => resolved_star_path.clone(),
-            };
-
-            // Skip files that are currently being loaded (to avoid cycles)
-            let mut should_skip = false;
-
-            // Check if this file is being loaded (appears as a key)
-            if in_progress_files.contains_key(&canonical_star_path) {
-                should_skip = true;
-            }
-
-            // Check if this file triggered any ongoing load (appears as a value)
-            if !should_skip {
-                for (_, source_path) in in_progress_files.iter() {
-                    let canonical_source = file_provider
-                        .canonicalize(source_path)
-                        .unwrap_or_else(|_| source_path.clone());
-                    if canonical_source == canonical_star_path {
-                        should_skip = true;
-                        break;
-                    }
-                }
-            }
-
-            // Check if this is our own source path
-            if !should_skip {
-                if let Some(ref our_path) = self.source_path {
-                    let canonical_our_path = file_provider
-                        .canonicalize(our_path)
-                        .unwrap_or_else(|_| our_path.clone());
-                    if canonical_our_path == canonical_star_path {
-                        should_skip = true;
-                    }
-                }
-            }
-
-            if should_skip {
-                continue;
-            }
-
-            // Create a LoadGuard for this file before evaluating it
-            // This ensures that if this file tries to load the same directory,
-            // it will see itself in load_in_progress and skip itself
-            let _guard = match LoadGuard::new(
-                self.state.clone(),
-                canonical_star_path.clone(),
-                self.source_path
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from("<directory-load>")),
-            ) {
-                Ok(guard) => guard,
-                Err(_) => {
-                    // This shouldn't happen since we already checked above
-                    continue;
-                }
-            };
-
-            // Try to evaluate the module to check for errors
-            let eval_result = self
-                .child_context()
-                .set_source_path(resolved_star_path.clone())
-                .set_module_name(symbol_name.clone())
-                .set_inputs(InputMap::new())
-                .eval();
-
-            // Collect any error diagnostics for this symbol
-            let mut symbol_errors = Vec::new();
-            for diag in &eval_result.diagnostics {
-                if diag.is_error() {
-                    symbol_errors.push(diag.clone());
-                }
-            }
-
-            // If there were errors, store them keyed by symbol name
-            if !symbol_errors.is_empty() {
-                errors_by_symbol.insert(symbol_name.clone(), symbol_errors);
-            }
-
-            // If the module loaded successfully, create a loader for it
-            if let Some(output) = eval_result.output {
-                // Build a ModuleLoader with the frozen module
-                let loader = ModuleLoader {
-                    name: symbol_name.clone(),
-                    source_path: resolved_star_path.to_string_lossy().to_string(),
-                    params: {
-                        let mut params = vec!["name".to_string(), "properties".to_string()];
-                        if let Some(extra) = output
-                            .star_module
-                            .extra_value()
-                            .and_then(|e| e.downcast_ref::<FrozenContextValue>())
-                        {
-                            for param in extra.module.signature().iter() {
-                                params.push(param.name.clone());
-                            }
-                        }
-                        params.sort();
-                        params.dedup();
-                        params
-                    },
-                    param_types: {
-                        let mut param_types = SmallMap::new();
-                        if let Some(extra) = output
-                            .star_module
-                            .extra_value()
-                            .and_then(|e| e.downcast_ref::<FrozenContextValue>())
-                        {
-                            for param in extra.module.signature().iter() {
-                                param_types
-                                    .insert(param.name.clone(), param.type_value.to_string());
-                            }
-                        }
-                        param_types
-                    },
-                    frozen_module: Some(output.star_module),
-                };
-
-                // Insert into the environment
-                let loader_val = heap.alloc(loader);
-                env.set(&symbol_name, loader_val);
-            }
-        }
-
-        // Gather all immediate *.kicad_sym entries.
-        let dir_entries = file_provider.list_directory(dir).map_err(|e| {
-            starlark::Error::new_other(anyhow::anyhow!(format!(
-                "Failed to read directory {}: {e}",
-                dir.display()
-            )))
-        })?;
-
-        let mut sym_entries: Vec<std::path::PathBuf> = dir_entries
-            .into_iter()
-            .filter(|p| {
-                file_provider.exists(p)
-                    && !file_provider.is_directory(p)
-                    && file_extensions::is_kicad_symbol_file(p.extension())
-            })
-            .collect();
-
-        sym_entries.sort();
-
-        for sym_path in sym_entries {
-            let symbol_name = sym_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Construct the load path for this .kicad_sym file within the directory
-            let file_load_path = format!(
-                "{}/{}",
-                original_load_path,
-                sym_path.file_name().unwrap().to_string_lossy()
-            );
-
-            // Use the load resolver to resolve this specific file's load path
-            let resolved_sym_path = if let Some(load_resolver) = &self.load_resolver {
-                match load_resolver.resolve_path(
-                    file_provider.as_ref(),
-                    &file_load_path,
-                    self.source_path.as_ref().unwrap_or(&PathBuf::from(".")),
-                ) {
-                    Ok(resolved) => resolved,
-                    Err(e) => {
-                        // Create a diagnostic for resolution errors
-                        let diag = Diagnostic {
-                            path: file_load_path.clone(),
-                            span: None,
-                            severity: starlark::analysis::EvalSeverity::Error,
-                            body: format!("Failed to resolve load path '{file_load_path}': {e}"),
-                            call_stack: None,
-                            child: None,
-                        };
-                        errors_by_symbol
-                            .entry(symbol_name.clone())
-                            .or_default()
-                            .push(diag);
-                        continue;
-                    }
-                }
-            } else {
-                // No load resolver, use the path as-is
-                sym_path.clone()
-            };
-
-            match build_component_factory_from_symbol(
-                &resolved_sym_path,
-                None,
-                Some(dir),
-                file_provider.as_ref(),
-                self,
-            ) {
-                Ok(factory) => {
-                    let val = heap.alloc(factory);
-                    env.set(&symbol_name, val);
-                }
-                Err(e) => {
-                    // Create a diagnostic for component factory errors
-                    let diag = Diagnostic {
-                        path: file_load_path.clone(),
-                        span: None,
-                        severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Failed to load component from {file_load_path}: {e}"),
-                        call_stack: None,
-                        child: None,
-                    };
-                    errors_by_symbol
-                        .entry(symbol_name.clone())
-                        .or_default()
-                        .push(diag);
-                }
-            }
-        }
-
-        // Freeze the environment and return both the module and errors
-        let frozen = env.freeze().map_err(starlark::Error::from)?;
-        Ok((frozen, errors_by_symbol))
-    }
-
     /// Provide the raw contents of the Starlark module. When omitted, the contents
     /// will be read from `source_path` during [`Context::eval`].
     #[allow(dead_code)]
@@ -825,11 +544,13 @@ impl EvalContext {
         let source_path = match self.source_path {
             Some(ref path) => path,
             None => {
-                return WithDiagnostics::failure(vec![Diagnostic::from_error(
-                    anyhow::anyhow!("source_path not set on Context before eval()").into(),
-                )]);
+                return anyhow::anyhow!("source_path not set on Context before eval()").into();
             }
         };
+
+        if let Some(load_resolver) = &self.load_resolver {
+            load_resolver.track_file(source_path);
+        }
 
         // Get or create a default file provider if none was set
         let file_provider = self
@@ -847,10 +568,7 @@ impl EvalContext {
                     c
                 }
                 Err(err) => {
-                    let diag = crate::Diagnostic::from_error(starlark::Error::new_other(
-                        anyhow::anyhow!("Failed to read file: {}", err),
-                    ));
-                    return WithDiagnostics::failure(vec![diag]);
+                    return anyhow::anyhow!("Failed to read file: {}", err).into();
                 }
             },
         };
@@ -869,165 +587,104 @@ impl EvalContext {
             &self.dialect(),
         );
 
-        let eval_res = match ast_res {
-            Ok(ast) => WithDiagnostics::success(ast, Vec::new()),
-            Err(err) => WithDiagnostics::failure(vec![crate::Diagnostic::from_eval_message(
-                EvalMessage::from_error(source_path, &err),
-            )]),
+        let ast = match ast_res {
+            Ok(ast) => ast,
+            Err(err) => return EvalMessage::from_error(source_path, &err).into(),
         };
 
-        eval_res.flat_map(|ast| {
-            // Create a print handler to collect output
-            let print_handler = CollectingPrintHandler::new();
+        // Create a print handler to collect output
+        let print_handler = CollectingPrintHandler::new();
 
-            let eval_result = {
-                let mut eval = Evaluator::new(&self.module);
-                eval.enable_static_typechecking(true);
-                eval.set_loader(&self);
-                eval.set_print_handler(&print_handler);
+        let eval_result = {
+            let mut eval = Evaluator::new(&self.module);
+            eval.enable_static_typechecking(true);
+            eval.set_loader(&self);
+            eval.set_print_handler(&print_handler);
 
-                // Attach a `ContextValue` so user code can access evaluation context.
-                self.module
-                    .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
+            // Attach a `ContextValue` so user code can access evaluation context.
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
 
-                // If the caller supplied custom properties via `set_properties()` attach them to the
-                // freshly created `ModuleValue` *before* executing the module body so that user code
-                // can observe/override them as needed.
-                if let Some(props) = &self.properties {
-                    if let Some(ctx_val) = eval
-                        .module()
-                        .extra_value()
-                        .and_then(|e| e.downcast_ref::<ContextValue>())
-                    {
-                        for (key, iv) in props.iter() {
-                            match iv.to_value(&mut eval, None) {
-                                Ok(val) => ctx_val.add_property(key.clone(), val),
-                                Err(e) => {
-                                    return WithDiagnostics::failure(vec![
-                                        crate::Diagnostic::from_error(e.into()),
-                                    ]);
-                                }
-                            }
+            // If the caller supplied custom properties via `set_properties()` attach them to the
+            // freshly created `ModuleValue` *before* executing the module body so that user code
+            // can observe/override them as needed.
+            if let Some(props) = &self.properties {
+                if let Some(ctx_val) = eval
+                    .module()
+                    .extra_value()
+                    .and_then(|e| e.downcast_ref::<ContextValue>())
+                {
+                    for (key, iv) in props.iter() {
+                        match iv.to_value(&mut eval, None) {
+                            Ok(val) => ctx_val.add_property(key.clone(), val),
+                            Err(e) => return e.into(),
                         }
                     }
                 }
-
-                let globals = Self::build_globals();
-
-                // We are only interested in whether evaluation succeeded, not in the
-                // value of the final expression, so map the result to `()`.
-                eval.eval_module(ast.clone(), &globals).map(|_| ())
-            };
-
-            // Collect print output after evaluation
-            let print_output = print_handler.take_output();
-
-            let result = match eval_result {
-                Ok(_) => {
-                    let frozen_module = self.module.freeze().expect("failed to freeze module");
-                    let extra = frozen_module
-                        .extra_value()
-                        .expect("extra value should be set before freezing")
-                        .downcast_ref::<FrozenContextValue>()
-                        .expect("extra value should be a FrozenContextValue");
-                    let mut diagnostics = extra.diagnostics().clone();
-                    diagnostics.extend(self.diagnostics.borrow().clone());
-
-                    let signature = extra
-                        .module
-                        .signature()
-                        .iter()
-                        .map(|param| {
-                            // Convert frozen value to regular value for introspection
-                            let type_value = param.type_value.to_value();
-                            let type_info = TypeInfo::from_value(type_value);
-
-                            // Convert default value to InputValue if present
-                            let default_value = param
-                                .default_value
-                                .as_ref()
-                                .map(|v| InputValue::from_value(v.to_value()));
-
-                            ParameterInfo {
-                                name: param.name.clone(),
-                                type_info,
-                                required: !param.optional,
-                                default_value,
-                                help: param.help.clone(),
-                            }
-                        })
-                        .collect();
-
-                    WithDiagnostics::success(
-                        EvalOutput {
-                            ast,
-                            star_module: frozen_module,
-                            sch_module: extra.module.clone(),
-                            signature,
-                            print_output,
-                        },
-                        diagnostics,
-                    )
-                }
-                Err(err) => {
-                    let mut diagnostics = vec![crate::Diagnostic::from_error(err)];
-                    diagnostics.extend(self.diagnostics.borrow().clone());
-                    WithDiagnostics::failure(diagnostics)
-                }
-            };
-
-            result
-        })
-    }
-
-    /// Introspect a module by evaluating it with empty inputs and non-strict IO config.
-    /// Returns the used inputs and their types.
-    pub fn introspect_module(
-        &self,
-        source_path: &Path,
-        module_name: &str,
-    ) -> WithDiagnostics<HashMap<String, String>> {
-        self.child_context()
-            .set_source_path(source_path.to_path_buf())
-            .set_module_name(module_name.to_string())
-            .set_inputs(InputMap::new()) // Empty inputs
-            .set_strict_io_config(false) // Non-strict so we don't fail on missing inputs
-            .eval()
-            .map(|output| {
-                output
-                    .signature
-                    .iter()
-                    .map(|param| (param.name.clone(), format!("{:?}", param.type_info)))
-                    .collect()
-            })
-    }
-
-    /// Introspect a module and return structured type information.
-    /// This is a richer API that returns TypeInfo instead of just strings.
-    pub fn introspect_module_typed(
-        &self,
-        source_path: &Path,
-        module_name: &str,
-    ) -> WithDiagnostics<Vec<crate::lang::type_info::ParameterInfo>> {
-        // First evaluate the module with empty inputs to get the used inputs
-        let eval_result = self
-            .child_context()
-            .set_source_path(source_path.to_path_buf())
-            .set_module_name(module_name.to_string())
-            .set_inputs(InputMap::new())
-            .set_strict_io_config(false)
-            .eval();
-
-        match eval_result.output {
-            Some(output) => {
-                // The signature is already a Vec of ParameterInfo
-                let parameters = output.signature;
-
-                WithDiagnostics::success(parameters, eval_result.diagnostics)
             }
-            None => {
-                // If evaluation failed, return empty parameters with diagnostics
-                WithDiagnostics::failure(eval_result.diagnostics)
+
+            let globals = Self::build_globals();
+
+            // We are only interested in whether evaluation succeeded, not in the
+            // value of the final expression, so map the result to `()`.
+            eval.eval_module(ast.clone(), &globals).map(|_| ())
+        };
+
+        // Collect print output after evaluation
+        let print_output = print_handler.take_output();
+
+        match eval_result {
+            Ok(_) => {
+                self.hijack_builtins();
+                let frozen_module = self.module.freeze().expect("failed to freeze module");
+                let extra = frozen_module
+                    .extra_value()
+                    .expect("extra value should be set before freezing")
+                    .downcast_ref::<FrozenContextValue>()
+                    .expect("extra value should be a FrozenContextValue");
+                let signature = extra
+                    .module
+                    .signature()
+                    .iter()
+                    .map(|param| {
+                        // Convert frozen value to regular value for introspection
+                        let type_value = param.type_value.to_value();
+                        let type_info = TypeInfo::from_value(type_value);
+
+                        // Convert default value to InputValue if present
+                        let default_value = param
+                            .default_value
+                            .as_ref()
+                            .map(|v| InputValue::from_value(v.to_value()));
+
+                        ParameterInfo {
+                            name: param.name.clone(),
+                            type_info,
+                            required: !param.optional,
+                            default_value,
+                            help: param.help.clone(),
+                        }
+                    })
+                    .collect();
+
+                let output = EvalOutput {
+                    ast,
+                    star_module: frozen_module,
+                    sch_module: extra.module.clone(),
+                    signature,
+                    print_output,
+                    load_resolver: self.load_resolver.clone(),
+                };
+                let mut ret = WithDiagnostics::success(output);
+                ret.diagnostics.extend(extra.diagnostics().clone());
+                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret
+            }
+            Err(err) => {
+                let mut ret = WithDiagnostics::default();
+                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret.diagnostics.push(err.into());
+                ret
             }
         }
     }
@@ -1250,14 +907,26 @@ impl EvalContext {
                 continue;
             }
 
-            for entry in walkdir::WalkDir::new(root)
-                .into_iter()
-                .filter_map(Result::ok)
-            {
+            // Skip hidden directories and files (those whose name starts with ".").
+            // Using filter_entry ensures we don't descend into hidden directories.
+            let iter = walkdir::WalkDir::new(root).into_iter().filter_entry(|e| {
+                if let Some(name) = e.file_name().to_str() {
+                    // Keep entries whose immediate name does not start with a dot
+                    return !name.starts_with('.');
+                }
+                true
+            });
+
+            for entry in iter.filter_map(Result::ok) {
                 if entry.file_type().is_file() {
                     let path = entry.into_path();
                     let ext = path.extension().and_then(|e| e.to_str());
                     let file_name = path.file_name().and_then(|e| e.to_str());
+                    // Also skip files whose own name starts with a dot to be safe
+                    let is_hidden = file_name.map(|n| n.starts_with('.')).unwrap_or(false);
+                    if is_hidden {
+                        continue;
+                    }
                     let is_starlark =
                         matches!((ext, file_name), (Some("star"), _) | (Some("zen"), _));
                     if is_starlark {
@@ -1269,32 +938,83 @@ impl EvalContext {
         Ok(files)
     }
 
-    /// Find the span of a load statement that loads the given path
-    pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
-        // We need access to the AST of the current module being evaluated
-        // This is a bit tricky since we're in the middle of evaluation
-        // For now, we'll try to parse the contents if available
+    /// Parse the current module's AST, returning None if parsing fails
+    fn parse_current_ast(&self) -> Option<starlark::syntax::AstModule> {
+        let source_path = self.source_path.as_ref()?;
+        let contents = self.contents.as_ref()?;
+        starlark::syntax::AstModule::parse(
+            &source_path.to_string_lossy(),
+            contents.clone(),
+            &self.dialect(),
+        )
+        .ok()
+    }
 
-        if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
-            // Try to parse the AST to find load statements
-            if let Ok(ast) = AstModule::parse(
-                &source_path.to_string_lossy(),
-                contents.clone(),
-                &self.dialect(),
-            ) {
-                // Get all load statements
-                let loads = ast.loads();
+    /// Recursively search for expressions matching a predicate within an expression tree
+    fn find_in_expr<F>(
+        expr: &starlark::syntax::ast::AstExpr,
+        predicate: &mut F,
+    ) -> Option<starlark::codemap::Span>
+    where
+        F: FnMut(&starlark::syntax::ast::AstExpr) -> Option<starlark::codemap::Span>,
+    {
+        use starlark::syntax::ast::{ArgumentP, ExprP};
 
-                // Find a load statement that matches our path
-                for load in loads {
-                    if load.module_id == path {
-                        return Some(load.span.span);
+        // Check current expression first
+        if let Some(span) = predicate(expr) {
+            return Some(span);
+        }
+
+        // Recursively search sub-expressions
+        match &expr.node {
+            ExprP::Call(_, call_args) => {
+                for arg in &call_args.args {
+                    if let ArgumentP::Positional(arg_expr) = &arg.node {
+                        if let Some(span) = Self::find_in_expr(arg_expr, predicate) {
+                            return Some(span);
+                        }
                     }
                 }
             }
+            ExprP::Dot(obj, _) => {
+                return Self::find_in_expr(obj, predicate);
+            }
+            ExprP::Index(boxed) => {
+                let (obj, index_expr) = &**boxed;
+                if let Some(span) = Self::find_in_expr(obj, predicate) {
+                    return Some(span);
+                }
+                return Self::find_in_expr(index_expr, predicate);
+            }
+            ExprP::Slice(obj, start, end, _) => {
+                if let Some(span) = Self::find_in_expr(obj, predicate) {
+                    return Some(span);
+                }
+                if let Some(start_expr) = start {
+                    if let Some(span) = Self::find_in_expr(start_expr, predicate) {
+                        return Some(span);
+                    }
+                }
+                if let Some(end_expr) = end {
+                    if let Some(span) = Self::find_in_expr(end_expr, predicate) {
+                        return Some(span);
+                    }
+                }
+            }
+            _ => {}
         }
-
         None
+    }
+
+    /// Find the span of a load statement that loads the given path
+    pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
+        let ast = self.parse_current_ast()?;
+        let result = ast
+            .loads()
+            .into_iter()
+            .find(|load| load.module_id == path)
+            .map(|load| load.span.span);
+        result
     }
 
     /// Get the codemap for the current module being evaluated
@@ -1309,6 +1029,92 @@ impl EvalContext {
         }
     }
 
+    /// Resolve the span for the current load statement being processed (using the load index)
+    pub fn resolve_span_for_current_load(&self, path: &str) -> Option<ResolvedSpan> {
+        let current_index = *self.current_load_index.borrow();
+        // We've already incremented the counter, so subtract 1 to get the actual current load
+        let actual_index = current_index.saturating_sub(1);
+
+        // Get the AST to verify the path matches
+        let ast = self.parse_current_ast()?;
+        let loads = ast.loads();
+        let load = loads.get(actual_index)?;
+
+        // Safety check: ensure the path matches what we expect
+        if load.module_id != path {
+            panic!(
+                "Load path mismatch at index {actual_index}: expected '{path}', got '{}'",
+                load.module_id
+            );
+        }
+
+        let load_span = load.span.span;
+        self.get_codemap()
+            .map(|codemap| codemap.file_span(load_span).resolve_span())
+    }
+
+    /// Resolve the span for the current Module() call being processed (using the module index)
+    pub fn resolve_span_for_current_module(&self, path: &str) -> Option<ResolvedSpan> {
+        let current_index = *self.current_module_index.borrow();
+        // We've already incremented the counter, so subtract 1 to get the actual current module
+        let actual_index = current_index.saturating_sub(1);
+
+        // Get the AST to verify the path matches
+        use starlark::syntax::ast::{ArgumentP, AstLiteral, ExprP};
+        let ast = self.parse_current_ast()?;
+        let mut module_calls = Vec::new();
+
+        ast.statement().visit_expr(|expr| {
+            Self::find_in_expr(expr, &mut |expr| {
+                // Look for Module() calls
+                if let ExprP::Call(callee, call_args) = &expr.node {
+                    if let ExprP::Identifier(ident) = &callee.node {
+                        if ident.node.ident == "Module" {
+                            if let Some((path_str, span)) = call_args
+                                .args
+                                .iter()
+                                .find_map(|arg| match &arg.node {
+                                    ArgumentP::Positional(expr) => Some(expr),
+                                    _ => None,
+                                })
+                                .filter(|expr| {
+                                    matches!(&expr.node, ExprP::Literal(AstLiteral::String(_)))
+                                })
+                                .and_then(|expr| match &expr.node {
+                                    ExprP::Literal(AstLiteral::String(s)) => {
+                                        Some((s.node.clone(), expr.span))
+                                    }
+                                    _ => None,
+                                })
+                            {
+                                module_calls.push((path_str, span));
+                            }
+                        }
+                    }
+                }
+                None
+            });
+        });
+
+        let (actual_path, span) = module_calls.get(actual_index)?;
+
+        // Safety check: ensure the path matches what we expect
+        if *actual_path != path {
+            panic!(
+                "Module path mismatch at index {actual_index}: expected '{path}', got '{actual_path}'"
+            );
+        }
+
+        self.get_codemap()
+            .map(|codemap| codemap.file_span(*span).resolve_span())
+    }
+
+    /// Increment the module counter for span tracking
+    pub fn increment_module_counter(&self) {
+        let mut index = self.current_module_index.borrow_mut();
+        *index += 1;
+    }
+
     /// Get the source path of the current module being evaluated
     pub fn get_source_path(&self) -> Option<&Path> {
         self.source_path.as_deref()
@@ -1317,6 +1123,68 @@ impl EvalContext {
     /// Get the load resolver if available
     pub fn get_load_resolver(&self) -> Option<&Arc<dyn crate::LoadResolver>> {
         self.load_resolver.as_ref()
+    }
+
+    /// Append a diagnostic that was produced while this context was active.
+    pub fn add_diagnostic<D: Into<Diagnostic>>(&self, diag: D) {
+        self.diagnostics.borrow_mut().push(diag.into());
+    }
+
+    fn hijack_builtins(&mut self) {
+        let Some(source_path) = self.get_source_path() else {
+            return;
+        };
+        if source_path.file_name().and_then(|name| name.to_str()) != Some("units.zen") {
+            return;
+        }
+
+        let heap = self.module.heap();
+        if self.module.get("Voltage").is_some() {
+            self.module.set("Voltage", heap.alloc_simple(VoltageType));
+        }
+        if self.module.get("Current").is_some() {
+            self.module.set("Current", heap.alloc_simple(CurrentType));
+        }
+        if self.module.get("Resistance").is_some() {
+            self.module
+                .set("Resistance", heap.alloc_simple(ResistanceType));
+        }
+        if self.module.get("Capacitance").is_some() {
+            self.module
+                .set("Capacitance", heap.alloc_simple(CapacitanceType));
+        }
+        if self.module.get("Inductance").is_some() {
+            self.module
+                .set("Inductance", heap.alloc_simple(InductanceType));
+        }
+        if self.module.get("Frequency").is_some() {
+            self.module
+                .set("Frequency", heap.alloc_simple(FrequencyType));
+        }
+        if self.module.get("Time").is_some() {
+            self.module.set("Time", heap.alloc_simple(TimeType));
+        }
+        if self.module.get("Temperature").is_some() {
+            self.module
+                .set("Temperature", heap.alloc_simple(TemperatureType));
+        }
+        if self.module.get("Charge").is_some() {
+            self.module.set("Charge", heap.alloc_simple(ChargeType));
+        }
+        if self.module.get("Power").is_some() {
+            self.module.set("Power", heap.alloc_simple(PowerType));
+        }
+        if self.module.get("Energy").is_some() {
+            self.module.set("Energy", heap.alloc_simple(EnergyType));
+        }
+        if self.module.get("Conductance").is_some() {
+            self.module
+                .set("Conductance", heap.alloc_simple(ConductanceType));
+        }
+        if self.module.get("MagneticFlux").is_some() {
+            self.module
+                .set("MagneticFlux", heap.alloc_simple(MagneticFluxType));
+        }
     }
 }
 
@@ -1327,6 +1195,12 @@ impl FileLoader for EvalContext {
             "Trying to load path {path} with current path {:?}",
             self.source_path
         );
+
+        // Increment load counter - this happens before warning generation
+        {
+            let mut index = self.current_load_index.borrow_mut();
+            *index += 1;
+        }
 
         // Get or create default providers if none were set
         let file_provider = self
@@ -1340,19 +1214,16 @@ impl FileLoader for EvalContext {
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No LoadResolver provided")))?;
 
         let module_path = self.source_path.clone();
+        let Some(current_file) = module_path.as_ref() else {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Cannot resolve load path '{}' without a current file context",
+                path
+            )));
+        };
 
         // Resolve the load path to an absolute path
-        let absolute_path = match module_path {
-            Some(ref current_file) => load_resolver
-                .resolve_path(file_provider.deref(), path, current_file)
-                .map_err(starlark::Error::new_other)?,
-            None => {
-                return Err(starlark::Error::new_other(anyhow::anyhow!(
-                    "Cannot resolve load path '{}' without a current file context",
-                    path
-                )));
-            }
-        };
+        let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
+        let absolute_path = load_resolver.resolve(&mut resolve_context)?;
 
         // Canonicalize the path for cache lookup
         let canonical_path = file_provider
@@ -1373,122 +1244,19 @@ impl FileLoader for EvalContext {
             return Ok(frozen.clone());
         }
 
-        // Special-case: if the load path refers to a *directory* treat it as a
-        // namespace that exports one `ModuleLoader` per `.zen` file found
-        // inside that directory.
+        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
+            load_resolver.as_ref(),
+            current_file,
+            &resolve_context,
+            self.resolve_span_for_current_load(path),
+        ) {
+            self.diagnostics.borrow_mut().push(warning_diag);
+        }
+
         if file_provider.is_directory(&canonical_path) {
-            let (frozen, errors_by_symbol) =
-                match self.load_directory_as_module(&canonical_path, path) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        // Find the load statement that triggered this error and attach proper span
-                        if let Some(load_span) = self.find_load_span_for_path(path) {
-                            if let Some(codemap) = self.get_codemap() {
-                                let mut err = starlark::Error::new_other(anyhow::anyhow!(
-                                    "Failed to load directory as module: {}",
-                                    e
-                                ));
-                                err.set_span(load_span, &codemap);
-                                return Err(err);
-                            }
-                        }
-                        return Err(e);
-                    }
-                };
-
-            // If there were errors loading any symbols, return the first one with proper span
-            if !errors_by_symbol.is_empty() {
-                // Find the first error to return - sort by symbol name for deterministic behavior
-                let mut sorted_symbols: Vec<_> = errors_by_symbol.keys().collect();
-                sorted_symbols.sort();
-
-                // Find the first error and its associated symbol
-                let mut error_symbol = "<unknown>";
-                let first_error = sorted_symbols
-                    .iter()
-                    .filter_map(|&symbol| {
-                        errors_by_symbol.get(symbol).and_then(|errors| {
-                            if !errors.is_empty() {
-                                error_symbol = symbol;
-                                Some(errors.iter().next())
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .flatten()
-                    .next();
-
-                if let Some(error) = first_error {
-                    // Construct the full path including the file that caused the error
-                    let error_path = if error_symbol != "<unknown>" {
-                        // Check if the error is from a .zen file or .kicad_sym file
-                        if error.path.ends_with(".kicad_sym") {
-                            format!("{path}/{error_symbol}.kicad_sym")
-                        } else {
-                            format!("{path}/{error_symbol}.zen")
-                        }
-                    } else {
-                        path.to_string()
-                    };
-
-                    // Try to find the load statement span to attach to the error
-                    if let Some(load_span) = self.find_load_span_for_path(path) {
-                        if let Some(codemap) = self.get_codemap() {
-                            // Create a parent diagnostic that wraps the child error
-                            let parent_diag = crate::Diagnostic {
-                                path: self
-                                    .source_path
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_default(),
-                                span: Some(codemap.file_span(load_span).resolve_span()),
-                                severity: starlark::analysis::EvalSeverity::Error,
-                                body: format!("Error loading module `{error_path}`"),
-                                call_stack: None,
-                                child: Some(Box::new(error.clone())),
-                            };
-
-                            // Wrap in DiagnosticError and pass through anyhow
-                            let diag_err = crate::DiagnosticError(parent_diag);
-                            let load_err = crate::LoadError {
-                                message: format!("Error loading module `{error_path}`"),
-                                diagnostic: diag_err,
-                            };
-                            let mut err = starlark::Error::new_other(anyhow::Error::new(load_err));
-                            err.set_span(load_span, &codemap);
-                            return Err(err);
-                        }
-                    }
-                    // Fallback: return error without span
-                    let parent_diag = crate::Diagnostic {
-                        path: self
-                            .source_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                        span: None,
-                        severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Error loading module `{error_path}`"),
-                        call_stack: None,
-                        child: Some(Box::new(error.clone())),
-                    };
-                    let diag_err = crate::DiagnosticError(parent_diag);
-                    let load_err = crate::LoadError {
-                        message: format!("Error loading module `{error_path}`"),
-                        diagnostic: diag_err,
-                    };
-                    let err = starlark::Error::new_other(anyhow::Error::new(load_err));
-                    return Err(err);
-                }
-            }
-
-            self.state
-                .lock()
-                .unwrap()
-                .load_cache
-                .insert(canonical_path.clone(), frozen.clone());
-            return Ok(frozen);
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "Directory load syntax is no longer supported"
+            )));
         }
 
         let result = self
@@ -1513,6 +1281,7 @@ impl FileLoader for EvalContext {
                         body: format!("Error loading module `{path}`"),
                         call_stack: None,
                         child: Some(Box::new(first_error.clone())),
+                        source_error: None,
                     };
 
                     // Wrap in DiagnosticError and pass through anyhow
@@ -1536,6 +1305,7 @@ impl FileLoader for EvalContext {
                         body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
@@ -1572,6 +1342,7 @@ impl FileLoader for EvalContext {
                         body: format!("Failed to load module `{path}`"),
                         call_stack: None,
                         child: None,
+                        source_error: None,
                     };
                     let diag_err = crate::DiagnosticError(diag);
                     let load_err = crate::LoadError {
@@ -1594,6 +1365,7 @@ impl FileLoader for EvalContext {
                 body: format!("Failed to load module `{path}`"),
                 call_stack: None,
                 child: None,
+                source_error: None,
             };
             let diag_err = crate::DiagnosticError(diag);
             let load_err = crate::LoadError {

@@ -24,5 +24,4 @@ install-updater = true
 # Which actions to run on pull requests
 pr-run-mode = "skip"
 # GitHub build setup for Node.js
-github-build-setup = "build-setup.yml"
-
+github-build-setup = "../build-setup.yml"

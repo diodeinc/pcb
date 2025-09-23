@@ -1,0 +1,50 @@
+---
+source: crates/pcb/tests/netlist.rs
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/HierarchicalBoard.zen:<root>": {
+    "symbol_positions": {
+      "comp:LED1.D1": {
+        "rotation": 90.0,
+        "x": 150.0,
+        "y": 100.0
+      },
+      "comp:LED1.R1": {
+        "rotation": 0.0,
+        "x": 100.0,
+        "y": 100.0
+      },
+      "comp:LED2.D1": {
+        "rotation": 90.0,
+        "x": 150.0,
+        "y": 200.0
+      },
+      "comp:LED2.R1": {
+        "rotation": 0.0,
+        "x": 100.0,
+        "y": 200.0
+      },
+      "sym:GND#1": {
+        "rotation": 0.0,
+        "x": 50.0,
+        "y": 250.0
+      },
+      "sym:GND#2": {
+        "rotation": 0.0,
+        "x": 200.0,
+        "y": 250.0
+      },
+      "sym:VCC_3V3#1": {
+        "rotation": 0.0,
+        "x": 50.0,
+        "y": 150.0
+      },
+      "sym:VCC_3V3#2": {
+        "rotation": 0.0,
+        "x": 200.0,
+        "y": 150.0
+      }
+    }
+  }
+}
