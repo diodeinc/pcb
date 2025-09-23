@@ -115,6 +115,9 @@ pub struct PhysicalValue {
     pub(crate) unit: PhysicalUnitDims,
 }
 
+#[derive(Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize)]
+pub struct PhysicalValueType;
+
 impl PhysicalValue {
     pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
         Self {
@@ -707,6 +710,8 @@ pub enum PhysicalValueError {
     WithUnitInvalidArgument,
     #[error("with_tolerance() expects exactly one argument")]
     WithToleranceWrongArgumentCount,
+    #[error("with_value() expects exactly one argument")]
+    WithValueWrongArgumentCount,
     #[error("Cannot divide {lhs_unit} by {rhs_unit} - {error}")]
     DivisionError {
         lhs_unit: String,
@@ -1045,6 +1050,7 @@ starlark_simple_value!(PhysicalUnitDims);
 impl<'v> StarlarkValue<'v> for PhysicalUnitDims {}
 
 starlark_simple_value!(PhysicalValue);
+starlark_simple_value!(PhysicalValueType);
 
 /// A callable wrapper for PhysicalValue's __str__ method to match stdlib units.zen API
 #[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
@@ -1131,6 +1137,45 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithTolerance {
     }
 }
 
+/// A callable wrapper for PhysicalValue's with_value method
+#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
+pub struct PhysicalValueWithValue {
+    value: PhysicalValue,
+}
+
+impl std::fmt::Display for PhysicalValueWithValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<with_value method for {}>", self.value)
+    }
+}
+
+starlark_simple_value!(PhysicalValueWithValue);
+
+#[starlark_value(type = "PhysicalValueWithValue")]
+impl<'v> StarlarkValue<'v> for PhysicalValueWithValue {
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        args: &Arguments<'v, '_>,
+        evaluator: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = evaluator.heap();
+        let positional: Vec<_> = args.positions(heap)?.collect();
+
+        if positional.len() != 1 {
+            return Err(PhysicalValueError::WithValueWrongArgumentCount.into());
+        }
+
+        let value_arg = positional[0];
+        let new_value = starlark_value_to_decimal(&value_arg)?;
+
+        let new_physical_value =
+            PhysicalValue::from_decimal(new_value, self.value.tolerance, self.value.unit);
+
+        Ok(heap.alloc(new_physical_value))
+    }
+}
+
 /// A callable wrapper for PhysicalValue's with_unit method
 #[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
 pub struct PhysicalValueWithUnit {
@@ -1177,12 +1222,34 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithUnit {
     }
 }
 
+impl fmt::Display for PhysicalValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PhysicalValue")
+    }
+}
+
+#[starlark_value(type = "PhysicalValueType")]
+impl<'v> StarlarkValue<'v> for PhysicalValueType
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn eval_type(&self) -> Option<starlark::typing::Ty> {
+        Some(<PhysicalValue as StarlarkValue>::get_type_starlark_repr())
+    }
+}
+
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn has_attr(&self, attribute: &str, _heap: &'v starlark::values::Heap) -> bool {
         matches!(
             attribute,
-            "value" | "tolerance" | "unit" | "__str__" | "with_tolerance" | "with_unit"
+            "value"
+                | "tolerance"
+                | "unit"
+                | "__str__"
+                | "with_tolerance"
+                | "with_unit"
+                | "with_value"
         )
     }
 
@@ -1216,6 +1283,10 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
                 // Return a callable that creates a new PhysicalValue with updated unit
                 Some(heap.alloc(PhysicalValueWithUnit { value: *self }))
             }
+            "with_value" => {
+                // Return a callable that creates a new PhysicalValue with updated value
+                Some(heap.alloc(PhysicalValueWithValue { value: *self }))
+            }
             _ => None,
         }
     }
@@ -1228,6 +1299,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             "__str__".to_owned(),
             "with_tolerance".to_owned(),
             "with_unit".to_owned(),
+            "with_value".to_owned(),
         ]
     }
 
