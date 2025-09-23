@@ -22,6 +22,7 @@ use starlark::{
     },
 };
 
+use crate::diagnostics::Diagnostics;
 use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::ContextValue;
 use crate::lang::eval::EvalContext;
@@ -657,6 +658,11 @@ pub struct ModuleLoader {
 
     #[freeze(identity)]
     pub frozen_module: Option<FrozenModule>,
+
+    /// Diagnostics from the introspection pass that should be propagated when ModuleType is invoked
+    #[freeze(identity)]
+    #[allocative(skip)]
+    pub introspection_diagnostics: Diagnostics,
 }
 starlark_simple_value!(ModuleLoader);
 
@@ -815,7 +821,11 @@ where
 
         let had_errors = diagnostics.has_errors();
 
-        for child in diagnostics.into_iter() {
+        // Combine introspection diagnostics with instantiation diagnostics
+        let mut all_diagnostics = self.introspection_diagnostics.clone();
+        all_diagnostics.extend(diagnostics);
+
+        for child in all_diagnostics.into_iter() {
             let diag_to_add = if let Some(cs) = &call_site {
                 // Wrap both errors and warnings with call-site context
                 let (severity, message) = match child.severity {
@@ -1813,7 +1823,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 /// Construct a `ModuleLoader` for the Starlark file at `path` by performing a
 /// lightweight introspection pass (empty `InputMap`) so that we can populate
 /// the placeholder parameter list ahead of time.
-pub fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> ModuleLoader {
+fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> ModuleLoader {
     let name = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1857,5 +1867,6 @@ pub fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> M
         params,
         param_types,
         frozen_module: result.output.map(|o| o.star_module),
+        introspection_diagnostics: result.diagnostics.clone(),
     }
 }
