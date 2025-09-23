@@ -58,7 +58,6 @@ impl<'v> StarlarkValue<'v> for Builtin {
             "Power".to_string(),
             "Energy".to_string(),
             "MagneticFlux".to_string(),
-            "PhysicalUnit".to_string(),
         ]
     }
 
@@ -78,7 +77,6 @@ impl<'v> StarlarkValue<'v> for Builtin {
                 | "Power"
                 | "Energy"
                 | "MagneticFlux"
-                | "PhysicalUnit"
         )
     }
 }
