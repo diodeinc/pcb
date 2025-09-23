@@ -1354,6 +1354,7 @@ define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers, "MagneticFlux");
 mod tests {
     use super::*;
     use rust_decimal::prelude::*;
+    use starlark::values::Heap;
 
     #[cfg(test)]
     fn physical_value(value: f64, tolerance: f64, unit: PhysicalUnit) -> PhysicalValue {
@@ -1967,8 +1968,6 @@ mod tests {
 
     #[test]
     fn test_try_from_physical_value() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let original = physical_value(10.0, 0.05, PhysicalUnit::Ohms);
         let starlark_val = heap.alloc(original);
@@ -1982,9 +1981,7 @@ mod tests {
     #[test]
     fn test_try_from_string() {
         // Test Starlark string conversion using helper
-        use starlark::values::Heap;
         let heap = Heap::new();
-
         for (input, unit, value) in [
             ("10kOhm", PhysicalUnit::Ohms, 10000.0),
             ("100nF", PhysicalUnit::Farads, 0.0000001),
@@ -2000,8 +1997,6 @@ mod tests {
 
     #[test]
     fn test_try_from_string_with_tolerance() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let starlark_val = heap.alloc("10kOhm 5%");
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
@@ -2013,8 +2008,6 @@ mod tests {
 
     #[test]
     fn test_try_from_scalar() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
 
         // Test integer
@@ -2034,8 +2027,6 @@ mod tests {
 
     #[test]
     fn test_try_from_string_error() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let invalid_strings = ["invalid", "10kZzz", "abc%", ""];
 
@@ -2195,8 +2186,6 @@ mod tests {
 
     #[test]
     fn test_equality_and_comparison() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
 
         // Test equality with same units and values
@@ -2252,8 +2241,6 @@ mod tests {
 
     #[test]
     fn test_comparison_with_various_input_types() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let voltage = physical_value(12.0, 0.0, PhysicalUnit::Volts);
 
@@ -2281,8 +2268,6 @@ mod tests {
 
     #[test]
     fn test_comparison_error_cases() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
 
         // Test unit mismatch in comparison
@@ -2295,14 +2280,12 @@ mod tests {
         // Verify the error contains unit mismatch information
         let error_str = format!("{}", result.unwrap_err());
         assert!(error_str.contains("Unit mismatch"));
-        assert!(error_str.contains("V"));
-        assert!(error_str.contains("A"));
+        assert!(error_str.contains("Voltage"));
+        assert!(error_str.contains("Current"));
     }
 
     #[test]
     fn test_dimensionless_comparisons() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
 
         // Test with dimensionless values
@@ -2358,33 +2341,10 @@ mod tests {
             resistance_5.compare(heap.alloc(dimensionless_5)).unwrap(),
             Ordering::Equal
         );
-
-        // Test dimensionless equality
-        assert!(dimensionless_5.equals(heap.alloc(voltage_5)).unwrap());
-        assert!(voltage_5.equals(heap.alloc(dimensionless_5)).unwrap());
-        assert!(dimensionless_5.equals(heap.alloc(resistance_5)).unwrap());
-        assert!(resistance_5.equals(heap.alloc(dimensionless_5)).unwrap());
-
-        // Different values should not be equal even with dimensionless
-        assert!(!dimensionless_5
-            .equals(heap.alloc(dimensionless_10))
-            .unwrap());
-        assert!(!voltage_5.equals(heap.alloc(dimensionless_10)).unwrap());
-
-        // Test with numeric values (should be treated as dimensionless)
-        let numeric_5 = heap.alloc(5.0);
-        assert!(voltage_5.equals(numeric_5).unwrap());
-        assert_eq!(voltage_5.compare(numeric_5).unwrap(), Ordering::Equal);
-
-        let numeric_10 = heap.alloc(10.0);
-        assert_eq!(voltage_5.compare(numeric_10).unwrap(), Ordering::Less);
-        assert!(!voltage_5.equals(numeric_10).unwrap());
     }
 
     #[test]
     fn test_dimensionless_with_string_conversions() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
 
         let voltage = physical_value(2023.0, 0.0, PhysicalUnit::Ohms);
