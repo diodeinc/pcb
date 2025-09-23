@@ -45,7 +45,7 @@ pub enum EvalMode {
 
 #[cfg(feature = "native")]
 fn default_file_provider() -> Arc<dyn crate::FileProvider> {
-    Arc::new(crate::DefaultFileProvider) as Arc<dyn crate::FileProvider>
+    Arc::new(crate::DefaultFileProvider::new()) as Arc<dyn crate::FileProvider>
 }
 
 #[cfg(not(feature = "native"))]

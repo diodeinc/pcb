@@ -90,7 +90,8 @@ pub fn execute(args: TagArgs) -> Result<()> {
     let tag_info = {
         let info_spinner = Spinner::builder("Gathering tag information").start();
         let start_path = args.path.as_deref().unwrap_or(".");
-        let workspace_info = get_workspace_info(&DefaultFileProvider, Path::new(start_path))?;
+        let workspace_info =
+            get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
         let version = Version::parse(&args.version)
             .map_err(|_| anyhow::anyhow!("Invalid semantic version: '{}'", args.version))?;
         let tag_name = format!("{}/v{version}", args.board);
