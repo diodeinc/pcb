@@ -491,7 +491,8 @@ impl ModuleConverter {
             let module_path = instance_ref.instance_path.join(".");
             for (key, pos) in module.positions().iter() {
                 let scoped_key = scoped_path(&module_path, key);
-                let remapped_key = remapper.remap(&scoped_key).unwrap_or(scoped_key);
+                let remapped_key = remapper.remap(&scoped_key).unwrap_or(scoped_key.clone());
+                let is_canonical = remapped_key == scoped_key;
                 let final_key = remapped_key
                     .strip_prefix(&format!("{}.", module_path))
                     .unwrap_or(&remapped_key);
@@ -513,7 +514,10 @@ impl ModuleConverter {
                 if let (Some(symbol_key), Some(instance)) =
                     (symbol_key, self.schematic.instances.get_mut(instance_ref))
                 {
-                    instance.symbol_positions.insert(symbol_key, position);
+                    // Only insert if we don't have this symbol yet, or if this is canonical (new name)
+                    if !instance.symbol_positions.contains_key(&symbol_key) || is_canonical {
+                        instance.symbol_positions.insert(symbol_key, position);
+                    }
                 }
             }
         }
