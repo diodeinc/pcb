@@ -474,6 +474,38 @@ new_current = Current(dimensionless)     # Cast dimensionless to current
 **String Representation**:
 Physical values maintain lossless string conversion, preserving original units and tolerances.
 
+### MetadataContainer
+
+Metadata containers provide typed, persistent storage that works across module boundaries. Values are validated against the container's declared type and can be accumulated over time.
+
+```python
+# Create typed metadata containers
+voltage_log = metadata(Voltage)
+error_log = metadata(str)
+measurements = metadata(float)
+
+# Store values with type checking
+voltage_log.push(Voltage("3.3V"))  # Valid
+voltage_log.push("invalid")        # Error: type mismatch
+
+# Retrieve values
+latest = voltage_log.get()          # Most recent value or None
+all_values = voltage_log.list()     # All values as list
+```
+
+**Type**: `MetadataContainer`
+**Created by**: `metadata()` function
+
+**Methods**:
+- `push(value)` - Add a value (must match container's type)
+- `get()` - Get the most recent value, or `None` if empty
+- `list()` - Get all values as a list in chronological order
+
+**Supported Types**:
+- Basic types: `str`, `int`, `float`, `bool`, `list`, `dict`
+- Physical values: `Voltage`, `Current`, `Resistance`, etc.
+- Not supported: enums, records, custom types
+
 ### TestBench
 
 TestBench values represent the results of module validation tests. They are created by the `TestBench()` function and contain information about the tested module and check results.
@@ -499,6 +531,29 @@ Properties accessible via the TestBench value:
 - Check function results
 
 ## Built-in Functions
+
+### metadata(type)
+
+Creates a typed metadata container for accumulating values across module boundaries.
+
+**Parameters**:
+- `type`: Type constructor (e.g., `str`, `Voltage`, `float`)
+
+**Returns**: `MetadataContainer` with the specified type
+
+```python
+# Create containers for different types
+voltage_log = metadata(Voltage)
+message_log = metadata(str)
+readings = metadata(float)
+
+# Use the container methods
+voltage_log.push(Voltage("5V"))
+latest_reading = voltage_log.get()
+all_readings = voltage_log.list()
+```
+
+**Supported Types**: Basic types (`str`, `int`, `float`, `bool`, `list`, `dict`) and PhysicalValue types. Enums and records are not supported.
 
 ### moved(old_path, new_path)
 
