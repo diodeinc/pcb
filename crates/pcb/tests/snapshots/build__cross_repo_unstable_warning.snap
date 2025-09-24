@@ -10,9 +10,9 @@ Exit Code: 0
 --- STDERR ---
 Warning: '@github/thirdparty/tools:main' is an unstable reference. Use a pinned version.
 1 similar warning(s) were suppressed
-   ╭─[ <TEMP_DIR>/cache/github/mycompany/components/v1.0.0/StableComponent.zen:3:25 ]
+   ╭─[ <TEMP_DIR>/cache/github/mycompany/components/v1.0.0/StableComponent.zen:3:18 ]
  3 │ThirdPartyTool = Module("@github/thirdparty/tools:main/Tool.zen")
-   │                                            ╰──────────────────── '@github/thirdparty/tools:main' is an unstable reference. Use a pinned version.
+   │                                         ╰──────────────────────── '@github/thirdparty/tools:main' is an unstable reference. Use a pinned version.
    ├─[ <TEMP_DIR>/board.zen:7:1 ]
  7 │StableComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
    │                                ╰───────────────────────────────── Warning from `StableComponent`

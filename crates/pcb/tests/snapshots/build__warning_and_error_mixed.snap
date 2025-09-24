@@ -9,9 +9,9 @@ Exit Code: 1
 
 --- STDERR ---
 Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
-   ╭─[ <TEMP_DIR>/board.zen:2:25 ]
+   ╭─[ <TEMP_DIR>/board.zen:2:18 ]
  2 │SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
-   │                                                   ╰─────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+   │                                                ╰─────────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
 
 Error: Input 'P2' is required but was not provided and no default value was given
    ╭─[ <TEMP_DIR>/cache/github/mycompany/components/main/SimpleResistor.zen:5:6 ]

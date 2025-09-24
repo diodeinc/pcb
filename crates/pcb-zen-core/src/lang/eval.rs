@@ -304,9 +304,6 @@ pub struct EvalContext {
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
 
-    /// Index to track which Module() call we're currently processing (for span resolution)
-    current_module_index: RefCell<usize>,
-
     /// Evaluation mode determining which features are active
     pub(crate) eval_mode: EvalMode,
 }
@@ -346,7 +343,6 @@ impl EvalContext {
             file_provider: None,
             load_resolver: None,
             current_load_index: RefCell::new(0),
-            current_module_index: RefCell::new(0),
             eval_mode: EvalMode::Build,
         }
     }
@@ -405,7 +401,6 @@ impl EvalContext {
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
             current_load_index: RefCell::new(0),
-            current_module_index: RefCell::new(0),
             eval_mode: self.eval_mode,
         }
     }
@@ -966,62 +961,6 @@ impl EvalContext {
         .ok()
     }
 
-    /// Recursively search for expressions matching a predicate within an expression tree
-    fn find_in_expr<F>(
-        expr: &starlark::syntax::ast::AstExpr,
-        predicate: &mut F,
-    ) -> Option<starlark::codemap::Span>
-    where
-        F: FnMut(&starlark::syntax::ast::AstExpr) -> Option<starlark::codemap::Span>,
-    {
-        use starlark::syntax::ast::{ArgumentP, ExprP};
-
-        // Check current expression first
-        if let Some(span) = predicate(expr) {
-            return Some(span);
-        }
-
-        // Recursively search sub-expressions
-        match &expr.node {
-            ExprP::Call(_, call_args) => {
-                for arg in &call_args.args {
-                    if let ArgumentP::Positional(arg_expr) = &arg.node {
-                        if let Some(span) = Self::find_in_expr(arg_expr, predicate) {
-                            return Some(span);
-                        }
-                    }
-                }
-            }
-            ExprP::Dot(obj, _) => {
-                return Self::find_in_expr(obj, predicate);
-            }
-            ExprP::Index(boxed) => {
-                let (obj, index_expr) = &**boxed;
-                if let Some(span) = Self::find_in_expr(obj, predicate) {
-                    return Some(span);
-                }
-                return Self::find_in_expr(index_expr, predicate);
-            }
-            ExprP::Slice(obj, start, end, _) => {
-                if let Some(span) = Self::find_in_expr(obj, predicate) {
-                    return Some(span);
-                }
-                if let Some(start_expr) = start {
-                    if let Some(span) = Self::find_in_expr(start_expr, predicate) {
-                        return Some(span);
-                    }
-                }
-                if let Some(end_expr) = end {
-                    if let Some(span) = Self::find_in_expr(end_expr, predicate) {
-                        return Some(span);
-                    }
-                }
-            }
-            _ => {}
-        }
-        None
-    }
-
     /// Get the codemap for the current module being evaluated
     pub fn get_codemap(&self) -> Option<starlark::codemap::CodeMap> {
         if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
@@ -1045,65 +984,8 @@ impl EvalContext {
         Some(codemap.file_span(span).resolve_span())
     }
 
-    /// Resolve the span for the current Module() call being processed (using the module index)
-    pub fn resolve_span_for_current_module(&self, path: &str) -> Option<ResolvedSpan> {
-        let current_index = *self.current_module_index.borrow();
-        // We've already incremented the counter, so subtract 1 to get the actual current module
-        let actual_index = current_index.saturating_sub(1);
-
-        // Get the AST to verify the path matches
-        use starlark::syntax::ast::{ArgumentP, AstLiteral, ExprP};
-        let ast = self.parse_current_ast()?;
-        let mut module_calls = Vec::new();
-
-        ast.statement().visit_expr(|expr| {
-            Self::find_in_expr(expr, &mut |expr| {
-                // Look for Module() calls
-                if let ExprP::Call(callee, call_args) = &expr.node {
-                    if let ExprP::Identifier(ident) = &callee.node {
-                        if ident.node.ident == "Module" {
-                            if let Some((path_str, span)) = call_args
-                                .args
-                                .iter()
-                                .find_map(|arg| match &arg.node {
-                                    ArgumentP::Positional(expr) => Some(expr),
-                                    _ => None,
-                                })
-                                .filter(|expr| {
-                                    matches!(&expr.node, ExprP::Literal(AstLiteral::String(_)))
-                                })
-                                .and_then(|expr| match &expr.node {
-                                    ExprP::Literal(AstLiteral::String(s)) => {
-                                        Some((s.node.clone(), expr.span))
-                                    }
-                                    _ => None,
-                                })
-                            {
-                                module_calls.push((path_str, span));
-                            }
-                        }
-                    }
-                }
-                None
-            });
-        });
-
-        let (actual_path, span) = module_calls.get(actual_index)?;
-
-        // Safety check: ensure the path matches what we expect
-        if *actual_path != path {
-            panic!(
-                "Module path mismatch at index {actual_index}: expected '{path}', got '{actual_path}'"
-            );
-        }
-
-        self.get_codemap()
-            .map(|codemap| codemap.file_span(*span).resolve_span())
-    }
-
-    /// Increment the module counter for span tracking
-    pub fn increment_module_counter(&self) {
-        let mut index = self.current_module_index.borrow_mut();
+    fn increment_load_index(&self) {
+        let mut index = self.current_load_index.borrow_mut();
         *index += 1;
     }
 
@@ -1179,17 +1061,15 @@ impl EvalContext {
         }
     }
 
-    pub fn resolve_and_eval_module(&self, path: &str) -> starlark::Result<FrozenModule> {
+    pub fn resolve_and_eval_module(
+        &self,
+        path: &str,
+        span: Option<ResolvedSpan>,
+    ) -> starlark::Result<FrozenModule> {
         log::debug!(
             "Trying to load path {path} with current path {:?}",
             self.source_path
         );
-
-        // Increment load counter - this happens before warning generation
-        {
-            let mut index = self.current_load_index.borrow_mut();
-            *index += 1;
-        }
         let load_resolver = self
             .load_resolver
             .clone()
@@ -1226,7 +1106,7 @@ impl EvalContext {
             return Ok(frozen.clone());
         }
 
-        let span = self.resolve_load_span(path);
+        let span = span.or_else(|| self.resolve_load_span(path));
         if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
             load_resolver.as_ref(),
             current_file,
@@ -1285,6 +1165,7 @@ impl EvalContext {
 // Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
 impl FileLoader for EvalContext {
     fn load(&self, path: &str) -> starlark::Result<FrozenModule> {
-        self.resolve_and_eval_module(path)
+        self.increment_load_index();
+        self.resolve_and_eval_module(path, None)
     }
 }

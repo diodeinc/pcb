@@ -1467,16 +1467,13 @@ where
             .resolve(&mut resolve_context)
             .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
 
-        // Increment module counter - this happens before warning generation
-        parent_context.increment_module_counter();
-
-        let span = parent_context.resolve_span_for_current_module(&path);
+        let span = eval.call_stack_top_location().unwrap().resolve_span();
 
         if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
             load_resolver.as_ref(),
             current_file,
             &resolve_context,
-            span,
+            Some(span),
         ) {
             parent_context.add_diagnostic(warning_diag);
         }
@@ -1867,6 +1864,6 @@ fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> Modul
         params,
         param_types,
         frozen_module: result.output.map(|o| o.star_module),
-        introspection_diagnostics: result.diagnostics.clone(),
+        introspection_diagnostics: result.diagnostics,
     }
 }
