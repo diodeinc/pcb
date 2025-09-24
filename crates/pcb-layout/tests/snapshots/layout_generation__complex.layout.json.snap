@@ -2469,6 +2469,742 @@ expression: content
       "name": "M2.S2"
     }
   ],
+  "tracks": [
+    {
+      "end": {
+        "x": 142716401,
+        "y": 104357199
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 142716401,
+        "y": 103256401
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 142716400,
+        "y": 106903600
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 142090000,
+        "y": 107530000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 142090000,
+        "y": 107530000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 139890000,
+        "y": 107530000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 142090000,
+        "y": 102630000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 139990000,
+        "y": 102630000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 142716401,
+        "y": 103256401
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 142090000,
+        "y": 102630000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 142716400,
+        "y": 105867200
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 142716400,
+        "y": 106903600
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 137490000,
+        "y": 103030000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137205600,
+        "y": 103314400
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 139890000,
+        "y": 107530000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137890000,
+        "y": 107530000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 137890000,
+        "y": 102630000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137490000,
+        "y": 103030000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 137205600,
+        "y": 105841800
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137205600,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 139990000,
+        "y": 102630000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137890000,
+        "y": 102630000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 137890000,
+        "y": 107530000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137205600,
+        "y": 106845600
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 137205600,
+        "y": 106845600
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137205600,
+        "y": 105841800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 137205600,
+        "y": 103314400
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "start": {
+        "x": 137205600,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 141029200,
+        "y": 105830000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 139890000,
+        "y": 105830000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 141066400,
+        "y": 105867200
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 141029200,
+        "y": 105830000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 141039202,
+        "y": 104330000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 139990000,
+        "y": 104330000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 141066400,
+        "y": 105867200
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 141066401,
+        "y": 104357199
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 141066401,
+        "y": 104357199
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 141039202,
+        "y": 104330000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 139878200,
+        "y": 105841800
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 138855600,
+        "y": 105841800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 139988200,
+        "y": 104331800
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 138855600,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 139890000,
+        "y": 105830000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 139878200,
+        "y": 105841800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 139990000,
+        "y": 104330000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "start": {
+        "x": 139988200,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 160226401,
+        "y": 104357199
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 160226401,
+        "y": 103256401
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 160226400,
+        "y": 106903600
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 159600000,
+        "y": 107530000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 159600000,
+        "y": 107530000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 157400000,
+        "y": 107530000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 159600000,
+        "y": 102630000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 157500000,
+        "y": 102630000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 160226401,
+        "y": 103256401
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 159600000,
+        "y": 102630000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 160226400,
+        "y": 105867200
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 160226400,
+        "y": 106903600
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 155000000,
+        "y": 103030000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 154715600,
+        "y": 103314400
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 157400000,
+        "y": 107530000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 155400000,
+        "y": 107530000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 155400000,
+        "y": 102630000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 155000000,
+        "y": 103030000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 154715600,
+        "y": 105841800
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 154715600,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 157500000,
+        "y": 102630000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 155400000,
+        "y": 102630000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 155400000,
+        "y": 107530000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 154715600,
+        "y": 106845600
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 154715600,
+        "y": 106845600
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 154715600,
+        "y": 105841800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 154715600,
+        "y": 103314400
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "start": {
+        "x": 154715600,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 158539200,
+        "y": 105830000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 157400000,
+        "y": 105830000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 158576400,
+        "y": 105867200
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 158539200,
+        "y": 105830000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 158549202,
+        "y": 104330000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 157500000,
+        "y": 104330000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 158576400,
+        "y": 105867200
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 158576401,
+        "y": 104357199
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 158576401,
+        "y": 104357199
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 158549202,
+        "y": 104330000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 157388200,
+        "y": 105841800
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 156365600,
+        "y": 105841800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 157498200,
+        "y": 104331800
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 156365600,
+        "y": 104331800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 157400000,
+        "y": 105830000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 157388200,
+        "y": 105841800
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 157500000,
+        "y": 104330000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "start": {
+        "x": 157498200,
+        "y": 104331800
+      },
+      "width": 200000
+    }
+  ],
+  "vias": [
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "position": {
+        "x": 139890000,
+        "y": 107530000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P1",
+      "position": {
+        "x": 139990000,
+        "y": 102630000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "position": {
+        "x": 139890000,
+        "y": 105830000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P2",
+      "position": {
+        "x": 139990000,
+        "y": 104330000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "position": {
+        "x": 157400000,
+        "y": 107530000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P3",
+      "position": {
+        "x": 157500000,
+        "y": 102630000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "position": {
+        "x": 157400000,
+        "y": 105830000
+      },
+      "via_type": 3
+    },
+    {
+      "diameter": 600000,
+      "drill": 300000,
+      "locked": false,
+      "net_name": "BOARD_P4",
+      "position": {
+        "x": 157500000,
+        "y": 104330000
+      },
+      "via_type": 3
+    }
+  ],
   "zones": [
     {
       "filled": true,
