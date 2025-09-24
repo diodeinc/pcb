@@ -22,10 +22,8 @@ use starlark::{
     },
 };
 
-use crate::diagnostics::Diagnostics;
 use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::ContextValue;
-use crate::lang::eval::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::InputMap;
 use crate::lang::validation::validate_identifier_name;
@@ -658,11 +656,6 @@ pub struct ModuleLoader {
 
     #[freeze(identity)]
     pub frozen_module: Option<FrozenModule>,
-
-    /// Diagnostics from the introspection pass that should be propagated when ModuleType is invoked
-    #[freeze(identity)]
-    #[allocative(skip)]
-    pub introspection_diagnostics: Diagnostics,
 }
 starlark_simple_value!(ModuleLoader);
 
@@ -820,12 +813,7 @@ where
         // For warnings, preserve them as warnings.
 
         let had_errors = diagnostics.has_errors();
-
-        // Combine introspection diagnostics with instantiation diagnostics
-        let mut all_diagnostics = self.introspection_diagnostics.clone();
-        all_diagnostics.extend(diagnostics);
-
-        for child in all_diagnostics.into_iter() {
+        for child in diagnostics.into_iter() {
             let diag_to_add = if let Some(cs) = &call_site {
                 // Wrap both errors and warnings with call-site context
                 let (severity, message) = match child.severity {
@@ -1447,49 +1435,29 @@ where
 
         // Get the parent context from the evaluator's ContextValue if available
         let parent_context = eval.eval_context().expect("expected eval context");
-        // Get the file provider
-        let file_provider = parent_context
-            .file_provider
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No file provider available"))?;
-        // Get the load resolver
-        let load_resolver = parent_context
-            .get_load_resolver()
-            .ok_or_else(|| anyhow::anyhow!("No load resolver available"))?;
-        // Get the current file path
-        let current_file = parent_context
-            .get_source_path()
-            .ok_or_else(|| anyhow::anyhow!("No source path available"))?;
+        let span = eval.call_stack_top_location().unwrap().resolve_span();
+        let output = parent_context.resolve_and_eval_module(&path, Some(span))?;
+        let mut params: Vec<String> = vec!["name".to_string(), "properties".to_string()];
+        let mut param_types: SmallMap<String, String> = SmallMap::new();
 
-        // Resolve the path using the load resolver
-        let mut resolve_context = load_resolver.resolve_context(&path, current_file)?;
-        let resolved_path = load_resolver
-            .resolve(&mut resolve_context)
-            .map_err(|e| anyhow::anyhow!("Failed to resolve module path '{}': {}", path, e))?;
-
-        // Increment module counter - this happens before warning generation
-        parent_context.increment_module_counter();
-
-        let span = parent_context.resolve_span_for_current_module(&path);
-
-        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
-            load_resolver.as_ref(),
-            current_file,
-            &resolve_context,
-            span,
-        ) {
-            parent_context.add_diagnostic(warning_diag);
+        if let Some(extra) = output
+            .star_module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<FrozenContextValue>())
+        {
+            // Get the signature from the module
+            for param in extra.module.signature().iter() {
+                params.push(param.name.clone());
+                param_types.insert(param.name.clone(), param.type_value.to_string());
+            }
         }
-
-        // Verify the resolved path exists
-        if !file_provider.exists(&resolved_path) {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "Module file not found: {}",
-                resolved_path.display()
-            )));
-        }
-
-        let loader = build_module_loader_from_path(&resolved_path, parent_context);
+        let loader = ModuleLoader {
+            name: output.sch_module.name.clone(),
+            source_path: output.sch_module.source_path.clone(),
+            params,
+            param_types,
+            frozen_module: Some(output.star_module),
+        };
 
         // Retain the child heap so the cached values remain valid for the lifetime of the
         // parent module.
@@ -1817,56 +1785,5 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             ctx.add_moved_directive(old_path, new_path, false);
         }
         Ok(Value::new_none())
-    }
-}
-
-/// Construct a `ModuleLoader` for the Starlark file at `path` by performing a
-/// lightweight introspection pass (empty `InputMap`) so that we can populate
-/// the placeholder parameter list ahead of time.
-fn build_module_loader_from_path(path: &Path, parent_ctx: &EvalContext) -> ModuleLoader {
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-
-    // Introspect the target module **once** with an empty InputMap so that we
-    // can collect any `io()` / `config()` placeholder names for signature help
-    // and cache the frozen module for later attribute look-ups.
-    let result = parent_ctx
-        .child_context()
-        .set_source_path(path.to_path_buf())
-        .set_module_name(name.clone())
-        .set_inputs(InputMap::new())
-        .eval();
-
-    let mut params: Vec<String> = vec!["name".to_string(), "properties".to_string()];
-    let mut param_types: SmallMap<String, String> = SmallMap::new();
-
-    // Extract parameter names and types from the frozen module
-    if let Some(output) = &result.output {
-        if let Some(extra) = output
-            .star_module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<FrozenContextValue>())
-        {
-            // Get the signature from the module
-            for param in extra.module.signature().iter() {
-                params.push(param.name.clone());
-                param_types.insert(param.name.clone(), param.type_value.to_string());
-            }
-        }
-    }
-
-    params.sort();
-    params.dedup();
-
-    ModuleLoader {
-        name,
-        source_path: path.to_string_lossy().into_owned(),
-        params,
-        param_types,
-        frozen_module: result.output.map(|o| o.star_module),
-        introspection_diagnostics: result.diagnostics.clone(),
     }
 }
