@@ -321,6 +321,26 @@ impl<'v> StarlarkValue<'v> for MetadataContainerList {
     }
 }
 
+/// Check if a type is supported by metadata containers
+fn is_supported_metadata_type(ty: &Ty) -> bool {
+    let type_str = ty.to_string();
+
+    // Check for basic types
+    if matches!(
+        type_str.as_str(),
+        "str" | "int" | "float" | "bool" | "list" | "dict"
+    ) {
+        return true;
+    }
+
+    // Check for PhysicalValue types
+    if physical_unit_from_ty(ty).is_some() {
+        return true;
+    }
+
+    false
+}
+
 /// Create a new MetadataContainer from an existing one, preserving the type but with a new ref_id.
 /// This is used when interface fields need their own metadata containers.
 pub fn clone_metadata_container<'v>(
@@ -358,6 +378,14 @@ pub fn metadata_globals(builder: &mut GlobalsBuilder) {
         let ref_id = with_metadata_store(eval, |store| store.allocate_ref())?;
         let type_compiled = TypeCompiled::new(type_value, eval.heap())?;
         let ty = type_compiled.as_ty().clone();
+
+        // Validate that the type is supported
+        if !is_supported_metadata_type(&ty) {
+            return Err(anyhow!(
+                "Unsupported type for metadata container: {}. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.",
+                ty
+            ));
+        }
 
         // Register the type name in the store
         with_metadata_store_mut(eval, |store| {

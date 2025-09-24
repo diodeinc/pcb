@@ -165,6 +165,28 @@ else:
 print("Final voltage list:", voltage_tracker.list())
 "#;
 
+const UNSUPPORTED_TYPES_ZEN: &str = r#"
+# Test metadata with unsupported types - should fail
+
+print("=== Testing Unsupported Types ===")
+
+# Test with enum type - should fail
+Color = enum("red", "green", "blue")
+print("Creating enum metadata...")
+enum_meta = metadata(Color)  # Should fail
+"#;
+
+const UNSUPPORTED_RECORD_ZEN: &str = r#"
+# Test metadata with record type - should fail
+
+print("=== Testing Record Type ===")
+
+# Test with record type - should fail  
+Config = record(name=str, value=int)
+print("Creating record metadata...")
+record_meta = metadata(Config)  # Should fail
+"#;
+
 const BASIC_TYPES_METADATA_ZEN: &str = r#"
 load("@stdlib:v0.2.10/units.zen", "Voltage")
 
@@ -287,4 +309,20 @@ fn test_basic_types_metadata() {
         .write("BasicTypesMetadata.zen", BASIC_TYPES_METADATA_ZEN)
         .snapshot_run("pcb", ["build", "BasicTypesMetadata.zen"]);
     assert_snapshot!("basic_types_metadata", output);
+}
+
+#[test]
+fn test_metadata_unsupported_enum_type() {
+    let output = Sandbox::new()
+        .write("UnsupportedEnum.zen", UNSUPPORTED_TYPES_ZEN)
+        .snapshot_run("pcb", ["build", "UnsupportedEnum.zen"]);
+    assert_snapshot!("metadata_unsupported_enum_type", output);
+}
+
+#[test]
+fn test_metadata_unsupported_record_type() {
+    let output = Sandbox::new()
+        .write("UnsupportedRecord.zen", UNSUPPORTED_RECORD_ZEN)
+        .snapshot_run("pcb", ["build", "UnsupportedRecord.zen"]);
+    assert_snapshot!("metadata_unsupported_record_type", output);
 }
