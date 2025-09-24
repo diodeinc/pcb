@@ -411,6 +411,7 @@ time_constant = resistance * capacitance  # Result: Time type
 # Convert units and add tolerances
 voltage_mv = voltage.with_unit("mV")      # Convert to millivolts
 resistor = resistance.with_tolerance("5%")  # Add 5% tolerance
+updated = voltage.with_value(5)           # Change to 5V, keep unit and tolerance
 
 # Parse from strings with automatic unit detection
 freq = Frequency("100MHz")
@@ -423,6 +424,11 @@ resistance_1k = Resistance("1k")  # 1kΩ (string with unit)
 # Dimensionless values and casting
 dimensionless = voltage.with_unit(None)  # Remove units
 new_current = Current(dimensionless)     # Cast dimensionless to current
+
+# Comparisons
+check(voltage > Voltage("2V"), "Voltage too low")     # Compare with string
+check(resistance == "10kOhm", "Wrong resistance")     # Equality with string
+sorted_voltages = sorted([v1, v2, v3])                # Sort physical values
 ```
 
 **Type**: `PhysicalValue`
@@ -456,6 +462,7 @@ new_current = Current(dimensionless)     # Cast dimensionless to current
 - `with_unit(unit)` - Convert to specified unit, returns new PhysicalValue
 - `with_unit(None)` - Convert to dimensionless value, returns new PhysicalValue
 - `with_tolerance(tolerance)` - Add/modify tolerance, returns new PhysicalValue
+- `with_value(value)` - Update the numeric value while preserving unit and tolerance, returns new PhysicalValue
 
 **Unit-Aware Operations**:
 - Arithmetic operations automatically handle unit conversions and dimensional analysis
@@ -464,6 +471,12 @@ new_current = Current(dimensionless)     # Cast dimensionless to current
 - Supports all electrical relationships: Ohm's law (V=I×R), power (P=V×I), time constants (τ=RC), etc.
 - Invalid operations (e.g., V + Hz) produce dimensionless results
 - Physical values can be mixed with strings and numbers in arithmetic operations
+
+**Comparisons**:
+- Physical values support equality (`==`, `!=`) and ordering (`<`, `>`, `<=`, `>=`) operations
+- Units must match for comparisons, except dimensionless values can compare with any unit
+- Tolerance is ignored in equality comparisons - only value and unit matter
+- Can compare with strings (e.g., `voltage == "5V"`) if they represent compatible physical values
 
 **Dimensionless Values**:
 - Dimensionless physical values can be cast to any unit type
