@@ -9,7 +9,6 @@ Exit Code: 0
 
 --- STDERR ---
 Warning: '@github/company1/components:main' is an unstable reference. Use a pinned version.
-1 similar warning(s) were suppressed
    ╭─[ <TEMP_DIR>/pcb.toml:3:9 ]
  3 │comp1 = "@github/company1/components:main"
    │                         ╰───────────────── '@github/company1/components:main' is an unstable reference. Use a pinned version.

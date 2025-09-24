@@ -9,7 +9,7 @@ use anyhow::anyhow;
 use starlark::{
     any::ProvidesStaticType,
     environment::{GlobalsBuilder, LibraryExtension},
-    errors::EvalMessage,
+    errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
     typing::TypeMap,
@@ -140,12 +140,13 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
     ))
 }
 
+#[derive(Clone)]
 pub struct EvalOutput {
     pub ast: AstModule,
     pub star_module: FrozenModule,
     pub sch_module: FrozenModuleValue,
     /// Ordered list of parameter information
-    pub signature: Vec<crate::lang::type_info::ParameterInfo>,
+    pub signature: Vec<ParameterInfo>,
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
     /// Load resolver used for this evaluation, when available
@@ -162,7 +163,7 @@ impl EvalOutput {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct EvalContextState {
     /// In-memory contents of files that are currently open/edited. Keyed by canonical path.
     file_contents: HashMap<PathBuf, String>,
@@ -184,7 +185,7 @@ struct EvalContextState {
     /// ensures that repeated `load()` calls for the same file return the *same* frozen
     /// module instance so that type identities remain consistent across the evaluation
     /// graph (e.g. record types defined in that module).
-    load_cache: HashMap<PathBuf, FrozenModule>,
+    load_cache: HashMap<PathBuf, EvalOutput>,
 
     /// Map of `module.zen` → set of files referenced via `load()`. Used by the LSP to
     /// propagate diagnostics when a dependency changes.
@@ -445,7 +446,7 @@ impl EvalContext {
     }
 
     /// Get a cached frozen module if it exists
-    pub fn get_cached_module(&self, path: &Path) -> Option<FrozenModule> {
+    pub fn get_cached_module(&self, path: &Path) -> Option<EvalOutput> {
         if let Ok(state) = self.state.lock() {
             state.load_cache.get(path).cloned()
         } else {
@@ -454,7 +455,7 @@ impl EvalContext {
     }
 
     /// Cache a frozen module
-    pub fn cache_module(&self, path: PathBuf, module: FrozenModule) {
+    pub fn cache_module(&self, path: PathBuf, module: EvalOutput) {
         if let Ok(mut state) = self.state.lock() {
             state.load_cache.insert(path, module);
         }
@@ -1004,6 +1005,10 @@ impl EvalContext {
         self.diagnostics.borrow_mut().push(diag.into());
     }
 
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.diagnostics.borrow().clone()
+    }
+
     fn hijack_builtins(&mut self) {
         let Some(source_path) = self.get_source_path() else {
             return;
@@ -1065,7 +1070,7 @@ impl EvalContext {
         &self,
         path: &str,
         span: Option<ResolvedSpan>,
-    ) -> starlark::Result<FrozenModule> {
+    ) -> starlark::Result<EvalOutput> {
         log::debug!(
             "Trying to load path {path} with current path {:?}",
             self.source_path
@@ -1103,7 +1108,7 @@ impl EvalContext {
         // within the current evaluation context, simply return the cached
         // instance so that callers share the same definitions.
         if let Some(frozen) = self.get_cached_module(&canonical_path) {
-            return Ok(frozen.clone());
+            return Ok(frozen);
         }
 
         let span = span.or_else(|| self.resolve_load_span(path));
@@ -1113,7 +1118,7 @@ impl EvalContext {
             &resolve_context,
             span,
         ) {
-            self.diagnostics.borrow_mut().push(warning_diag);
+            self.add_diagnostic(warning_diag);
         }
 
         if file_provider.is_directory(&canonical_path) {
@@ -1122,10 +1127,31 @@ impl EvalContext {
             )));
         }
 
+        let name = canonical_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         let result = self
             .child_context()
             .set_source_path(canonical_path.clone())
+            .set_module_name(name)
+            .set_inputs(InputMap::new())
             .eval();
+
+        result.diagnostics.iter().for_each(|diag| {
+            if matches!(diag.severity, EvalSeverity::Warning) {
+                self.add_diagnostic(crate::Diagnostic {
+                    path: source_path.to_string_lossy().to_string(),
+                    span,
+                    severity: diag.severity,
+                    body: format!("Warning from `{path}`"),
+                    call_stack: None,
+                    child: Some(Box::new(diag.clone())),
+                    source_error: None,
+                });
+            }
+        });
 
         // If there were any error diagnostics, return the first one
         if let Some(first_error) = result.diagnostics.iter().find(|d| d.is_error()) {
@@ -1143,9 +1169,8 @@ impl EvalContext {
 
         // Cache the result if successful
         if let Some(output) = result.output {
-            let frozen = output.star_module;
-            self.cache_module(canonical_path, frozen.clone());
-            Ok(frozen)
+            self.cache_module(canonical_path, output.clone());
+            Ok(output)
         } else {
             // No specific error diagnostic but evaluation failed
             let diagnostic = crate::Diagnostic {
@@ -1166,6 +1191,7 @@ impl EvalContext {
 impl FileLoader for EvalContext {
     fn load(&self, path: &str) -> starlark::Result<FrozenModule> {
         self.increment_load_index();
-        self.resolve_and_eval_module(path, None)
+        let eval_output = self.resolve_and_eval_module(path, None)?;
+        Ok(eval_output.star_module)
     }
 }
