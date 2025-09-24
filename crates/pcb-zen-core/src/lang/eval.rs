@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::anyhow;
-use starlark::typing::Interface;
 use starlark::{
     any::ProvidesStaticType,
     environment::{GlobalsBuilder, LibraryExtension},
@@ -21,6 +20,7 @@ use starlark::{
     PrintHandler,
 };
 use starlark::{codemap::ResolvedSpan, collections::SmallMap};
+use starlark::{environment::FrozenModule, typing::Interface};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
@@ -142,7 +142,7 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
 
 pub struct EvalOutput {
     pub ast: AstModule,
-    pub star_module: starlark::environment::FrozenModule,
+    pub star_module: FrozenModule,
     pub sch_module: FrozenModuleValue,
     /// Ordered list of parameter information
     pub signature: Vec<crate::lang::type_info::ParameterInfo>,
@@ -184,7 +184,7 @@ struct EvalContextState {
     /// ensures that repeated `load()` calls for the same file return the *same* frozen
     /// module instance so that type identities remain consistent across the evaluation
     /// graph (e.g. record types defined in that module).
-    load_cache: HashMap<PathBuf, starlark::environment::FrozenModule>,
+    load_cache: HashMap<PathBuf, FrozenModule>,
 
     /// Map of `module.zen` → set of files referenced via `load()`. Used by the LSP to
     /// propagate diagnostics when a dependency changes.
@@ -446,6 +446,22 @@ impl EvalContext {
         if let Ok(mut state) = self.state.lock() {
             let entry = state.module_deps.entry(from.to_path_buf()).or_default();
             entry.insert(to.to_path_buf());
+        }
+    }
+
+    /// Get a cached frozen module if it exists
+    pub fn get_cached_module(&self, path: &Path) -> Option<FrozenModule> {
+        if let Ok(state) = self.state.lock() {
+            state.load_cache.get(path).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Cache a frozen module
+    pub fn cache_module(&self, path: PathBuf, module: FrozenModule) {
+        if let Ok(mut state) = self.state.lock() {
+            state.load_cache.insert(path, module);
         }
     }
 
@@ -850,7 +866,7 @@ impl EvalContext {
     }
 
     /// Get the frozen module for a file if it has been evaluated
-    pub fn get_environment(&self, _path: &Path) -> Option<starlark::environment::FrozenModule> {
+    pub fn get_environment(&self, _path: &Path) -> Option<FrozenModule> {
         // This would need to be implemented to track evaluated modules
         // For now, return None
         None
@@ -1006,17 +1022,6 @@ impl EvalContext {
         None
     }
 
-    /// Find the span of a load statement that loads the given path
-    pub fn find_load_span_for_path(&self, path: &str) -> Option<starlark::codemap::Span> {
-        let ast = self.parse_current_ast()?;
-        let result = ast
-            .loads()
-            .into_iter()
-            .find(|load| load.module_id == path)
-            .map(|load| load.span.span);
-        result
-    }
-
     /// Get the codemap for the current module being evaluated
     pub fn get_codemap(&self) -> Option<starlark::codemap::CodeMap> {
         if let (Some(source_path), Some(contents)) = (&self.source_path, &self.contents) {
@@ -1029,28 +1034,15 @@ impl EvalContext {
         }
     }
 
-    /// Resolve the span for the current load statement being processed (using the load index)
-    pub fn resolve_span_for_current_load(&self, path: &str) -> Option<ResolvedSpan> {
-        let current_index = *self.current_load_index.borrow();
-        // We've already incremented the counter, so subtract 1 to get the actual current load
-        let actual_index = current_index.saturating_sub(1);
-
-        // Get the AST to verify the path matches
+    pub fn resolve_load_span(&self, path: &str) -> Option<ResolvedSpan> {
+        let codemap = self.get_codemap()?;
         let ast = self.parse_current_ast()?;
-        let loads = ast.loads();
-        let load = loads.get(actual_index)?;
-
-        // Safety check: ensure the path matches what we expect
-        if load.module_id != path {
-            panic!(
-                "Load path mismatch at index {actual_index}: expected '{path}', got '{}'",
-                load.module_id
-            );
-        }
-
-        let load_span = load.span.span;
-        self.get_codemap()
-            .map(|codemap| codemap.file_span(load_span).resolve_span())
+        let span = ast
+            .loads()
+            .into_iter()
+            .find(|load| load.module_id == path)
+            .map(|load| load.span.span)?;
+        Some(codemap.file_span(span).resolve_span())
     }
 
     /// Resolve the span for the current Module() call being processed (using the module index)
@@ -1186,11 +1178,8 @@ impl EvalContext {
                 .set("MagneticFlux", heap.alloc_simple(MagneticFluxType));
         }
     }
-}
 
-// Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
-impl FileLoader for EvalContext {
-    fn load(&self, path: &str) -> starlark::Result<starlark::environment::FrozenModule> {
+    pub fn resolve_and_eval_module(&self, path: &str) -> starlark::Result<FrozenModule> {
         log::debug!(
             "Trying to load path {path} with current path {:?}",
             self.source_path
@@ -1201,17 +1190,11 @@ impl FileLoader for EvalContext {
             let mut index = self.current_load_index.borrow_mut();
             *index += 1;
         }
-
-        // Get or create default providers if none were set
-        let file_provider = self
-            .file_provider
-            .clone()
-            .unwrap_or_else(|| default_file_provider());
-
         let load_resolver = self
             .load_resolver
             .clone()
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No LoadResolver provided")))?;
+        let file_provider = load_resolver.file_provider();
 
         let module_path = self.source_path.clone();
         let Some(current_file) = module_path.as_ref() else {
@@ -1223,32 +1206,32 @@ impl FileLoader for EvalContext {
 
         // Resolve the load path to an absolute path
         let mut resolve_context = load_resolver.resolve_context(path, current_file)?;
-        let absolute_path = load_resolver.resolve(&mut resolve_context)?;
-
-        // Canonicalize the path for cache lookup
-        let canonical_path = file_provider
-            .canonicalize(&absolute_path)
-            .unwrap_or(absolute_path.clone());
+        let canonical_path = load_resolver.resolve(&mut resolve_context)?;
 
         // Create a LoadGuard to prevent cyclic imports
         let source_path = self
             .source_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("<unknown>"));
-        let _guard = LoadGuard::new(self.state.clone(), canonical_path.clone(), source_path)?;
+        let _guard = LoadGuard::new(
+            self.state.clone(),
+            canonical_path.clone(),
+            source_path.clone(),
+        )?;
 
         // Fast path: if we've already loaded (and frozen) this module once
         // within the current evaluation context, simply return the cached
         // instance so that callers share the same definitions.
-        if let Some(frozen) = self.state.lock().unwrap().load_cache.get(&canonical_path) {
+        if let Some(frozen) = self.get_cached_module(&canonical_path) {
             return Ok(frozen.clone());
         }
 
+        let span = self.resolve_load_span(path);
         if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
             load_resolver.as_ref(),
             current_file,
             &resolve_context,
-            self.resolve_span_for_current_load(path),
+            span,
         ) {
             self.diagnostics.borrow_mut().push(warning_diag);
         }
@@ -1266,114 +1249,42 @@ impl FileLoader for EvalContext {
 
         // If there were any error diagnostics, return the first one
         if let Some(first_error) = result.diagnostics.iter().find(|d| d.is_error()) {
-            // Try to attach the error to the load statement span
-            if let Some(load_span) = self.find_load_span_for_path(path) {
-                if let Some(codemap) = self.get_codemap() {
-                    // Create a parent diagnostic that wraps the child error
-                    let parent_diag = crate::Diagnostic {
-                        path: self
-                            .source_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                        span: Some(codemap.file_span(load_span).resolve_span()),
-                        severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Error loading module `{path}`"),
-                        call_stack: None,
-                        child: Some(Box::new(first_error.clone())),
-                        source_error: None,
-                    };
-
-                    // Wrap in DiagnosticError and pass through anyhow
-                    let diag_err = crate::DiagnosticError(parent_diag);
-                    let load_err = crate::LoadError {
-                        message: format!("Error loading module `{path}`"),
-                        diagnostic: diag_err,
-                    };
-                    let mut err = starlark::Error::new_other(anyhow::Error::new(load_err));
-                    err.set_span(load_span, &codemap);
-                    return Err(err);
-                } else {
-                    let diag = crate::Diagnostic {
-                        path: self
-                            .source_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                        span: None,
-                        severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Failed to load module `{path}`"),
-                        call_stack: None,
-                        child: None,
-                        source_error: None,
-                    };
-                    let diag_err = crate::DiagnosticError(diag);
-                    let load_err = crate::LoadError {
-                        message: format!("Failed to load module `{path}`"),
-                        diagnostic: diag_err,
-                    };
-                    let err = starlark::Error::new_other(anyhow::Error::new(load_err));
-                    return Err(err);
-                }
-            }
+            let diagnostic = crate::Diagnostic {
+                path: source_path.to_string_lossy().to_string(),
+                span,
+                severity: starlark::analysis::EvalSeverity::Error,
+                body: format!("Error loading module `{path}`"),
+                call_stack: None,
+                child: Some(Box::new(first_error.clone())),
+                source_error: None,
+            };
+            return Err(diagnostic.into());
         }
 
         // Cache the result if successful
         if let Some(output) = result.output {
             let frozen = output.star_module;
-            self.state
-                .lock()
-                .unwrap()
-                .load_cache
-                .insert(canonical_path, frozen.clone());
+            self.cache_module(canonical_path, frozen.clone());
             Ok(frozen)
         } else {
             // No specific error diagnostic but evaluation failed
-            if let Some(load_span) = self.find_load_span_for_path(path) {
-                if let Some(codemap) = self.get_codemap() {
-                    let diag = crate::Diagnostic {
-                        path: self
-                            .source_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                        span: Some(codemap.file_span(load_span).resolve_span()),
-                        severity: starlark::analysis::EvalSeverity::Error,
-                        body: format!("Failed to load module `{path}`"),
-                        call_stack: None,
-                        child: None,
-                        source_error: None,
-                    };
-                    let diag_err = crate::DiagnosticError(diag);
-                    let load_err = crate::LoadError {
-                        message: format!("Failed to load module `{path}`"),
-                        diagnostic: diag_err,
-                    };
-                    let mut err = starlark::Error::new_other(anyhow::Error::new(load_err));
-                    err.set_span(load_span, &codemap);
-                    return Err(err);
-                }
-            }
-            let diag = crate::Diagnostic {
-                path: self
-                    .source_path
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                span: None,
+            let diagnostic = crate::Diagnostic {
+                path: source_path.to_string_lossy().to_string(),
+                span,
                 severity: starlark::analysis::EvalSeverity::Error,
                 body: format!("Failed to load module `{path}`"),
                 call_stack: None,
                 child: None,
                 source_error: None,
             };
-            let diag_err = crate::DiagnosticError(diag);
-            let load_err = crate::LoadError {
-                message: format!("Failed to load module `{path}`"),
-                diagnostic: diag_err,
-            };
-            let err = starlark::Error::new_other(anyhow::Error::new(load_err));
-            Err(err)
+            Err(diagnostic.into())
         }
+    }
+}
+
+// Add FileLoader implementation so that Starlark `load()` works when evaluating modules.
+impl FileLoader for EvalContext {
+    fn load(&self, path: &str) -> starlark::Result<FrozenModule> {
+        self.resolve_and_eval_module(path)
     }
 }
