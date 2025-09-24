@@ -1,0 +1,26 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build UnsupportedEnum.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+=== Testing Unsupported Types ===
+Creating enum metadata...
+Error: Unsupported type for metadata container: Color. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.
+   ╭─[ <TEMP_DIR>/UnsupportedEnum.zen:9:13 ]
+   │
+ 9 │ enum_meta = metadata(Color)  # Should fail
+   │             ───────┬───────  
+   │                    ╰───────── Unsupported type for metadata container: Color. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.
+───╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/UnsupportedEnum.zen:9:13 (Unsupported type for metadata container: Color. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.)
+      ╰─ metadata (called from <TEMP_DIR>/UnsupportedEnum.zen:9:13-28)
+
+✗ UnsupportedEnum.zen: Build failed
+Error: Build failed with errors
