@@ -99,7 +99,10 @@ fn main() -> anyhow::Result<()> {
     };
     env_logger::Builder::from_env(env).init();
 
-    check_and_update();
+    // Skip auto-update in CI environments
+    if std::env::var("CI").is_err() {
+        check_and_update();
+    }
 
     match cli.command {
         Commands::Build(args) => build::execute(args),
