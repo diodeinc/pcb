@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-large
+    runs-on: ubicloud-standard-30-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:
