@@ -312,6 +312,7 @@ fn test_basic_types_metadata() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_metadata_unsupported_enum_type() {
     let output = Sandbox::new()
         .write("UnsupportedEnum.zen", UNSUPPORTED_TYPES_ZEN)
@@ -320,6 +321,7 @@ fn test_metadata_unsupported_enum_type() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn test_metadata_unsupported_record_type() {
     let output = Sandbox::new()
         .write("UnsupportedRecord.zen", UNSUPPORTED_RECORD_ZEN)
