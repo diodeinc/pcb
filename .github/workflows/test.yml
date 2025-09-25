@@ -31,7 +31,8 @@ jobs:
           - name: Ubuntu
             runs-on: ubicloud-standard-30-ubuntu-2204
             container:
-              image: kicad/kicad:9.0.3  # Keep in sync with KICAD_VERSION
+              # Mirrored using: skopeo copy --all docker://docker.io/kicad/kicad:9.0.3 docker://ghcr.io/diodeinc/kicad:9.0.3 --dest-creds "<username>:$(gh auth token -u <username>)"
+              image: ghcr.io/diodeinc/kicad:9.0.3  # Keep in sync with KICAD_VERSION
               options: --user root
     steps:
       - uses: actions/checkout@v5
