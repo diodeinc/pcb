@@ -18,7 +18,6 @@ jobs:
   build_and_test:
     name: Build and Test (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs-on }}
-    container: ${{ matrix.config.container }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -30,17 +29,15 @@ jobs:
             runs-on: macos-15-xlarge
           - name: Ubuntu
             runs-on: ubicloud-standard-30-ubuntu-2204
-            container:
-              image: kicad/kicad:9.0.3  # Keep in sync with KICAD_VERSION
-              options: --user root
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
         run: |
-          apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev
+          sudo add-apt-repository --yes ppa:kicad/kicad-9.0-releases
+          sudo apt-get update
+          sudo apt-get install -y --install-recommends kicad
 
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
