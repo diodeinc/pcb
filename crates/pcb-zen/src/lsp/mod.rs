@@ -66,6 +66,7 @@ impl Default for LspEvalContext {
             starlark::environment::LibraryExtension::Partial,
             starlark::environment::LibraryExtension::Breakpoint,
             starlark::environment::LibraryExtension::SetType,
+            starlark::environment::LibraryExtension::Json,
         ])
         .build();
 

@@ -425,6 +425,7 @@ impl EvalContext {
             LibraryExtension::Partial,
             LibraryExtension::Breakpoint,
             LibraryExtension::SetType,
+            LibraryExtension::Json,
         ])
         .with(builtin_globals)
         .with(component_globals)
