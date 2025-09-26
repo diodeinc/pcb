@@ -1,0 +1,88 @@
+# Copper constraints - all clearances and widths for copper features
+Copper = record(
+    minimum_clearance=float,  # Minimum clearance between copper features
+    minimum_track_width=float,  # Minimum track width
+    minimum_connection_width=float,  # Minimum connection width (KiCad: m_MinConn)
+    minimum_annular_width=float,  # Minimum annular ring width for vias
+    minimum_via_diameter=float,  # Minimum via diameter
+    copper_to_hole_clearance=float,  # Clearance from copper to holes
+    copper_to_edge_clearance=float,  # Clearance from copper to board edge
+)
+
+# Hole constraints - drill sizes and clearances
+Holes = record(
+    minimum_through_hole=float,  # Minimum through hole diameter
+    hole_to_hole_clearance=float,  # Minimum clearance between holes
+)
+
+# Micro via constraints - specialized via rules
+Uvias = record(
+    minimum_uvia_diameter=float,  # Minimum micro via diameter
+    minimum_uvia_hole=float,  # Minimum micro via hole diameter
+)
+
+# Silkscreen constraints - text and graphics rules
+Silkscreen = record(
+    minimum_item_clearance=float,  # Minimum clearance for silkscreen items
+    minimum_text_height=float,  # Minimum text height
+    # Note: minimum_text_thickness is complex in KiCad API, not supported yet
+)
+
+# All design rule constraints grouped together
+Constraints = record(
+    copper=Copper,
+    holes=Holes,
+    uvias=Uvias,
+    silkscreen=Silkscreen,
+)
+
+# Via dimensions for pre-defined sizes
+ViaDimension = record(
+    diameter=float,  # Via diameter in mm
+    drill=float,  # Via drill size in mm
+)
+
+# NOTE: Differential pair dimensions are not supported due to missing SWIG template
+# in KiCad Python API. The following would be needed in board.i:
+# %template(DIFF_PAIR_DIMENSION_Vector) std::vector<DIFF_PAIR_DIMENSION>;
+#
+# DiffPairDimension = record(
+#     width=float,                      # Track width in mm
+#     gap=float,                        # Gap between tracks in mm
+#     via_gap=float,                    # Gap for vias in mm
+# )
+
+# Pre-defined sizes that appear in KiCad GUI dropdowns
+PredefinedSizes = record(
+    track_widths=list,  # List of track widths in mm (e.g. [0.1, 0.15, 0.2])
+    via_dimensions=list,  # List of ViaDimension objects
+    # diff_pair_dimensions=list,     # Not supported - missing KiCad SWIG template
+)
+
+# Design rules container
+DesignRules = record(
+    constraints=Constraints,
+    predefined_sizes=PredefinedSizes,
+)
+
+# Complete board configuration
+BoardConfig = record(
+    design_rules=DesignRules,
+)
+
+
+def Board(
+    name: str,
+    config: BoardConfig,
+    layout_path: str,
+    layout_hints: list | None = None,
+    default: bool = False,
+):
+    builtin.add_board_config(
+        name=name,
+        default=default,
+        config=config,
+    )
+    add_property("layout_path", Path(layout_path, allow_not_exist=True))
+    if layout_hints:
+        add_property("layout_hints", layout_hints)

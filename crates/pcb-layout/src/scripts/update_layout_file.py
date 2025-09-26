@@ -1341,6 +1341,9 @@ class SetupBoard(Step):
         (['design_rules', 'constraints', 'silkscreen', 'minimum_text_height'], 'm_TextSize', 'silkscreen minimum text height', 
          lambda ds, val: setattr(ds, 'm_TextSize', pcbnew.VECTOR2I(pcbnew.FromMM(val), pcbnew.FromMM(val)))),
         # Note: m_TextThickness requires a complex array setup, skipping for now
+        # Pre-defined sizes (track widths and via dimensions only - diff pairs not supported)
+        (['design_rules', 'predefined_sizes', 'track_widths'], 'm_TrackWidthList', 'pre-defined track widths', 'track_widths'),
+        (['design_rules', 'predefined_sizes', 'via_dimensions'], 'm_ViasDimensionsList', 'pre-defined via dimensions', 'via_dimensions'),
     ]
 
     def _get_nested_value(self, data, path):
@@ -1350,6 +1353,34 @@ class SetupBoard(Step):
                 return None
             data = data[key]
         return data
+
+    def _set_track_width_list(self, ds, values):
+        """Set track width list from list of width values in mm."""
+        track_list = ds.m_TrackWidthList
+        
+        # Clear existing list and add new values
+        track_list.clear()
+        for width in values:
+            track_list.push_back(pcbnew.FromMM(width))
+        logger.info(f"Set {track_list.size()} pre-defined track widths")
+
+    def _set_via_dimensions_list(self, ds, values):
+        """Set via dimensions list from list of {diameter, drill} objects."""
+        via_list = ds.m_ViasDimensionsList
+        
+        # Clear existing list and add new values
+        via_list.clear()
+        for via_def in values:
+            if not isinstance(via_def, dict) or 'diameter' not in via_def or 'drill' not in via_def:
+                logger.warning(f"Via dimension must have 'diameter' and 'drill' keys: {via_def}")
+                continue
+            diameter = pcbnew.FromMM(via_def['diameter'])
+            drill = pcbnew.FromMM(via_def['drill'])
+            via_dim = pcbnew.VIA_DIMENSION(diameter, drill)
+            via_list.push_back(via_dim)
+        logger.info(f"Set {via_list.size()} pre-defined via dimensions")
+
+
 
     def _apply_board_config(self):
         """Apply board configuration from JSON file to design settings."""
@@ -1375,10 +1406,18 @@ class SetupBoard(Step):
             value = self._get_nested_value(config, json_path)
             if value is not None:
                 if custom_setter:
-                    custom_setter(ds, value)
+                    if callable(custom_setter):
+                        # Lambda function
+                        custom_setter(ds, value)
+                    elif custom_setter == 'track_widths':
+                        self._set_track_width_list(ds, value)
+                    elif custom_setter == 'via_dimensions':
+                        self._set_via_dimensions_list(ds, value)
+                    else:
+                        logger.warning(f"Unknown custom setter: {custom_setter}")
                 else:
                     setattr(ds, ds_attr, pcbnew.FromMM(value))
-                logger.info(f"Set {display_name}: {value}mm")
+                    logger.info(f"Set {display_name}: {value}mm")
 
     def run(self):
         # Apply board config logic
