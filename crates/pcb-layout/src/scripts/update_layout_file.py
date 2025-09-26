@@ -1319,6 +1319,38 @@ class SetupBoard(Step):
         """Check if this is a newly created board by looking for existing footprints."""
         return len(list(self.board.GetFootprints())) == 0
 
+    # Configuration table: (json_path, ds_attribute, display_name, [custom_setter])
+    CONFIG_MAPPINGS = [
+        # Copper constraints
+        (['design_rules', 'constraints', 'copper', 'minimum_clearance'], 'm_MinClearance', 'minimum clearance'),
+        (['design_rules', 'constraints', 'copper', 'minimum_track_width'], 'm_TrackMinWidth', 'minimum track width'),
+        (['design_rules', 'constraints', 'copper', 'minimum_connection_width'], 'm_MinConn', 'minimum connection width'),
+        (['design_rules', 'constraints', 'copper', 'minimum_annular_width'], 'm_ViasMinAnnularWidth', 'minimum annular width'),
+        (['design_rules', 'constraints', 'copper', 'minimum_via_diameter'], 'm_ViasMinSize', 'minimum via diameter'),
+        (['design_rules', 'constraints', 'copper', 'copper_to_hole_clearance'], 'm_HoleClearance', 'copper to hole clearance'),
+        (['design_rules', 'constraints', 'copper', 'copper_to_edge_clearance'], 'm_CopperEdgeClearance', 'copper to edge clearance'),
+        # Hole constraints
+        (['design_rules', 'constraints', 'holes', 'minimum_through_hole'], 'm_MinThroughDrill', 'minimum through hole'),
+        (['design_rules', 'constraints', 'holes', 'hole_to_hole_clearance'], 'm_HoleToHoleMin', 'hole to hole clearance'),
+        # Micro via constraints
+        (['design_rules', 'constraints', 'uvias', 'minimum_uvia_diameter'], 'm_MicroViasMinSize', 'minimum uvia diameter'),
+        (['design_rules', 'constraints', 'uvias', 'minimum_uvia_hole'], 'm_MicroViasMinDrill', 'minimum uvia hole'),
+        # Silkscreen constraints
+        (['design_rules', 'constraints', 'silkscreen', 'minimum_item_clearance'], 'm_SilkClearance', 'silkscreen minimum item clearance'),
+        # Special case for text size (needs VECTOR2I)
+        (['design_rules', 'constraints', 'silkscreen', 'minimum_text_height'], 'm_TextSize', 'silkscreen minimum text height', 
+         lambda ds, val: setattr(ds, 'm_TextSize', pcbnew.VECTOR2I(pcbnew.FromMM(val), pcbnew.FromMM(val)))),
+        # Note: m_TextThickness requires a complex array setup, skipping for now
+    ]
+
+    def _get_nested_value(self, data, path):
+        """Get a nested value from a dictionary using a path list."""
+        for key in path:
+            if not isinstance(data, dict) or key not in data:
+                return None
+            data = data[key]
+        return data
+
     def _apply_board_config(self):
         """Apply board configuration from JSON file to design settings."""
         if not self.board_config_path:
@@ -1334,75 +1366,19 @@ class SetupBoard(Step):
             return
             
         ds = self.board.GetDesignSettings()
-        design_rules = config.get('design_rules', {})
-        constraints = design_rules.get('constraints', {})
         
-        # Apply copper constraints
-        copper = constraints.get('copper', {})
-        if 'minimum_clearance' in copper:
-            ds.m_MinClearance = pcbnew.FromMM(copper['minimum_clearance'])
-            logger.info(f"Set minimum clearance: {copper['minimum_clearance']}mm")
+        # Apply all configuration mappings
+        for mapping in self.CONFIG_MAPPINGS:
+            json_path, ds_attr, display_name = mapping[:3]
+            custom_setter = mapping[3] if len(mapping) > 3 else None
             
-        if 'minimum_track_width' in copper:
-            ds.m_TrackMinWidth = pcbnew.FromMM(copper['minimum_track_width'])
-            logger.info(f"Set minimum track width: {copper['minimum_track_width']}mm")
-            
-        if 'minimum_connection_width' in copper:
-            ds.m_MinConnWidth = pcbnew.FromMM(copper['minimum_connection_width'])
-            logger.info(f"Set minimum connection width: {copper['minimum_connection_width']}mm")
-            
-        if 'minimum_annular_width' in copper:
-            ds.m_ViasMinAnnularWidth = pcbnew.FromMM(copper['minimum_annular_width'])
-            logger.info(f"Set minimum annular width: {copper['minimum_annular_width']}mm")
-            
-        if 'minimum_via_diameter' in copper:
-            ds.m_ViasMinSize = pcbnew.FromMM(copper['minimum_via_diameter'])
-            logger.info(f"Set minimum via diameter: {copper['minimum_via_diameter']}mm")
-            
-        if 'copper_to_hole_clearance' in copper:
-            ds.m_HoleClearance = pcbnew.FromMM(copper['copper_to_hole_clearance'])
-            logger.info(f"Set copper to hole clearance: {copper['copper_to_hole_clearance']}mm")
-            
-        if 'copper_to_edge_clearance' in copper:
-            ds.m_CopperEdgeClearance = pcbnew.FromMM(copper['copper_to_edge_clearance'])
-            logger.info(f"Set copper to edge clearance: {copper['copper_to_edge_clearance']}mm")
-        
-        # Apply hole constraints
-        holes = constraints.get('holes', {})
-        if 'minimum_through_hole' in holes:
-            ds.m_MinThroughDrill = pcbnew.FromMM(holes['minimum_through_hole'])
-            logger.info(f"Set minimum through hole: {holes['minimum_through_hole']}mm")
-            
-        if 'hole_to_hole_clearance' in holes:
-            ds.m_HoleToHoleMin = pcbnew.FromMM(holes['hole_to_hole_clearance'])
-            logger.info(f"Set hole to hole clearance: {holes['hole_to_hole_clearance']}mm")
-        
-        # Apply micro via constraints
-        uvias = constraints.get('uvias', {})
-        if 'minimum_uvia_diameter' in uvias:
-            ds.m_MicroViasMinSize = pcbnew.FromMM(uvias['minimum_uvia_diameter'])
-            logger.info(f"Set minimum uvia diameter: {uvias['minimum_uvia_diameter']}mm")
-            
-        if 'minimum_uvia_hole' in uvias:
-            ds.m_MicroViasMinDrill = pcbnew.FromMM(uvias['minimum_uvia_hole'])
-            logger.info(f"Set minimum uvia hole: {uvias['minimum_uvia_hole']}mm")
-        
-        # Apply silkscreen constraints
-        silkscreen = constraints.get('silkscreen', {})
-        if 'minimum_item_clearance' in silkscreen:
-            ds.m_SilkClearance = pcbnew.FromMM(silkscreen['minimum_item_clearance'])
-            logger.info(f"Set silkscreen minimum item clearance: {silkscreen['minimum_item_clearance']}mm")
-            
-        if 'minimum_text_height' in silkscreen:
-            ds.m_TextSize = pcbnew.VECTOR2I(
-                pcbnew.FromMM(silkscreen['minimum_text_height']),
-                pcbnew.FromMM(silkscreen['minimum_text_height'])
-            )
-            logger.info(f"Set silkscreen minimum text height: {silkscreen['minimum_text_height']}mm")
-            
-        if 'minimum_text_thickness' in silkscreen:
-            ds.m_TextThickness = pcbnew.FromMM(silkscreen['minimum_text_thickness'])
-            logger.info(f"Set silkscreen minimum text thickness: {silkscreen['minimum_text_thickness']}mm")
+            value = self._get_nested_value(config, json_path)
+            if value is not None:
+                if custom_setter:
+                    custom_setter(ds, value)
+                else:
+                    setattr(ds, ds_attr, pcbnew.FromMM(value))
+                logger.info(f"Set {display_name}: {value}mm")
 
     def run(self):
         # Apply board config logic
