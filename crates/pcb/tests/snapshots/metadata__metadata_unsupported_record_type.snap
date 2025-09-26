@@ -1,0 +1,26 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build UnsupportedRecord.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+=== Testing Record Type ===
+Creating record metadata...
+Error: Unsupported type for metadata container: Config. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.
+   ╭─[ <TEMP_DIR>/UnsupportedRecord.zen:9:15 ]
+   │
+ 9 │ record_meta = metadata(Config)  # Should fail
+   │               ────────┬───────  
+   │                       ╰───────── Unsupported type for metadata container: Config. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.
+───╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/UnsupportedRecord.zen:9:15 (Unsupported type for metadata container: Config. Only basic types (str, int, float, bool, list, dict) and PhysicalValue types are supported.)
+      ╰─ metadata (called from <TEMP_DIR>/UnsupportedRecord.zen:9:15-31)
+
+✗ UnsupportedRecord.zen: Build failed
+Error: Build failed with errors

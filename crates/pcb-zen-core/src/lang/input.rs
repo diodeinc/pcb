@@ -21,6 +21,7 @@ use starlark::values::record::{FrozenRecord, FrozenRecordType, Record, RecordTyp
 use starlark::values::{Trace, Value, ValueLike};
 
 use crate::lang::interface::{get_promotion_map, FrozenInterfaceValue, InterfaceValue};
+use crate::lang::metadata::MetadataContainer;
 use crate::lang::net::NetValue;
 use crate::lang::physical::PhysicalValue;
 use crate::{FrozenNetValue, NetId};
@@ -29,7 +30,7 @@ use super::interface::{FrozenInterfaceFactory, InterfaceFactory};
 
 /// A heap-agnostic representation of a Starlark value that can be recreated on
 /// any heap later.
-#[derive(Debug, Clone, Trace, Allocative, Serialize, Deserialize)]
+#[derive(Debug, Clone, Trace, Allocative, Serialize, Deserialize, PartialEq)]
 #[repr(C)]
 pub enum InputValue {
     None,
@@ -65,6 +66,9 @@ pub enum InputValue {
         fields: SmallMap<String, InputValue>,
         promotion_by_type: SmallMap<String, String>,
     },
+
+    /// Represents a metadata container (stores ref_id for later lookup)
+    MetadataContainer(MetadataContainer),
 
     /// Fallback for unsupported / complex values.
     #[allocative(skip)]
@@ -112,6 +116,7 @@ impl fmt::Display for InputValue {
                     )
                 }
             }
+            InputValue::MetadataContainer(mc) => write!(f, "{}", mc),
             InputValue::Unsupported(s) => write!(f, "Unsupported({s})"),
         }
     }
@@ -278,6 +283,7 @@ impl InputValue {
                 eval.eval_function(typ_val, &[], &named)
                     .map_err(|e| anyhow!(e.to_string()))
             }
+            InputValue::MetadataContainer(mc) => Ok(heap.alloc(*mc)),
             InputValue::Unsupported(s) => Err(anyhow!("unsupported input value type: {s}")),
         }
     }
@@ -421,6 +427,10 @@ impl InputValue {
                 fields: field_map,
                 promotion_by_type,
             };
+        }
+
+        if let Some(metadata_container) = value.downcast_ref::<MetadataContainer>() {
+            return InputValue::MetadataContainer(*metadata_container);
         }
 
         InputValue::Unsupported(value.get_type().to_owned())
