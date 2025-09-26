@@ -59,10 +59,30 @@ PredefinedSizes = record(
     # diff_pair_dimensions=list,     # Not supported - missing KiCad SWIG template
 )
 
+# Netclass definition for PCB routing rules
+NetClass = record(
+    name=field(str | None, None),  # Netclass name
+    clearance=field(float | None, None),  # Clearance in mm
+    track_width=field(float | None, None),  # Track width in mm
+    via_diameter=field(float | None, None),  # Via diameter in mm
+    via_drill=field(float | None, None),  # Via drill/hole in mm
+    microvia_diameter=field(float | None, None),  # Microvia diameter in mm
+    microvia_drill=field(float | None, None),  # Microvia drill/hole in mm
+    diff_pair_width=field(float | None, None),  # Differential pair width in mm
+    diff_pair_gap=field(float | None, None),  # Differential pair gap in mm
+    color=field(str | None, None),  # PCB color (hex like "#FF0000" or CSS name)
+)
+
+# Container for all netclasses
+NetClasses = record(
+    netclasses=field(list | None, None),  # List of NetClass objects
+)
+
 # Design rules container
 DesignRules = record(
     constraints=field(Constraints | None, None),
     predefined_sizes=field(PredefinedSizes | None, None),
+    netclasses=field(NetClasses | None, None),
 )
 
 # Complete board configuration
@@ -130,6 +150,10 @@ def deep_merge(base, override):
             return Silkscreen(**merged)
         elif base_type == "ViaDimension":
             return ViaDimension(**merged)
+        elif base_type == "NetClass":
+            return NetClass(**merged)
+        elif base_type == "NetClasses":
+            return NetClasses(**merged)
         else:
             # Fallback: return merged dict
             return merged

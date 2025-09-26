@@ -1321,29 +1321,31 @@ class SetupBoard(Step):
 
     # Configuration table: (json_path, ds_attribute, display_name, [custom_setter])
     CONFIG_MAPPINGS = [
-        # Copper constraints
-        (['design_rules', 'constraints', 'copper', 'minimum_clearance'], 'm_MinClearance', 'minimum clearance'),
-        (['design_rules', 'constraints', 'copper', 'minimum_track_width'], 'm_TrackMinWidth', 'minimum track width'),
-        (['design_rules', 'constraints', 'copper', 'minimum_connection_width'], 'm_MinConn', 'minimum connection width'),
-        (['design_rules', 'constraints', 'copper', 'minimum_annular_width'], 'm_ViasMinAnnularWidth', 'minimum annular width'),
-        (['design_rules', 'constraints', 'copper', 'minimum_via_diameter'], 'm_ViasMinSize', 'minimum via diameter'),
-        (['design_rules', 'constraints', 'copper', 'copper_to_hole_clearance'], 'm_HoleClearance', 'copper to hole clearance'),
-        (['design_rules', 'constraints', 'copper', 'copper_to_edge_clearance'], 'm_CopperEdgeClearance', 'copper to edge clearance'),
-        # Hole constraints
-        (['design_rules', 'constraints', 'holes', 'minimum_through_hole'], 'm_MinThroughDrill', 'minimum through hole'),
-        (['design_rules', 'constraints', 'holes', 'hole_to_hole_clearance'], 'm_HoleToHoleMin', 'hole to hole clearance'),
-        # Micro via constraints
-        (['design_rules', 'constraints', 'uvias', 'minimum_uvia_diameter'], 'm_MicroViasMinSize', 'minimum uvia diameter'),
-        (['design_rules', 'constraints', 'uvias', 'minimum_uvia_hole'], 'm_MicroViasMinDrill', 'minimum uvia hole'),
-        # Silkscreen constraints
-        (['design_rules', 'constraints', 'silkscreen', 'minimum_item_clearance'], 'm_SilkClearance', 'silkscreen minimum item clearance'),
-        # Special case for text size (needs VECTOR2I)
-        (['design_rules', 'constraints', 'silkscreen', 'minimum_text_height'], 'm_TextSize', 'silkscreen minimum text height', 
-         lambda ds, val: setattr(ds, 'm_TextSize', pcbnew.VECTOR2I(pcbnew.FromMM(val), pcbnew.FromMM(val)))),
-        # Note: m_TextThickness requires a complex array setup, skipping for now
-        # Pre-defined sizes (track widths and via dimensions only - diff pairs not supported)
-        (['design_rules', 'predefined_sizes', 'track_widths'], 'm_TrackWidthList', 'pre-defined track widths', 'track_widths'),
-        (['design_rules', 'predefined_sizes', 'via_dimensions'], 'm_ViasDimensionsList', 'pre-defined via dimensions', 'via_dimensions'),
+    # Copper constraints
+    (['design_rules', 'constraints', 'copper', 'minimum_clearance'], 'm_MinClearance', 'minimum clearance'),
+    (['design_rules', 'constraints', 'copper', 'minimum_track_width'], 'm_TrackMinWidth', 'minimum track width'),
+    (['design_rules', 'constraints', 'copper', 'minimum_connection_width'], 'm_MinConn', 'minimum connection width'),
+    (['design_rules', 'constraints', 'copper', 'minimum_annular_width'], 'm_ViasMinAnnularWidth', 'minimum annular width'),
+    (['design_rules', 'constraints', 'copper', 'minimum_via_diameter'], 'm_ViasMinSize', 'minimum via diameter'),
+    (['design_rules', 'constraints', 'copper', 'copper_to_hole_clearance'], 'm_HoleClearance', 'copper to hole clearance'),
+    (['design_rules', 'constraints', 'copper', 'copper_to_edge_clearance'], 'm_CopperEdgeClearance', 'copper to edge clearance'),
+    # Hole constraints
+    (['design_rules', 'constraints', 'holes', 'minimum_through_hole'], 'm_MinThroughDrill', 'minimum through hole'),
+    (['design_rules', 'constraints', 'holes', 'hole_to_hole_clearance'], 'm_HoleToHoleMin', 'hole to hole clearance'),
+    # Micro via constraints
+    (['design_rules', 'constraints', 'uvias', 'minimum_uvia_diameter'], 'm_MicroViasMinSize', 'minimum uvia diameter'),
+    (['design_rules', 'constraints', 'uvias', 'minimum_uvia_hole'], 'm_MicroViasMinDrill', 'minimum uvia hole'),
+    # Silkscreen constraints
+    (['design_rules', 'constraints', 'silkscreen', 'minimum_item_clearance'], 'm_SilkClearance', 'silkscreen minimum item clearance'),
+    # Special case for text size (needs VECTOR2I)
+    (['design_rules', 'constraints', 'silkscreen', 'minimum_text_height'], 'm_TextSize', 'silkscreen minimum text height',
+    lambda ds, val: setattr(ds, 'm_TextSize', pcbnew.VECTOR2I(pcbnew.FromMM(val), pcbnew.FromMM(val)))),
+    # Note: m_TextThickness requires a complex array setup, skipping for now
+    # Pre-defined sizes (track widths and via dimensions only - diff pairs not supported)
+    (['design_rules', 'predefined_sizes', 'track_widths'], 'm_TrackWidthList', 'pre-defined track widths', 'track_widths'),
+    (['design_rules', 'predefined_sizes', 'via_dimensions'], 'm_ViasDimensionsList', 'pre-defined via dimensions', 'via_dimensions'),
+        # Netclasses
+        (['design_rules', 'netclasses', 'netclasses'], None, 'netclasses', 'netclasses'),
     ]
 
     def _get_nested_value(self, data, path):
@@ -1380,7 +1382,77 @@ class SetupBoard(Step):
             via_list.push_back(via_dim)
         logger.info(f"Set {via_list.size()} pre-defined via dimensions")
 
+    def _set_netclasses(self, ds, values):
+        """Set netclasses from list of netclass definitions."""
+        if not isinstance(values, list):
+            logger.warning("Netclasses must be a list")
+            return
 
+        netSettings = ds.m_NetSettings
+
+        # Clear existing netclasses (except default)
+        netSettings.ClearNetclasses()
+
+        def apply_netclass_properties(netclass, nc_def):
+            """Apply properties from definition dict to a netclass object."""
+            if 'clearance' in nc_def and nc_def['clearance'] is not None:
+                netclass.SetClearance(pcbnew.FromMM(nc_def['clearance']))
+            
+            if 'track_width' in nc_def and nc_def['track_width'] is not None:
+                netclass.SetTrackWidth(pcbnew.FromMM(nc_def['track_width']))
+            
+            if 'via_diameter' in nc_def and nc_def['via_diameter'] is not None:
+                netclass.SetViaDiameter(pcbnew.FromMM(nc_def['via_diameter']))
+            
+            if 'via_drill' in nc_def and nc_def['via_drill'] is not None:
+                netclass.SetViaDrill(pcbnew.FromMM(nc_def['via_drill']))
+            
+            if 'microvia_diameter' in nc_def and nc_def['microvia_diameter'] is not None:
+                netclass.SetuViaDiameter(pcbnew.FromMM(nc_def['microvia_diameter']))
+            
+            if 'microvia_drill' in nc_def and nc_def['microvia_drill'] is not None:
+                netclass.SetuViaDrill(pcbnew.FromMM(nc_def['microvia_drill']))
+            
+            if 'diff_pair_width' in nc_def and nc_def['diff_pair_width'] is not None:
+                netclass.SetDiffPairWidth(pcbnew.FromMM(nc_def['diff_pair_width']))
+            
+            if 'diff_pair_gap' in nc_def and nc_def['diff_pair_gap'] is not None:
+                netclass.SetDiffPairGap(pcbnew.FromMM(nc_def['diff_pair_gap']))
+            
+            # Set color if provided
+            if 'color' in nc_def and nc_def['color'] is not None:
+                try:
+                    color = pcbnew.COLOR4D(nc_def['color'])
+                    netclass.SetPcbColor(color)
+                except Exception as e:
+                    logger.warning(f"Failed to parse color '{nc_def['color']}' for netclass '{name}': {e}")
+
+        for nc_def in values:
+            if not isinstance(nc_def, dict) or 'name' not in nc_def:
+                logger.warning(f"Netclass definition must have 'name' key: {nc_def}")
+                continue
+
+            name = nc_def['name']
+            if not name:
+                logger.warning("Netclass name cannot be empty")
+                continue
+
+            # Create new netclass (False = don't init with defaults)
+            netclass = pcbnew.NETCLASS(name, False)
+            apply_netclass_properties(netclass, nc_def)
+
+            # Special handling for "Default" netclass
+            if name == "Default":
+                # Update the actual internal default netclass (m_DefaultNetclass)
+                default_nc = netSettings.GetDefaultNetclass()
+                apply_netclass_properties(default_nc, nc_def)
+                logger.info(f"Updated internal m_DefaultNetclass with properties from 'Default' netclass")
+
+            # Add netclass to the collection
+            netSettings.SetNetclass(netclass.GetName(), netclass)
+            logger.info(f"Added netclass '{name}' to board")
+
+        logger.info(f"Set {len(values)} netclasses")
 
     def _apply_board_config(self):
         """Apply board configuration from JSON file to design settings."""
@@ -1413,6 +1485,8 @@ class SetupBoard(Step):
                         self._set_track_width_list(ds, value)
                     elif custom_setter == 'via_dimensions':
                         self._set_via_dimensions_list(ds, value)
+                    elif custom_setter == 'netclasses':
+                        self._set_netclasses(ds, value)
                     else:
                         logger.warning(f"Unknown custom setter: {custom_setter}")
                 else:
