@@ -42,6 +42,7 @@ pub struct LayoutPaths {
     pub snapshot: PathBuf,
     pub log: PathBuf,
     pub json_netlist: PathBuf,
+    pub board_config: PathBuf,
     pub temp_dir: TempDir,
 }
 
@@ -102,6 +103,20 @@ pub fn process_layout(
         )
     })?;
 
+    // Extract and write board config if it exists
+    let board_config_path = if let Some(board_config_json) = utils::extract_board_config(schematic)
+    {
+        fs::write(&paths.board_config, board_config_json).with_context(|| {
+            format!(
+                "Failed to write board config: {}",
+                paths.board_config.display()
+            )
+        })?;
+        Some(paths.board_config.to_str().unwrap())
+    } else {
+        None
+    };
+
     // Write footprint library table
     utils::write_footprint_library_table(&layout_dir, schematic)?;
 
@@ -119,13 +134,20 @@ pub fn process_layout(
     let script = include_str!("scripts/update_layout_file.py");
 
     // Build and run the Python script using the new pcbnew API
-    PythonScriptBuilder::new(script)
+    let mut script_builder = PythonScriptBuilder::new(script)
         .arg("-j")
         .arg(paths.json_netlist.to_str().unwrap())
         .arg("-o")
         .arg(paths.pcb.to_str().unwrap())
         .arg("-s")
-        .arg(paths.snapshot.to_str().unwrap())
+        .arg(paths.snapshot.to_str().unwrap());
+
+    // Add board config argument if we have one
+    if let Some(board_config) = board_config_path {
+        script_builder = script_builder.arg("--board-config").arg(board_config);
+    }
+
+    script_builder
         .log_file(
             fs::OpenOptions::new()
                 .create(true)
@@ -175,14 +197,68 @@ pub mod utils {
     pub fn get_layout_paths(layout_dir: &Path) -> LayoutPaths {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp directory for netlist");
         let json_netlist = temp_dir.path().join("netlist.json");
+        let board_config = temp_dir.path().join("board_config.json");
         LayoutPaths {
             netlist: layout_dir.join("default.net"),
             pcb: layout_dir.join("layout.kicad_pcb"),
             snapshot: layout_dir.join("snapshot.layout.json"),
             log: layout_dir.join("layout.log"),
             json_netlist,
+            board_config,
             temp_dir,
         }
+    }
+
+    /// Extract board config from schematic's root instance attributes using the same
+    /// priority logic as pcb layout command.
+    ///
+    /// Priority order:
+    /// 1. If `default_board_config` property exists, use that specific config
+    /// 2. Otherwise, collect all `board_config.*` properties, sort alphabetically
+    /// 3. If there's a config named "default", choose that one
+    /// 4. Otherwise, choose the first one alphabetically
+    pub fn extract_board_config(schematic: &Schematic) -> Option<String> {
+        let root_ref = schematic.root_ref.as_ref()?;
+        let root = schematic.instances.get(root_ref)?;
+
+        // First, check if there's a default_board_config set
+        if let Some(default_config_name) = root
+            .attributes
+            .get("default_board_config")
+            .and_then(|v| v.string())
+        {
+            // Look up the specific config
+            let config_key = format!("board_config.{}", default_config_name);
+            if let Some(config_json) = root.attributes.get(&config_key).and_then(|v| v.string()) {
+                return Some(config_json.to_string());
+            }
+        }
+
+        // If no default is set, collect all board_config.* properties
+        let mut configs: Vec<(String, String)> = Vec::new();
+        for (key, value) in &root.attributes {
+            if key.starts_with("board_config.") {
+                if let Some(config_json) = value.string() {
+                    let config_name = key.strip_prefix("board_config.").unwrap();
+                    configs.push((config_name.to_string(), config_json.to_string()));
+                }
+            }
+        }
+
+        if configs.is_empty() {
+            return None;
+        }
+
+        // Sort alphabetically by config name
+        configs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // If there's a config named "default", choose that one
+        if let Some((_, config_json)) = configs.iter().find(|(name, _)| name == "default") {
+            return Some(config_json.clone());
+        }
+
+        // Otherwise, choose the first one alphabetically
+        Some(configs[0].1.clone())
     }
 
     /// Write footprint library table for a layout

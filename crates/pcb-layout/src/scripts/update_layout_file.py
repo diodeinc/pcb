@@ -1309,12 +1309,110 @@ class SyncState:
 class SetupBoard(Step):
     """Set up the board for the sync process."""
 
-    def __init__(self, state: SyncState, board: pcbnew.BOARD):
+    def __init__(self, state: SyncState, board: pcbnew.BOARD, board_config_path: str = None, force_sync_board_config: bool = False):
         self.state = state
         self.board = board
+        self.board_config_path = board_config_path
+        self.force_sync_board_config = force_sync_board_config
+
+    def _is_new_board(self) -> bool:
+        """Check if this is a newly created board by looking for existing footprints."""
+        return len(list(self.board.GetFootprints())) == 0
+
+    def _apply_board_config(self):
+        """Apply board configuration from JSON file to design settings."""
+        if not self.board_config_path:
+            return
+            
+        logger.info(f"Applying board configuration from {self.board_config_path}")
+        
+        try:
+            with open(self.board_config_path, 'r') as f:
+                config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to load board config: {e}")
+            return
+            
+        ds = self.board.GetDesignSettings()
+        design_rules = config.get('design_rules', {})
+        constraints = design_rules.get('constraints', {})
+        
+        # Apply copper constraints
+        copper = constraints.get('copper', {})
+        if 'minimum_clearance' in copper:
+            ds.m_MinClearance = pcbnew.FromMM(copper['minimum_clearance'])
+            logger.info(f"Set minimum clearance: {copper['minimum_clearance']}mm")
+            
+        if 'minimum_track_width' in copper:
+            ds.m_TrackMinWidth = pcbnew.FromMM(copper['minimum_track_width'])
+            logger.info(f"Set minimum track width: {copper['minimum_track_width']}mm")
+            
+        if 'minimum_connection_width' in copper:
+            ds.m_MinConnWidth = pcbnew.FromMM(copper['minimum_connection_width'])
+            logger.info(f"Set minimum connection width: {copper['minimum_connection_width']}mm")
+            
+        if 'minimum_annular_width' in copper:
+            ds.m_ViasMinAnnularWidth = pcbnew.FromMM(copper['minimum_annular_width'])
+            logger.info(f"Set minimum annular width: {copper['minimum_annular_width']}mm")
+            
+        if 'minimum_via_diameter' in copper:
+            ds.m_ViasMinSize = pcbnew.FromMM(copper['minimum_via_diameter'])
+            logger.info(f"Set minimum via diameter: {copper['minimum_via_diameter']}mm")
+            
+        if 'copper_to_hole_clearance' in copper:
+            ds.m_HoleClearance = pcbnew.FromMM(copper['copper_to_hole_clearance'])
+            logger.info(f"Set copper to hole clearance: {copper['copper_to_hole_clearance']}mm")
+            
+        if 'copper_to_edge_clearance' in copper:
+            ds.m_CopperEdgeClearance = pcbnew.FromMM(copper['copper_to_edge_clearance'])
+            logger.info(f"Set copper to edge clearance: {copper['copper_to_edge_clearance']}mm")
+        
+        # Apply hole constraints
+        holes = constraints.get('holes', {})
+        if 'minimum_through_hole' in holes:
+            ds.m_MinThroughDrill = pcbnew.FromMM(holes['minimum_through_hole'])
+            logger.info(f"Set minimum through hole: {holes['minimum_through_hole']}mm")
+            
+        if 'hole_to_hole_clearance' in holes:
+            ds.m_HoleToHoleMin = pcbnew.FromMM(holes['hole_to_hole_clearance'])
+            logger.info(f"Set hole to hole clearance: {holes['hole_to_hole_clearance']}mm")
+        
+        # Apply micro via constraints
+        uvias = constraints.get('uvias', {})
+        if 'minimum_uvia_diameter' in uvias:
+            ds.m_MicroViasMinSize = pcbnew.FromMM(uvias['minimum_uvia_diameter'])
+            logger.info(f"Set minimum uvia diameter: {uvias['minimum_uvia_diameter']}mm")
+            
+        if 'minimum_uvia_hole' in uvias:
+            ds.m_MicroViasMinDrill = pcbnew.FromMM(uvias['minimum_uvia_hole'])
+            logger.info(f"Set minimum uvia hole: {uvias['minimum_uvia_hole']}mm")
+        
+        # Apply silkscreen constraints
+        silkscreen = constraints.get('silkscreen', {})
+        if 'minimum_item_clearance' in silkscreen:
+            ds.m_SilkClearance = pcbnew.FromMM(silkscreen['minimum_item_clearance'])
+            logger.info(f"Set silkscreen minimum item clearance: {silkscreen['minimum_item_clearance']}mm")
+            
+        if 'minimum_text_height' in silkscreen:
+            ds.m_TextSize = pcbnew.VECTOR2I(
+                pcbnew.FromMM(silkscreen['minimum_text_height']),
+                pcbnew.FromMM(silkscreen['minimum_text_height'])
+            )
+            logger.info(f"Set silkscreen minimum text height: {silkscreen['minimum_text_height']}mm")
+            
+        if 'minimum_text_thickness' in silkscreen:
+            ds.m_TextThickness = pcbnew.FromMM(silkscreen['minimum_text_thickness'])
+            logger.info(f"Set silkscreen minimum text thickness: {silkscreen['minimum_text_thickness']}mm")
 
     def run(self):
-        pass
+        # Apply board config logic
+        should_apply_config = (
+            self.board_config_path and 
+            (self._is_new_board() or self.force_sync_board_config)
+        )
+        
+        if should_apply_config:
+            self._apply_board_config()
 
 
 ####################################################################################################
@@ -2934,6 +3032,17 @@ def main():
         action="store_true",
         help="""Generate a snapshot and exit.""",
     )
+    parser.add_argument(
+        "--board-config",
+        type=str,
+        metavar="file",
+        help="""JSON file containing board setup configuration.""",
+    )
+    parser.add_argument(
+        "--force-sync-board-config",
+        action="store_true",
+        help="""Apply board config even to existing boards (default: only new boards).""",
+    )
     args = parser.parse_args()
 
     logger.setLevel(logging.DEBUG)
@@ -2968,7 +3077,7 @@ def main():
         ]
     else:
         steps = [
-            SetupBoard(state, board),
+            SetupBoard(state, board, args.board_config, args.force_sync_board_config),
             ApplyMovedPaths(state, board, schematic_data),
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),
