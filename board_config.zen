@@ -1,45 +1,45 @@
 # Copper constraints - all clearances and widths for copper features
 Copper = record(
-    minimum_clearance=float,  # Minimum clearance between copper features
-    minimum_track_width=float,  # Minimum track width
-    minimum_connection_width=float,  # Minimum connection width (KiCad: m_MinConn)
-    minimum_annular_width=float,  # Minimum annular ring width for vias
-    minimum_via_diameter=float,  # Minimum via diameter
-    copper_to_hole_clearance=float,  # Clearance from copper to holes
-    copper_to_edge_clearance=float,  # Clearance from copper to board edge
+    minimum_clearance=field(float | None, None),  # Minimum clearance between copper features
+    minimum_track_width=field(float | None, None),  # Minimum track width
+    minimum_connection_width=field(float | None, None),  # Minimum connection width (KiCad: m_MinConn)
+    minimum_annular_width=field(float | None, None),  # Minimum annular ring width for vias
+    minimum_via_diameter=field(float | None, None),  # Minimum via diameter
+    copper_to_hole_clearance=field(float | None, None),  # Clearance from copper to holes
+    copper_to_edge_clearance=field(float | None, None),  # Clearance from copper to board edge
 )
 
 # Hole constraints - drill sizes and clearances
 Holes = record(
-    minimum_through_hole=float,  # Minimum through hole diameter
-    hole_to_hole_clearance=float,  # Minimum clearance between holes
+    minimum_through_hole=field(float | None, None),  # Minimum through hole diameter
+    hole_to_hole_clearance=field(float | None, None),  # Minimum clearance between holes
 )
 
 # Micro via constraints - specialized via rules
 Uvias = record(
-    minimum_uvia_diameter=float,  # Minimum micro via diameter
-    minimum_uvia_hole=float,  # Minimum micro via hole diameter
+    minimum_uvia_diameter=field(float | None, None),  # Minimum micro via diameter
+    minimum_uvia_hole=field(float | None, None),  # Minimum micro via hole diameter
 )
 
 # Silkscreen constraints - text and graphics rules
 Silkscreen = record(
-    minimum_item_clearance=float,  # Minimum clearance for silkscreen items
-    minimum_text_height=float,  # Minimum text height
+    minimum_item_clearance=field(float | None, None),  # Minimum clearance for silkscreen items
+    minimum_text_height=field(float | None, None),  # Minimum text height
     # Note: minimum_text_thickness is complex in KiCad API, not supported yet
 )
 
 # All design rule constraints grouped together
 Constraints = record(
-    copper=Copper,
-    holes=Holes,
-    uvias=Uvias,
-    silkscreen=Silkscreen,
+    copper=field(Copper | None, None),
+    holes=field(Holes | None, None),
+    uvias=field(Uvias | None, None),
+    silkscreen=field(Silkscreen | None, None),
 )
 
 # Via dimensions for pre-defined sizes
 ViaDimension = record(
-    diameter=float,  # Via diameter in mm
-    drill=float,  # Via drill size in mm
+    diameter=field(float | None, None),  # Via diameter in mm
+    drill=field(float | None, None),  # Via drill size in mm
 )
 
 # NOTE: Differential pair dimensions are not supported due to missing SWIG template
@@ -54,21 +54,107 @@ ViaDimension = record(
 
 # Pre-defined sizes that appear in KiCad GUI dropdowns
 PredefinedSizes = record(
-    track_widths=list,  # List of track widths in mm (e.g. [0.1, 0.15, 0.2])
-    via_dimensions=list,  # List of ViaDimension objects
+    track_widths=field(list | None, None),  # List of track widths in mm (e.g. [0.1, 0.15, 0.2])
+    via_dimensions=field(list | None, None),  # List of ViaDimension objects
     # diff_pair_dimensions=list,     # Not supported - missing KiCad SWIG template
 )
 
 # Design rules container
 DesignRules = record(
-    constraints=Constraints,
-    predefined_sizes=PredefinedSizes,
+    constraints=field(Constraints | None, None),
+    predefined_sizes=field(PredefinedSizes | None, None),
 )
 
 # Complete board configuration
 BoardConfig = record(
-    design_rules=DesignRules,
+    design_rules=field(DesignRules | None, None),
 )
+
+
+def deep_merge(base, override):
+    """Deep merge two records, with override values taking precedence.
+
+    For records: recursively merges fields
+    For lists: override replaces base entirely
+    For primitives: override value used if not None
+    """
+    if override == None:
+        return base
+    if base == None:
+        return override
+
+    # Check if both are records by getting their fields
+    base_fields = dir(base)
+    override_fields = dir(override)
+
+    # If we can get fields from both, assume they're records to merge
+    if base_fields and override_fields:
+        merged = {}
+
+        # Start with all base fields
+        for field in base_fields:
+            if field.startswith("_"):  # Skip private fields
+                continue
+            merged[field] = getattr(base, field)
+
+        # Override with fields from override
+        for field in override_fields:
+            if field.startswith("_"):  # Skip private fields
+                continue
+            override_val = getattr(override, field)
+            if override_val != None:
+                if field in merged:
+                    # Recursively merge if both exist
+                    merged[field] = deep_merge(merged[field], override_val)
+                else:
+                    # New field from override
+                    merged[field] = override_val
+
+        # Construct same type as base
+        base_type = type(base)
+        if base_type == "BoardConfig":
+            return BoardConfig(**merged)
+        elif base_type == "DesignRules":
+            return DesignRules(**merged)
+        elif base_type == "Constraints":
+            return Constraints(**merged)
+        elif base_type == "PredefinedSizes":
+            return PredefinedSizes(**merged)
+        elif base_type == "Copper":
+            return Copper(**merged)
+        elif base_type == "Holes":
+            return Holes(**merged)
+        elif base_type == "Uvias":
+            return Uvias(**merged)
+        elif base_type == "Silkscreen":
+            return Silkscreen(**merged)
+        elif base_type == "ViaDimension":
+            return ViaDimension(**merged)
+        else:
+            # Fallback: return merged dict
+            return merged
+
+    # Not records, override wins
+    return override
+
+
+def merge_configs(*configs: BoardConfig) -> BoardConfig:
+    """Merge multiple BoardConfig objects, with later configs taking precedence.
+
+    Args:
+        *configs: Variable number of BoardConfig objects to merge
+
+    Returns:
+        BoardConfig: Merged configuration with later configs overriding earlier ones
+    """
+    if not configs:
+        return BoardConfig()
+
+    result = configs[0]
+    for config in configs[1:]:
+        result = deep_merge(result, config)
+
+    return result
 
 
 def Board(
