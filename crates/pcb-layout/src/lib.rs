@@ -1,6 +1,9 @@
 use anyhow::{Context, Result as AnyhowResult};
-use log::debug;
+use log::{debug, info};
 use pcb_sch::{AttributeValue, Schematic, ATTR_LAYOUT_PATH};
+use pcb_zen_core::lang::stackup::{
+    ApproxEq, BoardConfig, BoardConfigError, Stackup, StackupError, THICKNESS_EPS,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -32,6 +35,15 @@ pub enum LayoutError {
 
     #[error("PCB generation error: {0}")]
     PcbGeneration(#[from] anyhow::Error),
+
+    #[error("Stackup patching error: {0}")]
+    StackupPatchingError(String),
+
+    #[error("Stackup error: {0}")]
+    StackupError(#[from] StackupError),
+
+    #[error("Board config error: {0}")]
+    BoardConfigError(#[from] BoardConfigError),
 }
 
 /// Helper struct for layout file paths
@@ -103,10 +115,10 @@ pub fn process_layout(
         )
     })?;
 
-    // Extract and write board config if it exists
-    let board_config_path = if let Some(board_config_json) = utils::extract_board_config(schematic)
-    {
-        fs::write(&paths.board_config, board_config_json).with_context(|| {
+    // Extract board config if it exists
+    let board_config_json = utils::extract_board_config(schematic);
+    let board_config_path = if let Some(ref json) = board_config_json {
+        fs::write(&paths.board_config, json).with_context(|| {
             format!(
                 "Failed to write board config: {}",
                 paths.board_config.display()
@@ -164,6 +176,11 @@ pub fn process_layout(
                 paths.pcb.display()
             )
         })?;
+
+    // NEW: Apply stackup configuration if present
+    if let Some(ref json) = board_config_json {
+        patch_stackup_if_needed(&paths.pcb, json)?;
+    }
 
     Ok(LayoutResult {
         source_file: source_path.to_path_buf(),
@@ -291,5 +308,199 @@ pub mod utils {
         })?;
 
         Ok(())
+    }
+}
+
+/// Apply stackup configuration if it differs from existing PCB file
+fn patch_stackup_if_needed(pcb_path: &Path, board_config_json: &str) -> Result<(), LayoutError> {
+    let board_config = BoardConfig::from_json_str(board_config_json)?;
+    let Some(zen_stackup) = board_config.stackup else {
+        debug!("No stackup configuration found in board config");
+        return Ok(()); // No stackup to apply
+    };
+
+    // Read current PCB file
+    let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
+        LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
+    })?;
+
+    // Parse existing stackup from PCB file
+    let existing_stackup = Stackup::from_kicad_pcb(&pcb_content)?;
+
+    // Compare stackups - only patch if they're different
+    let needs_update = match existing_stackup {
+        Some(existing) => {
+            let equivalent = zen_stackup.approx_eq(&existing, THICKNESS_EPS);
+            if !equivalent {
+                debug!("Zen stackup: {:?}", zen_stackup);
+                debug!("Existing stackup: {:?}", existing);
+            }
+            !equivalent
+        }
+        None => {
+            debug!("No existing stackup found in PCB file");
+            true // No existing stackup, so we need to add it
+        }
+    };
+
+    if !needs_update {
+        info!("Stackup configuration matches existing PCB file, no update needed");
+        return Ok(());
+    }
+
+    info!("Updating stackup configuration in {}", pcb_path.display());
+
+    // Generate new S-expressions
+    let layers_sexpr = zen_stackup.generate_layers_sexpr();
+    let stackup_sexpr = zen_stackup.generate_stackup_sexpr();
+
+    // Use surgical string replacement to avoid parsing issues with hex numbers
+    let mut updated_content = pcb_content;
+    updated_content = replace_section_in_pcb_content(&updated_content, "layers", &layers_sexpr)?;
+    updated_content = replace_section_in_pcb_content(&updated_content, "stackup", &stackup_sexpr)?;
+
+    // Write updated content back to file
+    fs::write(pcb_path, updated_content).map_err(|e| {
+        LayoutError::StackupPatchingError(format!("Failed to write updated PCB file: {}", e))
+    })?;
+
+    info!("Successfully updated stackup configuration");
+    Ok(())
+}
+
+/// Replace a section in KiCad PCB content using careful string matching
+fn replace_section_in_pcb_content(
+    content: &str,
+    section_name: &str,
+    new_section: &str,
+) -> Result<String, LayoutError> {
+    // Find the section by parsing just enough to locate it
+    let section_start = find_section_start(content, section_name)?;
+
+    if let Some(start_pos) = section_start {
+        let end_pos = find_matching_paren(content, start_pos)?;
+
+        // Replace the section with the new content
+        let mut result = String::with_capacity(content.len() + new_section.len());
+        result.push_str(&content[..start_pos]);
+        result.push('\t');
+        result.push_str(new_section);
+        result.push_str(&content[end_pos + 1..]);
+        Ok(result)
+    } else {
+        // Section doesn't exist, need to add it
+        add_section_to_pcb_content(content, section_name, new_section)
+    }
+}
+
+/// Find the start position of a section in PCB content
+fn find_section_start(content: &str, section_name: &str) -> Result<Option<usize>, LayoutError> {
+    let pattern = format!("({}", section_name);
+    let mut pos = 0;
+
+    while let Some(found) = content[pos..].find(&pattern) {
+        let abs_pos = pos + found;
+
+        // Check if this is a word boundary (not part of a larger identifier)
+        let next_char_pos = abs_pos + pattern.len();
+        if next_char_pos < content.len() {
+            let next_char = content.chars().nth(next_char_pos).unwrap();
+            if next_char.is_whitespace() || next_char == '\n' || next_char == '\t' {
+                return Ok(Some(abs_pos));
+            }
+        } else {
+            return Ok(Some(abs_pos));
+        }
+
+        pos = abs_pos + 1;
+    }
+
+    Ok(None)
+}
+
+/// Find the matching closing parenthesis for an opening parenthesis
+fn find_matching_paren(content: &str, start_pos: usize) -> Result<usize, LayoutError> {
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    let chars: Vec<char> = content.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate().skip(start_pos) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_string => escaped = true,
+            '"' => in_string = !in_string,
+            '(' if !in_string => depth += 1,
+            ')' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(i);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Err(LayoutError::StackupPatchingError(
+        "Could not find matching closing parenthesis".to_string(),
+    ))
+}
+
+/// Add a new section to PCB content
+fn add_section_to_pcb_content(
+    content: &str,
+    section_name: &str,
+    new_section: &str,
+) -> Result<String, LayoutError> {
+    match section_name {
+        "layers" => {
+            // Add after general section
+            if let Some(general_start) = find_section_start(content, "general")? {
+                let general_end = find_matching_paren(content, general_start)?;
+                let insert_pos = general_end + 1;
+
+                let mut result = String::with_capacity(content.len() + new_section.len() + 10);
+                result.push_str(&content[..insert_pos]);
+                result.push('\n');
+                result.push('\t');
+                result.push_str(new_section);
+                result.push_str(&content[insert_pos..]);
+                Ok(result)
+            } else {
+                Err(LayoutError::StackupPatchingError(
+                    "Could not find general section for layers insertion".to_string(),
+                ))
+            }
+        }
+        "stackup" => {
+            // Add within setup section
+            if let Some(setup_start) = find_section_start(content, "setup")? {
+                let setup_end = find_matching_paren(content, setup_start)?;
+                let insert_pos = setup_end; // Before closing paren
+
+                let mut result = String::with_capacity(content.len() + new_section.len() + 20);
+                result.push_str(&content[..insert_pos]);
+                result.push('\n');
+                result.push_str("\t\t");
+                result.push_str(new_section);
+                result.push('\n');
+                result.push('\t');
+                result.push_str(&content[insert_pos..]);
+                Ok(result)
+            } else {
+                Err(LayoutError::StackupPatchingError(
+                    "Could not find setup section for stackup insertion".to_string(),
+                ))
+            }
+        }
+        _ => Err(LayoutError::StackupPatchingError(format!(
+            "Unknown section type: {}",
+            section_name
+        ))),
     }
 }

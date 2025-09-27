@@ -1,11 +1,116 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::{borrow::Cow, fmt, str::FromStr};
+use std::{borrow::Cow, collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 
-use crate::lang::sexpr::{kv, str_lit, sym, ListBuilder, Pretty, SExpr};
+use crate::lang::sexpr::{self, kv, str_lit, sym, ListBuilder, Pretty, SExpr};
 
-const THICKNESS_TOLERANCE: f64 = 0.10;
+pub const THICKNESS_EPS: f64 = f64::EPSILON * 1000.0; // Floating point precision tolerance
+const THICKNESS_VALIDATION_TOLERANCE: f64 = 0.10; // 10% tolerance for stackup validation
+
+/// Trait for approximate equality with tolerance
+pub trait ApproxEq<Rhs = Self> {
+    fn approx_eq(&self, other: &Rhs, eps: f64) -> bool;
+}
+
+impl ApproxEq for f64 {
+    fn approx_eq(&self, other: &f64, eps: f64) -> bool {
+        (self - other).abs() <= eps
+    }
+}
+
+impl ApproxEq for Option<f64> {
+    fn approx_eq(&self, other: &Option<f64>, eps: f64) -> bool {
+        match (self, other) {
+            (Some(a), Some(b)) => a.approx_eq(b, eps),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl ApproxEq for Layer {
+    fn approx_eq(&self, other: &Layer, eps: f64) -> bool {
+        use Layer::*;
+        match (self, other) {
+            (
+                Copper {
+                    thickness: t1,
+                    role: r1,
+                },
+                Copper {
+                    thickness: t2,
+                    role: r2,
+                },
+            ) => r1 == r2 && t1.approx_eq(t2, eps),
+            (
+                Dielectric {
+                    thickness: t1,
+                    material: m1,
+                    form: f1,
+                },
+                Dielectric {
+                    thickness: t2,
+                    material: m2,
+                    form: f2,
+                },
+            ) => f1 == f2 && m1 == m2 && t1.approx_eq(t2, eps),
+            _ => false,
+        }
+    }
+}
+
+impl ApproxEq for Material {
+    fn approx_eq(&self, other: &Material, eps: f64) -> bool {
+        // Only compare essential properties that are preserved in KiCad files
+        self.name == other.name
+            && self
+                .relative_permittivity
+                .approx_eq(&other.relative_permittivity, eps)
+            && self.loss_tangent.approx_eq(&other.loss_tangent, eps)
+        // Ignore vendor and reference_frequency as they're not stored in KiCad files
+    }
+}
+
+impl ApproxEq for Stackup {
+    fn approx_eq(&self, other: &Stackup, eps: f64) -> bool {
+        // Compare materials
+        let materials_ok = match (&self.materials, &other.materials) {
+            (Some(a), Some(b)) => {
+                if a.len() != b.len() {
+                    return false;
+                }
+                a.iter().zip(b).all(|(x, y)| x.approx_eq(y, eps))
+            }
+            (None, None) => true,
+            (a, b) => {
+                eprintln!(
+                    "STACKUP DIFF: Materials option mismatch: {:?} vs {:?}",
+                    a.as_ref().map(|v| v.len()),
+                    b.as_ref().map(|v| v.len())
+                );
+                false
+            }
+        };
+
+        // Compare layers
+        let layers_ok = match (&self.layers, &other.layers) {
+            (Some(a), Some(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.approx_eq(y, eps))
+            }
+            (None, None) => true,
+            _ => false,
+        };
+
+        // Compare other properties
+        let colors_ok = self.silk_screen_color == other.silk_screen_color
+            && self.solder_mask_color == other.solder_mask_color;
+        let finish_ok = self.copper_finish == other.copper_finish;
+        let thick_ok = self.thickness.approx_eq(&other.thickness, eps);
+
+        materials_ok && layers_ok && colors_ok && finish_ok && thick_ok
+    }
+}
 
 // Helper functions for layer mapping
 fn copper_layer_mapping(index: usize, total_copper: usize) -> (u32, Cow<'static, str>) {
@@ -245,6 +350,15 @@ pub enum StackupError {
 
     #[error("Unknown copper finish: {0}")]
     UnknownCopperFinish(String),
+
+    #[error("Unknown copper role: {0}")]
+    UnknownCopperRole(String),
+}
+
+impl From<sexpr::ParseError> for StackupError {
+    fn from(_: sexpr::ParseError) -> Self {
+        StackupError::KicadParseError
+    }
 }
 
 impl Stackup {
@@ -316,7 +430,7 @@ impl Stackup {
     fn validate_thickness(&self, layers: &[Layer]) -> Result<(), StackupError> {
         if let Some(expected_thickness) = self.thickness {
             let total_thickness: f64 = layers.iter().map(Layer::thickness).sum();
-            let tolerance = expected_thickness * THICKNESS_TOLERANCE;
+            let tolerance = expected_thickness * THICKNESS_VALIDATION_TOLERANCE;
 
             if (total_thickness - expected_thickness).abs() > tolerance {
                 return Err(StackupError::ThicknessMismatch {
@@ -402,8 +516,8 @@ impl Stackup {
     }
 
     /// Generate KiCad layers S-expression
-    pub fn generate_layers_sexpr(&self) -> Option<String> {
-        let layers = self.layers.as_ref()?;
+    pub fn generate_layers_sexpr(&self) -> String {
+        let layers = self.layers.as_deref().unwrap_or_default();
         let copper_layers: Vec<_> = layers.iter().filter(|l| l.is_copper()).collect();
 
         let mut elements = Vec::new();
@@ -440,12 +554,12 @@ impl Stackup {
         let mut builder = ListBuilder::node(sym("layers"));
         builder.extend(elements);
         let result = builder.build();
-        Some(format!("{}", Pretty(&result)))
+        format!("{}", Pretty(&result))
     }
 
     /// Generate KiCad stackup S-expression
-    pub fn generate_stackup_sexpr(&self) -> Option<String> {
-        let layers = self.layers.as_ref()?;
+    pub fn generate_stackup_sexpr(&self) -> String {
+        let layers = self.layers.as_deref().unwrap_or_default();
         let materials = self
             .materials
             .as_ref()
@@ -535,15 +649,15 @@ impl Stackup {
         }
         b.push(SExpr::List(vec![sym("dielectric_constraints"), sym("no")]));
 
-        Some(format!("{}", Pretty(&b.build())))
+        format!("{}", Pretty(&b.build()))
     }
 
     /// Parse stackup configuration from KiCad PCB file content
     pub fn from_kicad_pcb(content: &str) -> Result<Option<Self>, StackupError> {
-        use crate::lang::sexpr::parse;
+        let pcb_expr = sexpr::parse(content)?;
 
-        // Parse the entire PCB file
-        let pcb_expr = parse(content).map_err(|_| StackupError::KicadParseError)?;
+        // First, parse the layers section to get copper roles
+        let copper_roles = Self::parse_copper_roles_from_layers(&pcb_expr)?;
 
         // Find the setup section
         let setup = pcb_expr
@@ -557,13 +671,53 @@ impl Stackup {
         match stackup_data {
             None => Ok(None), // No stackup defined
             Some(stackup_items) => {
-                let stackup = Self::parse_stackup_section(stackup_items)?;
+                let stackup = Self::parse_stackup_section_with_roles(stackup_items, &copper_roles)?;
                 Ok(Some(stackup))
             }
         }
     }
 
-    fn parse_stackup_section(stackup_items: &[SExpr]) -> Result<Self, StackupError> {
+    /// Parse copper roles from the layers section
+    fn parse_copper_roles_from_layers(
+        pcb_expr: &SExpr,
+    ) -> Result<HashMap<String, CopperRole>, StackupError> {
+        let mut copper_roles = HashMap::new();
+
+        // Find the layers section
+        if let Some(layers_items) = pcb_expr.find_list("layers") {
+            for item in layers_items.iter().skip(1) {
+                // Skip "layers" symbol
+                if let Some(layer_list) = item.as_list() {
+                    if layer_list.len() >= 3 {
+                        if let (Some(layer_name), Some(role_str)) =
+                            (layer_list[1].as_str(), layer_list[2].as_sym())
+                        {
+                            if layer_name.ends_with(".Cu") {
+                                let role = match role_str {
+                                    "signal" => CopperRole::Signal,
+                                    "power" => CopperRole::Power,
+                                    "mixed" => CopperRole::Mixed,
+                                    _ => {
+                                        return Err(StackupError::UnknownCopperRole(
+                                            role_str.to_string(),
+                                        ))
+                                    }
+                                };
+                                copper_roles.insert(layer_name.to_string(), role);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(copper_roles)
+    }
+
+    fn parse_stackup_section_with_roles(
+        stackup_items: &[SExpr],
+        copper_roles: &HashMap<String, CopperRole>,
+    ) -> Result<Self, StackupError> {
         let mut materials = Vec::new();
         let mut layers = Vec::new();
         let mut silk_screen_color = None;
@@ -579,40 +733,59 @@ impl Stackup {
                     if let Some(layer_name) = layer_data[1].as_str() {
                         match layer_name {
                             "F.SilkS" => {
-                                silk_screen_color = Self::extract_color(&layer_data[2..]);
+                                silk_screen_color =
+                                    Self::extract_string_prop(&layer_data[2..], "color");
                             }
                             "F.Mask" | "B.Mask" => {
                                 if solder_mask_color.is_none() {
-                                    solder_mask_color = Self::extract_color(&layer_data[2..]);
+                                    solder_mask_color =
+                                        Self::extract_string_prop(&layer_data[2..], "color");
                                 }
                             }
                             name if name.ends_with(".Cu") => {
-                                // Copper layer
-                                let thickness = Self::extract_thickness(&layer_data[2..])?;
-                                let role = Self::determine_copper_role(name);
+                                // Copper layer - use actual role from layers section
+                                let thickness =
+                                    Self::extract_numeric_prop(&layer_data[2..], "thickness")
+                                        .ok_or(StackupError::MissingThickness)?;
+                                let role = copper_roles
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or_else(|| Self::determine_copper_role(name)); // Fallback to heuristic
                                 layers.push(Layer::Copper { thickness, role });
                                 total_thickness += thickness;
                             }
                             name if name.starts_with("dielectric ") => {
                                 // Dielectric layer
-                                let thickness = Self::extract_thickness(&layer_data[2..])?;
-                                let material = Self::extract_material(&layer_data[2..])
-                                    .unwrap_or("FR4".to_string());
-                                let form = Self::extract_form(&layer_data[2..])
+                                let thickness =
+                                    Self::extract_numeric_prop(&layer_data[2..], "thickness")
+                                        .ok_or(StackupError::MissingThickness)?;
+                                let material =
+                                    Self::extract_string_prop(&layer_data[2..], "material")
+                                        .unwrap_or("FR4".to_string());
+                                let form = Self::extract_string_prop(&layer_data[2..], "type")
+                                    .and_then(|s| match s.as_str() {
+                                        "core" => Some(DielectricForm::Core),
+                                        "prepreg" => Some(DielectricForm::Prepreg),
+                                        _ => None,
+                                    })
                                     .unwrap_or(DielectricForm::Core);
 
                                 // Extract material properties
                                 if let (Some(er), Some(tan_d)) = (
-                                    Self::extract_epsilon_r(&layer_data[2..]),
-                                    Self::extract_loss_tangent(&layer_data[2..]),
+                                    Self::extract_numeric_prop(&layer_data[2..], "epsilon_r"),
+                                    Self::extract_numeric_prop(&layer_data[2..], "loss_tangent"),
                                 ) {
-                                    materials.push(Material {
+                                    // Check if we already have this material or need to add it
+                                    let mat = Material {
                                         name: Some(material.clone()),
                                         vendor: None,
                                         relative_permittivity: Some(er),
                                         loss_tangent: Some(tan_d),
                                         reference_frequency: None,
-                                    });
+                                    };
+                                    if !materials.iter().any(|m: &Material| m.name == mat.name) {
+                                        materials.push(mat);
+                                    }
                                 }
 
                                 layers.push(Layer::Dielectric {
@@ -625,9 +798,22 @@ impl Stackup {
                             _ => {} // Skip other layers
                         }
                     }
-                } else if layer_data.len() >= 2 && layer_data[0].as_sym() == Some("copper_finish") {
-                    if let Some(finish_str) = layer_data[1].as_str() {
-                        copper_finish = Some(finish_str.parse()?);
+                }
+            }
+        }
+
+        // Extract copper finish from the stackup items
+        for item in stackup_items.iter().skip(1) {
+            // Skip "stackup" symbol
+            if let Some(item_list) = item.as_list() {
+                if item_list.len() >= 2 {
+                    if let (Some(prop_name), Some(prop_value)) =
+                        (item_list[0].as_sym(), item_list[1].as_str())
+                    {
+                        if prop_name == "copper_finish" {
+                            copper_finish = prop_value.parse::<CopperFinish>().ok();
+                            break;
+                        }
                     }
                 }
             }
@@ -641,8 +827,12 @@ impl Stackup {
             },
             silk_screen_color,
             solder_mask_color,
-            thickness: Some(total_thickness),
-            symmetric: None, // Cannot determine from KiCad file
+            thickness: if total_thickness > 0.0 {
+                Some(total_thickness)
+            } else {
+                None
+            },
+            symmetric: None, // We don't parse this from KiCad files
             layers: if layers.is_empty() {
                 None
             } else {
@@ -673,34 +863,6 @@ impl Stackup {
                 })
                 .flatten()
         })
-    }
-
-    fn extract_color(props: &[SExpr]) -> Option<String> {
-        Self::extract_string_prop(props, "color")
-    }
-
-    fn extract_thickness(props: &[SExpr]) -> Result<f64, StackupError> {
-        Self::extract_numeric_prop(props, "thickness").ok_or(StackupError::MissingThickness)
-    }
-
-    fn extract_material(props: &[SExpr]) -> Option<String> {
-        Self::extract_string_prop(props, "material")
-    }
-
-    fn extract_form(props: &[SExpr]) -> Option<DielectricForm> {
-        Self::extract_string_prop(props, "type").and_then(|s| match s.as_str() {
-            "core" => Some(DielectricForm::Core),
-            "prepreg" => Some(DielectricForm::Prepreg),
-            _ => None,
-        })
-    }
-
-    fn extract_epsilon_r(props: &[SExpr]) -> Option<f64> {
-        Self::extract_numeric_prop(props, "epsilon_r")
-    }
-
-    fn extract_loss_tangent(props: &[SExpr]) -> Option<f64> {
-        Self::extract_numeric_prop(props, "loss_tangent")
     }
 
     fn determine_copper_role(layer_name: &str) -> CopperRole {
@@ -895,6 +1057,70 @@ mod tests {
         } else {
             panic!("Second layer should be dielectric");
         }
+    }
+
+    #[test]
+    fn test_stackup_round_trip_consistency() {
+        // Create a test stackup
+        let original_stackup = Stackup {
+            materials: Some(vec![Material {
+                name: Some("FR-4".to_string()),
+                vendor: Some("Generic".to_string()),
+                relative_permittivity: Some(4.5),
+                loss_tangent: Some(0.02),
+                reference_frequency: Some(1e9),
+            }]),
+            silk_screen_color: Some("#008000FF".to_string()),
+            solder_mask_color: Some("#000000FF".to_string()),
+            thickness: Some(1.6),
+            symmetric: Some(true),
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+                Layer::Dielectric {
+                    thickness: 1.53,
+                    material: "FR-4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+            ]),
+            copper_finish: Some(CopperFinish::Enig),
+        };
+
+        // Generate S-expressions
+        let layers_sexpr = original_stackup.generate_layers_sexpr();
+        let stackup_sexpr = original_stackup.generate_stackup_sexpr();
+
+        // Create a mock PCB file content
+        let mock_pcb_content = format!(
+            r#"(kicad_pcb
+    (version 20241229)
+    (general (thickness 1.6))
+    {}
+    (setup
+        {}
+    )
+)"#,
+            layers_sexpr, stackup_sexpr
+        );
+
+        // Parse it back
+        let parsed_stackup = Stackup::from_kicad_pcb(&mock_pcb_content)
+            .expect("Failed to parse generated stackup")
+            .expect("No stackup found");
+
+        // They should be equivalent with tolerance
+        assert!(
+            original_stackup.approx_eq(&parsed_stackup, THICKNESS_EPS),
+            "Round-trip consistency failed!\nOriginal: {:?}\nParsed: {:?}",
+            original_stackup,
+            parsed_stackup
+        );
     }
 
     #[test]

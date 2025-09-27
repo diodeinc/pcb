@@ -2879,6 +2879,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-sch",
  "pcb-zen",
+ "pcb-zen-core",
  "serde_json",
  "serial_test",
  "tempfile",
