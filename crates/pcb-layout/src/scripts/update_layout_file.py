@@ -1309,11 +1309,11 @@ class SyncState:
 class SetupBoard(Step):
     """Set up the board for the sync process."""
 
-    def __init__(self, state: SyncState, board: pcbnew.BOARD, board_config_path: str = None, force_sync_board_config: bool = False):
+    def __init__(self, state: SyncState, board: pcbnew.BOARD, board_config_path: str = None, dont_sync_board_config: bool = False):
         self.state = state
         self.board = board
         self.board_config_path = board_config_path
-        self.force_sync_board_config = force_sync_board_config
+        self.dont_sync_board_config = dont_sync_board_config
 
     def _is_new_board(self) -> bool:
         """Check if this is a newly created board by looking for existing footprints."""
@@ -1497,7 +1497,7 @@ class SetupBoard(Step):
         # Apply board config logic
         should_apply_config = (
             self.board_config_path and 
-            (self._is_new_board() or self.force_sync_board_config)
+            not self.dont_sync_board_config
         )
         
         if should_apply_config:
@@ -3128,9 +3128,9 @@ def main():
         help="""JSON file containing board setup configuration.""",
     )
     parser.add_argument(
-        "--force-sync-board-config",
+        "--dont-sync-board-config",
         action="store_true",
-        help="""Apply board config even to existing boards (default: only new boards).""",
+        help="""Skip applying board config (default: always apply board config).""",
     )
     args = parser.parse_args()
 
@@ -3166,7 +3166,7 @@ def main():
         ]
     else:
         steps = [
-            SetupBoard(state, board, args.board_config, args.force_sync_board_config),
+            SetupBoard(state, board, args.board_config, args.dont_sync_board_config),
             ApplyMovedPaths(state, board, schematic_data),
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),

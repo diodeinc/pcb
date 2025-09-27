@@ -552,7 +552,7 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
 fn copy_layout(info: &ReleaseInfo) -> Result<()> {
     // If build directory doesn't exist, generate layout files first
     if !info.layout_path.exists() {
-        pcb_layout::process_layout(&info.schematic, &info.workspace.zen_path)?;
+        pcb_layout::process_layout(&info.schematic, &info.workspace.zen_path, false)?;
     }
 
     let layout_staging_dir = info.staging_dir.join("layout");

@@ -68,6 +68,7 @@ pub struct LayoutPaths {
 pub fn process_layout(
     schematic: &Schematic,
     source_path: &Path,
+    dont_sync_board_config: bool,
 ) -> Result<LayoutResult, LayoutError> {
     // Extract layout path from schematic
     let layout_path = utils::extract_layout_path(schematic).ok_or(LayoutError::NoLayoutPath)?;
@@ -159,6 +160,11 @@ pub fn process_layout(
         script_builder = script_builder.arg("--board-config").arg(board_config);
     }
 
+    // Add dont-sync-board-config flag if set
+    if dont_sync_board_config {
+        script_builder = script_builder.arg("--dont-sync-board-config");
+    }
+
     script_builder
         .log_file(
             fs::OpenOptions::new()
@@ -177,9 +183,11 @@ pub fn process_layout(
             )
         })?;
 
-    // NEW: Apply stackup configuration if present
-    if let Some(ref json) = board_config_json {
-        patch_stackup_if_needed(&paths.pcb, json)?;
+    // NEW: Apply stackup configuration if present and not disabled
+    if !dont_sync_board_config {
+        if let Some(ref json) = board_config_json {
+            patch_stackup_if_needed(&paths.pcb, json)?;
+        }
     }
 
     Ok(LayoutResult {

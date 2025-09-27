@@ -29,6 +29,10 @@ pub struct LayoutArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
+
+    /// Skip applying board config (default: always apply board config)
+    #[arg(long = "dont-sync-board-config")]
+    pub dont_sync_board_config: bool,
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
@@ -62,7 +66,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         let spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
 
         // Check if the schematic has a layout
-        match process_layout(&schematic, &zen_path) {
+        match process_layout(&schematic, &zen_path, args.dont_sync_board_config) {
             Ok(layout_result) => {
                 spinner.finish();
                 // Print success with the layout path relative to the star file
