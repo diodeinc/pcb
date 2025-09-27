@@ -85,9 +85,43 @@ DesignRules = record(
     netclasses=field(NetClasses | None, None),
 )
 
+# Material definition for stackup layers
+Material = record(
+    name=field(str | None, None),  # Material name
+    vendor=field(str | None, None),  # Optional vendor
+    relative_permittivity=field(float | None, None),  # Epsilon R (dielectric constant)
+    loss_tangent=field(float | None, None),  # Loss tangent
+    reference_frequency=field(float | None, None),  # Optional frequency in Hz
+)
+
+# Copper layer definition for stackup
+CopperLayer = record(
+    thickness=field(float | None, None),  # Thickness in mm
+    role=field(str | None, None),  # "signal", "power", "mixed"
+)
+
+# Dielectric layer definition for stackup
+DielectricLayer = record(
+    thickness=field(float | None, None),  # Thickness in mm
+    material=field(str | None, None),  # Material name (ref to materials list)
+    form=field(str | None, None),  # "core" or "prepreg"
+)
+
+# Board stackup configuration
+Stackup = record(
+    materials=field(list | None, None),  # List of Material objects
+    silk_screen_color=field(str | None, None),  # Hex color like "#44805BFF"
+    solder_mask_color=field(str | None, None),  # Hex color like "#191919E6"
+    thickness=field(float | None, None),  # Total thickness in mm
+    symmetric=field(bool | None, None),  # Assert symmetric stackup (default: True)
+    layers=field(list | None, None),  # Ordered list of stackup layers
+    copper_finish=field(str | None, None),  # Surface finish: "ENIG", "HAL SnPb", "HAL lead-free"
+)
+
 # Complete board configuration
 BoardConfig = record(
     design_rules=field(DesignRules | None, None),
+    stackup=field(Stackup | None, None),  # Board stackup configuration
 )
 
 
@@ -154,6 +188,14 @@ def deep_merge(base, override):
             return NetClass(**merged)
         elif base_type == "NetClasses":
             return NetClasses(**merged)
+        elif base_type == "Stackup":
+            return Stackup(**merged)
+        elif base_type == "Material":
+            return Material(**merged)
+        elif base_type == "CopperLayer":
+            return CopperLayer(**merged)
+        elif base_type == "DielectricLayer":
+            return DielectricLayer(**merged)
         else:
             # Fallback: return merged dict
             return merged

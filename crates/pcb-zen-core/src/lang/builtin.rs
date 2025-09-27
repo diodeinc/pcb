@@ -11,7 +11,7 @@ use starlark::{
     Error,
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, physical::*};
+use crate::lang::{evaluator_ext::EvaluatorExt, physical::*, stackup::BoardConfig};
 
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;
@@ -177,6 +177,11 @@ impl<'v> StarlarkValue<'v> for AddBoardConfig {
         // Convert value to pretty-printed JSON and store config directly
         let config_json = config_val.to_json().map_err(|e| {
             Error::new_other(anyhow::anyhow!("Failed to convert config to JSON: {}", e))
+        })?;
+
+        // Parse and validate the board configuration (including stackup validation)
+        let _board_config = BoardConfig::from_json_str(&config_json).map_err(|e| {
+            Error::new_other(anyhow::anyhow!("Board config validation failed: {}", e))
         })?;
 
         // Parse and pretty-print the JSON
