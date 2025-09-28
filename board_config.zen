@@ -132,73 +132,89 @@ def deep_merge(base, override):
     For lists: override replaces base entirely
     For primitives: override value used if not None
     """
+
     if override == None:
         return base
     if base == None:
         return override
 
-    # Check if both are records by getting their fields
-    base_fields = dir(base)
-    override_fields = dir(override)
+    # Handle list types - override replaces entirely
+    if type(base) == "list":
+        return override if type(override) == "list" else base
 
-    # If we can get fields from both, assume they're records to merge
-    if base_fields and override_fields:
+    # Check if both are records by checking if they have getattr/type
+    base_type = type(base)
+    override_type = type(override)
+
+    # Only merge if both are record types (not primitive types)
+    if base_type == "record" and override_type == "record":
         merged = {}
 
-        # Start with all base fields
-        for field in base_fields:
-            if field.startswith("_"):  # Skip private fields
-                continue
-            merged[field] = getattr(base, field)
+        # Get all field names from both records
+        base_fields = dir(base)
+        override_fields = dir(override)
+        all_fields = set(base_fields + override_fields)
 
-        # Override with fields from override
-        for field in override_fields:
+        for field in all_fields:
             if field.startswith("_"):  # Skip private fields
                 continue
-            override_val = getattr(override, field)
+
+            base_val = getattr(base, field, None) if field in base_fields else None
+            override_val = getattr(override, field, None) if field in override_fields else None
+
             if override_val != None:
-                if field in merged:
-                    # Recursively merge if both exist
-                    merged[field] = deep_merge(merged[field], override_val)
+                if base_val != None and type(base_val) != "list":
+                    # Recursively merge if both exist and not lists
+                    merged[field] = deep_merge(base_val, override_val)
                 else:
-                    # New field from override
+                    # Use override value (including for lists)
                     merged[field] = override_val
+            elif base_val != None:
+                # Keep base value when override is None but base has a value
 
-        # Construct same type as base
-        base_type = type(base)
-        if base_type == "BoardConfig":
-            return BoardConfig(**merged)
-        elif base_type == "DesignRules":
-            return DesignRules(**merged)
-        elif base_type == "Constraints":
-            return Constraints(**merged)
-        elif base_type == "PredefinedSizes":
-            return PredefinedSizes(**merged)
-        elif base_type == "Copper":
-            return Copper(**merged)
-        elif base_type == "Holes":
-            return Holes(**merged)
-        elif base_type == "Uvias":
-            return Uvias(**merged)
-        elif base_type == "Silkscreen":
-            return Silkscreen(**merged)
-        elif base_type == "ViaDimension":
-            return ViaDimension(**merged)
-        elif base_type == "NetClass":
-            return NetClass(**merged)
-        elif base_type == "NetClasses":
-            return NetClasses(**merged)
-        elif base_type == "Stackup":
-            return Stackup(**merged)
-        elif base_type == "Material":
-            return Material(**merged)
-        elif base_type == "CopperLayer":
-            return CopperLayer(**merged)
-        elif base_type == "DielectricLayer":
-            return DielectricLayer(**merged)
+                merged[field] = base_val
+            else:
+                # Both are None, keep None
+                merged[field] = None
+
+        # Extract record type from string representation
+        base_str = str(base)
+        if base_str.startswith("record["):
+            type_name = base_str.split("[")[1].split("]")[0]
+            if type_name == "BoardConfig":
+                return BoardConfig(**merged)
+            elif type_name == "DesignRules":
+                return DesignRules(**merged)
+            elif type_name == "Constraints":
+                return Constraints(**merged)
+            elif type_name == "PredefinedSizes":
+                return PredefinedSizes(**merged)
+            elif type_name == "Copper":
+                return Copper(**merged)
+            elif type_name == "Holes":
+                return Holes(**merged)
+            elif type_name == "Uvias":
+                return Uvias(**merged)
+            elif type_name == "Silkscreen":
+                return Silkscreen(**merged)
+            elif type_name == "ViaDimension":
+                return ViaDimension(**merged)
+            elif type_name == "NetClass":
+                return NetClass(**merged)
+            elif type_name == "NetClasses":
+                return NetClasses(**merged)
+            elif type_name == "Stackup":
+                return Stackup(**merged)
+            elif type_name == "Material":
+                return Material(**merged)
+            elif type_name == "CopperLayer":
+                return CopperLayer(**merged)
+            elif type_name == "DielectricLayer":
+                return DielectricLayer(**merged)
+            else:
+                error("Unknown record type for merge: " + type_name)
         else:
-            # Fallback: return merged dict
-            return merged
+            error("Unable to determine record type from: " + base_str)
 
     # Not records, override wins
     return override
