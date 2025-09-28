@@ -10,6 +10,10 @@ pub enum Sexpr {
     Symbol(String),
     /// A string - quoted text
     String(String),
+    /// An integer value
+    Int(i64),
+    /// A floating-point value
+    F64(f64),
     /// A list of S-expressions
     List(Vec<Sexpr>),
 }
@@ -25,31 +29,52 @@ impl Sexpr {
         Sexpr::String(s.into())
     }
 
-    /// Create an atom - for backwards compatibility
-    /// This creates a symbol by default
-    pub fn atom(s: impl Into<String>) -> Self {
-        Sexpr::Symbol(s.into())
-    }
-
     /// Create a list from a vector of S-expressions
     pub fn list(items: Vec<Sexpr>) -> Self {
         Sexpr::List(items)
     }
 
-    /// Check if this is an atom (symbol or string)
-    pub fn is_atom(&self) -> bool {
-        self.as_atom().is_some()
-    }
-
     /// Check if this is a list
     pub fn is_list(&self) -> bool {
-        self.as_list().is_some()
+        matches!(self, Sexpr::List(_))
     }
 
-    /// Get the atom value if this is an atom (symbol or string)
+    /// Get the atom value if this is an atom (symbol or string) - for compatibility
     pub fn as_atom(&self) -> Option<&str> {
         match self {
             Sexpr::Symbol(s) | Sexpr::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get the symbol name if this is a symbol
+    pub fn as_sym(&self) -> Option<&str> {
+        match self {
+            Sexpr::Symbol(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get the string content if this is a string literal
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Sexpr::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get the integer value if this is an integer
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Sexpr::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// Get the float value if this is a float
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            Sexpr::F64(f) => Some(*f),
             _ => None,
         }
     }
@@ -68,6 +93,136 @@ impl Sexpr {
             Sexpr::List(items) => Some(items),
             _ => None,
         }
+    }
+
+    /// Find a child list with the given name (first element)
+    pub fn find_list(&self, name: &str) -> Option<&[Sexpr]> {
+        if let Some(items) = self.as_list() {
+            for item in items {
+                if let Some(list_items) = item.as_list() {
+                    if let Some(first) = list_items.first() {
+                        if first.as_sym() == Some(name) {
+                            return Some(list_items);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find all child lists with the given name
+    pub fn find_all_lists(&self, name: &str) -> Vec<&[Sexpr]> {
+        let mut result = Vec::new();
+        if let Some(items) = self.as_list() {
+            for item in items {
+                if let Some(list_items) = item.as_list() {
+                    if let Some(first) = list_items.first() {
+                        if first.as_sym() == Some(name) {
+                            result.push(list_items);
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+/// Create a key-value pair list
+pub fn kv<K: Into<String>, V: Into<Sexpr>>(k: K, v: V) -> Sexpr {
+    Sexpr::list(vec![Sexpr::symbol(k), v.into()])
+}
+
+/// A builder for constructing lists incrementally
+#[derive(Debug)]
+pub struct ListBuilder {
+    items: Vec<Sexpr>,
+}
+
+impl Default for ListBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ListBuilder {
+    /// Create a new builder with a node name
+    pub fn node<N: Into<Sexpr>>(name: N) -> Self {
+        Self {
+            items: vec![name.into()],
+        }
+    }
+
+    /// Create an empty builder
+    pub fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    /// Push a value to the list
+    pub fn push<V: Into<Sexpr>>(&mut self, v: V) -> &mut Self {
+        self.items.push(v.into());
+        self
+    }
+
+    /// Conditionally push a value to the list
+    pub fn push_if<V: Into<Sexpr>>(&mut self, cond: bool, v: V) -> &mut Self {
+        if cond {
+            self.items.push(v.into());
+        }
+        self
+    }
+
+    /// Extend the list with an iterator of values
+    pub fn extend<I, V>(&mut self, iter: I) -> &mut Self
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<Sexpr>,
+    {
+        self.items.extend(iter.into_iter().map(Into::into));
+        self
+    }
+
+    /// Build the final list
+    pub fn build(self) -> Sexpr {
+        Sexpr::List(self.items)
+    }
+}
+
+/// From implementations for automatic conversion
+impl From<&str> for Sexpr {
+    fn from(s: &str) -> Self {
+        Self::symbol(s)
+    }
+}
+
+impl From<String> for Sexpr {
+    fn from(s: String) -> Self {
+        Self::symbol(s)
+    }
+}
+
+impl From<i64> for Sexpr {
+    fn from(n: i64) -> Self {
+        Sexpr::Int(n)
+    }
+}
+
+impl From<u32> for Sexpr {
+    fn from(n: u32) -> Self {
+        Sexpr::Int(n as i64)
+    }
+}
+
+impl From<f64> for Sexpr {
+    fn from(n: f64) -> Self {
+        Sexpr::F64(n)
+    }
+}
+
+impl From<bool> for Sexpr {
+    fn from(b: bool) -> Self {
+        Self::symbol(if b { "yes" } else { "no" })
     }
 }
 
@@ -154,7 +309,7 @@ impl<'a> Parser<'a> {
             // Parse quoted string
             self.parse_string()
         } else {
-            // Parse unquoted atom
+            // Parse unquoted atom - could be number or symbol
             let start = self.current_pos;
             while let Some(ch) = self.peek_char() {
                 if ch.is_whitespace() || ch == '(' || ch == ')' {
@@ -167,9 +322,17 @@ impl<'a> Parser<'a> {
                 return Err(ParseError::EmptyAtom);
             }
 
-            Ok(Sexpr::Symbol(
-                self.input[start..self.current_pos].to_string(),
-            ))
+            let atom_str = self.input[start..self.current_pos].to_string();
+
+            // Try to parse as number first
+            if let Ok(int_val) = atom_str.parse::<i64>() {
+                Ok(Sexpr::Int(int_val))
+            } else if let Ok(float_val) = atom_str.parse::<f64>() {
+                Ok(Sexpr::F64(float_val))
+            } else {
+                // Otherwise treat as symbol
+                Ok(Sexpr::Symbol(atom_str))
+            }
         }
     }
 
@@ -334,58 +497,36 @@ impl std::error::Error for ParseError {}
 
 /// Format an S-expression with proper indentation
 pub fn format_sexpr(sexpr: &Sexpr, indent_level: usize) -> String {
-    format_sexpr_inner(sexpr, indent_level, true)
-}
-
-/// Internal formatting function with control over whether to add initial indent
-fn format_sexpr_inner(sexpr: &Sexpr, indent_level: usize, add_indent: bool) -> String {
-    let indent = if add_indent {
-        "  ".repeat(indent_level)
-    } else {
-        String::new()
-    };
+    let indent = "  ".repeat(indent_level);
 
     match sexpr {
-        Sexpr::Symbol(s) => {
-            // Symbols are never quoted
-            format!("{indent}{s}")
-        }
-        Sexpr::String(s) => {
-            // Strings are always quoted
-            format!("{}\"{}\"", indent, escape_string(s))
-        }
+        Sexpr::Symbol(s) => format!("{indent}{s}"), // Symbols are never quoted
+        Sexpr::String(s) => format!("{}\"{}\"", indent, escape_string(s)), // Strings are always quoted
+        Sexpr::Int(n) => format!("{indent}{n}"),
+        Sexpr::F64(f) => format!("{indent}{}", trim_float(f.to_string())),
         Sexpr::List(items) => {
             if items.is_empty() {
                 return format!("{indent}()");
             }
 
-            // Check if this is a simple list that should be on one line
-            let is_simple = is_simple_list(items);
-
-            if is_simple {
+            if is_simple_list(items) {
+                // Single line format
                 let mut result = format!("{indent}(");
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {
                         result.push(' ');
                     }
-                    result.push_str(&format_sexpr_inner(item, 0, false));
+                    result.push_str(format_sexpr(item, 0).trim());
                 }
                 result.push(')');
                 result
             } else {
-                let mut result = format!("{indent}(");
-
-                // First item on the same line
-                if let Some(first) = items.first() {
-                    result.push_str(&format_sexpr_inner(first, 0, false));
-                }
-
-                // Rest of items on new lines
-                for item in items.iter().skip(1) {
+                // Multi-line format
+                let mut result = format!("{indent}({}", format_sexpr(&items[0], 0).trim());
+                for item in &items[1..] {
                     result.push('\n');
-                    result.push_str(&format_sexpr_inner(item, indent_level + 1, true));
+                    result.push_str(&format_sexpr(item, indent_level + 1));
                 }
-
                 result.push('\n');
                 result.push_str(&indent);
                 result.push(')');
@@ -408,6 +549,22 @@ fn escape_string(s: &str) -> String {
         }
     }
     result
+}
+
+fn trim_float(mut s: String) -> String {
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    if s.is_empty() {
+        "0".to_string()
+    } else {
+        s
+    }
 }
 
 fn is_simple_list(items: &[Sexpr]) -> bool {
@@ -438,9 +595,12 @@ fn is_simple_list(items: &[Sexpr]) -> bool {
 
     // Otherwise, simple if very short and all atoms
     items.len() <= 2
-        && items
-            .iter()
-            .all(|item| matches!(item, Sexpr::Symbol(_) | Sexpr::String(_)))
+        && items.iter().all(|item| {
+            matches!(
+                item,
+                Sexpr::Symbol(_) | Sexpr::String(_) | Sexpr::Int(_) | Sexpr::F64(_)
+            )
+        })
 }
 
 impl fmt::Display for Sexpr {
@@ -456,8 +616,8 @@ mod tests {
     #[test]
     fn test_parse_atom() {
         assert_eq!(parse("hello").unwrap(), Sexpr::Symbol("hello".to_string()));
-        assert_eq!(parse("123").unwrap(), Sexpr::Symbol("123".to_string()));
-        assert_eq!(parse("3.14").unwrap(), Sexpr::Symbol("3.14".to_string()));
+        assert_eq!(parse("123").unwrap(), Sexpr::Int(123));
+        assert_eq!(parse("3.14").unwrap(), Sexpr::F64(3.14));
         assert_eq!(
             parse("symbol-with-dashes").unwrap(),
             Sexpr::Symbol("symbol-with-dashes".to_string())

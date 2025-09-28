@@ -9,7 +9,6 @@ pub(crate) mod interface_validation;
 pub mod module;
 pub mod net;
 pub mod physical;
-pub mod sexpr;
 pub mod spice_model;
 pub mod stackup;
 pub mod symbol;

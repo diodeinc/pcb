@@ -3,7 +3,7 @@ use serde_json::Value as JsonValue;
 use std::{borrow::Cow, collections::HashMap, fmt, str::FromStr};
 use thiserror::Error;
 
-use crate::lang::sexpr::{self, kv, str_lit, sym, ListBuilder, Pretty, SExpr};
+use pcb_sexpr::{kv, ListBuilder, Sexpr};
 
 pub const THICKNESS_EPS: f64 = f64::EPSILON * 1000.0; // Floating point precision tolerance
 const THICKNESS_VALIDATION_TOLERANCE: f64 = 0.10; // 10% tolerance for stackup validation
@@ -131,7 +131,7 @@ trait ListBuilderExt {
 
 impl ListBuilderExt for ListBuilder {
     fn kv_str(&mut self, key: &str, val: &str) -> &mut Self {
-        self.push(kv(key, str_lit(val)))
+        self.push(kv(key, Sexpr::string(val)))
     }
 
     fn kv_f64(&mut self, key: &str, val: f64) -> &mut Self {
@@ -154,22 +154,22 @@ impl ListBuilderExt for ListBuilder {
 }
 
 // Tiny helpers for stackup generation
-fn tech_layer(name: &str, layer_type: &str, color: Option<&str>, thickness: Option<f64>) -> SExpr {
-    let mut l = ListBuilder::node(sym("layer"));
-    l.push(str_lit(name))
+fn tech_layer(name: &str, layer_type: &str, color: Option<&str>, thickness: Option<f64>) -> Sexpr {
+    let mut l = ListBuilder::node(Sexpr::symbol("layer"));
+    l.push(Sexpr::string(name))
         .kv_str("type", layer_type)
         .kv_opt_str("color", color)
         .kv_opt_f64("thickness", thickness);
     l.build()
 }
 
-fn layer_entry<I, T>(name: &str, props: I) -> SExpr
+fn layer_entry<I, T>(name: &str, props: I) -> Sexpr
 where
     I: IntoIterator<Item = T>,
-    T: Into<SExpr>,
+    T: Into<Sexpr>,
 {
-    let mut l = ListBuilder::node(sym("layer"));
-    l.push(str_lit(name)).extend(props);
+    let mut l = ListBuilder::node(Sexpr::symbol("layer"));
+    l.push(Sexpr::string(name)).extend(props);
     l.build()
 }
 
@@ -355,8 +355,8 @@ pub enum StackupError {
     UnknownCopperRole(String),
 }
 
-impl From<sexpr::ParseError> for StackupError {
-    fn from(_: sexpr::ParseError) -> Self {
+impl From<pcb_sexpr::ParseError> for StackupError {
+    fn from(_: pcb_sexpr::ParseError) -> Self {
         StackupError::KicadParseError
     }
 }
@@ -526,10 +526,10 @@ impl Stackup {
         for (i, layer) in copper_layers.iter().enumerate() {
             if let Layer::Copper { role, .. } = layer {
                 let (id, name) = copper_layer_mapping(i, copper_layers.len());
-                elements.push(SExpr::List(vec![
+                elements.push(Sexpr::List(vec![
                     id.into(),
-                    str_lit(name.as_ref()),
-                    sym(role.to_string()),
+                    Sexpr::string(name.as_ref()),
+                    Sexpr::symbol(role.to_string()),
                 ]));
             }
         }
@@ -544,17 +544,17 @@ impl Stackup {
         ];
 
         for &(id, name, layer_type, alias) in TECH_LAYERS {
-            let mut v = vec![id.into(), str_lit(name), sym(layer_type)];
+            let mut v = vec![id.into(), Sexpr::string(name), Sexpr::symbol(layer_type)];
             if let Some(a) = alias {
-                v.push(str_lit(a));
+                v.push(Sexpr::string(a));
             }
-            elements.push(SExpr::List(v));
+            elements.push(Sexpr::List(v));
         }
 
-        let mut builder = ListBuilder::node(sym("layers"));
+        let mut builder = ListBuilder::node(Sexpr::symbol("layers"));
         builder.extend(elements);
         let result = builder.build();
-        format!("{}", Pretty(&result))
+        format!("{}", &result)
     }
 
     /// Generate KiCad stackup S-expression
@@ -565,7 +565,7 @@ impl Stackup {
             .as_ref()
             .map_or(&[] as &[Material], |v| v.as_slice());
 
-        let mut b = ListBuilder::node(sym("stackup"));
+        let mut b = ListBuilder::node(Sexpr::symbol("stackup"));
 
         // Top technical layers
         b.push(tech_layer(
@@ -592,7 +592,10 @@ impl Stackup {
                     let (_, name) = copper_layer_mapping(copper_index, copper_layers.len());
                     b.push(layer_entry(
                         &name,
-                        [kv("type", str_lit("copper")), kv("thickness", *thickness)],
+                        [
+                            kv("type", Sexpr::string("copper")),
+                            kv("thickness", *thickness),
+                        ],
                     ));
                     copper_index += 1;
                 }
@@ -602,9 +605,9 @@ impl Stackup {
                     form,
                 } => {
                     let mut entries = vec![
-                        kv("type", str_lit(form.to_string())),
+                        kv("type", Sexpr::string(form.to_string())),
                         kv("thickness", *thickness),
-                        kv("material", str_lit(material)),
+                        kv("material", Sexpr::string(material)),
                     ];
                     if let Some(mat) = materials
                         .iter()
@@ -642,19 +645,22 @@ impl Stackup {
 
         // Finish and constraints
         if let Some(finish) = &self.copper_finish {
-            b.push(SExpr::List(vec![
-                sym("copper_finish"),
-                str_lit(finish.to_string()),
+            b.push(Sexpr::List(vec![
+                Sexpr::symbol("copper_finish"),
+                Sexpr::string(finish.to_string()),
             ]));
         }
-        b.push(SExpr::List(vec![sym("dielectric_constraints"), sym("no")]));
+        b.push(Sexpr::List(vec![
+            Sexpr::symbol("dielectric_constraints"),
+            Sexpr::symbol("no"),
+        ]));
 
-        format!("{}", Pretty(&b.build()))
+        format!("{}", &b.build())
     }
 
     /// Parse stackup configuration from KiCad PCB file content
     pub fn from_kicad_pcb(content: &str) -> Result<Option<Self>, StackupError> {
-        let pcb_expr = sexpr::parse(content)?;
+        let pcb_expr = pcb_sexpr::parse(content)?;
 
         // First, parse the layers section to get copper roles
         let copper_roles = Self::parse_copper_roles_from_layers(&pcb_expr)?;
@@ -665,7 +671,7 @@ impl Stackup {
             .ok_or(StackupError::NoSetupSection)?;
 
         // Find the stackup within setup
-        let setup_expr = SExpr::List(setup.to_vec());
+        let setup_expr = Sexpr::List(setup.to_vec());
         let stackup_data = setup_expr.find_list("stackup");
 
         match stackup_data {
@@ -679,7 +685,7 @@ impl Stackup {
 
     /// Parse copper roles from the layers section
     fn parse_copper_roles_from_layers(
-        pcb_expr: &SExpr,
+        pcb_expr: &Sexpr,
     ) -> Result<HashMap<String, CopperRole>, StackupError> {
         let mut copper_roles = HashMap::new();
 
@@ -715,7 +721,7 @@ impl Stackup {
     }
 
     fn parse_stackup_section_with_roles(
-        stackup_items: &[SExpr],
+        stackup_items: &[Sexpr],
         copper_roles: &HashMap<String, CopperRole>,
     ) -> Result<Self, StackupError> {
         let mut materials = Vec::new();
@@ -843,7 +849,7 @@ impl Stackup {
     }
 
     // Helper methods for extracting properties from S-expressions
-    fn extract_string_prop(props: &[SExpr], key: &str) -> Option<String> {
+    fn extract_string_prop(props: &[Sexpr], key: &str) -> Option<String> {
         props.iter().find_map(|prop| {
             let list = prop.as_list()?;
             (list.len() >= 2 && list[0].as_sym() == Some(key))
@@ -852,7 +858,7 @@ impl Stackup {
         })
     }
 
-    fn extract_numeric_prop(props: &[SExpr], key: &str) -> Option<f64> {
+    fn extract_numeric_prop(props: &[Sexpr], key: &str) -> Option<f64> {
         props.iter().find_map(|prop| {
             let list = prop.as_list()?;
             (list.len() >= 2 && list[0].as_sym() == Some(key))
