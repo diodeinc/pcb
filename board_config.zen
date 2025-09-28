@@ -248,3 +248,132 @@ def Board(
     add_property("layout_path", Path(layout_path, allow_not_exist=True))
     if layout_hints:
         add_property("layout_hints", layout_hints)
+
+
+# Standard Base Configurations
+
+# Common materials that can be reused across board configurations
+
+# Standard PCB Materials
+FR4_CORE = Material(
+    name="FR4-Core",
+    relative_permittivity=4.6,
+    loss_tangent=0.025,  # Typical for standard FR4 core
+)
+
+BASE_PREPREG = Material(
+    name="Prepreg",
+    relative_permittivity=4.4,
+    loss_tangent=0.025,  # Standard prepreg material
+)
+
+# Common stackup configurations
+
+# Base 4-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+BASE_4L_STACKUP = Stackup(
+    materials=[FR4_CORE, BASE_PREPREG],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="HAL SnPb",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=1.065, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
+# Common constraint sets for different fabrication capabilities
+
+# Base PCB Constraints (1oz copper)
+BASE_CONSTRAINTS = Constraints(
+    copper=Copper(
+        minimum_clearance=0.09,  # Min spacing between copper features (1oz)
+        minimum_track_width=0.09,  # Min track width (1oz)
+        minimum_via_diameter=0.25,  # Min via diameter (0.25mm)
+        copper_to_hole_clearance=0.2,  # Inner layer via hole to copper clearance
+        copper_to_edge_clearance=0.3,  # Reasonable edge clearance
+    ),
+    holes=Holes(
+        minimum_through_hole=0.15,  # Min via hole size
+        hole_to_hole_clearance=0.2,  # Via hole-to-hole spacing
+    ),
+    uvias=Uvias(
+        minimum_uvia_diameter=0.15,  # Micro via diameter (if supported)
+        minimum_uvia_hole=0.1,  # Micro via hole (if supported)
+    ),
+    silkscreen=Silkscreen(
+        minimum_item_clearance=0.1,  # Reasonable silkscreen clearance
+        minimum_text_height=0.8,  # Reasonable minimum text height
+    ),
+)
+
+# Heavy Copper Constraints (2oz copper)
+HEAVY_COPPER_CONSTRAINTS = Constraints(
+    copper=Copper(
+        minimum_clearance=0.2,  # Min spacing (2oz copper)
+        minimum_track_width=0.16,  # Min track width (2oz copper)
+        minimum_via_diameter=0.25,  # Same via diameter
+        copper_to_hole_clearance=0.2,  # Same hole clearance
+        copper_to_edge_clearance=0.3,  # Same edge clearance
+    ),
+    holes=Holes(
+        minimum_through_hole=0.15,  # Same hole size
+        hole_to_hole_clearance=0.2,  # Same hole spacing
+    ),
+    uvias=Uvias(
+        minimum_uvia_diameter=0.15,
+        minimum_uvia_hole=0.1,
+    ),
+    silkscreen=Silkscreen(
+        minimum_item_clearance=0.1,
+        minimum_text_height=0.8,
+    ),
+)
+
+# Common netclass definitions
+
+# Default netclass for general-purpose PCB manufacturing
+DEFAULT_NETCLASS = NetClass(
+    name="Default",
+    clearance=0.15,  # Conservative clearance (different nets)
+    track_width=0.15,  # Safe track width for most manufacturers
+    via_diameter=0.4,  # Standard via size
+    via_drill=0.2,  # Standard drill size
+    diff_pair_width=0.2,  # Reasonable diff pair width
+    diff_pair_gap=0.2,  # Reasonable diff pair gap
+)
+
+# Common predefined sizes for design tool dropdowns
+
+# Base predefined sizes for common PCB design
+BASE_PREDEFINED_SIZES = PredefinedSizes(
+    track_widths=[
+        0.1,  # Safe minimum
+        0.2,  # Standard signals
+        0.4,  # Power traces
+        0.8,  # Heavy power
+    ],
+    via_dimensions=[
+        ViaDimension(diameter=0.35, drill=0.2),  # Small via
+        ViaDimension(diameter=0.4, drill=0.25),  # Standard via
+        ViaDimension(diameter=0.45, drill=0.3),  # Large via
+    ],
+)
+
+# Base board configurations that can be extended
+
+# Complete base 4-layer board configuration (1oz outer, 0.5oz inner, base constraints)
+BASE_4L = BoardConfig(
+    design_rules=DesignRules(
+        constraints=BASE_CONSTRAINTS,
+        predefined_sizes=BASE_PREDEFINED_SIZES,
+        netclasses=[DEFAULT_NETCLASS],
+    ),
+    stackup=BASE_4L_STACKUP,
+)
