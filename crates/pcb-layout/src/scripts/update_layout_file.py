@@ -1315,10 +1315,6 @@ class SetupBoard(Step):
         self.board_config_path = board_config_path
         self.dont_sync_board_config = dont_sync_board_config
 
-    def _is_new_board(self) -> bool:
-        """Check if this is a newly created board by looking for existing footprints."""
-        return len(list(self.board.GetFootprints())) == 0
-
     # Configuration table: (json_path, ds_attribute, display_name, [custom_setter])
     CONFIG_MAPPINGS = [
     # Copper constraints
