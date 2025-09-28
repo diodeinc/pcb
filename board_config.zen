@@ -73,16 +73,11 @@ NetClass = record(
     color=field(str | None, None),  # PCB color (hex like "#FF0000" or CSS name)
 )
 
-# Container for all netclasses
-NetClasses = record(
-    netclasses=field(list | None, None),  # List of NetClass objects
-)
-
 # Design rules container
 DesignRules = record(
     constraints=field(Constraints | None, None),
     predefined_sizes=field(PredefinedSizes | None, None),
-    netclasses=field(NetClasses | None, None),
+    netclasses=field(list | None, None),  # List of NetClass objects
 )
 
 # Material definition for stackup layers
@@ -201,8 +196,7 @@ def deep_merge(base, override):
                 return ViaDimension(**merged)
             elif type_name == "NetClass":
                 return NetClass(**merged)
-            elif type_name == "NetClasses":
-                return NetClasses(**merged)
+
             elif type_name == "Stackup":
                 return Stackup(**merged)
             elif type_name == "Material":

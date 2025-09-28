@@ -1345,7 +1345,7 @@ class SetupBoard(Step):
     (['design_rules', 'predefined_sizes', 'track_widths'], 'm_TrackWidthList', 'pre-defined track widths', 'track_widths'),
     (['design_rules', 'predefined_sizes', 'via_dimensions'], 'm_ViasDimensionsList', 'pre-defined via dimensions', 'via_dimensions'),
         # Netclasses
-        (['design_rules', 'netclasses', 'netclasses'], None, 'netclasses', 'netclasses'),
+        (['design_rules', 'netclasses'], None, 'netclasses', 'netclasses'),
     ]
 
     def _get_nested_value(self, data, path):
