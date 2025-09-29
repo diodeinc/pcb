@@ -365,7 +365,7 @@ if "SubmoduleName.ComponentName" in module:
     nested_component = module["SubmoduleName.ComponentName"]
 ```
 
-**Type**: `Module`  
+**Type**: `Module`
 **Constructor**: `Module(path)`
 
 **Module Indexing**: `module[name]` supports:
@@ -381,12 +381,13 @@ if "SubmoduleName.ComponentName" in module:
 - Returns `True` if the path exists, `False` otherwise
 - Works with the same path syntax as indexing
 
-**Module Attributes**:
-- `module.nets`: Dict mapping net names to lists of connected port tuples
-- `module.components`: Dict mapping component paths to component objects
+**Module Methods**:
+- `module.nets()` - Returns dict mapping net names to lists of connected port tuples
+- `module.components()` - Returns dict mapping component paths to component objects
+- `module.graph()` - Returns CircuitGraph object for path finding and topology validation
 
 **Naming Conventions**:
-- Component paths in `module.components` follow the pattern `SubmoduleName.ComponentName` (e.g., `"BMI270.BMI270"`, `"C1.C"`)
+- Component paths in `module.components()` follow the pattern `SubmoduleName.ComponentName` (e.g., `"BMI270.BMI270"`, `"C1.C"`)
 - The first part is the submodule name, the second part is the component name within that submodule
 - Indexing supports both single names and nested paths:
   - `module["BMI270"]` returns the BMI270 submodule
@@ -867,29 +868,35 @@ final_config = merge_configs(base_config, tight_rules)
 Board("Production", final_config, "layout/", default=True)
 ```
 
-### TestBench(name, module, checks)
+### TestBench(name, module, test_cases, checks)
 
-Creates a test bench for validating module connectivity and properties without requiring inputs.
+Creates a test bench for validating module behavior across multiple test cases with parametric inputs.
 
 ```python
 # Load a module to test
 MyCircuit = Module("./my_circuit.zen")
 
-# Define check functions
-def verify_power_connections(module):
+# Define check functions that receive (module, inputs)
+def verify_power_connections(module, inputs):
     """Ensure all power pins are connected to VCC"""
-    vcc_connections = module.nets.get("VCC", [])
+    nets = module.nets()
+    vcc_connections = nets.get("VCC", [])
     check(len(vcc_connections) >= 2, "Need at least 2 VCC connections")
 
-def verify_ground_plane(module):
+def verify_ground_plane(module, inputs):
     """Check for proper ground connections"""
-    check("GND" in module.nets, "Missing GND net")
-    check(len(module.nets["GND"]) > 3, "GND net needs more than 3 connections")
+    nets = module.nets()
+    check("GND" in nets, "Missing GND net")
+    check(len(nets["GND"]) > 3, "GND net needs more than 3 connections")
 
-# Create test bench
+# Create test bench with multiple test cases
 TestBench(
     name = "PowerTest",
     module = MyCircuit,
+    test_cases = {
+        "case_3v3": {"voltage": "3.3V", "current": "1A"},
+        "case_5v": {"voltage": "5V", "current": "2A"},
+    },
     checks = [verify_power_connections, verify_ground_plane]
 )
 ```
@@ -897,38 +904,42 @@ TestBench(
 **Parameters:**
 
 - `name`: String identifier for the test bench
-- `module`: Module instance to test (created with `Module()`)
-- `checks`: List of check functions to execute
+- `module`: ModuleLoader to test (created with `Module()`)
+- `test_cases`: Dict mapping case names to input parameter dicts
+- `checks`: Optional list of check functions to execute for each test case
 
 **Check Function Signature:**
 
-Check functions receive a single `Module` argument containing circuit data:
+Check functions receive two arguments: the evaluated module and the test case inputs:
 
 ```python
-def check_function(module: Module):
-    # Access circuit data through the Module
-    nets = module.nets              # Map of net names to connected port tuples
-    components = module.components  # Map of component paths to component objects
-    
-    # Access components via indexing (new preferred method)
-    component = module["ComponentName"]              # Direct component access
-    submodule = module["SubmoduleName"]              # Direct submodule access
-    nested = module["SubmoduleName"]["ComponentName"] # Chained access
-    
-    # Access component attributes
-    component_pins = component.pins     # Component pin connections
-    component_type = component.type     # Component type (if available)
-    component_props = component.properties  # Component properties dict
-    
+def check_function(module: Module, inputs: dict):
+    # Access circuit data by calling Module methods
+    nets = module.nets()              # Returns dict of net connections
+    components = module.components()  # Returns dict of component objects
+    graph = module.graph()            # Returns CircuitGraph object
+
+    # Access test case parameters
+    voltage = inputs["voltage"]
+    current = inputs["current"]
+
+    # Access components via indexing
+    component = module["ComponentName"]
+    submodule = module["SubmoduleName"]
+    nested = module["SubmoduleName"]["ComponentName"]
+
     # Perform validation - signal failures using check() or error()
-    check(condition, "Failure message")  # Throws error if condition is False
+    check(condition, "Failure message")
 ```
 
-**Module Contents:**
+**Module Methods:**
 
-- `module.nets`: Maps each net name to a list of connected port tuples (e.g., `{"VCC": [("U1", "VDD"), ("C1", "P1")]}`)
-- `module.components`: Maps component paths to component objects (e.g., `{"U1.IC": <Component>, "C1.C": <Component>}`)
-- `module["name"]`: Direct indexing access to child components and submodules by name
+- `module.nets()` - Returns dict mapping net names to lists of connected port tuples
+  - Example: `{"VCC": [("U1", "VDD"), ("C1", "P1")]}`
+- `module.components()` - Returns dict mapping component paths to component objects
+  - Example: `{"U1.IC": <Component>, "C1.C": <Component>}`
+- `module.graph()` - Returns CircuitGraph for path finding and topology validation
+- `module[name]` - Direct indexing access to child components and submodules
 
 **Check Function Behavior:**
 
@@ -939,97 +950,78 @@ def check_function(module: Module):
 
 **TestBench Behavior:**
 
-- Evaluates the module with relaxed input requirements (missing required inputs are allowed)
-- Executes each check function in order
-- Reports failures as diagnostics with precise source location pointing to the failing `check()` call
-- Prints a success message if all checks pass
+- Evaluates the module once for each test case with the provided inputs
+- Executes all check functions for each successful module evaluation
+- Reports failures as diagnostics with precise source location
+- Prints a summary message showing passed/failed checks across all test cases
 - Returns a TestBench value containing results
 
-**Example with Modern Indexing Syntax:**
+**Example with Multiple Test Cases:**
 
 ```python
-def check_power_connections(module: Module):
-    """Verify power IC connections using modern indexing syntax"""
-    # Access submodule and then component within it (chained syntax)
-    power_ic = module["PowerIC"]["LDO"]
-    
-    # Equivalent using nested path syntax
-    power_ic_nested = module["PowerIC.LDO"]
-    
-    # Both approaches return the same component
-    check(power_ic.name == power_ic_nested.name, "Chained and nested path syntax should be equivalent")
-    
-    # Check that power pins are connected properly
-    check("VCC" in power_ic.pins["VIN"].name, "LDO input not connected to VCC")
-    check("GND" in power_ic.pins["GND"].name, "LDO ground not connected")
-    
-    print(f"✓ {power_ic.name} power connections verified")
+MyModule = Module("./voltage_regulator.zen")
 
-def check_capacitor_placement(module: Module):
-    """Verify bypass capacitors are properly placed"""
-    # Access capacitor components by name using both syntaxes
-    c1 = module["C1"]["C"]    # Chained syntax
-    c2 = module["C2.C"]       # Nested path syntax
-    
-    # Verify they're connected to power and ground
-    check("VCC" in c1.pins["P1"].name, "C1 not connected to power")
-    check("GND" in c1.pins["P2"].name, "C1 not connected to ground")
-    check("VCC" in c2.pins["P1"].name, "C2 not connected to power")
-    check("GND" in c2.pins["P2"].name, "C2 not connected to ground")
-    
-    print(f"✓ Capacitors {c1.name} and {c2.name} properly placed")
+def check_output_voltage(module, inputs):
+    """Verify output voltage configuration"""
+    components = module.components()
+    regulator = components.get("U1.REG")
 
-def check_traditional_syntax(module: Module):
-    """Example using traditional components dict access"""
-    for comp_path, component in module.components.items():
-        if component.type == "capacitor":
-            check(hasattr(component, 'capacitance'), f"{comp_path} missing capacitance")
-            print(f"✓ {comp_path} capacitance: {component.capacitance}")
+    expected_voltage = inputs["output_voltage"]
+    check(regulator is not None, "Regulator component not found")
 
-def check_net_connectivity(module: Module):
-    """Verify net connections using nets attribute"""
-    check("VCC" in module.nets, "Missing VCC power net")
-    check("GND" in module.nets, "Missing GND net")
-    
-    vcc_connections = len(module.nets["VCC"])
-    check(vcc_connections >= 2, f"VCC only has {vcc_connections} connections, need at least 2")
-    
-    print(f"✓ VCC net has {vcc_connections} connections")
+    print(f"✓ Output voltage configured for {expected_voltage}")
 
-def check_component_presence(module: Module):
-    """Use membership operator to check component existence"""
-    # Check if components exist before accessing them
-    if "PowerIC" in module:
-        power_ic = module["PowerIC"]
-        print(f"✓ Found PowerIC submodule: {power_ic}")
-        
-        # Check nested component existence
-        if "PowerIC.LDO" in module:
-            ldo = module["PowerIC.LDO"]
-            print(f"✓ Found LDO component: {ldo.name}")
-        else:
-            error("LDO component not found in PowerIC")
+def check_bypass_capacitors(module, inputs):
+    """Verify proper decoupling"""
+    graph = module.graph()
+
+    # Find paths from VIN to GND through capacitors
+    vin_paths = graph.paths(start=("U1", "VIN"), end="GND_GND")
+    check(len(vin_paths) > 0, "No bypass capacitor found on VIN")
+
+    print(f"✓ Found {len(vin_paths)} bypass capacitor paths")
+
+def check_component_existence(module, inputs):
+    """Verify required components are present"""
+    if "U1" in module:
+        regulator = module["U1"]
+        print(f"✓ Found regulator: {regulator}")
     else:
-        print("PowerIC not present in this module")
-    
-    # Check multiple components at once
-    required_caps = ["C1", "C2", "C3"]
-    missing_caps = [cap for cap in required_caps if cap not in module]
-    
-    if missing_caps:
-        error(f"Missing required capacitors: {missing_caps}")
-    else:
-        print("✓ All required capacitors present")
+        error("Regulator not found")
 
 TestBench(
-    name = "PowerCircuitValidation",
-    module = MyPowerCircuit,
+    name = "VoltageRegulatorTest",
+    module = MyModule,
+    test_cases = {
+        "3v3_config": {
+            "output_voltage": "3.3V",
+            "input_voltage": "5V",
+        },
+        "5v_config": {
+            "output_voltage": "5V",
+            "input_voltage": "12V",
+        },
+    },
     checks = [
-        check_power_connections,      # Uses modern indexing syntax
-        check_capacitor_placement,    # Uses chained indexing
-        check_traditional_syntax,     # Uses traditional components dict
-        check_net_connectivity,       # Uses nets attribute
-        check_component_presence,     # Uses membership operator
+        check_output_voltage,
+        check_bypass_capacitors,
+        check_component_existence,
+    ]
+)
+```
+
+**Named Check Functions:**
+
+You can provide custom names for check functions using tuples:
+
+```python
+TestBench(
+    name = "MyTest",
+    module = MyModule,
+    test_cases = {"default": {}},
+    checks = [
+        ("Power Check", check_power),
+        ("Ground Check", check_ground),
     ]
 )
 ```
@@ -1049,10 +1041,10 @@ The graph analysis operates on the **public interface paradigm**: path finding w
 Every module automatically generates a circuit graph that models component connectivity:
 
 ```python
-def analyze_circuit(module: Module):
-    # Get the circuit graph from any module
+def analyze_circuit(module, inputs):
+    # Get the circuit graph from the module
     graph = module.graph()
-    
+
     # Find paths between public interface points
     paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND", max_depth=5)
 ```
@@ -1078,15 +1070,15 @@ Path finding operates between two types of well-defined endpoints:
 Finds all simple paths between two points in the circuit:
 
 ```python
-def validate_power_supply(module: Module):
+def validate_power_supply(module, inputs):
     graph = module.graph()
-    
+
     # IC pin to external net
     input_paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND")
-    
+
     # IC pin to IC pin (internal feedback path)
     feedback_paths = graph.paths(start=("TPS82140", "VOUT"), end=("TPS82140", "FB"))
-    
+
     # External net to IC pin
     enable_paths = graph.paths(start="EN_EN", end=("TPS82140", "EN"))
 ```
@@ -1133,10 +1125,10 @@ path.none(is_active_component)
 The `path.matches()` method validates component sequences in order:
 
 ```python
-def validate_filter_topology(module: Module):
+def validate_filter_topology(module, inputs):
     graph = module.graph()
     filter_paths = graph.paths(start=("OpAmp", "OUT"), end="GND_GND")
-    
+
     # Validate exact component sequence
     filter_paths[0].matches(
         is_resistor("1kOhm"),    # Series resistor
@@ -1153,24 +1145,24 @@ Circuit validation can directly implement datasheet requirements by mapping comp
 
 **Power Supply Decoupling**
 ```python
-def validate_vin_decoupling(module: Module):
+def validate_vin_decoupling(module, inputs):
     """Validate VIN decoupling per datasheet Figure 8-1"""
     graph = module.graph()
-    
+
     # Find all paths from VIN pin to ground
     vin_paths = graph.paths(start=("TPS82140", "VIN"), end="GND_GND")
-    
+
     # Datasheet requirement: "≥10µF bulk + 100nF ceramic"
     vin_paths.any(path.matches(is_capacitor("10uF")))   # Bulk capacitor
     vin_paths.any(path.matches(is_capacitor("100nF")))  # Bypass capacitor
-    
+
     print("✓ VIN decoupling meets datasheet requirements")
     // Reference: Datasheet §8.2.1, Figure 8-1
 ```
 
 **Feedback Networks**
 ```python
-def validate_feedback_divider(module: Module):
+def validate_feedback_divider(module, inputs):
     """Validate feedback network per datasheet Section 8.3"""
     graph = module.graph()
     
@@ -1189,16 +1181,16 @@ def validate_feedback_divider(module: Module):
 
 **Bootstrap Circuits**
 ```python
-def validate_bootstrap_cap(module: Module):
+def validate_bootstrap_cap(module, inputs):
     """Validate bootstrap capacitor per datasheet Figure 8-4"""
     graph = module.graph()
-    
+
     # Bootstrap cap connects BOOT pin to SW pin
     boot_paths = graph.paths(start=("TPS82140", "BOOT"), end=("TPS82140", "SW"))
-    
+
     # Datasheet requirement: "100nF ceramic, X7R dielectric"
     boot_paths[0].matches(is_capacitor("100nF", dielectric="X7R"))
-    
+
     print("✓ Bootstrap capacitor meets specifications")
     // Reference: Datasheet §8.4.1, Figure 8-4
 ```
