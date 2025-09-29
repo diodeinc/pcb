@@ -1,0 +1,85 @@
+# Simple Metadata Usage Example
+# 
+# This example demonstrates basic metadata container functionality:
+# - Creating typed containers
+# - Pushing values with type validation
+# - Retrieving values using get() and list()
+
+load("@stdlib/units.zen", "Voltage", "Resistance", "Temperature")
+
+# Create typed metadata containers for different purposes
+voltage_log = metadata(Voltage)
+resistance_measurements = metadata(Resistance) 
+error_messages = metadata(str)
+test_results = metadata(bool)
+temperature_readings = metadata(Temperature)
+raw_data = metadata(float)
+configuration_data = metadata(dict)
+
+# Basic string logging
+error_messages.push("System initialization")
+error_messages.push("Voltage rail stable")
+error_messages.push("All checks passed")
+
+# Physical value logging with automatic type validation
+voltage_log.push(Voltage("3.3V"))
+voltage_log.push(Voltage("5.0V"))
+voltage_log.push(Voltage("12V"))
+
+resistance_measurements.push(Resistance("10kOhm"))
+resistance_measurements.push(Resistance("4.7kOhm 5%"))
+resistance_measurements.push(Resistance("1MOhm"))
+
+temperature_readings.push(Temperature("25°C"))
+temperature_readings.push(Temperature("85°C"))
+temperature_readings.push(Temperature("-40°C"))
+
+# Boolean test results
+test_results.push(True)
+test_results.push(False)
+test_results.push(True)
+
+# Numeric data
+raw_data.push(3.14159)
+raw_data.push(2.71828)
+raw_data.push(1.41421)
+
+# Structured data
+configuration_data.push({"mode": "normal", "debug": False})
+configuration_data.push({"mode": "test", "debug": True})
+
+# Demonstrate retrieval methods
+latest_voltage = voltage_log.get()  # Most recent: Voltage("12V")
+all_voltages = voltage_log.list()   # All values in chronological order
+
+latest_error = error_messages.get()  # Most recent: "All checks passed"
+all_errors = error_messages.list()   # All messages
+
+# Show that containers are persistent and can be accessed later
+def print_summary():
+    latest_v = voltage_log.get()
+    total_v = len(voltage_log.list())
+    latest_r = resistance_measurements.get()
+    latest_t = temperature_readings.get()
+    latest_e = error_messages.get()
+    test_list = test_results.list()
+    test_passed = 0
+    for result in test_list:
+        if result:
+            test_passed += 1
+    test_total = len(test_list)
+    
+    print("=== Metadata Summary ===")
+    print("Latest voltage: " + str(latest_v))
+    print("Total voltage readings: " + str(total_v))
+    print("Latest resistance: " + str(latest_r))
+    print("Latest temperature: " + str(latest_t))
+    print("Latest error: " + str(latest_e))
+    print("Test success rate: " + str(test_passed) + "/" + str(test_total))
+
+print_summary()
+
+# Type validation demonstration - these would cause errors:
+# voltage_log.push("not a voltage")  # Error: type mismatch
+# resistance_measurements.push(3.3)  # Error: type mismatch 
+# error_messages.push(42)            # Error: type mismatch

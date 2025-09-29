@@ -1,0 +1,7 @@
+load("@stdlib:v0.2.19/units.zen", "Voltage", "Resistance", "Temperature")
+
+Power = interface(
+    NET = using(Net),
+    mode = field(str, "RUN"),
+    voltage = metadata(Voltage),
+)

@@ -1,0 +1,180 @@
+# Cross-Module Metadata Demo
+#
+# This example demonstrates how metadata containers work across module boundaries:
+# - Shared metadata containers between modules
+# - Aggregating data from multiple modules  
+# - Global analysis using accumulated metadata
+
+load("@stdlib/interfaces.zen", "Power", "Ground", "Uart")
+load("@stdlib/units.zen", "Voltage", "Current")
+
+# Create shared metadata containers that will be used by sub-modules
+shared_component_count = metadata(int)
+shared_voltage_levels = metadata(Voltage)
+shared_module_trace = metadata(str)
+shared_interface_registry = metadata(dict)
+
+# Additional containers for main module
+design_requirements = metadata(dict)
+power_budget = metadata(dict)
+
+# Log main module initialization
+shared_module_trace.push("MainModule: Starting system design")
+shared_module_trace.push("MainModule: Initializing shared metadata containers")
+
+# Define design requirements
+design_requirements.push({
+    "max_power": "2W",
+    "operating_temp": "85C", 
+    "supply_voltage": "5V",
+    "target_cost": "$10"
+})
+
+# Create main power and ground
+main_power = Power("VCC_5V")
+main_ground = Ground("GND")
+
+# Track main power rail
+shared_voltage_levels.push(Voltage("5V"))
+shared_interface_registry.push({
+    "module": "MainModule",
+    "interface": "main_power",
+    "type": "Power", 
+    "voltage": "5V"
+})
+
+# Power budget tracking
+power_budget.push({
+    "component": "system_overhead",
+    "current": "50mA",
+    "power": "250mW"
+})
+
+# Main module components
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+
+# Status LED circuit
+Resistor(name="R_LED", value="330Ohm", package="0603", P1=main_power.NET, P2=Net("LED_ANODE"))
+shared_component_count.push(1)
+
+Led(name="D_STATUS", color="green", package="0603", A=Net("LED_ANODE"), K=main_ground.NET)
+shared_component_count.push(2)
+
+power_budget.push({
+    "component": "status_led",
+    "current": "10mA", 
+    "power": "50mW"
+})
+
+shared_module_trace.push("MainModule: Created status LED circuit")
+
+# Load sub-module - this will add to our shared metadata containers
+SubModule = Module("./SubModule.zen")
+
+# Create UART interface for sub-module
+uart_interface = Uart("MAIN_UART")
+
+# Instantiate sub-module with shared metadata
+sub_instance = SubModule(
+    name="uart_subsystem",
+    power_in=main_power,
+    ground_in=main_ground, 
+    uart_out=uart_interface,
+    uart_baud="115200",
+    supply_voltage="3.3V"  # Sub-module uses 3.3V internally
+)
+
+shared_module_trace.push("MainModule: Sub-module instantiated")
+
+# Track power for sub-module
+power_budget.push({
+    "component": "uart_subsystem",
+    "current": "25mA",
+    "power": "82.5mW"  # 3.3V * 25mA
+})
+
+# Global analysis function using accumulated metadata
+def analyze_complete_system():
+    components = shared_component_count.list()
+    voltages = shared_voltage_levels.list()
+    trace = shared_module_trace.list()
+    interfaces = shared_interface_registry.list()
+    requirements = design_requirements.list()
+    budget = power_budget.list()
+    
+    total_components = 0
+    for count in components:
+        total_components += count
+    voltage_count = len(voltages)
+    voltage_strs = [str(v) for v in voltages]
+    interface_count = len(interfaces)
+    trace_count = len(trace)
+    
+    print("=== Complete System Analysis ===")
+    print("Total components across all modules: " + str(total_components))
+    print("Voltage levels used: " + str(voltage_count) + " (" + str(voltage_strs) + ")")
+    print("Total interfaces: " + str(interface_count))
+    print("Execution trace entries: " + str(trace_count))
+    
+    print("\n=== Module Execution Trace ===")
+    for entry in trace:
+        print("  " + entry)
+    
+    print("\n=== Interface Registry ===")
+    for interface in interfaces:
+        module = interface["module"]
+        name = interface["interface"]
+        itype = interface["type"]
+        print("  " + module + "." + name + ": " + itype)
+    
+    print("\n=== Power Budget Analysis ===")
+    total_power = 0
+    for item in budget:
+        component = item["component"]
+        power = item["power"]
+        print("  " + component + ": " + power)
+        # Extract numeric value for summation (simplified)
+        if "mW" in power:
+            total_power += float(power.replace("mW", ""))
+    
+    print("\nTotal estimated power: " + str(total_power) + "mW")
+    
+    print("\n=== Design Requirements Check ===")
+    req = requirements[0]  # Get the requirements dict
+    max_power = float(req["max_power"].replace("W", "")) * 1000  # Convert to mW
+    print("Power requirement: " + req['max_power'] + " (" + str(max_power) + "mW)")
+    print("Actual power: " + str(total_power) + "mW")
+    print("Power margin: " + str(max_power - total_power) + "mW")
+    
+    if total_power <= max_power:
+        print("✅ Power requirement MET")
+        shared_module_trace.push("MainModule: Power requirement satisfied")
+    else:
+        print("❌ Power requirement EXCEEDED")  
+        shared_module_trace.push("MainModule: Power requirement violated")
+
+# Demonstrate that metadata persists and accumulates
+def demonstrate_persistence():
+    print("\n=== Metadata Persistence Demo ===")
+    
+    # Show that we can still access data added by sub-module
+    count_history = shared_component_count.list()
+    latest_count = shared_component_count.get()
+    print("Component count history: " + str(count_history))
+    print("Latest component count: " + str(latest_count))
+    
+    # Add more data after sub-module completed
+    shared_module_trace.push("MainModule: Adding final analysis data")
+    shared_component_count.push(99)  # Dummy final count
+    
+    updated_count = shared_component_count.get()
+    trace_length = len(shared_module_trace.list())
+    print("Updated component count: " + str(updated_count))
+    print("Full trace length: " + str(trace_length))
+
+# Run analysis
+analyze_complete_system()
+demonstrate_persistence()
+
+shared_module_trace.push("MainModule: Analysis completed")

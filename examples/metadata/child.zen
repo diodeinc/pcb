@@ -1,0 +1,3 @@
+load("./interface.zen", "Power")
+
+POWER = io("POWA", Power)
