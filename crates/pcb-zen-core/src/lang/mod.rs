@@ -10,6 +10,7 @@ pub mod module;
 pub mod net;
 pub mod physical;
 pub mod spice_model;
+pub mod stackup;
 pub mod symbol;
 pub mod test_bench;
 pub mod type_info;

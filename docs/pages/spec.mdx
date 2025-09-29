@@ -563,6 +563,160 @@ add_property("layout_group", "power_supply")
 add_property("critical", True)
 ```
 
+### builtin.add_board_config(name, config, default=False)
+
+**Built-in function** for registering board configurations with the layout system.
+
+**Parameters:**
+- `name`: String identifier for the board configuration
+- `config`: `BoardConfig` object containing design rules and stackup
+- `default`: If True, this becomes the default board config for the project
+
+This builtin is typically called through the stdlib `Board()` function rather than directly.
+
+## Board Configuration Types
+
+The board configuration record types are provided by `@stdlib/board_config.zen` and offer comprehensive control over PCB manufacturing specifications.
+
+**Available Records and Functions:**
+
+```python
+load("@stdlib/board_config.zen", 
+    "Board",              # Board configuration function
+    "BoardConfig",        # Main configuration container
+    "DesignRules",        # Design rule constraints  
+    "Stackup",            # Layer stackup definition
+    "Material",           # Material properties
+    "CopperLayer",        # Copper layer specification
+    "DielectricLayer",    # Dielectric layer specification
+    "Constraints",        # Manufacturing constraints
+    "Copper",             # Copper-specific rules
+    "NetClass",           # Netclass definitions
+    "merge_configs",      # Configuration merging utility
+    "deep_merge"          # Deep merge utility
+)
+```
+
+### Board(name, config, layout_path, layout_hints=None, default=False)
+
+**Stdlib function** for declaring board configurations for PCB layout generation.
+
+```python
+# Load from stdlib
+load("@stdlib/board_config.zen", "Board", "BoardConfig", "DesignRules", "Stackup", "Material", "CopperLayer", "DielectricLayer")
+
+# Define board configuration
+config = BoardConfig(
+    stackup=Stackup(
+        materials=[
+            Material(
+                name="FR-4",
+                vendor="Isola", 
+                relative_permittivity=4.21,
+                loss_tangent=0.025,
+                reference_frequency=1e9,
+            ),
+        ],
+        silk_screen_color="#44805BFF",
+        solder_mask_color="#191919E6", 
+        thickness=1.605,
+        symmetric=True,
+        copper_finish="ENIG",
+        layers=[
+            CopperLayer(thickness=0.035, role="mixed"),
+            DielectricLayer(thickness=0.2, material="FR-4", form="prepreg"),
+            CopperLayer(thickness=0.035, role="power"),
+            DielectricLayer(thickness=1.065, material="FR-4", form="core"), 
+            CopperLayer(thickness=0.035, role="power"),
+            DielectricLayer(thickness=0.2, material="FR-4", form="prepreg"),
+            CopperLayer(thickness=0.035, role="mixed"),
+        ],
+    )
+)
+
+# Declare board using stdlib function
+Board(
+    name="MyBoard",
+    config=config,
+    layout_path="layout/",
+    default=True
+)
+```
+
+**Parameters:**
+
+- `name`: String identifier for the board configuration
+- `config`: `BoardConfig` record containing design rules and stackup
+- `layout_path`: Directory path where layout files will be generated
+- `layout_hints`: Optional list of layout optimization hints  
+- `default`: If True, this becomes the default board config for the project
+
+**Implementation:** The stdlib `Board()` function calls the language builtin `builtin.add_board_config()` and sets layout properties.
+
+**BoardConfig Structure:**
+
+```python
+BoardConfig = record(
+    design_rules=DesignRules,     # PCB design rules and constraints  
+    stackup=Stackup,              # Layer stackup and materials
+)
+```
+
+**Design Rules Examples:**
+
+```python
+# Copper constraints (from @stdlib/board_config.zen)
+Copper(
+    minimum_clearance=0.1,              # mm
+    minimum_track_width=0.1,            # mm  
+    minimum_via_diameter=0.2,           # mm
+    copper_to_edge_clearance=0.3,       # mm
+)
+
+# Netclasses for different signal types  
+NetClass(
+    name="Power",
+    clearance=0.25,                     # mm
+    track_width=0.6,                    # mm
+    via_diameter=0.8,                   # mm
+    color="#FF0000",
+)
+```
+
+**Stackup Configuration Examples:**
+
+```python
+# Material definitions (from @stdlib/board_config.zen)
+Material(
+    name="FR-4",
+    vendor="Isola", 
+    relative_permittivity=4.21,         # Dielectric constant
+    loss_tangent=0.025,                 # Loss tangent  
+    reference_frequency=1e9,            # Hz
+)
+
+# Layer definitions (from @stdlib/board_config.zen)
+CopperLayer(thickness=0.035, role="signal")     # "signal", "power", "mixed"
+DielectricLayer(thickness=1.6, material="FR-4", form="core")  # "core", "prepreg"
+```
+
+**Configuration Merging (Stdlib Utilities):**
+
+The stdlib provides utilities for merging multiple board configurations:
+
+```python
+load("@stdlib/board_config.zen", "merge_configs", "deep_merge")
+
+base_config = BoardConfig(stackup=my_stackup)
+tight_rules = BoardConfig(design_rules=tight_constraints)
+
+# Merge multiple configs using stdlib utilities
+final_config = merge_configs(base_config, tight_rules)
+
+# Use built-in Board() with merged config
+Board("Production", final_config, "layout/", default=True)
+```
+
 ### TestBench(name, module, checks)
 
 Creates a test bench for validating module connectivity and properties without requiring inputs.
