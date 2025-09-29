@@ -383,9 +383,15 @@ where
     }
 
     // Create the interface instance
+    let instance_name = if prefix.new_style.is_empty() {
+        None
+    } else {
+        Some(prefix.new_style.clone())
+    };
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
         factory: factory_value,
+        name: instance_name,
     });
 
     // Execute __post_init__ if present
@@ -741,6 +747,7 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> DeepCopyToHeap for InterfaceFactoryGe
 pub struct InterfaceValueGen<V> {
     fields: SmallMap<String, V>,
     factory: V, // store reference to the Interface *type* that created this instance
+    name: Option<String>, // The instance name passed to the constructor
 }
 starlark_complex_value!(pub InterfaceValue);
 
@@ -751,8 +758,12 @@ where
 {
     type Canonical = FrozenInterfaceValue;
 
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
-        self.fields.get(attr).map(|v| v.to_value())
+    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        let name = self.name.as_ref().map(|name| heap.alloc(name.clone()));
+        match attr {
+            "name" => Some(name.unwrap_or(Value::new_none())),
+            _ => self.fields.get(attr).map(|v| v.to_value()),
+        }
     }
 
     fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
@@ -835,7 +846,11 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for InterfaceValueGen<V> {
         // remains connected to its type information in the destination heap.
         let factory = copy_value(self.factory.to_value(), dst)?;
 
-        Ok(dst.alloc(InterfaceValue { fields, factory }))
+        Ok(dst.alloc(InterfaceValue {
+            fields,
+            factory,
+            name: self.name.clone(),
+        }))
     }
 }
 
