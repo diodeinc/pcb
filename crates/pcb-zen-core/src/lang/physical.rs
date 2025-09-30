@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{cmp::Ordering, fmt, str::FromStr};
 
 use allocative::Allocative;
 
@@ -115,6 +115,9 @@ pub struct PhysicalValue {
     pub(crate) unit: PhysicalUnitDims,
 }
 
+#[derive(Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize)]
+pub struct PhysicalValueType;
+
 impl PhysicalValue {
     pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
         Self {
@@ -147,8 +150,8 @@ impl PhysicalValue {
     pub fn check_unit(self, expected: PhysicalUnitDims) -> Result<Self, PhysicalValueError> {
         if self.unit != expected {
             return Err(PhysicalValueError::UnitMismatch {
-                expected: expected.fmt_unit(),
-                actual: self.unit.fmt_unit(),
+                expected: expected.quantity(),
+                actual: self.unit.quantity(),
             });
         }
         Ok(self)
@@ -159,7 +162,7 @@ impl PhysicalValue {
         kwargs: &SmallMap<ValueTyped<'v, StarlarkStr>, Value<'v>>,
     ) -> starlark::Result<Self> {
         let expected_unit: PhysicalUnitDims = T::UNIT.into();
-        let unit_str = expected_unit.fmt_unit();
+        let unit_str = expected_unit.quantity();
 
         let result = match positional {
             // Single positional argument (string or PhysicalValue)
@@ -408,8 +411,8 @@ impl std::ops::Add for PhysicalValue {
     fn add(self, rhs: Self) -> Self::Output {
         if self.unit != rhs.unit {
             return Err(PhysicalValueError::UnitMismatch {
-                expected: self.unit.fmt_unit(),
-                actual: rhs.unit.fmt_unit(),
+                expected: self.unit.quantity(),
+                actual: rhs.unit.quantity(),
             });
         }
         let unit = self.unit;
@@ -424,8 +427,8 @@ impl std::ops::Sub for PhysicalValue {
     fn sub(self, rhs: Self) -> Self::Output {
         if self.unit != rhs.unit {
             return Err(PhysicalValueError::UnitMismatch {
-                expected: self.unit.fmt_unit(),
-                actual: rhs.unit.fmt_unit(),
+                expected: self.unit.quantity(),
+                actual: rhs.unit.quantity(),
             });
         }
         let unit = self.unit;
@@ -649,6 +652,16 @@ impl PhysicalUnitDims {
             (false, false) => format!("{}/{}", format_units(&num), format_units(&den)),
         }
     }
+
+    pub fn quantity(&self) -> String {
+        if let Some(alias) = self.alias() {
+            return alias.quantity().to_string();
+        }
+        if *self == Self::DIMENSIONLESS {
+            return "Dimensionless".to_string();
+        }
+        self.fmt_unit()
+    }
 }
 
 pub trait PhysicalUnitType<'a>: StarlarkValue<'a> {
@@ -697,6 +710,8 @@ pub enum PhysicalValueError {
     WithUnitInvalidArgument,
     #[error("with_tolerance() expects exactly one argument")]
     WithToleranceWrongArgumentCount,
+    #[error("with_value() expects exactly one argument")]
+    WithValueWrongArgumentCount,
     #[error("Cannot divide {lhs_unit} by {rhs_unit} - {error}")]
     DivisionError {
         lhs_unit: String,
@@ -1035,6 +1050,7 @@ starlark_simple_value!(PhysicalUnitDims);
 impl<'v> StarlarkValue<'v> for PhysicalUnitDims {}
 
 starlark_simple_value!(PhysicalValue);
+starlark_simple_value!(PhysicalValueType);
 
 /// A callable wrapper for PhysicalValue's __str__ method to match stdlib units.zen API
 #[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
@@ -1121,6 +1137,45 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithTolerance {
     }
 }
 
+/// A callable wrapper for PhysicalValue's with_value method
+#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
+pub struct PhysicalValueWithValue {
+    value: PhysicalValue,
+}
+
+impl std::fmt::Display for PhysicalValueWithValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<with_value method for {}>", self.value)
+    }
+}
+
+starlark_simple_value!(PhysicalValueWithValue);
+
+#[starlark_value(type = "PhysicalValueWithValue")]
+impl<'v> StarlarkValue<'v> for PhysicalValueWithValue {
+    fn invoke(
+        &self,
+        _me: Value<'v>,
+        args: &Arguments<'v, '_>,
+        evaluator: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = evaluator.heap();
+        let positional: Vec<_> = args.positions(heap)?.collect();
+
+        if positional.len() != 1 {
+            return Err(PhysicalValueError::WithValueWrongArgumentCount.into());
+        }
+
+        let value_arg = positional[0];
+        let new_value = starlark_value_to_decimal(&value_arg)?;
+
+        let new_physical_value =
+            PhysicalValue::from_decimal(new_value, self.value.tolerance, self.value.unit);
+
+        Ok(heap.alloc(new_physical_value))
+    }
+}
+
 /// A callable wrapper for PhysicalValue's with_unit method
 #[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
 pub struct PhysicalValueWithUnit {
@@ -1167,12 +1222,34 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithUnit {
     }
 }
 
+impl fmt::Display for PhysicalValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PhysicalValue")
+    }
+}
+
+#[starlark_value(type = "PhysicalValueType")]
+impl<'v> StarlarkValue<'v> for PhysicalValueType
+where
+    Self: ProvidesStaticType<'v>,
+{
+    fn eval_type(&self) -> Option<starlark::typing::Ty> {
+        Some(<PhysicalValue as StarlarkValue>::get_type_starlark_repr())
+    }
+}
+
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn has_attr(&self, attribute: &str, _heap: &'v starlark::values::Heap) -> bool {
         matches!(
             attribute,
-            "value" | "tolerance" | "unit" | "__str__" | "with_tolerance" | "with_unit"
+            "value"
+                | "tolerance"
+                | "unit"
+                | "__str__"
+                | "with_tolerance"
+                | "with_unit"
+                | "with_value"
         )
     }
 
@@ -1206,6 +1283,10 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
                 // Return a callable that creates a new PhysicalValue with updated unit
                 Some(heap.alloc(PhysicalValueWithUnit { value: *self }))
             }
+            "with_value" => {
+                // Return a callable that creates a new PhysicalValue with updated value
+                Some(heap.alloc(PhysicalValueWithValue { value: *self }))
+            }
             _ => None,
         }
     }
@@ -1218,6 +1299,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
             "__str__".to_owned(),
             "with_tolerance".to_owned(),
             "with_unit".to_owned(),
+            "with_value".to_owned(),
         ]
     }
 
@@ -1225,8 +1307,8 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (*self / other).map(|v| heap.alloc(v)).map_err(|err| {
             PhysicalValueError::DivisionError {
-                lhs_unit: self.unit.fmt_unit(),
-                rhs_unit: other.unit.fmt_unit(),
+                lhs_unit: self.unit.quantity(),
+                rhs_unit: other.unit.quantity(),
                 error: err.to_string(),
             }
             .into()
@@ -1238,8 +1320,8 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (other / *self).map(|v| heap.alloc(v)).map_err(|err| {
             PhysicalValueError::DivisionError {
-                lhs_unit: other.unit.fmt_unit(),
-                rhs_unit: self.unit.fmt_unit(),
+                lhs_unit: other.unit.quantity(),
+                rhs_unit: self.unit.quantity(),
                 error: err.to_string(),
             }
             .into()
@@ -1263,8 +1345,8 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
         let other = PhysicalValue::try_from(other).ok()?;
         let result = (*self + other).map(|v| heap.alloc(v)).map_err(|err| {
             PhysicalValueError::AdditionError {
-                lhs_unit: self.unit.fmt_unit(),
-                rhs_unit: other.unit.fmt_unit(),
+                lhs_unit: self.unit.quantity(),
+                rhs_unit: other.unit.quantity(),
                 error: err.to_string(),
             }
             .into()
@@ -1279,15 +1361,49 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
         let other = PhysicalValue::try_from(other).map_err(|_| {
             PhysicalValueError::SubtractionNonPhysical {
-                unit: self.unit.fmt_unit(),
+                unit: self.unit.quantity(),
             }
         })?;
         let result = (*self - other).map_err(|err| PhysicalValueError::SubtractionError {
-            lhs_unit: self.unit.fmt_unit(),
-            rhs_unit: other.unit.fmt_unit(),
+            lhs_unit: self.unit.quantity(),
+            rhs_unit: other.unit.quantity(),
             error: err.to_string(),
         })?;
         Ok(heap.alloc(result))
+    }
+
+    fn equals(&self, other: Value<'v>) -> starlark::Result<bool> {
+        // Try to convert the other value to PhysicalValue
+        let other = match PhysicalValue::try_from(other) {
+            Ok(other) => other,
+            Err(_) => return Ok(false),
+        };
+        Ok(self.unit == other.unit && self.value == other.value)
+    }
+
+    fn compare(&self, other: Value<'v>) -> starlark::Result<Ordering> {
+        // Try to convert the other value to PhysicalValue
+        let other = PhysicalValue::try_from(other).map_err(|_| {
+            starlark::Error::new_other(PhysicalValueError::InvalidArgumentType {
+                unit: self.unit.quantity(),
+            })
+        })?;
+
+        // Check that units match OR one of them is dimensionless
+        if self.unit != other.unit
+            && self.unit != PhysicalUnitDims::DIMENSIONLESS
+            && other.unit != PhysicalUnitDims::DIMENSIONLESS
+        {
+            return Err(starlark::Error::new_other(
+                PhysicalValueError::UnitMismatch {
+                    expected: self.unit.quantity(),
+                    actual: other.unit.quantity(),
+                },
+            ));
+        }
+
+        // Compare the underlying values
+        Ok(self.value.cmp(&other.value))
     }
 }
 
@@ -1310,6 +1426,7 @@ define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers, "MagneticFlux");
 mod tests {
     use super::*;
     use rust_decimal::prelude::*;
+    use starlark::values::Heap;
 
     #[cfg(test)]
     fn physical_value(value: f64, tolerance: f64, unit: PhysicalUnit) -> PhysicalValue {
@@ -1923,8 +2040,6 @@ mod tests {
 
     #[test]
     fn test_try_from_physical_value() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let original = physical_value(10.0, 0.05, PhysicalUnit::Ohms);
         let starlark_val = heap.alloc(original);
@@ -1938,9 +2053,7 @@ mod tests {
     #[test]
     fn test_try_from_string() {
         // Test Starlark string conversion using helper
-        use starlark::values::Heap;
         let heap = Heap::new();
-
         for (input, unit, value) in [
             ("10kOhm", PhysicalUnit::Ohms, 10000.0),
             ("100nF", PhysicalUnit::Farads, 0.0000001),
@@ -1956,8 +2069,6 @@ mod tests {
 
     #[test]
     fn test_try_from_string_with_tolerance() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let starlark_val = heap.alloc("10kOhm 5%");
         let result = PhysicalValue::try_from(starlark_val.to_value()).unwrap();
@@ -1969,8 +2080,6 @@ mod tests {
 
     #[test]
     fn test_try_from_scalar() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
 
         // Test integer
@@ -1990,8 +2099,6 @@ mod tests {
 
     #[test]
     fn test_try_from_string_error() {
-        use starlark::values::Heap;
-
         let heap = Heap::new();
         let invalid_strings = ["invalid", "10kZzz", "abc%", ""];
 
@@ -2147,6 +2254,181 @@ mod tests {
         // Verify the units are now different from dimensionless
         assert_ne!(resistance_casted.unit, PhysicalUnitDims::DIMENSIONLESS);
         assert_ne!(voltage_casted.unit, PhysicalUnitDims::DIMENSIONLESS);
+    }
+
+    #[test]
+    fn test_equality_and_comparison() {
+        let heap = Heap::new();
+
+        // Test equality with same units and values
+        let v1 = physical_value(5.0, 0.01, PhysicalUnit::Volts); // 5V ±1%
+        let v2 = physical_value(5.0, 0.02, PhysicalUnit::Volts); // 5V ±2%
+        let v3 = physical_value(3.3, 0.0, PhysicalUnit::Volts); // 3.3V
+
+        // Values with same unit and same value are equal (tolerance ignored)
+        let v1_val = heap.alloc(v1);
+        assert!(v1.equals(v1_val).unwrap());
+        assert!(v1.equals(heap.alloc(v2)).unwrap());
+
+        // Values with same unit but different values are not equal
+        assert!(!v1.equals(heap.alloc(v3)).unwrap());
+
+        // Values with different units are not equal
+        let i1 = physical_value(5.0, 0.0, PhysicalUnit::Amperes);
+        assert!(!v1.equals(heap.alloc(i1)).unwrap());
+
+        // Test comparison with same units
+        let v_small = physical_value(3.0, 0.0, PhysicalUnit::Volts);
+        let v_large = physical_value(10.0, 0.0, PhysicalUnit::Volts);
+
+        assert_eq!(
+            v_small.compare(heap.alloc(v_large)).unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            v_large.compare(heap.alloc(v_small)).unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(v1.compare(heap.alloc(v2)).unwrap(), Ordering::Equal);
+
+        // Test comparison with different units fails
+        let r1 = physical_value(10.0, 0.0, PhysicalUnit::Ohms);
+        assert!(v1.compare(heap.alloc(r1)).is_err());
+
+        // Test comparison with string values
+        let v_str = heap.alloc("5V");
+        assert!(v1.equals(v_str).unwrap());
+        assert_eq!(v1.compare(v_str).unwrap(), Ordering::Equal);
+
+        // Test comparison with numeric values (should be treated as dimensionless)
+        let num_val = heap.alloc(5.0);
+        assert!(!v1.equals(num_val).unwrap()); // Different units
+
+        // Test with dimensionless values
+        let dim1 = PhysicalValue::dimensionless(10);
+        let dim2 = PhysicalValue::dimensionless(20);
+        assert_eq!(dim1.compare(heap.alloc(dim2)).unwrap(), Ordering::Less);
+        assert_eq!(dim2.compare(heap.alloc(dim1)).unwrap(), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_comparison_with_various_input_types() {
+        let heap = Heap::new();
+        let voltage = physical_value(12.0, 0.0, PhysicalUnit::Volts);
+
+        // Test equality with string representation
+        let voltage_str = heap.alloc("12V");
+        assert!(voltage.equals(voltage_str).unwrap());
+
+        // Test comparison with string representation
+        let larger_voltage_str = heap.alloc("15V");
+        assert_eq!(voltage.compare(larger_voltage_str).unwrap(), Ordering::Less);
+
+        // Test equality with existing PhysicalValue
+        let same_voltage = heap.alloc(voltage);
+        assert!(voltage.equals(same_voltage).unwrap());
+
+        // Test with different string formats
+        let voltage_with_tolerance = heap.alloc("12V 5%");
+        assert!(voltage.equals(voltage_with_tolerance).unwrap()); // Tolerance ignored in equality
+
+        // Test comparison failure with non-convertible values
+        let non_physical = heap.alloc("not a physical value");
+        assert!(!voltage.equals(non_physical).unwrap());
+        assert!(voltage.compare(non_physical).is_err());
+    }
+
+    #[test]
+    fn test_comparison_error_cases() {
+        let heap = Heap::new();
+
+        // Test unit mismatch in comparison
+        let voltage = physical_value(12.0, 0.0, PhysicalUnit::Volts);
+        let current = physical_value(2.0, 0.0, PhysicalUnit::Amperes);
+
+        let result = voltage.compare(heap.alloc(current));
+        assert!(result.is_err());
+
+        // Verify the error contains unit mismatch information
+        let error_str = format!("{}", result.unwrap_err());
+        assert!(error_str.contains("Unit mismatch"));
+        assert!(error_str.contains("Voltage"));
+        assert!(error_str.contains("Current"));
+    }
+
+    #[test]
+    fn test_dimensionless_comparisons() {
+        let heap = Heap::new();
+
+        // Test with dimensionless values
+        let dimensionless_5 = PhysicalValue::dimensionless(5);
+        let dimensionless_10 = PhysicalValue::dimensionless(10);
+        let voltage_5 = physical_value(5.0, 0.0, PhysicalUnit::Volts);
+        let resistance_5 = physical_value(5.0, 0.0, PhysicalUnit::Ohms);
+
+        // Dimensionless to dimensionless comparisons
+        assert_eq!(
+            dimensionless_5
+                .compare(heap.alloc(dimensionless_10))
+                .unwrap(),
+            Ordering::Less
+        );
+        assert_eq!(
+            dimensionless_10
+                .compare(heap.alloc(dimensionless_5))
+                .unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            dimensionless_5
+                .compare(heap.alloc(dimensionless_5))
+                .unwrap(),
+            Ordering::Equal
+        );
+
+        // Dimensionless to physical unit comparisons (should work)
+        assert_eq!(
+            dimensionless_5.compare(heap.alloc(voltage_5)).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            voltage_5.compare(heap.alloc(dimensionless_5)).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            dimensionless_10.compare(heap.alloc(voltage_5)).unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            voltage_5.compare(heap.alloc(dimensionless_10)).unwrap(),
+            Ordering::Less
+        );
+
+        // Different units with dimensionless should work
+        assert_eq!(
+            dimensionless_5.compare(heap.alloc(resistance_5)).unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            resistance_5.compare(heap.alloc(dimensionless_5)).unwrap(),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_dimensionless_with_string_conversions() {
+        let heap = Heap::new();
+
+        let voltage = physical_value(2023.0, 0.0, PhysicalUnit::Ohms);
+
+        // Test comparison with numeric string (should be treated as dimensionless)
+        let numeric_str = heap.alloc("2000");
+        assert_eq!(voltage.compare(numeric_str).unwrap(), Ordering::Greater);
+        assert!(!voltage.equals(numeric_str).unwrap()); // Different values
+
+        let same_numeric_str = heap.alloc("2023");
+        assert_eq!(voltage.compare(same_numeric_str).unwrap(), Ordering::Equal);
+        assert!(voltage.equals(same_numeric_str).unwrap()); // Same values
     }
 
     #[test]

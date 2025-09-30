@@ -39,6 +39,7 @@ impl<'v> StarlarkValue<'v> for Builtin {
             "Power" => Some(heap.alloc_simple(PowerType)),
             "Energy" => Some(heap.alloc_simple(EnergyType)),
             "MagneticFlux" => Some(heap.alloc_simple(MagneticFluxType)),
+            "PhysicalValue" => Some(heap.alloc_simple(PhysicalValueType)),
             _ => None,
         }
     }
@@ -58,7 +59,7 @@ impl<'v> StarlarkValue<'v> for Builtin {
             "Power".to_string(),
             "Energy".to_string(),
             "MagneticFlux".to_string(),
-            "PhysicalUnit".to_string(),
+            "PhysicalValue".to_string(),
         ]
     }
 
@@ -78,7 +79,7 @@ impl<'v> StarlarkValue<'v> for Builtin {
                 | "Power"
                 | "Energy"
                 | "MagneticFlux"
-                | "PhysicalUnit"
+                | "PhysicalValue"
         )
     }
 }

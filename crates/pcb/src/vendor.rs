@@ -28,7 +28,8 @@ pub struct VendorArgs {
 
 pub fn execute(args: VendorArgs) -> Result<()> {
     let zen_path = args.zen_path.canonicalize()?;
-    let workspace_root = find_workspace_root(&DefaultFileProvider, &zen_path).canonicalize()?;
+    let workspace_root =
+        find_workspace_root(&DefaultFileProvider::new(), &zen_path).canonicalize()?;
     if !workspace_root.join("pcb.toml").exists() {
         anyhow::bail!(
             "No pcb.toml found in workspace. \
