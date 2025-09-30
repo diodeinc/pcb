@@ -158,6 +158,18 @@ pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
     Ok(())
 }
 
+/// Convert a stable symbol ID (e.g. "comp:R1" or "sym:NET#2") to the
+/// comment key used in `# pcb:sch` lines (e.g. "R1" or "NET.2").
+pub fn symbol_id_to_comment_key(symbol_id: &str) -> Option<String> {
+    if let Some(component_name) = symbol_id.strip_prefix("comp:") {
+        Some(component_name.to_string())
+    } else {
+        symbol_id
+            .strip_prefix("sym:")
+            .map(|net_symbol| net_symbol.replace('#', "."))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,7 +351,7 @@ load("@stdlib/interfaces.zen", "Power")
 
         let (content_before, position_comments) =
             update_position_comments(original_content, &new_positions);
-        let updated_content = format!("{}{}", content_before, position_comments);
+        let updated_content = format!("{content_before}{position_comments}");
 
         // Should have 3 elements: updated A, preserved B, new C
         let pcb_sch_count = updated_content.matches("# pcb:sch ").count();
@@ -619,7 +631,7 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
     #[test]
     fn test_extremely_long_element_id() {
         let long_id = "A".repeat(1000);
-        let content = format!("# pcb:sch {} x=100.0 y=200.0 rot=0", long_id);
+        let content = format!("# pcb:sch {long_id} x=100.0 y=200.0 rot=0");
 
         let (positions, _) = parse_position_comments(&content);
 
@@ -647,7 +659,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
         let (truncate_pos, position_comments) = update_position_comments(content, &new_positions);
         let updated_content = format!("{}{}", &content[..truncate_pos], position_comments);
 
-        println!("Updated content: '{}'", updated_content);
+        println!("Updated content: '{updated_content}'");
 
         // Should have blank line between code and position comments
         assert!(updated_content.contains("P2=gnd.NET)\n\n# pcb:sch NEW_ELEMENT"));
@@ -693,7 +705,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
         );
 
         let (_, position_comments) = update_position_comments(content, &positions);
-        println!("Position comments order:\n{}", position_comments);
+        println!("Position comments order:\n{position_comments}");
 
         // Should sort numerically: 2, 9, 10, 11
         let lines: Vec<&str> = position_comments
