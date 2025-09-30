@@ -528,19 +528,10 @@ impl Instance {
         self.string_attr(&["Value", "value"])
     }
 
-    pub fn is_test_component(&self) -> bool {
-        self.reference_designator
-            .as_deref()
-            .unwrap_or_default()
-            .starts_with("TP")
-    }
-
     pub fn dnp(&self) -> bool {
-        self.is_test_component()
-            || self
-                .string_attr(&["do_not_populate", "Do_not_populate", "DNP", "dnp"])
-                .map(|s| s.to_lowercase() == "true" || s == "1")
-                .unwrap_or(false)
+        self.string_attr(&["do_not_populate", "Do_not_populate", "DNP", "dnp"])
+            .map(|s| s.to_lowercase() == "true" || s == "1")
+            .unwrap_or(false)
     }
 }
 
