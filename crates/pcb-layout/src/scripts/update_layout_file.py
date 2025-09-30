@@ -1354,12 +1354,195 @@ class SyncState:
 class SetupBoard(Step):
     """Set up the board for the sync process."""
 
-    def __init__(self, state: SyncState, board: pcbnew.BOARD):
+    def __init__(self, state: SyncState, board: pcbnew.BOARD, board_config_path: str = None, sync_board_config: bool = True):
         self.state = state
         self.board = board
+        self.board_config_path = board_config_path
+        self.sync_board_config = sync_board_config
+
+    # Configuration table: (json_path, ds_attribute, display_name, [custom_setter])
+    CONFIG_MAPPINGS = [
+    # Copper constraints
+    (['design_rules', 'constraints', 'copper', 'minimum_clearance'], 'm_MinClearance', 'minimum clearance'),
+    (['design_rules', 'constraints', 'copper', 'minimum_track_width'], 'm_TrackMinWidth', 'minimum track width'),
+    (['design_rules', 'constraints', 'copper', 'minimum_connection_width'], 'm_MinConn', 'minimum connection width'),
+    (['design_rules', 'constraints', 'copper', 'minimum_annular_width'], 'm_ViasMinAnnularWidth', 'minimum annular width'),
+    (['design_rules', 'constraints', 'copper', 'minimum_via_diameter'], 'm_ViasMinSize', 'minimum via diameter'),
+    (['design_rules', 'constraints', 'copper', 'copper_to_hole_clearance'], 'm_HoleClearance', 'copper to hole clearance'),
+    (['design_rules', 'constraints', 'copper', 'copper_to_edge_clearance'], 'm_CopperEdgeClearance', 'copper to edge clearance'),
+    # Hole constraints
+    (['design_rules', 'constraints', 'holes', 'minimum_through_hole'], 'm_MinThroughDrill', 'minimum through hole'),
+    (['design_rules', 'constraints', 'holes', 'hole_to_hole_clearance'], 'm_HoleToHoleMin', 'hole to hole clearance'),
+    # Micro via constraints
+    (['design_rules', 'constraints', 'uvias', 'minimum_uvia_diameter'], 'm_MicroViasMinSize', 'minimum uvia diameter'),
+    (['design_rules', 'constraints', 'uvias', 'minimum_uvia_hole'], 'm_MicroViasMinDrill', 'minimum uvia hole'),
+    # Silkscreen constraints
+    (['design_rules', 'constraints', 'silkscreen', 'minimum_item_clearance'], 'm_SilkClearance', 'silkscreen minimum item clearance'),
+    # Special case for text size (needs VECTOR2I)
+    (['design_rules', 'constraints', 'silkscreen', 'minimum_text_height'], 'm_TextSize', 'silkscreen minimum text height',
+    lambda ds, val: setattr(ds, 'm_TextSize', pcbnew.VECTOR2I(pcbnew.FromMM(val), pcbnew.FromMM(val)))),
+    # Note: m_TextThickness requires a complex array setup, skipping for now
+    # Pre-defined sizes (track widths and via dimensions only - diff pairs not supported)
+    (['design_rules', 'predefined_sizes', 'track_widths'], 'm_TrackWidthList', 'pre-defined track widths', 'track_widths'),
+    (['design_rules', 'predefined_sizes', 'via_dimensions'], 'm_ViasDimensionsList', 'pre-defined via dimensions', 'via_dimensions'),
+        # Netclasses
+        (['design_rules', 'netclasses'], None, 'netclasses', 'netclasses'),
+    ]
+
+    def _get_nested_value(self, data, path):
+        """Get a nested value from a dictionary using a path list."""
+        for key in path:
+            if not isinstance(data, dict) or key not in data:
+                return None
+            data = data[key]
+        return data
+
+    def _set_track_width_list(self, ds, values):
+        """Set track width list from list of width values in mm."""
+        track_list = ds.m_TrackWidthList
+        
+        # Clear existing list and add new values
+        track_list.clear()
+        for width in values:
+            track_list.push_back(pcbnew.FromMM(width))
+        logger.info(f"Set {track_list.size()} pre-defined track widths")
+
+    def _set_via_dimensions_list(self, ds, values):
+        """Set via dimensions list from list of {diameter, drill} objects."""
+        via_list = ds.m_ViasDimensionsList
+        
+        # Clear existing list and add new values
+        via_list.clear()
+        for via_def in values:
+            if not isinstance(via_def, dict) or 'diameter' not in via_def or 'drill' not in via_def:
+                logger.warning(f"Via dimension must have 'diameter' and 'drill' keys: {via_def}")
+                continue
+            diameter = pcbnew.FromMM(via_def['diameter'])
+            drill = pcbnew.FromMM(via_def['drill'])
+            via_dim = pcbnew.VIA_DIMENSION(diameter, drill)
+            via_list.push_back(via_dim)
+        logger.info(f"Set {via_list.size()} pre-defined via dimensions")
+
+    def _set_netclasses(self, ds, values):
+        """Set netclasses from list of netclass definitions."""
+        if not isinstance(values, list):
+            logger.warning("Netclasses must be a list")
+            return
+
+        netSettings = ds.m_NetSettings
+
+        # Clear existing netclasses (except default)
+        netSettings.ClearNetclasses()
+
+        def apply_netclass_properties(netclass, nc_def):
+            """Apply properties from definition dict to a netclass object."""
+            if 'clearance' in nc_def and nc_def['clearance'] is not None:
+                netclass.SetClearance(pcbnew.FromMM(nc_def['clearance']))
+            
+            if 'track_width' in nc_def and nc_def['track_width'] is not None:
+                netclass.SetTrackWidth(pcbnew.FromMM(nc_def['track_width']))
+            
+            if 'via_diameter' in nc_def and nc_def['via_diameter'] is not None:
+                netclass.SetViaDiameter(pcbnew.FromMM(nc_def['via_diameter']))
+            
+            if 'via_drill' in nc_def and nc_def['via_drill'] is not None:
+                netclass.SetViaDrill(pcbnew.FromMM(nc_def['via_drill']))
+            
+            if 'microvia_diameter' in nc_def and nc_def['microvia_diameter'] is not None:
+                netclass.SetuViaDiameter(pcbnew.FromMM(nc_def['microvia_diameter']))
+            
+            if 'microvia_drill' in nc_def and nc_def['microvia_drill'] is not None:
+                netclass.SetuViaDrill(pcbnew.FromMM(nc_def['microvia_drill']))
+            
+            if 'diff_pair_width' in nc_def and nc_def['diff_pair_width'] is not None:
+                netclass.SetDiffPairWidth(pcbnew.FromMM(nc_def['diff_pair_width']))
+            
+            if 'diff_pair_gap' in nc_def and nc_def['diff_pair_gap'] is not None:
+                netclass.SetDiffPairGap(pcbnew.FromMM(nc_def['diff_pair_gap']))
+            
+            # Set color if provided
+            if 'color' in nc_def and nc_def['color'] is not None:
+                try:
+                    color = pcbnew.COLOR4D(nc_def['color'])
+                    netclass.SetPcbColor(color)
+                except Exception as e:
+                    logger.warning(f"Failed to parse color '{nc_def['color']}' for netclass '{name}': {e}")
+
+        for nc_def in values:
+            if not isinstance(nc_def, dict) or 'name' not in nc_def:
+                logger.warning(f"Netclass definition must have 'name' key: {nc_def}")
+                continue
+
+            name = nc_def['name']
+            if not name:
+                logger.warning("Netclass name cannot be empty")
+                continue
+
+            # Create new netclass (False = don't init with defaults)
+            netclass = pcbnew.NETCLASS(name, False)
+            apply_netclass_properties(netclass, nc_def)
+
+            # Special handling for "Default" netclass
+            if name == "Default":
+                # Update the actual internal default netclass (m_DefaultNetclass)
+                default_nc = netSettings.GetDefaultNetclass()
+                apply_netclass_properties(default_nc, nc_def)
+                logger.info(f"Updated internal m_DefaultNetclass with properties from 'Default' netclass")
+
+            # Add netclass to the collection
+            netSettings.SetNetclass(netclass.GetName(), netclass)
+            logger.info(f"Added netclass '{name}' to board")
+
+        logger.info(f"Set {len(values)} netclasses")
+
+    def _apply_board_config(self):
+        """Apply board configuration from JSON file to design settings."""
+        if not self.board_config_path:
+            return
+            
+        logger.info(f"Applying board configuration from {self.board_config_path}")
+        
+        try:
+            with open(self.board_config_path, 'r') as f:
+                config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to load board config: {e}")
+            return
+            
+        ds = self.board.GetDesignSettings()
+        
+        # Apply all configuration mappings
+        for mapping in self.CONFIG_MAPPINGS:
+            json_path, ds_attr, display_name = mapping[:3]
+            custom_setter = mapping[3] if len(mapping) > 3 else None
+            
+            value = self._get_nested_value(config, json_path)
+            if value is not None:
+                if custom_setter:
+                    if callable(custom_setter):
+                        # Lambda function
+                        custom_setter(ds, value)
+                    elif custom_setter == 'track_widths':
+                        self._set_track_width_list(ds, value)
+                    elif custom_setter == 'via_dimensions':
+                        self._set_via_dimensions_list(ds, value)
+                    elif custom_setter == 'netclasses':
+                        self._set_netclasses(ds, value)
+                    else:
+                        logger.warning(f"Unknown custom setter: {custom_setter}")
+                else:
+                    setattr(ds, ds_attr, pcbnew.FromMM(value))
+                    logger.info(f"Set {display_name}: {value}mm")
 
     def run(self):
-        pass
+        # Apply board config logic
+        should_apply_config = (
+            self.board_config_path and 
+            self.sync_board_config
+        )
+        
+        if should_apply_config:
+            self._apply_board_config()
 
 
 ####################################################################################################
@@ -3085,6 +3268,18 @@ def main():
         action="store_true",
         help="""Generate a snapshot and exit.""",
     )
+    parser.add_argument(
+        "--board-config",
+        type=str,
+        metavar="file",
+        help="""JSON file containing board setup configuration.""",
+    )
+    parser.add_argument(
+        "--sync-board-config",
+        type=bool,
+        default=True,
+        help="""Apply board config (default: true).""",
+    )
     args = parser.parse_args()
 
     logger.setLevel(logging.DEBUG)
@@ -3119,7 +3314,7 @@ def main():
         ]
     else:
         steps = [
-            SetupBoard(state, board),
+            SetupBoard(state, board, args.board_config, args.sync_board_config),
             ApplyMovedPaths(state, board, schematic_data),
             ImportNetlist(state, board, args.output, netlist),
             SyncLayouts(state, board, netlist),

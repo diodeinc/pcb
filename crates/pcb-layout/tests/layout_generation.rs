@@ -36,7 +36,7 @@ macro_rules! layout_test {
                 let schematic = output.expect("Zen evaluation should produce a schematic");
 
                 // Process the layout
-                let result = process_layout(&schematic, &zen_file)?;
+                let result = process_layout(&schematic, &zen_file, false)?;
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

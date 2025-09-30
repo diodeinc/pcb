@@ -29,6 +29,17 @@ pub struct LayoutArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
+
+    /// Apply board config (default: true)
+    #[arg(
+        long = "sync-board-config",
+        action = clap::ArgAction::Set,
+        default_value_t = true,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        num_args = 0..=1,
+        default_missing_value = "true"
+    )]
+    pub sync_board_config: bool,
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
@@ -62,7 +73,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         let spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
 
         // Check if the schematic has a layout
-        match process_layout(&schematic, &zen_path) {
+        match process_layout(&schematic, &zen_path, args.sync_board_config) {
             Ok(layout_result) => {
                 spinner.finish();
                 // Print success with the layout path relative to the star file

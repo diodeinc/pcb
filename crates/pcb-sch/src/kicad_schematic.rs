@@ -1130,22 +1130,22 @@ impl SchematicConverter {
     fn generate_schematic_sexpr(&self, output_path: &Path) -> String {
         let mut schematic_items = vec![
             // Header
-            Sexpr::list(vec![Sexpr::atom("version"), Sexpr::atom("20231120")]),
-            Sexpr::list(vec![Sexpr::atom("generator"), Sexpr::string("diode_sch")]),
+            Sexpr::list(vec![Sexpr::symbol("version"), Sexpr::symbol("20231120")]),
+            Sexpr::list(vec![Sexpr::symbol("generator"), Sexpr::string("diode_sch")]),
             Sexpr::list(vec![
-                Sexpr::atom("uuid"),
-                Sexpr::atom(Uuid::new_v4().to_string()),
+                Sexpr::symbol("uuid"),
+                Sexpr::symbol(Uuid::new_v4().to_string()),
             ]),
-            Sexpr::list(vec![Sexpr::atom("paper"), Sexpr::string("A4")]),
+            Sexpr::list(vec![Sexpr::symbol("paper"), Sexpr::string("A4")]),
             // Title block
             Sexpr::list(vec![
-                Sexpr::atom("title_block"),
+                Sexpr::symbol("title_block"),
                 Sexpr::list(vec![
-                    Sexpr::atom("title"),
+                    Sexpr::symbol("title"),
                     Sexpr::string("Converted from Diode"),
                 ]),
                 Sexpr::list(vec![
-                    Sexpr::atom("date"),
+                    Sexpr::symbol("date"),
                     Sexpr::string(chrono::Local::now().format("%Y-%m-%d").to_string()),
                 ]),
             ]),
@@ -1153,7 +1153,7 @@ impl SchematicConverter {
 
         // Library symbols - just copy them as-is
         if !self.lib_symbols.is_empty() {
-            let mut lib_symbols_items = vec![Sexpr::atom("lib_symbols")];
+            let mut lib_symbols_items = vec![Sexpr::symbol("lib_symbols")];
             for symbol_info in self.lib_symbols.values() {
                 lib_symbols_items.push(symbol_info.raw_sexpr.clone());
             }
@@ -1192,17 +1192,17 @@ impl SchematicConverter {
 
         // Sheet instances
         schematic_items.push(Sexpr::list(vec![
-            Sexpr::atom("sheet_instances"),
+            Sexpr::symbol("sheet_instances"),
             Sexpr::list(vec![
-                Sexpr::atom("path"),
+                Sexpr::symbol("path"),
                 Sexpr::string("/"),
-                Sexpr::list(vec![Sexpr::atom("page"), Sexpr::string("1")]),
+                Sexpr::list(vec![Sexpr::symbol("page"), Sexpr::string("1")]),
             ]),
         ]));
 
         // Build the complete schematic S-expression
         let schematic_sexpr = Sexpr::list({
-            let mut items = vec![Sexpr::atom("kicad_sch")];
+            let mut items = vec![Sexpr::symbol("kicad_sch")];
             items.extend(schematic_items);
             items
         });
@@ -1213,46 +1213,49 @@ impl SchematicConverter {
 
     fn junction_to_sexpr(&self, junction: &Junction) -> Sexpr {
         Sexpr::list(vec![
-            Sexpr::atom("junction"),
+            Sexpr::symbol("junction"),
             Sexpr::list(vec![
-                Sexpr::atom("at"),
-                Sexpr::atom(junction.position.0.to_string()),
-                Sexpr::atom(junction.position.1.to_string()),
+                Sexpr::symbol("at"),
+                Sexpr::symbol(junction.position.0.to_string()),
+                Sexpr::symbol(junction.position.1.to_string()),
             ]),
-            Sexpr::list(vec![Sexpr::atom("diameter"), Sexpr::atom("0")]),
+            Sexpr::list(vec![Sexpr::symbol("diameter"), Sexpr::symbol("0")]),
             Sexpr::list(vec![
-                Sexpr::atom("color"),
-                Sexpr::atom("0"),
-                Sexpr::atom("0"),
-                Sexpr::atom("0"),
-                Sexpr::atom("0"),
+                Sexpr::symbol("color"),
+                Sexpr::symbol("0"),
+                Sexpr::symbol("0"),
+                Sexpr::symbol("0"),
+                Sexpr::symbol("0"),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("uuid"),
-                Sexpr::atom(junction.uuid.clone()),
+                Sexpr::symbol("uuid"),
+                Sexpr::symbol(junction.uuid.clone()),
             ]),
         ])
     }
 
     fn wire_to_sexpr(&self, wire: &Wire) -> Sexpr {
-        let mut pts_items = vec![Sexpr::atom("pts")];
+        let mut pts_items = vec![Sexpr::symbol("pts")];
         for point in &wire.points {
             pts_items.push(Sexpr::list(vec![
-                Sexpr::atom("xy"),
-                Sexpr::atom(point.0.to_string()),
-                Sexpr::atom(point.1.to_string()),
+                Sexpr::symbol("xy"),
+                Sexpr::symbol(point.0.to_string()),
+                Sexpr::symbol(point.1.to_string()),
             ]));
         }
 
         Sexpr::list(vec![
-            Sexpr::atom("wire"),
+            Sexpr::symbol("wire"),
             Sexpr::list(pts_items),
             Sexpr::list(vec![
-                Sexpr::atom("stroke"),
-                Sexpr::list(vec![Sexpr::atom("width"), Sexpr::atom("0")]),
-                Sexpr::list(vec![Sexpr::atom("type"), Sexpr::atom("default")]),
+                Sexpr::symbol("stroke"),
+                Sexpr::list(vec![Sexpr::symbol("width"), Sexpr::symbol("0")]),
+                Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("default")]),
             ]),
-            Sexpr::list(vec![Sexpr::atom("uuid"), Sexpr::atom(wire.uuid.clone())]),
+            Sexpr::list(vec![
+                Sexpr::symbol("uuid"),
+                Sexpr::symbol(wire.uuid.clone()),
+            ]),
         ])
     }
 
@@ -1272,60 +1275,66 @@ impl SchematicConverter {
         };
 
         Sexpr::list(vec![
-            Sexpr::atom("global_label"),
+            Sexpr::symbol("global_label"),
             Sexpr::string(label.text.clone()),
-            Sexpr::list(vec![Sexpr::atom("shape"), Sexpr::atom("input")]),
+            Sexpr::list(vec![Sexpr::symbol("shape"), Sexpr::symbol("input")]),
             Sexpr::list(vec![
-                Sexpr::atom("at"),
-                Sexpr::atom(label.position.0.to_string()),
-                Sexpr::atom(label.position.1.to_string()),
-                Sexpr::atom(label.angle.to_string()),
+                Sexpr::symbol("at"),
+                Sexpr::symbol(label.position.0.to_string()),
+                Sexpr::symbol(label.position.1.to_string()),
+                Sexpr::symbol(label.angle.to_string()),
             ]),
-            Sexpr::list(vec![Sexpr::atom("fields_autoplaced")]),
+            Sexpr::list(vec![Sexpr::symbol("fields_autoplaced")]),
             Sexpr::list(vec![
-                Sexpr::atom("effects"),
+                Sexpr::symbol("effects"),
                 Sexpr::list(vec![
-                    Sexpr::atom("font"),
+                    Sexpr::symbol("font"),
                     Sexpr::list(vec![
-                        Sexpr::atom("size"),
-                        Sexpr::atom("1.27"),
-                        Sexpr::atom("1.27"),
+                        Sexpr::symbol("size"),
+                        Sexpr::symbol("1.27"),
+                        Sexpr::symbol("1.27"),
                     ]),
                 ]),
-                Sexpr::list(vec![Sexpr::atom("justify"), Sexpr::atom(justify_value)]),
+                Sexpr::list(vec![Sexpr::symbol("justify"), Sexpr::symbol(justify_value)]),
             ]),
-            Sexpr::list(vec![Sexpr::atom("uuid"), Sexpr::atom(label.uuid.clone())]),
+            Sexpr::list(vec![
+                Sexpr::symbol("uuid"),
+                Sexpr::symbol(label.uuid.clone()),
+            ]),
         ])
     }
 
     fn symbol_to_sexpr(&self, symbol: &SchematicSymbol, output_path: &Path) -> Sexpr {
         let mut symbol_items = vec![
-            Sexpr::atom("symbol"),
+            Sexpr::symbol("symbol"),
             Sexpr::list(vec![
-                Sexpr::atom("lib_id"),
+                Sexpr::symbol("lib_id"),
                 Sexpr::string(symbol.lib_id.clone()),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("at"),
-                Sexpr::atom(symbol.position.0.to_string()),
-                Sexpr::atom(symbol.position.1.to_string()),
-                Sexpr::atom("0"),
+                Sexpr::symbol("at"),
+                Sexpr::symbol(symbol.position.0.to_string()),
+                Sexpr::symbol(symbol.position.1.to_string()),
+                Sexpr::symbol("0"),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("unit"),
-                Sexpr::atom(symbol.unit.to_string()),
+                Sexpr::symbol("unit"),
+                Sexpr::symbol(symbol.unit.to_string()),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("in_bom"),
-                Sexpr::atom(if symbol.in_bom { "yes" } else { "no" }),
+                Sexpr::symbol("in_bom"),
+                Sexpr::symbol(if symbol.in_bom { "yes" } else { "no" }),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("on_board"),
-                Sexpr::atom(if symbol.on_board { "yes" } else { "no" }),
+                Sexpr::symbol("on_board"),
+                Sexpr::symbol(if symbol.on_board { "yes" } else { "no" }),
             ]),
-            Sexpr::list(vec![Sexpr::atom("dnp"), Sexpr::atom("no")]),
-            Sexpr::list(vec![Sexpr::atom("fields_autoplaced")]),
-            Sexpr::list(vec![Sexpr::atom("uuid"), Sexpr::atom(symbol.uuid.clone())]),
+            Sexpr::list(vec![Sexpr::symbol("dnp"), Sexpr::symbol("no")]),
+            Sexpr::list(vec![Sexpr::symbol("fields_autoplaced")]),
+            Sexpr::list(vec![
+                Sexpr::symbol("uuid"),
+                Sexpr::symbol(symbol.uuid.clone()),
+            ]),
         ];
 
         // Properties
@@ -1370,9 +1379,9 @@ impl SchematicConverter {
 
         // Instances
         symbol_items.push(Sexpr::list(vec![
-            Sexpr::atom("instances"),
+            Sexpr::symbol("instances"),
             Sexpr::list(vec![
-                Sexpr::atom("project"),
+                Sexpr::symbol("project"),
                 Sexpr::string(
                     output_path
                         .file_stem()
@@ -1380,15 +1389,15 @@ impl SchematicConverter {
                         .unwrap_or("project"),
                 ),
                 Sexpr::list(vec![
-                    Sexpr::atom("path"),
+                    Sexpr::symbol("path"),
                     Sexpr::string(format!("/{}", symbol.uuid)),
                     Sexpr::list(vec![
-                        Sexpr::atom("reference"),
+                        Sexpr::symbol("reference"),
                         Sexpr::string(symbol.reference.clone()),
                     ]),
                     Sexpr::list(vec![
-                        Sexpr::atom("unit"),
-                        Sexpr::atom(symbol.unit.to_string()),
+                        Sexpr::symbol("unit"),
+                        Sexpr::symbol(symbol.unit.to_string()),
                     ]),
                 ]),
             ]),
@@ -1399,31 +1408,31 @@ impl SchematicConverter {
 
     fn create_property_sexpr(&self, key: &str, value: &str, x: f64, y: f64, hide: bool) -> Sexpr {
         let mut property_items = vec![
-            Sexpr::atom("property"),
+            Sexpr::symbol("property"),
             Sexpr::string(key),
             Sexpr::string(value),
             Sexpr::list(vec![
-                Sexpr::atom("at"),
-                Sexpr::atom(x.to_string()),
-                Sexpr::atom(y.to_string()),
-                Sexpr::atom("0"),
+                Sexpr::symbol("at"),
+                Sexpr::symbol(x.to_string()),
+                Sexpr::symbol(y.to_string()),
+                Sexpr::symbol("0"),
             ]),
         ];
 
         let mut effects_items = vec![
-            Sexpr::atom("effects"),
+            Sexpr::symbol("effects"),
             Sexpr::list(vec![
-                Sexpr::atom("font"),
+                Sexpr::symbol("font"),
                 Sexpr::list(vec![
-                    Sexpr::atom("size"),
-                    Sexpr::atom("1.27"),
-                    Sexpr::atom("1.27"),
+                    Sexpr::symbol("size"),
+                    Sexpr::symbol("1.27"),
+                    Sexpr::symbol("1.27"),
                 ]),
             ]),
         ];
 
         if hide {
-            effects_items.push(Sexpr::atom("hide"));
+            effects_items.push(Sexpr::symbol("hide"));
         }
 
         property_items.push(Sexpr::list(effects_items));
@@ -1594,49 +1603,49 @@ impl SchematicConverter {
 
     fn rectangle_to_sexpr(&self, rectangle: &Rectangle) -> Sexpr {
         let mut rect_items = vec![
-            Sexpr::atom("rectangle"),
+            Sexpr::symbol("rectangle"),
             Sexpr::list(vec![
-                Sexpr::atom("start"),
-                Sexpr::atom(rectangle.start.0.to_string()),
-                Sexpr::atom(rectangle.start.1.to_string()),
+                Sexpr::symbol("start"),
+                Sexpr::symbol(rectangle.start.0.to_string()),
+                Sexpr::symbol(rectangle.start.1.to_string()),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("end"),
-                Sexpr::atom(rectangle.end.0.to_string()),
-                Sexpr::atom(rectangle.end.1.to_string()),
+                Sexpr::symbol("end"),
+                Sexpr::symbol(rectangle.end.0.to_string()),
+                Sexpr::symbol(rectangle.end.1.to_string()),
             ]),
         ];
 
         // Add stroke with color if specified
         let stroke_items = if let Some((r, g, b, a)) = rectangle.color {
             vec![
-                Sexpr::atom("stroke"),
-                Sexpr::list(vec![Sexpr::atom("width"), Sexpr::atom("0.254")]), // Slightly thicker for debug
-                Sexpr::list(vec![Sexpr::atom("type"), Sexpr::atom("default")]),
+                Sexpr::symbol("stroke"),
+                Sexpr::list(vec![Sexpr::symbol("width"), Sexpr::symbol("0.254")]), // Slightly thicker for debug
+                Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("default")]),
                 Sexpr::list(vec![
-                    Sexpr::atom("color"),
-                    Sexpr::atom(r.to_string()),
-                    Sexpr::atom(g.to_string()),
-                    Sexpr::atom(b.to_string()),
-                    Sexpr::atom(a.to_string()),
+                    Sexpr::symbol("color"),
+                    Sexpr::symbol(r.to_string()),
+                    Sexpr::symbol(g.to_string()),
+                    Sexpr::symbol(b.to_string()),
+                    Sexpr::symbol(a.to_string()),
                 ]),
             ]
         } else {
             vec![
-                Sexpr::atom("stroke"),
-                Sexpr::list(vec![Sexpr::atom("width"), Sexpr::atom("0")]),
-                Sexpr::list(vec![Sexpr::atom("type"), Sexpr::atom("default")]),
+                Sexpr::symbol("stroke"),
+                Sexpr::list(vec![Sexpr::symbol("width"), Sexpr::symbol("0")]),
+                Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("default")]),
             ]
         };
         rect_items.push(Sexpr::list(stroke_items));
 
         rect_items.push(Sexpr::list(vec![
-            Sexpr::atom("fill"),
-            Sexpr::list(vec![Sexpr::atom("type"), Sexpr::atom("none")]),
+            Sexpr::symbol("fill"),
+            Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("none")]),
         ]));
         rect_items.push(Sexpr::list(vec![
-            Sexpr::atom("uuid"),
-            Sexpr::atom(rectangle.uuid.clone()),
+            Sexpr::symbol("uuid"),
+            Sexpr::symbol(rectangle.uuid.clone()),
         ]));
 
         Sexpr::list(rect_items)
@@ -1644,27 +1653,30 @@ impl SchematicConverter {
 
     fn text_to_sexpr(&self, text: &Text) -> Sexpr {
         Sexpr::list(vec![
-            Sexpr::atom("text"),
+            Sexpr::symbol("text"),
             Sexpr::string(text.content.clone()),
-            Sexpr::list(vec![Sexpr::atom("exclude_from_sim"), Sexpr::atom("no")]),
+            Sexpr::list(vec![Sexpr::symbol("exclude_from_sim"), Sexpr::symbol("no")]),
             Sexpr::list(vec![
-                Sexpr::atom("at"),
-                Sexpr::atom(text.position.0.to_string()),
-                Sexpr::atom(text.position.1.to_string()),
-                Sexpr::atom(text.angle.to_string()),
+                Sexpr::symbol("at"),
+                Sexpr::symbol(text.position.0.to_string()),
+                Sexpr::symbol(text.position.1.to_string()),
+                Sexpr::symbol(text.angle.to_string()),
             ]),
             Sexpr::list(vec![
-                Sexpr::atom("effects"),
+                Sexpr::symbol("effects"),
                 Sexpr::list(vec![
-                    Sexpr::atom("font"),
+                    Sexpr::symbol("font"),
                     Sexpr::list(vec![
-                        Sexpr::atom("size"),
-                        Sexpr::atom("1.27"),
-                        Sexpr::atom("1.27"),
+                        Sexpr::symbol("size"),
+                        Sexpr::symbol("1.27"),
+                        Sexpr::symbol("1.27"),
                     ]),
                 ]),
             ]),
-            Sexpr::list(vec![Sexpr::atom("uuid"), Sexpr::atom(text.uuid.clone())]),
+            Sexpr::list(vec![
+                Sexpr::symbol("uuid"),
+                Sexpr::symbol(text.uuid.clone()),
+            ]),
         ])
     }
 
