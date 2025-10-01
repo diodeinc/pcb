@@ -1022,10 +1022,9 @@ def check_function(module: Module):
 **TestBench Behavior:**
 
 - Evaluates the module with relaxed input requirements (missing required inputs are allowed)
-- Executes each check function in order
-- Reports failures as diagnostics with precise source location pointing to the failing `check()` call
-- Prints a success message if all checks pass
-- Returns a TestBench value containing results
+- Stores check functions for deferred execution (checks run later when using `pcb test` command)
+- Returns a TestBench value containing test cases and deferred checks
+- When executed by `pcb test`: runs each check function in order, reports failures as diagnostics with precise source location pointing to the failing `check()` call, and prints a success message if all checks pass
 
 **Example with Modern Indexing Syntax:**
 
