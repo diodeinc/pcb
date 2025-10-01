@@ -7,7 +7,8 @@ use lsp_types::{
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
 use pcb_sch::position::{
-    parse_position_comments, replace_pcb_sch_comments, symbol_id_to_comment_key, Position,
+    parse_position_comments, replace_pcb_sch_comments, symbol_id_to_comment_key, NaturalString,
+    Position,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
@@ -767,8 +768,9 @@ impl LspContext for LspEvalContext {
                         });
                     };
 
-                    // Remove if present
-                    let _removed = existing_positions.remove(comment_key.as_str()).is_some();
+                    // Remove if present (use NaturalString to ensure comparator matches)
+                    let lookup_key = NaturalString::from(comment_key.as_str());
+                    let _removed = existing_positions.remove(&lookup_key).is_some();
 
                     // Prepare new position comments (preserve formatting rules)
                     let mut position_comments = String::new();
