@@ -2275,6 +2275,7 @@ mod tests {
             ("100A", PhysicalUnit::Amperes, 100.0),
             ("47", PhysicalUnit::Ohms, 47.0),
             ("100Ohm", PhysicalUnit::Ohms, 100.0),
+            ("24.9k", PhysicalUnit::Ohms, 24900.0),
             ("1C", PhysicalUnit::Coulombs, 1.0),
             ("100W", PhysicalUnit::Watts, 100.0),
             ("50J", PhysicalUnit::Joules, 50.0),
