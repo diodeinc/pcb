@@ -508,6 +508,25 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &self.signature
     }
 
+    /// Collect all TestBench values from this module tree (recursively)
+    pub fn collect_testbenches(&'v self) -> Vec<&'v crate::lang::test_bench::FrozenTestBenchValue> {
+        let mut benches = Vec::new();
+        for child in &self.children {
+            let child_value = child.to_value();
+            // Check if this child is a TestBench (need to check frozen type)
+            if let Some(tb) =
+                child_value.downcast_ref::<crate::lang::test_bench::FrozenTestBenchValue>()
+            {
+                benches.push(tb);
+            }
+            // Recursively collect from child modules (also check frozen type)
+            if let Some(module) = child_value.downcast_ref::<FrozenModuleValue>() {
+                benches.extend(module.collect_testbenches());
+            }
+        }
+        benches
+    }
+
     /// Record that this module introduced a net with `id` and `local_name`.
     /// If another net with the same local name already exists in this module,
     /// generate a unique variant by appending a numeric suffix (e.g. `_2`, `_3`, ...).
