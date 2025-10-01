@@ -19,6 +19,7 @@ use starlark::{
     values::{
         float::StarlarkFloat,
         function::FUNCTION_TYPE,
+        none::NoneOr,
         starlark_value,
         string::StarlarkStr,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
@@ -1501,6 +1502,15 @@ impl fmt::Display for PhysicalRange {
 impl PhysicalRange {
     pub const TYPE: &'static str = "PhysicalRange";
 
+    fn fields() -> SortedMap<String, Ty> {
+        SortedMap::from_iter([
+            ("min".to_string(), Ty::float()),
+            ("max".to_string(), Ty::float()),
+            ("nominal".to_string(), Ty::union2(Ty::float(), Ty::none())),
+            ("unit".to_string(), Ty::string()),
+        ])
+    }
+
     /// Extract trailing parenthesized nominal clause if present
     /// Returns (remaining_str, optional_nominal_str)
     fn extract_nominal(s: &str) -> (&str, Option<String>) {
@@ -1550,7 +1560,12 @@ impl PhysicalRange {
 }
 
 #[starlark_value(type = PhysicalRange::TYPE)]
-impl<'v> StarlarkValue<'v> for PhysicalRange {}
+impl<'v> StarlarkValue<'v> for PhysicalRange {
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(range_methods)
+    }
+}
 
 impl FromStr for PhysicalRange {
     type Err = ParseError;
@@ -1699,15 +1714,6 @@ impl PhysicalRangeType {
         format!("{}RangeType", self.unit.quantity())
     }
 
-    fn fields(&self) -> SortedMap<String, Ty> {
-        SortedMap::from_iter([
-            ("min".to_string(), Ty::float()),
-            ("max".to_string(), Ty::float()),
-            ("nominal".to_string(), Ty::union2(Ty::float(), Ty::none())),
-            ("unit".to_string(), Ty::string()),
-        ])
-    }
-
     fn param_spec(&self) -> ParamSpec {
         ParamSpec::new_parts(
             [(
@@ -1773,7 +1779,7 @@ impl<'v> StarlarkValue<'v> for PhysicalRangeType {
                         unit: self.unit,
                     })),
                     fields: TyUserFields {
-                        known: self.fields(),
+                        known: PhysicalRange::fields(),
                         unknown: false,
                     },
                     ..TyUserParams::default()
@@ -2012,6 +2018,31 @@ fn range_type_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn unit(this: &PhysicalRangeType) -> starlark::Result<String> {
         Ok(this.unit.to_string())
+    }
+}
+
+#[starlark::starlark_module]
+fn range_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn min(this: &PhysicalRange) -> starlark::Result<f64> {
+        Ok(this.min.to_f64().unwrap())
+    }
+
+    #[starlark(attribute)]
+    fn max(this: &PhysicalRange) -> starlark::Result<f64> {
+        Ok(this.max.to_f64().unwrap())
+    }
+
+    #[starlark(attribute)]
+    fn nominal(this: &PhysicalRange) -> starlark::Result<NoneOr<f64>> {
+        Ok(NoneOr::from_option(
+            this.nominal.map(|n| n.to_f64().unwrap()),
+        ))
+    }
+
+    #[starlark(attribute)]
+    fn unit(this: &PhysicalRange) -> starlark::Result<String> {
+        Ok(this.r#type.unit.to_string())
     }
 }
 

@@ -38,6 +38,10 @@ print(VoltageRange("11V to 26V", nominal="16V"))
 print(VoltageRange(min="11V", nominal="16", max="26V"))
 
 print(serialize(VoltageRange("1.1–3.6V")))
-print(serialize(VoltageRange("1.1–3.6V (12 V nom.)")))
+print(serialize(VoltageRange("1.1–3.6V (1.2 V nom.)")))
 
-print(deserialize(VoltageRange, serialize(VoltageRange("1.1–3.6V"))))
+voltage_range = VoltageRange("11–26 V (12 V nom.)")
+print(voltage_range.min)
+print(voltage_range.nominal)
+print(voltage_range.max)
+print(voltage_range.unit)
