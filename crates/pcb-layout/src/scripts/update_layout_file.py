@@ -1355,19 +1355,31 @@ class SetupBoard(Step):
     def _set_track_width_list(self, ds, values):
         """Set track width list from list of width values in mm."""
         track_list = ds.m_TrackWidthList
-        
+
         # Clear existing list and add new values
         track_list.clear()
+
+        # Index 0 is reserved to "make room for the netclass value" (from KiCad source)
+        # This placeholder allows the GUI to use netclass defaults when no specific size is selected
+        # See: pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr_parser.cpp line 2178-2180
+        track_list.push_back(0)
+
         for width in values:
             track_list.push_back(pcbnew.FromMM(width))
-        logger.info(f"Set {track_list.size()} pre-defined track widths")
+        logger.info(f"Set {track_list.size()} pre-defined track widths (including 0.0 placeholder)")
 
     def _set_via_dimensions_list(self, ds, values):
         """Set via dimensions list from list of {diameter, drill} objects."""
         via_list = ds.m_ViasDimensionsList
-        
+
         # Clear existing list and add new values
         via_list.clear()
+
+        # Index 0 is reserved to "make room for the netclass value" (from KiCad source)
+        # This placeholder allows the GUI to use netclass defaults when no specific size is selected
+        # See: pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr_parser.cpp (VIA_DIMENSION case)
+        via_list.push_back(pcbnew.VIA_DIMENSION(0, 0))
+
         for via_def in values:
             if not isinstance(via_def, dict) or 'diameter' not in via_def or 'drill' not in via_def:
                 logger.warning(f"Via dimension must have 'diameter' and 'drill' keys: {via_def}")
@@ -1376,7 +1388,7 @@ class SetupBoard(Step):
             drill = pcbnew.FromMM(via_def['drill'])
             via_dim = pcbnew.VIA_DIMENSION(diameter, drill)
             via_list.push_back(via_dim)
-        logger.info(f"Set {via_list.size()} pre-defined via dimensions")
+        logger.info(f"Set {via_list.size()} pre-defined via dimensions (including 0.0/0.0 placeholder)")
 
     def _set_netclasses(self, ds, values):
         """Set netclasses from list of netclass definitions."""
@@ -1393,28 +1405,24 @@ class SetupBoard(Step):
             """Apply properties from definition dict to a netclass object."""
             if 'clearance' in nc_def and nc_def['clearance'] is not None:
                 netclass.SetClearance(pcbnew.FromMM(nc_def['clearance']))
-            
             if 'track_width' in nc_def and nc_def['track_width'] is not None:
                 netclass.SetTrackWidth(pcbnew.FromMM(nc_def['track_width']))
-            
             if 'via_diameter' in nc_def and nc_def['via_diameter'] is not None:
                 netclass.SetViaDiameter(pcbnew.FromMM(nc_def['via_diameter']))
-            
             if 'via_drill' in nc_def and nc_def['via_drill'] is not None:
                 netclass.SetViaDrill(pcbnew.FromMM(nc_def['via_drill']))
-            
             if 'microvia_diameter' in nc_def and nc_def['microvia_diameter'] is not None:
                 netclass.SetuViaDiameter(pcbnew.FromMM(nc_def['microvia_diameter']))
-            
             if 'microvia_drill' in nc_def and nc_def['microvia_drill'] is not None:
                 netclass.SetuViaDrill(pcbnew.FromMM(nc_def['microvia_drill']))
-            
             if 'diff_pair_width' in nc_def and nc_def['diff_pair_width'] is not None:
                 netclass.SetDiffPairWidth(pcbnew.FromMM(nc_def['diff_pair_width']))
-            
             if 'diff_pair_gap' in nc_def and nc_def['diff_pair_gap'] is not None:
                 netclass.SetDiffPairGap(pcbnew.FromMM(nc_def['diff_pair_gap']))
-            
+            if 'diff_pair_via_gap' in nc_def and nc_def['diff_pair_via_gap'] is not None:
+                netclass.SetDiffPairViaGap(pcbnew.FromMM(nc_def['diff_pair_via_gap']))
+            if 'priority' in nc_def and nc_def['priority'] is not None:
+                netclass.SetPriority(int(nc_def['priority']))
             # Set color if provided
             if 'color' in nc_def and nc_def['color'] is not None:
                 try:
@@ -1443,10 +1451,10 @@ class SetupBoard(Step):
                 default_nc = netSettings.GetDefaultNetclass()
                 apply_netclass_properties(default_nc, nc_def)
                 logger.info(f"Updated internal m_DefaultNetclass with properties from 'Default' netclass")
-
-            # Add netclass to the collection
-            netSettings.SetNetclass(netclass.GetName(), netclass)
-            logger.info(f"Added netclass '{name}' to board")
+            else:
+                # Add netclass to the collection (skip for Default since it's already there)
+                netSettings.SetNetclass(netclass.GetName(), netclass)
+                logger.info(f"Added netclass '{name}' to board")
 
         logger.info(f"Set {len(values)} netclasses")
 

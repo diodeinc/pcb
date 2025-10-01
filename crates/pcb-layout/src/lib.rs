@@ -358,8 +358,11 @@ fn patch_stackup_if_needed(pcb_path: &Path, board_config_json: &str) -> Result<(
 
     info!("Updating stackup configuration in {}", pcb_path.display());
 
+    // Get number of user layers from board config
+    let num_user_layers = board_config.num_user_layers;
+
     // Generate new S-expressions
-    let layers_sexpr = zen_stackup.generate_layers_sexpr();
+    let layers_sexpr = zen_stackup.generate_layers_sexpr(num_user_layers);
     let stackup_sexpr = zen_stackup.generate_stackup_sexpr();
 
     // Use surgical string replacement to avoid parsing issues with hex numbers
@@ -391,7 +394,6 @@ fn replace_section_in_pcb_content(
         // Replace the section with the new content
         let mut result = String::with_capacity(content.len() + new_section.len());
         result.push_str(&content[..start_pos]);
-        result.push('\t');
         result.push_str(new_section);
         result.push_str(&content[end_pos + 1..]);
         Ok(result)
