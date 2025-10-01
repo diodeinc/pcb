@@ -453,8 +453,9 @@ impl std::ops::Sub for PhysicalValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Serialize, Deserialize, Hash,
+    Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash, Serialize, Deserialize,
 )]
+#[serde(into = "String", try_from = "String")]
 pub struct PhysicalUnitDims {
     pub current: i8,
     pub time: i8,
@@ -559,6 +560,19 @@ impl FromStr for PhysicalUnitDims {
         }
 
         Ok(dims)
+    }
+}
+
+impl From<PhysicalUnitDims> for String {
+    fn from(dims: PhysicalUnitDims) -> String {
+        dims.to_string()
+    }
+}
+
+impl TryFrom<String> for PhysicalUnitDims {
+    type Error = ParseError;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -1446,14 +1460,16 @@ define_physical_unit!(PowerType, PhysicalUnit::Watts);
 define_physical_unit!(EnergyType, PhysicalUnit::Joules);
 define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers);
 
-#[derive(Clone, Debug, Freeze, ProvidesStaticType, NoSerialize, Allocative)]
+#[derive(Clone, Debug, Freeze, ProvidesStaticType, Allocative, Serialize, Deserialize)]
 pub struct PhysicalRange {
     #[allocative(skip)]
     min: Decimal,
     #[allocative(skip)]
     max: Decimal,
     #[allocative(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     nominal: Option<Decimal>,
+    #[serde(flatten)]
     r#type: PhysicalRangeType,
 }
 
@@ -1625,7 +1641,9 @@ impl FromStr for PhysicalRange {
     }
 }
 
-#[derive(Clone, Copy, Hash, Debug, PartialEq, NoSerialize, ProvidesStaticType, Allocative)]
+#[derive(
+    Clone, Copy, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize,
+)]
 pub struct PhysicalRangeType {
     unit: PhysicalUnitDims,
 }
@@ -1948,9 +1966,7 @@ impl RangeBuilder {
             unit_hint
         };
 
-        // TODO:
-        // ensure min < nominal < max
-
+        // TODO: ensure min < nominal < max
         Ok(PhysicalRange {
             min,
             max,
