@@ -152,4 +152,14 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         eval.add_property(&config_key, heap.alloc(&pretty_config_json));
         Ok(NoneType)
     }
+
+    fn physical_range(
+        #[allow(unused_variables)] this: &Builtin,
+        unit: String,
+    ) -> starlark::Result<PhysicalRangeType> {
+        let unit: pcb_sch::PhysicalUnit = unit
+            .parse()
+            .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
+        Ok(PhysicalRangeType::new(unit.into()))
+    }
 }

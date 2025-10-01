@@ -228,7 +228,7 @@ impl std::str::FromStr for PhysicalUnit {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "" | "ohm" | "Ohm" | "ohms" | "Ohms" => Ok(PhysicalUnit::Ohms),
+            "" | "Ω" | "ohm" | "Ohm" | "ohms" | "Ohms" => Ok(PhysicalUnit::Ohms),
             "V" | "volt" | "Volt" | "volts" | "Volts" => Ok(PhysicalUnit::Volts),
             "A" | "ampere" | "Ampere" | "amperes" | "Amperes" => Ok(PhysicalUnit::Amperes),
             "F" | "farad" | "Farad" | "farads" | "Farads" => Ok(PhysicalUnit::Farads),
