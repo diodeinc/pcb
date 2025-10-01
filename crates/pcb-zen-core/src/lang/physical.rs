@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, fmt, str::FromStr};
+use std::{cmp::Ordering, fmt, hash::Hash, str::FromStr};
 
 use allocative::Allocative;
 
@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
-    eval::{Arguments, Evaluator},
+    environment::{Methods, MethodsBuilder, MethodsStatic},
+    eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
     typing::{
         ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserFields,
@@ -16,16 +17,23 @@ use starlark::{
     },
     util::ArcStr,
     values::{
-        float::StarlarkFloat, starlark_value, string::StarlarkStr, typing::TypeInstanceId, Freeze,
-        FreezeResult, Heap, NoSerialize, StarlarkValue, Value, ValueLike, ValueTyped,
+        float::StarlarkFloat,
+        function::FUNCTION_TYPE,
+        none::NoneOr,
+        starlark_value,
+        string::StarlarkStr,
+        typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
+        Freeze, FreezeResult, FrozenValue, Heap, NoSerialize, StarlarkValue, Value, ValueLike,
+        ValueTyped,
     },
 };
+use starlark_map::{sorted_map::SortedMap, StarlarkHasher};
 
 /// Macro to generate physical unit type implementations
 ///
 /// Usage: define_physical_unit!(TypeName, PhysicalUnit::Variant);
 macro_rules! define_physical_unit {
-    ($type_name:ident, $unit_variant:expr, $quantity_str:expr) => {
+    ($type_name:ident, $unit_variant:expr) => {
         #[derive(
             Clone, Copy, Debug, PartialEq, ProvidesStaticType, NoSerialize, Freeze, Allocative,
         )]
@@ -41,7 +49,6 @@ macro_rules! define_physical_unit {
 
         impl<'a> PhysicalUnitType<'a> for $type_name {
             const UNIT: PhysicalUnit = $unit_variant;
-            const QUANTITY: &'static str = $quantity_str;
         }
 
         impl $type_name {
@@ -74,7 +81,7 @@ macro_rules! define_physical_unit {
             }
 
             fn get_type_starlark_repr() -> Ty {
-                PhysicalValue::unit_type::<Self>(Self::type_id())
+                PhysicalValue::unit_type(Self::type_id(), Self::UNIT)
             }
 
             fn typechecker_ty(&self) -> Option<Ty> {
@@ -99,6 +106,11 @@ fn starlark_value_to_decimal(
         Ok(Decimal::try_from(f.0)?)
     } else if let Some(i) = value.unpack_i32() {
         Ok(Decimal::from(i))
+    } else if let Some(s) = value.unpack_str() {
+        if let Ok(physical) = PhysicalValue::from_str(s) {
+            return Ok(physical.value);
+        }
+        Ok(s.parse()?)
     } else {
         Err(PhysicalValueError::InvalidNumberType)
     }
@@ -251,7 +263,7 @@ impl PhysicalValue {
         Ok(result.check_unit(expected_unit)?)
     }
 
-    pub fn unit_type<'a, T: PhysicalUnitType<'a>>(type_id: TypeInstanceId) -> Ty {
+    pub fn unit_type(type_id: TypeInstanceId, unit: PhysicalUnit) -> Ty {
         fn single_param_spec(param_type: Ty) -> ParamSpec {
             ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
         }
@@ -261,7 +273,7 @@ impl PhysicalValue {
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         Ty::custom(
             TyUser::new(
-                T::QUANTITY.to_string(),
+                unit.quantity().to_string(),
                 TyStarlarkValue::new::<PhysicalValue>(),
                 type_id,
                 TyUserParams {
@@ -339,7 +351,10 @@ impl PhysicalValue {
                 TyStarlarkValue::new::<T>(),
                 callable_type_id,
                 TyUserParams {
-                    callable: Some(TyCallable::new(param_spec, Self::unit_type::<T>(type_id))),
+                    callable: Some(TyCallable::new(
+                        param_spec,
+                        Self::unit_type(type_id, T::UNIT),
+                    )),
                     ..Default::default()
                 },
             )
@@ -438,7 +453,10 @@ impl std::ops::Sub for PhysicalValue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash, Serialize, Deserialize,
+)]
+#[serde(into = "String", try_from = "String")]
 pub struct PhysicalUnitDims {
     pub current: i8,
     pub time: i8,
@@ -543,6 +561,19 @@ impl FromStr for PhysicalUnitDims {
         }
 
         Ok(dims)
+    }
+}
+
+impl From<PhysicalUnitDims> for String {
+    fn from(dims: PhysicalUnitDims) -> String {
+        dims.to_string()
+    }
+}
+
+impl TryFrom<String> for PhysicalUnitDims {
+    type Error = ParseError;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -666,9 +697,8 @@ impl PhysicalUnitDims {
 
 pub trait PhysicalUnitType<'a>: StarlarkValue<'a> {
     const UNIT: PhysicalUnit;
-    const QUANTITY: &'static str;
     fn type_name() -> String {
-        format!("{}Type", Self::QUANTITY)
+        format!("{}Type", Self::UNIT.quantity())
     }
 }
 
@@ -731,6 +761,18 @@ pub enum PhysicalValueError {
         lhs_unit: String,
         rhs_unit: String,
         error: String,
+    },
+    #[error("Invalid arguments: {args:?}")]
+    InvalidArguments { args: Vec<String> },
+    #[error("Range() requires either a value argument or min/max keywords")]
+    MissingRangeValue,
+    #[error("Invalid range: min ({min}) > max ({max})")]
+    InvalidRange { min: String, max: String },
+    #[error("Nominal value ({nominal}) is outside range [{min}, {max}]")]
+    NominalOutOfRange {
+        nominal: String,
+        min: String,
+        max: String,
     },
 }
 
@@ -1047,7 +1089,12 @@ impl std::fmt::Display for PhysicalValue {
 starlark_simple_value!(PhysicalUnitDims);
 
 #[starlark_value(type = "PhysicalUnit")]
-impl<'v> StarlarkValue<'v> for PhysicalUnitDims {}
+impl<'v> StarlarkValue<'v> for PhysicalUnitDims {
+    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        self.hash(hasher);
+        Ok(())
+    }
+}
 
 starlark_simple_value!(PhysicalValue);
 starlark_simple_value!(PhysicalValueType);
@@ -1408,19 +1455,596 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
 }
 
 // Physical unit types generated by macro
-define_physical_unit!(VoltageType, PhysicalUnit::Volts, "Voltage");
-define_physical_unit!(CurrentType, PhysicalUnit::Amperes, "Current");
-define_physical_unit!(ResistanceType, PhysicalUnit::Ohms, "Resistance");
-define_physical_unit!(CapacitanceType, PhysicalUnit::Farads, "Capacitance");
-define_physical_unit!(InductanceType, PhysicalUnit::Henries, "Inductance");
-define_physical_unit!(FrequencyType, PhysicalUnit::Hertz, "Frequency");
-define_physical_unit!(TimeType, PhysicalUnit::Seconds, "Time");
-define_physical_unit!(ConductanceType, PhysicalUnit::Siemens, "Conductance");
-define_physical_unit!(TemperatureType, PhysicalUnit::Kelvin, "Temperature");
-define_physical_unit!(ChargeType, PhysicalUnit::Coulombs, "Charge");
-define_physical_unit!(PowerType, PhysicalUnit::Watts, "Power");
-define_physical_unit!(EnergyType, PhysicalUnit::Joules, "Energy");
-define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers, "MagneticFlux");
+define_physical_unit!(VoltageType, PhysicalUnit::Volts);
+define_physical_unit!(CurrentType, PhysicalUnit::Amperes);
+define_physical_unit!(ResistanceType, PhysicalUnit::Ohms);
+define_physical_unit!(CapacitanceType, PhysicalUnit::Farads);
+define_physical_unit!(InductanceType, PhysicalUnit::Henries);
+define_physical_unit!(FrequencyType, PhysicalUnit::Hertz);
+define_physical_unit!(TimeType, PhysicalUnit::Seconds);
+define_physical_unit!(ConductanceType, PhysicalUnit::Siemens);
+define_physical_unit!(TemperatureType, PhysicalUnit::Kelvin);
+define_physical_unit!(ChargeType, PhysicalUnit::Coulombs);
+define_physical_unit!(PowerType, PhysicalUnit::Watts);
+define_physical_unit!(EnergyType, PhysicalUnit::Joules);
+define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers);
+
+#[derive(Clone, Debug, Freeze, ProvidesStaticType, Allocative, Serialize, Deserialize)]
+pub struct PhysicalRange {
+    #[allocative(skip)]
+    min: Decimal,
+    #[allocative(skip)]
+    max: Decimal,
+    #[allocative(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nominal: Option<Decimal>,
+    #[serde(flatten)]
+    r#type: PhysicalRangeType,
+}
+
+starlark_simple_value!(PhysicalRange);
+
+impl fmt::Display for PhysicalRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let unit = self.r#type.unit;
+        if let Some(nominal) = self.nominal {
+            write!(
+                f,
+                "{}–{} {} ({} {} nom.)",
+                self.min, self.max, unit, nominal, unit
+            )
+        } else {
+            write!(f, "{}–{} {}", self.min, self.max, unit)
+        }
+    }
+}
+
+impl PhysicalRange {
+    pub const TYPE: &'static str = "PhysicalRange";
+
+    fn fields() -> SortedMap<String, Ty> {
+        SortedMap::from_iter([
+            ("min".to_string(), Ty::float()),
+            ("max".to_string(), Ty::float()),
+            ("nominal".to_string(), Ty::union2(Ty::float(), Ty::none())),
+            ("unit".to_string(), Ty::string()),
+        ])
+    }
+
+    /// Extract trailing parenthesized nominal clause if present
+    /// Returns (remaining_str, optional_nominal_str)
+    fn extract_nominal(s: &str) -> (&str, Option<String>) {
+        let trimmed = s.trim_end();
+        if let Some(rparen_pos) = trimmed.rfind(')') {
+            if let Some(lparen_pos) = trimmed[..rparen_pos].rfind('(') {
+                let inner = trimmed[lparen_pos + 1..rparen_pos].trim();
+                // Check if it matches the nominal pattern (ends with "nom" or "nom.")
+                let lower = inner.trim_end().to_lowercase();
+
+                if let Some(nominal_value_str) = lower.strip_suffix("nom.") {
+                    let core = trimmed[..lparen_pos].trim_end();
+                    let value_len = nominal_value_str.len();
+                    // Return the original case version of the nominal value
+                    return (core, Some(inner[..value_len].trim().to_string()));
+                } else if let Some(nominal_value_str) = lower.strip_suffix("nom") {
+                    let core = trimmed[..lparen_pos].trim_end();
+                    let value_len = nominal_value_str.len();
+                    return (core, Some(inner[..value_len].trim().to_string()));
+                }
+            }
+        }
+        (s, None)
+    }
+
+    /// Try to split on range separator (en-dash or "to")
+    /// Returns (left, right) if found
+    fn try_split_range(s: &str) -> Option<(&str, &str)> {
+        // Try en-dash first (U+2013)
+        if let Some(pos) = s.find('–') {
+            let left = s[..pos].trim_end();
+            let right = s[pos + '–'.len_utf8()..].trim_start();
+            return Some((left, right));
+        }
+
+        // Try case-insensitive "to" with word boundaries
+        let lower = s.to_lowercase();
+        if let Some(pos) = lower.find(" to ") {
+            // Ensure it's a word boundary by checking it has spaces
+            let left = s[..pos].trim_end();
+            let right = s[pos + 4..].trim_start(); // " to " is 4 bytes
+            return Some((left, right));
+        }
+
+        None
+    }
+}
+
+#[starlark_value(type = PhysicalRange::TYPE)]
+impl<'v> StarlarkValue<'v> for PhysicalRange {
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(range_methods)
+    }
+}
+
+impl FromStr for PhysicalRange {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(ParseError::InvalidFormat);
+        }
+
+        // Step 1: Extract optional nominal clause
+        let (core_str, nominal_str) = Self::extract_nominal(s);
+        let nominal = if let Some(nom_str) = nominal_str {
+            let pv = PhysicalValue::from_str(&nom_str)?;
+            Some(pv)
+        } else {
+            None
+        };
+
+        // Step 2: Try to parse as explicit range
+        if let Some((left_str, right_str)) = Self::try_split_range(core_str) {
+            // Parse right side (must have unit)
+            let right_pv = PhysicalValue::from_str(right_str)?;
+            let unit = right_pv.unit;
+
+            // Try parsing left side - check if it has a unit suffix
+            let left_trimmed = left_str.trim();
+            let has_unit_suffix = left_trimmed
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_alphabetic());
+
+            let (min_val, max_val) = if has_unit_suffix {
+                // Left side has a unit, parse as PhysicalValue
+                let left_pv = PhysicalValue::from_str(left_str)?;
+                // Units must match
+                if left_pv.unit != right_pv.unit {
+                    return Err(ParseError::InvalidUnit);
+                }
+                (left_pv.value, right_pv.value)
+            } else {
+                // Left side is bare number, parse as Decimal
+                let left_num =
+                    Decimal::from_str(left_trimmed).map_err(|_| ParseError::InvalidNumber)?;
+                (left_num, right_pv.value)
+            };
+
+            // Ensure min <= max
+            let (min_val, max_val) = if min_val <= max_val {
+                (min_val, max_val)
+            } else {
+                (max_val, min_val)
+            };
+
+            // Validate nominal dimension if present
+            if let Some(nom) = &nominal {
+                if nom.unit != unit {
+                    return Err(ParseError::InvalidUnit);
+                }
+            }
+
+            return Ok(PhysicalRange {
+                min: min_val,
+                max: max_val,
+                nominal: nominal.map(|n| n.value),
+                r#type: PhysicalRangeType::new(unit),
+            });
+        }
+
+        // Step 3: Parse as single PhysicalValue (possibly with tolerance)
+        let pv = PhysicalValue::from_str(core_str)?;
+
+        let (min_val, max_val) = if pv.tolerance.is_zero() {
+            // No tolerance - min equals max
+            (pv.value, pv.value)
+        } else {
+            // Expand tolerance into range
+            let min_val = pv.value * (Decimal::ONE - pv.tolerance);
+            let max_val = pv.value * (Decimal::ONE + pv.tolerance);
+            (min_val, max_val)
+        };
+
+        // Validate nominal dimension if present
+        if let Some(nom) = &nominal {
+            if nom.unit != pv.unit {
+                return Err(ParseError::InvalidUnit);
+            }
+        }
+
+        Ok(PhysicalRange {
+            min: min_val,
+            max: max_val,
+            nominal: nominal.map(|n| n.value),
+            r#type: PhysicalRangeType::new(pv.unit),
+        })
+    }
+}
+
+#[derive(
+    Clone, Copy, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize,
+)]
+pub struct PhysicalRangeType {
+    unit: PhysicalUnitDims,
+}
+
+impl Freeze for PhysicalRangeType {
+    type Frozen = Self;
+    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
+        Ok(self)
+    }
+}
+
+starlark_simple_value!(PhysicalRangeType);
+
+impl fmt::Display for PhysicalRangeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.instance_ty_name())
+    }
+}
+
+impl PhysicalRangeType {
+    pub fn new(unit: PhysicalUnitDims) -> Self {
+        PhysicalRangeType { unit }
+    }
+
+    fn type_instance_id(&self) -> TypeInstanceId {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+
+        static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
+
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        *cache
+            .lock()
+            .unwrap()
+            .entry(self.unit)
+            .or_insert_with(TypeInstanceId::r#gen)
+    }
+
+    fn instance_ty_name(&self) -> String {
+        format!("{}Range", self.unit.quantity())
+    }
+
+    fn ty_name(&self) -> String {
+        format!("{}RangeType", self.unit.quantity())
+    }
+
+    fn param_spec(&self) -> ParamSpec {
+        ParamSpec::new_parts(
+            [(
+                ParamIsRequired::No,
+                Ty::union2(Ty::string(), PhysicalValue::get_type_starlark_repr()),
+            )],
+            [],
+            None,
+            [
+                (
+                    "min".into(),
+                    ParamIsRequired::No,
+                    Ty::union2(Ty::string(), Ty::float()),
+                ),
+                (
+                    "max".into(),
+                    ParamIsRequired::No,
+                    Ty::union2(Ty::string(), Ty::float()),
+                ),
+                (
+                    "nominal".into(),
+                    ParamIsRequired::No,
+                    Ty::union2(Ty::string(), Ty::float()),
+                ),
+            ],
+            None,
+        )
+        .unwrap()
+    }
+
+    fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
+        ParametersSpec::new_parts(
+            self.instance_ty_name().as_str(),
+            [("value", ParametersSpecParam::Optional)],
+            [],
+            false,
+            [
+                ("min", ParametersSpecParam::Optional),
+                ("max", ParametersSpecParam::Optional),
+                ("nominal", ParametersSpecParam::Optional),
+            ],
+            false,
+        )
+    }
+}
+
+#[starlark_value(type = FUNCTION_TYPE)]
+impl<'v> StarlarkValue<'v> for PhysicalRangeType {
+    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        self.hash(hasher);
+        Ok(())
+    }
+
+    fn eval_type(&self) -> Option<Ty> {
+        let id = self.type_instance_id();
+        let ty_range = Ty::custom(
+            TyUser::new(
+                self.instance_ty_name(),
+                TyStarlarkValue::new::<PhysicalRange>(),
+                id,
+                TyUserParams {
+                    matcher: Some(TypeMatcherFactory::new(RangeTypeMatcher {
+                        unit: self.unit,
+                    })),
+                    fields: TyUserFields {
+                        known: PhysicalRange::fields(),
+                        unknown: false,
+                    },
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        );
+        Some(ty_range)
+    }
+
+    fn typechecker_ty(&self) -> Option<Ty> {
+        let ty_range_type = Ty::custom(
+            TyUser::new(
+                self.ty_name(),
+                TyStarlarkValue::new::<Self>(),
+                TypeInstanceId::r#gen(),
+                TyUserParams {
+                    callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        );
+        Some(ty_range_type)
+    }
+
+    fn invoke(
+        &self,
+        _: Value<'v>,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        self.parameters_spec()
+            .parser(args, eval, |param_parser, eval| {
+                let value: Option<Value> = param_parser.next_opt()?;
+                let min: Option<Value> = param_parser.next_opt()?;
+                let max: Option<Value> = param_parser.next_opt()?;
+                let nominal: Option<Value> = param_parser.next_opt()?;
+                let mut range_builder = RangeBuilder::default();
+                range_builder.add_value_opt(value)?;
+                range_builder.add_min_max_opt(min, max)?;
+                range_builder.add_nominal_opt(nominal)?;
+                let mut range = range_builder.build(self.unit)?;
+                range.r#type = *self;
+                Ok(eval.heap().alloc_simple(range))
+            })
+    }
+
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(range_type_methods)
+    }
+}
+
+#[derive(Hash, Debug, PartialEq, Clone, Allocative)]
+struct RangeTypeMatcher {
+    unit: PhysicalUnitDims,
+}
+
+impl TypeMatcher for RangeTypeMatcher {
+    fn matches(&self, value: Value) -> bool {
+        match PhysicalRange::from_value(value) {
+            Some(range) => range.r#type.unit == self.unit,
+            None => false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct RangeBuilder {
+    range: Option<(Decimal, Decimal)>,
+    nominal: Option<Decimal>,
+    unit: Option<PhysicalUnitDims>,
+}
+
+impl RangeBuilder {
+    fn add_value(&mut self, value: Value) -> Result<(), PhysicalValueError> {
+        // Try string first
+        if let Some(s) = value.unpack_str() {
+            return self.add_str(s);
+        }
+
+        // Try PhysicalValue
+        if let Some(pv) = value.downcast_ref::<PhysicalValue>() {
+            return self.add_physical_value(*pv);
+        }
+
+        Err(PhysicalValueError::InvalidArgumentType {
+            unit: "value".to_string(),
+        })
+    }
+
+    fn add_str(&mut self, str: &str) -> Result<(), PhysicalValueError> {
+        // If range is already set, error
+        if self.range.is_some() {
+            return Err(PhysicalValueError::InvalidArguments {
+                args: vec!["value".to_string()],
+            });
+        }
+        let range = PhysicalRange::from_str(str)?;
+        self.range = Some((range.min, range.max));
+        self.nominal = range.nominal;
+        self.unit = Some(range.r#type.unit);
+        Ok(())
+    }
+
+    fn add_physical_value(&mut self, value: PhysicalValue) -> Result<(), PhysicalValueError> {
+        // If range is already set, error
+        if self.range.is_some() {
+            return Err(PhysicalValueError::InvalidArguments {
+                args: vec!["value".to_string()],
+            });
+        }
+
+        // Expand tolerance to range (works correctly when tolerance is zero)
+        let min = value.value * (Decimal::ONE - value.tolerance);
+        let max = value.value * (Decimal::ONE + value.tolerance);
+
+        self.range = Some((min, max));
+        self.unit = Some(value.unit);
+        Ok(())
+    }
+
+    fn add_min_max(&mut self, min: Value, max: Value) -> Result<(), PhysicalValueError> {
+        // if self.range is already set, we can't set it again
+        if self.range.is_some() {
+            return Err(PhysicalValueError::InvalidArguments {
+                args: vec!["min".to_string(), "max".to_string()],
+            });
+        }
+        let min = starlark_value_to_decimal(&min)?;
+        let max = starlark_value_to_decimal(&max)?;
+        self.range = Some((min, max));
+        Ok(())
+    }
+
+    fn add_nominal(&mut self, nominal: Value) -> Result<(), PhysicalValueError> {
+        if self.nominal.is_some() {
+            return Err(PhysicalValueError::InvalidArguments {
+                args: vec!["nominal".to_string()],
+            });
+        }
+        let nominal = starlark_value_to_decimal(&nominal)?;
+        self.nominal = Some(nominal);
+        Ok(())
+    }
+
+    fn add_min_max_opt(
+        &mut self,
+        min: Option<Value>,
+        max: Option<Value>,
+    ) -> Result<(), PhysicalValueError> {
+        // iff min and max are provided, we can set it
+        // if only one of min or max is provided, we can't set it
+        // if neither min nor max is provided, we can't set it
+        match (min, max) {
+            (Some(min), Some(max)) => self.add_min_max(min, max),
+            (Some(_), None) => Err(PhysicalValueError::InvalidArguments {
+                args: vec!["min".to_string()],
+            }),
+            (None, Some(_)) => Err(PhysicalValueError::InvalidArguments {
+                args: vec!["max".to_string()],
+            }),
+            (None, None) => Ok(()),
+        }
+    }
+
+    fn add_nominal_opt(&mut self, nominal: Option<Value>) -> Result<(), PhysicalValueError> {
+        match nominal {
+            Some(nominal) => self.add_nominal(nominal),
+            None => Ok(()),
+        }
+    }
+
+    fn add_value_opt(&mut self, value: Option<Value>) -> Result<(), PhysicalValueError> {
+        match value {
+            Some(value) => self.add_value(value),
+            None => Ok(()),
+        }
+    }
+
+    fn build(self, unit_hint: PhysicalUnitDims) -> Result<PhysicalRange, PhysicalValueError> {
+        // Range must be set
+        let (min, max) = self.range.ok_or(PhysicalValueError::MissingRangeValue)?;
+
+        // Determine unit
+        let unit: PhysicalUnitDims = if let Some(builder_unit) = self.unit {
+            // If builder has a unit, ensure it matches the hint
+            if builder_unit != unit_hint {
+                return Err(PhysicalValueError::UnitMismatch {
+                    expected: unit_hint.to_string(),
+                    actual: builder_unit.to_string(),
+                });
+            }
+            builder_unit
+        } else {
+            // Use the hint
+            unit_hint
+        };
+
+        // Ensure min <= max (already enforced in parsing, but validate here)
+        if min > max {
+            return Err(PhysicalValueError::InvalidRange {
+                min: min.to_string(),
+                max: max.to_string(),
+            });
+        }
+
+        // Ensure nominal is within [min, max] if present
+        if let Some(nominal) = self.nominal {
+            if nominal < min || nominal > max {
+                return Err(PhysicalValueError::NominalOutOfRange {
+                    nominal: nominal.to_string(),
+                    min: min.to_string(),
+                    max: max.to_string(),
+                });
+            }
+        }
+
+        Ok(PhysicalRange {
+            min,
+            max,
+            nominal: self.nominal,
+            r#type: PhysicalRangeType::new(unit),
+        })
+    }
+}
+
+#[starlark::starlark_module]
+fn range_type_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn r#type(this: &PhysicalRangeType) -> starlark::Result<String> {
+        Ok(this.ty_name())
+    }
+
+    #[starlark(attribute)]
+    fn unit(this: &PhysicalRangeType) -> starlark::Result<String> {
+        Ok(this.unit.to_string())
+    }
+}
+
+#[starlark::starlark_module]
+fn range_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn min(this: &PhysicalRange) -> starlark::Result<f64> {
+        Ok(this.min.to_f64().unwrap())
+    }
+
+    #[starlark(attribute)]
+    fn max(this: &PhysicalRange) -> starlark::Result<f64> {
+        Ok(this.max.to_f64().unwrap())
+    }
+
+    #[starlark(attribute)]
+    fn nominal(this: &PhysicalRange) -> starlark::Result<NoneOr<f64>> {
+        Ok(NoneOr::from_option(
+            this.nominal.map(|n| n.to_f64().unwrap()),
+        ))
+    }
+
+    #[starlark(attribute)]
+    fn unit(this: &PhysicalRange) -> starlark::Result<String> {
+        Ok(this.r#type.unit.to_string())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2444,5 +3068,166 @@ mod tests {
 
         // The logic should detect this mismatch and return an error
         // In the actual implementation, this would be caught by the unit checking
+    }
+
+    #[test]
+    fn test_range_parsing_endash() {
+        let r = PhysicalRange::from_str("11–26V").unwrap();
+        assert_eq!(r.min, Decimal::from(11));
+        assert_eq!(r.max, Decimal::from(26));
+        assert_eq!(r.nominal, None);
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_endash_with_spaces() {
+        let r = PhysicalRange::from_str("11 – 26V").unwrap();
+        assert_eq!(r.min, Decimal::from(11));
+        assert_eq!(r.max, Decimal::from(26));
+        assert_eq!(r.nominal, None);
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_to_keyword() {
+        let r = PhysicalRange::from_str("11V to 26V").unwrap();
+        assert_eq!(r.min, Decimal::from(11));
+        assert_eq!(r.max, Decimal::from(26));
+        assert_eq!(r.nominal, None);
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_decimal_to_keyword() {
+        let r = PhysicalRange::from_str("1.1 V to 26V").unwrap();
+        assert_eq!(r.min, Decimal::from_str("1.1").unwrap());
+        assert_eq!(r.max, Decimal::from(26));
+        assert_eq!(r.nominal, None);
+    }
+
+    #[test]
+    fn test_range_parsing_with_nominal() {
+        let r = PhysicalRange::from_str("11–26 V (12 V nom.)").unwrap();
+        assert_eq!(r.min, Decimal::from(11));
+        assert_eq!(r.max, Decimal::from(26));
+        assert_eq!(r.nominal, Some(Decimal::from(12)));
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_with_nominal_no_period() {
+        let r = PhysicalRange::from_str("11–26 V (12 V nom)").unwrap();
+        assert_eq!(r.min, Decimal::from(11));
+        assert_eq!(r.max, Decimal::from(26));
+        assert_eq!(r.nominal, Some(Decimal::from(12)));
+    }
+
+    #[test]
+    fn test_range_parsing_single_value_no_tolerance() {
+        let r = PhysicalRange::from_str("3.3V").unwrap();
+        assert_eq!(r.min, Decimal::from_str("3.3").unwrap());
+        assert_eq!(r.max, Decimal::from_str("3.3").unwrap());
+        assert_eq!(r.nominal, None);
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_tolerance_expansion() {
+        let r = PhysicalRange::from_str("15V 10%").unwrap();
+        assert_eq!(r.min, Decimal::from_str("13.5").unwrap());
+        assert_eq!(r.max, Decimal::from_str("16.5").unwrap());
+        assert_eq!(r.nominal, None);
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_unit_inference() {
+        // Left side is bare number, should inherit unit from right
+        let r = PhysicalRange::from_str("3.3 to 5V").unwrap();
+        assert_eq!(r.min, Decimal::from_str("3.3").unwrap());
+        assert_eq!(r.max, Decimal::from(5));
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::VOLTAGE);
+    }
+
+    #[test]
+    fn test_range_parsing_reversed_values() {
+        // Should auto-swap to ensure min <= max
+        let r = PhysicalRange::from_str("26V to 11V").unwrap();
+        assert_eq!(r.min, Decimal::from(11));
+        assert_eq!(r.max, Decimal::from(26));
+    }
+
+    #[test]
+    fn test_range_parsing_resistance() {
+        let r = PhysicalRange::from_str("10kOhm to 100kOhm").unwrap();
+        assert_eq!(r.min, Decimal::from(10000));
+        assert_eq!(r.max, Decimal::from(100000));
+        assert_eq!(r.r#type.unit, PhysicalUnit::Ohms.into());
+    }
+
+    #[test]
+    fn test_range_parsing_current() {
+        let r = PhysicalRange::from_str("100mA to 2A").unwrap();
+        assert_eq!(r.min, Decimal::from_str("0.1").unwrap());
+        assert_eq!(r.max, Decimal::from(2));
+        assert_eq!(r.r#type.unit, PhysicalUnitDims::CURRENT);
+    }
+
+    #[test]
+    fn test_range_display() {
+        let r = PhysicalRange::from_str("11–26V").unwrap();
+        let display = format!("{}", r);
+        assert_eq!(display, "11–26 V");
+    }
+
+    #[test]
+    fn test_range_display_with_nominal() {
+        let r = PhysicalRange::from_str("11–26 V (12 V nom.)").unwrap();
+        let display = format!("{}", r);
+        assert_eq!(display, "11–26 V (12 V nom.)");
+    }
+
+    #[test]
+    fn test_range_parsing_invalid_format() {
+        assert!(PhysicalRange::from_str("").is_err());
+        assert!(PhysicalRange::from_str("   ").is_err());
+    }
+
+    #[test]
+    fn test_range_parsing_unit_mismatch() {
+        // Should fail - mixing voltage and current units
+        assert!(PhysicalRange::from_str("5V to 2A").is_err());
+    }
+
+    #[test]
+    fn test_range_validation_nominal_out_of_range() {
+        // Nominal value must be within [min, max]
+        let heap = Heap::new();
+        let mut builder = RangeBuilder::default();
+        builder.add_min_max(heap.alloc(1), heap.alloc(10)).unwrap();
+        builder.add_nominal(heap.alloc(15)).unwrap();
+
+        let result = builder.build(PhysicalUnitDims::VOLTAGE);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PhysicalValueError::NominalOutOfRange { .. }
+        ));
+    }
+
+    #[test]
+    fn test_range_validation_valid_nominal() {
+        // Nominal value within range should succeed
+        let heap = Heap::new();
+        let mut builder = RangeBuilder::default();
+        builder.add_min_max(heap.alloc(1), heap.alloc(10)).unwrap();
+        builder.add_nominal(heap.alloc(5)).unwrap();
+
+        let result = builder.build(PhysicalUnitDims::VOLTAGE);
+        assert!(result.is_ok());
+        let range = result.unwrap();
+        assert_eq!(range.min, Decimal::from(1));
+        assert_eq!(range.max, Decimal::from(10));
+        assert_eq!(range.nominal, Some(Decimal::from(5)));
     }
 }
