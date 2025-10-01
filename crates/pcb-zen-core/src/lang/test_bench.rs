@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use crate::lang::eval::EvalMode;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::{InputMap, InputValue};
 use crate::lang::module::{FrozenModuleValue, ModuleLoader};
@@ -46,50 +45,6 @@ pub struct DeferredTestCaseGen<V: ValueLifetimeless> {
     pub checks: Vec<DeferredCheckGen<V>>,
 }
 
-/// Result from a single test case evaluation
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct TestCaseResultGen<V: ValueLifetimeless> {
-    /// The test case parameters that were provided
-    pub params: SmallMap<String, V>,
-    /// The evaluated module (None if evaluation failed)
-    #[freeze(identity)]
-    pub evaluated: Option<FrozenModuleValue>,
-    /// Results from running check functions for this case
-    pub check_results: Vec<V>,
-    /// Number of failed checks for this case
-    pub failed_checks: u32,
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Display for TestCaseResultGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "TestCaseResult(params: {}, evaluated: {})",
-            self.params.len(),
-            self.evaluated.is_some()
-        )
-    }
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Debug for TestCaseResultGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TestCaseResult")
-            .field("params", &self.params.len())
-            .field("evaluated", &self.evaluated.is_some())
-            .field("failed_checks", &self.failed_checks)
-            .finish()
-    }
-}
-
-#[starlark_value(type = "TestCaseResult")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for TestCaseResultGen<V> where
-    Self: ProvidesStaticType<'v>
-{
-}
-
-starlark_complex_value!(pub TestCaseResult);
-
 /// TestBench value that evaluates modules with explicit test cases
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -103,6 +58,10 @@ pub struct TestBenchValueGen<V: ValueLifetimeless> {
     deferred_cases: Vec<DeferredTestCaseGen<V>>,
     /// Source file path where TestBench was defined (for diagnostic context)
     source_path: String,
+    /// Span of the TestBench() call for diagnostic context
+    #[freeze(identity)]
+    #[allocative(skip)]
+    call_span: Option<starlark::codemap::ResolvedSpan>,
 }
 
 starlark_complex_value!(pub TestBenchValue);
@@ -148,6 +107,10 @@ impl<'v, V: ValueLike<'v>> TestBenchValueGen<V> {
 
     pub fn source_path(&self) -> &str {
         &self.source_path
+    }
+
+    pub fn call_span(&self) -> Option<&starlark::codemap::ResolvedSpan> {
+        self.call_span.as_ref()
     }
 }
 
@@ -282,14 +245,6 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] checks: Option<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        // Check eval mode - in Build mode, TestBench is a no-op
-        if let Some(ctx) = eval.eval_context() {
-            if ctx.eval_mode == EvalMode::Build {
-                // Return None to indicate no-op
-                return Ok(Value::new_none());
-            }
-        }
-
         // Extract ModuleLoader from the module parameter
         let loader = module.downcast_ref::<ModuleLoader>().ok_or_else(|| {
             anyhow::anyhow!("'module' parameter must be a ModuleLoader (created with Module())")
@@ -303,11 +258,13 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             return Err(anyhow::anyhow!("'test_cases' cannot be empty"));
         }
 
-        // Get source path for diagnostic context
-        let source_path = eval
-            .call_stack_top_location()
+        // Capture context from TestBench() call for diagnostics
+        let call_site = eval.call_stack_top_location();
+        let source_path = call_site
+            .as_ref()
             .map(|cs| cs.filename().to_string())
-            .unwrap_or_else(|| "<unknown>".to_string());
+            .unwrap_or_default();
+        let call_span = call_site.map(|cs| cs.resolve_span());
 
         // Parse checks list once if provided
         let checks_list =
@@ -347,36 +304,38 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             }
 
             // Store check functions for later execution
-            let mut deferred_checks = Vec::new();
-            if let Some(checks_list_ref) = checks_list {
-                for check_item in checks_list_ref.iter() {
-                    // Check if it's a tuple (name, function) or just a function
-                    let (check_func, custom_name) =
-                        if let Some(tuple_ref) = TupleRef::from_value(check_item) {
-                            if tuple_ref.len() == 2 {
+            let deferred_checks = if let Some(checks_list_ref) = checks_list {
+                checks_list_ref
+                    .iter()
+                    .map(|check_item| {
+                        // Check if it's a tuple (name, function) or just a function
+                        let (check_func, custom_name) =
+                            if let Some(tuple_ref) = TupleRef::from_value(check_item) {
+                                if tuple_ref.len() != 2 {
+                                    anyhow::bail!(
+                                    "Check tuple must have exactly 2 elements: (name, function)"
+                                );
+                                }
                                 let tuple_items: Vec<_> = tuple_ref.iter().collect();
                                 let name = tuple_items[0].unpack_str().ok_or_else(|| {
                                     anyhow::anyhow!(
                                         "First element of check tuple must be a string name"
                                     )
                                 })?;
-                                let func = tuple_items[1];
-                                (func, Some(name.to_string()))
+                                (tuple_items[1], Some(name.to_string()))
                             } else {
-                                return Err(anyhow::anyhow!(
-                                    "Check tuple must have exactly 2 elements: (name, function)"
-                                ));
-                            }
-                        } else {
-                            (check_item, None)
-                        };
+                                (check_item, None)
+                            };
 
-                    deferred_checks.push(DeferredCheckGen {
-                        check_func,
-                        custom_name,
-                    });
-                }
-            }
+                        Ok(DeferredCheckGen {
+                            check_func,
+                            custom_name,
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+            } else {
+                Vec::new()
+            };
 
             deferred_cases.push(DeferredTestCaseGen {
                 case_name: case_name_str.to_string(),
@@ -398,6 +357,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             module_loader: loader.clone(),
             deferred_cases,
             source_path,
+            call_span,
         };
 
         let testbench_value = eval.heap().alloc(testbench);
@@ -411,15 +371,21 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
+/// Context for executing a deferred check
+pub struct CheckContext<'a> {
+    pub test_bench_name: &'a str,
+    pub case_name: &'a str,
+    pub source_path: &'a str,
+    pub call_span: Option<&'a starlark::codemap::ResolvedSpan>,
+}
+
 /// Execute a single deferred check and create diagnostic
 pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
     eval: &mut Evaluator<'v, '_, '_>,
     check: &DeferredCheckGen<V>,
     module_value: Value<'v>,
     inputs_dict: Value<'v>,
-    test_bench_name: &str,
-    case_name: &str,
-    test_bench_source_path: &str,
+    ctx: &CheckContext,
 ) -> (bool, Vec<Diagnostic>) {
     // Extract check name
     let check_name = check.custom_name.clone().unwrap_or_else(|| {
@@ -441,34 +407,32 @@ pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
     );
     let passed = result.is_ok();
 
-    // Create test result
-    let test_result = crate::lang::error::BenchTestResult {
-        test_bench_name: test_bench_name.to_string(),
-        case_name: Some(case_name.to_string()),
-        check_name: check_name.clone(),
-        file_path: test_bench_source_path.to_string(),
-        passed,
-    };
-
-    // Create diagnostic with error details if failed
     let diagnostic = Diagnostic {
-        path: test_bench_source_path.to_string(),
-        span: None,
+        path: ctx.source_path.to_string(),
+        span: ctx.call_span.cloned(),
         severity: if passed {
             EvalSeverity::Advice
         } else {
             EvalSeverity::Error
         },
         body: format!(
-            "TestBench '{}' case '{}' check '{}' {}",
-            test_bench_name,
-            case_name,
-            check_name,
+            "TestBench '{}' case '{}' check '{check_name}' {}",
+            ctx.test_bench_name,
+            ctx.case_name,
             if passed { "passed" } else { "failed" }
         ),
         call_stack: None,
         child: result.err().map(|e| Box::new(Diagnostic::from(e))),
-        source_error: Some(Arc::new(test_result.into())),
+        source_error: Some(Arc::new(
+            crate::lang::error::BenchTestResult {
+                test_bench_name: ctx.test_bench_name.to_string(),
+                case_name: Some(ctx.case_name.to_string()),
+                check_name,
+                file_path: ctx.source_path.to_string(),
+                passed,
+            }
+            .into(),
+        )),
     };
 
     (passed, vec![diagnostic])

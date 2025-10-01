@@ -74,12 +74,11 @@ pub fn test(
     debug!("Testing Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Testing")).start();
 
-    // Evaluate the design in test mode (use eval() not run() to get EvalOutput)
+    // Evaluate the design (use eval() not run() to get EvalOutput and collect TestBenches)
     let eval_result = pcb_zen::eval(
         zen_path,
         pcb_zen::EvalConfig {
             offline,
-            mode: pcb_zen::EvalMode::Test,
             ..Default::default()
         },
     );
@@ -164,17 +163,17 @@ fn execute_testbench_checks(
                 .to_value();
 
             // Execute each check
+            let ctx = pcb_zen_core::lang::test_bench::CheckContext {
+                test_bench_name: testbench.name(),
+                case_name: &deferred_case.case_name,
+                source_path: testbench.source_path(),
+                call_span: testbench.call_span(),
+            };
+
             for check in &deferred_case.checks {
                 total_checks += 1;
-                let (passed, mut diagnostics) = execute_deferred_check(
-                    &mut eval,
-                    check,
-                    module_value,
-                    inputs_dict,
-                    testbench.name(),
-                    &deferred_case.case_name,
-                    testbench.source_path(),
-                );
+                let (passed, mut diagnostics) =
+                    execute_deferred_check(&mut eval, check, module_value, inputs_dict, &ctx);
 
                 if passed {
                     passed_checks += 1;

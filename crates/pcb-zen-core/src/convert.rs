@@ -2,6 +2,7 @@ use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::module::find_moved_span;
 use crate::lang::physical::PhysicalValue;
 use crate::lang::symbol::SymbolValue;
+use crate::lang::test_bench::FrozenTestBenchValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
@@ -192,6 +193,9 @@ impl ModuleConverter {
             self.add_module_at(module_value, instance_ref)
         } else if let Some(component_value) = value.downcast_ref::<FrozenComponentValue>() {
             self.add_component_at(component_value, instance_ref)
+        } else if value.downcast_ref::<FrozenTestBenchValue>().is_some() {
+            // Skip TestBench values - they're not part of the schematic
+            Ok(())
         } else {
             Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }
@@ -202,6 +206,8 @@ impl ModuleConverter {
             Ok(module_value.name().to_string())
         } else if let Some(component_value) = value.downcast_ref::<FrozenComponentValue>() {
             Ok(component_value.name().to_string())
+        } else if let Some(testbench) = value.downcast_ref::<FrozenTestBenchValue>() {
+            Ok(testbench.name().to_string())
         } else {
             Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }
