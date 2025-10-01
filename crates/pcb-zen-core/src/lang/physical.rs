@@ -765,6 +765,14 @@ pub enum PhysicalValueError {
     InvalidArguments { args: Vec<String> },
     #[error("Range() requires either a value argument or min/max keywords")]
     MissingRangeValue,
+    #[error("Invalid range: min ({min}) > max ({max})")]
+    InvalidRange { min: String, max: String },
+    #[error("Nominal value ({nominal}) is outside range [{min}, {max}]")]
+    NominalOutOfRange {
+        nominal: String,
+        min: String,
+        max: String,
+    },
 }
 
 impl From<PhysicalValueError> for starlark::Error {
@@ -1966,7 +1974,25 @@ impl RangeBuilder {
             unit_hint
         };
 
-        // TODO: ensure min < nominal < max
+        // Ensure min <= max (already enforced in parsing, but validate here)
+        if min > max {
+            return Err(PhysicalValueError::InvalidRange {
+                min: min.to_string(),
+                max: max.to_string(),
+            });
+        }
+
+        // Ensure nominal is within [min, max] if present
+        if let Some(nominal) = self.nominal {
+            if nominal < min || nominal > max {
+                return Err(PhysicalValueError::NominalOutOfRange {
+                    nominal: nominal.to_string(),
+                    min: min.to_string(),
+                    max: max.to_string(),
+                });
+            }
+        }
+
         Ok(PhysicalRange {
             min,
             max,
@@ -3140,5 +3166,37 @@ mod tests {
     fn test_range_parsing_unit_mismatch() {
         // Should fail - mixing voltage and current units
         assert!(PhysicalRange::from_str("5V to 2A").is_err());
+    }
+
+    #[test]
+    fn test_range_validation_nominal_out_of_range() {
+        // Nominal value must be within [min, max]
+        let heap = Heap::new();
+        let mut builder = RangeBuilder::default();
+        builder.add_min_max(heap.alloc(1), heap.alloc(10)).unwrap();
+        builder.add_nominal(heap.alloc(15)).unwrap();
+
+        let result = builder.build(PhysicalUnitDims::VOLTAGE);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PhysicalValueError::NominalOutOfRange { .. }
+        ));
+    }
+
+    #[test]
+    fn test_range_validation_valid_nominal() {
+        // Nominal value within range should succeed
+        let heap = Heap::new();
+        let mut builder = RangeBuilder::default();
+        builder.add_min_max(heap.alloc(1), heap.alloc(10)).unwrap();
+        builder.add_nominal(heap.alloc(5)).unwrap();
+
+        let result = builder.build(PhysicalUnitDims::VOLTAGE);
+        assert!(result.is_ok());
+        let range = result.unwrap();
+        assert_eq!(range.min, Decimal::from(1));
+        assert_eq!(range.max, Decimal::from(10));
+        assert_eq!(range.nominal, Some(Decimal::from(5)));
     }
 }
