@@ -185,23 +185,23 @@ fn execute_testbench_checks(
         }
     }
 
-    // Print summary
-    if total_checks > 0 {
-        let case_count = testbench.case_count();
-        let failed_checks = total_checks - passed_checks;
-
-        if failed_checks == 0 {
-            let case_word = if case_count == 1 { "case" } else { "cases" };
-            let check_word = if total_checks == 1 { "check" } else { "checks" };
-            eprintln!(
-                "\x1b[1m\x1b[32m✓ {}\x1b[0m: {} {} passed across {} {}",
-                testbench.name(),
-                total_checks,
-                check_word,
-                case_count,
-                case_word
-            );
-        }
+    // Print summary for successful test benches
+    if total_checks > 0 && passed_checks == total_checks {
+        let case_word = if testbench.case_count() == 1 {
+            "case"
+        } else {
+            "cases"
+        };
+        let check_word = if total_checks == 1 { "check" } else { "checks" };
+        eprintln!(
+            "{} {}: {} {} passed across {} {}",
+            pcb_ui::icons::success().with_style(pcb_ui::Style::Green),
+            testbench.name(),
+            total_checks,
+            check_word,
+            testbench.case_count(),
+            case_word
+        );
     }
 
     all_diagnostics

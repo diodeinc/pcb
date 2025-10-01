@@ -19,4 +19,4 @@ Exit Code: 0
 --- STDERR ---
 Resistor R has resistance: 10k
 Found resistor path through: R
-[1m[32m✓ FactoryTest[0m: 4 checks passed across 1 case
+✓ FactoryTest: 4 checks passed across 1 case

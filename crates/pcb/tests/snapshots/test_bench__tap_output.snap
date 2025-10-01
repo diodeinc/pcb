@@ -12,4 +12,4 @@ ok 1 TestBench 'SimpleTest' case 'basic' check 'check_components_exist'
 ok 2 TestBench 'SimpleTest' case 'basic' check 'check_power_connections'
 ok 3 TestBench 'SimpleTest' case 'basic' check 'check_path_finding'
 --- STDERR ---
-[1m[32m✓ SimpleTest[0m: 3 checks passed across 1 case
+✓ SimpleTest: 3 checks passed across 1 case

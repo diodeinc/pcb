@@ -263,121 +263,13 @@ impl ModuleLoader {
 /// Build an InputMap from a test case dictionary
 fn build_input_map<'v>(case_dict: &DictRef<'v>) -> anyhow::Result<InputMap> {
     let mut inputs = InputMap::new();
-
     for (key, value) in case_dict.iter() {
         let key_str = key
             .unpack_str()
             .ok_or_else(|| anyhow::anyhow!("test case keys must be strings, got: {}", key))?;
-
-        let input_value = InputValue::from_value(value);
-        inputs.insert(key_str.to_string(), input_value);
+        inputs.insert(key_str.to_string(), InputValue::from_value(value));
     }
-
     Ok(inputs)
-}
-
-/// Execute a single check function and handle the result (legacy - no longer used with deferred execution)
-#[allow(dead_code)]
-fn execute_check<'v>(
-    eval: &mut Evaluator<'v, '_, '_>,
-    check_func: Value<'v>,
-    args: &[Value<'v>],
-    test_bench_name: &str,
-    case_name: Option<&str>,
-    custom_name: Option<&str>,
-) -> anyhow::Result<(Value<'v>, bool)> {
-    let check_name = if let Some(name) = custom_name {
-        name.to_string()
-    } else {
-        let check_func_str = check_func.to_string();
-        check_func_str
-            .rsplit('.')
-            .next()
-            .unwrap_or("check")
-            .to_string()
-    };
-
-    let case_suffix = case_name
-        .map(|n| format!(" case '{}'", n))
-        .unwrap_or_default();
-
-    // Validate that check_func is actually callable before trying to call it
-    if check_func.get_type() != "function" && check_func.get_type() != "native_function" {
-        return Err(anyhow::anyhow!(
-            "Check function '{}' is not callable (type: {})",
-            check_func.to_string(),
-            check_func.get_type()
-        ));
-    }
-
-    match eval.eval_function(check_func, args, &[]) {
-        Ok(result) => {
-            // Only add diagnostics if context is available
-            if let (Some(ctx), Some(test_bench_location)) =
-                (eval.context_value(), eval.call_stack_top_location())
-            {
-                // Create structured test result for tracking
-                let test_result = crate::lang::error::BenchTestResult {
-                    test_bench_name: test_bench_name.to_string(),
-                    case_name: case_name.map(|s| s.to_string()),
-                    check_name: check_name.clone(),
-                    file_path: test_bench_location.filename().to_string(),
-                    passed: true,
-                };
-
-                // Add as a non-error diagnostic for collection purposes
-                ctx.add_diagnostic(Diagnostic {
-                    path: test_bench_location.filename().to_string(),
-                    span: Some(test_bench_location.resolve_span()),
-                    severity: EvalSeverity::Advice,
-                    body: format!(
-                        "TestBench '{}'{} check '{}' passed",
-                        test_bench_name, case_suffix, check_name
-                    ),
-                    call_stack: Some(eval.call_stack().clone()),
-                    child: None,
-                    source_error: Some(std::sync::Arc::new(test_result.into())),
-                });
-            }
-
-            Ok((result, false)) // Success, no failure
-        }
-        Err(e) => {
-            // Only add diagnostics if context is available
-            if let (Some(ctx), Some(test_bench_location)) =
-                (eval.context_value(), eval.call_stack_top_location())
-            {
-                // Convert error to diagnostic - this will handle DiagnosticError chains properly
-                let child_diagnostic = Diagnostic::from(e);
-                let child = Some(Box::new(child_diagnostic));
-
-                // Create structured test result for tracking
-                let test_result = crate::lang::error::BenchTestResult {
-                    test_bench_name: test_bench_name.to_string(),
-                    case_name: case_name.map(|s| s.to_string()),
-                    check_name: check_name.clone(),
-                    file_path: test_bench_location.filename().to_string(),
-                    passed: false,
-                };
-
-                // Parent diagnostic for TestBench context
-                ctx.add_diagnostic(Diagnostic {
-                    path: test_bench_location.filename().to_string(),
-                    span: Some(test_bench_location.resolve_span()),
-                    severity: EvalSeverity::Error,
-                    body: format!(
-                        "TestBench '{}'{} check '{}' failed",
-                        test_bench_name, case_suffix, check_name
-                    ),
-                    call_stack: Some(eval.call_stack().clone()),
-                    child,
-                    source_error: Some(Arc::new(test_result.into())),
-                });
-            }
-
-            Ok((eval.heap().alloc(false).to_value(), true)) // Failure
-        }
-    }
 }
 
 #[starlark_module]
@@ -519,7 +411,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
     }
 }
 
-/// Execute a single deferred check and add diagnostic
+/// Execute a single deferred check and create diagnostic
 pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
     eval: &mut Evaluator<'v, '_, '_>,
     check: &DeferredCheckGen<V>,
@@ -529,78 +421,55 @@ pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
     case_name: &str,
     test_bench_source_path: &str,
 ) -> (bool, Vec<Diagnostic>) {
-    let mut diagnostics = Vec::new();
-
-    let check_name = if let Some(ref name) = check.custom_name {
-        name.clone()
-    } else {
-        let check_func_str = check.check_func.to_value().to_string();
-        check_func_str
+    // Extract check name
+    let check_name = check.custom_name.clone().unwrap_or_else(|| {
+        check
+            .check_func
+            .to_value()
+            .to_string()
             .rsplit('.')
             .next()
             .unwrap_or("check")
             .to_string()
+    });
+
+    // Execute the check function
+    let result = eval.eval_function(
+        check.check_func.to_value(),
+        &[module_value, inputs_dict],
+        &[],
+    );
+    let passed = result.is_ok();
+
+    // Create test result
+    let test_result = crate::lang::error::BenchTestResult {
+        test_bench_name: test_bench_name.to_string(),
+        case_name: Some(case_name.to_string()),
+        check_name: check_name.clone(),
+        file_path: test_bench_source_path.to_string(),
+        passed,
     };
 
-    let case_suffix = format!(" case '{}'", case_name);
-    let args = [module_value, inputs_dict];
+    // Create diagnostic with error details if failed
+    let diagnostic = Diagnostic {
+        path: test_bench_source_path.to_string(),
+        span: None,
+        severity: if passed {
+            EvalSeverity::Advice
+        } else {
+            EvalSeverity::Error
+        },
+        body: format!(
+            "TestBench '{}' case '{}' check '{}' {}",
+            test_bench_name,
+            case_name,
+            check_name,
+            if passed { "passed" } else { "failed" }
+        ),
+        call_stack: None,
+        child: result.err().map(|e| Box::new(Diagnostic::from(e))),
+        source_error: Some(Arc::new(test_result.into())),
+    };
 
-    match eval.eval_function(check.check_func.to_value(), &args, &[]) {
-        Ok(_result) => {
-            // Create structured test result for tracking
-            let test_result = crate::lang::error::BenchTestResult {
-                test_bench_name: test_bench_name.to_string(),
-                case_name: Some(case_name.to_string()),
-                check_name: check_name.clone(),
-                file_path: test_bench_source_path.to_string(),
-                passed: true,
-            };
-
-            // Add as a non-error diagnostic for collection purposes
-            diagnostics.push(Diagnostic {
-                path: test_bench_source_path.to_string(),
-                span: None,
-                severity: EvalSeverity::Advice,
-                body: format!(
-                    "TestBench '{}'{} check '{}' passed",
-                    test_bench_name, case_suffix, check_name
-                ),
-                call_stack: None,
-                child: None,
-                source_error: Some(std::sync::Arc::new(test_result.into())),
-            });
-
-            (true, diagnostics) // Success
-        }
-        Err(e) => {
-            // Convert error to diagnostic
-            let child_diagnostic = Diagnostic::from(e);
-            let child = Some(Box::new(child_diagnostic));
-
-            // Create structured test result for tracking
-            let test_result = crate::lang::error::BenchTestResult {
-                test_bench_name: test_bench_name.to_string(),
-                case_name: Some(case_name.to_string()),
-                check_name: check_name.clone(),
-                file_path: test_bench_source_path.to_string(),
-                passed: false,
-            };
-
-            // Parent diagnostic for TestBench context
-            diagnostics.push(Diagnostic {
-                path: test_bench_source_path.to_string(),
-                span: None,
-                severity: EvalSeverity::Error,
-                body: format!(
-                    "TestBench '{}'{} check '{}' failed",
-                    test_bench_name, case_suffix, check_name
-                ),
-                call_stack: None,
-                child,
-                source_error: Some(Arc::new(test_result.into())),
-            });
-
-            (false, diagnostics) // Failure
-        }
-    }
+    (passed, vec![diagnostic])
 }
