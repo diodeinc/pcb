@@ -6,7 +6,9 @@ use lsp_types::{
     request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
-use pcb_sch::position::{replace_pcb_sch_comments, Position};
+use pcb_sch::position::{
+    parse_position_comments, replace_pcb_sch_comments, symbol_id_to_comment_key, Position,
+};
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
 };
@@ -22,6 +24,10 @@ use starlark::docs::DocModule;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
+use std::{
+    fs::OpenOptions,
+    io::{Seek, Write},
+};
 
 use crate::load::DefaultRemoteFetcher;
 use pcb_zen_core::convert::ToSchematic;
@@ -673,22 +679,17 @@ impl LspContext for LspEvalContext {
                     // Convert symbol positions to comment format
                     let mut flat_positions = BTreeMap::new();
                     for (symbol_id, position) in params.symbol_positions {
-                        let comment_name =
-                            if let Some(component_name) = symbol_id.strip_prefix("comp:") {
-                                component_name.to_string()
-                            } else if let Some(net_symbol) = symbol_id.strip_prefix("sym:") {
-                                net_symbol.replace('#', ".")
-                            } else {
-                                return Some(Response {
-                                    id: req.id.clone(),
-                                    result: None,
-                                    error: Some(ResponseError {
-                                        code: INVALID_PARAMS,
-                                        message: format!("Invalid symbol ID format: {}", symbol_id),
-                                        data: None,
-                                    }),
-                                });
-                            };
+                        let Some(comment_name) = symbol_id_to_comment_key(&symbol_id) else {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: INVALID_PARAMS,
+                                    message: format!("Invalid symbol ID format: {symbol_id}"),
+                                    data: None,
+                                }),
+                            });
+                        };
                         flat_positions.insert(comment_name, position);
                     }
 
@@ -721,6 +722,139 @@ impl LspContext for LspEvalContext {
                         error: Some(ResponseError {
                             code: INVALID_PARAMS,
                             message: format!("Invalid pcb/savePositions params: {e}"),
+                            data: None,
+                        }),
+                    });
+                }
+            }
+        }
+
+        // Handle pcb/removePosition requests
+        if req.method == "pcb/removePosition" {
+            match serde_json::from_value::<PcbRemovePositionParams>(req.params.clone()) {
+                Ok(params) => {
+                    let file_path = &params.file_path;
+
+                    // Read existing content
+                    let content = match std::fs::read_to_string(file_path) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: INTERNAL_ERROR,
+                                    message: format!("Failed to read file: {e}"),
+                                    data: None,
+                                }),
+                            });
+                        }
+                    };
+
+                    // Parse existing positions and determine the block start
+                    let (mut existing_positions, block_start) = parse_position_comments(&content);
+
+                    // Translate symbol_id to comment key used in pcb:sch lines
+                    let Some(comment_key) = symbol_id_to_comment_key(&params.symbol_id) else {
+                        return Some(Response {
+                            id: req.id.clone(),
+                            result: None,
+                            error: Some(ResponseError {
+                                code: INVALID_PARAMS,
+                                message: format!("Invalid symbol ID format: {}", params.symbol_id),
+                                data: None,
+                            }),
+                        });
+                    };
+
+                    // Remove if present
+                    let _removed = existing_positions.remove(comment_key.as_str()).is_some();
+
+                    // Prepare new position comments (preserve formatting rules)
+                    let mut position_comments = String::new();
+                    if !existing_positions.is_empty() {
+                        let content_before = &content[..block_start];
+                        let needs_blank_line =
+                            !content_before.is_empty() && !content_before.ends_with("\n\n");
+                        if needs_blank_line {
+                            if content_before.ends_with('\n') {
+                                position_comments.push('\n');
+                            } else {
+                                position_comments.push_str("\n\n");
+                            }
+                        }
+
+                        for (element_id, position) in &existing_positions {
+                            let comment = format!(
+                                "# pcb:sch {} x={:.4} y={:.4} rot={:.0}\n",
+                                element_id, position.x, position.y, position.rotation
+                            );
+                            position_comments.push_str(&comment);
+                        }
+                    }
+
+                    // Write back: truncate at block_start, then append new comments (if any)
+                    let mut file = match OpenOptions::new().write(true).read(true).open(file_path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: INTERNAL_ERROR,
+                                    message: format!("Failed to open file for write: {e}"),
+                                    data: None,
+                                }),
+                            });
+                        }
+                    };
+                    if let Err(e) = file.set_len(block_start as u64) {
+                        return Some(Response {
+                            id: req.id.clone(),
+                            result: None,
+                            error: Some(ResponseError {
+                                code: INTERNAL_ERROR,
+                                message: format!("Failed to truncate file: {e}"),
+                                data: None,
+                            }),
+                        });
+                    }
+                    if let Err(e) = file.seek(std::io::SeekFrom::Start(block_start as u64)) {
+                        return Some(Response {
+                            id: req.id.clone(),
+                            result: None,
+                            error: Some(ResponseError {
+                                code: INTERNAL_ERROR,
+                                message: format!("Failed to seek file: {e}"),
+                                data: None,
+                            }),
+                        });
+                    }
+                    if let Err(e) = file.write_all(position_comments.as_bytes()) {
+                        return Some(Response {
+                            id: req.id.clone(),
+                            result: None,
+                            error: Some(ResponseError {
+                                code: INTERNAL_ERROR,
+                                message: format!("Failed to write file: {e}"),
+                                data: None,
+                            }),
+                        });
+                    }
+
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: Some(serde_json::Value::Null),
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    return Some(Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(ResponseError {
+                            code: INVALID_PARAMS,
+                            message: format!("Invalid pcb/removePosition params: {e}"),
                             data: None,
                         }),
                     });
@@ -921,4 +1055,13 @@ struct DiagnosticInfo {
 struct PcbSavePositionsParams {
     file_path: String,
     symbol_positions: BTreeMap<String, Position>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PcbRemovePositionParams {
+    file_path: String,
+    /// Symbol ID in the same format used by pcb/savePositions keys
+    /// (e.g. "comp:R1" or "sym:NET#1")
+    symbol_id: String,
 }
