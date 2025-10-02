@@ -115,6 +115,12 @@ pub struct MissingInputError {
     name: String,
 }
 
+impl From<MissingInputError> for starlark::Error {
+    fn from(err: MissingInputError) -> Self {
+        starlark::Error::new_other(err)
+    }
+}
+
 /// Metadata for a module parameter (from io() or config() calls)
 #[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -657,6 +663,30 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             }
             self.net_name_to_id = rebuilt_lookup;
         }
+    }
+}
+
+impl FrozenModuleValue {
+    /// Collect all ElectricalCheck values with their defining modules (recursively)
+    pub fn collect_electrical_checks(
+        &self,
+    ) -> Vec<(
+        &crate::lang::electrical_check::FrozenElectricalCheck,
+        &FrozenModuleValue,
+    )> {
+        let mut checks = Vec::new();
+        for child in &self.children {
+            let child_value = child.to_value();
+            if let Some(check) =
+                child_value.downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
+            {
+                checks.push((check, self));
+            }
+            if let Some(module) = child_value.downcast_ref::<FrozenModuleValue>() {
+                checks.extend(module.collect_electrical_checks());
+            }
+        }
+        checks
     }
 }
 
@@ -1506,11 +1536,12 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
     fn io<'v>(
         #[starlark(require = pos)] name: String,
         #[starlark(require = pos)] typ: Value<'v>,
+        checks: Option<Value<'v>>, // list of check functions to run on the value
         #[starlark(require = named)] default: Option<Value<'v>>, // explicit default provided by caller
         #[starlark(require = named)] optional: Option<bool>, // if true, the placeholder is not required
         #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
         eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
+    ) -> starlark::Result<Value<'v>> {
         // First compute the actual value that will be returned and the default value to record
         let (result_value, default_for_metadata) = {
             // 1. Value supplied by the parent module.
@@ -1634,7 +1665,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                             ctx.add_missing_input(name.clone());
                         }
 
-                        return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
+                        return Err(MissingInputError { name: name.clone() }.into());
                     }
 
                     // 5. If the caller supplied an explicit default, always prefer it.
@@ -1689,6 +1720,20 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 }
             }
         };
+
+        // Run check functions if provided
+        if let Some(checks_value) = checks {
+            // Accept either a single function or a list of functions
+            if let Some(checks_list) = ListRef::from_value(checks_value) {
+                // It's a list - iterate through all check functions
+                for check_fn in checks_list.iter() {
+                    eval.eval_function(check_fn, &[result_value], &[])?;
+                }
+            } else {
+                // It's a single function - call it directly
+                eval.eval_function(checks_value, &[result_value], &[])?;
+            }
+        }
 
         // Record that this placeholder was referenced in the module's signature
         // along with the actual value that will be returned

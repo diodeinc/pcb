@@ -762,7 +762,7 @@ pub enum PhysicalValueError {
         rhs_unit: String,
         error: String,
     },
-    #[error("Invalid arguments: {args:?}")]
+    #[error("Invalid argument(s): {args:?}")]
     InvalidArguments { args: Vec<String> },
     #[error("Range() requires either a value argument or min/max keywords")]
     MissingRangeValue,
@@ -1718,7 +1718,10 @@ impl PhysicalRangeType {
         ParamSpec::new_parts(
             [(
                 ParamIsRequired::No,
-                Ty::union2(Ty::string(), PhysicalValue::get_type_starlark_repr()),
+                Ty::union2(
+                    Ty::union2(Ty::string(), PhysicalRange::get_type_starlark_repr()),
+                    PhysicalValue::get_type_starlark_repr(),
+                ),
             )],
             [],
             None,
@@ -1857,7 +1860,15 @@ struct RangeBuilder {
 
 impl RangeBuilder {
     fn add_value(&mut self, value: Value) -> Result<(), PhysicalValueError> {
-        // Try string first
+        // Try PhysicalRange
+        if let Some(range) = PhysicalRange::from_value(value) {
+            self.range = Some((range.min, range.max));
+            self.nominal = range.nominal;
+            self.unit = Some(range.r#type.unit);
+            return Ok(());
+        }
+
+        // Try string
         if let Some(s) = value.unpack_str() {
             return self.add_str(s);
         }
@@ -1867,8 +1878,9 @@ impl RangeBuilder {
             return self.add_physical_value(*pv);
         }
 
-        Err(PhysicalValueError::InvalidArgumentType {
-            unit: "value".to_string(),
+        let value_type = value.get_type();
+        Err(PhysicalValueError::InvalidArguments {
+            args: vec![value_type.to_string()],
         })
     }
 

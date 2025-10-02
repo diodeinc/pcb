@@ -1,0 +1,32 @@
+---
+source: crates/pcb/tests/electrical_checks.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Critical check failed
+   ╭─[ <TEMP_DIR>/board.zen:3:5 ]
+   │
+ 3 │         error("Critical check failed")
+   │         ───────────────┬──────────────  
+   │                        ╰──────────────── Critical check failed
+   │ 
+ 5 │ ╭─▶ builtin.add_electrical_check(
+   ┆ ┆   
+ 8 │ ├─▶ )
+   │ │       
+   │ ╰─────── Electrical check 'critical' failed
+───╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/board.zen:5:1 (Electrical check 'critical' failed)
+    <TEMP_DIR>/board.zen:3:5 (Critical check failed)
+      ├─ check_critical
+      ╰─ error (called from <TEMP_DIR>/board.zen:3:5-35)
+
+✗ board.zen: Build failed
+Error: Build failed with errors

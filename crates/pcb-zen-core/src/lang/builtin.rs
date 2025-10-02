@@ -162,4 +162,63 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
         Ok(PhysicalRangeType::new(unit.into()))
     }
+
+    fn add_electrical_check<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = named)] name: String,
+        #[starlark(require = named)] check_fn: Value<'v>,
+        #[starlark(require = named)] inputs: Option<Value<'v>>,
+        #[starlark(require = named)] severity: Option<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        use crate::lang::electrical_check::ElectricalCheckGen;
+        use starlark::values::dict::DictRef;
+
+        let severity = severity.unwrap_or_else(|| "error".to_string());
+        if !["error", "warning", "advice"].contains(&severity.as_str()) {
+            return Err(Error::new_other(anyhow::anyhow!(
+                "Invalid severity '{}'. Must be 'error', 'warning', or 'advice'",
+                severity
+            )));
+        }
+
+        let inputs_map = if let Some(inputs_value) = inputs {
+            let inputs_dict = DictRef::from_value(inputs_value).ok_or_else(|| {
+                Error::new_other(anyhow::anyhow!("'inputs' parameter must be a dictionary"))
+            })?;
+
+            let mut map = starlark::collections::SmallMap::new();
+            for (key, value) in inputs_dict.iter() {
+                let key_str = key.unpack_str().ok_or_else(|| {
+                    Error::new_other(anyhow::anyhow!("input keys must be strings, got: {}", key))
+                })?;
+                map.insert(key_str.to_string(), value);
+            }
+            map
+        } else {
+            starlark::collections::SmallMap::new()
+        };
+
+        let call_site = eval.call_stack_top_location();
+        let source_path = call_site
+            .as_ref()
+            .map(|cs| cs.filename().to_string())
+            .unwrap_or_default();
+        let call_span = call_site.map(|cs| cs.resolve_span());
+
+        let check = ElectricalCheckGen::<Value> {
+            name,
+            inputs: inputs_map,
+            check_func: check_fn,
+            severity,
+            source_path,
+            call_span,
+        };
+
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_child(eval.heap().alloc(check));
+        }
+
+        Ok(NoneType)
+    }
 }

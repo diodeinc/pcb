@@ -196,6 +196,12 @@ impl ModuleConverter {
         } else if value.downcast_ref::<FrozenTestBenchValue>().is_some() {
             // Skip TestBench values - they're not part of the schematic
             Ok(())
+        } else if value
+            .downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
+            .is_some()
+        {
+            // Skip ElectricalCheck values - they're not part of the schematic
+            Ok(())
         } else {
             Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }
@@ -208,6 +214,10 @@ impl ModuleConverter {
             Ok(component_value.name().to_string())
         } else if let Some(testbench) = value.downcast_ref::<FrozenTestBenchValue>() {
             Ok(testbench.name().to_string())
+        } else if let Some(check) =
+            value.downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
+        {
+            Ok(check.name.clone())
         } else {
             Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }

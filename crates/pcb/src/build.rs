@@ -3,9 +3,26 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
+use pcb_zen_core::convert::ToSchematic;
 use std::path::{Path, PathBuf};
 
 use crate::file_walker;
+
+fn execute_electrical_check(
+    check: &pcb_zen_core::lang::electrical_check::FrozenElectricalCheck,
+    defining_module: &pcb_zen_core::lang::module::FrozenModuleValue,
+) -> pcb_zen_core::Diagnostic {
+    use starlark::environment::Module;
+    use starlark::eval::Evaluator;
+    use starlark::values::Heap;
+
+    let heap = Heap::new();
+    let module = Module::new();
+    let mut eval = Evaluator::new(&module);
+    let module_value = heap.alloc_simple(defining_module.clone());
+
+    pcb_zen_core::lang::electrical_check::execute_electrical_check(&mut eval, check, module_value)
+}
 
 /// Create diagnostics passes for the given deny list
 pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
@@ -54,46 +71,56 @@ pub fn build(
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
-    // Show spinner while building
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
-    // Evaluate the design
-    let eval_config = pcb_zen::EvalConfig {
-        offline,
-        ..Default::default()
-    };
-    let eval = pcb_zen::run(zen_path, eval_config);
+    let eval_result = pcb_zen::eval(
+        zen_path,
+        pcb_zen::EvalConfig {
+            offline,
+            ..Default::default()
+        },
+    );
+    let mut diagnostics = eval_result.diagnostics;
 
-    // Finish spinner before printing diagnostics
-    if eval.is_empty() {
+    let output = if let Some(eval_output) = eval_result.output {
+        for (check, defining_module) in eval_output.sch_module.collect_electrical_checks() {
+            diagnostics
+                .diagnostics
+                .push(execute_electrical_check(check, defining_module));
+        }
+        Some(eval_output)
+    } else {
+        None
+    };
+
+    // Convert to schematic and merge diagnostics
+    let schematic = output.and_then(|eval_output| {
+        let schematic_result = eval_output.sch_module.to_schematic_with_diagnostics();
+        diagnostics
+            .diagnostics
+            .extend(schematic_result.diagnostics.diagnostics);
+        schematic_result.output
+    });
+
+    if diagnostics.diagnostics.is_empty() && schematic.is_none() {
         spinner.set_message(format!("{file_name}: No output generated"));
     }
     spinner.finish();
 
-    // Apply all passes including rendering
-    let mut diagnostics = eval.diagnostics.clone();
     diagnostics.apply_passes(&passes);
 
-    // Check for errors
     if diagnostics.has_errors() {
         *has_errors = true;
+        eprintln!(
+            "{} {}: Build failed",
+            pcb_ui::icons::error(),
+            file_name.with_style(Style::Red).bold()
+        );
+        return None;
     }
 
-    eval.output_result()
-        .inspect_err(|_| {
-            eprintln!(
-                "{} {}: Build failed",
-                pcb_ui::icons::error(),
-                file_name.with_style(Style::Red).bold()
-            );
-        })
-        .inspect_err(|diagnostics| {
-            if diagnostics.has_errors() {
-                *has_errors = true;
-            }
-        })
-        .ok()
+    schematic
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {

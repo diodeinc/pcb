@@ -1,6 +1,7 @@
 pub mod builtin;
 pub mod component;
 pub(crate) mod context;
+pub mod electrical_check;
 pub mod eval;
 pub(crate) mod evaluator_ext;
 pub mod input;

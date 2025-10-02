@@ -564,7 +564,7 @@ moved("ModuleA.ComponentX", "ModuleB.ComponentX")
 moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
 ```
 
-### io(name, type, default=None, optional=False)
+### io(name, type, checks=None, default=None, optional=False)
 
 Declares a net or interface input for a module.
 
@@ -578,14 +578,31 @@ power = io("power", PowerInterface, optional=True)
 
 # With explicit default
 data = io("data", Net, default=Net("DATA"))
+
+# With validation checks (single function)
+def check_voltage_within(within):
+    def check_fn(power_value):
+        voltage = power_value.voltage
+        check(voltage.min >= within.min and voltage.max <= within.max,
+              f"Voltage {voltage} not within {within}")
+    return check_fn
+
+vbat = io("VBAT", Power, check_voltage_within(VoltageRange("10–30 V")))
+
+# Or with multiple checks as a list
+vbat = io("VBAT", Power, [check_voltage_within(VoltageRange("10–30 V")), check_current()])
+
+# Or as a named argument
+vbat = io("VBAT", Power, checks=check_voltage_within(VoltageRange("10–30 V")))
 ```
 
 **Parameters:**
 
-- `name`: String identifier for the input
-- `type`: Expected type (`Net` or interface type)
-- `default`: Default value if not provided by parent
-- `optional`: If True, returns None when not provided (unless default is specified)
+- `name`: String identifier for the input (positional)
+- `type`: Expected type - `Net` or interface type (positional)
+- `checks`: Optional check function or list of check functions to run on the value at eval time (3rd positional or named)
+- `default`: Default value if not provided by parent (named)
+- `optional`: If True, returns None when not provided (unless default is specified) (named)
 
 ### config(name, type, default=None, convert=None, optional=False)
 
@@ -805,6 +822,94 @@ See [PhysicalRange](#physicalrange) in Core Types for detailed information about
 - `default`: If True, this becomes the default board config for the project
 
 This builtin is typically called through the stdlib `Board()` function rather than directly.
+
+### builtin.add_electrical_check(name, check_fn, inputs=None)
+
+**Built-in function** for registering electrical validation checks that run during `pcb build`.
+
+**Parameters:**
+- `name`: String identifier for the check (required)
+- `check_fn`: Function to execute for validation (required)
+- `inputs`: Optional dictionary of input parameters to pass to the check function
+
+Electrical checks use lazy evaluation - they are registered during module evaluation but execute after the design is fully evaluated. This allows checks to validate electrical properties, design rules, or other constraints across the entire design.
+
+The check function receives the module as its first argument, followed by any specified inputs as keyword arguments:
+
+```python
+def voltage_range_check(module, min_voltage, max_voltage):
+    """Check that supply voltage is within acceptable range"""
+    supply = module.supply_voltage
+    if supply < min_voltage or supply > max_voltage:
+        error("Supply voltage {} is outside range {}-{}".format(
+            supply, min_voltage, max_voltage
+        ))
+
+builtin.add_electrical_check(
+    name="supply_voltage_range",
+    check_fn=voltage_range_check,
+    inputs={
+        "min_voltage": 3.0,
+        "max_voltage": 5.5,
+    }
+)
+```
+
+**Check Function Signature:**
+```python
+def check_function(module, **kwargs):
+    # Validation logic
+    # Raise error() or fail assertion to indicate failure
+    pass
+```
+
+**Example - Basic Check:**
+```python
+def check_no_floating_nets(module):
+    """Ensure all nets are connected to at least 2 pins"""
+    for net in module.nets:
+        if len(net.pins) < 2:
+            error("Net '{}' is floating (only {} pin connected)".format(
+                net.name, len(net.pins)
+            ))
+
+builtin.add_electrical_check(
+    name="no_floating_nets",
+    check_fn=check_no_floating_nets
+)
+```
+
+**Example - Parameterized Check:**
+```python
+def check_power_capacity(module, max_current):
+    """Verify power supply can handle load current"""
+    total_load = sum([c.max_current for c in module.components])
+    if total_load > max_current:
+        error("Total load current {}A exceeds supply capacity {}A".format(
+            total_load, max_current
+        ))
+
+builtin.add_electrical_check(
+    name="power_capacity",
+    check_fn=check_power_capacity,
+    inputs={"max_current": 3.0}
+)
+```
+
+**Execution Model:**
+
+1. Checks are registered during module evaluation via `builtin.add_electrical_check()`
+2. Check functions and inputs are stored as frozen values
+3. During `pcb build`, after evaluation completes, all checks are collected from the module tree
+4. Each check executes with a fresh evaluator context
+5. Check failures generate error diagnostics that are reported through the standard diagnostic system
+6. Build fails if any electrical checks fail
+
+**Notes:**
+- Checks run only during `pcb build`, not during `pcb test` (use `TestBench` for test-specific validation)
+- Check failures generate error-level diagnostics
+- Checks can access the entire module structure, including components, nets, interfaces, and properties
+- Multiple checks with the same name are allowed (they execute independently)
 
 ## Board Configuration Types
 

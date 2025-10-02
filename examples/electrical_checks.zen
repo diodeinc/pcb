@@ -1,0 +1,139 @@
+# Comprehensive test of builtin.add_electrical_check with different severities
+
+# ============================================================================
+# ERROR SEVERITY CHECKS (default - fails build)
+# ============================================================================
+
+def check_critical_requirement(module):
+    """This check must pass or build fails"""
+    # Simulate a critical failure
+    error("Critical requirement not met - this fails the build")
+
+builtin.add_electrical_check(
+    name="critical_requirement",
+    check_fn=check_critical_requirement,
+    # severity defaults to "error"
+)
+
+# ============================================================================
+# WARNING SEVERITY CHECKS (doesn't fail build)
+# ============================================================================
+
+def check_recommended_practice(module, min_value):
+    """This check produces a warning but doesn't fail build"""
+    actual_value = 5
+    if actual_value < min_value:
+        error("Recommended: value should be at least {}, got {}".format(
+            min_value, actual_value
+        ))
+
+builtin.add_electrical_check(
+    name="recommended_practice",
+    check_fn=check_recommended_practice,
+    inputs={"min_value": 10},
+    severity="warning",
+)
+
+# ============================================================================
+# ADVICE SEVERITY CHECKS (informational only)
+# ============================================================================
+
+def check_optional_optimization(module, target):
+    """This check is purely informational"""
+    actual = 3
+    if actual != target:
+        error("Info: could optimize to {} (currently {})".format(target, actual))
+
+builtin.add_electrical_check(
+    name="optional_optimization",
+    check_fn=check_optional_optimization,
+    inputs={"target": 5},
+    severity="advice",
+)
+
+# ============================================================================
+# PASSING CHECKS (various severities)
+# ============================================================================
+
+def check_passing_error(module):
+    """This check passes - no diagnostic shown"""
+    # No error means check passes
+    pass
+
+builtin.add_electrical_check(
+    name="passing_error_check",
+    check_fn=check_passing_error,
+)
+
+def check_passing_warning(module, expected):
+    """This check passes with warning severity"""
+    if expected != 42:
+        error("Should be 42")
+
+builtin.add_electrical_check(
+    name="passing_warning_check",
+    check_fn=check_passing_warning,
+    inputs={"expected": 42},
+    severity="warning",
+)
+
+# ============================================================================
+# PARAMETERIZED CHECKS
+# ============================================================================
+
+def check_with_multiple_params(module, min_val, max_val, name):
+    """Check with multiple input parameters"""
+    actual = 50
+    if actual < min_val or actual > max_val:
+        error("{} out of range {}-{}: got {}".format(
+            name, min_val, max_val, actual
+        ))
+
+builtin.add_electrical_check(
+    name="range_check",
+    check_fn=check_with_multiple_params,
+    inputs={
+        "min_val": 0,
+        "max_val": 100,
+        "name": "voltage",
+    },
+    severity="warning",
+)
+
+# ============================================================================
+# EDGE CASES
+# ============================================================================
+
+# Check with no inputs
+def check_no_inputs(module):
+    """Check without any input parameters"""
+    pass
+
+builtin.add_electrical_check(
+    name="no_inputs_check",
+    check_fn=check_no_inputs,
+    severity="advice",
+)
+
+# Check that uses check() builtin instead of error()
+def check_using_check_builtin(module, value):
+    """Using check() instead of error()"""
+    check(value > 0, "value must be positive, got {}".format(value))
+
+builtin.add_electrical_check(
+    name="check_builtin_usage",
+    check_fn=check_using_check_builtin,
+    inputs={"value": -5},
+    severity="warning",
+)
+
+# ============================================================================
+# INVALID SEVERITY TEST (commented out - would fail immediately)
+# ============================================================================
+
+# Uncomment to test invalid severity validation:
+# builtin.add_electrical_check(
+#     name="invalid_severity",
+#     check_fn=check_no_inputs,
+#     severity="invalid",  # Should error immediately
+# )
