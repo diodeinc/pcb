@@ -3,8 +3,8 @@ VoltageRange = builtin.physical_range("V")
 Severity = enum("error", "warning", "advice")
 
 
-def ElectricalCheck(check_fn: typing.Callable, *args):
-    check_fn(*args)
+def ElectricalCheck(check_fn: typing.Callable, **kwargs):
+    check_fn(**kwargs)
 
 
 Power = interface(
@@ -30,8 +30,8 @@ def ensure_voltage_within(_module, voltage: Power | VoltageRange | None, within:
 
 def check_voltage_within(
     within: str | VoltageRange, name: str = "voltage_check", severity: Severity = Severity("error")
-) -> typing.Callable[[Power | VoltageRange], None]:
-    def check_gen(voltage: Power | VoltageRange):
+) -> typing.Callable:
+    def check_gen(voltage: Power | VoltageRange, severity: Severity = severity, name: str = name):
         check_name = name
         if not voltage:
             return
@@ -59,8 +59,10 @@ builtin.add_electrical_check(
 # Option 2: Use stdlib ElectricalCheck
 vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
 ElectricalCheck(
-    check_voltage_within("10–30 V", severity=Severity("warning")),
-    vbat,
+    name="override_name",
+    severity=Severity("warning"),
+    check_fn=check_voltage_within("20–30 V"),
+    voltage=vbat,
 )
 
 # Option 3: Use helper in io()
