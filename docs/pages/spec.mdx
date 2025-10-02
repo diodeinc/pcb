@@ -564,7 +564,7 @@ moved("ModuleA.ComponentX", "ModuleB.ComponentX")
 moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
 ```
 
-### io(name, type, default=None, optional=False)
+### io(name, type, checks=None, default=None, optional=False)
 
 Declares a net or interface input for a module.
 
@@ -578,14 +578,31 @@ power = io("power", PowerInterface, optional=True)
 
 # With explicit default
 data = io("data", Net, default=Net("DATA"))
+
+# With validation checks (single function)
+def check_voltage_within(within):
+    def check_fn(power_value):
+        voltage = power_value.voltage
+        check(voltage.min >= within.min and voltage.max <= within.max,
+              f"Voltage {voltage} not within {within}")
+    return check_fn
+
+vbat = io("VBAT", Power, check_voltage_within(VoltageRange("10–30 V")))
+
+# Or with multiple checks as a list
+vbat = io("VBAT", Power, [check_voltage_within(VoltageRange("10–30 V")), check_current()])
+
+# Or as a named argument
+vbat = io("VBAT", Power, checks=check_voltage_within(VoltageRange("10–30 V")))
 ```
 
 **Parameters:**
 
-- `name`: String identifier for the input
-- `type`: Expected type (`Net` or interface type)
-- `default`: Default value if not provided by parent
-- `optional`: If True, returns None when not provided (unless default is specified)
+- `name`: String identifier for the input (positional)
+- `type`: Expected type - `Net` or interface type (positional)
+- `checks`: Optional check function or list of check functions to run on the value at eval time (3rd positional or named)
+- `default`: Default value if not provided by parent (named)
+- `optional`: If True, returns None when not provided (unless default is specified) (named)
 
 ### config(name, type, default=None, convert=None, optional=False)
 

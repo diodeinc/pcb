@@ -1,0 +1,67 @@
+VoltageRange = builtin.physical_range("V")
+
+Severity = enum("error", "warning", "advice")
+
+
+def ElectricalCheck(check_fn: typing.Callable, *args):
+    check_fn(*args)
+
+
+Power = interface(
+    NET=using(Net("VCC", symbol=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC"))),
+    voltage=field(VoltageRange | None, None),
+)
+
+
+def ensure_voltage_within(_module, voltage: Power | VoltageRange | None, within: str | VoltageRange):
+    if not voltage:
+        return
+    if isinstance(voltage, Power):
+        voltage = voltage.voltage
+    if isinstance(within, str):
+        within = VoltageRange(within)
+    # drop nominal in within:
+    within = VoltageRange(min=within.min, max=within.max)
+    # ensure voltage is within within
+    min_valid = voltage.min >= within.min
+    max_valid = voltage.max <= within.max
+    check(min_valid and max_valid, "Voltage range " + str(voltage) + " is not within " + str(within))
+
+
+def check_voltage_within(
+    within: str | VoltageRange, name: str = "voltage_check", severity: Severity = Severity("error")
+) -> typing.Callable[[Power | VoltageRange], None]:
+    def check_gen(voltage: Power | VoltageRange):
+        check_name = name
+        if not voltage:
+            return
+        if isinstance(voltage, Power):
+            check_name = voltage.NET.name + "_" + name
+            voltage = voltage.voltage
+        builtin.add_electrical_check(
+            name=check_name,
+            check_fn=ensure_voltage_within,
+            inputs={"voltage": voltage, "within": within},
+            severity=severity.value,
+        )
+
+    return check_gen
+
+
+# Option 1: Use builtin.add_electrical_check
+vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
+builtin.add_electrical_check(
+    name="vbat_voltage_check",
+    check_fn=ensure_voltage_within,
+    inputs={"voltage": vbat, "within": "10–30 V"},
+)
+
+# Option 2: Use stdlib ElectricalCheck
+vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
+ElectricalCheck(
+    check_voltage_within("10–30 V", severity=Severity("warning")),
+    vbat,
+)
+
+# Option 3: Use helper in io()
+vbat = io("VBAT", Power, check_voltage_within("20–30 V"))
