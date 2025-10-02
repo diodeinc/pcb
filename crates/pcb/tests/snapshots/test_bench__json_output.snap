@@ -37,4 +37,4 @@ Exit Code: 0
   }
 }
 --- STDERR ---
-[1m[32m✓ SimpleTest[0m: 3 checks passed across 1 case
+✓ SimpleTest: 3 checks passed across 1 case
