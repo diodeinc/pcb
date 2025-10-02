@@ -12,7 +12,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 7,
-                "name": "ORIGINAL_power_VCC",
+                "name": "ORIGINAL_power",
                 "properties": {}
               }
             },
@@ -68,7 +68,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 7,
-                "name": "ORIGINAL_power_VCC",
+                "name": "ORIGINAL_power",
                 "properties": {}
               }
             },
@@ -115,8 +115,8 @@ expression: output
   }
 }
 === Comparison ===
-Original: System(power=using(Power(NET=using(Net { name: "ORIGINAL_power_VCC", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_uart_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_uart_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
-Deserialized: System(power=using(Power(NET=using(Net { name: "ORIGINAL_power_VCC", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_uart_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_uart_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Original: System(power=using(Power(NET=using(Net { name: "ORIGINAL_power", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_uart_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_uart_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
+Deserialized: System(power=using(Power(NET=using(Net { name: "ORIGINAL_power", id: "<ID>", symbol: Value(NoneType) }), voltage="3.3V")), uart=using(Uart(RX=Net { name: "ORIGINAL_uart_UART_RX", id: "<ID>", symbol: Value(NoneType) }, TX=Net { name: "ORIGINAL_uart_UART_TX", id: "<ID>", symbol: Value(NoneType) })))
 === Both factories still work ===
 New from original factory: {
   "Interface": {
@@ -127,7 +127,7 @@ New from original factory: {
             "NET": {
               "Net": {
                 "id": 10,
-                "name": "NEW_ORIGINAL_power_VCC",
+                "name": "NEW_ORIGINAL_power",
                 "properties": {}
               }
             },
@@ -182,7 +182,7 @@ New from deserialized factory: {
             "NET": {
               "Net": {
                 "id": 13,
-                "name": "NEW_DESERIALIZED_power_VCC",
+                "name": "NEW_DESERIALIZED_power",
                 "properties": {}
               }
             },
