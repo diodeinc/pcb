@@ -13,57 +13,37 @@ Power = interface(
 )
 
 
-def ensure_voltage_within(_module, voltage: Power | VoltageRange | None, within: str | VoltageRange):
-    if not voltage:
-        return
-    if isinstance(voltage, Power):
-        voltage = voltage.voltage
-    if isinstance(within, str):
-        within = VoltageRange(within)
-    # drop nominal in within:
-    within = VoltageRange(min=within.min, max=within.max)
-    # ensure voltage is within within
-    min_valid = voltage.min >= within.min
-    max_valid = voltage.max <= within.max
-    check(min_valid and max_valid, "Voltage range " + str(voltage) + " is not within " + str(within))
-
-
 def check_voltage_within(
     within: str | VoltageRange, name: str = "voltage_check", severity: Severity = Severity("error")
 ) -> typing.Callable:
-    def check_gen(voltage: Power | VoltageRange, severity: Severity = severity, name: str = name):
-        check_name = name
-        if not voltage:
+    def ensure_voltage_within(_module, net_name: str, voltage: VoltageRange, within: str | VoltageRange):
+        within = VoltageRange(within)
+        # drop nominal in within:
+        within = VoltageRange(min=within.min, max=within.max)
+        # ensure voltage is within within
+        min_valid = voltage.min >= within.min
+        max_valid = voltage.max <= within.max
+        err_msg = "Voltage range " + str(voltage) + " of " + net_name + " is not within " + str(within)
+        check(min_valid and max_valid, err_msg)
+    def check_gen(power: Power, severity: Severity = severity, name: str = name):
+        check_name = power.NET.name + "_" + name
+        if not power.voltage:
             return
-        if isinstance(voltage, Power):
-            check_name = voltage.NET.name + "_" + name
-            voltage = voltage.voltage
         builtin.add_electrical_check(
             name=check_name,
             check_fn=ensure_voltage_within,
-            inputs={"voltage": voltage, "within": within},
+            inputs={"voltage": power.voltage, "within": within, "net_name": power.NET.name},
             severity=severity.value,
         )
-
     return check_gen
 
-
-# Option 1: Use builtin.add_electrical_check
-vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
-builtin.add_electrical_check(
-    name="vbat_voltage_check",
-    check_fn=ensure_voltage_within,
-    inputs={"voltage": vbat, "within": "10–30 V"},
-)
-
-# Option 2: Use stdlib ElectricalCheck
+# Option 1: Use stdlib ElectricalCheck
 vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
 ElectricalCheck(
-    name="override_name",
     severity=Severity("warning"),
-    check_fn=check_voltage_within("20–30 V"),
-    voltage=vbat,
+    check_fn=check_voltage_within(VoltageRange("20–30 V")),
+    power=vbat,
 )
 
-# Option 3: Use helper in io()
+# Option 2: Use helper in io()
 vbat = io("VBAT", Power, check_voltage_within("20–30 V"))
