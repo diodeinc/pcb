@@ -19,5 +19,5 @@ Error: '@github/mycompany/components:main' is an unstable reference. Use a pinne
 Stack trace (most recent call last):
     <TEMP_DIR>/board.zen:2:18 ('@github/mycompany/components:main' is an unstable reference. Use a pinned version.)
 
-✓ board.zen (1 components)
+✗ board.zen: Build failed
 Error: Build failed with errors

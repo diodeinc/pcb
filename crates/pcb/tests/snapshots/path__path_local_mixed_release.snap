@@ -51,6 +51,7 @@ Error: Path 'missing_dir' does not exist
 Stack trace (most recent call last):
     <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:8:19 (Path 'missing_dir' does not exist)
 
+✗ LocalPathTest.zen: Build failed
 ✗ Validating build from staged sources failed
 Error: Validating build from staged sources failed
 

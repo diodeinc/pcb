@@ -660,6 +660,30 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 }
 
+impl FrozenModuleValue {
+    /// Collect all ElectricalCheck values with their defining modules (recursively)
+    pub fn collect_electrical_checks(
+        &self,
+    ) -> Vec<(
+        &crate::lang::electrical_check::FrozenElectricalCheck,
+        &FrozenModuleValue,
+    )> {
+        let mut checks = Vec::new();
+        for child in &self.children {
+            let child_value = child.to_value();
+            if let Some(check) =
+                child_value.downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
+            {
+                checks.push((check, self));
+            }
+            if let Some(module) = child_value.downcast_ref::<FrozenModuleValue>() {
+                checks.extend(module.collect_electrical_checks());
+            }
+        }
+        checks
+    }
+}
+
 #[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 pub struct ModuleLoader {
     pub name: String,
