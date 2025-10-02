@@ -379,6 +379,13 @@ impl ModuleConverter {
             comp_inst.add_attribute(crate::attrs::MPN, AttributeValue::String(mpn.to_owned()));
         }
 
+        if let Some(manufacturer) = component.manufacturer() {
+            comp_inst.add_attribute(
+                crate::attrs::MANUFACTURER,
+                AttributeValue::String(manufacturer.to_owned()),
+            );
+        }
+
         if let Some(ctype) = component.ctype() {
             comp_inst.add_attribute(crate::attrs::TYPE, AttributeValue::String(ctype.to_owned()));
         }
