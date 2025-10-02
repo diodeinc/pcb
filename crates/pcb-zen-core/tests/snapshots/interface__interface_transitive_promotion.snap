@@ -27,7 +27,7 @@ expression: output
       "NET": {
         "Net": {
           "id": 9,
-          "name": "PWR_VCC",
+          "name": "PWR",
           "properties": {}
         }
       },
@@ -75,7 +75,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 12,
-                "name": "SYS_power_VCC",
+                "name": "SYS_power",
                 "properties": {}
               }
             },

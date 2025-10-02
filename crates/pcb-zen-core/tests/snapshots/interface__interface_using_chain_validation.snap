@@ -12,7 +12,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 10,
-                "name": "COMPLETE_power_VCC",
+                "name": "COMPLETE_power",
                 "properties": {}
               }
             },
@@ -68,7 +68,7 @@ expression: output
             "NET": {
               "Net": {
                 "id": 13,
-                "name": "BROKEN_power_VCC",
+                "name": "BROKEN_power",
                 "properties": {}
               }
             },

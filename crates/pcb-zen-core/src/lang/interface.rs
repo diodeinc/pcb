@@ -105,17 +105,20 @@ fn is_single_net_interface<'v, V>(factory: &InterfaceFactoryGen<V>) -> bool
 where
     V: ValueLike<'v> + InterfaceCell,
 {
-    if factory.fields.len() != 1 {
-        return false;
+    let mut net_field_count = 0;
+    let mut interface_field_count = 0;
+
+    for (_name, field_spec) in factory.fields.iter() {
+        let field_type = field_spec.to_value().get_type();
+        if field_type == "Net" || field_type == "NetType" {
+            net_field_count += 1;
+        } else if field_type == "InterfaceFactory" || field_type == "InterfaceValue" {
+            interface_field_count += 1;
+        }
     }
 
-    // Check if the single field is a Net type
-    if let Some((_field_name, field_spec)) = factory.fields.iter().next() {
-        let field_type = field_spec.to_value().get_type();
-        field_type == "Net" || field_type == "NetType"
-    } else {
-        false
-    }
+    // Single net interface: exactly 1 net field and no interface fields
+    net_field_count == 1 && interface_field_count == 0
 }
 
 /// Get promotion key for any value
