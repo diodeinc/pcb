@@ -1,0 +1,31 @@
+---
+source: crates/pcb/tests/electrical_checks.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: voltage out of range 0-100: got 150
+    ╭─[ <TEMP_DIR>/board.zen:5:9 ]
+    │
+  5 │             error("{} out of range {}-{}: got {}".format(name, min_val, max_val, actual))
+    │             ──────────────────────────────────────┬──────────────────────────────────────  
+    │                                                   ╰──────────────────────────────────────── voltage out of range 0-100: got 150
+    │ 
+  7 │ ╭─▶ builtin.add_electrical_check(
+    ┆ ┆   
+ 12 │ ├─▶ )
+    │ │       
+    │ ╰─────── Electrical check 'range_check' failed
+────╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/board.zen:7:1 (Electrical check 'range_check' failed)
+    <TEMP_DIR>/board.zen:5:9 (voltage out of range 0-100: got 150)
+      ├─ check_range
+      ╰─ error (called from <TEMP_DIR>/board.zen:5:9-86)
+
+✓ board.zen (0 components)

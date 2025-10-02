@@ -63,8 +63,9 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
     // Identify deepest message in the chain.
     let deepest_error_msg: &Diagnostic = messages.last().copied().unwrap_or(diagnostic);
 
-    // Determine ReportKind from deepest error severity (more relevant).
-    let kind = match deepest_error_msg.severity {
+    // Determine ReportKind from parent (outermost) diagnostic severity
+    // This allows wrapper diagnostics (like electrical checks) to control the severity
+    let kind = match diagnostic.severity {
         EvalSeverity::Error => ReportKind::Error,
         EvalSeverity::Warning => ReportKind::Warning,
         EvalSeverity::Advice => ReportKind::Advice,
