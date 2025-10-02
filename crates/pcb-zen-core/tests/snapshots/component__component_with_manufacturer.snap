@@ -9,6 +9,7 @@ Module {
         FrozenValue(
             Component {
                 name: "test_comp",
+                manufacturer: "test_manufacturer",
                 footprint: "test_footprint",
                 prefix: "U",
                 connections: {
@@ -31,26 +32,12 @@ Module {
                         },
                     ),
                 },
-                properties: {
-                    "symbol_name": FrozenValue(
-                        "TestSymbol",
-                    ),
-                    "symbol_path": FrozenValue(
-                        "/test_symbol.kicad_sym",
-                    ),
-                },
                 symbol: FrozenValue(
                     Symbol {
-                        name: Some(
-                            "TestSymbol",
-                        ),
+                        name: None,
                         pins: {
                             "1": "in",
                             "2": "out",
-                            "3": "in",
-                        },
-                        properties: {
-                            "Reference": "U",
                         },
                     },
                 ),
