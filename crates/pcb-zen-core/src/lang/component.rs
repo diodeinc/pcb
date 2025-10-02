@@ -68,6 +68,7 @@ impl From<ComponentError> for starlark::Error {
 pub struct ComponentValueGen<V> {
     name: String,
     mpn: Option<String>,
+    manufacturer: Option<String>,
     ctype: Option<String>,
     footprint: String,
     prefix: String,
@@ -85,6 +86,9 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 
         if let Some(mpn) = &self.mpn {
             debug.field("mpn", mpn);
+        }
+        if let Some(manufacturer) = &self.manufacturer {
+            debug.field("manufacturer", manufacturer);
         }
         if let Some(ctype) = &self.ctype {
             debug.field("type", ctype);
@@ -248,6 +252,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         self.mpn.as_deref()
     }
 
+    pub fn manufacturer(&self) -> Option<&str> {
+        self.manufacturer.as_deref()
+    }
+
     pub fn prefix(&self) -> &str {
         &self.prefix
     }
@@ -321,6 +329,7 @@ where
                 ),
                 ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
+                ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
@@ -371,6 +380,7 @@ where
             // Optional fields
             let symbol_val: Option<Value> = param_parser.next_opt()?;
             let mpn: Option<Value> = param_parser.next_opt()?;
+            let manufacturer: Option<Value> = param_parser.next_opt()?;
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
@@ -550,6 +560,7 @@ where
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                manufacturer: manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
                 prefix,

@@ -103,3 +103,21 @@ snapshot_eval!(component_duplicate_pin_names, {
         )
     "#
 });
+
+snapshot_eval!(component_with_manufacturer, {
+    "test.zen" => r#"
+        Component(
+            name = "test_comp",
+            footprint = "test_footprint",
+            manufacturer = "test_manufacturer",
+            pin_defs = {
+                "in": "1",
+                "out": "2",
+            },
+            pins = {
+                "in": Net("in"),
+                "out": Net("out"),
+            },
+        )
+    "#
+});
