@@ -261,6 +261,30 @@ impl ModuleConverter {
             }
         }
 
+        // Consolidate DNP handling for modules: check legacy properties
+        // (modules don't have dnp field, they set it via properties)
+        let legacy_keys = ["do_not_populate", "Do_not_populate", "DNP", "dnp"];
+        let is_dnp = legacy_keys.iter().any(|&key| {
+            module
+                .properties()
+                .get(key)
+                .map(|val| {
+                    // Try to interpret the value as a boolean
+                    if let Some(s) = val.downcast_frozen_str() {
+                        let s_str = s.to_string();
+                        s_str.to_lowercase() == "true" || s_str == "1"
+                    } else {
+                        val.unpack_bool().unwrap_or_default()
+                    }
+                })
+                .unwrap_or(false)
+        });
+
+        // Only emit DNP attribute when it's true (false is the default)
+        if is_dnp {
+            inst.add_attribute(crate::attrs::DNP.to_string(), AttributeValue::Boolean(true));
+        }
+
         // Build the module signature
         let mut signature = ModuleSignature {
             parameters: Vec::new(),
@@ -410,6 +434,36 @@ impl ModuleConverter {
         for (key, val) in component.properties().iter() {
             let attr_value = to_attribute_value(*val)?;
             comp_inst.add_attribute(key.clone(), attr_value);
+        }
+
+        // Consolidate DNP handling: check both new kwarg and legacy properties
+        // Priority: dnp kwarg > legacy properties (do_not_populate, DNP, etc.)
+        let is_dnp = if let Some(dnp_kwarg) = component.dnp() {
+            // DNP kwarg takes precedence
+            dnp_kwarg
+        } else {
+            // Fall back to checking legacy properties
+            let legacy_keys = ["do_not_populate", "Do_not_populate", "DNP", "dnp"];
+            legacy_keys.iter().any(|&key| {
+                component
+                    .properties()
+                    .get(key)
+                    .map(|val| {
+                        // Try to interpret the value as a boolean
+                        if let Some(s) = val.downcast_frozen_str() {
+                            let s_str = s.to_string();
+                            s_str.to_lowercase() == "true" || s_str == "1"
+                        } else {
+                            val.unpack_bool().unwrap_or_default()
+                        }
+                    })
+                    .unwrap_or(false)
+            })
+        };
+
+        // Only emit DNP attribute when it's true (false is the default)
+        if is_dnp {
+            comp_inst.add_attribute(crate::attrs::DNP.to_string(), AttributeValue::Boolean(true));
         }
 
         if let Some(model_val) = component.spice_model() {

@@ -1,0 +1,47 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "test_comp_dnp",
+                footprint: "test_footprint",
+                prefix: "U",
+                connections: {
+                    "in": FrozenValue(
+                        Net {
+                            name: "in",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                    "out": FrozenValue(
+                        Net {
+                            name: "out",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "in",
+                            "2": "out",
+                        },
+                    },
+                ),
+            },
+        ),
+    ],
+}
+[]

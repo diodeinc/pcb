@@ -77,6 +77,7 @@ pub struct ComponentValueGen<V> {
     source_path: String,
     symbol: V,
     spice_model: Option<V>,
+    dnp: Option<bool>,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -267,6 +268,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         self.ctype.as_deref()
     }
 
+    pub fn dnp(&self) -> Option<bool> {
+        self.dnp
+    }
+
     pub fn footprint(&self) -> &str {
         &self.footprint
     }
@@ -333,6 +338,7 @@ where
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
+                ("dnp", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -384,6 +390,7 @@ where
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
+            let dnp_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
@@ -582,6 +589,7 @@ where
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
                 spice_model: spice_model_val,
+                dnp: dnp_val.and_then(|v| v.unpack_bool()),
             });
 
             Ok(component)

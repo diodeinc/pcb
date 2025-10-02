@@ -154,3 +154,21 @@ snapshot_eval!(component_manufacturer_from_symbol, {
         )
     "#
 });
+
+snapshot_eval!(component_with_dnp_kwarg, {
+    "test.zen" => r#"
+        Component(
+            name = "test_comp_dnp",
+            footprint = "test_footprint",
+            dnp = True,
+            pin_defs = {
+                "in": "1",
+                "out": "2",
+            },
+            pins = {
+                "in": Net("in"),
+                "out": Net("out"),
+            },
+        )
+    "#
+});

@@ -790,6 +790,17 @@ where
                 continue;
             }
 
+            if arg_name.as_str() == "dnp" {
+                // Handle dnp kwarg by adding it to properties
+                if properties_override.is_none() {
+                    properties_override = Some(starlark::collections::SmallMap::new());
+                }
+                let iv = InputValue::from_value(value.to_value());
+                properties_override.as_mut().unwrap().insert("dnp".to_string(), iv);
+                // Do *not* treat `dnp` as an input placeholder.
+                continue;
+            }
+
             provided_names.insert(arg_name.as_str().to_string());
             let iv = InputValue::from_value(value.to_value());
             input_map.insert(arg_name.as_str().to_string(), iv);
