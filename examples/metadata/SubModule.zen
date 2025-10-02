@@ -1,0 +1,79 @@
+# Sub-module for Cross-Module Metadata Demo
+#
+# This module contributes to shared metadata containers and 
+# demonstrates how metadata persists across module boundaries.
+
+load("@stdlib/interfaces.zen", "Power", "Ground", "Uart")
+load("@stdlib/units.zen", "Voltage", "Frequency")
+
+# Declare shared metadata containers (same names as in parent module)
+shared_component_count = metadata(int)
+shared_voltage_levels = metadata(Voltage)
+shared_module_trace = metadata(str)
+shared_interface_registry = metadata(dict)
+
+# Configuration for this sub-module
+uart_baud = config("uart_baud", str, default="115200")
+supply_voltage = config("supply_voltage", str, default="3.3V")
+
+# IO interfaces
+power_in = io("power_in", Power)
+ground_in = io("ground_in", Ground)
+uart_out = io("uart_out", Uart)
+
+# Log this module's initialization
+shared_module_trace.push("SubModule: Initialization started")
+shared_module_trace.push("SubModule: UART baud rate set to " + uart_baud)
+shared_module_trace.push("SubModule: Supply voltage: " + supply_voltage)
+
+# Track voltage level used by this module
+shared_voltage_levels.push(Voltage(supply_voltage))
+
+# Create internal components and track them
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+# UART pull-up resistors
+Resistor(name="R_TX_PU", value="10kOhm", package="0603", P1=power_in.NET, P2=uart_out.TX)
+shared_component_count.push(1)
+
+Resistor(name="R_RX_PU", value="10kOhm", package="0603", P1=power_in.NET, P2=uart_out.RX)  
+shared_component_count.push(2)
+
+# Decoupling capacitors
+Capacitor(name="C_DECOUPLE", value="100nF", package="0402", P1=power_in.NET, P2=ground_in.NET)
+shared_component_count.push(3)
+
+# Register interfaces created by this module
+shared_interface_registry.push({
+    "module": "SubModule",
+    "interface": "uart_out", 
+    "type": "Uart",
+    "baud_rate": uart_baud
+})
+
+shared_interface_registry.push({
+    "module": "SubModule", 
+    "interface": "power_in",
+    "type": "Power",
+    "voltage": supply_voltage
+})
+
+# Function to contribute to global analysis
+def report_submodule_status():
+    # Add our contribution to the shared trace
+    shared_module_trace.push("SubModule: Status report generated")
+    component_count = shared_component_count.get()
+    shared_module_trace.push("SubModule: Created " + str(component_count) + " components")
+    
+    # Report our interface usage
+    interfaces = shared_interface_registry.list()
+    submodule_interfaces = [i for i in interfaces if i["module"] == "SubModule"]
+    
+    for interface in submodule_interfaces:
+        shared_module_trace.push("SubModule: Interface " + interface['interface'] + " (" + interface['type'] + ")")
+
+# Call reporting function
+report_submodule_status()
+
+shared_module_trace.push("SubModule: Initialization completed")

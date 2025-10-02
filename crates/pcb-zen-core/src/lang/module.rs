@@ -1131,7 +1131,7 @@ fn try_enum_conversion<'v>(
     }
 }
 
-fn validate_or_convert<'v>(
+pub fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,

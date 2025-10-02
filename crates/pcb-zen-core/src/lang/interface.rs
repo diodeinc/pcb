@@ -18,6 +18,7 @@ use crate::lang::context::ContextValue;
 use crate::lang::eval::{copy_value, DeepCopyToHeap};
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface_validation::ensure_field_compat;
+use crate::lang::metadata::{clone_metadata_container, MetadataContainer};
 use crate::lang::net::{generate_net_id, NetValue};
 use crate::lang::validation::validate_identifier_name;
 
@@ -338,6 +339,9 @@ fn create_field_value<'v>(
     } else if field_spec.get_type() == "NetType" {
         let new_name = compute_net_name(prefix, None, Some(field_name), suffix_net_name, eval);
         alloc_net(&new_name, SmallMap::new(), Value::new_none(), heap, eval)
+    } else if field_spec.get_type() == "MetadataContainer" {
+        // For MetadataContainer templates, create a new container with the same type
+        clone_metadata_container(field_spec, eval)
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, &child_prefix, heap, eval)
@@ -382,9 +386,15 @@ where
     }
 
     // Create the interface instance
+    let instance_name = if prefix.new_style.is_empty() {
+        None
+    } else {
+        Some(prefix.new_style.clone())
+    };
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
         factory: factory_value,
+        name: instance_name,
     });
 
     // Execute __post_init__ if present
@@ -740,6 +750,7 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> DeepCopyToHeap for InterfaceFactoryGe
 pub struct InterfaceValueGen<V> {
     fields: SmallMap<String, V>,
     factory: V, // store reference to the Interface *type* that created this instance
+    name: Option<String>, // The instance name passed to the constructor
 }
 starlark_complex_value!(pub InterfaceValue);
 
@@ -750,8 +761,12 @@ where
 {
     type Canonical = FrozenInterfaceValue;
 
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
-        self.fields.get(attr).map(|v| v.to_value())
+    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        let name = self.name.as_ref().map(|name| heap.alloc(name.clone()));
+        match attr {
+            "name" => Some(name.unwrap_or(Value::new_none())),
+            _ => self.fields.get(attr).map(|v| v.to_value()),
+        }
     }
 
     fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
@@ -834,7 +849,11 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for InterfaceValueGen<V> {
         // remains connected to its type information in the destination heap.
         let factory = copy_value(self.factory.to_value(), dst)?;
 
-        Ok(dst.alloc(InterfaceValue { fields, factory }))
+        Ok(dst.alloc(InterfaceValue {
+            fields,
+            factory,
+            name: self.name.clone(),
+        }))
     }
 }
 
@@ -916,7 +935,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
 
                 let type_str = field_value.get_type();
 
-                // Accept Net type, Net instance, Interface factory, Interface instance, field() specs, or using() wrapped values
+                // Accept Net type, Net instance, Interface factory, Interface instance, field() specs, using() wrapped values, or metadata containers
                 if type_str == "NetType"
                     || type_str == "Net"
                     || type_str == "InterfaceValue"
@@ -925,6 +944,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     || field_value
                         .downcast_ref::<FrozenInterfaceFactory>()
                         .is_some()
+                    || field_value.downcast_ref::<MetadataContainer>().is_some()
                 {
                     // If a Net instance literal was provided as a template field,
                     // unregister it from the current module so it does not count as
@@ -958,7 +978,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     fields.insert(name.clone(), field_value);
                 } else {
                     return Err(anyhow::anyhow!(
-                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, field() specification, or using() wrapped value, got `{}`",
+                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, field() specification, using() wrapped value, or metadata container, got `{}`",
                         name,
                         type_str
                     ));

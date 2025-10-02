@@ -1,0 +1,131 @@
+# Component Tracker Module
+#
+# This module demonstrates using metadata with interfaces and component tracking.
+# It logs component instantiations and their properties for analysis.
+
+load("@stdlib/interfaces.zen", "Power", "Ground", "Gpio")
+load("@stdlib/units.zen", "Voltage", "Current", "Resistance")
+
+# Create metadata containers for component tracking
+component_log = metadata(str)
+power_rail_log = metadata(dict) 
+interface_usage = metadata(str)
+design_notes = metadata(str)
+
+# Configuration
+rail_voltage = config("rail_voltage", str, default="3.3V")
+max_current = config("max_current", str, default="500mA")
+
+# Log design parameters
+design_notes.push(f"Target voltage: {rail_voltage}")
+design_notes.push(f"Max current: {max_current}")
+
+# Create power and ground interfaces with logging
+vcc = Power("VCC_" + rail_voltage.replace(".", "V"))
+gnd = Ground("GND")
+
+# Log interface creation
+interface_usage.push("Created power rail: " + vcc.NET.name)
+interface_usage.push("Created ground: " + gnd.NET.name)
+
+# Log power rail specifications
+power_rail_log.push({
+    "name": vcc.NET.name,
+    "voltage": rail_voltage,
+    "max_current": max_current,
+    "type": "power_supply"
+})
+
+power_rail_log.push({
+    "name": gnd.NET.name,
+    "voltage": "0V", 
+    "type": "ground"
+})
+
+# GPIO interfaces with metadata tracking
+gpio_pins = []
+for i in range(4):
+    pin_name = "GPIO_" + str(i)
+    gpio_pin = Gpio(pin_name)
+    gpio_pins.append(gpio_pin)
+    
+    interface_usage.push("Created GPIO: " + pin_name)
+
+# Function to log component creation
+def log_component(name, component_type, package, value=None):
+    log_entry = "Component: " + name + " (" + component_type + ", " + package + ")"
+    if value:
+        log_entry += ", value: " + value
+    component_log.push(log_entry)
+    
+    design_notes.push("Added " + component_type + " " + name + " for circuit functionality")
+
+# Resistor with metadata logging  
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+log_component("R1", "resistor", "0603", "10kOhm")
+Resistor(name="R1", value="10kOhm", package="0603", P1=vcc.NET, P2=gpio_pins[0].NET)
+
+log_component("R2", "resistor", "0603", "4.7kOhm") 
+Resistor(name="R2", value="4.7kOhm", package="0603", P1=gpio_pins[1].NET, P2=gnd.NET)
+
+# Capacitor with metadata logging
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+log_component("C1", "capacitor", "0402", "100nF")
+Capacitor(name="C1", value="100nF", package="0402", P1=vcc.NET, P2=gnd.NET)
+
+log_component("C2", "capacitor", "0603", "10uF")
+Capacitor(name="C2", value="10uF", package="0603", voltage="16V", P1=vcc.NET, P2=gnd.NET)
+
+# LED with metadata logging
+Led = Module("@stdlib/generics/Led.zen")
+
+log_component("D1", "led", "0603", "green")
+Led(name="D1", color="green", package="0603", A=gpio_pins[2].NET, K=gnd.NET)
+
+# Analysis function that uses accumulated metadata
+def analyze_design():
+    components = component_log.list()
+    interfaces = interface_usage.list()
+    notes = design_notes.list()
+    power_rails = power_rail_log.list()
+    
+    print("=== Design Analysis ===")
+    print("Total components: " + str(len(components)))
+    print("Total interfaces: " + str(len(interfaces)))
+    print("Total power rails: " + str(len(power_rails)))
+    print("Design notes: " + str(len(notes)))
+    
+    print("\nComponent breakdown:")
+    for component in components:
+        print("  - " + component)
+    
+    print("\nInterface usage:")
+    for interface in interfaces:
+        print("  - " + interface)
+        
+    print("\nPower rail summary:")
+    for rail in power_rails:
+        if rail["type"] == "power_supply":
+            print("  - " + rail['name'] + ": " + rail['voltage'] + " @ " + rail['max_current'])
+        else:
+            print("  - " + rail['name'] + ": " + rail['type'])
+
+# Export interface for other modules
+# Note: interfaces don't support list types, so we'll comment this out
+# component_tracker_interface = interface(
+#     vcc = Power,
+#     gnd = Ground,
+#     gpio = list[Gpio]  # Lists not supported in interface fields
+# )
+
+# Since we commented out the interface, we'll just use the variables directly
+# tracker_output = component_tracker_interface(
+#     vcc=vcc,
+#     gnd=gnd, 
+#     gpio=gpio_pins
+# )
+
+# Run analysis
+analyze_design()

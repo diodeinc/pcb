@@ -1,0 +1,5 @@
+load("./interface.zen", "Power")
+
+ChildModule = Module("./child.zen")
+
+ChildModule(name = "CHILD", POWA = Power())

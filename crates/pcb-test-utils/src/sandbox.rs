@@ -407,6 +407,13 @@ impl Sandbox {
         let linux_pattern = Regex::new(r"/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
         result = linux_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
+        // Windows: C:\Users\...\.tmpXXX or \\?\C:\Users\...\.tmpXXX
+        let windows_pattern =
+            Regex::new(r"(?:\\\\\?\\)?[A-Z]:\\Users\\.*?\.tmp[a-zA-Z0-9]+").unwrap();
+        result = windows_pattern
+            .replace_all(&result, "<TEMP_DIR>")
+            .to_string();
+
         // Sanitize ISO 8601 timestamps
         let timestamp_pattern =
             Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+\+\d{2}:\d{2}").unwrap();

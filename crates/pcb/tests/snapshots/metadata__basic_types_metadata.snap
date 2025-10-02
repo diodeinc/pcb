@@ -1,0 +1,28 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build BasicTypesMetadata.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+=== Testing Basic Types ===
+String metadata: ["design_v1", "design_v2", "final_design"]
+Latest string: final_design
+Integer metadata: [1, 42, 100]
+Latest integer: 100
+Float metadata: [1.5, 3.14, 2.718]
+Latest float: 2.718
+Voltage metadata: [3.3V, 5V]
+Latest voltage: 5V
+=== Conditional Logic with Basic Types ===
+Total designs: 3
+Max component count: 100
+Precision factor: 2.718
+Multiple design iterations found
+High component count design
+Design complexity score: 815.4
+COMPLEX DESIGN - consider modular approach
+✓ BasicTypesMetadata.zen (0 components)

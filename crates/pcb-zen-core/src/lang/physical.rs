@@ -116,7 +116,9 @@ fn starlark_value_to_decimal(
     }
 }
 
-#[derive(Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize, PartialEq,
+)]
 pub struct PhysicalValue {
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
@@ -2043,6 +2045,29 @@ fn range_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn unit(this: &PhysicalRange) -> starlark::Result<String> {
         Ok(this.r#type.unit.to_string())
+    }
+}
+
+/// Helper function to extract PhysicalUnit from a Ty by matching the type name
+/// Returns Some(PhysicalUnit) if the type matches a known physical unit type
+pub fn physical_unit_from_ty(ty: &Ty) -> Option<PhysicalUnit> {
+    // Try to convert the type to string and match against known names
+    let type_str = ty.to_string();
+    match type_str.as_str() {
+        "Voltage" => Some(PhysicalUnit::Volts),
+        "Current" => Some(PhysicalUnit::Amperes),
+        "Resistance" => Some(PhysicalUnit::Ohms),
+        "Capacitance" => Some(PhysicalUnit::Farads),
+        "Inductance" => Some(PhysicalUnit::Henries),
+        "Frequency" => Some(PhysicalUnit::Hertz),
+        "Time" => Some(PhysicalUnit::Seconds),
+        "Conductance" => Some(PhysicalUnit::Siemens),
+        "Temperature" => Some(PhysicalUnit::Kelvin),
+        "Charge" => Some(PhysicalUnit::Coulombs),
+        "Power" => Some(PhysicalUnit::Watts),
+        "Energy" => Some(PhysicalUnit::Joules),
+        "MagneticFlux" => Some(PhysicalUnit::Webers),
+        _ => None,
     }
 }
 

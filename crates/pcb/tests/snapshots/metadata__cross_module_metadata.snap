@@ -1,0 +1,16 @@
+---
+source: crates/pcb/tests/metadata.rs
+expression: output
+---
+Command: pcb build CrossModule.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Power module configured with: 5V at 1A
+Loaded voltage metadata: [5V]
+Loaded current metadata: [1A]
+Updated voltage metadata: [5V, 24V]
+Updated current metadata: [1A, 2A]
+✓ CrossModule.zen (0 components)
