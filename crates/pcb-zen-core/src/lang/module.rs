@@ -796,7 +796,10 @@ where
                     properties_override = Some(starlark::collections::SmallMap::new());
                 }
                 let iv = InputValue::from_value(value.to_value());
-                properties_override.as_mut().unwrap().insert("dnp".to_string(), iv);
+                properties_override
+                    .as_mut()
+                    .unwrap()
+                    .insert("dnp".to_string(), iv);
                 // Do *not* treat `dnp` as an input placeholder.
                 continue;
             }
