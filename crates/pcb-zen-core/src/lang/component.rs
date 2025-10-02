@@ -424,6 +424,7 @@ where
                             pad_to_signal, // Use pin mappings from pin_defs
                             source_path: symbol_value.source_path.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
+                            properties: symbol_value.properties.clone(),
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
@@ -432,6 +433,7 @@ where
                             pad_to_signal,
                             source_path: None,
                             raw_sexp: None,
+                            properties: SmallMap::new(),
                         }
                     }
                 } else {
@@ -441,6 +443,7 @@ where
                         pad_to_signal,
                         source_path: None,
                         raw_sexp: None,
+                        properties: SmallMap::new(),
                     }
                 }
             } else if let Some(symbol) = &symbol_val {
@@ -557,10 +560,20 @@ where
                 }
             }
 
+            // If manufacturer is not explicitly provided, try to get it from the symbol's properties
+            let final_manufacturer = manufacturer
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Manufacturer_Name")
+                        .map(|s| s.to_owned())
+                });
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
-                manufacturer: manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                manufacturer: final_manufacturer,
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
                 prefix,

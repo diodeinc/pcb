@@ -9,21 +9,22 @@ Module {
         FrozenValue(
             Component {
                 name: "test_comp",
+                manufacturer: "ACME Corp",
                 footprint: "test_footprint",
                 prefix: "U",
                 connections: {
-                    "in": FrozenValue(
+                    "GND": FrozenValue(
                         Net {
-                            name: "in",
+                            name: "GND",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,
                             ),
                         },
                     ),
-                    "out": FrozenValue(
+                    "VCC": FrozenValue(
                         Net {
-                            name: "out",
+                            name: "VCC",
                             id: "<ID>",
                             symbol: FrozenValue(
                                 NoneType,
@@ -45,11 +46,11 @@ Module {
                             "TestSymbol",
                         ),
                         pins: {
-                            "1": "in",
-                            "2": "out",
-                            "3": "in",
+                            "1": "VCC",
+                            "2": "GND",
                         },
                         properties: {
+                            "Manufacturer_Name": "ACME Corp",
                             "Reference": "U",
                         },
                     },

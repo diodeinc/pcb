@@ -1,6 +1,5 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use allocative::Allocative;
@@ -15,6 +14,8 @@ use starlark::{
         Trace, Value,
     },
 };
+
+use std::collections::HashMap;
 
 use crate::lang::eval::DeepCopyToHeap;
 use crate::lang::evaluator_ext::EvaluatorExt;
@@ -45,6 +46,7 @@ pub struct SymbolValue {
     pub pad_to_signal: SmallMap<String, String>, // pad name -> signal name
     pub source_path: Option<String>, // Absolute path to the symbol library (if loaded from file)
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
+    pub properties: SmallMap<String, String>, // Properties from the symbol definition
 }
 
 impl std::fmt::Debug for SymbolValue {
@@ -61,6 +63,15 @@ impl std::fmt::Debug for SymbolValue {
             debug.field("pins", &pins_map);
         }
 
+        // Sort properties for deterministic output
+        if !self.properties.is_empty() {
+            let mut props: Vec<_> = self.properties.iter().collect();
+            props.sort_by_key(|(k, _)| k.as_str());
+            let props_map: std::collections::BTreeMap<_, _> =
+                props.into_iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            debug.field("properties", &props_map);
+        }
+
         debug.finish()
     }
 }
@@ -74,6 +85,33 @@ where
 {
     fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
         demand.provide_value::<&dyn DeepCopyToHeap>(self);
+    }
+
+    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attr {
+            "properties" => {
+                let props_vec: Vec<(Value<'v>, Value<'v>)> = self
+                    .properties
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            heap.alloc_str(key).to_value(),
+                            heap.alloc_str(value).to_value(),
+                        )
+                    })
+                    .collect();
+                Some(heap.alloc(starlark::values::dict::AllocDict(props_vec)))
+            }
+            _ => None,
+        }
+    }
+
+    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+        matches!(attr, "properties")
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        vec!["properties".to_string()]
     }
 }
 
@@ -177,6 +215,7 @@ impl<'v> SymbolValue {
                 pad_to_signal,
                 source_path: None,
                 raw_sexp: None,
+                properties: SmallMap::new(),
             })
         }
         // Case 2: Load from library
@@ -270,11 +309,18 @@ impl<'v> SymbolValue {
                 .raw_sexp()
                 .map(|s| pcb_sexpr::format_sexpr(s, 0));
 
+            // Extract properties from the symbol and convert to SmallMap
+            let mut properties = SmallMap::new();
+            for (key, value) in selected_symbol.properties.iter() {
+                properties.insert(key.clone(), value.clone());
+            }
+
             Ok(SymbolValue {
                 name: Some(selected_symbol.name.clone()),
                 pad_to_signal,
                 source_path: Some(absolute_path),
                 raw_sexp: sexpr,
+                properties,
             })
         } else {
             Err(starlark::Error::new_other(anyhow!(
@@ -301,6 +347,10 @@ impl<'v> SymbolValue {
 
     pub fn signal_names(&self) -> impl Iterator<Item = &str> {
         self.pad_to_signal.values().map(|v| v.as_str())
+    }
+
+    pub fn properties(&self) -> &SmallMap<String, String> {
+        &self.properties
     }
 }
 
