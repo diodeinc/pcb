@@ -880,8 +880,6 @@ fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
         .subcommand("gerbers")
         .arg("--output")
         .arg(gerbers_dir.to_string_lossy())
-        .arg("--layers")
-        .arg("F.Cu,B.Cu,F.Paste,B.Paste,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts,In1.Cu,In2.Cu,In3.Cu,In4.Cu")
         .arg("--no-x2")
         .arg("--use-drill-file-origin")
         .arg(kicad_pcb_path.to_string_lossy())
