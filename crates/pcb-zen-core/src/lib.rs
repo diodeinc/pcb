@@ -33,6 +33,7 @@ pub mod attrs {
     pub const SYMBOL_PATH: &str = "symbol_path";
     pub const SYMBOL_VALUE: &str = "__symbol_value";
     pub const PADS: &str = "pads";
+    pub const DNP: &str = "dnp";
 
     pub mod net {
         pub mod kind {

@@ -478,6 +478,15 @@ impl Instance {
         })
     }
 
+    pub fn boolean_attr(&self, keys: &[&str]) -> Option<bool> {
+        keys.iter().find_map(|&key| {
+            self.attributes.get(key).and_then(|attr| match attr {
+                AttributeValue::Boolean(b) => Some(*b),
+                _ => None,
+            })
+        })
+    }
+
     pub fn string_list_attr(&self, keys: &[&str]) -> Vec<String> {
         keys.iter()
             .find_map(|&key| match self.attributes.get(key)? {
@@ -529,9 +538,8 @@ impl Instance {
     }
 
     pub fn dnp(&self) -> bool {
-        self.string_attr(&["do_not_populate", "Do_not_populate", "DNP", "dnp"])
-            .map(|s| s.to_lowercase() == "true" || s == "1")
-            .unwrap_or(false)
+        // Check for the standardized boolean "dnp" attribute
+        self.boolean_attr(&["dnp"]).unwrap_or(false)
     }
 }
 
