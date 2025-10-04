@@ -617,5 +617,7 @@ expression: content
       "name": "G2"
     }
   ],
+  "tracks": [],
+  "vias": [],
   "zones": []
 }
