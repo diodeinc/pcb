@@ -204,6 +204,10 @@ fn ensure_git_worktree(
     log::debug!("Fetching updates in bare repository");
     let _ = git::fetch_in_bare_repo(&bare_repo);
 
+    // Prune stale worktree metadata before creating new worktree
+    log::debug!("Pruning stale worktrees");
+    let _ = git::prune_worktrees(&bare_repo);
+
     // Create worktree for the specific ref
     log::debug!("Creating worktree for {rev}");
     git::create_worktree(&bare_repo, dest_dir, rev)?;
