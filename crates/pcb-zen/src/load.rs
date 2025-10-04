@@ -154,6 +154,12 @@ fn ensure_git_worktree(
     rev: &str,
     dest_dir: &Path,
 ) -> anyhow::Result<()> {
+    // Fast path: if worktree exists, return immediately
+    // This is safe because we use atomic rename during creation
+    if dest_dir.exists() {
+        return Ok(());
+    }
+
     if !git::is_available() {
         anyhow::bail!("Git is required but not available on this system");
     }
@@ -166,7 +172,7 @@ fn ensure_git_worktree(
     let mut _lock = fslock::LockFile::open(&lock_file)?;
     _lock.lock()?;
 
-    // Check if worktree already exists (after acquiring lock)
+    // Double-check after acquiring lock (another process may have created it)
     if dest_dir.exists() {
         return Ok(());
     }
@@ -208,9 +214,15 @@ fn ensure_git_worktree(
     log::debug!("Pruning stale worktrees");
     let _ = git::prune_worktrees(&bare_repo);
 
-    // Create worktree for the specific ref
+    // Create worktree to a temp directory first, then atomically rename
+    // This ensures other processes don't see a partially-created worktree
+    let temp_dir = repo_root.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
+
     log::debug!("Creating worktree for {rev}");
-    git::create_worktree(&bare_repo, dest_dir, rev)?;
+    git::create_worktree(&bare_repo, &temp_dir, rev)?;
+
+    // Atomically rename temp directory to final location
+    std::fs::rename(&temp_dir, dest_dir)?;
 
     Ok(())
 }
