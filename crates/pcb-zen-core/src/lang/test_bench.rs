@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use crate::lang::eval::EvalMode;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::input::{InputMap, InputValue};
 use crate::lang::module::{FrozenModuleValue, ModuleLoader};
@@ -16,57 +15,35 @@ use starlark::{
     eval::Evaluator,
     starlark_complex_value, starlark_module,
     values::{
-        dict::{AllocDict, DictRef},
-        list::ListRef,
-        starlark_value,
-        tuple::TupleRef,
-        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
+        dict::DictRef, list::ListRef, starlark_value, tuple::TupleRef, Coerce, Freeze, NoSerialize,
+        StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
     },
 };
 
-/// Result from a single test case evaluation
+/// A single deferred check function with optional custom name
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct TestCaseResultGen<V: ValueLifetimeless> {
+pub struct DeferredCheckGen<V: ValueLifetimeless> {
+    /// The check function to execute later
+    pub check_func: V,
+    /// Optional custom name for the check (from tuple syntax)
+    pub custom_name: Option<String>,
+}
+
+/// A test case with deferred check execution
+#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct DeferredTestCaseGen<V: ValueLifetimeless> {
+    /// The name of this test case
+    pub case_name: String,
     /// The test case parameters that were provided
     pub params: SmallMap<String, V>,
     /// The evaluated module (None if evaluation failed)
     #[freeze(identity)]
     pub evaluated: Option<FrozenModuleValue>,
-    /// Results from running check functions for this case
-    pub check_results: Vec<V>,
-    /// Number of failed checks for this case
-    pub failed_checks: u32,
+    /// Check functions to run later
+    pub checks: Vec<DeferredCheckGen<V>>,
 }
-
-impl<'v, V: ValueLike<'v>> std::fmt::Display for TestCaseResultGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "TestCaseResult(params: {}, evaluated: {})",
-            self.params.len(),
-            self.evaluated.is_some()
-        )
-    }
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Debug for TestCaseResultGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TestCaseResult")
-            .field("params", &self.params.len())
-            .field("evaluated", &self.evaluated.is_some())
-            .field("failed_checks", &self.failed_checks)
-            .finish()
-    }
-}
-
-#[starlark_value(type = "TestCaseResult")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for TestCaseResultGen<V> where
-    Self: ProvidesStaticType<'v>
-{
-}
-
-starlark_complex_value!(pub TestCaseResult);
 
 /// TestBench value that evaluates modules with explicit test cases
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -77,10 +54,14 @@ pub struct TestBenchValueGen<V: ValueLifetimeless> {
     /// The module loader that was used
     #[freeze(identity)]
     module_loader: ModuleLoader,
-    /// Results from each test case
-    cases: Vec<TestCaseResultGen<V>>,
-    /// Summary statistics
-    summary: SmallMap<String, V>,
+    /// Deferred test cases (used when checks are deferred)
+    deferred_cases: Vec<DeferredTestCaseGen<V>>,
+    /// Source file path where TestBench was defined (for diagnostic context)
+    source_path: String,
+    /// Span of the TestBench() call for diagnostic context
+    #[freeze(identity)]
+    #[allocative(skip)]
+    call_span: Option<starlark::codemap::ResolvedSpan>,
 }
 
 starlark_complex_value!(pub TestBenchValue);
@@ -102,7 +83,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for TestBenchValueGen<V> {
         let mut debug = f.debug_struct("TestBench");
         debug.field("name", &self.name);
         debug.field("module", &self.module_loader.name);
-        debug.field("cases", &self.cases.len());
+        debug.field("deferred_cases", &self.deferred_cases.len());
         debug.finish()
     }
 }
@@ -116,16 +97,20 @@ impl<'v, V: ValueLike<'v>> TestBenchValueGen<V> {
         &self.module_loader
     }
 
-    pub fn cases(&self) -> &Vec<TestCaseResultGen<V>> {
-        &self.cases
+    pub fn deferred_cases(&self) -> &Vec<DeferredTestCaseGen<V>> {
+        &self.deferred_cases
     }
 
     pub fn case_count(&self) -> usize {
-        self.cases.len()
+        self.deferred_cases.len()
     }
 
-    pub fn summary(&self) -> &SmallMap<String, V> {
-        &self.summary
+    pub fn source_path(&self) -> &str {
+        &self.source_path
+    }
+
+    pub fn call_span(&self) -> Option<&starlark::codemap::ResolvedSpan> {
+        self.call_span.as_ref()
     }
 }
 
@@ -241,120 +226,13 @@ impl ModuleLoader {
 /// Build an InputMap from a test case dictionary
 fn build_input_map<'v>(case_dict: &DictRef<'v>) -> anyhow::Result<InputMap> {
     let mut inputs = InputMap::new();
-
     for (key, value) in case_dict.iter() {
         let key_str = key
             .unpack_str()
             .ok_or_else(|| anyhow::anyhow!("test case keys must be strings, got: {}", key))?;
-
-        let input_value = InputValue::from_value(value);
-        inputs.insert(key_str.to_string(), input_value);
+        inputs.insert(key_str.to_string(), InputValue::from_value(value));
     }
-
     Ok(inputs)
-}
-
-/// Execute a single check function and handle the result
-fn execute_check<'v>(
-    eval: &mut Evaluator<'v, '_, '_>,
-    check_func: Value<'v>,
-    args: &[Value<'v>],
-    test_bench_name: &str,
-    case_name: Option<&str>,
-    custom_name: Option<&str>,
-) -> anyhow::Result<(Value<'v>, bool)> {
-    let check_name = if let Some(name) = custom_name {
-        name.to_string()
-    } else {
-        let check_func_str = check_func.to_string();
-        check_func_str
-            .rsplit('.')
-            .next()
-            .unwrap_or("check")
-            .to_string()
-    };
-
-    let case_suffix = case_name
-        .map(|n| format!(" case '{}'", n))
-        .unwrap_or_default();
-
-    // Validate that check_func is actually callable before trying to call it
-    if check_func.get_type() != "function" && check_func.get_type() != "native_function" {
-        return Err(anyhow::anyhow!(
-            "Check function '{}' is not callable (type: {})",
-            check_func.to_string(),
-            check_func.get_type()
-        ));
-    }
-
-    match eval.eval_function(check_func, args, &[]) {
-        Ok(result) => {
-            // Only add diagnostics if context is available
-            if let (Some(ctx), Some(test_bench_location)) =
-                (eval.context_value(), eval.call_stack_top_location())
-            {
-                // Create structured test result for tracking
-                let test_result = crate::lang::error::BenchTestResult {
-                    test_bench_name: test_bench_name.to_string(),
-                    case_name: case_name.map(|s| s.to_string()),
-                    check_name: check_name.clone(),
-                    file_path: test_bench_location.filename().to_string(),
-                    passed: true,
-                };
-
-                // Add as a non-error diagnostic for collection purposes
-                ctx.add_diagnostic(Diagnostic {
-                    path: test_bench_location.filename().to_string(),
-                    span: Some(test_bench_location.resolve_span()),
-                    severity: EvalSeverity::Advice,
-                    body: format!(
-                        "TestBench '{}'{} check '{}' passed",
-                        test_bench_name, case_suffix, check_name
-                    ),
-                    call_stack: Some(eval.call_stack().clone()),
-                    child: None,
-                    source_error: Some(std::sync::Arc::new(test_result.into())),
-                });
-            }
-
-            Ok((result, false)) // Success, no failure
-        }
-        Err(e) => {
-            // Only add diagnostics if context is available
-            if let (Some(ctx), Some(test_bench_location)) =
-                (eval.context_value(), eval.call_stack_top_location())
-            {
-                // Convert error to diagnostic - this will handle DiagnosticError chains properly
-                let child_diagnostic = Diagnostic::from(e);
-                let child = Some(Box::new(child_diagnostic));
-
-                // Create structured test result for tracking
-                let test_result = crate::lang::error::BenchTestResult {
-                    test_bench_name: test_bench_name.to_string(),
-                    case_name: case_name.map(|s| s.to_string()),
-                    check_name: check_name.clone(),
-                    file_path: test_bench_location.filename().to_string(),
-                    passed: false,
-                };
-
-                // Parent diagnostic for TestBench context
-                ctx.add_diagnostic(Diagnostic {
-                    path: test_bench_location.filename().to_string(),
-                    span: Some(test_bench_location.resolve_span()),
-                    severity: EvalSeverity::Error,
-                    body: format!(
-                        "TestBench '{}'{} check '{}' failed",
-                        test_bench_name, case_suffix, check_name
-                    ),
-                    call_stack: Some(eval.call_stack().clone()),
-                    child,
-                    source_error: Some(Arc::new(test_result.into())),
-                });
-            }
-
-            Ok((eval.heap().alloc(false).to_value(), true)) // Failure
-        }
-    }
 }
 
 #[starlark_module]
@@ -367,14 +245,6 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] checks: Option<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        // Check eval mode - in Build mode, TestBench is a no-op
-        if let Some(ctx) = eval.eval_context() {
-            if ctx.eval_mode == EvalMode::Build {
-                // Return None to indicate no-op
-                return Ok(Value::new_none());
-            }
-        }
-
         // Extract ModuleLoader from the module parameter
         let loader = module.downcast_ref::<ModuleLoader>().ok_or_else(|| {
             anyhow::anyhow!("'module' parameter must be a ModuleLoader (created with Module())")
@@ -388,9 +258,25 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             return Err(anyhow::anyhow!("'test_cases' cannot be empty"));
         }
 
-        let mut cases = Vec::new();
-        let mut total_checks = 0;
-        let mut total_failed_checks = 0;
+        // Capture context from TestBench() call for diagnostics
+        let call_site = eval.call_stack_top_location();
+        let source_path = call_site
+            .as_ref()
+            .map(|cs| cs.filename().to_string())
+            .unwrap_or_default();
+        let call_span = call_site.map(|cs| cs.resolve_span());
+
+        // Parse checks list once if provided
+        let checks_list =
+            if let Some(checks_value) = checks {
+                Some(ListRef::from_value(checks_value).ok_or_else(|| {
+                    anyhow::anyhow!("'checks' parameter must be a list of functions")
+                })?)
+            } else {
+                None
+            };
+
+        let mut deferred_cases = Vec::new();
 
         // Process each test case
         for (case_name, case_value) in test_cases_dict.iter() {
@@ -409,66 +295,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             let evaluated_module =
                 loader.evaluate_with_inputs(name.clone(), eval, inputs, Some(case_name_str))?;
 
-            // Execute check functions for this case
-            let mut case_check_results = Vec::new();
-            let mut case_failed_count = 0;
-
-            if let (Some(checks_value), Some(ref module)) = (&checks, &evaluated_module) {
-                let checks_list = ListRef::from_value(*checks_value).ok_or_else(|| {
-                    anyhow::anyhow!("'checks' parameter must be a list of functions")
-                })?;
-
-                // Use frozen_heap to allocate the FrozenModuleValue
-                let module_value = eval.frozen_heap().alloc(module.clone()).to_value();
-
-                // Convert test case parameters to Starlark dict
-                let inputs_dict = eval
-                    .heap()
-                    .alloc(AllocDict(case_dict.iter().collect::<Vec<_>>()))
-                    .to_value();
-
-                let args = [module_value, inputs_dict];
-
-                for check_item in checks_list.iter() {
-                    // Check if it's a tuple (name, function) or just a function
-                    let (check_func, custom_name) =
-                        if let Some(tuple_ref) = TupleRef::from_value(check_item) {
-                            if tuple_ref.len() == 2 {
-                                let tuple_items: Vec<_> = tuple_ref.iter().collect();
-                                let name = tuple_items[0].unpack_str().ok_or_else(|| {
-                                    anyhow::anyhow!(
-                                        "First element of check tuple must be a string name"
-                                    )
-                                })?;
-                                let func = tuple_items[1];
-                                (func, Some(name))
-                            } else {
-                                return Err(anyhow::anyhow!(
-                                    "Check tuple must have exactly 2 elements: (name, function)"
-                                ));
-                            }
-                        } else {
-                            (check_item, None)
-                        };
-
-                    let (result, failed) = execute_check(
-                        eval,
-                        check_func,
-                        &args,
-                        &name,
-                        Some(case_name_str),
-                        custom_name,
-                    )?;
-                    case_check_results.push(result);
-                    total_checks += 1;
-                    if failed {
-                        case_failed_count += 1;
-                        total_failed_checks += 1;
-                    }
-                }
-            }
-
-            // Store case parameters for introspection
+            // Store case parameters for later
             let mut params = SmallMap::new();
             for (key, value) in case_dict.iter() {
                 if let Some(key_str) = key.unpack_str() {
@@ -476,58 +303,137 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                 }
             }
 
-            cases.push(TestCaseResultGen {
+            // Store check functions for later execution
+            let deferred_checks = if let Some(checks_list_ref) = checks_list {
+                checks_list_ref
+                    .iter()
+                    .map(|check_item| {
+                        // Check if it's a tuple (name, function) or just a function
+                        let (check_func, custom_name) =
+                            if let Some(tuple_ref) = TupleRef::from_value(check_item) {
+                                if tuple_ref.len() != 2 {
+                                    anyhow::bail!(
+                                    "Check tuple must have exactly 2 elements: (name, function)"
+                                );
+                                }
+                                let tuple_items: Vec<_> = tuple_ref.iter().collect();
+                                let name = tuple_items[0].unpack_str().ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "First element of check tuple must be a string name"
+                                    )
+                                })?;
+                                (tuple_items[1], Some(name.to_string()))
+                            } else {
+                                (check_item, None)
+                            };
+
+                        Ok(DeferredCheckGen {
+                            check_func,
+                            custom_name,
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+            } else {
+                Vec::new()
+            };
+
+            deferred_cases.push(DeferredTestCaseGen {
+                case_name: case_name_str.to_string(),
                 params,
                 evaluated: evaluated_module,
-                check_results: case_check_results,
-                failed_checks: case_failed_count,
+                checks: deferred_checks,
             });
         }
 
-        // Build summary
-        let mut summary = SmallMap::new();
-        summary.insert(
-            "total_cases".to_string(),
-            eval.heap().alloc(cases.len() as i32).to_value(),
-        );
-        summary.insert(
-            "total_checks".to_string(),
-            eval.heap().alloc(total_checks).to_value(),
-        );
-        summary.insert(
-            "total_failed_checks".to_string(),
-            eval.heap().alloc(total_failed_checks).to_value(),
-        );
-
-        // Log and print results
         log::info!(
-            "TestBench '{}': {} cases, {} checks executed",
+            "TestBench '{}': {} cases registered with deferred checks",
             name,
-            cases.len(),
-            total_checks
+            deferred_cases.len()
         );
 
-        if total_failed_checks == 0 && total_checks > 0 {
-            let case_word = if cases.len() == 1 { "case" } else { "cases" };
-            let check_word = if total_checks == 1 { "check" } else { "checks" };
-            eprintln!(
-                "\x1b[1m\x1b[32m✓ {}\x1b[0m: {} {} passed across {} {}",
-                name,
-                total_checks,
-                check_word,
-                cases.len(),
-                case_word
-            );
-        }
-
-        // Create and return the TestBenchValue
+        // Create and return the TestBenchValue with deferred checks
         let testbench = TestBenchValueGen::<Value> {
             name,
             module_loader: loader.clone(),
-            cases,
-            summary,
+            deferred_cases,
+            source_path,
+            call_span,
         };
 
-        Ok(eval.heap().alloc(testbench))
+        let testbench_value = eval.heap().alloc(testbench);
+
+        // Add the TestBench to the module's children so it can be collected later
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_child(testbench_value);
+        }
+
+        Ok(testbench_value)
     }
+}
+
+/// Context for executing a deferred check
+pub struct CheckContext<'a> {
+    pub test_bench_name: &'a str,
+    pub case_name: &'a str,
+    pub source_path: &'a str,
+    pub call_span: Option<&'a starlark::codemap::ResolvedSpan>,
+}
+
+/// Execute a single deferred check and create diagnostic
+pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
+    eval: &mut Evaluator<'v, '_, '_>,
+    check: &DeferredCheckGen<V>,
+    module_value: Value<'v>,
+    inputs_dict: Value<'v>,
+    ctx: &CheckContext,
+) -> (bool, Vec<Diagnostic>) {
+    // Extract check name
+    let check_name = check.custom_name.clone().unwrap_or_else(|| {
+        check
+            .check_func
+            .to_value()
+            .to_string()
+            .rsplit('.')
+            .next()
+            .unwrap_or("check")
+            .to_string()
+    });
+
+    // Execute the check function
+    let result = eval.eval_function(
+        check.check_func.to_value(),
+        &[module_value, inputs_dict],
+        &[],
+    );
+    let passed = result.is_ok();
+
+    let diagnostic = Diagnostic {
+        path: ctx.source_path.to_string(),
+        span: ctx.call_span.cloned(),
+        severity: if passed {
+            EvalSeverity::Advice
+        } else {
+            EvalSeverity::Error
+        },
+        body: format!(
+            "TestBench '{}' case '{}' check '{check_name}' {}",
+            ctx.test_bench_name,
+            ctx.case_name,
+            if passed { "passed" } else { "failed" }
+        ),
+        call_stack: None,
+        child: result.err().map(|e| Box::new(Diagnostic::from(e))),
+        source_error: Some(Arc::new(
+            crate::lang::error::BenchTestResult {
+                test_bench_name: ctx.test_bench_name.to_string(),
+                case_name: Some(ctx.case_name.to_string()),
+                check_name,
+                file_path: ctx.source_path.to_string(),
+                passed,
+            }
+            .into(),
+        )),
+    };
+
+    (passed, vec![diagnostic])
 }

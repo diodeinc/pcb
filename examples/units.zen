@@ -1,0 +1,47 @@
+# Pure units
+PI = 3.14159265358979323846
+
+# Toleranced units
+Time = builtin.Time
+Current = builtin.Current
+Voltage = builtin.Voltage
+Capacitance = builtin.Capacitance
+Resistance = builtin.Resistance
+Inductance = builtin.Inductance
+Frequency = builtin.Frequency
+Temperature = builtin.Temperature
+Charge = builtin.Charge
+Power = builtin.Power
+Energy = builtin.Energy
+MagneticFlux = builtin.MagneticFlux
+Conductance = builtin.Conductance
+
+VoltageRange = builtin.physical_range("V")
+CurrentRange = builtin.physical_range("A")
+ResistanceRange = builtin.physical_range("Ohm")
+CapacitanceRange = builtin.physical_range("F")
+InductanceRange = builtin.physical_range("H")
+FrequencyRange = builtin.physical_range("Hz")
+TemperatureRange = builtin.physical_range("K")
+TimeRange = builtin.physical_range("s")
+PowerRange = builtin.physical_range("W")
+
+print(VoltageRange("1.1–3.6V"))
+print(VoltageRange("11–26 V (12 V nom.)"))
+print(VoltageRange("11V to 26V"))
+print(VoltageRange("11V to 26V (13V nom.)"))
+print(VoltageRange(min=11, nominal=16, max=26))
+print(VoltageRange(min=1.1, nominal=1.6, max=2.6))
+print(VoltageRange("15V 10%"))
+print(VoltageRange(Voltage(15)))
+print(VoltageRange("11V to 26V", nominal="16V"))
+print(VoltageRange(min="11V", nominal="16", max="26V"))
+
+print(serialize(VoltageRange("1.1–3.6V")))
+print(serialize(VoltageRange("1.1–3.6V (1.2 V nom.)")))
+
+voltage_range = VoltageRange("11–26 V (12 V nom.)")
+print(voltage_range.min)
+print(voltage_range.nominal)
+print(voltage_range.max)
+print(voltage_range.unit)

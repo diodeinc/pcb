@@ -33,8 +33,6 @@ Error: Expected more than 100 components (intentional failure)
 Stack trace (most recent call last):
     <TEMP_DIR>/failing_checks_testbench.zen:20:1 (TestBench 'FailingTest' case 'test_failures' check 'failing_check' failed)
     <TEMP_DIR>/failing_checks_testbench.zen:13:5 (Expected more than 100 components (intentional failure))
-      ├─ TestBench (called from <TEMP_DIR>/failing_checks_testbench.zen:20:1-34:2)
-      ├─ None
       ├─ failing_check
       ╰─ check (called from <TEMP_DIR>/failing_checks_testbench.zen:13:5-92)
 

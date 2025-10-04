@@ -27,11 +27,13 @@ pub mod attrs {
     pub const FOOTPRINT: &str = "footprint";
     pub const PREFIX: &str = "prefix";
     pub const MPN: &str = "mpn";
+    pub const MANUFACTURER: &str = "manufacturer";
     pub const TYPE: &str = "type";
     pub const SYMBOL_NAME: &str = "symbol_name";
     pub const SYMBOL_PATH: &str = "symbol_path";
     pub const SYMBOL_VALUE: &str = "__symbol_value";
     pub const PADS: &str = "pads";
+    pub const DNP: &str = "dnp";
 
     pub mod net {
         pub mod kind {
@@ -47,7 +49,7 @@ pub use diagnostics::{
     Diagnostic, DiagnosticError, Diagnostics, DiagnosticsPass, LoadError, WithDiagnostics,
 };
 pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
-pub use lang::eval::{EvalContext, EvalMode, EvalOutput};
+pub use lang::eval::{EvalContext, EvalOutput};
 pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;
 pub use passes::{AggregatePass, FilterHiddenPass, LspFilterPass, PromoteDeniedPass, SortPass};

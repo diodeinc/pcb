@@ -2,6 +2,7 @@ use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::module::find_moved_span;
 use crate::lang::physical::PhysicalValue;
 use crate::lang::symbol::SymbolValue;
+use crate::lang::test_bench::FrozenTestBenchValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
@@ -192,6 +193,15 @@ impl ModuleConverter {
             self.add_module_at(module_value, instance_ref)
         } else if let Some(component_value) = value.downcast_ref::<FrozenComponentValue>() {
             self.add_component_at(component_value, instance_ref)
+        } else if value.downcast_ref::<FrozenTestBenchValue>().is_some() {
+            // Skip TestBench values - they're not part of the schematic
+            Ok(())
+        } else if value
+            .downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
+            .is_some()
+        {
+            // Skip ElectricalCheck values - they're not part of the schematic
+            Ok(())
         } else {
             Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }
@@ -202,6 +212,12 @@ impl ModuleConverter {
             Ok(module_value.name().to_string())
         } else if let Some(component_value) = value.downcast_ref::<FrozenComponentValue>() {
             Ok(component_value.name().to_string())
+        } else if let Some(testbench) = value.downcast_ref::<FrozenTestBenchValue>() {
+            Ok(testbench.name().to_string())
+        } else if let Some(check) =
+            value.downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
+        {
+            Ok(check.name.clone())
         } else {
             Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }
@@ -243,6 +259,30 @@ impl ModuleConverter {
             } else {
                 inst.add_attribute(key.clone(), to_attribute_value(*val)?);
             }
+        }
+
+        // Consolidate DNP handling for modules: check legacy properties
+        // (modules don't have dnp field, they set it via properties)
+        let legacy_keys = ["do_not_populate", "Do_not_populate", "DNP", "dnp"];
+        let is_dnp = legacy_keys.iter().any(|&key| {
+            module
+                .properties()
+                .get(key)
+                .map(|val| {
+                    // Try to interpret the value as a boolean
+                    if let Some(s) = val.downcast_frozen_str() {
+                        let s_str = s.to_string();
+                        s_str.to_lowercase() == "true" || s_str == "1"
+                    } else {
+                        val.unpack_bool().unwrap_or_default()
+                    }
+                })
+                .unwrap_or(false)
+        });
+
+        // Only emit DNP attribute when it's true (false is the default)
+        if is_dnp {
+            inst.add_attribute(crate::attrs::DNP.to_string(), AttributeValue::Boolean(true));
         }
 
         // Build the module signature
@@ -379,6 +419,13 @@ impl ModuleConverter {
             comp_inst.add_attribute(crate::attrs::MPN, AttributeValue::String(mpn.to_owned()));
         }
 
+        if let Some(manufacturer) = component.manufacturer() {
+            comp_inst.add_attribute(
+                crate::attrs::MANUFACTURER,
+                AttributeValue::String(manufacturer.to_owned()),
+            );
+        }
+
         if let Some(ctype) = component.ctype() {
             comp_inst.add_attribute(crate::attrs::TYPE, AttributeValue::String(ctype.to_owned()));
         }
@@ -387,6 +434,36 @@ impl ModuleConverter {
         for (key, val) in component.properties().iter() {
             let attr_value = to_attribute_value(*val)?;
             comp_inst.add_attribute(key.clone(), attr_value);
+        }
+
+        // Consolidate DNP handling: check both new kwarg and legacy properties
+        // Priority: dnp kwarg > legacy properties (do_not_populate, DNP, etc.)
+        let is_dnp = if let Some(dnp_kwarg) = component.dnp() {
+            // DNP kwarg takes precedence
+            dnp_kwarg
+        } else {
+            // Fall back to checking legacy properties
+            let legacy_keys = ["do_not_populate", "Do_not_populate", "DNP", "dnp"];
+            legacy_keys.iter().any(|&key| {
+                component
+                    .properties()
+                    .get(key)
+                    .map(|val| {
+                        // Try to interpret the value as a boolean
+                        if let Some(s) = val.downcast_frozen_str() {
+                            let s_str = s.to_string();
+                            s_str.to_lowercase() == "true" || s_str == "1"
+                        } else {
+                            val.unpack_bool().unwrap_or_default()
+                        }
+                    })
+                    .unwrap_or(false)
+            })
+        };
+
+        // Only emit DNP attribute when it's true (false is the default)
+        if is_dnp {
+            comp_inst.add_attribute(crate::attrs::DNP.to_string(), AttributeValue::Boolean(true));
         }
 
         if let Some(model_val) = component.spice_model() {

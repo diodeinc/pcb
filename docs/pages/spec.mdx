@@ -416,6 +416,117 @@ Properties accessible via the TestBench value:
 - Module evaluation status
 - Check function results
 
+### PhysicalRange
+
+A `PhysicalRange` represents a bounded range of physical values with an optional nominal value, used for specifying operating ranges, tolerances, and electrical characteristics. Ranges have minimum and maximum bounds with consistent physical units.
+
+```python
+# PhysicalRange values are created by unit-specific range constructors
+# (See builtin.physical_range() in Built-in Functions)
+
+# String parsing with range separators
+voltage_range = VoltageRange("1.1–3.6V")              # 1.1–3.6 V
+supply_range = VoltageRange("11V to 26V")             # 11–26 V
+
+# With nominal value in parentheses
+input_range = VoltageRange("11–26 V (12 V nom.)")     # 11–26 V (12 V nom.)
+
+# Tolerance expansion
+nominal_voltage = VoltageRange("15V 10%")             # 13.5–16.5 V
+
+# From PhysicalValue
+single_point = VoltageRange(Voltage(15))              # 15–15 V
+
+# Keyword arguments
+operating_range = VoltageRange(min=11, nominal=16, max=26)  # 11–26 V (16 V nom.)
+
+# Mixed string/number keywords
+custom_range = VoltageRange(min="11V", nominal="16", max="26V")  # 11–26 V (16 V nom.)
+
+# Override nominal separately
+with_nominal = VoltageRange("11V to 26V", nominal="16V")  # 11–26 V (16 V nom.)
+```
+
+**Type**: `PhysicalRange`
+**Created by**: Unit-specific range constructors (e.g., `VoltageRange`, `CurrentRange`)
+
+Properties:
+- `min`: Minimum value (Decimal)
+- `max`: Maximum value (Decimal)
+- `nominal`: Optional nominal/typical value (Decimal or None)
+- `unit`: Physical unit dimensions
+
+**Display Format**:
+- With nominal: `11–26 V (12 V nom.)`
+- Without nominal: `11–26 V`
+
+#### PhysicalRangeType
+
+A `PhysicalRangeType` is a factory type that creates `PhysicalRange` instances for a specific physical unit. Each unit has its own range type (e.g., `VoltageRange` for volts, `CurrentRange` for amperes).
+
+```python
+# Range types are created by builtin.physical_range()
+VoltageRange = builtin.physical_range("V")
+CurrentRange = builtin.physical_range("A")
+
+# Range types are callable and return PhysicalRange instances
+input_voltage = VoltageRange("3.3V to 5V")
+load_current = CurrentRange("100mA to 500mA")
+```
+
+**Type**: `PhysicalRangeType`
+**Created by**: `builtin.physical_range(unit)` (see [Built-in Functions](#builtinphysical_rangeunit))
+
+**Standard Range Types** (available in `@stdlib/units.zen`):
+- `VoltageRange` - Voltage ranges (V)
+- `CurrentRange` - Current ranges (A)
+- `ResistanceRange` - Resistance ranges (Ω)
+- `CapacitanceRange` - Capacitance ranges (F)
+- `InductanceRange` - Inductance ranges (H)
+- `FrequencyRange` - Frequency ranges (Hz)
+- `TemperatureRange` - Temperature ranges (K)
+- `TimeRange` - Time ranges (s)
+- `PowerRange` - Power ranges (W)
+
+**Construction Flexibility**:
+
+Range constructors accept multiple input formats for maximum flexibility:
+
+1. **String parsing with separators**:
+   - En-dash: `"1.1–3.6V"`
+   - Word "to": `"11V to 26V"`
+   - Left side can omit unit: `"11–26V"`
+
+2. **Nominal value extraction**:
+   - Parenthesized suffix: `"11–26 V (12 V nom.)"`
+   - Can be combined with string ranges or keyword override
+
+3. **Tolerance expansion**:
+   - Percentage tolerance: `"15V 10%"` expands to `13.5–16.5 V`
+
+4. **PhysicalValue conversion**:
+   - Single value: `VoltageRange(Voltage(15))` creates point range `15–15 V`
+   - Toleranced value: `VoltageRange(Voltage(15, 0.1))` expands tolerance to range
+
+5. **Keyword arguments**:
+   - Explicit bounds: `min=11, max=26`
+   - With nominal: `min=11, nominal=16, max=26`
+   - Accepts numbers or strings: `min="11V"`, `max="26V"`
+
+6. **Mixed modes**:
+   - String range with keyword nominal: `VoltageRange("11V to 26V", nominal="16V")`
+
+**Type Safety**:
+- Units must be consistent across min, max, and nominal values
+- Range types are distinct: `VoltageRange` ≠ `CurrentRange`
+- Type checking enforces unit correctness at compile time
+
+**Use Cases**:
+- Component operating ranges: `input_voltage = VoltageRange("2.7V to 5.5V")`
+- Load specifications: `output_current = CurrentRange("0A to 3A")`
+- Environmental conditions: `operating_temp = TemperatureRange("-40C to 85C")`
+- Future: Electrical Rule Checking (ERC) - validate that supply ranges satisfy load requirements
+
 ## Built-in Functions
 
 ### moved(old_path, new_path)
@@ -453,7 +564,7 @@ moved("ModuleA.ComponentX", "ModuleB.ComponentX")
 moved("AN_OLD_FILTERED_VCC_VCC", "FILTERED_VCC_VCC")
 ```
 
-### io(name, type, default=None, optional=False)
+### io(name, type, checks=None, default=None, optional=False)
 
 Declares a net or interface input for a module.
 
@@ -467,14 +578,31 @@ power = io("power", PowerInterface, optional=True)
 
 # With explicit default
 data = io("data", Net, default=Net("DATA"))
+
+# With validation checks (single function)
+def check_voltage_within(within):
+    def check_fn(power_value):
+        voltage = power_value.voltage
+        check(voltage.min >= within.min and voltage.max <= within.max,
+              f"Voltage {voltage} not within {within}")
+    return check_fn
+
+vbat = io("VBAT", Power, check_voltage_within(VoltageRange("10–30 V")))
+
+# Or with multiple checks as a list
+vbat = io("VBAT", Power, [check_voltage_within(VoltageRange("10–30 V")), check_current()])
+
+# Or as a named argument
+vbat = io("VBAT", Power, checks=check_voltage_within(VoltageRange("10–30 V")))
 ```
 
 **Parameters:**
 
-- `name`: String identifier for the input
-- `type`: Expected type (`Net` or interface type)
-- `default`: Default value if not provided by parent
-- `optional`: If True, returns None when not provided (unless default is specified)
+- `name`: String identifier for the input (positional)
+- `type`: Expected type - `Net` or interface type (positional)
+- `checks`: Optional check function or list of check functions to run on the value at eval time (3rd positional or named)
+- `default`: Default value if not provided by parent (named)
+- `optional`: If True, returns None when not provided (unless default is specified) (named)
 
 ### config(name, type, default=None, convert=None, optional=False)
 
@@ -563,6 +691,127 @@ add_property("layout_group", "power_supply")
 add_property("critical", True)
 ```
 
+### builtin.physical_range(unit)
+
+**Built-in function** that creates unit-specific range constructor types for defining bounded physical value ranges.
+
+```python
+# Create range constructors for different units
+VoltageRange = builtin.physical_range("V")
+CurrentRange = builtin.physical_range("A")
+ResistanceRange = builtin.physical_range("Ohm")
+CapacitanceRange = builtin.physical_range("F")
+InductanceRange = builtin.physical_range("H")
+FrequencyRange = builtin.physical_range("Hz")
+TemperatureRange = builtin.physical_range("K")
+TimeRange = builtin.physical_range("s")
+PowerRange = builtin.physical_range("W")
+
+# Use the constructors to create ranges
+input_voltage = VoltageRange("2.7V to 5.5V")
+output_current = CurrentRange("0A to 3A")
+operating_temp = TemperatureRange("-40C to 85C")
+
+# All construction patterns are supported
+supply = VoltageRange("11–26 V (12 V nom.)")           # String with nominal
+tolerance = VoltageRange("15V 10%")                    # Tolerance expansion
+explicit = VoltageRange(min=11, nominal=16, max=26)    # Keyword arguments
+from_value = VoltageRange(Voltage(15))                 # From PhysicalValue
+mixed = VoltageRange("11V to 26V", nominal="16V")      # Mixed modes
+```
+
+**Parameters:**
+
+- `unit`: String identifier for the physical unit (e.g., `"V"`, `"A"`, `"Ohm"`, `"F"`, `"H"`, `"Hz"`, `"K"`, `"s"`, `"W"`)
+
+**Returns:** A `PhysicalRangeType` that can be called to create `PhysicalRange` instances
+
+**Standard Usage:**
+
+This builtin is typically accessed through `@stdlib/units.zen`, which provides pre-defined range constructors:
+
+```python
+load("@stdlib/units.zen", "VoltageRange", "CurrentRange", "ResistanceRange")
+
+# Use standard constructors from stdlib
+input_range = VoltageRange("3.3V to 5V")
+load_range = CurrentRange("100mA to 500mA")
+pullup_range = ResistanceRange("4.7kOhm to 10kOhm")
+```
+
+**Available in stdlib/units.zen:**
+- `VoltageRange` - Voltage ranges (V)
+- `CurrentRange` - Current ranges (A)
+- `ResistanceRange` - Resistance ranges (Ω)
+- `CapacitanceRange` - Capacitance ranges (F)
+- `InductanceRange` - Inductance ranges (H)
+- `FrequencyRange` - Frequency ranges (Hz)
+- `TemperatureRange` - Temperature ranges (K)
+- `TimeRange` - Time ranges (s)
+- `PowerRange` - Power ranges (W)
+
+**Construction Patterns:**
+
+The returned range constructor accepts flexible input formats:
+
+```python
+# String parsing with range separators
+VoltageRange("1.1–3.6V")           # En-dash separator
+VoltageRange("11V to 26V")         # Word "to" separator
+VoltageRange("11–26V")             # Left side can omit unit
+
+# Nominal value in parentheses
+VoltageRange("11–26 V (12 V nom.)")
+
+# Tolerance expansion
+VoltageRange("15V 10%")            # Expands to 13.5–16.5 V
+
+# From PhysicalValue
+VoltageRange(Voltage(15))          # Single point: 15–15 V
+VoltageRange(Voltage(15, 0.1))     # With tolerance: 13.5–16.5 V
+
+# Keyword arguments (all must be present)
+VoltageRange(min=11, max=26)
+VoltageRange(min=11, nominal=16, max=26)
+
+# Mixed string/number keywords
+VoltageRange(min="11V", nominal="16", max="26V")
+
+# Override nominal separately
+VoltageRange("11V to 26V", nominal="16V")
+```
+
+**Type Safety:**
+
+- Units must be consistent: `VoltageRange("5V to 3A")` → Error (mixing V and A)
+- Range types are distinct: Cannot pass a `VoltageRange` where `CurrentRange` is expected
+- Type checking enforces correctness at compile time
+
+**Use Cases:**
+
+Physical ranges are used to specify operating characteristics, constraints, and requirements:
+
+```python
+# Component specifications
+input_voltage = VoltageRange("2.7V to 5.5V")
+output_current = CurrentRange("0A to 3A (1.5A nom.)")
+operating_temp = TemperatureRange("-40C to 85C")
+
+# Load requirements
+supply_current = CurrentRange("10mA to 100mA")
+clock_frequency = FrequencyRange("1MHz to 100MHz")
+
+# Tolerance specifications
+capacitance = CapacitanceRange("100nF 10%")  # 90nF to 110nF
+resistance = ResistanceRange("10kOhm 5%")    # 9.5kΩ to 10.5kΩ
+
+# Future: Electrical Rule Checking (ERC)
+# Validate that supply ranges satisfy load requirements
+# check(supply_voltage_range.contains(load_voltage_range))
+```
+
+See [PhysicalRange](#physicalrange) in Core Types for detailed information about the returned range values.
+
 ### builtin.add_board_config(name, config, default=False)
 
 **Built-in function** for registering board configurations with the layout system.
@@ -573,6 +822,94 @@ add_property("critical", True)
 - `default`: If True, this becomes the default board config for the project
 
 This builtin is typically called through the stdlib `Board()` function rather than directly.
+
+### builtin.add_electrical_check(name, check_fn, inputs=None)
+
+**Built-in function** for registering electrical validation checks that run during `pcb build`.
+
+**Parameters:**
+- `name`: String identifier for the check (required)
+- `check_fn`: Function to execute for validation (required)
+- `inputs`: Optional dictionary of input parameters to pass to the check function
+
+Electrical checks use lazy evaluation - they are registered during module evaluation but execute after the design is fully evaluated. This allows checks to validate electrical properties, design rules, or other constraints across the entire design.
+
+The check function receives the module as its first argument, followed by any specified inputs as keyword arguments:
+
+```python
+def voltage_range_check(module, min_voltage, max_voltage):
+    """Check that supply voltage is within acceptable range"""
+    supply = module.supply_voltage
+    if supply < min_voltage or supply > max_voltage:
+        error("Supply voltage {} is outside range {}-{}".format(
+            supply, min_voltage, max_voltage
+        ))
+
+builtin.add_electrical_check(
+    name="supply_voltage_range",
+    check_fn=voltage_range_check,
+    inputs={
+        "min_voltage": 3.0,
+        "max_voltage": 5.5,
+    }
+)
+```
+
+**Check Function Signature:**
+```python
+def check_function(module, **kwargs):
+    # Validation logic
+    # Raise error() or fail assertion to indicate failure
+    pass
+```
+
+**Example - Basic Check:**
+```python
+def check_no_floating_nets(module):
+    """Ensure all nets are connected to at least 2 pins"""
+    for net in module.nets:
+        if len(net.pins) < 2:
+            error("Net '{}' is floating (only {} pin connected)".format(
+                net.name, len(net.pins)
+            ))
+
+builtin.add_electrical_check(
+    name="no_floating_nets",
+    check_fn=check_no_floating_nets
+)
+```
+
+**Example - Parameterized Check:**
+```python
+def check_power_capacity(module, max_current):
+    """Verify power supply can handle load current"""
+    total_load = sum([c.max_current for c in module.components])
+    if total_load > max_current:
+        error("Total load current {}A exceeds supply capacity {}A".format(
+            total_load, max_current
+        ))
+
+builtin.add_electrical_check(
+    name="power_capacity",
+    check_fn=check_power_capacity,
+    inputs={"max_current": 3.0}
+)
+```
+
+**Execution Model:**
+
+1. Checks are registered during module evaluation via `builtin.add_electrical_check()`
+2. Check functions and inputs are stored as frozen values
+3. During `pcb build`, after evaluation completes, all checks are collected from the module tree
+4. Each check executes with a fresh evaluator context
+5. Check failures generate error diagnostics that are reported through the standard diagnostic system
+6. Build fails if any electrical checks fail
+
+**Notes:**
+- Checks run only during `pcb build`, not during `pcb test` (use `TestBench` for test-specific validation)
+- Check failures generate error-level diagnostics
+- Checks can access the entire module structure, including components, nets, interfaces, and properties
+- Multiple checks with the same name are allowed (they execute independently)
 
 ## Board Configuration Types
 
@@ -790,10 +1127,9 @@ def check_function(module: Module):
 **TestBench Behavior:**
 
 - Evaluates the module with relaxed input requirements (missing required inputs are allowed)
-- Executes each check function in order
-- Reports failures as diagnostics with precise source location pointing to the failing `check()` call
-- Prints a success message if all checks pass
-- Returns a TestBench value containing results
+- Stores check functions for deferred execution (checks run later when using `pcb test` command)
+- Returns a TestBench value containing test cases and deferred checks
+- When executed by `pcb test`: runs each check function in order, reports failures as diagnostics with precise source location pointing to the failing `check()` call, and prints a success message if all checks pass
 
 **Example with Modern Indexing Syntax:**
 

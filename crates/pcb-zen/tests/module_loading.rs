@@ -296,7 +296,7 @@ fn module_load_remote_with_alias() {
 name = "test"
 
 [packages]
-test_package = "@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea"
+test_package = "@github/diodeinc/stdlib:v0.2.10"
 "#,
     );
 
@@ -304,15 +304,15 @@ test_package = "@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea"
         "top.zen",
         r#"
 # Load a type from a remote repository
-load("@github/hexdae/6d919d810f4a3a238688cfd59de8b7ea/Capacitor.star", "Package")
+load("@github/diodeinc/stdlib:v0.2.10/generics/Capacitor.zen", "Package")
 
 # Load a component from aliased package
-Capacitor = Module("@test_package/Capacitor.star")
+Capacitor = Module("@test_package/generics/Capacitor.zen")
 
 package = Package("0402")
 
 # Instantiate Capacitor
-Capacitor(name = "C1", package = package.value, value = 10e-6, P1 = Net("P1"), P2 = Net("P2"))
+Capacitor(name = "C1", package = package.value, value = "1uF", P1 = Net("P1"), P2 = Net("P2"))
 "#,
     );
 

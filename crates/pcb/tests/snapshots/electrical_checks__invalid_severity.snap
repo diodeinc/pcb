@@ -1,0 +1,26 @@
+---
+source: crates/pcb/tests/electrical_checks.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Invalid severity 'invalid'. Must be 'error', 'warning', or 'advice'
+   ╭─[ <TEMP_DIR>/board.zen:5:1 ]
+   │
+ 5 │ ╭─▶ builtin.add_electrical_check(
+   ┆ ┆   
+ 9 │ ├─▶ )
+   │ │       
+   │ ╰─────── Invalid severity 'invalid'. Must be 'error', 'warning', or 'advice'
+───╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/board.zen:5:1 (Invalid severity 'invalid'. Must be 'error', 'warning', or 'advice')
+      ╰─ add_electrical_check (called from <TEMP_DIR>/board.zen:5:1-9:2)
+
+✗ board.zen: Build failed
+Error: Build failed with errors

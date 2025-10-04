@@ -1,0 +1,31 @@
+---
+source: crates/pcb/tests/electrical_checks.rs
+expression: output
+---
+Command: pcb build board.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Recommended value should be at least 10
+    ╭─[ <TEMP_DIR>/board.zen:4:9 ]
+    │
+  4 │             error("Recommended value should be at least {}".format(min_value))
+    │             ─────────────────────────────────┬────────────────────────────────  
+    │                                              ╰────────────────────────────────── Recommended value should be at least 10
+    │ 
+  6 │ ╭─▶ builtin.add_electrical_check(
+    ┆ ┆   
+ 11 │ ├─▶ )
+    │ │       
+    │ ╰─────── Electrical check 'recommended' failed
+────╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/board.zen:6:1 (Electrical check 'recommended' failed)
+    <TEMP_DIR>/board.zen:4:9 (Recommended value should be at least 10)
+      ├─ check_recommended
+      ╰─ error (called from <TEMP_DIR>/board.zen:4:9-75)
+
+✓ board.zen (0 components)

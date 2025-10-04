@@ -68,6 +68,7 @@ impl From<ComponentError> for starlark::Error {
 pub struct ComponentValueGen<V> {
     name: String,
     mpn: Option<String>,
+    manufacturer: Option<String>,
     ctype: Option<String>,
     footprint: String,
     prefix: String,
@@ -76,6 +77,7 @@ pub struct ComponentValueGen<V> {
     source_path: String,
     symbol: V,
     spice_model: Option<V>,
+    dnp: Option<bool>,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -85,6 +87,9 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
 
         if let Some(mpn) = &self.mpn {
             debug.field("mpn", mpn);
+        }
+        if let Some(manufacturer) = &self.manufacturer {
+            debug.field("manufacturer", manufacturer);
         }
         if let Some(ctype) = &self.ctype {
             debug.field("type", ctype);
@@ -248,6 +253,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         self.mpn.as_deref()
     }
 
+    pub fn manufacturer(&self) -> Option<&str> {
+        self.manufacturer.as_deref()
+    }
+
     pub fn prefix(&self) -> &str {
         &self.prefix
     }
@@ -257,6 +266,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
     /// appropriate symbol when the MPN is not available.
     pub fn ctype(&self) -> Option<&str> {
         self.ctype.as_deref()
+    }
+
+    pub fn dnp(&self) -> Option<bool> {
+        self.dnp
     }
 
     pub fn footprint(&self) -> &str {
@@ -321,9 +334,11 @@ where
                 ),
                 ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
+                ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
                 ("type", ParametersSpecParam::<Value<'_>>::Optional),
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
+                ("dnp", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -371,9 +386,11 @@ where
             // Optional fields
             let symbol_val: Option<Value> = param_parser.next_opt()?;
             let mpn: Option<Value> = param_parser.next_opt()?;
+            let manufacturer: Option<Value> = param_parser.next_opt()?;
             let ctype: Option<Value> = param_parser.next_opt()?;
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
+            let dnp_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
@@ -414,6 +431,7 @@ where
                             pad_to_signal, // Use pin mappings from pin_defs
                             source_path: symbol_value.source_path.clone(),
                             raw_sexp: symbol_value.raw_sexp.clone(),
+                            properties: symbol_value.properties.clone(),
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
@@ -422,6 +440,7 @@ where
                             pad_to_signal,
                             source_path: None,
                             raw_sexp: None,
+                            properties: SmallMap::new(),
                         }
                     }
                 } else {
@@ -431,6 +450,7 @@ where
                         pad_to_signal,
                         source_path: None,
                         raw_sexp: None,
+                        properties: SmallMap::new(),
                     }
                 }
             } else if let Some(symbol) = &symbol_val {
@@ -547,9 +567,20 @@ where
                 }
             }
 
+            // If manufacturer is not explicitly provided, try to get it from the symbol's properties
+            let final_manufacturer = manufacturer
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Manufacturer_Name")
+                        .map(|s| s.to_owned())
+                });
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                manufacturer: final_manufacturer,
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
                 prefix,
@@ -558,6 +589,7 @@ where
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
                 spice_model: spice_model_val,
+                dnp: dnp_val.and_then(|v| v.unpack_bool()),
             });
 
             Ok(component)
@@ -594,283 +626,6 @@ fn try_add_physical_property<'a, 'b>(
 impl std::fmt::Display for ComponentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<Component>")
-    }
-}
-
-#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct ComponentFactoryValue {
-    mpn: Option<String>,
-    ctype: Option<String>,
-    footprint: String,
-    prefix: String,
-    symbol: SymbolValue,
-    default_properties: SmallMap<String, String>,
-}
-
-starlark_simple_value!(ComponentFactoryValue);
-
-impl ComponentFactoryValue {
-    /// Get the MPN (Manufacturer Part Number) if available
-    pub fn mpn(&self) -> Option<&str> {
-        self.mpn.as_deref()
-    }
-
-    /// Get the component type/manufacturer if available
-    pub fn ctype(&self) -> Option<&str> {
-        self.ctype.as_deref()
-    }
-
-    /// Get the footprint
-    pub fn footprint(&self) -> &str {
-        &self.footprint
-    }
-
-    /// Get the reference designator prefix
-    pub fn prefix(&self) -> &str {
-        &self.prefix
-    }
-
-    /// Get the symbol
-    pub fn symbol(&self) -> &SymbolValue {
-        &self.symbol
-    }
-
-    /// Get the default properties
-    pub fn default_properties(&self) -> &SmallMap<String, String> {
-        &self.default_properties
-    }
-}
-
-impl std::fmt::Display for ComponentFactoryValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut ds = f.debug_struct("ComponentFactory");
-
-        if let Some(mpn) = &self.mpn {
-            ds.field("mpn", mpn);
-        }
-        if let Some(ctype) = &self.ctype {
-            ds.field("type", ctype);
-        }
-
-        ds.field("footprint", &self.footprint)
-            .field("prefix", &self.prefix)
-            .field("symbol", &self.symbol);
-
-        if !self.default_properties.is_empty() {
-            ds.field("default_properties", &self.default_properties);
-        }
-
-        ds.finish()
-    }
-}
-
-#[starlark_value(type = "Component")]
-impl<'v> StarlarkValue<'v> for ComponentFactoryValue
-where
-    Self: ProvidesStaticType<'v>,
-{
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let param_spec = ParametersSpec::new_named_only(
-            "<Component>",
-            [
-                ("name", ParametersSpecParam::<Value<'_>>::Required),
-                ("pins", ParametersSpecParam::<Value<'_>>::Required),
-                ("footprint", ParametersSpecParam::<Value<'_>>::Optional),
-                ("prefix", ParametersSpecParam::<Value<'_>>::Optional),
-                ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
-                ("type", ParametersSpecParam::<Value<'_>>::Optional),
-                ("properties", ParametersSpecParam::<Value<'_>>::Optional),
-                ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
-            ],
-        );
-
-        let component_val = param_spec.parser(args, eval, |param_parser, eval_ctx| {
-            let name_val: Value = param_parser.next()?;
-            let name = name_val
-                .unpack_str()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
-                .to_owned();
-
-            let pins_dict_val: Value = param_parser.next()?;
-            let dict_ref = DictRef::from_value(pins_dict_val).ok_or_else(|| {
-                starlark::Error::new_other(anyhow!(
-                    "`pins` must be a dict mapping pin names to nets"
-                ))
-            })?;
-
-            // Build connections map and validate pin names
-            let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
-            for (k_val, v_val) in dict_ref.iter() {
-                let pin_name = k_val
-                    .unpack_str()
-                    .ok_or_else(|| {
-                        starlark::Error::new_other(anyhow!("pin names must be strings"))
-                    })?
-                    .to_owned();
-
-                if !self.symbol.signal_names().any(|n| n == pin_name) {
-                    return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Unknown pin name '{}' (expected one of: {})",
-                        pin_name,
-                        self.symbol.signal_names().collect::<Vec<_>>().join(", ")
-                    ))));
-                }
-
-                if v_val.get_type() != "Net" {
-                    return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Pin '{}' must be connected to a Net, got {}",
-                        pin_name,
-                        v_val.get_type()
-                    ))));
-                }
-
-                connections.insert(pin_name, v_val);
-            }
-
-            // Detect any pins missing from the provided dict.
-            let mut missing_pins: Vec<&str> = self
-                .symbol
-                .signal_names()
-                .filter(|n| !connections.contains_key(*n))
-                .collect();
-
-            missing_pins.sort();
-            if !missing_pins.is_empty() {
-                return Err(starlark::Error::new_other(anyhow!(format!(
-                    "Unconnected pin(s): {}",
-                    missing_pins.join(", ")
-                ))));
-            }
-
-            let footprint_val: Option<Value> = param_parser.next_opt()?;
-            let mut final_footprint = if let Some(fp_val) = footprint_val {
-                let s = fp_val.unpack_str().ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!("`footprint` must be a string"))
-                })?;
-                s.to_owned()
-            } else {
-                self.footprint.clone()
-            };
-
-            // If the footprint looks like a KiCad module file, make the path absolute
-            if final_footprint.ends_with(".kicad_mod") {
-                let candidate = std::path::PathBuf::from(&final_footprint);
-                if !candidate.is_absolute() {
-                    let current_path = eval_ctx.source_path().unwrap_or_default();
-                    if let Some(current_dir) = std::path::Path::new(&current_path).parent() {
-                        final_footprint =
-                            current_dir.join(candidate).to_string_lossy().into_owned();
-                    }
-                }
-            }
-
-            let prefix_val: Option<Value> = param_parser.next_opt()?;
-            let final_prefix = if let Some(p_val) = prefix_val {
-                p_val
-                    .unpack_str()
-                    .ok_or_else(|| {
-                        starlark::Error::new_other(anyhow!("`prefix` must be a string"))
-                    })?
-                    .to_owned()
-            } else {
-                self.prefix.clone()
-            };
-
-            let mpn_val: Option<Value> = param_parser.next_opt()?;
-            let final_mpn = if let Some(m_val) = mpn_val {
-                Some(
-                    m_val
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!("`mpn` must be a string"))
-                        })?
-                        .to_owned(),
-                )
-            } else {
-                self.mpn.clone()
-            };
-
-            let ctype_val: Option<Value> = param_parser.next_opt()?;
-            let final_ctype = if let Some(c_val) = ctype_val {
-                Some(
-                    c_val
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!("`type` must be a string"))
-                        })?
-                        .to_owned(),
-                )
-            } else {
-                self.ctype.clone()
-            };
-
-            let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
-            let spice_model_val: Option<Value> = param_parser.next_opt()?;
-            let mut properties_map: SmallMap<String, Value<'v>> = SmallMap::new();
-
-            // Start with default_properties from factory.
-            for (k, v) in self.default_properties.iter() {
-                properties_map.insert(k.clone(), eval_ctx.heap().alloc_str(v).to_value());
-            }
-
-            if !properties_val.is_none() {
-                if let Some(dict_ref) = DictRef::from_value(properties_val) {
-                    for (k_val, v_val) in dict_ref.iter() {
-                        let key_str = k_val
-                            .unpack_str()
-                            .map(|s| s.to_owned())
-                            .unwrap_or_else(|| k_val.to_string());
-                        properties_map.insert(key_str, v_val);
-                    }
-                } else {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "'properties' must be a dict"
-                    )));
-                }
-            }
-
-            // Validate spice_model type if provided
-            if let Some(ref sm) = spice_model_val {
-                if sm.get_type() != "SpiceModel" {
-                    return Err(starlark::Error::new_other(anyhow!(format!(
-                        "`spice_model` must be a SpiceModel, got {}",
-                        sm.get_type()
-                    ))));
-                }
-            }
-
-            let component = eval_ctx.heap().alloc_complex(ComponentValue {
-                name,
-                mpn: final_mpn,
-                ctype: final_ctype,
-                footprint: final_footprint,
-                prefix: final_prefix,
-                connections,
-                properties: properties_map,
-                source_path: eval_ctx.source_path().unwrap_or_default(),
-                symbol: eval_ctx.heap().alloc_complex(self.symbol.clone()),
-                spice_model: spice_model_val,
-            });
-
-            Ok(component)
-        })?;
-
-        // Add to current module context if available
-        if let Some(mut module) = eval.module_value_mut() {
-            module.add_child(component_val);
-        }
-
-        Ok(component_val)
-    }
-
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<ComponentFactoryValue as StarlarkValue>::get_type_starlark_repr())
     }
 }
 

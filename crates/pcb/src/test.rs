@@ -74,16 +74,37 @@ pub fn test(
     debug!("Testing Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Testing")).start();
 
-    // Evaluate the design in test mode
-    let (_output, mut diagnostics) = pcb_zen::run(
+    // Evaluate the design (use eval() not run() to get EvalOutput and collect TestBenches)
+    let eval_result = pcb_zen::eval(
         zen_path,
         pcb_zen::EvalConfig {
             offline,
-            mode: pcb_zen::EvalMode::Test,
             ..Default::default()
         },
-    )
-    .unpack();
+    );
+
+    let mut diagnostics = eval_result.diagnostics;
+
+    // Execute deferred TestBench checks if evaluation succeeded
+    if let Some(eval_output) = eval_result.output {
+        let root_module = &eval_output.sch_module;
+
+        // Collect all TestBenches from the module tree
+        let testbenches = root_module.collect_testbenches();
+
+        if !testbenches.is_empty() {
+            debug!(
+                "Found {} TestBench(es), executing deferred checks",
+                testbenches.len()
+            );
+
+            // Execute checks for each TestBench
+            for testbench in testbenches {
+                let check_diagnostics = execute_testbench_checks(testbench);
+                diagnostics.diagnostics.extend(check_diagnostics);
+            }
+        }
+    }
 
     // Finish spinner before printing diagnostics
     spinner.finish();
@@ -103,6 +124,86 @@ pub fn test(
     let had_errors = diagnostics.has_errors();
 
     (test_results, had_errors)
+}
+
+/// Execute all deferred checks for a TestBench
+fn execute_testbench_checks(
+    testbench: &pcb_zen_core::lang::test_bench::FrozenTestBenchValue,
+) -> Vec<pcb_zen_core::Diagnostic> {
+    use pcb_zen_core::lang::test_bench::execute_deferred_check;
+    use starlark::environment::Module;
+    use starlark::eval::Evaluator;
+    use starlark::values::{dict::AllocDict, Heap, ValueLike};
+
+    let mut all_diagnostics = Vec::new();
+    let mut total_checks = 0;
+    let mut passed_checks = 0;
+
+    // Create a new heap and evaluator for running the checks
+    let heap = Heap::new();
+    let module = Module::new();
+    let mut eval = Evaluator::new(&module);
+
+    for deferred_case in testbench.deferred_cases() {
+        if let Some(frozen_module) = &deferred_case.evaluated {
+            // FrozenModuleValue is ModuleValueGen<FrozenValue>, which is a complex starlark value
+            // We need to get it as a heap-allocated value to use in function calls
+            // Since it's already frozen, we can reference it directly through its identity
+            let module_value = heap.alloc_simple(frozen_module.clone());
+
+            // Reconstruct inputs dict from frozen params
+            let inputs_dict = heap
+                .alloc(AllocDict(
+                    deferred_case
+                        .params
+                        .iter()
+                        .map(|(k, v)| (heap.alloc_str(k).to_value(), v.to_value()))
+                        .collect::<Vec<_>>(),
+                ))
+                .to_value();
+
+            // Execute each check
+            let ctx = pcb_zen_core::lang::test_bench::CheckContext {
+                test_bench_name: testbench.name(),
+                case_name: &deferred_case.case_name,
+                source_path: testbench.source_path(),
+                call_span: testbench.call_span(),
+            };
+
+            for check in &deferred_case.checks {
+                total_checks += 1;
+                let (passed, mut diagnostics) =
+                    execute_deferred_check(&mut eval, check, module_value, inputs_dict, &ctx);
+
+                if passed {
+                    passed_checks += 1;
+                }
+
+                all_diagnostics.append(&mut diagnostics);
+            }
+        }
+    }
+
+    // Print summary for successful test benches
+    if total_checks > 0 && passed_checks == total_checks {
+        let case_word = if testbench.case_count() == 1 {
+            "case"
+        } else {
+            "cases"
+        };
+        let check_word = if total_checks == 1 { "check" } else { "checks" };
+        eprintln!(
+            "{} {}: {} {} passed across {} {}",
+            pcb_ui::icons::success().with_style(pcb_ui::Style::Green),
+            testbench.name(),
+            total_checks,
+            check_word,
+            testbench.case_count(),
+            case_word
+        );
+    }
+
+    all_diagnostics
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {

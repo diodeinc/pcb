@@ -34,15 +34,6 @@ use crate::lang::{
 };
 use crate::{Diagnostic, WithDiagnostics};
 
-/// Evaluation mode determines which features are active during evaluation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvalMode {
-    /// Build mode: ignores testbench() calls, focuses on artifact generation
-    Build,
-    /// Test mode: evaluates testbench() calls, skips artifact generation
-    Test,
-}
-
 #[cfg(feature = "native")]
 fn default_file_provider() -> Arc<dyn crate::FileProvider> {
     Arc::new(crate::DefaultFileProvider::new()) as Arc<dyn crate::FileProvider>
@@ -304,9 +295,6 @@ pub struct EvalContext {
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
-
-    /// Evaluation mode determining which features are active
-    pub(crate) eval_mode: EvalMode,
 }
 
 impl Default for EvalContext {
@@ -344,7 +332,6 @@ impl EvalContext {
             file_provider: None,
             load_resolver: None,
             current_load_index: RefCell::new(0),
-            eval_mode: EvalMode::Build,
         }
     }
 
@@ -379,12 +366,6 @@ impl EvalContext {
         self
     }
 
-    /// Set the evaluation mode.
-    pub fn set_eval_mode(mut self, mode: EvalMode) -> Self {
-        self.eval_mode = mode;
-        self
-    }
-
     /// Create a new Context that shares caches with this one
     pub fn child_context(&self) -> Self {
         Self {
@@ -402,7 +383,6 @@ impl EvalContext {
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
             current_load_index: RefCell::new(0),
-            eval_mode: self.eval_mode,
         }
     }
 

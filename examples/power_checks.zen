@@ -1,0 +1,49 @@
+VoltageRange = builtin.physical_range("V")
+
+Severity = enum("error", "warning", "advice")
+
+
+def ElectricalCheck(check_fn: typing.Callable, **kwargs):
+    check_fn(**kwargs)
+
+
+Power = interface(
+    NET=using(Net("VCC", symbol=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC"))),
+    voltage=field(VoltageRange | None, None),
+)
+
+
+def check_voltage_within(
+    within: str | VoltageRange, name: str = "voltage_check", severity: Severity = Severity("error")
+) -> typing.Callable:
+    def ensure_voltage_within(_module, net_name: str, voltage: VoltageRange, within: str | VoltageRange):
+        within = VoltageRange(within)
+        # drop nominal in within:
+        within = VoltageRange(min=within.min, max=within.max)
+        # ensure voltage is within within
+        min_valid = voltage.min >= within.min
+        max_valid = voltage.max <= within.max
+        err_msg = "Voltage range " + str(voltage) + " of " + net_name + " is not within " + str(within)
+        check(min_valid and max_valid, err_msg)
+    def check_gen(power: Power, severity: Severity = severity, name: str = name):
+        check_name = power.NET.name + "_" + name
+        if not power.voltage:
+            return
+        builtin.add_electrical_check(
+            name=check_name,
+            check_fn=ensure_voltage_within,
+            inputs={"voltage": power.voltage, "within": within, "net_name": power.NET.name},
+            severity=severity.value,
+        )
+    return check_gen
+
+# Option 1: Use stdlib ElectricalCheck
+vbat = Power("VBAT", voltage=VoltageRange("11–26 V (12 V nom.)"))
+ElectricalCheck(
+    severity=Severity("warning"),
+    check_fn=check_voltage_within(VoltageRange("20–30 V")),
+    power=vbat,
+)
+
+# Option 2: Use helper in io()
+vbat = io("VBAT", Power, check_voltage_within("20–30 V"))

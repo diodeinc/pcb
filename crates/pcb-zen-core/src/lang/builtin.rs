@@ -4,10 +4,10 @@ use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
-    environment::GlobalsBuilder,
-    eval::{Arguments, Evaluator},
+    environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
+    eval::Evaluator,
     starlark_module, starlark_simple_value,
-    values::{starlark_value, Freeze, Heap, StarlarkValue, Value},
+    values::{none::NoneType, starlark_value, Freeze, StarlarkValue, Value},
     Error,
 };
 
@@ -24,126 +24,86 @@ impl fmt::Display for Builtin {
 
 starlark_simple_value!(Builtin);
 
-#[starlark_value(type = "Builtin")]
+#[starlark_value(type = "builtin")]
 impl<'v> StarlarkValue<'v> for Builtin {
-    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
-        match attribute {
-            "Voltage" => Some(heap.alloc_simple(VoltageType)),
-            "Current" => Some(heap.alloc_simple(CurrentType)),
-            "Resistance" => Some(heap.alloc_simple(ResistanceType)),
-            "Time" => Some(heap.alloc_simple(TimeType)),
-            "Frequency" => Some(heap.alloc_simple(FrequencyType)),
-            "Conductance" => Some(heap.alloc_simple(ConductanceType)),
-            "Inductance" => Some(heap.alloc_simple(InductanceType)),
-            "Capacitance" => Some(heap.alloc_simple(CapacitanceType)),
-            "Temperature" => Some(heap.alloc_simple(TemperatureType)),
-            "Charge" => Some(heap.alloc_simple(ChargeType)),
-            "Power" => Some(heap.alloc_simple(PowerType)),
-            "Energy" => Some(heap.alloc_simple(EnergyType)),
-            "MagneticFlux" => Some(heap.alloc_simple(MagneticFluxType)),
-            "PhysicalValue" => Some(heap.alloc_simple(PhysicalValueType)),
-            "add_board_config" => Some(heap.alloc_simple(AddBoardConfig)),
-            _ => None,
-        }
-    }
-
-    fn dir_attr(&self) -> Vec<String> {
-        vec![
-            "Voltage".to_string(),
-            "Current".to_string(),
-            "Resistance".to_string(),
-            "Time".to_string(),
-            "Frequency".to_string(),
-            "Conductance".to_string(),
-            "Inductance".to_string(),
-            "Capacitance".to_string(),
-            "Temperature".to_string(),
-            "Charge".to_string(),
-            "Power".to_string(),
-            "Energy".to_string(),
-            "MagneticFlux".to_string(),
-            "PhysicalValue".to_string(),
-            "add_board_config".to_string(),
-        ]
-    }
-
-    fn has_attr(&self, attribute: &str, _heap: &'v starlark::values::Heap) -> bool {
-        matches!(
-            attribute,
-            "Voltage"
-                | "Current"
-                | "Resistance"
-                | "Time"
-                | "Frequency"
-                | "Conductance"
-                | "Inductance"
-                | "Capacitance"
-                | "Temperature"
-                | "Charge"
-                | "Power"
-                | "Energy"
-                | "MagneticFlux"
-                | "PhysicalValue"
-                | "add_board_config"
-        )
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(builtin_methods)
     }
 }
 
-#[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
-pub struct AddBoardConfig;
-
-impl fmt::Display for AddBoardConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "add_board_config")
-    }
+#[starlark_module]
+pub fn builtin_globals(builder: &mut GlobalsBuilder) {
+    const builtin: Builtin = Builtin;
 }
 
-starlark_simple_value!(AddBoardConfig);
+#[starlark_module]
+fn builtin_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn Voltage(this: &Builtin) -> starlark::Result<VoltageType> {
+        Ok(VoltageType)
+    }
+    #[starlark(attribute)]
+    fn Current(this: &Builtin) -> starlark::Result<CurrentType> {
+        Ok(CurrentType)
+    }
+    #[starlark(attribute)]
+    fn Resistance(this: &Builtin) -> starlark::Result<ResistanceType> {
+        Ok(ResistanceType)
+    }
+    #[starlark(attribute)]
+    fn Time(this: &Builtin) -> starlark::Result<TimeType> {
+        Ok(TimeType)
+    }
+    #[starlark(attribute)]
+    fn Frequency(this: &Builtin) -> starlark::Result<FrequencyType> {
+        Ok(FrequencyType)
+    }
+    #[starlark(attribute)]
+    fn Conductance(this: &Builtin) -> starlark::Result<ConductanceType> {
+        Ok(ConductanceType)
+    }
+    #[starlark(attribute)]
+    fn Inductance(this: &Builtin) -> starlark::Result<InductanceType> {
+        Ok(InductanceType)
+    }
+    #[starlark(attribute)]
+    fn Capacitance(this: &Builtin) -> starlark::Result<CapacitanceType> {
+        Ok(CapacitanceType)
+    }
+    #[starlark(attribute)]
+    fn Temperature(this: &Builtin) -> starlark::Result<TemperatureType> {
+        Ok(TemperatureType)
+    }
+    #[starlark(attribute)]
+    fn Charge(this: &Builtin) -> starlark::Result<ChargeType> {
+        Ok(ChargeType)
+    }
+    #[starlark(attribute)]
+    fn Power(this: &Builtin) -> starlark::Result<PowerType> {
+        Ok(PowerType)
+    }
+    #[starlark(attribute)]
+    fn Energy(this: &Builtin) -> starlark::Result<EnergyType> {
+        Ok(EnergyType)
+    }
+    #[starlark(attribute)]
+    fn MagneticFlux(this: &Builtin) -> starlark::Result<MagneticFluxType> {
+        Ok(MagneticFluxType)
+    }
+    #[starlark(attribute)]
+    fn PhysicalValue(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType)
+    }
 
-#[starlark_value(type = "builtin_function_or_method")]
-impl<'v> StarlarkValue<'v> for AddBoardConfig {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
+    fn add_board_config<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        name: String,
+        default: bool,
+        config: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
+    ) -> starlark::Result<NoneType> {
         let heap = eval.heap();
-
-        // Extract arguments from named parameters
-        let args_map = args.names_map()?;
-        let name_val = args_map
-            .get(&heap.alloc_str("name"))
-            .copied()
-            .ok_or_else(|| {
-                Error::new_other(anyhow::anyhow!(
-                    "add_board_config() requires 'name' argument"
-                ))
-            })?;
-        let default_val = args_map
-            .get(&heap.alloc_str("default"))
-            .copied()
-            .ok_or_else(|| {
-                Error::new_other(anyhow::anyhow!(
-                    "add_board_config() requires 'default' argument"
-                ))
-            })?;
-        let config_val = args_map
-            .get(&heap.alloc_str("config"))
-            .copied()
-            .ok_or_else(|| {
-                Error::new_other(anyhow::anyhow!(
-                    "add_board_config() requires 'config' argument"
-                ))
-            })?;
-
-        let name = name_val
-            .unpack_str()
-            .ok_or_else(|| Error::new_other(anyhow::anyhow!("name must be a string")))?
-            .to_string();
-        let default = default_val
-            .unpack_bool()
-            .ok_or_else(|| Error::new_other(anyhow::anyhow!("default must be a boolean")))?;
 
         // Check if board config already exists
         let config_key = format!("board_config.{}", name);
@@ -175,7 +135,7 @@ impl<'v> StarlarkValue<'v> for AddBoardConfig {
         }
 
         // Convert value to pretty-printed JSON and store config directly
-        let config_json = config_val.to_json().map_err(|e| {
+        let config_json = config.to_json().map_err(|e| {
             Error::new_other(anyhow::anyhow!("Failed to convert config to JSON: {}", e))
         })?;
 
@@ -190,12 +150,75 @@ impl<'v> StarlarkValue<'v> for AddBoardConfig {
             .map_err(|e| Error::new_other(anyhow::anyhow!("Failed to pretty-print JSON: {}", e)))?;
 
         eval.add_property(&config_key, heap.alloc(&pretty_config_json));
-
-        Ok(Value::new_none())
+        Ok(NoneType)
     }
-}
 
-#[starlark_module]
-pub fn builtin_globals(builder: &mut GlobalsBuilder) {
-    const builtin: Builtin = Builtin;
+    fn physical_range(
+        #[allow(unused_variables)] this: &Builtin,
+        unit: String,
+    ) -> starlark::Result<PhysicalRangeType> {
+        let unit: pcb_sch::PhysicalUnit = unit
+            .parse()
+            .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
+        Ok(PhysicalRangeType::new(unit.into()))
+    }
+
+    fn add_electrical_check<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = named)] name: String,
+        #[starlark(require = named)] check_fn: Value<'v>,
+        #[starlark(require = named)] inputs: Option<Value<'v>>,
+        #[starlark(require = named)] severity: Option<String>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        use crate::lang::electrical_check::ElectricalCheckGen;
+        use starlark::values::dict::DictRef;
+
+        let severity = severity.unwrap_or_else(|| "error".to_string());
+        if !["error", "warning", "advice"].contains(&severity.as_str()) {
+            return Err(Error::new_other(anyhow::anyhow!(
+                "Invalid severity '{}'. Must be 'error', 'warning', or 'advice'",
+                severity
+            )));
+        }
+
+        let inputs_map = if let Some(inputs_value) = inputs {
+            let inputs_dict = DictRef::from_value(inputs_value).ok_or_else(|| {
+                Error::new_other(anyhow::anyhow!("'inputs' parameter must be a dictionary"))
+            })?;
+
+            let mut map = starlark::collections::SmallMap::new();
+            for (key, value) in inputs_dict.iter() {
+                let key_str = key.unpack_str().ok_or_else(|| {
+                    Error::new_other(anyhow::anyhow!("input keys must be strings, got: {}", key))
+                })?;
+                map.insert(key_str.to_string(), value);
+            }
+            map
+        } else {
+            starlark::collections::SmallMap::new()
+        };
+
+        let call_site = eval.call_stack_top_location();
+        let source_path = call_site
+            .as_ref()
+            .map(|cs| cs.filename().to_string())
+            .unwrap_or_default();
+        let call_span = call_site.map(|cs| cs.resolve_span());
+
+        let check = ElectricalCheckGen::<Value> {
+            name,
+            inputs: inputs_map,
+            check_func: check_fn,
+            severity,
+            source_path,
+            call_span,
+        };
+
+        if let Some(ctx) = eval.context_value() {
+            ctx.add_child(eval.heap().alloc(check));
+        }
+
+        Ok(NoneType)
+    }
 }

@@ -20,13 +20,12 @@ use pcb_zen_core::{
 };
 
 pub use pcb_zen_core::file_extensions;
-pub use pcb_zen_core::{Diagnostic, Diagnostics, EvalMode, WithDiagnostics};
+pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use starlark::errors::EvalSeverity;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EvalConfig {
     pub offline: bool,
-    pub mode: EvalMode,
     pub use_vendor: bool,
 }
 
@@ -34,7 +33,6 @@ impl Default for EvalConfig {
     fn default() -> Self {
         Self {
             offline: false,
-            mode: EvalMode::Build,
             use_vendor: true,
         }
     }
@@ -75,7 +73,6 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
         .set_source_path(abs_path)
         .set_module_name("<root>".to_string())
         .set_inputs(inputs)
-        .set_eval_mode(cfg.mode)
         .eval()
 }
 

@@ -392,7 +392,7 @@ where
         // Extract suppress_errors named parameter
         let args_map = args.names_map()?;
         let suppress_errors = args_map
-            .get(&heap.alloc_str("suppress_errors"))
+            .get("suppress_errors")
             .and_then(|v| v.unpack_bool())
             .unwrap_or(false);
 

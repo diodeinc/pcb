@@ -70,6 +70,8 @@ NetClass = record(
     microvia_drill=field(float | None, None),  # Microvia drill/hole in mm
     diff_pair_width=field(float | None, None),  # Differential pair width in mm
     diff_pair_gap=field(float | None, None),  # Differential pair gap in mm
+    diff_pair_via_gap=field(float | None, None),  # Differential pair via gap in mm
+    priority=field(int | None, None),  # Priority for netclass resolution (higher = higher priority)
     color=field(str | None, None),  # PCB color (hex like "#FF0000" or CSS name)
 )
 
@@ -104,12 +106,12 @@ DielectricLayer = record(
 
 # Board stackup configuration
 Stackup = record(
-    materials=field(list | None, None),  # List of Material objects
+    materials=field(list[Material] | None, None),  # List of Material objects
     silk_screen_color=field(str | None, None),  # Hex color like "#44805BFF"
     solder_mask_color=field(str | None, None),  # Hex color like "#191919E6"
     thickness=field(float | None, None),  # Total thickness in mm
     symmetric=field(bool | None, None),  # Assert symmetric stackup (default: True)
-    layers=field(list | None, None),  # Ordered list of stackup layers
+    layers=field(list[CopperLayer | DielectricLayer] | None, None),  # Ordered list of stackup layers
     copper_finish=field(str | None, None),  # Surface finish: "ENIG", "HAL SnPb", "HAL lead-free"
 )
 
@@ -117,6 +119,7 @@ Stackup = record(
 BoardConfig = record(
     design_rules=field(DesignRules | None, None),
     stackup=field(Stackup | None, None),  # Board stackup configuration
+    num_user_layers=field(int, 4),  # Number of User.N layers (User.1, User.2, etc.)
 )
 
 

@@ -287,10 +287,16 @@ pub struct Stackup {
     pub copper_finish: Option<CopperFinish>,
 }
 
+fn default_num_user_layers() -> usize {
+    4
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardConfig {
     pub design_rules: Option<JsonValue>,
     pub stackup: Option<Stackup>,
+    #[serde(default = "default_num_user_layers")]
+    pub num_user_layers: usize,
 }
 
 impl BoardConfig {
@@ -516,45 +522,65 @@ impl Stackup {
     }
 
     /// Generate KiCad layers S-expression
-    pub fn generate_layers_sexpr(&self) -> String {
+    pub fn generate_layers_sexpr(&self, num_user_layers: usize) -> String {
         let layers = self.layers.as_deref().unwrap_or_default();
         let copper_layers: Vec<_> = layers.iter().filter(|l| l.is_copper()).collect();
 
-        let mut elements = Vec::new();
+        let mut lines = vec!["(layers".to_string()];
 
-        // Copper layers
+        // Copper layers - format as single lines
         for (i, layer) in copper_layers.iter().enumerate() {
             if let Layer::Copper { role, .. } = layer {
                 let (id, name) = copper_layer_mapping(i, copper_layers.len());
-                elements.push(Sexpr::List(vec![
-                    id.into(),
-                    Sexpr::string(name.as_ref()),
-                    Sexpr::symbol(role.to_string()),
-                ]));
+                lines.push(format!("\t\t({} \"{}\" {})", id, name, role));
             }
         }
 
-        // Technical layers
-        static TECH_LAYERS: &[(u32, &str, &str, Option<&str>)] = &[
+        // Standard technical layers that should always be preserved
+        // Layer IDs from KiCad source: include/layer_ids.h (lines 97-119)
+        // Output order from KiCad source: common/lset.cpp TechAndUserUIOrder() (lines 265-284)
+        // Ordered to match KiCad's standard layer output order (grouped logically, not by ID)
+        let technical_layers = [
+            (9, "F.Adhes", "user", Some("F.Adhesive")),
+            (11, "B.Adhes", "user", Some("B.Adhesive")),
+            (13, "F.Paste", "user", None),
+            (15, "B.Paste", "user", None),
             (5, "F.SilkS", "user", Some("F.Silkscreen")),
-            (1, "F.Mask", "user", None),
             (7, "B.SilkS", "user", Some("B.Silkscreen")),
+            (1, "F.Mask", "user", None),
             (3, "B.Mask", "user", None),
+            (17, "Dwgs.User", "user", Some("User.Drawings")),
+            (19, "Cmts.User", "user", Some("User.Comments")),
+            (21, "Eco1.User", "user", Some("User.Eco1")),
+            (23, "Eco2.User", "user", Some("User.Eco2")),
             (25, "Edge.Cuts", "user", None),
+            (27, "Margin", "user", None),
+            (31, "F.CrtYd", "user", Some("F.Courtyard")),
+            (29, "B.CrtYd", "user", Some("B.Courtyard")),
+            (35, "F.Fab", "user", None),
+            (33, "B.Fab", "user", None),
         ];
 
-        for &(id, name, layer_type, alias) in TECH_LAYERS {
-            let mut v = vec![id.into(), Sexpr::string(name), Sexpr::symbol(layer_type)];
-            if let Some(a) = alias {
-                v.push(Sexpr::string(a));
+        for (id, name, layer_type, alias) in &technical_layers {
+            if let Some(alias_str) = alias {
+                lines.push(format!(
+                    "\t\t({} \"{}\" {} \"{}\")",
+                    id, name, layer_type, alias_str
+                ));
+            } else {
+                lines.push(format!("\t\t({} \"{}\" {})", id, name, layer_type));
             }
-            elements.push(Sexpr::List(v));
         }
 
-        let mut builder = ListBuilder::node(Sexpr::symbol("layers"));
-        builder.extend(elements);
-        let result = builder.build();
-        format!("{}", &result)
+        // Add User.N layers if requested
+        // User layer IDs: User_1=39, User_2=41, User_3=43, User_4=45, etc. (from layer_ids.h)
+        for i in 1..=num_user_layers {
+            let layer_id = 39 + (i - 1) * 2;
+            lines.push(format!("\t\t({} \"User.{}\" user)", layer_id, i));
+        }
+
+        lines.push("\t)".to_string());
+        lines.join("\n")
     }
 
     /// Generate KiCad stackup S-expression
@@ -574,6 +600,7 @@ impl Stackup {
             self.silk_screen_color.as_deref(),
             None,
         ));
+        b.push(tech_layer("F.Paste", "Top Solder Paste", None, None));
         b.push(tech_layer(
             "F.Mask",
             "Top Solder Mask",
@@ -636,6 +663,7 @@ impl Stackup {
             self.solder_mask_color.as_deref(),
             Some(0.01),
         ));
+        b.push(tech_layer("B.Paste", "Bottom Solder Paste", None, None));
         b.push(tech_layer(
             "B.SilkS",
             "Bottom Silk Screen",
@@ -1099,7 +1127,7 @@ mod tests {
         };
 
         // Generate S-expressions
-        let layers_sexpr = original_stackup.generate_layers_sexpr();
+        let layers_sexpr = original_stackup.generate_layers_sexpr(4);
         let stackup_sexpr = original_stackup.generate_stackup_sexpr();
 
         // Create a mock PCB file content
