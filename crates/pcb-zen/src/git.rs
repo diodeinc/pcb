@@ -73,15 +73,12 @@ pub fn is_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Clone a Git repository as branch or tag (fast, shallow)
-pub fn clone_as_branch_or_tag(remote_url: &str, rev: &str, dest_dir: &Path) -> anyhow::Result<()> {
+/// Clone a bare repository with blob filtering for use as a shared object store
+pub fn clone_bare_with_filter(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let status = Command::new("git")
         .arg("clone")
-        .arg("--depth")
-        .arg("1")
-        .arg("--branch")
-        .arg(rev)
-        .arg("--single-branch")
+        .arg("--bare")
+        .arg("--filter=blob:none")
         .arg("--quiet")
         .arg(remote_url)
         .arg(dest_dir)
@@ -92,14 +89,15 @@ pub fn clone_as_branch_or_tag(remote_url: &str, rev: &str, dest_dir: &Path) -> a
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Git clone failed for {remote_url}@{rev}"))
+        Err(anyhow::anyhow!("Git bare clone failed for {remote_url}"))
     }
 }
 
-/// Clone default branch of a Git repository (shallow)
-pub fn clone(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
+/// Clone a bare repository without filtering (fallback for file:// URLs)
+pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     let status = Command::new("git")
         .arg("clone")
+        .arg("--bare")
         .arg("--quiet")
         .arg(remote_url)
         .arg(dest_dir)
@@ -110,17 +108,39 @@ pub fn clone(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Git clone failed for {remote_url}"))
+        Err(anyhow::anyhow!("Git bare clone failed for {remote_url}"))
     }
 }
 
-/// Checkout a specific commit
-pub fn checkout_commit(repo_root: &Path, rev: &str) -> anyhow::Result<()> {
+/// Fetch updates in a bare repository
+pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
     let status = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
-        .arg("checkout")
+        .arg(bare_repo)
+        .arg("fetch")
+        .arg("origin")
         .arg("--quiet")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Git fetch failed in bare repo"))
+    }
+}
+
+/// Create a worktree from a bare repository for a specific ref
+pub fn create_worktree(bare_repo: &Path, worktree_dir: &Path, rev: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(bare_repo)
+        .arg("worktree")
+        .arg("add")
+        .arg("--detach")
+        .arg("--quiet")
+        .arg(worktree_dir)
         .arg(rev)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -129,7 +149,7 @@ pub fn checkout_commit(repo_root: &Path, rev: &str) -> anyhow::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Git checkout failed for {rev}"))
+        Err(anyhow::anyhow!("Git worktree creation failed for {rev}"))
     }
 }
 

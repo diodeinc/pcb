@@ -95,59 +95,23 @@ fn classify_remote(cache_root: &Path, spec: &LoadSpec) -> Option<RemoteRefMeta> 
     })
 }
 
-/// Ensure a cache directory exists atomically, downloading if necessary.
-fn ensure_cached_atomically(
-    cache_root: &Path,
-    download_fn: impl FnOnce(&Path) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    if cache_root.exists() {
-        return Ok(());
-    }
-
-    // Ensure parent directory exists
-    if let Some(parent) = cache_root.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Create temp directory in same parent as final cache directory
-    let temp_dir = tempfile::tempdir_in(cache_root.parent().unwrap())?;
-
-    // Download to temp directory
-    download_fn(temp_dir.path())?;
-
-    // Atomically move temp directory to final location
-    match std::fs::rename(temp_dir.path(), cache_root) {
-        Ok(()) => Ok(()),
-        Err(_) if cache_root.exists() => {
-            // Another thread won the race - that's fine
-            // TempDir will clean itself up on drop
-            Ok(())
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
 /// Ensure the remote is cached and return the root directory of the checked-out revision.
 /// Returns the directory containing the checked-out repository or unpacked package.
-/// Uses atomic directory creation to prevent race conditions when multiple tests run in parallel.
+/// For Git repos, uses worktrees for efficient multi-version support.
 pub fn ensure_remote_cached(spec: &LoadSpec) -> anyhow::Result<PathBuf> {
     match spec {
         LoadSpec::Github {
             user, repo, rev, ..
         } => {
             let cache_root = cache_dir()?.join("github").join(user).join(repo).join(rev);
-            ensure_cached_atomically(&cache_root, |temp_dir| {
-                download_and_unpack_github_repo(user, repo, rev, temp_dir)
-            })?;
+            download_and_unpack_github_repo(user, repo, rev, &cache_root)?;
             Ok(cache_root)
         }
         LoadSpec::Gitlab {
             project_path, rev, ..
         } => {
             let cache_root = cache_dir()?.join("gitlab").join(project_path).join(rev);
-            ensure_cached_atomically(&cache_root, |temp_dir| {
-                download_and_unpack_gitlab_repo(project_path, rev, temp_dir)
-            })?;
+            download_and_unpack_gitlab_repo(project_path, rev, &cache_root)?;
             Ok(cache_root)
         }
         _ => anyhow::bail!("ensure_remote_cached only handles remote specs"),
@@ -181,36 +145,70 @@ pub fn cache_dir() -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
-fn try_clone_and_fetch_commit(remote_url: &str, rev: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    log::debug!("Cloning default branch then fetching commit: {remote_url} @ {rev}");
-    git::clone(remote_url, dest_dir)?;
-    git::checkout_commit(dest_dir, rev)
-}
-
-/// Try Git clone with 2-pass strategy for multiple URLs
-fn try_git_clone(clone_urls: &[String], rev: &str, dest_dir: &Path) -> anyhow::Result<bool> {
+/// Ensure a git repository is available as a worktree using a shared bare repository.
+/// This approach minimizes disk space and network usage when multiple refs from the
+/// same repository are needed.
+fn ensure_git_worktree(
+    remote_urls: &[String],
+    repo_root: &Path,
+    rev: &str,
+    dest_dir: &Path,
+) -> anyhow::Result<()> {
     if !git::is_available() {
-        return Ok(false);
+        anyhow::bail!("Git is required but not available on this system");
     }
 
-    for remote_url in clone_urls {
-        // Ensure parent dirs exist so `git clone` can create `dest_dir`.
-        if let Some(parent) = dest_dir.parent() {
-            std::fs::create_dir_all(parent)?;
+    let bare_repo = repo_root.join(".repo");
+    let lock_file = repo_root.join(".repo.lock");
+
+    // Acquire lock for this repository to prevent race conditions
+    std::fs::create_dir_all(repo_root)?;
+    let mut _lock = fslock::LockFile::open(&lock_file)?;
+    _lock.lock()?;
+
+    // Check if worktree already exists (after acquiring lock)
+    if dest_dir.exists() {
+        return Ok(());
+    }
+
+    // Ensure bare repository exists
+    if !bare_repo.exists() {
+        let mut last_error = None;
+        for remote_url in remote_urls {
+            log::debug!("Cloning bare repository: {remote_url}");
+
+            // Try with filter first (network optimization), fall back without (for file:// URLs)
+            let result = git::clone_bare_with_filter(remote_url, &bare_repo).or_else(|e| {
+                log::debug!("Clone with filter failed: {e}, trying without filter");
+                git::clone_bare(remote_url, &bare_repo)
+            });
+
+            match result {
+                Ok(()) => {
+                    last_error = None;
+                    break;
+                }
+                Err(e) => {
+                    log::debug!("Failed to clone from {remote_url}: {e}");
+                    last_error = Some(e);
+                }
+            }
         }
 
-        // Pass 1: Try to clone as branch/tag (most efficient)
-        log::debug!("Trying branch/tag clone: {remote_url} @ {rev}");
-        if git::clone_as_branch_or_tag(remote_url, rev, dest_dir).is_ok() {
-            return Ok(true);
-        }
-
-        // Pass 2: Clone default branch, then fetch specific commit
-        if try_clone_and_fetch_commit(remote_url, rev, dest_dir).is_ok() {
-            return Ok(true);
+        if let Some(e) = last_error {
+            return Err(e);
         }
     }
-    Ok(false)
+
+    // Fetch updates (best effort)
+    log::debug!("Fetching updates in bare repository");
+    let _ = git::fetch_in_bare_repo(&bare_repo);
+
+    // Create worktree for the specific ref
+    log::debug!("Creating worktree for {rev}");
+    git::create_worktree(&bare_repo, dest_dir, rev)?;
+
+    Ok(())
 }
 
 pub fn download_and_unpack_github_repo(
@@ -221,63 +219,18 @@ pub fn download_and_unpack_github_repo(
 ) -> anyhow::Result<()> {
     log::info!("Fetching GitHub repo {user}/{repo} @ {rev}");
 
-    // Try Git clone strategies first
-    let clone_urls = [
+    let remote_urls = [
         format!("https://github.com/{user}/{repo}.git"),
         format!("git@github.com:{user}/{repo}.git"),
     ];
 
-    if try_git_clone(&clone_urls, rev, dest_dir)? {
-        return Ok(());
-    }
+    // Get the repository root (parent of the rev-specific directory)
+    let repo_root = dest_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Invalid destination directory"))?;
 
-    // Fallback: GitHub's codeload tarball API
-    let url = format!("https://codeload.github.com/{user}/{repo}/tar.gz/{rev}");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("diode-star-loader")
-        .build()?;
-
-    let token = std::env::var("DIODE_GITHUB_TOKEN")
-        .or_else(|_| std::env::var("GITHUB_TOKEN"))
-        .ok();
-
-    let mut request = client.get(&url);
-    if let Some(t) = token.as_ref() {
-        request = request.header("Authorization", format!("Bearer {t}"));
-    }
-
-    let resp = request.send()?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        if code == reqwest::StatusCode::NOT_FOUND || code == reqwest::StatusCode::FORBIDDEN {
-            anyhow::bail!(
-                "Failed to download GitHub repo {user}/{repo} at {rev} (HTTP {code}).\n\
-                 Tried clones via HTTPS & SSH, then tarball download.\n\
-                 If this repository is private, set an access token in GITHUB_TOKEN."
-            );
-        } else {
-            anyhow::bail!("Failed to download GitHub repo {user}/{repo} at {rev} (HTTP {code})");
-        }
-    }
-
-    let bytes = resp.bytes()?;
-    let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
-    let mut archive = tar::Archive::new(gz);
-
-    // Extract contents while stripping the top-level folder
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?;
-        let mut comps = path.components();
-        comps.next(); // strip top-level folder
-        let stripped: PathBuf = comps.as_path().to_path_buf();
-        let out_path = dest_dir.join(stripped);
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        entry.unpack(&out_path)?;
-    }
-    Ok(())
+    ensure_git_worktree(&remote_urls, repo_root, rev, dest_dir)
+        .map_err(|_| anyhow::anyhow!("Failed to fetch GitHub repo {user}/{repo}@{rev}"))
 }
 
 pub fn download_and_unpack_gitlab_repo(
@@ -287,65 +240,18 @@ pub fn download_and_unpack_gitlab_repo(
 ) -> anyhow::Result<()> {
     log::info!("Fetching GitLab repo {project_path} @ {rev}");
 
-    // Try Git clone strategies first
-    let clone_urls = [
+    let remote_urls = [
         format!("https://gitlab.com/{project_path}.git"),
         format!("git@gitlab.com:{project_path}.git"),
     ];
 
-    if try_git_clone(&clone_urls, rev, dest_dir)? {
-        return Ok(());
-    }
+    // Get the repository root (parent of the rev-specific directory)
+    let repo_root = dest_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Invalid destination directory"))?;
 
-    // Fallback: GitLab's archive API
-    let encoded_project_path = project_path.replace('/', "%2F");
-    let url = format!("https://gitlab.com/api/v4/projects/{encoded_project_path}/repository/archive.tar.gz?sha={rev}");
-
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("diode-star-loader")
-        .build()?;
-
-    let token = std::env::var("DIODE_GITLAB_TOKEN")
-        .or_else(|_| std::env::var("GITLAB_TOKEN"))
-        .ok();
-
-    let mut request = client.get(&url);
-    if let Some(t) = token.as_ref() {
-        request = request.header("PRIVATE-TOKEN", t);
-    }
-
-    let resp = request.send()?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        if code == reqwest::StatusCode::NOT_FOUND || code == reqwest::StatusCode::UNAUTHORIZED {
-            anyhow::bail!(
-                "Failed to download GitLab repo {project_path} at {rev} (HTTP {code}).\n\
-                 Tried clones via HTTPS & SSH, then archive download.\n\
-                 If this repository is private, set an access token in GITLAB_TOKEN."
-            );
-        } else {
-            anyhow::bail!("Failed to download GitLab repo {project_path} at {rev} (HTTP {code})");
-        }
-    }
-
-    let bytes = resp.bytes()?;
-    let gz = flate2::read::GzDecoder::new(bytes.as_ref());
-    let mut archive = tar::Archive::new(gz);
-
-    // Extract contents while stripping the top-level folder
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?;
-        let mut comps = path.components();
-        comps.next(); // strip top-level folder
-        let stripped: PathBuf = comps.as_path().to_path_buf();
-        let out_path = dest_dir.join(stripped);
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        entry.unpack(&out_path)?;
-    }
-    Ok(())
+    ensure_git_worktree(&remote_urls, repo_root, rev, dest_dir)
+        .map_err(|_| anyhow::anyhow!("Failed to fetch GitLab repo {project_path}@{rev}"))
 }
 
 // Create a symlink inside `<workspace>/.pcb/<alias>/<sub_path>` pointing to `target`.
