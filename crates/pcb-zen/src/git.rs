@@ -131,6 +131,24 @@ pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
     }
 }
 
+/// Prune stale worktree administrative data
+pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(bare_repo)
+        .arg("worktree")
+        .arg("prune")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Git worktree prune failed"))
+    }
+}
+
 /// Create a worktree from a bare repository for a specific ref
 pub fn create_worktree(bare_repo: &Path, worktree_dir: &Path, rev: &str) -> anyhow::Result<()> {
     let status = Command::new("git")
