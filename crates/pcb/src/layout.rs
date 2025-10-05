@@ -104,11 +104,10 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
                 spinner.finish();
                 // Now print the error message
                 println!(
-                    "{} {}: Layout generation failed",
+                    "{} {}: {e:#}",
                     pcb_ui::icons::error(),
                     file_name.with_style(Style::Red).bold()
                 );
-                eprintln!("  Error: {e}");
                 has_errors = true;
             }
         }
