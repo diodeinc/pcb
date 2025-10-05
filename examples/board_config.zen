@@ -120,6 +120,7 @@ BoardConfig = record(
     design_rules=field(DesignRules | None, None),
     stackup=field(Stackup | None, None),  # Board stackup configuration
     num_user_layers=field(int, 4),  # Number of User.N layers (User.1, User.2, etc.)
+    spec=field(str | None, None), # Path to a specification file
 )
 
 
@@ -369,14 +370,16 @@ BASE_PREDEFINED_SIZES = PredefinedSizes(
     ],
 )
 
+BASE_DESIGN_RULES = DesignRules(
+    constraints=BASE_CONSTRAINTS,
+    predefined_sizes=BASE_PREDEFINED_SIZES,
+    netclasses=[DEFAULT_NETCLASS],
+)
+
 # Base board configurations that can be extended
 
 # Complete base 4-layer board configuration (1oz outer, 0.5oz inner, base constraints)
 BASE_4L = BoardConfig(
-    design_rules=DesignRules(
-        constraints=BASE_CONSTRAINTS,
-        predefined_sizes=BASE_PREDEFINED_SIZES,
-        netclasses=[DEFAULT_NETCLASS],
-    ),
+    design_rules=BASE_DESIGN_RULES,
     stackup=BASE_4L_STACKUP,
 )

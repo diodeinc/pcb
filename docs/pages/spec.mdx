@@ -996,8 +996,19 @@ Board(
 BoardConfig = record(
     design_rules=DesignRules,     # PCB design rules and constraints  
     stackup=Stackup,              # Layer stackup and materials
+    num_user_layers=int,          # Number of User.N layers (default: 4)
+    spec=str | None,              # Optional path to specification file
 )
 ```
+
+**Parameters:**
+- `design_rules`: Optional PCB design rules and constraints
+- `stackup`: Optional layer stackup and materials configuration
+- `num_user_layers`: Number of User.N layers to create (default: 4)
+- `spec`: Optional path to a specification markdown file. Use `Path()` to resolve the path:
+  ```python
+  BoardConfig(spec=Path("./docs/my-spec.md"))
+  ```
 
 **Design Rules Examples:**
 
