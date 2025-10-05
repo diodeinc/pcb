@@ -119,7 +119,12 @@ pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
         .arg(bare_repo)
         .arg("fetch")
         .arg("origin")
+        .arg("--tags")
+        .arg("--force")
+        .arg("--prune")
+        .arg("--prune-tags")
         .arg("--quiet")
+        .arg("+refs/heads/*:refs/heads/*")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;
