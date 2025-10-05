@@ -430,6 +430,13 @@ impl ModuleConverter {
             comp_inst.add_attribute(crate::attrs::TYPE, AttributeValue::String(ctype.to_owned()));
         }
 
+        if let Some(datasheet) = component.datasheet() {
+            comp_inst.add_attribute(
+                crate::attrs::DATASHEET,
+                AttributeValue::String(datasheet.to_owned()),
+            );
+        }
+
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
             let attr_value = to_attribute_value(*val)?;

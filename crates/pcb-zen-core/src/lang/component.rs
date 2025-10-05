@@ -78,6 +78,7 @@ pub struct ComponentValueGen<V> {
     symbol: V,
     spice_model: Option<V>,
     dnp: Option<bool>,
+    datasheet: Option<String>,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -272,6 +273,10 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         self.dnp
     }
 
+    pub fn datasheet(&self) -> Option<&str> {
+        self.datasheet.as_deref()
+    }
+
     pub fn footprint(&self) -> &str {
         &self.footprint
     }
@@ -339,6 +344,7 @@ where
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
                 ("dnp", ParametersSpecParam::<Value<'_>>::Optional),
+                ("datasheet", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -391,6 +397,7 @@ where
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
             let dnp_val: Option<Value> = param_parser.next_opt()?;
+            let datasheet_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
@@ -577,6 +584,18 @@ where
                         .map(|s| s.to_owned())
                 });
 
+            // If datasheet is not explicitly provided, try to get it from properties
+            let final_datasheet = datasheet_val
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("datasheet")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                });
+
+            // Remove datasheet from properties map since we're storing it as a typed field
+            properties_map.shift_remove("datasheet");
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
@@ -590,6 +609,7 @@ where
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
                 spice_model: spice_model_val,
                 dnp: dnp_val.and_then(|v| v.unpack_bool()),
+                datasheet: final_datasheet,
             });
 
             Ok(component)
