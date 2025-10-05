@@ -36,7 +36,7 @@ Module {
                         "TestSymbol",
                     ),
                     "symbol_path": FrozenValue(
-                        "/test_symbol.kicad_sym",
+                        "/duplicate_pins_symbol.kicad_sym",
                     ),
                 },
                 symbol: FrozenValue(

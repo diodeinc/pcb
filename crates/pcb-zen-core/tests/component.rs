@@ -69,7 +69,7 @@ snapshot_eval!(component_with_symbol, {
 });
 
 snapshot_eval!(component_duplicate_pin_names, {
-    "test_symbol.kicad_sym" => r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+    "duplicate_pins_symbol.kicad_sym" => r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
   (symbol "TestSymbol" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
     (property "Reference" "U" (id 0) (at 0 0 0))
     (symbol "TestSymbol_0_1"
@@ -95,7 +95,7 @@ snapshot_eval!(component_duplicate_pin_names, {
         Component(
             name = "test_comp",
             footprint = "test_footprint",
-            symbol = Symbol(library = "./test_symbol.kicad_sym"),
+            symbol = Symbol(library = "./duplicate_pins_symbol.kicad_sym"),
             pins = {
                 "in": Net("in"),
                 "out": Net("out"),
