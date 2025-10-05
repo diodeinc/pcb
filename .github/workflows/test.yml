@@ -107,6 +107,9 @@ jobs:
           RUST_BACKTRACE: full
         run: cargo test --verbose -p pcb -- --ignored
 
+      - name: Build examples
+        run: cargo run -- build examples
+
       - name: Test CLI (E2E)
         env:
           RUST_LOG: info,pcb::release=debug,pcb::bom=debug
@@ -133,3 +136,12 @@ jobs:
           find stdlib -name "*.zen" -exec "$PCB_BIN" build {} +
 
           echo "All stdlib files built successfully!"
+
+  check_readme:
+    name: Check README Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check README sync
+        run: bin/embed-readme --check README.md

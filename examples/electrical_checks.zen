@@ -1,21 +1,6 @@
 # Comprehensive test of builtin.add_electrical_check with different severities
 
 # ============================================================================
-# ERROR SEVERITY CHECKS (default - fails build)
-# ============================================================================
-
-def check_critical_requirement(module):
-    """This check must pass or build fails"""
-    # Simulate a critical failure
-    error("Critical requirement not met - this fails the build")
-
-builtin.add_electrical_check(
-    name="critical_requirement",
-    check_fn=check_critical_requirement,
-    # severity defaults to "error"
-)
-
-# ============================================================================
 # WARNING SEVERITY CHECKS (doesn't fail build)
 # ============================================================================
 

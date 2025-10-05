@@ -33,7 +33,7 @@ pub enum LayoutError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("PCB generation error: {0}")]
+    #[error(transparent)]
     PcbGeneration(#[from] anyhow::Error),
 
     #[error("Stackup patching error: {0}")]
@@ -177,9 +177,8 @@ pub fn process_layout(
         .run()
         .with_context(|| {
             format!(
-                "Failed to {} layout file: {}",
+                "Failed to {} layout file",
                 if pcb_exists { "update" } else { "create" },
-                paths.pcb.display()
             )
         })?;
 
