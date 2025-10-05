@@ -54,6 +54,7 @@ cd pcb
 
 Create a file called `blinky.zen`:
 
+[embed-readme]:# (examples/blinky.zen python)
 ```python
 # Load standard library
 load("@stdlib:v0.2.23/properties.zen", "Layout")
@@ -70,7 +71,7 @@ led_anode = Net("LED_ANODE")
 # Create components
 Resistor(
     name = "R1",
-    value = "1kohm",
+    value = "2kohm",
     package = "0402",
     P1 = vcc,
     P2 = led_anode

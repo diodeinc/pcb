@@ -133,3 +133,7 @@ jobs:
           find stdlib -name "*.zen" -exec "$PCB_BIN" build {} +
 
           echo "All stdlib files built successfully!"
+
+      - name: Check README sync
+        if: matrix.config.name == 'Ubuntu'
+        run: bin/embed-readme --check README.md
