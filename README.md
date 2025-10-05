@@ -56,10 +56,11 @@ Create a file called `blinky.zen`:
 
 ```python
 # Load standard library
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib:v0.2.23/properties.zen", "Layout")
+load("@stdlib:v0.2.23/board_config.zen", "Board", "BASE_4L")
 
-Resistor = Module("@stdlib/generics/Resistor.zen")
-Led = Module("@stdlib/generics/Led.zen")
+Resistor = Module("@stdlib:v0.2.23/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.23/generics/Led.zen")
 
 # Define power nets
 vcc = Net("VCC")
@@ -83,7 +84,11 @@ Led(
     K = gnd
 )
 
-Layout("layout", "layout/")
+Board(
+    name = "blinky",
+    config = BASE_4L,
+    layout_path = "layout/blinky"
+)
 ```
 
 ### 2. Build Your Design

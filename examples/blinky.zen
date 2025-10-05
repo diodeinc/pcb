@@ -1,0 +1,34 @@
+# Load standard library
+load("@stdlib:v0.2.23/properties.zen", "Layout")
+load("@stdlib:v0.2.23/board_config.zen", "Board", "BASE_4L")
+
+Resistor = Module("@stdlib:v0.2.23/generics/Resistor.zen")
+Led = Module("@stdlib:v0.2.23/generics/Led.zen")
+
+# Define power nets
+vcc = Net("VCC")
+gnd = Net("GND")
+led_anode = Net("LED_ANODE")
+
+# Create components
+Resistor(
+    name = "R1",
+    value = "1kohm",
+    package = "0402",
+    P1 = vcc,
+    P2 = led_anode
+)
+
+Led(
+    name = "D1",
+    package = "0402",
+    color = "red",
+    A = led_anode,
+    K = gnd
+)
+
+Board(
+    name = "blinky",
+    config = BASE_4L,
+    layout_path = "layout/blinky"
+)
