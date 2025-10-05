@@ -108,7 +108,7 @@ jobs:
         run: cargo test --verbose -p pcb -- --ignored
 
       - name: Build examples
-        run: cargo run -- build examples/blinky.zen
+        run: cargo run -- build examples
 
       - name: Test CLI (E2E)
         env:
