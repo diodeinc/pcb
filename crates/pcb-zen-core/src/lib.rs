@@ -34,6 +34,7 @@ pub mod attrs {
     pub const SYMBOL_VALUE: &str = "__symbol_value";
     pub const PADS: &str = "pads";
     pub const DNP: &str = "dnp";
+    pub const DATASHEET: &str = "datasheet";
 
     pub mod net {
         pub mod kind {
