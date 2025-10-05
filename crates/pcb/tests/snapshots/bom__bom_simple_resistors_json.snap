@@ -12,6 +12,7 @@ Exit Code: 0
     "designator": "R1",
     "package": "0603",
     "value": "1k",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "1000",
@@ -44,6 +45,7 @@ Exit Code: 0
     "designator": "R2",
     "package": "0603",
     "value": "1k",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "1000",
@@ -76,6 +78,7 @@ Exit Code: 0
     "designator": "R3",
     "package": "0402",
     "value": "4.7k",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "4700.0",

@@ -591,22 +591,38 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            // If datasheet is not explicitly provided, try to get it from properties
+            // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
+            // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
             let final_datasheet = datasheet_val
                 .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
                 .or_else(|| {
                     properties_map
                         .get("datasheet")
                         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Datasheet")
+                        .filter(|s| !s.is_empty() && s.as_str() != "~")
+                        .map(|s| s.to_owned())
                 });
 
-            // If description is not explicitly provided, try to get it from properties
+            // If description is not explicitly provided, try to get it from properties, then symbol properties
+            // Skip empty strings - prefer None over empty
             let final_description = description_val
                 .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
                 .or_else(|| {
                     properties_map
                         .get("description")
                         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Description")
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_owned())
                 });
 
             // Remove datasheet and description from properties map since we're storing them as typed fields

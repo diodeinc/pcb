@@ -9,6 +9,7 @@ expression: sb.snapshot_dir(staging_dir)
     "designator": "C1",
     "package": "0402",
     "value": "100nF",
+    "description": "Unpolarized capacitor",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000000100",
@@ -22,6 +23,7 @@ expression: sb.snapshot_dir(staging_dir)
     "designator": "C2",
     "package": "0805",
     "value": "10uF",
+    "description": "Unpolarized capacitor",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000010",
@@ -35,6 +37,7 @@ expression: sb.snapshot_dir(staging_dir)
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
+    "description": "Light emitting diode, small symbol, filled shape",
     "dnp": false
   },
   {
@@ -42,6 +45,7 @@ expression: sb.snapshot_dir(staging_dir)
     "designator": "R1",
     "package": "0603",
     "value": "330",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "330",
@@ -55,6 +59,7 @@ expression: sb.snapshot_dir(staging_dir)
     "designator": "R2",
     "package": "0603",
     "value": "10k",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "10000",
