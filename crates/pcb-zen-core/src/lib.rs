@@ -35,6 +35,7 @@ pub mod attrs {
     pub const PADS: &str = "pads";
     pub const DNP: &str = "dnp";
     pub const DATASHEET: &str = "datasheet";
+    pub const DESCRIPTION: &str = "description";
 
     pub mod net {
         pub mod kind {

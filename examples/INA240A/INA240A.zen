@@ -123,6 +123,7 @@ symbol = component_config["symbols"][package][gain]
 # Create the component
 Component(
     name=component_config["mpns"][package][gain],
+    description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
     symbol = symbol,
     footprint=component_config["footprints"][package],
     mpn=component_config["mpns"][package][gain],

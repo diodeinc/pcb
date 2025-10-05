@@ -1953,6 +1953,10 @@ class ImportNetlist(Step):
                 if prop.name.lower() == "datasheet":
                     fp.GetFieldByName("Datasheet").SetText(prop.value)
                     fp.GetFieldByName("Datasheet").SetVisible(False)
+                # Handle description specially - use the built-in KiCad "Description" field
+                elif prop.name.lower() == "description":
+                    fp.GetFieldByName("Description").SetText(prop.value)
+                    fp.GetFieldByName("Description").SetVisible(False)
                 # Skip built-in fields and specially handled properties
                 elif prop.name.lower() not in [
                     "value",
