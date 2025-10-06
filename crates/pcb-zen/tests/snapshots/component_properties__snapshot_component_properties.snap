@@ -16,6 +16,7 @@ expression: netlist
       (tstamps "6c73e1fb-8e95-5677-97d9-7dce42ba86d2")
       (property (name "Reference") (value "U1"))
       (property (name "CustomProp") (value "Value123"))
+      (property (name "datasheet") (value "https://lcsc.com/product-detail/Logic-ICs_ON_NB3N551DG_NB3N551DG_C146731.html"))
       (property (name "symbol_name") (value "NB3N551DG"))
       (property (name "symbol_path") (value "[TEMP_DIR]C146731.kicad_sym"))
     )

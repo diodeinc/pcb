@@ -12,6 +12,7 @@ Exit Code: 0
     "designator": "C1",
     "package": "0402",
     "value": "100nF",
+    "description": "Unpolarized capacitor",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000000100",
@@ -25,6 +26,7 @@ Exit Code: 0
     "designator": "C2",
     "package": "0805",
     "value": "10uF",
+    "description": "Unpolarized capacitor",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000010",
@@ -38,6 +40,7 @@ Exit Code: 0
     "designator": "C3",
     "package": "0402",
     "value": "22pF",
+    "description": "Unpolarized capacitor",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000000000022",
@@ -51,6 +54,7 @@ Exit Code: 0
     "designator": "C4",
     "package": "0402",
     "value": "22pF",
+    "description": "Unpolarized capacitor",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000000000022",
@@ -64,6 +68,7 @@ Exit Code: 0
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
+    "description": "Light emitting diode, small symbol, filled shape",
     "dnp": false
   },
   {
@@ -71,6 +76,7 @@ Exit Code: 0
     "designator": "D2",
     "package": "0603",
     "value": "LED RED",
+    "description": "Light emitting diode, small symbol, filled shape",
     "dnp": false
   },
   {
@@ -78,6 +84,7 @@ Exit Code: 0
     "designator": "R1",
     "package": "0603",
     "value": "330",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "330",
@@ -91,6 +98,7 @@ Exit Code: 0
     "designator": "R2",
     "package": "0603",
     "value": "330",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "330",
@@ -104,6 +112,7 @@ Exit Code: 0
     "designator": "R3",
     "package": "0603",
     "value": "10k",
+    "description": "Resistor",
     "component_type": "Resistor",
     "resistance": {
       "value": "10000",
@@ -117,6 +126,7 @@ Exit Code: 0
     "designator": "Y1",
     "package": "5032_2Pin",
     "value": "16MHz 18pF",
+    "description": "Two pin crystal",
     "dnp": false
   }
 ]

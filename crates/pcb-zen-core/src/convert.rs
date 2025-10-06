@@ -437,6 +437,13 @@ impl ModuleConverter {
             );
         }
 
+        if let Some(description) = component.description() {
+            comp_inst.add_attribute(
+                crate::attrs::DESCRIPTION,
+                AttributeValue::String(description.to_owned()),
+            );
+        }
+
         // Add any properties defined directly on the component.
         for (key, val) in component.properties().iter() {
             let attr_value = to_attribute_value(*val)?;
