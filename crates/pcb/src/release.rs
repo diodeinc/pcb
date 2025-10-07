@@ -1170,27 +1170,13 @@ fn generate_glb_model(info: &ReleaseInfo) -> Result<()> {
         }
     }
 
-    // Optimize GLB file with gltfpack if available
-    let optimize_result = Command::new("gltfpack")
-        .arg("-i")
-        .arg(&glb_path)
-        .arg("-cc")
-        .arg("-o")
-        .arg(&glb_path)
-        .output();
-
-    match optimize_result {
-        Ok(output) if output.status.success() => {
+    // Optimize GLB file with gltfpack
+    match gltfpack_sys::compress(&glb_path, &glb_path) {
+        Ok(()) => {
             debug!("GLB file optimized successfully with gltfpack");
         }
-        Ok(output) => {
-            warn!(
-                "gltfpack failed with status: {}, skipping optimization",
-                output.status
-            );
-        }
-        Err(e) => {
-            debug!("gltfpack not found or failed to run: {e}, skipping optimization");
+        Err(code) => {
+            warn!("gltfpack failed with error code: {code}, skipping optimization");
         }
     }
 
