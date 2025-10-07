@@ -643,15 +643,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmake"
-version = "0.1.54"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "cmp_any"
 version = "0.8.1"
 source = "git+https://github.com/diodeinc/starlark-rust?rev=1851d265#1851d265617d61001a3455ea91d05043be251839"
@@ -1638,12 +1629,11 @@ dependencies = [
 
 [[package]]
 name = "gltfpack-sys"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14c6e3a387f52d7bff98898fa17db08d888875dd82d8f452b48a70a91d98d62d"
+checksum = "429a3a943cb2dfba37518c759a6b03e738a6fc61633fcecf73835149a4c09589"
 dependencies = [
  "cc",
- "cmake",
 ]
 
 [[package]]
