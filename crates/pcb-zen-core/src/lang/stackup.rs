@@ -36,13 +36,13 @@ impl ApproxEq for Layer {
             (
                 Copper {
                     thickness: t1,
-                    role: r1,
+                    role: _,
                 },
                 Copper {
                     thickness: t2,
-                    role: r2,
+                    role: _,
                 },
-            ) => r1 == r2 && t1.approx_eq(t2, eps),
+            ) => t1.approx_eq(t2, eps),
             (
                 Dielectric {
                     thickness: t1,
@@ -173,11 +173,24 @@ where
     l.build()
 }
 
+impl CopperRole {
+    /// Convert to KiCad format string (Ground maps to "power" for KiCad compatibility)
+    pub fn to_kicad_str(&self) -> &'static str {
+        match self {
+            CopperRole::Signal => "signal",
+            CopperRole::Power => "power",
+            CopperRole::Ground => "power", // KiCad doesn't have ground, map to power
+            CopperRole::Mixed => "mixed",
+        }
+    }
+}
+
 impl fmt::Display for CopperRole {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             CopperRole::Signal => "signal",
             CopperRole::Power => "power",
+            CopperRole::Ground => "ground",
             CopperRole::Mixed => "mixed",
         })
     }
@@ -229,6 +242,7 @@ pub struct Material {
 pub enum CopperRole {
     Signal,
     Power,
+    Ground,
     Mixed,
 }
 
@@ -468,14 +482,14 @@ impl Stackup {
                 (
                     Layer::Copper {
                         thickness: t1,
-                        role: r1,
+                        role: _,
                     },
                     Layer::Copper {
                         thickness: t2,
-                        role: r2,
+                        role: _,
                     },
                 ) => {
-                    if t1 != t2 || std::mem::discriminant(r1) != std::mem::discriminant(r2) {
+                    if t1 != t2 {
                         return Err(StackupError::LayersNotSymmetric);
                     }
                 }
@@ -531,7 +545,7 @@ impl Stackup {
         for (i, layer) in copper_layers.iter().enumerate() {
             if let Layer::Copper { role, .. } = layer {
                 let (id, name) = copper_layer_mapping(i, copper_layers.len());
-                lines.push(format!("\t\t({} \"{}\" {})", id, name, role));
+                lines.push(format!("\t\t({} \"{}\" {})", id, name, role.to_kicad_str()));
             }
         }
 
@@ -1146,6 +1160,48 @@ mod tests {
     }
 
     #[test]
+    fn test_symmetric_validation_ignores_role() {
+        // Test that symmetric validation only checks thickness, not role
+        let stackup = Stackup {
+            materials: Some(vec![Material {
+                name: Some("FR4".to_string()),
+                vendor: None,
+                relative_permittivity: Some(4.6),
+                loss_tangent: Some(0.02),
+                reference_frequency: None,
+            }]),
+            thickness: None, // Don't specify total thickness to avoid thickness validation
+            symmetric: Some(true),
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal, // Different role from bottom
+                },
+                Layer::Dielectric {
+                    thickness: 1.53,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Power, // Different role from top, but same thickness
+                },
+            ]),
+            silk_screen_color: None,
+            solder_mask_color: None,
+            copper_finish: None,
+        };
+
+        // Should pass validation despite different roles
+        let result = stackup.validate();
+        assert!(
+            result.is_ok(),
+            "Symmetric validation should ignore role differences, but got error: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
     fn test_stackup_round_trip_consistency() {
         // Create a test stackup
         let original_stackup = Stackup {
@@ -1335,5 +1391,84 @@ mod tests {
         assert!(sexpr_str.contains("RO4350B"));
         assert!(sexpr_str.contains("3.54")); // epsilon_r for RO4450F
         assert!(sexpr_str.contains("3.48")); // epsilon_r for RO4350B
+    }
+
+    #[test]
+    fn test_ground_role_maps_to_power_in_kicad() {
+        // Test that Ground role is mapped to "power" when generating KiCad output
+        let stackup = Stackup {
+            materials: Some(vec![Material {
+                name: Some("FR4".to_string()),
+                vendor: None,
+                relative_permittivity: Some(4.6),
+                loss_tangent: Some(0.02),
+                reference_frequency: None,
+            }]),
+            thickness: None,
+            symmetric: None,
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+                Layer::Dielectric {
+                    thickness: 0.2,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Prepreg,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Ground, // Ground role
+                },
+                Layer::Dielectric {
+                    thickness: 1.1,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Power, // Power role
+                },
+                Layer::Dielectric {
+                    thickness: 0.2,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Prepreg,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+            ]),
+            silk_screen_color: None,
+            solder_mask_color: None,
+            copper_finish: None,
+        };
+
+        // Generate KiCad layers sexpr
+        let layers_sexpr = stackup.generate_layers_sexpr(0);
+
+        // Verify Ground role is written as "power" in KiCad format
+        // The output should contain "power" for both Ground and Power roles
+        assert!(
+            layers_sexpr.contains("signal"),
+            "Expected 'signal' in layers output"
+        );
+        assert!(
+            layers_sexpr.contains("power"),
+            "Expected 'power' in layers output for both Ground and Power roles"
+        );
+        // Should NOT contain "ground" as a role string
+        assert!(
+            !layers_sexpr.contains(" ground)"),
+            "Should not contain 'ground' role in KiCad output"
+        );
+
+        // Verify the internal representation still has Ground
+        if let Some(layers) = &stackup.layers {
+            let copper_layers: Vec<_> = layers.iter().filter(|l| l.is_copper()).collect();
+            if let Layer::Copper { role, .. } = copper_layers[1] {
+                assert_eq!(*role, CopperRole::Ground, "Internal role should be Ground");
+            }
+        }
     }
 }
