@@ -36,13 +36,13 @@ impl ApproxEq for Layer {
             (
                 Copper {
                     thickness: t1,
-                    role: r1,
+                    role: _,
                 },
                 Copper {
                     thickness: t2,
-                    role: r2,
+                    role: _,
                 },
-            ) => r1 == r2 && t1.approx_eq(t2, eps),
+            ) => t1.approx_eq(t2, eps),
             (
                 Dielectric {
                     thickness: t1,
@@ -468,14 +468,14 @@ impl Stackup {
                 (
                     Layer::Copper {
                         thickness: t1,
-                        role: r1,
+                        role: _,
                     },
                     Layer::Copper {
                         thickness: t2,
-                        role: r2,
+                        role: _,
                     },
                 ) => {
-                    if t1 != t2 || std::mem::discriminant(r1) != std::mem::discriminant(r2) {
+                    if t1 != t2 {
                         return Err(StackupError::LayersNotSymmetric);
                     }
                 }
@@ -1143,6 +1143,48 @@ mod tests {
         } else {
             panic!("Second layer should be dielectric");
         }
+    }
+
+    #[test]
+    fn test_symmetric_validation_ignores_role() {
+        // Test that symmetric validation only checks thickness, not role
+        let stackup = Stackup {
+            materials: Some(vec![Material {
+                name: Some("FR4".to_string()),
+                vendor: None,
+                relative_permittivity: Some(4.6),
+                loss_tangent: Some(0.02),
+                reference_frequency: None,
+            }]),
+            thickness: None, // Don't specify total thickness to avoid thickness validation
+            symmetric: Some(true),
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal, // Different role from bottom
+                },
+                Layer::Dielectric {
+                    thickness: 1.53,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Power, // Different role from top, but same thickness
+                },
+            ]),
+            silk_screen_color: None,
+            solder_mask_color: None,
+            copper_finish: None,
+        };
+
+        // Should pass validation despite different roles
+        let result = stackup.validate();
+        assert!(
+            result.is_ok(),
+            "Symmetric validation should ignore role differences, but got error: {:?}",
+            result.err()
+        );
     }
 
     #[test]
