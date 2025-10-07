@@ -934,7 +934,7 @@ load("@stdlib/board_config.zen",
 )
 ```
 
-### Board(name, config, layout_path, layout_hints=None, default=False)
+### Board(name, layout_path, config=None, layers=None, layout_hints=None, default=False)
 
 **Stdlib function** for declaring board configurations for PCB layout generation.
 
@@ -942,20 +942,28 @@ load("@stdlib/board_config.zen",
 # Load from stdlib
 load("@stdlib/board_config.zen", "Board", "BoardConfig", "DesignRules", "Stackup", "Material", "CopperLayer", "DielectricLayer")
 
-# Define board configuration
+# Simple usage with predefined layer count (recommended for most projects)
+Board(
+    name="MyBoard",
+    layout_path="layout/",
+    layers=4,
+    default=True
+)
+
+# Advanced usage with custom configuration
 config = BoardConfig(
     stackup=Stackup(
         materials=[
             Material(
                 name="FR-4",
-                vendor="Isola", 
+                vendor="Isola",
                 relative_permittivity=4.21,
                 loss_tangent=0.025,
                 reference_frequency=1e9,
             ),
         ],
         silk_screen_color="#44805BFF",
-        solder_mask_color="#191919E6", 
+        solder_mask_color="#191919E6",
         thickness=1.605,
         symmetric=True,
         copper_finish="ENIG",
@@ -963,7 +971,7 @@ config = BoardConfig(
             CopperLayer(thickness=0.035, role="mixed"),
             DielectricLayer(thickness=0.2, material="FR-4", form="prepreg"),
             CopperLayer(thickness=0.035, role="power"),
-            DielectricLayer(thickness=1.065, material="FR-4", form="core"), 
+            DielectricLayer(thickness=1.065, material="FR-4", form="core"),
             CopperLayer(thickness=0.035, role="power"),
             DielectricLayer(thickness=0.2, material="FR-4", form="prepreg"),
             CopperLayer(thickness=0.035, role="mixed"),
@@ -971,22 +979,29 @@ config = BoardConfig(
     )
 )
 
-# Declare board using stdlib function
+# Declare board using custom configuration
 Board(
     name="MyBoard",
-    config=config,
     layout_path="layout/",
+    config=config,
     default=True
 )
 ```
 
 **Parameters:**
 
-- `name`: String identifier for the board configuration
-- `config`: `BoardConfig` record containing design rules and stackup
-- `layout_path`: Directory path where layout files will be generated
-- `layout_hints`: Optional list of layout optimization hints  
+- `name`: String identifier for the board configuration (required)
+- `layout_path`: Directory path where layout files will be generated (required)
+- `config`: `BoardConfig` record containing design rules and stackup (optional, mutually exclusive with `layers`)
+- `layers`: Number of layers - 2, 4, 6, or 8 (optional, mutually exclusive with `config`). When specified, uses predefined stackups from the stdlib:
+  - `layers=2`: 2-layer board (1.6mm, 1oz copper, SIG/SIG)
+  - `layers=4`: 4-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/PWR/SIG)
+  - `layers=6`: 6-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/(SIG/PWR)/(SIG/PWR)/GND/SIG)
+  - `layers=8`: 8-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/SIG/PWR/GND/SIG/GND/SIG)
+- `layout_hints`: Optional list of layout optimization hints
 - `default`: If True, this becomes the default board config for the project
+
+**Note:** Either `config` or `layers` must be provided, but not both. If neither is provided, an error will be raised.
 
 **Implementation:** The stdlib `Board()` function calls the language builtin `builtin.add_board_config()` and sets layout properties.
 
