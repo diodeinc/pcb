@@ -1628,6 +1628,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gltfpack-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "429a3a943cb2dfba37518c759a6b03e738a6fc61633fcecf73835149a4c09589"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2801,6 +2810,7 @@ dependencies = [
  "dir-diff",
  "duct",
  "env_logger",
+ "gltfpack-sys",
  "ignore",
  "inquire",
  "insta",
