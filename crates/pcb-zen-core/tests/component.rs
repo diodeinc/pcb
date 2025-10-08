@@ -172,3 +172,51 @@ snapshot_eval!(component_with_dnp_kwarg, {
         )
     "#
 });
+
+snapshot_eval!(component_inherits_reference_prefix, {
+    "ic_symbol.kicad_sym" => r#"(kicad_symbol_lib
+        (symbol "MyIC"
+            (property "Reference" "IC" (at 0 0 0))
+            (symbol "MyIC_0_1"
+                (pin input line (at 0 0 0) (length 2.54)
+                    (name "IN" (effects (font (size 1.27 1.27))))
+                    (number "1" (effects (font (size 1.27 1.27))))
+                )
+                (pin output line (at 0 0 0) (length 2.54)
+                    (name "OUT" (effects (font (size 1.27 1.27))))
+                    (number "2" (effects (font (size 1.27 1.27))))
+                )
+            )
+        )
+    )"#,
+    "test.zen" => r#"
+        # Test that component inherits reference prefix "IC" from symbol
+        # when no explicit prefix is provided
+        comp1 = Component(
+            name = "MyComponent1",
+            footprint = "SOIC-8",
+            symbol = Symbol(library = "ic_symbol.kicad_sym"),
+            pins = {
+                "IN": Net("in_signal"),
+                "OUT": Net("out_signal"),
+            }
+        )
+        
+        # Verify the prefix was inherited
+        print("Component prefix:", comp1.prefix)
+        
+        # Test that explicit prefix still overrides symbol reference
+        comp2 = Component(
+            name = "MyComponent2",
+            footprint = "SOIC-8",
+            symbol = Symbol(library = "ic_symbol.kicad_sym"),
+            prefix = "U",  # Explicit prefix should override
+            pins = {
+                "IN": Net("in2"),
+                "OUT": Net("out2"),
+            }
+        )
+        
+        print("Component with explicit prefix:", comp2.prefix)
+    "#
+});
