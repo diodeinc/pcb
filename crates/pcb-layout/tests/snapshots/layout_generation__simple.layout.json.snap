@@ -386,7 +386,7 @@ expression: content
         "x": 148500000,
         "y": 105485000
       },
-      "reference": "U2",
+      "reference": "IC1",
       "uuid": "233c70a3-0882-5e15-a03d-8be81cfdc04b",
       "value": "?"
     },

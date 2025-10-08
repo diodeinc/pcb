@@ -10,6 +10,7 @@ use std::str::FromStr;
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct KicadSymbol {
     pub(super) name: String,
+    pub(super) reference: String,
     pub(super) extends: Option<String>,
     pub(super) footprint: String,
     pub(super) in_bom: bool,
@@ -48,6 +49,7 @@ impl From<KicadSymbol> for Symbol {
         Symbol {
             name: symbol.name,
             footprint: symbol.footprint,
+            reference: symbol.reference,
             in_bom: symbol.in_bom,
             mpn: symbol.mpn,
             datasheet: symbol.datasheet_url,
@@ -210,6 +212,7 @@ fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
     ) = (prop_list.get(1), prop_list.get(2))
     {
         match key.as_str() {
+            "Reference" => symbol.reference = value.clone(),
             "Footprint" => {
                 // Handle footprint values that include a library prefix like "C146731:SOIC-8_..."
                 if let Some(colon_index) = value.find(':') {

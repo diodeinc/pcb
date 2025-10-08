@@ -336,12 +336,7 @@ where
                 ("footprint", ParametersSpecParam::<Value<'_>>::Required),
                 ("pin_defs", ParametersSpecParam::<Value<'_>>::Optional),
                 ("pins", ParametersSpecParam::<Value<'_>>::Required),
-                (
-                    "prefix",
-                    ParametersSpecParam::<Value<'_>>::Defaulted(
-                        eval.heap().alloc_str("U").to_value(),
-                    ),
-                ),
+                ("prefix", ParametersSpecParam::<Value<'_>>::Optional),
                 ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
@@ -389,11 +384,8 @@ where
             let pins_val: Value = param_parser.next()?;
             let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
 
-            let prefix_val: Value = param_parser.next()?;
-            let prefix = prefix_val
-                .unpack_str()
-                .ok_or(ComponentError::PrefixNotString)?
-                .to_owned();
+            let prefix_val: Option<Value> = param_parser.next_opt()?;
+            let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
             // Optional fields
             let symbol_val: Option<Value> = param_parser.next_opt()?;
@@ -629,13 +621,23 @@ where
             properties_map.shift_remove("datasheet");
             properties_map.shift_remove("description");
 
+            // If prefix is not explicitly provided, try to get it from the symbol's Reference property
+            let final_prefix = prefix
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Reference")
+                        .map(|s| s.to_owned())
+                })
+                .unwrap_or_else(|| "U".to_owned());
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 manufacturer: final_manufacturer,
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
-                prefix,
+                prefix: final_prefix,
                 connections,
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),

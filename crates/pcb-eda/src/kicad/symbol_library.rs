@@ -767,6 +767,22 @@ mod tests {
     }
 
     #[test]
+    fn test_extends_reference() {
+        let content = r#"(kicad_symbol_lib
+            (symbol "Base"
+                (property "Reference" "J" (at 0 0 0))
+            )
+            (symbol "Extended"
+                (extends "Base")
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        let extended = lib.get_symbol("Extended").unwrap();
+        assert_eq!(extended.reference, "J");
+    }
+
+    #[test]
     fn test_extends_renames_sub_symbols() {
         let content = r#"(kicad_symbol_lib
             (symbol "BaseIC"
