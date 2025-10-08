@@ -36,6 +36,11 @@ fn test_pcm2903cdb_in_bom() {
 }
 
 #[test]
+fn test_pcm2903cdb_reference() {
+    test_symbol_property("PCM2903CDB", |s| s.reference.clone(), "IC");
+}
+
+#[test]
 fn test_pcm2903cdb_datasheet() {
     test_symbol_option_property(
         "PCM2903CDB",
