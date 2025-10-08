@@ -620,7 +620,7 @@ where
             // Remove datasheet and description from properties map since we're storing them as typed fields
             properties_map.shift_remove("datasheet");
             properties_map.shift_remove("description");
-            
+
             // If prefix is not explicitly provided, try to get it from the symbol's Reference property
             let final_prefix = prefix
                 .or_else(|| {
