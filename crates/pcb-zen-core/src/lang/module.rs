@@ -25,7 +25,6 @@ use starlark::{
 use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::input::InputMap;
 use crate::lang::validation::validate_identifier_name;
 use crate::{Diagnostic, InputValue};
 use regex::Regex;
@@ -398,16 +397,8 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
         debug.field("name", &self.name);
         debug.field("source", &self.source_path);
 
-        // Sort inputs for deterministic output
-        if !self.inputs.is_empty() {
-            let mut inputs: Vec<_> = self.inputs.iter().collect();
-            inputs.sort_by_key(|(k, _)| k.as_str());
-            let inputs_map: std::collections::BTreeMap<_, _> = inputs
-                .into_iter()
-                .map(|(k, v)| (k.as_str(), format!("{v:?}")))
-                .collect();
-            debug.field("inputs", &inputs_map);
-        }
+        // Hide inputs from Debug output (internal implementation detail)
+        // Inputs are copied values from parent - showing them creates snapshot noise
 
         // Sort properties for deterministic output
         if !self.properties.is_empty() {
@@ -436,6 +427,10 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
     pub(crate) fn add_property(&mut self, name: String, value: V) {
         self.properties.insert(name, value);
+    }
+
+    pub(crate) fn add_input(&mut self, name: String, value: V) {
+        self.inputs.insert(name, value);
     }
 
     pub fn new(name: String, source_path: &Path, positions: PositionMap) -> Self {
@@ -734,8 +729,8 @@ where
             )));
         }
 
-        // Collect named arguments into InputMap while handling the special `name` parameter.
-        let mut input_map: InputMap = InputMap::new();
+        // Collect parent values temporarily
+        let mut parent_values: SmallMap<String, Value<'v>> = SmallMap::new();
         let mut provided_names: HashSet<String> = HashSet::new();
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
@@ -805,8 +800,8 @@ where
             }
 
             provided_names.insert(arg_name.as_str().to_string());
-            let iv = InputValue::from_value(value.to_value());
-            input_map.insert(arg_name.as_str().to_string(), iv);
+            // Store parent value temporarily (will copy to child heap before eval)
+            parent_values.insert(arg_name.as_str().to_string(), value.to_value());
         }
         // `name` is required when instantiating a module via its loader.  If the
         // caller omitted it, emit a *soft* diagnostic (non-fatal) and fall back
@@ -837,25 +832,27 @@ where
             self.name.clone()
         };
 
-        // Evaluate the module file with the given inputs
-        let ctx = eval
+        // Create child context and get its heap for copying
+        let mut ctx = eval
             .eval_context()
             .expect("expected eval context")
             .child_context()
             .set_strict_io_config(true);
 
-        let ctx = if let Some(props_map) = properties_override.clone() {
+        ctx = ctx
+            .set_source_path(std::path::PathBuf::from(&self.source_path))
+            .set_module_name(final_name.clone());
+
+        ctx = if let Some(props_map) = properties_override.clone() {
             ctx.set_properties(props_map)
         } else {
             ctx
         };
 
-        let (output, diagnostics) = ctx
-            .set_source_path(std::path::PathBuf::from(&self.source_path))
-            .set_module_name(final_name.clone())
-            .set_inputs(input_map)
-            .eval()
-            .unpack();
+        // Copy parent values to child heap upfront (before evaluation starts)
+        ctx.copy_and_set_inputs_from_values(parent_values)?;
+
+        let (output, diagnostics) = ctx.eval().unpack();
 
         let context = eval
             .module()
@@ -1188,9 +1185,96 @@ fn try_enum_conversion<'v>(
     // Attempt to call the enum factory with the provided `value` as a single
     // positional argument.  This supports common call patterns like passing the
     // variant label as a string (e.g. "NORTH") or the numeric variant index.
+    // Return Ok(None) on failure so other conversion strategies can be tried.
     match eval.eval_function(typ, &[value], &[]) {
         Ok(converted) => Ok(Some(converted)),
-        Err(e) => Err(anyhow::anyhow!(e.to_string())),
+        Err(_) => Ok(None), // Can't convert - let caller try other strategies
+    }
+}
+
+// Helper function to attempt interface promotion when passing an interface to
+// a parameter expecting a simpler type (e.g., Power -> Net).
+// Returns `Ok(Some(promoted))` if promotion succeeds, `Ok(None)` if value is not
+// an interface or can't promote, and `Err(..)` if promotion was attempted but failed.
+fn try_interface_promotion<'v>(
+    value: Value<'v>,
+    expected_typ: Value<'v>,
+    _eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    use crate::lang::interface::{get_promotion_key, get_promotion_map, FrozenInterfaceValue, InterfaceValue};
+
+    // Check if value is an interface instance
+    let (interface_fields, promotion_map) = if let Some(iface) = value.downcast_ref::<InterfaceValue>() {
+        (iface.fields().clone(), get_promotion_map(iface.factory().to_value()))
+    } else if let Some(frozen_iface) = value.downcast_ref::<FrozenInterfaceValue>() {
+        // For frozen interfaces, we need to collect fields into a map we can access
+        let mut fields = SmallMap::new();
+        for (k, v) in frozen_iface.fields().iter() {
+            fields.insert(k.clone(), v.to_value());
+        }
+        (fields, get_promotion_map(frozen_iface.factory().to_value()))
+    } else {
+        return Ok(None); // Not an interface
+    };
+
+    // Get the promotion key for the expected type (e.g., "Net")
+    let expected_key = match get_promotion_key(expected_typ) {
+        Ok(key) => key,
+        Err(_) => return Ok(None), // Can't determine key
+    };
+
+    // Check if the interface can promote to the expected type
+    if let Some(promotion_path) = promotion_map.get(&expected_key) {
+        // Extract the field name from the promotion path (e.g., "NET" from "NET" or "NET.foo")
+        let field_name = promotion_path.split('.').next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid promotion path: {}", promotion_path))?;
+
+        // Get the promoted field value
+        let promoted_value = interface_fields.get(field_name)
+            .ok_or_else(|| anyhow::anyhow!("Promotion field '{}' not found in interface", field_name))?;
+
+        Ok(Some(*promoted_value))
+    } else {
+        Ok(None) // Can't promote to this type
+    }
+}
+
+// Helper to attempt converting dict to record by calling RecordType with kwargs
+fn try_record_conversion<'v>(
+    value: Value<'v>,
+    typ: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    // Only applicable for RecordType values
+    if typ.downcast_ref::<RecordType>().is_none() && typ.downcast_ref::<FrozenRecordType>().is_none() {
+        return Ok(None);
+    }
+
+    // If value is already a record, bail (should have passed validation)
+    use starlark::values::record::Record;
+    if Record::from_value(value).is_some() {
+        return Ok(None);
+    }
+
+    // Try to convert from dict - extract field names and values
+    if let Some(dict) = DictRef::from_value(value) {
+        let mut kwargs = Vec::new();
+        for (k, v) in dict.iter() {
+            if let Some(key_str) = k.unpack_str() {
+                kwargs.push((key_str, v));
+            } else {
+                return Err(anyhow::anyhow!("Record field names must be strings"));
+            }
+        }
+
+        // Call RecordType with kwargs: RecordType(field1=val1, field2=val2, ...)
+        // Return Ok(None) on failure so other conversion strategies can be tried.
+        match eval.eval_function(typ, &[], &kwargs) {
+            Ok(converted) => Ok(Some(converted)),
+            Err(_) => Ok(None), // Can't convert - let caller try other strategies
+        }
+    } else {
+        Ok(None) // Not a dict, can't convert
     }
 }
 
@@ -1206,7 +1290,22 @@ fn validate_or_convert<'v>(
         return Ok(value);
     }
 
-    // 1. If a custom converter was supplied, try that first.
+    // 1. Try automatic conversions for values that were downgraded during copy_value()
+    //    These must happen BEFORE custom converter to preserve transparent copying
+
+    // 1a. If expected type is record and value is dict, auto-convert (record was downgraded)
+    if let Some(converted) = try_record_conversion(value, typ, eval)? {
+        validate_type(name, converted, typ, eval.heap())?;
+        return Ok(converted);
+    }
+
+    // 1b. If expected type is enum and value is string, auto-convert (enum was downgraded)
+    if let Some(converted) = try_enum_conversion(value, typ, eval)? {
+        validate_type(name, converted, typ, eval.heap())?;
+        return Ok(converted);
+    }
+
+    // 2. If a custom converter is provided, use it for other conversions
     if let Some(conv_fn) = convert {
         log::debug!("Converting {name} from {value} to {typ}");
         let converted = eval
@@ -1221,35 +1320,22 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
-    // 2. Try automatic type conversions for common cases
+    // 3. Try automatic int to float conversion (no custom converter)
     let type_str = typ.to_string();
-    match type_str.as_str() {
-        "float" | "Float" => {
-            // Try to convert int to float
-            if let Some(i) = value.unpack_i32() {
-                let float_val = eval.heap().alloc(StarlarkFloat(i as f64));
-                if validate_type(name, float_val, typ, eval.heap()).is_ok() {
-                    return Ok(float_val);
-                }
+    if type_str == "float" || type_str == "Float" {
+        if let Some(i) = value.unpack_i32() {
+            let float_val = eval.heap().alloc(StarlarkFloat(i as f64));
+            if validate_type(name, float_val, typ, eval.heap()).is_ok() {
+                return Ok(float_val);
             }
         }
-        _ => {}
     }
 
-    // 3. Next, if the expected type is an enum, attempt to construct the variant
-    //    by calling the enum factory with the provided value.
-    if let Some(converted) = try_enum_conversion(value, typ, eval)? {
-        // Ensure the converted value is of the correct type (it should be, but
-        // keep the guard for completeness).
-        validate_type(name, converted, typ, eval.heap())?;
-        return Ok(converted);
-    }
-
-    // 4. None of the conversion paths worked – propagate the original validation
-    //    error for a helpful message.
+    // 4. None of the conversion paths worked – propagate the original validation error
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
 }
+
 
 /// Callable wrapper for nets() method on modules
 #[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -1560,14 +1646,17 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         let (result_value, default_for_metadata) = {
             // 1. Value supplied by the parent module.
             if let Some(provided) = eval.request_input(&name, typ)? {
-                // First try a direct validation.
+                // Try validation/conversion in order: direct match, enum, record, interface promotion
                 let value = if validate_type(name.as_str(), provided, typ, eval.heap()).is_ok() {
                     provided
                 } else if let Some(converted) = try_enum_conversion(provided, typ, eval)? {
-                    // If validation failed and `typ` is an enum type, attempt to convert
                     converted
+                } else if let Some(converted) = try_record_conversion(provided, typ, eval)? {
+                    converted
+                } else if let Some(promoted) = try_interface_promotion(provided, typ, eval)? {
+                    promoted
                 } else {
-                    // Fallback: propagate the original validation error.
+                    // All conversions failed - show validation error
                     validate_type(name.as_str(), provided, typ, eval.heap())?;
                     unreachable!();
                 };

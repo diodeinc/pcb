@@ -200,7 +200,7 @@ macro_rules! snapshot_eval {
         #[cfg(not(target_os = "windows"))]
         fn $name() {
             use std::sync::Arc;
-            use pcb_zen_core::{EvalContext, InputMap, CoreLoadResolver, NoopRemoteFetcher};
+            use pcb_zen_core::{EvalContext, CoreLoadResolver, NoopRemoteFetcher};
             use $crate::common::InMemoryFileProvider;
 
             let mut files = std::collections::HashMap::new();
@@ -226,8 +226,7 @@ macro_rules! snapshot_eval {
                 .set_file_provider(file_provider)
                 .set_load_resolver(load_resolver)
                 .set_source_path(std::path::PathBuf::from(&main_file))
-                .set_module_name("<root>")
-                .set_inputs(InputMap::new());
+                .set_module_name("<root>");
 
             let result = ctx.eval();
 

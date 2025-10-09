@@ -56,21 +56,17 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
     fn request_input(
         &mut self,
         name: &str,
-        expected_typ: Value<'v>,
+        _expected_typ: Value<'v>,
     ) -> anyhow::Result<Option<Value<'v>>> {
-        // Take a *copy* of the `InputValue` so we can drop the immutable borrow
-        // of `self` before we try to materialise the value (which needs a
-        // mutable borrow).
-        let iv = if let Some(ctx) = self.context_value() {
-            ctx.inputs().as_ref().and_then(|m| m.get(name).cloned())
-        } else {
-            None
-        };
-
-        match iv {
-            Some(value) => Ok(Some(value.to_value(self, Some(expected_typ))?)),
-            None => Ok(None),
+        // Check module.inputs (already copied from parent using deep_copy_to!)
+        if let Some(ctx) = self.context_value() {
+            let module = ctx.module();
+            if let Some(value) = module.inputs().get(name) {
+                return Ok(Some(value.to_value()));
+            }
         }
+
+        Ok(None)
     }
 
     fn add_property(&self, name: &str, value: Value<'v>) {
