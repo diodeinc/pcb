@@ -17,14 +17,8 @@ pub(crate) trait EvaluatorExt<'v> {
     /// is available.
     fn context_value(&self) -> Option<&ContextValue<'v>>;
 
-    /// Fetch the input value and materialise it on the current heap, using
-    /// `expected_typ` (the second argument passed to `io()` / `config()`) to guide
-    /// reconstruction for complex types such as enums and records.
-    fn request_input(
-        &mut self,
-        name: &str,
-        expected_typ: Value<'v>,
-    ) -> anyhow::Result<Option<Value<'v>>>;
+    /// Fetch the input value from module.inputs (already copied from parent)
+    fn request_input(&mut self, name: &str) -> anyhow::Result<Option<Value<'v>>>;
 
     /// Add a property to the module value.
     fn add_property(&self, name: &str, value: Value<'v>);
@@ -53,11 +47,7 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
             .and_then(|extra| extra.downcast_ref::<ContextValue>())
     }
 
-    fn request_input(
-        &mut self,
-        name: &str,
-        _expected_typ: Value<'v>,
-    ) -> anyhow::Result<Option<Value<'v>>> {
+    fn request_input(&mut self, name: &str) -> anyhow::Result<Option<Value<'v>>> {
         // Check module.inputs (already copied from parent using deep_copy_to!)
         if let Some(ctx) = self.context_value() {
             let module = ctx.module();

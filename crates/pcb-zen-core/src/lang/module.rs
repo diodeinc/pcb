@@ -26,7 +26,7 @@ use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::validation::validate_identifier_name;
-use crate::{Diagnostic, InputValue};
+use crate::Diagnostic;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, Span};
 use starlark::errors::EvalSeverity;
@@ -734,9 +734,7 @@ where
         let mut provided_names: HashSet<String> = HashSet::new();
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
-        let mut properties_override: Option<
-            starlark::collections::SmallMap<String, crate::lang::input::InputValue>,
-        > = None;
+        let mut properties_override: Option<SmallMap<String, Value<'v>>> = None;
 
         for (arg_name, value) in args.names_map()? {
             if arg_name.as_str() == "name" {
@@ -766,18 +764,12 @@ where
                     ))
                 })?;
 
-                let mut map: starlark::collections::SmallMap<
-                    String,
-                    crate::lang::input::InputValue,
-                > = starlark::collections::SmallMap::new();
-
+                let mut map = SmallMap::new();
                 for (k, v) in dict.iter() {
                     let key_str = k.unpack_str().ok_or_else(|| {
                         starlark::Error::new_other(anyhow::anyhow!("property keys must be strings"))
                     })?;
-
-                    let iv = InputValue::from_value(v.to_value());
-                    map.insert(key_str.to_string(), iv);
+                    map.insert(key_str.to_string(), v);
                 }
 
                 properties_override = Some(map);
@@ -788,13 +780,12 @@ where
             if arg_name.as_str() == "dnp" {
                 // Handle dnp kwarg by adding it to properties
                 if properties_override.is_none() {
-                    properties_override = Some(starlark::collections::SmallMap::new());
+                    properties_override = Some(SmallMap::new());
                 }
-                let iv = InputValue::from_value(value.to_value());
                 properties_override
                     .as_mut()
                     .unwrap()
-                    .insert("dnp".to_string(), iv);
+                    .insert("dnp".to_string(), value.to_value());
                 // Do *not* treat `dnp` as an input placeholder.
                 continue;
             }
@@ -843,11 +834,10 @@ where
             .set_source_path(std::path::PathBuf::from(&self.source_path))
             .set_module_name(final_name.clone());
 
-        ctx = if let Some(props_map) = properties_override.clone() {
-            ctx.set_properties(props_map)
-        } else {
-            ctx
-        };
+        // Copy properties to child heap if provided
+        if let Some(props_map) = properties_override {
+            ctx.copy_and_set_properties(props_map)?;
+        }
 
         // Copy parent values to child heap upfront (before evaluation starts)
         ctx.copy_and_set_inputs_from_values(parent_values)?;
@@ -1201,21 +1191,22 @@ fn try_interface_promotion<'v>(
     expected_typ: Value<'v>,
     _eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
-    use crate::lang::interface::{get_promotion_key, get_promotion_map, FrozenInterfaceValue, InterfaceValue};
+    use crate::lang::interface::{get_promotion_key, FrozenInterfaceValue, InterfaceValue};
 
     // Check if value is an interface instance
-    let (interface_fields, promotion_map) = if let Some(iface) = value.downcast_ref::<InterfaceValue>() {
-        (iface.fields().clone(), get_promotion_map(iface.factory().to_value()))
-    } else if let Some(frozen_iface) = value.downcast_ref::<FrozenInterfaceValue>() {
-        // For frozen interfaces, we need to collect fields into a map we can access
-        let mut fields = SmallMap::new();
-        for (k, v) in frozen_iface.fields().iter() {
-            fields.insert(k.clone(), v.to_value());
-        }
-        (fields, get_promotion_map(frozen_iface.factory().to_value()))
-    } else {
-        return Ok(None); // Not an interface
-    };
+    let (interface_fields, promotion_map) =
+        if let Some(iface) = value.downcast_ref::<InterfaceValue>() {
+            (iface.fields().clone(), iface.promotion_by_type().clone())
+        } else if let Some(frozen_iface) = value.downcast_ref::<FrozenInterfaceValue>() {
+            // For frozen interfaces, we need to collect fields into a map we can access
+            let mut fields = SmallMap::new();
+            for (k, v) in frozen_iface.fields().iter() {
+                fields.insert(k.clone(), v.to_value());
+            }
+            (fields, frozen_iface.promotion_by_type().clone())
+        } else {
+            return Ok(None); // Not an interface
+        };
 
     // Get the promotion key for the expected type (e.g., "Net")
     let expected_key = match get_promotion_key(expected_typ) {
@@ -1226,12 +1217,15 @@ fn try_interface_promotion<'v>(
     // Check if the interface can promote to the expected type
     if let Some(promotion_path) = promotion_map.get(&expected_key) {
         // Extract the field name from the promotion path (e.g., "NET" from "NET" or "NET.foo")
-        let field_name = promotion_path.split('.').next()
+        let field_name = promotion_path
+            .split('.')
+            .next()
             .ok_or_else(|| anyhow::anyhow!("Invalid promotion path: {}", promotion_path))?;
 
         // Get the promoted field value
-        let promoted_value = interface_fields.get(field_name)
-            .ok_or_else(|| anyhow::anyhow!("Promotion field '{}' not found in interface", field_name))?;
+        let promoted_value = interface_fields.get(field_name).ok_or_else(|| {
+            anyhow::anyhow!("Promotion field '{}' not found in interface", field_name)
+        })?;
 
         Ok(Some(*promoted_value))
     } else {
@@ -1246,7 +1240,9 @@ fn try_record_conversion<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
     // Only applicable for RecordType values
-    if typ.downcast_ref::<RecordType>().is_none() && typ.downcast_ref::<FrozenRecordType>().is_none() {
+    if typ.downcast_ref::<RecordType>().is_none()
+        && typ.downcast_ref::<FrozenRecordType>().is_none()
+    {
         return Ok(None);
     }
 
@@ -1335,7 +1331,6 @@ fn validate_or_convert<'v>(
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
 }
-
 
 /// Callable wrapper for nets() method on modules
 #[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -1645,7 +1640,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // First compute the actual value that will be returned and the default value to record
         let (result_value, default_for_metadata) = {
             // 1. Value supplied by the parent module.
-            if let Some(provided) = eval.request_input(&name, typ)? {
+            if let Some(provided) = eval.request_input(&name)? {
                 // Try validation/conversion in order: direct match, enum, record, interface promotion
                 let value = if validate_type(name.as_str(), provided, typ, eval.heap()).is_ok() {
                     provided
@@ -1870,7 +1865,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         // First compute the actual value that will be returned
         let result_value = {
             // 1. Value supplied by the parent module.
-            if let Some(provided) = eval.request_input(&name, typ)? {
+            if let Some(provided) = eval.request_input(&name)? {
                 validate_or_convert(&name, provided, typ, convert, eval)?
             } else {
                 // 2. Determine whether the placeholder is required.

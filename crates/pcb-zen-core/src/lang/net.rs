@@ -46,15 +46,17 @@ pub fn reset_net_id_counter() {
 }
 
 #[derive(
-    Clone, PartialEq, Eq, ProvidesStaticType, NoSerialize, Allocative, Trace, Freeze, Coerce,
+    Clone, PartialEq, Eq, ProvidesStaticType, Allocative, Trace, Freeze, Coerce, serde::Serialize,
 )]
 #[repr(C)]
+#[serde(bound = "V: serde::Serialize")]
 pub struct NetValueGen<V> {
     id: NetId,
     name: String,
-    pub original_name: Option<String>, // The name originally requested before deduplication
-    properties: SmallMap<String, V>,
-    symbol: V, // The Symbol value if one was provided (None if not)
+    pub original_name: Option<String>,
+    properties: SmallMap<String, V>, // Auto-serializes since V: Serialize!
+    #[serde(skip)]
+    symbol: V,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {

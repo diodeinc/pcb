@@ -9,8 +9,8 @@ use starlark::{
     values::{starlark_value, Freeze, FreezeResult, Freezer, StarlarkValue, Trace, Value},
 };
 
-use super::net::NetId;
 use super::module::{parse_positions, FrozenModuleValue, ModuleValue};
+use super::net::NetId;
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]

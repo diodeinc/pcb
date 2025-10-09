@@ -15,8 +15,7 @@ use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver,
-    NoopRemoteFetcher,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
 };
 
 pub use pcb_zen_core::file_extensions;

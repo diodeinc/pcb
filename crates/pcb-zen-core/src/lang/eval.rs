@@ -24,7 +24,6 @@ use starlark::{environment::FrozenModule, typing::Interface};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
-use crate::lang::input::InputValue;
 use crate::lang::spice_model::model_globals;
 use crate::lang::{
     builtin::builtin_globals,
@@ -162,21 +161,20 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
     // Handle Record from external starlark crate
     // Record doesn't implement DeepCopyToHeap. We convert to dict {field: value}
     // and try_record_conversion() in validate_or_convert() will reconstruct it.
-    use starlark::values::record::{Record, FrozenRecord};
-    if let Some(record) = v.downcast_ref::<Record>() {
+    use starlark::values::record::{FrozenRecord, Record};
+    if Record::from_value(v).is_some() || v.downcast_ref::<FrozenRecord>().is_some() {
+        // Generic record iteration works for both Record and FrozenRecord
         let mut pairs = Vec::new();
-        for (field_name, field_value) in record.iter() {
-            let copied_value = copy_value(field_value.to_value(), dst)?;
-            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-        }
-        return Ok(dst.alloc(AllocDict(pairs)));
-    }
-
-    if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
-        let mut pairs = Vec::new();
-        for (field_name, field_value) in frozen_record.iter() {
-            let copied_value = copy_value(field_value.to_value(), dst)?;
-            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+        if let Some(record) = v.downcast_ref::<Record>() {
+            for (field_name, field_value) in record.iter() {
+                let copied_value = copy_value(field_value.to_value(), dst)?;
+                pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+            }
+        } else if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
+            for (field_name, field_value) in frozen_record.iter() {
+                let copied_value = copy_value(field_value.to_value(), dst)?;
+                pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+            }
         }
         return Ok(dst.alloc(AllocDict(pairs)));
     }
@@ -335,11 +333,6 @@ pub struct EvalContext {
     /// The name of the module we are evaluating.
     pub(crate) name: Option<String>,
 
-    /// Optional map of custom properties to attach to the root `ModuleValue` before the
-    /// module body is executed. Populated by `ModuleLoader` when the caller passes the
-    /// `properties = {...}` keyword argument.
-    properties: Option<starlark::collections::SmallMap<String, crate::lang::input::InputValue>>,
-
     /// Additional diagnostics from this evaluation context that will be merged with any other
     /// diagnostics attached to the ContextValue.
     diagnostics: RefCell<Vec<Diagnostic>>,
@@ -357,6 +350,43 @@ pub struct EvalContext {
 impl Default for EvalContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Helper to recursively convert JSON to heap values
+fn json_value_to_heap_value<'v>(
+    json: &serde_json::Value,
+    heap: &'v Heap,
+) -> anyhow::Result<Value<'v>> {
+    use starlark::values::dict::AllocDict;
+    match json {
+        serde_json::Value::Null => Ok(Value::new_none()),
+        serde_json::Value::Bool(b) => Ok(Value::new_bool(*b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(heap.alloc(i as i32))
+            } else if let Some(f) = n.as_f64() {
+                Ok(heap.alloc(starlark::values::float::StarlarkFloat(f)))
+            } else {
+                Err(anyhow::anyhow!("Invalid number"))
+            }
+        }
+        serde_json::Value::String(s) => Ok(heap.alloc_str(s).to_value()),
+        serde_json::Value::Array(arr) => {
+            let mut values = Vec::new();
+            for item in arr {
+                values.push(json_value_to_heap_value(item, heap)?);
+            }
+            Ok(heap.alloc(values))
+        }
+        serde_json::Value::Object(obj) => {
+            let mut pairs = Vec::new();
+            for (k, v) in obj {
+                let val = json_value_to_heap_value(v, heap)?;
+                pairs.push((heap.alloc_str(k).to_value(), val));
+            }
+            Ok(heap.alloc(AllocDict(pairs)))
+        }
     }
 }
 
@@ -383,7 +413,6 @@ impl EvalContext {
             source_path: None,
             contents: None,
             name: None,
-            properties: None,
             diagnostics: RefCell::new(Vec::new()),
             file_provider: None,
             load_resolver: None,
@@ -433,7 +462,6 @@ impl EvalContext {
             source_path: None,
             contents: None,
             name: None,
-            properties: None,
             diagnostics: RefCell::new(Vec::new()),
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
@@ -576,23 +604,51 @@ impl EvalContext {
         parent_inputs: SmallMap<String, Value<'_>>,
     ) -> starlark::Result<()> {
         let child_heap = self.module.heap();
-
-        // Create Evaluator temporarily to access ContextValue
         let eval = Evaluator::new(&self.module);
 
-        // Attach ContextValue if not already present
         if self.module.extra_value().is_none() {
             self.module
                 .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
         }
 
-        // Get ContextValue and populate inputs
-        if let Some(ctx_val) = self.module.extra_value().and_then(|e| e.downcast_ref::<ContextValue>()) {
+        if let Some(ctx_val) = self
+            .module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+        {
             let mut module = ctx_val.module_mut();
             for (name, parent_value) in parent_inputs.iter() {
-                let copied = copy_value(*parent_value, child_heap)
-                    .map_err(|e| starlark::Error::new_other(e))?;
+                let copied =
+                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
                 module.add_input(name.clone(), copied);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Copy and set properties from parent values to child module
+    pub fn copy_and_set_properties(
+        &mut self,
+        parent_properties: SmallMap<String, Value<'_>>,
+    ) -> starlark::Result<()> {
+        let child_heap = self.module.heap();
+        let eval = Evaluator::new(&self.module);
+
+        if self.module.extra_value().is_none() {
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+        }
+
+        if let Some(ctx_val) = self
+            .module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+        {
+            for (name, parent_value) in parent_properties.iter() {
+                let copied =
+                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
+                ctx_val.add_property(name.clone(), copied);
             }
         }
 
@@ -604,54 +660,27 @@ impl EvalContext {
         &mut self,
         json_inputs: SmallMap<String, serde_json::Value>,
     ) -> anyhow::Result<()> {
-        use starlark::values::dict::AllocDict;
-
-        // Get heap and allocate all values
         let heap = self.module.heap();
         let mut values = SmallMap::new();
 
+        // Convert all JSON to heap values
         for (key, json) in json_inputs.iter() {
-            let value = match json {
-                serde_json::Value::Null => Value::new_none(),
-                serde_json::Value::Bool(b) => Value::new_bool(*b),
-                serde_json::Value::Number(n) => {
-                    if let Some(i) = n.as_i64() {
-                        heap.alloc(i as i32)
-                    } else if let Some(f) = n.as_f64() {
-                        heap.alloc(starlark::values::float::StarlarkFloat(f))
-                    } else {
-                        return Err(anyhow::anyhow!("Invalid number for '{}'", key));
-                    }
-                }
-                serde_json::Value::String(s) => heap.alloc_str(s).to_value(),
-                serde_json::Value::Array(arr) => {
-                    let mut vec_values = Vec::new();
-                    for item in arr {
-                        vec_values.push(self.json_value_to_heap_value(item, heap)?);
-                    }
-                    heap.alloc(vec_values)
-                }
-                serde_json::Value::Object(obj) => {
-                    let mut pairs = Vec::new();
-                    for (k, v) in obj {
-                        let val = self.json_value_to_heap_value(v, heap)?;
-                        pairs.push((heap.alloc_str(k).to_value(), val));
-                    }
-                    heap.alloc(AllocDict(pairs))
-                }
-            };
+            let value = json_value_to_heap_value(json, heap)?;
             values.insert(key.clone(), value);
         }
 
-        // Populate module inputs
+        // Ensure ContextValue exists and populate inputs
         let eval = Evaluator::new(&self.module);
-
         if self.module.extra_value().is_none() {
             self.module
                 .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
         }
 
-        if let Some(ctx_val) = self.module.extra_value().and_then(|e| e.downcast_ref::<ContextValue>()) {
+        if let Some(ctx_val) = self
+            .module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+        {
             let mut module = ctx_val.module_mut();
             for (name, value) in values.into_iter() {
                 module.add_input(name, value);
@@ -659,50 +688,6 @@ impl EvalContext {
         }
 
         Ok(())
-    }
-
-    fn json_value_to_heap_value<'v>(
-        &self,
-        json: &serde_json::Value,
-        heap: &'v Heap,
-    ) -> anyhow::Result<Value<'v>> {
-        use starlark::values::dict::AllocDict;
-        match json {
-            serde_json::Value::Null => Ok(Value::new_none()),
-            serde_json::Value::Bool(b) => Ok(Value::new_bool(*b)),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(heap.alloc(i as i32))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(heap.alloc(starlark::values::float::StarlarkFloat(f)))
-                } else {
-                    Err(anyhow::anyhow!("Invalid number"))
-                }
-            }
-            serde_json::Value::String(s) => Ok(heap.alloc_str(s).to_value()),
-            serde_json::Value::Array(arr) => {
-                let mut values = Vec::new();
-                for item in arr {
-                    values.push(self.json_value_to_heap_value(item, heap)?);
-                }
-                Ok(heap.alloc(values))
-            }
-            serde_json::Value::Object(obj) => {
-                let mut pairs = Vec::new();
-                for (k, v) in obj {
-                    let val = self.json_value_to_heap_value(v, heap)?;
-                    pairs.push((heap.alloc_str(k).to_value(), val));
-                }
-                Ok(heap.alloc(AllocDict(pairs)))
-            }
-        }
-    }
-
-    /// Specify a map of `name → value` pairs that should be attached as custom
-    /// properties on the module value *before* the Starlark file is executed.
-    pub fn set_properties(mut self, props: SmallMap<String, InputValue>) -> Self {
-        self.properties = Some(props);
-        self
     }
 
     /// Evaluate the configured module. All required fields must be provided
@@ -771,28 +756,10 @@ impl EvalContext {
             eval.set_print_handler(&print_handler);
 
             // Attach a `ContextValue` so user code can access evaluation context.
-            // Only create one if it doesn't already exist (copy_and_set_inputs may have created it)
+            // Only create one if it doesn't already exist (copy_and_set_inputs/properties may have created it)
             if self.module.extra_value().is_none() {
                 self.module
                     .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
-            }
-
-            // If the caller supplied custom properties via `set_properties()` attach them to the
-            // freshly created `ModuleValue` *before* executing the module body so that user code
-            // can observe/override them as needed.
-            if let Some(props) = &self.properties {
-                if let Some(ctx_val) = eval
-                    .module()
-                    .extra_value()
-                    .and_then(|e| e.downcast_ref::<ContextValue>())
-                {
-                    for (key, iv) in props.iter() {
-                        match iv.to_value(&mut eval, None) {
-                            Ok(val) => ctx_val.add_property(key.clone(), val),
-                            Err(e) => return e.into(),
-                        }
-                    }
-                }
             }
 
             let globals = Self::build_globals();
@@ -823,11 +790,11 @@ impl EvalContext {
                         let type_value = param.type_value.to_value();
                         let type_info = TypeInfo::from_value(type_value);
 
-                        // Convert default value to InputValue if present
+                        // Convert default value to JSON using Starlark's native serialization
                         let default_value = param
                             .default_value
                             .as_ref()
-                            .map(|v| InputValue::from_value(v.to_value()));
+                            .and_then(|v| v.to_value().to_json_value().ok());
 
                         ParameterInfo {
                             name: param.name.clone(),

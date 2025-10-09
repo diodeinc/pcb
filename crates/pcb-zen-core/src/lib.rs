@@ -52,7 +52,6 @@ pub use diagnostics::{
 };
 pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
 pub use lang::eval::{EvalContext, EvalOutput};
-pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;
 pub use passes::{AggregatePass, FilterHiddenPass, LspFilterPass, PromoteDeniedPass, SortPass};
 

@@ -226,7 +226,9 @@ impl ModuleLoader {
 }
 
 /// Collect parent values from a test case dictionary
-fn collect_parent_values<'v>(case_dict: &DictRef<'v>) -> anyhow::Result<SmallMap<String, Value<'v>>> {
+fn collect_parent_values<'v>(
+    case_dict: &DictRef<'v>,
+) -> anyhow::Result<SmallMap<String, Value<'v>>> {
     let mut values = SmallMap::new();
     for (key, value) in case_dict.iter() {
         let key_str = key
@@ -294,8 +296,12 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             let parent_values = collect_parent_values(&case_dict)?;
 
             // Evaluate the module with this test case
-            let evaluated_module =
-                loader.evaluate_with_inputs(name.clone(), eval, parent_values, Some(case_name_str))?;
+            let evaluated_module = loader.evaluate_with_inputs(
+                name.clone(),
+                eval,
+                parent_values,
+                Some(case_name_str),
+            )?;
 
             // Store case parameters for later
             let mut params = SmallMap::new();

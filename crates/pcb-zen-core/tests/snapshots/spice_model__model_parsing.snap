@@ -12,10 +12,11 @@ Module {
         type_info: Net,
         required: true,
         default_value: Some(
-            Net {
-                id: 1,
-                name: "P1",
-                properties: {},
+            Object {
+                "id": Number(1),
+                "name": String("P1"),
+                "original_name": Null,
+                "properties": Object {},
             },
         ),
         help: None,
@@ -25,10 +26,11 @@ Module {
         type_info: Net,
         required: true,
         default_value: Some(
-            Net {
-                id: 2,
-                name: "P2",
-                properties: {},
+            Object {
+                "id": Number(2),
+                "name": String("P2"),
+                "original_name": Null,
+                "properties": Object {},
             },
         ),
         help: None,

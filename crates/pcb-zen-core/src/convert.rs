@@ -7,8 +7,7 @@ use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{
-    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, InputValue,
-    NetId,
+    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
 };
 use itertools::Itertools;
 use pcb_sch::position::Position;
@@ -48,8 +47,10 @@ struct ParameterInfo {
     has_default: bool,
     is_config: bool, // true for config(), false for io()
     help: Option<String>,
-    value: Option<InputValue>,
-    default_value: Option<InputValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_value: Option<serde_json::Value>,
 }
 
 impl ModuleConverter {
@@ -302,10 +303,10 @@ impl ModuleConverter {
                 help: param.help.clone(),
                 value: param
                     .actual_value
-                    .map(|v| InputValue::from_value(v.to_value())),
+                    .and_then(|v| v.to_value().to_json_value().ok()),
                 default_value: param
                     .default_value
-                    .map(|v| InputValue::from_value(v.to_value())),
+                    .and_then(|v| v.to_value().to_json_value().ok()),
             });
         }
 
