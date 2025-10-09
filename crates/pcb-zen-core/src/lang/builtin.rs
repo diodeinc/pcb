@@ -11,7 +11,7 @@ use starlark::{
     Error,
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, net2::*, physical::*, stackup::BoardConfig};
+use crate::lang::{evaluator_ext::EvaluatorExt, net::*, physical::*, stackup::BoardConfig};
 
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;
