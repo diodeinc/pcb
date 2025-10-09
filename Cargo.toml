@@ -19,7 +19,7 @@ allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d26
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 
-gltfpack-sys = "0.1.1"
+gltfpack-sys = "0.1.2"
 
 similar = "2.7.0"
 

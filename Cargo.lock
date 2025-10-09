@@ -1629,9 +1629,9 @@ dependencies = [
 
 [[package]]
 name = "gltfpack-sys"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "429a3a943cb2dfba37518c759a6b03e738a6fc61633fcecf73835149a4c09589"
+checksum = "8c950013f326b4e1b8845ede62e133d8b69300833c22fb1fc9ab3019acc91536"
 dependencies = [
  "cc",
 ]
