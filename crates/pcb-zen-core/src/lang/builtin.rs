@@ -11,7 +11,7 @@ use starlark::{
     Error,
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, physical::*, stackup::BoardConfig};
+use crate::lang::{evaluator_ext::EvaluatorExt, net2::*, physical::*, stackup::BoardConfig};
 
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;
@@ -193,6 +193,10 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             .parse()
             .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
         Ok(PhysicalValueType::new(unit.into()))
+    }
+
+    fn net(#[allow(unused_variables)] this: &Builtin, name: String) -> starlark::Result<NetType> {
+        Ok(NetType::new(name))
     }
 
     fn add_electrical_check<'v>(
