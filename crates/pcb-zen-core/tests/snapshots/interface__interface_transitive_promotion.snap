@@ -10,7 +10,8 @@ expression: output
         "Net": {
           "id": 8,
           "name": "CTRL",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
@@ -28,7 +29,8 @@ expression: output
         "Net": {
           "id": 9,
           "name": "PWR",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "voltage": {
@@ -49,14 +51,16 @@ expression: output
         "Net": {
           "id": 10,
           "name": "UART_UART_TX",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "RX": {
         "Net": {
           "id": 11,
           "name": "UART_UART_RX",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
@@ -76,7 +80,8 @@ expression: output
               "Net": {
                 "id": 12,
                 "name": "SYS_power",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "voltage": {
@@ -96,14 +101,16 @@ expression: output
               "Net": {
                 "id": 13,
                 "name": "SYS_uart_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 14,
                 "name": "SYS_uart_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },

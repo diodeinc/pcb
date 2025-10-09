@@ -13,7 +13,8 @@ expression: output
               "Net": {
                 "id": 10,
                 "name": "COMPLETE_power",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "voltage": {
@@ -33,14 +34,16 @@ expression: output
               "Net": {
                 "id": 11,
                 "name": "COMPLETE_uart_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 12,
                 "name": "COMPLETE_uart_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },
@@ -69,7 +72,8 @@ expression: output
               "Net": {
                 "id": 13,
                 "name": "BROKEN_power",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "voltage": {
@@ -89,14 +93,16 @@ expression: output
               "Net": {
                 "id": 14,
                 "name": "BROKEN_uart_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 15,
                 "name": "BROKEN_uart_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },

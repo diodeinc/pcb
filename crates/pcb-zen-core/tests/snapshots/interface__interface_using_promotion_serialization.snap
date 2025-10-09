@@ -10,7 +10,8 @@ expression: output
         "Net": {
           "id": 11,
           "name": "MAIN",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "voltage": {
@@ -31,14 +32,16 @@ expression: output
         "Net": {
           "id": 12,
           "name": "DEBUG_UART_TX",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "RX": {
         "Net": {
           "id": 13,
           "name": "DEBUG_UART_RX",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
@@ -58,14 +61,16 @@ expression: output
               "Net": {
                 "id": 14,
                 "name": "COMM_uart_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 15,
                 "name": "COMM_uart_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },
@@ -78,7 +83,8 @@ expression: output
         "Net": {
           "id": 16,
           "name": "COMM_USART_CK",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
@@ -99,14 +105,16 @@ expression: output
               "Net": {
                 "id": 17,
                 "name": "COMPLEX_uart_field_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 18,
                 "name": "COMPLEX_uart_field_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },
@@ -122,7 +130,8 @@ expression: output
               "Net": {
                 "id": 19,
                 "name": "COMPLEX_power_field",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "voltage": {
@@ -139,7 +148,8 @@ expression: output
         "Net": {
           "id": 20,
           "name": "COMPLEX_REGULAR",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "config": {

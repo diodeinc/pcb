@@ -7,7 +7,8 @@ expression: output
   "Net": {
     "id": 1,
     "name": "SIMPLE_NET",
-    "properties": {}
+    "properties": {},
+    "type_name": "Net"
   }
 }
 === Simple Interface ===
@@ -18,7 +19,8 @@ expression: output
         "Net": {
           "id": 3,
           "name": "PWR",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
@@ -57,7 +59,8 @@ expression: output
               "Net": {
                 "id": 5,
                 "name": "SYS_power",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },

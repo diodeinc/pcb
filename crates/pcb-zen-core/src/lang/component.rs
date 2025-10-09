@@ -688,6 +688,8 @@ impl std::fmt::Display for ComponentType {
 #[starlark_module]
 pub fn component_globals(builder: &mut GlobalsBuilder) {
     const Component: ComponentType = ComponentType;
-    const Net: NetType = NetType;
+    const Net: NetType = NetType {
+        type_name: "Net".to_string(),
+    };
     const Symbol: SymbolType = SymbolType;
 }
