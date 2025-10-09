@@ -39,61 +39,68 @@ pub fn builtin_globals(builder: &mut GlobalsBuilder) {
 
 #[starlark_module]
 fn builtin_methods(methods: &mut MethodsBuilder) {
+    // Backward compatibility attributes - return factory instances
     #[starlark(attribute)]
-    fn Voltage(this: &Builtin) -> starlark::Result<VoltageType> {
-        Ok(VoltageType)
+    fn Voltage(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Volts.into()))
     }
     #[starlark(attribute)]
-    fn Current(this: &Builtin) -> starlark::Result<CurrentType> {
-        Ok(CurrentType)
+    fn Current(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(
+            pcb_sch::PhysicalUnit::Amperes.into(),
+        ))
     }
     #[starlark(attribute)]
-    fn Resistance(this: &Builtin) -> starlark::Result<ResistanceType> {
-        Ok(ResistanceType)
+    fn Resistance(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Ohms.into()))
     }
     #[starlark(attribute)]
-    fn Time(this: &Builtin) -> starlark::Result<TimeType> {
-        Ok(TimeType)
+    fn Time(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(
+            pcb_sch::PhysicalUnit::Seconds.into(),
+        ))
     }
     #[starlark(attribute)]
-    fn Frequency(this: &Builtin) -> starlark::Result<FrequencyType> {
-        Ok(FrequencyType)
+    fn Frequency(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Hertz.into()))
     }
     #[starlark(attribute)]
-    fn Conductance(this: &Builtin) -> starlark::Result<ConductanceType> {
-        Ok(ConductanceType)
+    fn Conductance(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(
+            pcb_sch::PhysicalUnit::Siemens.into(),
+        ))
     }
     #[starlark(attribute)]
-    fn Inductance(this: &Builtin) -> starlark::Result<InductanceType> {
-        Ok(InductanceType)
+    fn Inductance(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(
+            pcb_sch::PhysicalUnit::Henries.into(),
+        ))
     }
     #[starlark(attribute)]
-    fn Capacitance(this: &Builtin) -> starlark::Result<CapacitanceType> {
-        Ok(CapacitanceType)
+    fn Capacitance(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Farads.into()))
     }
     #[starlark(attribute)]
-    fn Temperature(this: &Builtin) -> starlark::Result<TemperatureType> {
-        Ok(TemperatureType)
+    fn Temperature(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Kelvin.into()))
     }
     #[starlark(attribute)]
-    fn Charge(this: &Builtin) -> starlark::Result<ChargeType> {
-        Ok(ChargeType)
+    fn Charge(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(
+            pcb_sch::PhysicalUnit::Coulombs.into(),
+        ))
     }
     #[starlark(attribute)]
-    fn Power(this: &Builtin) -> starlark::Result<PowerType> {
-        Ok(PowerType)
+    fn Power(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Watts.into()))
     }
     #[starlark(attribute)]
-    fn Energy(this: &Builtin) -> starlark::Result<EnergyType> {
-        Ok(EnergyType)
+    fn Energy(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Joules.into()))
     }
     #[starlark(attribute)]
-    fn MagneticFlux(this: &Builtin) -> starlark::Result<MagneticFluxType> {
-        Ok(MagneticFluxType)
-    }
-    #[starlark(attribute)]
-    fn PhysicalValue(this: &Builtin) -> starlark::Result<PhysicalValueType> {
-        Ok(PhysicalValueType)
+    fn MagneticFlux(this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(pcb_sch::PhysicalUnit::Webers.into()))
     }
 
     fn add_board_config<'v>(
@@ -161,6 +168,16 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             .parse()
             .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
         Ok(PhysicalRangeType::new(unit.into()))
+    }
+
+    fn physical_value(
+        #[allow(unused_variables)] this: &Builtin,
+        unit: String,
+    ) -> starlark::Result<PhysicalValueType> {
+        let unit: pcb_sch::PhysicalUnit = unit
+            .parse()
+            .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
+        Ok(PhysicalValueType::new(unit.into()))
     }
 
     fn add_electrical_check<'v>(

@@ -998,52 +998,86 @@ impl EvalContext {
             return;
         }
 
+        use pcb_sch::PhysicalUnit;
         let heap = self.module.heap();
+
         if self.module.get("Voltage").is_some() {
-            self.module.set("Voltage", heap.alloc_simple(VoltageType));
+            self.module.set(
+                "Voltage",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Volts.into())),
+            );
         }
         if self.module.get("Current").is_some() {
-            self.module.set("Current", heap.alloc_simple(CurrentType));
+            self.module.set(
+                "Current",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Amperes.into())),
+            );
         }
         if self.module.get("Resistance").is_some() {
-            self.module
-                .set("Resistance", heap.alloc_simple(ResistanceType));
+            self.module.set(
+                "Resistance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Ohms.into())),
+            );
         }
         if self.module.get("Capacitance").is_some() {
-            self.module
-                .set("Capacitance", heap.alloc_simple(CapacitanceType));
+            self.module.set(
+                "Capacitance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Farads.into())),
+            );
         }
         if self.module.get("Inductance").is_some() {
-            self.module
-                .set("Inductance", heap.alloc_simple(InductanceType));
+            self.module.set(
+                "Inductance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Henries.into())),
+            );
         }
         if self.module.get("Frequency").is_some() {
-            self.module
-                .set("Frequency", heap.alloc_simple(FrequencyType));
+            self.module.set(
+                "Frequency",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Hertz.into())),
+            );
         }
         if self.module.get("Time").is_some() {
-            self.module.set("Time", heap.alloc_simple(TimeType));
+            self.module.set(
+                "Time",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Seconds.into())),
+            );
         }
         if self.module.get("Temperature").is_some() {
-            self.module
-                .set("Temperature", heap.alloc_simple(TemperatureType));
+            self.module.set(
+                "Temperature",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Kelvin.into())),
+            );
         }
         if self.module.get("Charge").is_some() {
-            self.module.set("Charge", heap.alloc_simple(ChargeType));
+            self.module.set(
+                "Charge",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Coulombs.into())),
+            );
         }
         if self.module.get("Power").is_some() {
-            self.module.set("Power", heap.alloc_simple(PowerType));
+            self.module.set(
+                "Power",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Watts.into())),
+            );
         }
         if self.module.get("Energy").is_some() {
-            self.module.set("Energy", heap.alloc_simple(EnergyType));
+            self.module.set(
+                "Energy",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Joules.into())),
+            );
         }
         if self.module.get("Conductance").is_some() {
-            self.module
-                .set("Conductance", heap.alloc_simple(ConductanceType));
+            self.module.set(
+                "Conductance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Siemens.into())),
+            );
         }
         if self.module.get("MagneticFlux").is_some() {
-            self.module
-                .set("MagneticFlux", heap.alloc_simple(MagneticFluxType));
+            self.module.set(
+                "MagneticFlux",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Webers.into())),
+            );
         }
     }
 

@@ -2,19 +2,19 @@
 PI = 3.14159265358979323846
 
 # Toleranced units
-Time = builtin.Time
-Current = builtin.Current
-Voltage = builtin.Voltage
-Capacitance = builtin.Capacitance
-Resistance = builtin.Resistance
-Inductance = builtin.Inductance
-Frequency = builtin.Frequency
-Temperature = builtin.Temperature
-Charge = builtin.Charge
-Power = builtin.Power
-Energy = builtin.Energy
-MagneticFlux = builtin.MagneticFlux
-Conductance = builtin.Conductance
+Time = builtin.physical_value("s")
+Current = builtin.physical_value("A")
+Voltage = builtin.physical_value("V")
+Capacitance = builtin.physical_value("F")
+Resistance = builtin.physical_value("Ohm")
+Inductance = builtin.physical_value("Ohm")
+Frequency = builtin.physical_value("Hz")
+Temperature = builtin.physical_value("K")
+Charge = builtin.physical_value("C")
+Power = builtin.physical_value("W")
+Energy = builtin.physical_value("J")
+MagneticFlux = builtin.physical_value("Wb")
+Conductance = builtin.physical_value("S")
 
 VoltageRange = builtin.physical_range("V")
 CurrentRange = builtin.physical_range("A")
