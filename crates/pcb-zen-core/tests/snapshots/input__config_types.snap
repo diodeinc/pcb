@@ -69,9 +69,7 @@ Module {
         type_info: String,
         required: false,
         default_value: Some(
-            String(
-                "default_value",
-            ),
+            String("default_value"),
         ),
         help: None,
     },
@@ -80,9 +78,7 @@ Module {
         type_info: Int,
         required: false,
         default_value: Some(
-            Int(
-                42,
-            ),
+            Number(42),
         ),
         help: None,
     },
@@ -91,9 +87,7 @@ Module {
         type_info: Float,
         required: false,
         default_value: Some(
-            Float(
-                3.14,
-            ),
+            Number(3.14),
         ),
         help: None,
     },
@@ -102,9 +96,7 @@ Module {
         type_info: Bool,
         required: false,
         default_value: Some(
-            Bool(
-                true,
-            ),
+            Bool(true),
         ),
         help: None,
     },
@@ -120,10 +112,11 @@ Module {
         type_info: Net,
         required: true,
         default_value: Some(
-            Net {
-                id: 1,
-                name: "net_io",
-                properties: {},
+            Object {
+                "id": Number(1),
+                "name": String("net_io"),
+                "original_name": Null,
+                "properties": Object {},
             },
         ),
         help: None,
@@ -133,10 +126,11 @@ Module {
         type_info: Net,
         required: false,
         default_value: Some(
-            Net {
-                id: 2,
-                name: "opt_net_io",
-                properties: {},
+            Object {
+                "id": Number(2),
+                "name": String("opt_net_io"),
+                "original_name": Null,
+                "properties": Object {},
             },
         ),
         help: None,
@@ -158,21 +152,23 @@ Module {
         },
         required: true,
         default_value: Some(
-            Interface {
-                fields: {
-                    "vcc": Net {
-                        id: 3,
-                        name: "power_io_vcc",
-                        properties: {},
+            Object {
+                "fields": Object {
+                    "gnd": Object {
+                        "id": Number(4),
+                        "name": String("power_io_gnd"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
-                    "gnd": Net {
-                        id: 4,
-                        name: "power_io_gnd",
-                        properties: {},
+                    "vcc": Object {
+                        "id": Number(3),
+                        "name": String("power_io_vcc"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
                 },
-                promotion_by_type: {
-                    "Power": "",
+                "promotion_by_type": Object {
+                    "Power": String(""),
                 },
             },
         ),
@@ -195,21 +191,23 @@ Module {
         },
         required: false,
         default_value: Some(
-            Interface {
-                fields: {
-                    "vcc": Net {
-                        id: 5,
-                        name: "opt_power_io_vcc",
-                        properties: {},
+            Object {
+                "fields": Object {
+                    "gnd": Object {
+                        "id": Number(6),
+                        "name": String("opt_power_io_gnd"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
-                    "gnd": Net {
-                        id: 6,
-                        name: "opt_power_io_gnd",
-                        properties: {},
+                    "vcc": Object {
+                        "id": Number(5),
+                        "name": String("opt_power_io_vcc"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
                 },
-                promotion_by_type: {
-                    "Power": "",
+                "promotion_by_type": Object {
+                    "Power": String(""),
                 },
             },
         ),
@@ -236,26 +234,29 @@ Module {
         },
         required: true,
         default_value: Some(
-            Interface {
-                fields: {
-                    "data": Net {
-                        id: 7,
-                        name: "bus_io_data",
-                        properties: {},
+            Object {
+                "fields": Object {
+                    "clock": Object {
+                        "id": Number(8),
+                        "name": String("bus_io_clock"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
-                    "clock": Net {
-                        id: 8,
-                        name: "bus_io_clock",
-                        properties: {},
+                    "data": Object {
+                        "id": Number(7),
+                        "name": String("bus_io_data"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
-                    "enable": Net {
-                        id: 9,
-                        name: "bus_io_enable",
-                        properties: {},
+                    "enable": Object {
+                        "id": Number(9),
+                        "name": String("bus_io_enable"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
                 },
-                promotion_by_type: {
-                    "DataBus": "",
+                "promotion_by_type": Object {
+                    "DataBus": String(""),
                 },
             },
         ),
@@ -310,55 +311,61 @@ Module {
         },
         required: true,
         default_value: Some(
-            Interface {
-                fields: {
-                    "power": Interface {
-                        fields: {
-                            "vcc": Net {
-                                id: 10,
-                                name: "system_io_power_vcc",
-                                properties: {},
+            Object {
+                "fields": Object {
+                    "bus": Object {
+                        "fields": Object {
+                            "clock": Object {
+                                "id": Number(13),
+                                "name": String("system_io_bus_clock"),
+                                "original_name": Null,
+                                "properties": Object {},
                             },
-                            "gnd": Net {
-                                id: 11,
-                                name: "system_io_power_gnd",
-                                properties: {},
+                            "data": Object {
+                                "id": Number(12),
+                                "name": String("system_io_bus_data"),
+                                "original_name": Null,
+                                "properties": Object {},
                             },
-                        },
-                        promotion_by_type: {
-                            "Power": "",
-                        },
-                    },
-                    "bus": Interface {
-                        fields: {
-                            "data": Net {
-                                id: 12,
-                                name: "system_io_bus_data",
-                                properties: {},
-                            },
-                            "clock": Net {
-                                id: 13,
-                                name: "system_io_bus_clock",
-                                properties: {},
-                            },
-                            "enable": Net {
-                                id: 14,
-                                name: "system_io_bus_enable",
-                                properties: {},
+                            "enable": Object {
+                                "id": Number(14),
+                                "name": String("system_io_bus_enable"),
+                                "original_name": Null,
+                                "properties": Object {},
                             },
                         },
-                        promotion_by_type: {
-                            "DataBus": "",
+                        "promotion_by_type": Object {
+                            "DataBus": String(""),
                         },
                     },
-                    "reset": Net {
-                        id: 15,
-                        name: "system_io_reset",
-                        properties: {},
+                    "power": Object {
+                        "fields": Object {
+                            "gnd": Object {
+                                "id": Number(11),
+                                "name": String("system_io_power_gnd"),
+                                "original_name": Null,
+                                "properties": Object {},
+                            },
+                            "vcc": Object {
+                                "id": Number(10),
+                                "name": String("system_io_power_vcc"),
+                                "original_name": Null,
+                                "properties": Object {},
+                            },
+                        },
+                        "promotion_by_type": Object {
+                            "Power": String(""),
+                        },
+                    },
+                    "reset": Object {
+                        "id": Number(15),
+                        "name": String("system_io_reset"),
+                        "original_name": Null,
+                        "properties": Object {},
                     },
                 },
-                promotion_by_type: {
-                    "System": "",
+                "promotion_by_type": Object {
+                    "System": String(""),
                 },
             },
         ),

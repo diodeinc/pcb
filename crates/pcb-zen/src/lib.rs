@@ -15,8 +15,7 @@ use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, InputMap, LoadResolver,
-    NoopRemoteFetcher,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
 };
 
 pub use pcb_zen_core::file_extensions;
@@ -66,13 +65,11 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
         load_resolver.track_file(&pcb_toml_path);
     }
 
-    let inputs = InputMap::new();
     EvalContext::new()
         .set_file_provider(file_provider)
         .set_load_resolver(load_resolver)
         .set_source_path(abs_path)
         .set_module_name("<root>".to_string())
-        .set_inputs(inputs)
         .eval()
 }
 

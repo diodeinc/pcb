@@ -9,11 +9,8 @@ use starlark::{
     values::{starlark_value, Freeze, FreezeResult, Freezer, StarlarkValue, Trace, Value},
 };
 
+use super::module::{parse_positions, FrozenModuleValue, ModuleValue};
 use super::net::NetId;
-use super::{
-    input::InputMap,
-    module::{parse_positions, FrozenModuleValue, ModuleValue},
-};
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
@@ -162,10 +159,6 @@ impl<'v> ContextValue<'v> {
     #[allow(dead_code)]
     pub(crate) fn diagnostics(&self) -> std::cell::Ref<'_, Vec<crate::Diagnostic>> {
         self.diagnostics.borrow()
-    }
-
-    pub fn inputs(&self) -> Option<&InputMap> {
-        self.parent_context().inputs.as_ref()
     }
 
     /// Return the absolute source path of the Starlark file currently being evaluated.

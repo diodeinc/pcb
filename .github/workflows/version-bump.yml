@@ -1,0 +1,68 @@
+name: Version Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
+            echo "Invalid version format. Use v1.2.3"
+            exit 1
+          fi
+
+          # Check if tag already exists
+          if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.name "Diode Robot"
+          git config user.email "info@diode.run"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update version in Cargo.toml
+        run: |
+          VERSION="${{ inputs.version }}"
+          CARGO_VERSION="${VERSION#v}"
+          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" Cargo.toml
+
+          # Verify the update worked
+          if ! grep -q "^version = \"${CARGO_VERSION}\"" Cargo.toml; then
+            echo "Failed to update version in Cargo.toml"
+            exit 1
+          fi
+
+      - name: Update Cargo.lock
+        run: cargo check
+
+      - name: Commit and push
+        run: |
+          git add Cargo.toml Cargo.lock
+          git commit -m "Release ${{ inputs.version }}"
+          git push origin main
+
+      - name: Create and push tag
+        run: |
+          git tag ${{ inputs.version }}
+          git push origin ${{ inputs.version }}

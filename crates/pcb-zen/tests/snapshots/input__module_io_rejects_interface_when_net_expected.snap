@@ -17,4 +17,4 @@ expression: netlist
   )
 )
 Error: [TEMP_DIR]parent.zen:8:1-36 Error instantiating `child`
-Error: [TEMP_DIR]child.zen:2:10-27 Expected 'Net', received: [SingleNet]
+Error: [TEMP_DIR]child.zen:2:10-27 Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net { name: "SIG", id: "<ID>", symbol: Value(NoneType) })

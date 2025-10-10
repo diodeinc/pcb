@@ -125,7 +125,10 @@ const MANUFACTURING_TASKS: &[(&str, TaskFn)] = &[
     ("Generating pick-and-place file", generate_cpl),
     ("Generating assembly drawings", generate_assembly_drawings),
     ("Generating ODB++ files", generate_odb),
-    ("Generating 3D models", generate_3d_models),
+    ("Generating STEP model", generate_step_model),
+    ("Generating VRML model", generate_vrml_model),
+    ("Generating GLB model", generate_glb_model),
+    ("Generating SVG rendering", generate_svg_rendering),
 ];
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
@@ -1052,8 +1055,8 @@ fn generate_odb(info: &ReleaseInfo) -> Result<()> {
     Ok(())
 }
 
-/// Generate 3D models (STEP, VRML, SVG)
-fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
+/// Generate STEP model
+fn generate_step_model(info: &ReleaseInfo) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
@@ -1061,6 +1064,7 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
 
     // Create a temp file to capture and discard verbose KiCad output
     let devnull = tempfile::tempfile()?;
+
     // Generate STEP model - KiCad CLI has platform-specific exit code issues
     let step_path = models_dir.join("model.step");
     let step_result = KiCadCliBuilder::new()
@@ -1077,7 +1081,7 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg("--include-silkscreen")
         .arg("--include-soldermask")
         .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull.try_clone()?)
+        .log_file(devnull)
         .suppress_error_output(true)
         .run();
 
@@ -1088,6 +1092,19 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
             return Err(e).context("Failed to generate STEP model");
         }
     }
+
+    Ok(())
+}
+
+/// Generate VRML model
+fn generate_vrml_model(info: &ReleaseInfo) -> Result<()> {
+    let models_dir = info.staging_dir.join("3d");
+    fs::create_dir_all(&models_dir)?;
+
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+
+    // Create a temp file to capture and discard verbose KiCad output
+    let devnull = tempfile::tempfile()?;
 
     // Generate VRML model - KiCad CLI has platform-specific exit code issues
     let wrl_path = models_dir.join("model.wrl");
@@ -1100,7 +1117,7 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg("--units")
         .arg("mm")
         .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull.try_clone()?)
+        .log_file(devnull)
         .suppress_error_output(true)
         .run();
 
@@ -1111,6 +1128,70 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
             return Err(e).context("Failed to generate VRML model");
         }
     }
+
+    Ok(())
+}
+
+/// Generate GLB model
+fn generate_glb_model(info: &ReleaseInfo) -> Result<()> {
+    let models_dir = info.staging_dir.join("3d");
+    fs::create_dir_all(&models_dir)?;
+
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+
+    // Create a temp file to capture and discard verbose KiCad output
+    let devnull = tempfile::tempfile()?;
+
+    // Generate GLB model - KiCad CLI has platform-specific exit code issues
+    let glb_path = models_dir.join("model.glb");
+    let glb_result = KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("glb")
+        .arg("--output")
+        .arg(glb_path.to_string_lossy())
+        .arg("--subst-models")
+        .arg("--force")
+        .arg("--no-dnp")
+        .arg("--no-unspecified")
+        .arg("--include-pads")
+        .arg("--include-silkscreen")
+        .arg("--include-soldermask")
+        .arg(kicad_pcb_path.to_string_lossy())
+        .log_file(devnull)
+        .suppress_error_output(true)
+        .run();
+
+    if let Err(e) = glb_result {
+        if glb_path.exists() {
+            warn!("KiCad CLI reported error but GLB file was created: {e}");
+        } else {
+            return Err(e).context("Failed to generate GLB model");
+        }
+    }
+
+    // Optimize GLB file with gltfpack
+    match gltfpack_sys::compress(&glb_path, &glb_path) {
+        Ok(()) => {
+            debug!("GLB file optimized successfully with gltfpack");
+        }
+        Err(code) => {
+            warn!("gltfpack failed with error code: {code}, skipping optimization");
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate SVG rendering
+fn generate_svg_rendering(info: &ReleaseInfo) -> Result<()> {
+    let models_dir = info.staging_dir.join("3d");
+    fs::create_dir_all(&models_dir)?;
+
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+
+    // Create a temp file to capture and discard verbose KiCad output
+    let devnull = tempfile::tempfile()?;
 
     // Generate SVG rendering - KiCad CLI has platform-specific exit code issues
     let svg_path = models_dir.join("model.svg");
@@ -1125,7 +1206,7 @@ fn generate_3d_models(info: &ReleaseInfo) -> Result<()> {
         .arg("--page-size-mode")
         .arg("2") // Board area only
         .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull.try_clone()?)
+        .log_file(devnull)
         .suppress_error_output(true)
         .run();
 

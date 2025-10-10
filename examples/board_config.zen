@@ -120,6 +120,7 @@ BoardConfig = record(
     design_rules=field(DesignRules | None, None),
     stackup=field(Stackup | None, None),  # Board stackup configuration
     num_user_layers=field(int, 4),  # Number of User.N layers (User.1, User.2, etc.)
+    spec=field(str | None, None),  # Path to a specification file
 )
 
 
@@ -238,11 +239,32 @@ def merge_configs(*configs: BoardConfig) -> BoardConfig:
 
 def Board(
     name: str,
-    config: BoardConfig,
     layout_path: str,
+    config: BoardConfig | None = None,
+    layers: int | None = None,
     layout_hints: list | None = None,
     default: bool = False,
 ):
+    # If config is not provided, construct it from layers
+    if config == None:
+        if layers == None:
+            error("Either 'config' or 'layers' must be provided")
+        elif layers == 2:
+            stackup = BASE_2L_STACKUP
+        elif layers == 4:
+            stackup = BASE_4L_STACKUP
+        elif layers == 6:
+            stackup = BASE_6L_STACKUP
+        elif layers == 8:
+            stackup = BASE_8L_STACKUP
+        else:
+            error("layers must be 2, 4, 6, or 8")
+
+        config = BoardConfig(
+            design_rules=BASE_DESIGN_RULES,
+            stackup=stackup,
+        )
+
     builtin.add_board_config(
         name=name,
         default=default,
@@ -272,7 +294,24 @@ BASE_PREPREG = Material(
 
 # Common stackup configurations
 
+# Base 2-layer stackup (1.6mm, 1oz outer)
+# SIG/SIG
+BASE_2L_STACKUP = Stackup(
+    materials=[FR4_CORE],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="HAL SnPb",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=1.53, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
 # Base 4-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/PWR/SIG
 BASE_4L_STACKUP = Stackup(
     materials=[FR4_CORE, BASE_PREPREG],
     thickness=1.6,
@@ -287,6 +326,84 @@ BASE_4L_STACKUP = Stackup(
         DielectricLayer(thickness=1.065, material="FR4-Core", form="core"),
         CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
         DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
+# Base 6-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/(SIG/PWR)/(SIG/PWR)/GND/SIG
+BASE_6L_STACKUP = Stackup(
+    materials=[
+        FR4_CORE,
+        Material(
+            name="2116",
+            relative_permittivity=4.16,
+            loss_tangent=0.025,
+        ),
+        Material(
+            name="3313",
+            relative_permittivity=4.1,
+            loss_tangent=0.025,
+        ),
+    ],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="HAL SnPb",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=0.09940, material="3313", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=0.55, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.11640, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L4 (0.5oz)
+        DielectricLayer(thickness=0.55, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L5 (0.5oz)
+        DielectricLayer(thickness=0.09940, material="3313", form="prepreg"),
+        CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
+    ],
+)
+
+# Base 8-layer stackup (1.6mm, 1oz outer/0.5oz inner)
+# SIG/GND/SIG/PWR/GND/SIG/GND/SIG
+BASE_8L_STACKUP = Stackup(
+    materials=[
+        FR4_CORE,
+        Material(
+            name="2116",
+            relative_permittivity=4.16,
+            loss_tangent=0.025,
+        ),
+        Material(
+            name="1080",
+            relative_permittivity=3.91,
+            loss_tangent=0.025,
+        ),
+    ],
+    thickness=1.6,
+    symmetric=True,
+    copper_finish="HAL SnPb",
+    silk_screen_color="White",
+    solder_mask_color="Black",
+    layers=[
+        CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
+        DielectricLayer(thickness=0.1164, material="2116", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L2 (0.5oz)
+        DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L3 (0.5oz)
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L4 (0.5oz)
+        DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L5 (0.5oz)
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L6 (0.5oz)
+        DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L7 (0.5oz)
+        DielectricLayer(thickness=0.1164, material="2116", form="prepreg"),
         CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
     ],
 )
@@ -370,13 +487,14 @@ BASE_PREDEFINED_SIZES = PredefinedSizes(
 )
 
 # Base board configurations that can be extended
+BASE_DESIGN_RULES = DesignRules(
+    constraints=BASE_CONSTRAINTS,
+    predefined_sizes=BASE_PREDEFINED_SIZES,
+    netclasses=[DEFAULT_NETCLASS],
+)
 
 # Complete base 4-layer board configuration (1oz outer, 0.5oz inner, base constraints)
 BASE_4L = BoardConfig(
-    design_rules=DesignRules(
-        constraints=BASE_CONSTRAINTS,
-        predefined_sizes=BASE_PREDEFINED_SIZES,
-        netclasses=[DEFAULT_NETCLASS],
-    ),
+    design_rules=BASE_DESIGN_RULES,
     stackup=BASE_4L_STACKUP,
 )

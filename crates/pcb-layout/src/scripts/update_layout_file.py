@@ -1994,8 +1994,16 @@ class ImportNetlist(Step):
             fp.GetFieldByName("Path").SetVisible(False)
 
             for prop in part.properties:
-                # Skip value, Reference, reference, and specially handled properties
-                if prop.name.lower() not in [
+                # Handle datasheet specially - use the built-in KiCad "Datasheet" field
+                if prop.name.lower() == "datasheet":
+                    fp.GetFieldByName("Datasheet").SetText(prop.value)
+                    fp.GetFieldByName("Datasheet").SetVisible(False)
+                # Handle description specially - use the built-in KiCad "Description" field
+                elif prop.name.lower() == "description":
+                    fp.GetFieldByName("Description").SetText(prop.value)
+                    fp.GetFieldByName("Description").SetVisible(False)
+                # Skip built-in fields and specially handled properties
+                elif prop.name.lower() not in [
                     "value",
                     "reference",
                     "dnp",  # Skip the standardized dnp attribute (handled above)

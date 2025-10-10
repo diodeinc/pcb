@@ -24,7 +24,6 @@ use starlark::{environment::FrozenModule, typing::Interface};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
-use crate::lang::input::{InputMap, InputValue};
 use crate::lang::spice_model::model_globals;
 use crate::lang::{
     builtin::builtin_globals,
@@ -86,6 +85,80 @@ unsafe impl<'v> ProvidesStaticType<'v> for dyn DeepCopyToHeap + 'v {
     type StaticType = dyn DeepCopyToHeap;
 }
 
+// Implement DeepCopyToHeap for ListRef
+impl<'v> DeepCopyToHeap for starlark::values::list::ListRef<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        let mut new_list = Vec::new();
+        for item in self.iter() {
+            new_list.push(copy_value(item, dst)?);
+        }
+        Ok(dst.alloc(new_list))
+    }
+}
+
+// Implement DeepCopyToHeap for DictRef
+impl<'v> DeepCopyToHeap for DictRef<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        let mut new_map = Vec::new();
+        for (k, v) in self.iter() {
+            let new_key = copy_value(k, dst)?;
+            let new_value = copy_value(v, dst)?;
+            new_map.push((new_key, new_value));
+        }
+        Ok(dst.alloc(AllocDict(new_map)))
+    }
+}
+
+// Implement DeepCopyToHeap for EnumValue
+impl<'v> DeepCopyToHeap for starlark::values::enumeration::EnumValue<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // Extract variant from string representation: EnumType("variant")
+        // Return as string - try_enum_conversion() will convert back to EnumValue
+        let repr = self.to_string();
+        let variant = if let Some(first_quote) = repr.find('"') {
+            if let Some(last_quote) = repr.rfind('"') {
+                if first_quote < last_quote {
+                    &repr[first_quote + 1..last_quote]
+                } else {
+                    &repr
+                }
+            } else {
+                &repr
+            }
+        } else {
+            &repr
+        };
+
+        Ok(dst.alloc_str(variant).to_value())
+    }
+}
+
+// Implement DeepCopyToHeap for Record
+impl<'v> DeepCopyToHeap for starlark::values::record::Record<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // Convert record to dict - try_record_conversion() will reconstruct it
+        let mut pairs = Vec::new();
+        for (field_name, field_value) in self.iter() {
+            let copied_value = copy_value(field_value.to_value(), dst)?;
+            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+        }
+        Ok(dst.alloc(AllocDict(pairs)))
+    }
+}
+
+// Implement DeepCopyToHeap for FrozenRecord
+impl DeepCopyToHeap for starlark::values::record::FrozenRecord {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // Convert record to dict - try_record_conversion() will reconstruct it
+        let mut pairs = Vec::new();
+        for (field_name, field_value) in self.iter() {
+            let copied_value = copy_value(field_value.to_value(), dst)?;
+            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+        }
+        Ok(dst.alloc(AllocDict(pairs)))
+    }
+}
+
 pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
     if v.is_none() {
         return Ok(Value::new_none().to_value());
@@ -99,18 +172,23 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
         return Ok(dst.alloc(i));
     }
 
+    if let Some(f) = v.downcast_ref::<starlark::values::float::StarlarkFloat>() {
+        return Ok(dst.alloc(starlark::values::float::StarlarkFloat(f.0)));
+    }
+
     if let Some(s) = v.unpack_str() {
         return Ok(dst.alloc_str(s).to_value());
     }
 
-    if let Some(m) = DictRef::from_value(v) {
-        let mut new_map = Vec::new();
-        for (k, v) in m.iter() {
-            let new_key = copy_value(k, dst)?;
-            let new_value = copy_value(v, dst)?;
-            new_map.push((new_key, new_value));
-        }
-        return Ok(dst.alloc(AllocDict(new_map)));
+    // Handle ListRef - use trait implementation
+    use starlark::values::list::ListRef;
+    if let Some(list) = ListRef::from_value(v) {
+        return list.deep_copy_to(dst);
+    }
+
+    // Handle DictRef - use trait implementation
+    if let Some(dict) = DictRef::from_value(v) {
+        return dict.deep_copy_to(dst);
     }
 
     // Handle FieldGen from external starlark crate
@@ -121,6 +199,22 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
         return Ok(Value::new_none());
     }
 
+    // Handle EnumValue - use trait implementation
+    use starlark::values::enumeration::EnumValue;
+    if let Some(enum_val) = EnumValue::from_value(v) {
+        return enum_val.deep_copy_to(dst);
+    }
+
+    // Handle Record/FrozenRecord - use trait implementations
+    use starlark::values::record::{FrozenRecord, Record};
+    if let Some(record) = v.downcast_ref::<Record>() {
+        return record.deep_copy_to(dst);
+    }
+    if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
+        return frozen_record.deep_copy_to(dst);
+    }
+
+    // Fallback to generic DeepCopyToHeap trait for other types
     if let Some(dc) = v.request_value::<&dyn DeepCopyToHeap>() {
         return dc.deep_copy_to(dst);
     }
@@ -275,14 +369,6 @@ pub struct EvalContext {
     /// The name of the module we are evaluating.
     pub(crate) name: Option<String>,
 
-    /// The inputs of the module we are evaluating.
-    pub(crate) inputs: Option<InputMap>,
-
-    /// Optional map of custom properties to attach to the root `ModuleValue` before the
-    /// module body is executed. Populated by `ModuleLoader` when the caller passes the
-    /// `properties = {...}` keyword argument.
-    properties: Option<starlark::collections::SmallMap<String, crate::lang::input::InputValue>>,
-
     /// Additional diagnostics from this evaluation context that will be merged with any other
     /// diagnostics attached to the ContextValue.
     diagnostics: RefCell<Vec<Diagnostic>>,
@@ -300,6 +386,43 @@ pub struct EvalContext {
 impl Default for EvalContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Helper to recursively convert JSON to heap values
+fn json_value_to_heap_value<'v>(
+    json: &serde_json::Value,
+    heap: &'v Heap,
+) -> anyhow::Result<Value<'v>> {
+    use starlark::values::dict::AllocDict;
+    match json {
+        serde_json::Value::Null => Ok(Value::new_none()),
+        serde_json::Value::Bool(b) => Ok(Value::new_bool(*b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(heap.alloc(i as i32))
+            } else if let Some(f) = n.as_f64() {
+                Ok(heap.alloc(starlark::values::float::StarlarkFloat(f)))
+            } else {
+                Err(anyhow::anyhow!("Invalid number"))
+            }
+        }
+        serde_json::Value::String(s) => Ok(heap.alloc_str(s).to_value()),
+        serde_json::Value::Array(arr) => {
+            let mut values = Vec::new();
+            for item in arr {
+                values.push(json_value_to_heap_value(item, heap)?);
+            }
+            Ok(heap.alloc(values))
+        }
+        serde_json::Value::Object(obj) => {
+            let mut pairs = Vec::new();
+            for (k, v) in obj {
+                let val = json_value_to_heap_value(v, heap)?;
+                pairs.push((heap.alloc_str(k).to_value(), val));
+            }
+            Ok(heap.alloc(AllocDict(pairs)))
+        }
     }
 }
 
@@ -326,8 +449,6 @@ impl EvalContext {
             source_path: None,
             contents: None,
             name: None,
-            inputs: None,
-            properties: None,
             diagnostics: RefCell::new(Vec::new()),
             file_provider: None,
             load_resolver: None,
@@ -377,8 +498,6 @@ impl EvalContext {
             source_path: None,
             contents: None,
             name: None,
-            inputs: None,
-            properties: None,
             diagnostics: RefCell::new(Vec::new()),
             file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
@@ -515,18 +634,96 @@ impl EvalContext {
         self
     }
 
-    /// Specify the `InputMap` containing external inputs (`io()` / `config()`).
-    /// If not provided, an empty map is assumed.
-    pub fn set_inputs(mut self, inputs: InputMap) -> Self {
-        self.inputs = Some(inputs);
-        self
+    /// Copy and set inputs from parent values to child module
+    pub fn copy_and_set_inputs_from_values(
+        &mut self,
+        parent_inputs: SmallMap<String, Value<'_>>,
+    ) -> starlark::Result<()> {
+        let child_heap = self.module.heap();
+        let eval = Evaluator::new(&self.module);
+
+        if self.module.extra_value().is_none() {
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+        }
+
+        if let Some(ctx_val) = self
+            .module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+        {
+            let mut module = ctx_val.module_mut();
+            for (name, parent_value) in parent_inputs.iter() {
+                let copied =
+                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
+                module.add_input(name.clone(), copied);
+            }
+        }
+
+        Ok(())
     }
 
-    /// Specify a map of `name → value` pairs that should be attached as custom
-    /// properties on the module value *before* the Starlark file is executed.
-    pub fn set_properties(mut self, props: SmallMap<String, InputValue>) -> Self {
-        self.properties = Some(props);
-        self
+    /// Copy and set properties from parent values to child module
+    pub fn copy_and_set_properties(
+        &mut self,
+        parent_properties: SmallMap<String, Value<'_>>,
+    ) -> starlark::Result<()> {
+        let child_heap = self.module.heap();
+        let eval = Evaluator::new(&self.module);
+
+        if self.module.extra_value().is_none() {
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+        }
+
+        if let Some(ctx_val) = self
+            .module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+        {
+            for (name, parent_value) in parent_properties.iter() {
+                let copied =
+                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
+                ctx_val.add_property(name.clone(), copied);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convert JSON inputs directly to heap values and set them (for external APIs)
+    pub fn set_json_inputs(
+        &mut self,
+        json_inputs: SmallMap<String, serde_json::Value>,
+    ) -> anyhow::Result<()> {
+        let heap = self.module.heap();
+        let mut values = SmallMap::new();
+
+        // Convert all JSON to heap values
+        for (key, json) in json_inputs.iter() {
+            let value = json_value_to_heap_value(json, heap)?;
+            values.insert(key.clone(), value);
+        }
+
+        // Ensure ContextValue exists and populate inputs
+        let eval = Evaluator::new(&self.module);
+        if self.module.extra_value().is_none() {
+            self.module
+                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+        }
+
+        if let Some(ctx_val) = self
+            .module
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+        {
+            let mut module = ctx_val.module_mut();
+            for (name, value) in values.into_iter() {
+                module.add_input(name, value);
+            }
+        }
+
+        Ok(())
     }
 
     /// Evaluate the configured module. All required fields must be provided
@@ -595,25 +792,10 @@ impl EvalContext {
             eval.set_print_handler(&print_handler);
 
             // Attach a `ContextValue` so user code can access evaluation context.
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
-
-            // If the caller supplied custom properties via `set_properties()` attach them to the
-            // freshly created `ModuleValue` *before* executing the module body so that user code
-            // can observe/override them as needed.
-            if let Some(props) = &self.properties {
-                if let Some(ctx_val) = eval
-                    .module()
-                    .extra_value()
-                    .and_then(|e| e.downcast_ref::<ContextValue>())
-                {
-                    for (key, iv) in props.iter() {
-                        match iv.to_value(&mut eval, None) {
-                            Ok(val) => ctx_val.add_property(key.clone(), val),
-                            Err(e) => return e.into(),
-                        }
-                    }
-                }
+            // Only create one if it doesn't already exist (copy_and_set_inputs/properties may have created it)
+            if self.module.extra_value().is_none() {
+                self.module
+                    .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
             }
 
             let globals = Self::build_globals();
@@ -644,11 +826,11 @@ impl EvalContext {
                         let type_value = param.type_value.to_value();
                         let type_info = TypeInfo::from_value(type_value);
 
-                        // Convert default value to InputValue if present
+                        // Convert default value to JSON using Starlark's native serialization
                         let default_value = param
                             .default_value
                             .as_ref()
-                            .map(|v| InputValue::from_value(v.to_value()));
+                            .and_then(|v| v.to_value().to_json_value().ok());
 
                         ParameterInfo {
                             name: param.name.clone(),
@@ -998,52 +1180,86 @@ impl EvalContext {
             return;
         }
 
+        use pcb_sch::PhysicalUnit;
         let heap = self.module.heap();
+
         if self.module.get("Voltage").is_some() {
-            self.module.set("Voltage", heap.alloc_simple(VoltageType));
+            self.module.set(
+                "Voltage",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Volts.into())),
+            );
         }
         if self.module.get("Current").is_some() {
-            self.module.set("Current", heap.alloc_simple(CurrentType));
+            self.module.set(
+                "Current",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Amperes.into())),
+            );
         }
         if self.module.get("Resistance").is_some() {
-            self.module
-                .set("Resistance", heap.alloc_simple(ResistanceType));
+            self.module.set(
+                "Resistance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Ohms.into())),
+            );
         }
         if self.module.get("Capacitance").is_some() {
-            self.module
-                .set("Capacitance", heap.alloc_simple(CapacitanceType));
+            self.module.set(
+                "Capacitance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Farads.into())),
+            );
         }
         if self.module.get("Inductance").is_some() {
-            self.module
-                .set("Inductance", heap.alloc_simple(InductanceType));
+            self.module.set(
+                "Inductance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Henries.into())),
+            );
         }
         if self.module.get("Frequency").is_some() {
-            self.module
-                .set("Frequency", heap.alloc_simple(FrequencyType));
+            self.module.set(
+                "Frequency",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Hertz.into())),
+            );
         }
         if self.module.get("Time").is_some() {
-            self.module.set("Time", heap.alloc_simple(TimeType));
+            self.module.set(
+                "Time",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Seconds.into())),
+            );
         }
         if self.module.get("Temperature").is_some() {
-            self.module
-                .set("Temperature", heap.alloc_simple(TemperatureType));
+            self.module.set(
+                "Temperature",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Kelvin.into())),
+            );
         }
         if self.module.get("Charge").is_some() {
-            self.module.set("Charge", heap.alloc_simple(ChargeType));
+            self.module.set(
+                "Charge",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Coulombs.into())),
+            );
         }
         if self.module.get("Power").is_some() {
-            self.module.set("Power", heap.alloc_simple(PowerType));
+            self.module.set(
+                "Power",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Watts.into())),
+            );
         }
         if self.module.get("Energy").is_some() {
-            self.module.set("Energy", heap.alloc_simple(EnergyType));
+            self.module.set(
+                "Energy",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Joules.into())),
+            );
         }
         if self.module.get("Conductance").is_some() {
-            self.module
-                .set("Conductance", heap.alloc_simple(ConductanceType));
+            self.module.set(
+                "Conductance",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Siemens.into())),
+            );
         }
         if self.module.get("MagneticFlux").is_some() {
-            self.module
-                .set("MagneticFlux", heap.alloc_simple(MagneticFluxType));
+            self.module.set(
+                "MagneticFlux",
+                heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Webers.into())),
+            );
         }
     }
 
@@ -1117,7 +1333,6 @@ impl EvalContext {
             .child_context()
             .set_source_path(canonical_path.clone())
             .set_module_name(name)
-            .set_inputs(InputMap::new())
             .eval();
 
         result.diagnostics.iter().for_each(|diag| {

@@ -242,22 +242,12 @@ Usart = interface(
     CTS = Net("USART_CTS"),
 )
 
-# Create instances to trigger serialization
+# Create instances
 power = Power("MAIN")
-uart = Uart("DEBUG") 
+uart = Uart("DEBUG")
 usart = Usart("COMM")
 
-# Print serialized forms to capture promotion_by_type
-print("=== Serialized Interface Data ===")
-print("Power serialized:")
-print(serialize(power))
-print("UART serialized:")
-print(serialize(uart))
-print("USART serialized:")
-print(serialize(usart))
-print("=== End Serialized Data ===")
-
-# Use in components to generate serialization
+# Use in components
 Component(
     name = "U1",
     type = "regulator", 

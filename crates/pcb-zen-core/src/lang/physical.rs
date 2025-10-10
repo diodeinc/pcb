@@ -7,7 +7,6 @@ use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
-    collections::SmallMap,
     environment::{Methods, MethodsBuilder, MethodsStatic},
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
@@ -23,80 +22,10 @@ use starlark::{
         starlark_value,
         string::StarlarkStr,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Freeze, FreezeResult, FrozenValue, Heap, NoSerialize, StarlarkValue, Value, ValueLike,
-        ValueTyped,
+        Freeze, FreezeResult, FrozenValue, Heap, StarlarkValue, Value, ValueLike,
     },
 };
 use starlark_map::{sorted_map::SortedMap, StarlarkHasher};
-
-/// Macro to generate physical unit type implementations
-///
-/// Usage: define_physical_unit!(TypeName, PhysicalUnit::Variant);
-macro_rules! define_physical_unit {
-    ($type_name:ident, $unit_variant:expr) => {
-        #[derive(
-            Clone, Copy, Debug, PartialEq, ProvidesStaticType, NoSerialize, Freeze, Allocative,
-        )]
-        pub struct $type_name;
-
-        starlark_simple_value!($type_name);
-
-        impl std::fmt::Display for $type_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", $unit_variant)
-            }
-        }
-
-        impl<'a> PhysicalUnitType<'a> for $type_name {
-            const UNIT: PhysicalUnit = $unit_variant;
-        }
-
-        impl $type_name {
-            fn type_id() -> TypeInstanceId {
-                use std::sync::OnceLock;
-                static TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
-                *TYPE_ID.get_or_init(TypeInstanceId::r#gen)
-            }
-
-            fn callable_type_id() -> TypeInstanceId {
-                use std::sync::OnceLock;
-                static CALLABLE_TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
-                *CALLABLE_TYPE_ID.get_or_init(TypeInstanceId::r#gen)
-            }
-        }
-
-        #[starlark_value(type = stringify!($type_name))]
-        impl<'v> StarlarkValue<'v> for $type_name {
-            fn invoke(
-                &self,
-                _me: Value<'v>,
-                args: &starlark::eval::Arguments<'v, '_>,
-                eval: &mut starlark::eval::Evaluator<'v, '_, '_>,
-            ) -> starlark::Result<Value<'v>> {
-                let heap = eval.heap();
-                let kwargs = args.names_map()?;
-                let positional: Vec<_> = args.positions(heap)?.collect();
-                let physical_value = PhysicalValue::from_arguments::<Self>(&positional, &kwargs)?;
-                Ok(heap.alloc(physical_value))
-            }
-
-            fn get_type_starlark_repr() -> Ty {
-                PhysicalValue::unit_type(Self::type_id(), Self::UNIT)
-            }
-
-            fn typechecker_ty(&self) -> Option<Ty> {
-                Some(PhysicalValue::callable_type::<Self>(
-                    Self::type_id(),
-                    Self::callable_type_id(),
-                ))
-            }
-
-            fn eval_type(&self) -> Option<starlark::typing::Ty> {
-                Some(Self::get_type_starlark_repr())
-            }
-        }
-    };
-}
 
 /// Convert Starlark value to Decimal for math operations
 fn starlark_value_to_decimal(
@@ -126,9 +55,6 @@ pub struct PhysicalValue {
     pub(crate) tolerance: Decimal,
     pub(crate) unit: PhysicalUnitDims,
 }
-
-#[derive(Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize)]
-pub struct PhysicalValueType;
 
 impl PhysicalValue {
     pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
@@ -169,108 +95,49 @@ impl PhysicalValue {
         Ok(self)
     }
 
-    pub fn from_arguments<'v, T: PhysicalUnitType<'v>>(
-        positional: &[Value<'v>],
-        kwargs: &SmallMap<ValueTyped<'v, StarlarkStr>, Value<'v>>,
-    ) -> starlark::Result<Self> {
-        let expected_unit: PhysicalUnitDims = T::UNIT.into();
-        let unit_str = expected_unit.quantity();
-
-        let result = match positional {
-            // Single positional argument (string or PhysicalValue)
-            [single] => {
-                if !kwargs.is_empty() {
-                    return Err(PhysicalValueError::MixedArguments.into());
-                }
-
-                // Try PhysicalValue first, then string
-                if let Some(phys_val) = single.downcast_ref::<PhysicalValue>() {
-                    // If units match exactly, use as-is
-                    if phys_val.unit == expected_unit {
-                        return Ok(*phys_val);
-                    } else if phys_val.unit == PhysicalUnitDims::DIMENSIONLESS {
-                        // Allow dimensionless values to be cast to any unit
-                        // Keep the value and tolerance but apply the expected unit
-                        return Ok(PhysicalValue::from_decimal(
-                            phys_val.value,
-                            phys_val.tolerance,
-                            expected_unit,
-                        ));
-                    } else {
-                        // Different units - not allowed
-                        return Err(PhysicalValueError::UnitMismatch {
-                            expected: expected_unit.fmt_unit(),
-                            actual: phys_val.unit.fmt_unit(),
-                        }
-                        .into());
-                    }
-                } else if let Some(src) = single.unpack_str() {
-                    src.parse().map_err(|e| PhysicalValueError::ParseError {
-                        unit: unit_str.clone(),
-                        input: src.to_string(),
-                        source: e,
-                    })?
-                } else {
-                    // Try numeric value (int/float) - treat as dimensionless value with expected unit
-                    match starlark_value_to_decimal(single) {
-                        Ok(value) => {
-                            PhysicalValue::from_decimal(value, Decimal::ZERO, expected_unit)
-                        }
-                        Err(_) => {
-                            return Err(
-                                PhysicalValueError::InvalidArgumentType { unit: unit_str }.into()
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Keyword mode
-            [] => {
-                let mut value_v: Option<Value<'v>> = None;
-                let mut tolerance_v: Option<Value<'v>> = None;
-
-                for (k, v) in kwargs.iter() {
-                    match k.as_str() {
-                        "value" => value_v = Some(*v),
-                        "tolerance" => tolerance_v = Some(*v),
-                        other => {
-                            return Err(PhysicalValueError::UnexpectedKeyword {
-                                keyword: other.to_string(),
-                            }
-                            .into());
-                        }
-                    }
-                }
-
-                let value_v =
-                    value_v.ok_or(PhysicalValueError::MissingValueKeyword { unit: unit_str })?;
-
-                let value = starlark_value_to_decimal(&value_v)?;
-                let tolerance = tolerance_v
-                    .map(|v| starlark_value_to_decimal(&v))
-                    .transpose()?
-                    .unwrap_or(Decimal::ZERO);
-
-                PhysicalValue::from_decimal(value, tolerance, expected_unit)
-            }
-
-            // Too many args
-            _ => return Err(PhysicalValueError::TooManyArguments { unit: unit_str }.into()),
-        };
-
-        // Single point of unit checking
-        Ok(result.check_unit(expected_unit)?)
-    }
-
-    pub fn unit_type(type_id: TypeInstanceId, unit: PhysicalUnit) -> Ty {
+    fn fields() -> SortedMap<String, Ty> {
         fn single_param_spec(param_type: Ty) -> ParamSpec {
             ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
         }
 
         let str_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let with_tolerance_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::string()));
+        let with_value_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::int()));
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
+
+        SortedMap::from_iter([
+            ("value".to_string(), Ty::float()),
+            ("tolerance".to_string(), Ty::float()),
+            ("unit".to_string(), Ty::string()),
+            (
+                "__str__".to_string(),
+                Ty::callable(str_param_spec, Ty::string()),
+            ),
+            (
+                "with_tolerance".to_string(),
+                Ty::callable(
+                    with_tolerance_param_spec,
+                    PhysicalValue::get_type_starlark_repr(),
+                ),
+            ),
+            (
+                "with_value".to_string(),
+                Ty::callable(
+                    with_value_param_spec,
+                    PhysicalValue::get_type_starlark_repr(),
+                ),
+            ),
+            (
+                "with_unit".to_string(),
+                Ty::callable(
+                    with_unit_param_spec,
+                    PhysicalValue::get_type_starlark_repr(),
+                ),
+            ),
+        ])
+    }
+
+    pub fn unit_type(type_id: TypeInstanceId, unit: PhysicalUnit) -> Ty {
         Ty::custom(
             TyUser::new(
                 unit.quantity().to_string(),
@@ -278,83 +145,9 @@ impl PhysicalValue {
                 type_id,
                 TyUserParams {
                     fields: TyUserFields {
-                        known: [
-                            ("value".to_string(), Ty::float()),
-                            ("tolerance".to_string(), Ty::float()),
-                            ("unit".to_string(), Ty::string()),
-                            (
-                                "__str__".to_string(),
-                                Ty::callable(str_param_spec, Ty::string()),
-                            ),
-                            (
-                                "with_tolerance".to_string(),
-                                Ty::callable(
-                                    with_tolerance_param_spec,
-                                    PhysicalValue::get_type_starlark_repr(),
-                                ),
-                            ),
-                            (
-                                "with_unit".to_string(),
-                                Ty::callable(
-                                    with_unit_param_spec,
-                                    PhysicalValue::get_type_starlark_repr(),
-                                ),
-                            ),
-                        ]
-                        .into_iter()
-                        .collect(),
+                        known: Self::fields(),
                         unknown: false,
                     },
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-        )
-    }
-
-    pub fn callable_type<'a, T: PhysicalUnitType<'a>>(
-        type_id: TypeInstanceId,
-        callable_type_id: TypeInstanceId,
-    ) -> Ty {
-        let param_spec = ParamSpec::new_parts(
-            [(
-                ParamIsRequired::No,
-                Ty::union2(
-                    Ty::union2(Ty::int(), Ty::float()),
-                    Ty::union2(
-                        StarlarkStr::get_type_starlark_repr(),
-                        PhysicalValue::get_type_starlark_repr(),
-                    ),
-                ),
-            )],
-            [],
-            None,
-            [
-                (
-                    ArcStr::from("value"),
-                    ParamIsRequired::No,
-                    StarlarkFloat::get_type_starlark_repr(),
-                ),
-                (
-                    ArcStr::from("tolerance"),
-                    ParamIsRequired::No,
-                    StarlarkFloat::get_type_starlark_repr(),
-                ),
-            ],
-            None,
-        )
-        .expect("ParamSpec creation should not fail");
-
-        Ty::custom(
-            TyUser::new(
-                T::type_name(),
-                TyStarlarkValue::new::<T>(),
-                callable_type_id,
-                TyUserParams {
-                    callable: Some(TyCallable::new(
-                        param_spec,
-                        Self::unit_type(type_id, T::UNIT),
-                    )),
                     ..Default::default()
                 },
             )
@@ -695,13 +488,6 @@ impl PhysicalUnitDims {
     }
 }
 
-pub trait PhysicalUnitType<'a>: StarlarkValue<'a> {
-    const UNIT: PhysicalUnit;
-    fn type_name() -> String {
-        format!("{}Type", Self::UNIT.quantity())
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum PhysicalValueError {
     #[error("Division by zero")]
@@ -734,14 +520,8 @@ pub enum PhysicalValueError {
     InvalidPercentage { value: String },
     #[error("Invalid tolerance value: '{value}'")]
     InvalidTolerance { value: String },
-    #[error("with_unit() expects exactly one argument")]
-    WithUnitWrongArgumentCount,
     #[error("with_unit() expects a PhysicalUnit string or None")]
     WithUnitInvalidArgument,
-    #[error("with_tolerance() expects exactly one argument")]
-    WithToleranceWrongArgumentCount,
-    #[error("with_value() expects exactly one argument")]
-    WithValueWrongArgumentCount,
     #[error("Cannot divide {lhs_unit} by {rhs_unit} - {error}")]
     DivisionError {
         lhs_unit: String,
@@ -1097,64 +877,51 @@ impl<'v> StarlarkValue<'v> for PhysicalUnitDims {
 }
 
 starlark_simple_value!(PhysicalValue);
-starlark_simple_value!(PhysicalValueType);
 
-/// A callable wrapper for PhysicalValue's __str__ method to match stdlib units.zen API
-#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
-pub struct PhysicalValueStrMethod {
-    value: PhysicalValue,
-}
-
-impl std::fmt::Display for PhysicalValueStrMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<__str__ method for {}>", self.value)
+impl crate::lang::eval::DeepCopyToHeap for PhysicalValue {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // PhysicalValue is Copy, so just allocate on dst heap
+        Ok(dst.alloc_simple(*self))
     }
 }
 
-starlark_simple_value!(PhysicalValueStrMethod);
-
-#[starlark_value(type = "PhysicalValueStrMethod")]
-impl<'v> StarlarkValue<'v> for PhysicalValueStrMethod {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        _args: &Arguments<'v, '_>,
-        evaluator: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        Ok(evaluator.heap().alloc(self.value.to_string()))
+#[starlark::starlark_module]
+fn physical_value_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn value<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
+        this.value.to_f64().ok_or_else(|| {
+            starlark::Error::new_other(anyhow::anyhow!("Failed to convert value to f64"))
+        })
     }
-}
 
-/// A callable wrapper for PhysicalValue's with_tolerance method
-#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
-pub struct PhysicalValueWithTolerance {
-    value: PhysicalValue,
-}
-
-impl std::fmt::Display for PhysicalValueWithTolerance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<with_tolerance method for {}>", self.value)
+    #[starlark(attribute)]
+    fn tolerance<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
+        this.tolerance.to_f64().ok_or_else(|| {
+            starlark::Error::new_other(anyhow::anyhow!("Failed to convert tolerance to f64"))
+        })
     }
-}
 
-starlark_simple_value!(PhysicalValueWithTolerance);
+    #[starlark(attribute)]
+    fn unit<'v>(this: &PhysicalValue) -> starlark::Result<String> {
+        let unit_str = if this.unit == PhysicalUnit::Ohms.into() {
+            "Ohm".to_string()
+        } else {
+            this.unit.fmt_unit()
+        };
+        Ok(unit_str)
+    }
 
-#[starlark_value(type = "PhysicalValueWithTolerance")]
-impl<'v> StarlarkValue<'v> for PhysicalValueWithTolerance {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        evaluator: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let heap = evaluator.heap();
-        let positional: Vec<_> = args.positions(heap)?.collect();
+    fn __str__<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] _arg: Value<'v>,
+    ) -> starlark::Result<String> {
+        Ok(this.to_string())
+    }
 
-        if positional.len() != 1 {
-            return Err(PhysicalValueError::WithToleranceWrongArgumentCount.into());
-        }
-
-        let tolerance_arg = positional[0];
+    fn with_tolerance<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] tolerance_arg: Value<'v>,
+    ) -> starlark::Result<PhysicalValue> {
         let new_tolerance = if let Some(s) = tolerance_arg.unpack_str() {
             // Handle percentage string like "3%"
             if let Some(percent_str) = s.strip_suffix('%') {
@@ -1177,82 +944,29 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithTolerance {
             starlark_value_to_decimal(&tolerance_arg)?
         };
 
-        let new_physical_value =
-            PhysicalValue::from_decimal(self.value.value, new_tolerance, self.value.unit);
-
-        Ok(heap.alloc(new_physical_value))
+        Ok(PhysicalValue::from_decimal(
+            this.value,
+            new_tolerance,
+            this.unit,
+        ))
     }
-}
 
-/// A callable wrapper for PhysicalValue's with_value method
-#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
-pub struct PhysicalValueWithValue {
-    value: PhysicalValue,
-}
-
-impl std::fmt::Display for PhysicalValueWithValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<with_value method for {}>", self.value)
-    }
-}
-
-starlark_simple_value!(PhysicalValueWithValue);
-
-#[starlark_value(type = "PhysicalValueWithValue")]
-impl<'v> StarlarkValue<'v> for PhysicalValueWithValue {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        evaluator: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let heap = evaluator.heap();
-        let positional: Vec<_> = args.positions(heap)?.collect();
-
-        if positional.len() != 1 {
-            return Err(PhysicalValueError::WithValueWrongArgumentCount.into());
-        }
-
-        let value_arg = positional[0];
+    fn with_value<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] value_arg: Value<'v>,
+    ) -> starlark::Result<PhysicalValue> {
         let new_value = starlark_value_to_decimal(&value_arg)?;
-
-        let new_physical_value =
-            PhysicalValue::from_decimal(new_value, self.value.tolerance, self.value.unit);
-
-        Ok(heap.alloc(new_physical_value))
+        Ok(PhysicalValue::from_decimal(
+            new_value,
+            this.tolerance,
+            this.unit,
+        ))
     }
-}
 
-/// A callable wrapper for PhysicalValue's with_unit method
-#[derive(Debug, Clone, Allocative, Serialize, ProvidesStaticType)]
-pub struct PhysicalValueWithUnit {
-    value: PhysicalValue,
-}
-
-impl std::fmt::Display for PhysicalValueWithUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<with_unit method for {}>", self.value)
-    }
-}
-
-starlark_simple_value!(PhysicalValueWithUnit);
-
-#[starlark_value(type = "PhysicalValueWithUnit")]
-impl<'v> StarlarkValue<'v> for PhysicalValueWithUnit {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        evaluator: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let heap = evaluator.heap();
-        let positional: Vec<_> = args.positions(heap)?.collect();
-
-        if positional.len() != 1 {
-            return Err(PhysicalValueError::WithUnitWrongArgumentCount.into());
-        }
-
-        let unit_arg = positional[0];
+    fn with_unit<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] unit_arg: Value<'v>,
+    ) -> starlark::Result<PhysicalValue> {
         let new_unit = if let Some(s) = unit_arg.unpack_str() {
             s.parse()?
         } else if unit_arg.is_none() {
@@ -1261,93 +975,23 @@ impl<'v> StarlarkValue<'v> for PhysicalValueWithUnit {
             return Err(PhysicalValueError::WithUnitInvalidArgument.into());
         };
 
-        Ok(heap.alloc(PhysicalValue::from_decimal(
-            self.value.value,
-            self.value.tolerance,
+        Ok(PhysicalValue::from_decimal(
+            this.value,
+            this.tolerance,
             new_unit,
-        )))
-    }
-}
-
-impl fmt::Display for PhysicalValueType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PhysicalValue")
-    }
-}
-
-#[starlark_value(type = "PhysicalValueType")]
-impl<'v> StarlarkValue<'v> for PhysicalValueType
-where
-    Self: ProvidesStaticType<'v>,
-{
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<PhysicalValue as StarlarkValue>::get_type_starlark_repr())
+        ))
     }
 }
 
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
-    fn has_attr(&self, attribute: &str, _heap: &'v starlark::values::Heap) -> bool {
-        matches!(
-            attribute,
-            "value"
-                | "tolerance"
-                | "unit"
-                | "__str__"
-                | "with_tolerance"
-                | "with_unit"
-                | "with_value"
-        )
+    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
+        demand.provide_value::<&dyn crate::lang::eval::DeepCopyToHeap>(self);
     }
 
-    fn get_attr(&self, attribute: &str, heap: &'v starlark::values::Heap) -> Option<Value<'v>> {
-        match attribute {
-            "value" => {
-                let f = self.value.to_f64()?;
-                Some(heap.alloc(StarlarkFloat(f)))
-            }
-            "tolerance" => {
-                let f = self.tolerance.to_f64()?;
-                Some(heap.alloc(StarlarkFloat(f)))
-            }
-            "unit" => {
-                let unit_str = if self.unit == PhysicalUnit::Ohms.into() {
-                    "Ohm".to_string()
-                } else {
-                    self.unit.fmt_unit()
-                };
-                Some(heap.alloc(unit_str))
-            }
-            "__str__" => {
-                // Return a callable that returns the string representation
-                Some(heap.alloc(PhysicalValueStrMethod { value: *self }))
-            }
-            "with_tolerance" => {
-                // Return a callable that creates a new PhysicalValue with updated tolerance
-                Some(heap.alloc(PhysicalValueWithTolerance { value: *self }))
-            }
-            "with_unit" => {
-                // Return a callable that creates a new PhysicalValue with updated unit
-                Some(heap.alloc(PhysicalValueWithUnit { value: *self }))
-            }
-            "with_value" => {
-                // Return a callable that creates a new PhysicalValue with updated value
-                Some(heap.alloc(PhysicalValueWithValue { value: *self }))
-            }
-            _ => None,
-        }
-    }
-
-    fn dir_attr(&self) -> Vec<String> {
-        vec![
-            "value".to_owned(),
-            "tolerance".to_owned(),
-            "unit".to_owned(),
-            "__str__".to_owned(),
-            "with_tolerance".to_owned(),
-            "with_unit".to_owned(),
-            "with_value".to_owned(),
-        ]
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(physical_value_methods)
     }
 
     fn div(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
@@ -1454,20 +1098,222 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
     }
 }
 
-// Physical unit types generated by macro
-define_physical_unit!(VoltageType, PhysicalUnit::Volts);
-define_physical_unit!(CurrentType, PhysicalUnit::Amperes);
-define_physical_unit!(ResistanceType, PhysicalUnit::Ohms);
-define_physical_unit!(CapacitanceType, PhysicalUnit::Farads);
-define_physical_unit!(InductanceType, PhysicalUnit::Henries);
-define_physical_unit!(FrequencyType, PhysicalUnit::Hertz);
-define_physical_unit!(TimeType, PhysicalUnit::Seconds);
-define_physical_unit!(ConductanceType, PhysicalUnit::Siemens);
-define_physical_unit!(TemperatureType, PhysicalUnit::Kelvin);
-define_physical_unit!(ChargeType, PhysicalUnit::Coulombs);
-define_physical_unit!(PowerType, PhysicalUnit::Watts);
-define_physical_unit!(EnergyType, PhysicalUnit::Joules);
-define_physical_unit!(MagneticFluxType, PhysicalUnit::Webers);
+/// Type factory for creating PhysicalValue constructors (like PhysicalRangeType)
+#[derive(
+    Clone, Copy, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize,
+)]
+pub struct PhysicalValueType {
+    unit: PhysicalUnitDims,
+}
+
+impl Freeze for PhysicalValueType {
+    type Frozen = Self;
+    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
+        Ok(self)
+    }
+}
+
+starlark_simple_value!(PhysicalValueType);
+
+impl fmt::Display for PhysicalValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.ty_name())
+    }
+}
+
+impl PhysicalValueType {
+    pub fn new(unit: PhysicalUnitDims) -> Self {
+        PhysicalValueType { unit }
+    }
+
+    fn type_instance_id(&self) -> TypeInstanceId {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        use std::sync::OnceLock;
+
+        static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
+
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        *cache
+            .lock()
+            .unwrap()
+            .entry(self.unit)
+            .or_insert_with(TypeInstanceId::r#gen)
+    }
+
+    fn instance_ty_name(&self) -> String {
+        self.unit.quantity()
+    }
+
+    fn ty_name(&self) -> String {
+        format!("{}Type", self.unit.quantity())
+    }
+
+    fn param_spec(&self) -> ParamSpec {
+        ParamSpec::new_parts(
+            [(
+                ParamIsRequired::No,
+                Ty::union2(
+                    Ty::union2(Ty::int(), Ty::float()),
+                    Ty::union2(
+                        StarlarkStr::get_type_starlark_repr(),
+                        PhysicalValue::get_type_starlark_repr(),
+                    ),
+                ),
+            )],
+            [],
+            None,
+            [
+                (
+                    ArcStr::from("value"),
+                    ParamIsRequired::No,
+                    StarlarkFloat::get_type_starlark_repr(),
+                ),
+                (
+                    ArcStr::from("tolerance"),
+                    ParamIsRequired::No,
+                    StarlarkFloat::get_type_starlark_repr(),
+                ),
+            ],
+            None,
+        )
+        .expect("ParamSpec creation should not fail")
+    }
+
+    fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
+        ParametersSpec::new_parts(
+            self.instance_ty_name().as_str(),
+            [("value", ParametersSpecParam::Optional)],
+            [],
+            false,
+            [
+                ("value", ParametersSpecParam::Optional),
+                ("tolerance", ParametersSpecParam::Optional),
+            ],
+            false,
+        )
+    }
+}
+
+#[starlark_value(type = FUNCTION_TYPE)]
+impl<'v> StarlarkValue<'v> for PhysicalValueType {
+    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        self.hash(hasher);
+        Ok(())
+    }
+
+    fn eval_type(&self) -> Option<Ty> {
+        let id = self.type_instance_id();
+        let ty_value = Ty::custom(
+            TyUser::new(
+                self.instance_ty_name(),
+                TyStarlarkValue::new::<PhysicalValue>(),
+                id,
+                TyUserParams {
+                    matcher: Some(TypeMatcherFactory::new(ValueTypeMatcher {
+                        unit: self.unit,
+                    })),
+                    fields: TyUserFields {
+                        known: PhysicalValue::fields(),
+                        unknown: false,
+                    },
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        );
+        Some(ty_value)
+    }
+
+    fn typechecker_ty(&self) -> Option<Ty> {
+        let ty_value_type = Ty::custom(
+            TyUser::new(
+                self.ty_name(),
+                TyStarlarkValue::new::<Self>(),
+                TypeInstanceId::r#gen(),
+                TyUserParams {
+                    callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        );
+        Some(ty_value_type)
+    }
+
+    fn invoke(
+        &self,
+        _: Value<'v>,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        self.parameters_spec()
+            .parser(args, eval, |param_parser, eval| {
+                let pos_value: Option<Value> = param_parser.next_opt()?;
+                let kw_value: Option<Value> = param_parser.next_opt()?;
+                let tolerance: Option<Value> = param_parser.next_opt()?;
+
+                // Determine value from positional or keyword arg
+                let value_arg = pos_value.or(kw_value).ok_or_else(|| {
+                    PhysicalValueError::MissingValueKeyword {
+                        unit: self.unit.quantity(),
+                    }
+                })?;
+
+                // Parse value - try PhysicalValue, string, or numeric
+                let (val, tol) = if let Some(pv) = value_arg.downcast_ref::<PhysicalValue>() {
+                    (pv.value, pv.tolerance)
+                } else if let Some(s) = value_arg.unpack_str() {
+                    let pv = PhysicalValue::from_str(s)?;
+                    (pv.value, pv.tolerance)
+                } else {
+                    let v = starlark_value_to_decimal(&value_arg)?;
+                    (v, Decimal::ZERO)
+                };
+
+                // Override tolerance if explicitly provided
+                let tol = if let Some(tol_val) = tolerance {
+                    starlark_value_to_decimal(&tol_val)?
+                } else {
+                    tol
+                };
+
+                let result = PhysicalValue::from_decimal(val, tol, self.unit);
+                Ok(eval.heap().alloc(result))
+            })
+    }
+
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(value_type_methods)
+    }
+}
+
+#[derive(Hash, Debug, PartialEq, Clone, Allocative)]
+struct ValueTypeMatcher {
+    unit: PhysicalUnitDims,
+}
+
+impl TypeMatcher for ValueTypeMatcher {
+    fn matches(&self, value: Value) -> bool {
+        match value.downcast_ref::<PhysicalValue>() {
+            Some(pv) => pv.unit == self.unit,
+            None => false,
+        }
+    }
+}
+
+#[starlark::starlark_module]
+fn value_type_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn r#type(this: &PhysicalValueType) -> starlark::Result<String> {
+        Ok(this.ty_name())
+    }
+    #[starlark(attribute)]
+    fn unit(this: &PhysicalValueType) -> starlark::Result<String> {
+        Ok(this.unit.to_string())
+    }
+}
 
 #[derive(Clone, Debug, Freeze, ProvidesStaticType, Allocative, Serialize, Deserialize)]
 pub struct PhysicalRange {
@@ -1483,6 +1329,13 @@ pub struct PhysicalRange {
 }
 
 starlark_simple_value!(PhysicalRange);
+
+impl crate::lang::eval::DeepCopyToHeap for PhysicalRange {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // PhysicalRange is Clone, so clone and allocate on dst heap
+        Ok(dst.alloc_simple(self.clone()))
+    }
+}
 
 impl fmt::Display for PhysicalRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1561,6 +1414,10 @@ impl PhysicalRange {
 
 #[starlark_value(type = PhysicalRange::TYPE)]
 impl<'v> StarlarkValue<'v> for PhysicalRange {
+    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
+        demand.provide_value::<&dyn crate::lang::eval::DeepCopyToHeap>(self);
+    }
+
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(range_methods)

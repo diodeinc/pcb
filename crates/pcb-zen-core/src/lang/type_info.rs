@@ -1,6 +1,6 @@
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
 use crate::lang::net::{NetType, NetValue};
-use crate::{FrozenNetValue, InputValue};
+use crate::FrozenNetValue;
 use serde::{Deserialize, Serialize};
 use starlark::values::enumeration::{EnumType, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
@@ -210,7 +210,9 @@ pub struct ParameterInfo {
     pub name: String,
     pub type_info: TypeInfo,
     pub required: bool,
-    pub default_value: Option<InputValue>,
+    /// Default value as JSON (uses Starlark's native JSON serialization)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<serde_json::Value>,
     pub help: Option<String>,
 }
 

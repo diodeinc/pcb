@@ -34,6 +34,8 @@ pub mod attrs {
     pub const SYMBOL_VALUE: &str = "__symbol_value";
     pub const PADS: &str = "pads";
     pub const DNP: &str = "dnp";
+    pub const DATASHEET: &str = "datasheet";
+    pub const DESCRIPTION: &str = "description";
 
     pub mod net {
         pub mod kind {
@@ -50,7 +52,6 @@ pub use diagnostics::{
 };
 pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
 pub use lang::eval::{EvalContext, EvalOutput};
-pub use lang::input::{InputMap, InputValue};
 pub use load_spec::LoadSpec;
 pub use passes::{AggregatePass, FilterHiddenPass, LspFilterPass, PromoteDeniedPass, SortPass};
 

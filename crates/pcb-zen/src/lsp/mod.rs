@@ -16,8 +16,7 @@ use pcb_starlark_lsp::server::{
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::lang::type_info::ParameterInfo;
 use pcb_zen_core::{
-    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, InputMap, InputValue,
-    LoadResolver,
+    CoreLoadResolver, DefaultFileProvider, EvalContext, FileProvider, LoadResolver,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -586,13 +585,11 @@ impl LspContext for LspEvalContext {
                             let eval_result = if let Some(contents) = maybe_contents {
                                 ctx.set_source_path(path_buf.clone())
                                     .set_module_name("<root>".to_string())
-                                    .set_inputs(InputMap::new())
                                     .set_source_contents(contents)
                                     .eval()
                             } else {
                                 ctx.set_source_path(path_buf.clone())
                                     .set_module_name("<root>".to_string())
-                                    .set_inputs(InputMap::new())
                                     .eval()
                             };
 
@@ -888,32 +885,30 @@ impl LspEvalContext {
             .unwrap_or("module")
             .to_string();
 
-        // Convert JSON inputs to InputMap
-        let mut input_map = InputMap::new();
-        for (key, value) in params.inputs {
-            let input_value = json_to_input_value(&value)
-                .ok_or_else(|| anyhow::anyhow!("Invalid input type for '{}'", key))?;
-            input_map.insert(key, input_value);
-        }
-
         // Create evaluation context
-        let ctx = EvalContext::new()
+        let mut ctx = EvalContext::new()
             .set_file_provider(self.file_provider.clone())
             .set_load_resolver(create_standard_load_resolver(
                 self.file_provider.clone(),
                 path_buf,
             ))
             .set_module_name(module_name)
-            .set_inputs(input_map);
+            .set_source_path(path_buf.clone());
+
+        ctx = if let Some(contents) = maybe_contents {
+            ctx.set_source_contents(contents)
+        } else {
+            ctx
+        };
+
+        // Convert JSON inputs directly to heap values (no serialization!)
+        if !params.inputs.is_empty() {
+            let json_map = starlark::collections::SmallMap::from_iter(params.inputs);
+            ctx.set_json_inputs(json_map)?;
+        }
 
         // Evaluate the module
-        let eval_result = if let Some(contents) = maybe_contents {
-            ctx.set_source_path(path_buf.clone())
-                .set_source_contents(contents)
-                .eval()
-        } else {
-            ctx.set_source_path(path_buf.clone()).eval()
-        };
+        let eval_result = ctx.eval();
 
         // Extract parameters from the result
         let parameters = eval_result
@@ -941,37 +936,6 @@ impl LspEvalContext {
             schematic,
             diagnostics,
         })
-    }
-}
-
-/// Convert serde_json::Value to InputValue
-fn json_to_input_value(json: &JsonValue) -> Option<InputValue> {
-    match json {
-        JsonValue::Null => Some(InputValue::None),
-        JsonValue::Bool(b) => Some(InputValue::Bool(*b)),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(InputValue::Int(i as i32))
-            } else {
-                n.as_f64().map(InputValue::Float)
-            }
-        }
-        JsonValue::String(s) => Some(InputValue::String(s.clone())),
-        JsonValue::Array(arr) => {
-            let values: Option<Vec<_>> = arr.iter().map(json_to_input_value).collect();
-            values.map(InputValue::List)
-        }
-        JsonValue::Object(obj) => {
-            let mut map = HashMap::new();
-            for (k, v) in obj {
-                if let Some(value) = json_to_input_value(v) {
-                    map.insert(k.clone(), value);
-                }
-            }
-            Some(InputValue::Dict(
-                starlark::collections::SmallMap::from_iter(map),
-            ))
-        }
     }
 }
 

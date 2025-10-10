@@ -78,6 +78,8 @@ pub struct ComponentValueGen<V> {
     symbol: V,
     spice_model: Option<V>,
     dnp: Option<bool>,
+    datasheet: Option<String>,
+    description: Option<String>,
 }
 
 impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
@@ -272,6 +274,14 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         self.dnp
     }
 
+    pub fn datasheet(&self) -> Option<&str> {
+        self.datasheet.as_deref()
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
     pub fn footprint(&self) -> &str {
         &self.footprint
     }
@@ -326,12 +336,7 @@ where
                 ("footprint", ParametersSpecParam::<Value<'_>>::Required),
                 ("pin_defs", ParametersSpecParam::<Value<'_>>::Optional),
                 ("pins", ParametersSpecParam::<Value<'_>>::Required),
-                (
-                    "prefix",
-                    ParametersSpecParam::<Value<'_>>::Defaulted(
-                        eval.heap().alloc_str("U").to_value(),
-                    ),
-                ),
+                ("prefix", ParametersSpecParam::<Value<'_>>::Optional),
                 ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
                 ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
                 ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
@@ -339,6 +344,8 @@ where
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
                 ("dnp", ParametersSpecParam::<Value<'_>>::Optional),
+                ("datasheet", ParametersSpecParam::<Value<'_>>::Optional),
+                ("description", ParametersSpecParam::<Value<'_>>::Optional),
             ],
         );
 
@@ -377,11 +384,8 @@ where
             let pins_val: Value = param_parser.next()?;
             let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
 
-            let prefix_val: Value = param_parser.next()?;
-            let prefix = prefix_val
-                .unpack_str()
-                .ok_or(ComponentError::PrefixNotString)?
-                .to_owned();
+            let prefix_val: Option<Value> = param_parser.next_opt()?;
+            let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
 
             // Optional fields
             let symbol_val: Option<Value> = param_parser.next_opt()?;
@@ -391,6 +395,8 @@ where
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
             let dnp_val: Option<Value> = param_parser.next_opt()?;
+            let datasheet_val: Option<Value> = param_parser.next_opt()?;
+            let description_val: Option<Value> = param_parser.next_opt()?;
 
             // Get a SymbolValue from the pin_defs or symbol_val
             let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
@@ -577,19 +583,69 @@ where
                         .map(|s| s.to_owned())
                 });
 
+            // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
+            // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
+            let final_datasheet = datasheet_val
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("datasheet")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Datasheet")
+                        .filter(|s| !s.is_empty() && s.as_str() != "~")
+                        .map(|s| s.to_owned())
+                });
+
+            // If description is not explicitly provided, try to get it from properties, then symbol properties
+            // Skip empty strings - prefer None over empty
+            let final_description = description_val
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("description")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Description")
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_owned())
+                });
+
+            // Remove datasheet and description from properties map since we're storing them as typed fields
+            properties_map.shift_remove("datasheet");
+            properties_map.shift_remove("description");
+
+            // If prefix is not explicitly provided, try to get it from the symbol's Reference property
+            let final_prefix = prefix
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Reference")
+                        .map(|s| s.to_owned())
+                })
+                .unwrap_or_else(|| "U".to_owned());
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 manufacturer: final_manufacturer,
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
-                prefix,
+                prefix: final_prefix,
                 connections,
                 properties: properties_map,
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
                 spice_model: spice_model_val,
                 dnp: dnp_val.and_then(|v| v.unpack_bool()),
+                datasheet: final_datasheet,
+                description: final_description,
             });
 
             Ok(component)

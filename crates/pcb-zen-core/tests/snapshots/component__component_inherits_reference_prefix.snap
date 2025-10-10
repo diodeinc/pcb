@@ -1,0 +1,111 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+Component prefix: IC
+Component with explicit prefix: U
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "MyComponent1",
+                footprint: "SOIC-8",
+                prefix: "IC",
+                connections: {
+                    "IN": FrozenValue(
+                        Net {
+                            name: "in_signal",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                    "OUT": FrozenValue(
+                        Net {
+                            name: "out_signal",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                },
+                properties: {
+                    "symbol_name": FrozenValue(
+                        "MyIC",
+                    ),
+                    "symbol_path": FrozenValue(
+                        "/ic_symbol.kicad_sym",
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: Some(
+                            "MyIC",
+                        ),
+                        pins: {
+                            "1": "IN",
+                            "2": "OUT",
+                        },
+                        properties: {
+                            "Reference": "IC",
+                        },
+                    },
+                ),
+            },
+        ),
+        FrozenValue(
+            Component {
+                name: "MyComponent2",
+                footprint: "SOIC-8",
+                prefix: "U",
+                connections: {
+                    "IN": FrozenValue(
+                        Net {
+                            name: "in2",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                    "OUT": FrozenValue(
+                        Net {
+                            name: "out2",
+                            id: "<ID>",
+                            symbol: FrozenValue(
+                                NoneType,
+                            ),
+                        },
+                    ),
+                },
+                properties: {
+                    "symbol_name": FrozenValue(
+                        "MyIC",
+                    ),
+                    "symbol_path": FrozenValue(
+                        "/ic_symbol.kicad_sym",
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: Some(
+                            "MyIC",
+                        ),
+                        pins: {
+                            "1": "IN",
+                            "2": "OUT",
+                        },
+                        properties: {
+                            "Reference": "IC",
+                        },
+                    },
+                ),
+            },
+        ),
+    ],
+}
+[]

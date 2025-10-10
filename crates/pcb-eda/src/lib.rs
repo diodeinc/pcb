@@ -15,6 +15,7 @@ use std::str::FromStr;
 pub struct Symbol {
     pub name: String,
     pub footprint: String,
+    pub reference: String,
     pub in_bom: bool,
     pub pins: Vec<Pin>,
     pub datasheet: Option<String>,
