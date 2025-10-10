@@ -85,6 +85,80 @@ unsafe impl<'v> ProvidesStaticType<'v> for dyn DeepCopyToHeap + 'v {
     type StaticType = dyn DeepCopyToHeap;
 }
 
+// Implement DeepCopyToHeap for ListRef
+impl<'v> DeepCopyToHeap for starlark::values::list::ListRef<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        let mut new_list = Vec::new();
+        for item in self.iter() {
+            new_list.push(copy_value(item, dst)?);
+        }
+        Ok(dst.alloc(new_list))
+    }
+}
+
+// Implement DeepCopyToHeap for DictRef
+impl<'v> DeepCopyToHeap for DictRef<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        let mut new_map = Vec::new();
+        for (k, v) in self.iter() {
+            let new_key = copy_value(k, dst)?;
+            let new_value = copy_value(v, dst)?;
+            new_map.push((new_key, new_value));
+        }
+        Ok(dst.alloc(AllocDict(new_map)))
+    }
+}
+
+// Implement DeepCopyToHeap for EnumValue
+impl<'v> DeepCopyToHeap for starlark::values::enumeration::EnumValue<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // Extract variant from string representation: EnumType("variant")
+        // Return as string - try_enum_conversion() will convert back to EnumValue
+        let repr = self.to_string();
+        let variant = if let Some(first_quote) = repr.find('"') {
+            if let Some(last_quote) = repr.rfind('"') {
+                if first_quote < last_quote {
+                    &repr[first_quote + 1..last_quote]
+                } else {
+                    &repr
+                }
+            } else {
+                &repr
+            }
+        } else {
+            &repr
+        };
+
+        Ok(dst.alloc_str(variant).to_value())
+    }
+}
+
+// Implement DeepCopyToHeap for Record
+impl<'v> DeepCopyToHeap for starlark::values::record::Record<'v> {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // Convert record to dict - try_record_conversion() will reconstruct it
+        let mut pairs = Vec::new();
+        for (field_name, field_value) in self.iter() {
+            let copied_value = copy_value(field_value.to_value(), dst)?;
+            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+        }
+        Ok(dst.alloc(AllocDict(pairs)))
+    }
+}
+
+// Implement DeepCopyToHeap for FrozenRecord
+impl DeepCopyToHeap for starlark::values::record::FrozenRecord {
+    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
+        // Convert record to dict - try_record_conversion() will reconstruct it
+        let mut pairs = Vec::new();
+        for (field_name, field_value) in self.iter() {
+            let copied_value = copy_value(field_value.to_value(), dst)?;
+            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
+        }
+        Ok(dst.alloc(AllocDict(pairs)))
+    }
+}
+
 pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
     if v.is_none() {
         return Ok(Value::new_none().to_value());
@@ -106,23 +180,15 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
         return Ok(dst.alloc_str(s).to_value());
     }
 
+    // Handle ListRef - use trait implementation
     use starlark::values::list::ListRef;
     if let Some(list) = ListRef::from_value(v) {
-        let mut new_list = Vec::new();
-        for item in list.iter() {
-            new_list.push(copy_value(item, dst)?);
-        }
-        return Ok(dst.alloc(new_list));
+        return list.deep_copy_to(dst);
     }
 
-    if let Some(m) = DictRef::from_value(v) {
-        let mut new_map = Vec::new();
-        for (k, v) in m.iter() {
-            let new_key = copy_value(k, dst)?;
-            let new_value = copy_value(v, dst)?;
-            new_map.push((new_key, new_value));
-        }
-        return Ok(dst.alloc(AllocDict(new_map)));
+    // Handle DictRef - use trait implementation
+    if let Some(dict) = DictRef::from_value(v) {
+        return dict.deep_copy_to(dst);
     }
 
     // Handle FieldGen from external starlark crate
@@ -133,52 +199,22 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
         return Ok(Value::new_none());
     }
 
-    // Handle EnumValue from external starlark crate
-    // EnumValue doesn't implement DeepCopyToHeap. We extract the variant string
-    // and return it - try_enum_conversion() in io()/config() will convert it back.
+    // Handle EnumValue - use trait implementation
     use starlark::values::enumeration::EnumValue;
-    if let Some(_enum_val) = EnumValue::from_value(v) {
-        // Parse variant from string representation: EnumType("variant")
-        let repr = v.to_string();
-        let variant = if let Some(first_quote) = repr.find('"') {
-            if let Some(last_quote) = repr.rfind('"') {
-                if first_quote < last_quote {
-                    &repr[first_quote + 1..last_quote]
-                } else {
-                    &repr
-                }
-            } else {
-                &repr
-            }
-        } else {
-            &repr
-        };
-
-        // Return variant as string - try_enum_conversion() will convert back to EnumValue
-        return Ok(dst.alloc_str(variant).to_value());
+    if let Some(enum_val) = EnumValue::from_value(v) {
+        return enum_val.deep_copy_to(dst);
     }
 
-    // Handle Record from external starlark crate
-    // Record doesn't implement DeepCopyToHeap. We convert to dict {field: value}
-    // and try_record_conversion() in validate_or_convert() will reconstruct it.
+    // Handle Record/FrozenRecord - use trait implementations
     use starlark::values::record::{FrozenRecord, Record};
-    if Record::from_value(v).is_some() || v.downcast_ref::<FrozenRecord>().is_some() {
-        // Generic record iteration works for both Record and FrozenRecord
-        let mut pairs = Vec::new();
-        if let Some(record) = v.downcast_ref::<Record>() {
-            for (field_name, field_value) in record.iter() {
-                let copied_value = copy_value(field_value.to_value(), dst)?;
-                pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-            }
-        } else if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
-            for (field_name, field_value) in frozen_record.iter() {
-                let copied_value = copy_value(field_value.to_value(), dst)?;
-                pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-            }
-        }
-        return Ok(dst.alloc(AllocDict(pairs)));
+    if let Some(record) = v.downcast_ref::<Record>() {
+        return record.deep_copy_to(dst);
+    }
+    if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
+        return frozen_record.deep_copy_to(dst);
     }
 
+    // Fallback to generic DeepCopyToHeap trait for other types
     if let Some(dc) = v.request_value::<&dyn DeepCopyToHeap>() {
         return dc.deep_copy_to(dst);
     }
