@@ -16,7 +16,7 @@ install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = true
 # Which actions to run on pull requests
-pr-run-mode = "skip"
+pr-run-mode = "upload"
 
 [dist.github-custom-runners]
 x86_64-apple-darwin = "macos-15-large"
