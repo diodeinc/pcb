@@ -10,9 +10,7 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-# Temporarily only building musl for debugging
-targets = ["x86_64-unknown-linux-musl"]
-# targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
@@ -30,4 +28,4 @@ x86_64-unknown-linux-gnu = "ubicloud-standard-30-ubuntu-2204"
 x86_64-unknown-linux-musl = "ubicloud-standard-30-ubuntu-2204"
 
 [dist.dependencies]
-x86_64-unknown-linux-musl = "musl-tools g++"
+x86_64-unknown-linux-musl = "musl-tools"
