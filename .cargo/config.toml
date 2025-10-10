@@ -9,3 +9,6 @@ CC_x86_64_unknown_linux_musl = "musl-gcc"
 CXX_x86_64_unknown_linux_musl = "g++"
 "CC_x86_64-unknown-linux-musl" = "musl-gcc"
 "CXX_x86_64-unknown-linux-musl" = "g++"
+# Disable glibc fortification - musl doesn't have __printf_chk, __memcpy_chk, etc.
+CXXFLAGS_x86_64_unknown_linux_musl = "-D_FORTIFY_SOURCE=0"
+"CXXFLAGS_x86_64-unknown-linux-musl" = "-D_FORTIFY_SOURCE=0"
