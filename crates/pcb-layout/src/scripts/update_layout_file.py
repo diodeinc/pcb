@@ -2587,6 +2587,9 @@ class SyncLayouts(Step):
 
             logger.info(f"  Marked group {group.id} as synced")
 
+        # Explicitly delete the layout board to release resources (important for Windows)
+        del layout_board
+
     def _get_footprints_in_group(self, group: VirtualGroup) -> List[VirtualFootprint]:
         """Get all footprints within a group (recursively)."""
         return group.find_all_footprints()
@@ -3449,6 +3452,9 @@ def main():
         step.run_with_timing()
 
     pcbnew.SaveBoard(args.output, board)
+
+    # Explicitly delete the board to release resources (important for Windows)
+    del board
 
 
 ###############################################################################
