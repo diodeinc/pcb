@@ -1301,6 +1301,12 @@ fn validate_or_convert<'v>(
         return Ok(converted);
     }
 
+    // 1c. Try interface promotion
+    if let Some(promoted) = try_interface_promotion(value, typ, eval)? {
+        validate_type(name, promoted, typ, eval.heap())?;
+        return Ok(promoted);
+    }
+
     // 2. If a custom converter is provided, use it for other conversions
     if let Some(conv_fn) = convert {
         log::debug!("Converting {name} from {value} to {typ}");
@@ -1330,6 +1336,63 @@ fn validate_or_convert<'v>(
     // 4. None of the conversion paths worked – propagate the original validation error
     validate_type(name, value, typ, eval.heap())?;
     unreachable!();
+}
+
+/// Generate default value for io() parameters, optionally registering nets
+fn io_generated_default<'v>(
+    eval: &mut Evaluator<'v, '_, '_>,
+    typ: Value<'v>,
+    name: &str,
+    register: bool,
+) -> anyhow::Result<Value<'v>> {
+    match typ.get_type() {
+        "NetType" => {
+            let heap = eval.heap();
+            let net_id = generate_net_id();
+            let mut final_name = name.to_string();
+
+            if register {
+                if let Some(ctx) = eval.context_value() {
+                    final_name = ctx.register_net(net_id, &final_name)?;
+                }
+            }
+
+            Ok(heap
+                .alloc(NetValue::new(
+                    net_id,
+                    final_name,
+                    starlark::collections::SmallMap::new(),
+                    Value::new_none(),
+                ))
+                .to_value())
+        }
+        "InterfaceFactory" => {
+            let instance_name = eval.heap().alloc_str(name).to_value();
+            eval.eval_function(typ, &[instance_name], &[])
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
+        }
+        _ => default_for_type(eval, typ),
+    }
+}
+
+/// Run check functions on a value
+fn run_checks<'v>(
+    eval: &mut Evaluator<'v, '_, '_>,
+    checks: Option<Value<'v>>,
+    value: Value<'v>,
+) -> starlark::Result<()> {
+    if let Some(checks_value) = checks {
+        if let Some(checks_list) = ListRef::from_value(checks_value) {
+            // It's a list - iterate through all check functions
+            for check_fn in checks_list.iter() {
+                eval.eval_function(check_fn, &[value], &[])?;
+            }
+        } else {
+            // It's a single function - call it directly
+            eval.eval_function(checks_value, &[value], &[])?;
+        }
+    }
+    Ok(())
 }
 
 /// Callable wrapper for nets() method on modules
@@ -1637,212 +1700,74 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,   // help text describing the parameter
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        // First compute the actual value that will be returned and the default value to record
-        let (result_value, default_for_metadata) = {
-            // 1. Value supplied by the parent module.
+        let is_optional = optional.unwrap_or(false);
+
+        // Compute the actual value and metadata default
+        let (result_value, default_for_metadata) =
             if let Some(provided) = eval.request_input(&name)? {
-                // Try validation/conversion in order: direct match, enum, record, interface promotion
-                let value = if validate_type(name.as_str(), provided, typ, eval.heap()).is_ok() {
-                    provided
-                } else if let Some(converted) = try_enum_conversion(provided, typ, eval)? {
-                    converted
-                } else if let Some(converted) = try_record_conversion(provided, typ, eval)? {
-                    converted
-                } else if let Some(promoted) = try_interface_promotion(provided, typ, eval)? {
-                    promoted
-                } else {
-                    // All conversions failed - show validation error
-                    validate_type(name.as_str(), provided, typ, eval.heap())?;
-                    unreachable!();
-                };
-                // When a value is provided by parent:
-                // - If an explicit default was provided, use it for metadata
-                // - Otherwise, synthesize the same auto-generated default we would use when inputs
-                //   are missing (but avoid side effects like net registration)
-                if let Some(explicit_default) = default {
-                    // Validate explicit default
+                // Value provided by parent - validate/convert it
+                let value = validate_or_convert(&name, provided, typ, None, eval)?;
+
+                // Determine metadata default
+                let metadata_default = if let Some(explicit_default) = default {
                     validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
-                    (value, Some(explicit_default))
+                    Some(explicit_default)
                 } else {
-                    // Synthesize a default for metadata without side effects
-                    let synthesized_default = match typ.get_type() {
-                        // For io() of NetType, create a named net using the placeholder name (do not register)
-                        "NetType" => {
-                            let heap = eval.heap();
-                            heap.alloc(NetValue::new(
-                                generate_net_id(),
-                                name.clone(),
-                                starlark::collections::SmallMap::new(),
-                                Value::new_none(),
-                            ))
-                            .to_value()
-                        }
-                        // For interfaces, instantiate with the placeholder name as instance prefix
-                        "InterfaceFactory" => {
-                            let instance_name = eval.heap().alloc_str(&name).to_value();
-                            eval.eval_function(typ, &[instance_name], &[])
-                                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                        }
-                        _ => {
-                            // Use generic type-based default
-                            default_for_type(eval, typ)?
-                        }
-                    };
-                    (value, Some(synthesized_default))
+                    // Synthesize default without side effects (no net registration)
+                    Some(io_generated_default(eval, typ, &name, false)?)
+                };
+
+                (value, metadata_default)
+            } else if is_optional {
+                // Optional parameter with no provided value
+                if let Some(default_val) = default {
+                    validate_type(name.as_str(), default_val, typ, eval.heap())?;
+                    (default_val, Some(default_val))
+                } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+                    // Generate and register nets/interfaces for optional Net/Interface types
+                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    (generated, Some(generated))
+                } else {
+                    // Other types: return None but record a default for metadata
+                    let metadata_default = default_for_type(eval, typ)?;
+                    (Value::new_none(), Some(metadata_default))
                 }
             } else {
-                // 2. Determine whether the placeholder is required.
-                let is_optional = optional.unwrap_or(false);
+                // Required parameter with no provided value
+                let strict = eval
+                    .context_value()
+                    .map(|ctx| ctx.strict_io_config())
+                    .unwrap_or(false);
 
-                // 3. If the placeholder is optional and the parent did not supply a value
-                if is_optional {
-                    if let Some(default_val) = default {
-                        // Validate the provided default before using it.
-                        validate_type(name.as_str(), default_val, typ, eval.heap())?;
-                        (default_val, Some(default_val))
-                    } else {
-                        match typ.get_type() {
-                            // For io() of NetType, create a named net using the placeholder name
-                            "NetType" => {
-                                let heap = eval.heap();
-                                let net_id = generate_net_id();
-                                let net_name = name.clone();
-                                if let Some(ctx) = eval.context_value() {
-                                    let final_name = ctx.register_net(net_id, &net_name)?;
-                                    // Update displayed name to match unique registration
-                                    let generated_default = heap.alloc(NetValue::new(
-                                        net_id,
-                                        final_name,
-                                        starlark::collections::SmallMap::new(),
-                                        Value::new_none(),
-                                    ));
-                                    (
-                                        generated_default.to_value(),
-                                        Some(generated_default.to_value()),
-                                    )
-                                } else {
-                                    let generated_default = heap.alloc(NetValue::new(
-                                        net_id,
-                                        net_name,
-                                        starlark::collections::SmallMap::new(),
-                                        Value::new_none(),
-                                    ));
-                                    (
-                                        generated_default.to_value(),
-                                        Some(generated_default.to_value()),
-                                    )
-                                }
-                            }
-                            // For interfaces, instantiate with the placeholder name as instance prefix
-                            "InterfaceFactory" => {
-                                let instance_name = eval.heap().alloc_str(&name).to_value();
-                                let generated_default = eval
-                                    .eval_function(typ, &[instance_name], &[])
-                                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                                (generated_default, Some(generated_default))
-                            }
-                            _ => {
-                                // Keep the returned value None for optional placeholders, but still
-                                // populate metadata default (auto-generated type default)
-                                let gen = default_for_type(eval, typ)?;
-                                (Value::new_none(), Some(gen))
-                            }
-                        }
+                if strict {
+                    if let Some(ctx) = eval.context_value() {
+                        ctx.add_missing_input(name.clone());
                     }
+                    return Err(MissingInputError { name: name.clone() }.into());
+                }
+
+                // Non-strict mode: use default or generate one
+                if let Some(default_val) = default {
+                    validate_type(name.as_str(), default_val, typ, eval.heap())?;
+                    (default_val, Some(default_val))
                 } else {
-                    // 4. Placeholder is required (optional == false).
-                    let strict = eval
-                        .context_value()
-                        .map(|ctx| ctx.strict_io_config())
-                        .unwrap_or(false);
-
-                    if strict {
-                        // Record the missing input so that the parent `ModuleLoader` can surface a helpful
-                        // diagnostic at the call-site.
-                        if let Some(ctx) = eval.context_value() {
-                            ctx.add_missing_input(name.clone());
-                        }
-
-                        return Err(MissingInputError { name: name.clone() }.into());
-                    }
-
-                    // 5. If the caller supplied an explicit default, always prefer it.
-                    if let Some(default_val) = default {
-                        // Validate the provided default before using it.
-                        validate_type(name.as_str(), default_val, typ, eval.heap())?;
-                        (default_val, Some(default_val))
-                    } else {
-                        match typ.get_type() {
-                            "NetType" => {
-                                let heap = eval.heap();
-                                let net_id = generate_net_id();
-                                let net_name = name.clone();
-                                if let Some(ctx) = eval.context_value() {
-                                    let final_name = ctx.register_net(net_id, &net_name)?;
-                                    let generated_default = heap.alloc(NetValue::new(
-                                        net_id,
-                                        final_name,
-                                        starlark::collections::SmallMap::new(),
-                                        Value::new_none(),
-                                    ));
-                                    (
-                                        generated_default.to_value(),
-                                        Some(generated_default.to_value()),
-                                    )
-                                } else {
-                                    let generated_default = heap.alloc(NetValue::new(
-                                        net_id,
-                                        net_name,
-                                        starlark::collections::SmallMap::new(),
-                                        Value::new_none(),
-                                    ));
-                                    (
-                                        generated_default.to_value(),
-                                        Some(generated_default.to_value()),
-                                    )
-                                }
-                            }
-                            "InterfaceFactory" => {
-                                let instance_name = eval.heap().alloc_str(&name).to_value();
-                                let generated_default = eval
-                                    .eval_function(typ, &[instance_name], &[])
-                                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                                (generated_default, Some(generated_default))
-                            }
-                            _ => {
-                                let generated_default = default_for_type(eval, typ)?;
-                                (generated_default, Some(generated_default))
-                            }
-                        }
-                    }
+                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    (generated, Some(generated))
                 }
-            }
-        };
+            };
 
-        // Run check functions if provided
-        if let Some(checks_value) = checks {
-            // Accept either a single function or a list of functions
-            if let Some(checks_list) = ListRef::from_value(checks_value) {
-                // It's a list - iterate through all check functions
-                for check_fn in checks_list.iter() {
-                    eval.eval_function(check_fn, &[result_value], &[])?;
-                }
-            } else {
-                // It's a single function - call it directly
-                eval.eval_function(checks_value, &[result_value], &[])?;
-            }
-        }
+        // Run checks
+        run_checks(eval, checks, result_value)?;
 
-        // Record that this placeholder was referenced in the module's signature
-        // along with the actual value that will be returned
+        // Record metadata
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
             module.add_parameter_metadata(
                 name.clone(),
                 typ,
-                optional.unwrap_or(false),
+                is_optional,
                 default_for_metadata,
-                false, // is_config = false for io()
+                false, // is_config
                 help,
                 Some(result_value),
             );
@@ -1862,63 +1787,51 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] help: Option<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        // First compute the actual value that will be returned
-        let result_value = {
-            // 1. Value supplied by the parent module.
-            if let Some(provided) = eval.request_input(&name)? {
-                validate_or_convert(&name, provided, typ, convert, eval)?
+        let is_optional = optional.unwrap_or(false);
+
+        // Compute the actual value
+        let result_value = if let Some(provided) = eval.request_input(&name)? {
+            // Value provided - validate/convert it
+            validate_or_convert(&name, provided, typ, convert, eval)?
+        } else if is_optional {
+            // Optional parameter with no provided value
+            if let Some(default_val) = default {
+                validate_or_convert(&name, default_val, typ, convert, eval)?
             } else {
-                // 2. Determine whether the placeholder is required.
-                let is_optional = optional.unwrap_or(false);
+                Value::new_none()
+            }
+        } else {
+            // Required parameter with no provided value
+            let strict = eval
+                .context_value()
+                .map(|ctx| ctx.strict_io_config())
+                .unwrap_or(false);
 
-                // 3. If the placeholder is optional and no value was supplied by the parent
-                if is_optional {
-                    if let Some(default_val) = default {
-                        let converted_default =
-                            validate_or_convert(&name, default_val, typ, convert, eval)?;
-                        converted_default
-                    } else {
-                        Value::new_none()
-                    }
-                } else {
-                    // 4. Placeholder is required (optional == false).
-                    // Check if we're in strict mode AND there's no default value
-                    let strict = eval
-                        .context_value()
-                        .map(|ctx| ctx.strict_io_config())
-                        .unwrap_or(false);
-
-                    if strict && default.is_none() {
-                        // Only throw MissingInputError if there's no default value
-                        // Record the missing input so that the parent `ModuleLoader` can surface a helpful
-                        // diagnostic at the call-site.
-                        if let Some(ctx) = eval.context_value() {
-                            ctx.add_missing_input(name.clone());
-                        }
-
-                        return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
-                    }
-
-                    // 5. If the caller supplied an explicit default, always prefer it.
-                    if let Some(default_val) = default {
-                        validate_or_convert(&name, default_val, typ, convert, eval)?
-                    } else {
-                        let gen_value = default_for_type(eval, typ)?;
-                        validate_or_convert(&name, gen_value, typ, convert, eval)?
-                    }
+            if strict && default.is_none() {
+                if let Some(ctx) = eval.context_value() {
+                    ctx.add_missing_input(name.clone());
                 }
+                return Err(anyhow::Error::new(MissingInputError { name: name.clone() }));
+            }
+
+            // Use default or generate one
+            if let Some(default_val) = default {
+                validate_or_convert(&name, default_val, typ, convert, eval)?
+            } else {
+                let gen_value = default_for_type(eval, typ)?;
+                validate_or_convert(&name, gen_value, typ, convert, eval)?
             }
         };
 
-        // Record usage in the module's signature along with the actual value
+        // Record metadata
         if let Some(ctx) = eval.context_value() {
             let mut module = ctx.module_mut();
             module.add_parameter_metadata(
                 name.clone(),
                 typ,
-                optional.unwrap_or(false),
+                is_optional,
                 default,
-                true, // is_config = true for config()
+                true, // is_config
                 help,
                 Some(result_value),
             );
