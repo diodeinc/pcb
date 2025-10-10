@@ -26,3 +26,6 @@ aarch64-apple-darwin = "macos-15-xlarge"
 x86_64-pc-windows-msvc = "windows-large"
 x86_64-unknown-linux-gnu = "ubicloud-standard-30-ubuntu-2204"
 x86_64-unknown-linux-musl = "ubicloud-standard-30-ubuntu-2204"
+
+[dist.dependencies]
+x86_64-unknown-linux-musl = "musl-tools"

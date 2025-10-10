@@ -8,7 +8,9 @@ authors = { workspace = true }
 description = "WebAssembly bindings for Zen PCB design language"
 
 [lib]
-crate-type = ["cdylib"]
+# Add rlib so non-wasm targets can build this crate (cargo-dist builds with --workspace)
+# cdylib is only used for wasm32 targets, rlib allows musl/other targets to compile
+crate-type = ["cdylib", "rlib"]
 
 [package.metadata.dist]
 dist = false

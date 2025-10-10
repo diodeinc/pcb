@@ -1,0 +1,10 @@
+# Musl target configuration
+[target.x86_64-unknown-linux-musl]
+linker = "musl-gcc"
+
+# Set C and C++ compilers for musl target (cc crate checks both formats)
+[env]
+CC_x86_64_unknown_linux_musl = "musl-gcc"
+CXX_x86_64_unknown_linux_musl = "musl-gcc"
+"CC_x86_64-unknown-linux-musl" = "musl-gcc"
+"CXX_x86_64-unknown-linux-musl" = "musl-gcc"
