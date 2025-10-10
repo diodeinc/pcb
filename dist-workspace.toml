@@ -17,6 +17,8 @@ install-path = "CARGO_HOME"
 install-updater = true
 # Which actions to run on pull requests
 pr-run-mode = "upload"
+# Exclude wasm crate from workspace builds (cdylib not supported on musl targets)
+build-args = ["--exclude", "pcb-zen-wasm"]
 
 [dist.github-custom-runners]
 x86_64-apple-darwin = "macos-15-large"
