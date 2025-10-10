@@ -30,4 +30,4 @@ x86_64-unknown-linux-gnu = "ubicloud-standard-30-ubuntu-2204"
 x86_64-unknown-linux-musl = "ubicloud-standard-30-ubuntu-2204"
 
 [dist.dependencies]
-x86_64-unknown-linux-musl = "musl-tools g++"
+x86_64-unknown-linux-musl = "musl-tools g++ libstdc++-12-dev"

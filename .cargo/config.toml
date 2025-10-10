@@ -2,9 +2,10 @@
 [target.x86_64-unknown-linux-musl]
 linker = "musl-gcc"
 
-# Set C and C++ compilers for musl target (cc crate checks both formats)
+# Set C and C++ compilers for musl target
+# Use musl-gcc for C, but g++ for C++ (musl-gcc doesn't have C++ headers)
 [env]
 CC_x86_64_unknown_linux_musl = "musl-gcc"
-CXX_x86_64_unknown_linux_musl = "musl-gcc"
+CXX_x86_64_unknown_linux_musl = "g++"
 "CC_x86_64-unknown-linux-musl" = "musl-gcc"
-"CXX_x86_64-unknown-linux-musl" = "musl-gcc"
+"CXX_x86_64-unknown-linux-musl" = "g++"
