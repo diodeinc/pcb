@@ -10,6 +10,9 @@ description = "WebAssembly bindings for Zen PCB design language"
 [lib]
 crate-type = ["cdylib"]
 
+[package.metadata.dist]
+dist = false
+
 [dependencies]
 pcb-zen-core = { workspace = true, features = ["wasm"] }
 pcb-sch = { workspace = true }
