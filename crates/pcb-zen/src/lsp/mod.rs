@@ -86,7 +86,9 @@ impl Default for LspEvalContext {
         }
 
         let file_provider = Arc::new(DefaultFileProvider::new());
-        let inner = EvalContext::with_file_provider(file_provider.clone());
+        let load_resolver =
+            create_standard_load_resolver(file_provider.clone(), &std::env::temp_dir());
+        let inner = EvalContext::new(load_resolver);
 
         Self {
             inner,
@@ -107,7 +109,8 @@ impl LspEvalContext {
         &self,
         current_file: &std::path::Path,
     ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
-        let workspace_root = find_workspace_root(self.file_provider.as_ref(), current_file);
+        let file_provider = self.inner.file_provider();
+        let workspace_root = find_workspace_root(file_provider, current_file);
         vec![
             Box::new(pcb_zen_core::FilterHiddenPass),
             Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
@@ -575,12 +578,9 @@ impl LspContext for LspEvalContext {
                             let maybe_contents = self.get_load_contents(&params.uri).ok().flatten();
 
                             // Evaluate the module
-                            let ctx = EvalContext::new()
-                                .set_file_provider(self.file_provider.clone())
-                                .set_load_resolver(create_standard_load_resolver(
-                                    self.file_provider.clone(),
-                                    path_buf,
-                                ));
+                            let load_resolver =
+                                create_standard_load_resolver(self.file_provider.clone(), path_buf);
+                            let ctx = EvalContext::new(load_resolver);
 
                             let eval_result = if let Some(contents) = maybe_contents {
                                 ctx.set_source_path(path_buf.clone())
@@ -886,12 +886,8 @@ impl LspEvalContext {
             .to_string();
 
         // Create evaluation context
-        let mut ctx = EvalContext::new()
-            .set_file_provider(self.file_provider.clone())
-            .set_load_resolver(create_standard_load_resolver(
-                self.file_provider.clone(),
-                path_buf,
-            ))
+        let load_resolver = create_standard_load_resolver(self.file_provider.clone(), path_buf);
+        let mut ctx = EvalContext::new(load_resolver)
             .set_module_name(module_name)
             .set_source_path(path_buf.clone());
 

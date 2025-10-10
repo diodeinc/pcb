@@ -327,7 +327,6 @@ pub struct Module {
     id: String,
     main_file: String,
     module_name: String,
-    file_provider: Arc<WasmFileProvider>,
     load_resolver: Arc<pcb_zen_core::CoreLoadResolver>,
 }
 
@@ -399,7 +398,6 @@ impl Module {
             id,
             main_file: file_path.to_string(),
             module_name,
-            file_provider,
             load_resolver,
         })
     }
@@ -471,7 +469,6 @@ impl Module {
             id,
             main_file: main_file.to_string(),
             module_name: module_name.to_string(),
-            file_provider,
             load_resolver,
         })
     }
@@ -485,9 +482,7 @@ impl Module {
 
         // Create evaluation context using the stored providers
         let main_path = PathBuf::from(&self.main_file);
-        let mut ctx = EvalContext::new()
-            .set_file_provider(self.file_provider.clone())
-            .set_load_resolver(self.load_resolver.clone())
+        let mut ctx = EvalContext::new(self.load_resolver.clone())
             .set_source_path(main_path)
             .set_module_name(self.module_name.clone());
 

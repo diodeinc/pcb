@@ -33,18 +33,6 @@ use crate::lang::{
 };
 use crate::{Diagnostic, WithDiagnostics};
 
-#[cfg(feature = "native")]
-fn default_file_provider() -> Arc<dyn crate::FileProvider> {
-    Arc::new(crate::DefaultFileProvider::new()) as Arc<dyn crate::FileProvider>
-}
-
-#[cfg(not(feature = "native"))]
-fn default_file_provider() -> Arc<dyn crate::FileProvider> {
-    panic!(
-        "No default file provider available in WASM mode. A custom FileProvider must be provided."
-    )
-}
-
 use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
@@ -235,13 +223,13 @@ pub struct EvalOutput {
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
     /// Load resolver used for this evaluation, when available
-    pub load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+    pub load_resolver: Arc<dyn crate::LoadResolver>,
 }
 
 impl EvalOutput {
     /// If the underlying resolver is a CoreLoadResolver, return a reference to it
     pub fn core_resolver(&self) -> Option<Arc<crate::CoreLoadResolver>> {
-        let load_resolver = self.load_resolver.clone()?;
+        let load_resolver = self.load_resolver.clone();
         (load_resolver as Arc<dyn std::any::Any + Send + Sync>)
             .downcast::<crate::CoreLoadResolver>()
             .ok()
@@ -373,21 +361,18 @@ pub struct EvalContext {
     /// diagnostics attached to the ContextValue.
     diagnostics: RefCell<Vec<Diagnostic>>,
 
-    /// File provider for accessing file system operations
-    pub(crate) file_provider: Option<Arc<dyn crate::FileProvider>>,
-
     /// Load resolver for resolving load() paths
-    pub(crate) load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
 }
 
-impl Default for EvalContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// impl Default for EvalContext {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
 
 /// Helper to recursively convert JSON to heap values
 fn json_value_to_heap_value<'v>(
@@ -427,7 +412,7 @@ fn json_value_to_heap_value<'v>(
 }
 
 impl EvalContext {
-    pub fn new() -> Self {
+    pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
         // Build a `Globals` instance so we can harvest the documentation for
         // all built-in symbols. We replicate the same extensions that
         // `build_globals` uses so that the docs are in sync with what the
@@ -450,28 +435,18 @@ impl EvalContext {
             contents: None,
             name: None,
             diagnostics: RefCell::new(Vec::new()),
-            file_provider: None,
-            load_resolver: None,
+            load_resolver,
             current_load_index: RefCell::new(0),
         }
     }
 
-    /// Create a new EvalContext with a custom file provider
-    pub fn with_file_provider(file_provider: Arc<dyn crate::FileProvider>) -> Self {
-        let mut ctx = Self::new();
-        ctx.file_provider = Some(file_provider);
-        ctx
+    pub fn file_provider(&self) -> &dyn crate::FileProvider {
+        self.load_resolver.file_provider()
     }
 
     /// Set the file provider for this context
-    pub fn set_file_provider(mut self, file_provider: Arc<dyn crate::FileProvider>) -> Self {
-        self.file_provider = Some(file_provider);
-        self
-    }
-
-    /// Set the load resolver for this context
     pub fn set_load_resolver(mut self, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        self.load_resolver = Some(load_resolver);
+        self.load_resolver = load_resolver;
         self
     }
 
@@ -499,7 +474,6 @@ impl EvalContext {
             contents: None,
             name: None,
             diagnostics: RefCell::new(Vec::new()),
-            file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
             current_load_index: RefCell::new(0),
         }
@@ -731,20 +705,12 @@ impl EvalContext {
             }
         };
 
-        if let Some(load_resolver) = &self.load_resolver {
-            load_resolver.track_file(source_path);
-        }
-
-        // Get or create a default file provider if none was set
-        let file_provider = self
-            .file_provider
-            .clone()
-            .unwrap_or_else(|| default_file_provider());
+        self.load_resolver.track_file(source_path);
 
         // Fetch contents: prefer explicit override, otherwise read from disk.
         let contents_owned = match &self.contents {
             Some(c) => c.clone(),
-            None => match file_provider.read_file(source_path) {
+            None => match self.file_provider().read_file(source_path) {
                 Ok(c) => {
                     // Cache the read contents for subsequent accesses.
                     self.contents = Some(c.clone());
@@ -942,13 +908,7 @@ impl EvalContext {
                             }
                         }
 
-                        // Get or create a default file provider if none was set
-                        let file_provider = self
-                            .file_provider
-                            .clone()
-                            .unwrap_or_else(|| default_file_provider());
-
-                        if let Ok(canon) = file_provider.canonicalize(&p) {
+                        if let Ok(canon) = self.file_provider().canonicalize(&p) {
                             p = canon;
                         }
 
@@ -1064,14 +1024,8 @@ impl EvalContext {
     ) -> anyhow::Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
-        // Get or create a default file provider if none was set
-        let file_provider = self
-            .file_provider
-            .clone()
-            .unwrap_or_else(|| default_file_provider());
-
         for root in workspace_roots {
-            if !file_provider.exists(root) {
+            if !self.file_provider().exists(root) {
                 continue;
             }
 
@@ -1152,8 +1106,8 @@ impl EvalContext {
     }
 
     /// Get the load resolver if available
-    pub fn get_load_resolver(&self) -> Option<&Arc<dyn crate::LoadResolver>> {
-        self.load_resolver.as_ref()
+    pub fn get_load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
+        &self.load_resolver
     }
 
     /// Append a diagnostic that was produced while this context was active.
@@ -1265,10 +1219,7 @@ impl EvalContext {
             "Trying to load path {path} with current path {:?}",
             self.source_path
         );
-        let load_resolver = self
-            .load_resolver
-            .clone()
-            .ok_or_else(|| starlark::Error::new_other(anyhow!("No LoadResolver provided")))?;
+        let load_resolver = self.load_resolver.clone();
         let file_provider = load_resolver.file_provider();
 
         let module_path = self.source_path.clone();
