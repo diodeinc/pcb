@@ -24,14 +24,16 @@ Enhanced flow_control: True
               "Net": {
                 "id": 10,
                 "name": "MCU_USART_uart_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 11,
                 "name": "MCU_USART_uart_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },
@@ -44,21 +46,24 @@ Enhanced flow_control: True
         "Net": {
           "id": 12,
           "name": "MCU_USART_USART_CK",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "RTS": {
         "Net": {
           "id": 13,
           "name": "MCU_USART_USART_RTS",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       },
       "CTS": {
         "Net": {
           "id": 14,
           "name": "MCU_USART_USART_CTS",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
@@ -78,14 +83,16 @@ Enhanced flow_control: True
               "Net": {
                 "id": 17,
                 "name": "ENHANCED_uart_UART_TX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             },
             "RX": {
               "Net": {
                 "id": 18,
                 "name": "ENHANCED_uart_UART_RX",
-                "properties": {}
+                "properties": {},
+                "type_name": "Net"
               }
             }
           },

@@ -14,7 +14,8 @@ Power validation: PASS
         "Net": {
           "id": 2,
           "name": "MAIN",
-          "properties": {}
+          "properties": {},
+          "type_name": "Net"
         }
       }
     },
