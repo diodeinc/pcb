@@ -13,8 +13,7 @@ use starlark::{
     values::{
         starlark_value,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Coerce, Freeze, FreezeResult, FrozenValue, StarlarkValue, Trace, Value,
-        ValueLike,
+        Coerce, Freeze, FreezeResult, FrozenValue, StarlarkValue, Trace, Value, ValueLike,
     },
 };
 use std::sync::OnceLock;
@@ -53,10 +52,22 @@ pub fn reset_net_id_counter() {
 }
 
 #[derive(
-    Clone, PartialEq, Eq, ProvidesStaticType, Allocative, Trace, Freeze, Coerce, serde::Serialize, serde::Deserialize
+    Clone,
+    PartialEq,
+    Eq,
+    ProvidesStaticType,
+    Allocative,
+    Trace,
+    Freeze,
+    Coerce,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[repr(C)]
-#[serde(bound(serialize = "V: serde::Serialize", deserialize = "V: serde::Deserialize<'de>"))]
+#[serde(bound(
+    serialize = "V: serde::Serialize",
+    deserialize = "V: serde::Deserialize<'de>"
+))]
 pub struct NetValueGen<V> {
     /// The globally unique identifier for this net
     pub(crate) net_id: NetId,
