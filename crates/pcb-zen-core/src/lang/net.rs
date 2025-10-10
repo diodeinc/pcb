@@ -13,7 +13,7 @@ use starlark::{
     values::{
         starlark_value, Heap,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Coerce, Freeze, FreezeResult, FrozenValue, NoSerialize, StarlarkValue, Trace, Value,
+        Coerce, Freeze, FreezeResult, FrozenValue, StarlarkValue, Trace, Value,
         ValueLike,
     },
 };
@@ -52,10 +52,10 @@ pub fn reset_net_id_counter() {
 }
 
 #[derive(
-    Clone, PartialEq, Eq, ProvidesStaticType, Allocative, Trace, Freeze, Coerce, serde::Serialize,
+    Clone, PartialEq, Eq, ProvidesStaticType, Allocative, Trace, Freeze, Coerce, serde::Serialize, serde::Deserialize
 )]
 #[repr(C)]
-#[serde(bound = "V: serde::Serialize")]
+#[serde(bound(serialize = "V: serde::Serialize", deserialize = "V: serde::Deserialize<'de>"))]
 pub struct NetValueGen<V> {
     /// The globally unique identifier for this net
     pub(crate) net_id: NetId,
@@ -231,7 +231,7 @@ starlark_simple_value!(NetType);
 
 impl fmt::Display for NetType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.ty_name())
+        write!(f, "{}", self.instance_ty_name())
     }
 }
 
