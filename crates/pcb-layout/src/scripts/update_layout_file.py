@@ -956,7 +956,9 @@ def build_virtual_dom_from_board(
 
     # Add zones to virtual DOM
     if include_zones:
-        for zone in board.Zones():
+        # Convert to list first to avoid iterator issues on Windows
+        zones_list = list(board.Zones())
+        for zone in zones_list:
             zone_uuid = (
                 str(zone.m_Uuid) if hasattr(zone, "m_Uuid") else str(uuid.uuid4())
             )
@@ -976,7 +978,9 @@ def build_virtual_dom_from_board(
 
     # Add graphics to virtual DOM
     if include_graphics:
-        for drawing in board.GetDrawings():
+        # Convert to list first to avoid iterator issues on Windows
+        drawings_list = list(board.GetDrawings())
+        for drawing in drawings_list:
             # Skip items that belong to footprints
             if drawing.GetParent() and isinstance(
                 drawing.GetParent(), pcbnew.FOOTPRINT
@@ -1002,7 +1006,9 @@ def build_virtual_dom_from_board(
 
     # Add tracks and vias to virtual DOM
     if include_tracks:
-        for item in board.GetTracks():
+        # Convert to list first to avoid iterator issues on Windows
+        tracks_list = list(board.GetTracks())
+        for item in tracks_list:
             item_uuid = (
                 str(item.m_Uuid) if hasattr(item, "m_Uuid") else str(uuid.uuid4())
             )
@@ -2515,12 +2521,16 @@ class SyncLayouts(Step):
             vias_synced = 0
 
             # Sync zones
-            for zone in layout_board.Zones():
+            # Convert to list first to avoid iterator issues on Windows
+            zones_list = list(layout_board.Zones())
+            for zone in zones_list:
                 self._sync_connected_item(zone, net_code_map, group)
                 zones_synced += 1
 
             # Sync tracks and vias
-            for item in layout_board.GetTracks():
+            # Convert to list first to avoid iterator issues on Windows
+            tracks_list = list(layout_board.GetTracks())
+            for item in tracks_list:
                 self._sync_connected_item(item, net_code_map, group)
                 # Count tracks vs vias for logging
                 item_class = item.GetClass()
@@ -2531,7 +2541,9 @@ class SyncLayouts(Step):
 
             # Get all graphics from source layout
             graphics_synced = 0
-            for drawing in layout_board.GetDrawings():
+            # Convert to list first to avoid iterator issues on Windows
+            drawings_list = list(layout_board.GetDrawings())
+            for drawing in drawings_list:
                 # Skip footprint graphics
                 if drawing.GetParent() and isinstance(
                     drawing.GetParent(), pcbnew.FOOTPRINT
