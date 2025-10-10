@@ -87,7 +87,6 @@ mod tests {
     #[test]
     fn test_moved_directive_storage() {
         use crate::lang::eval::EvalContext;
-        use crate::lang::input::InputMap;
         use starlark::values::ValueLike;
 
         let test_content = r#"
@@ -104,7 +103,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         let result = EvalContext::new()
             .set_source_path(temp_path.clone())
             .set_module_name("test_moved".to_string())
-            .set_inputs(InputMap::new())
             .eval();
 
         // Clean up the temp file
@@ -139,7 +137,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
     #[test]
     fn test_moved_directive_empty() {
         use crate::lang::eval::EvalContext;
-        use crate::lang::input::InputMap;
         use starlark::values::ValueLike;
 
         let test_content = r#"
@@ -154,7 +151,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         let result = EvalContext::new()
             .set_source_path(temp_path.clone())
             .set_module_name("test_moved_empty".to_string())
-            .set_inputs(InputMap::new())
             .eval();
 
         // Clean up the temp file
@@ -291,7 +287,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
     fn test_schematic_moved_paths_integration() {
         use crate::convert::ToSchematic;
         use crate::lang::eval::EvalContext;
-        use crate::lang::input::InputMap;
 
         let test_content = r#"
 moved("old.component", "new.component")
@@ -308,7 +303,6 @@ moved("POW.PS1", "PS1")
         let result = EvalContext::new()
             .set_source_path(temp_path.clone())
             .set_module_name("test_schematic_moved".to_string())
-            .set_inputs(InputMap::new())
             .eval();
 
         // Clean up the temp file

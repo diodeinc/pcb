@@ -1,7 +1,7 @@
 use log::debug;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::convert::ToSchematic;
-use pcb_zen_core::{EvalContext, FileProvider, InputMap, InputValue};
+use pcb_zen_core::{EvalContext, FileProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -302,38 +302,6 @@ impl pcb_zen_core::FileProvider for WasmFileProvider {
     }
 }
 
-/// Convert serde_json::Value to InputValue
-fn json_to_input_value(json: &serde_json::Value) -> Option<InputValue> {
-    match json {
-        serde_json::Value::Null => Some(InputValue::None),
-        serde_json::Value::Bool(b) => Some(InputValue::Bool(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(InputValue::Int(i as i32))
-            } else {
-                n.as_f64().map(InputValue::Float)
-            }
-        }
-        serde_json::Value::String(s) => Some(InputValue::String(s.clone())),
-        serde_json::Value::Array(arr) => {
-            let values: Option<Vec<_>> = arr.iter().map(json_to_input_value).collect();
-            values.map(InputValue::List)
-        }
-        serde_json::Value::Object(obj) => {
-            // Regular dict
-            let mut map = HashMap::new();
-            for (k, v) in obj {
-                if let Some(value) = json_to_input_value(v) {
-                    map.insert(k.clone(), value);
-                }
-            }
-            Some(InputValue::Dict(
-                starlark::collections::SmallMap::from_iter(map),
-            ))
-        }
-    }
-}
-
 /// Convert a Diagnostic to DiagnosticInfo
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
     let level = match diag.severity {
@@ -516,25 +484,22 @@ impl Module {
             .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs JSON: {e}")))?;
 
         // Create evaluation context using the stored providers
-        let ctx = EvalContext::new()
+        let main_path = PathBuf::from(&self.main_file);
+        let mut ctx = EvalContext::new()
             .set_file_provider(self.file_provider.clone())
-            .set_load_resolver(self.load_resolver.clone());
+            .set_load_resolver(self.load_resolver.clone())
+            .set_source_path(main_path)
+            .set_module_name(self.module_name.clone());
 
-        // Convert inputs to InputMap
-        let mut input_map = InputMap::new();
-        for (key, value) in inputs {
-            let input_value = json_to_input_value(&value)
-                .ok_or_else(|| JsValue::from_str(&format!("Invalid input type for '{key}'")))?;
-            input_map.insert(key, input_value);
+        // Convert JSON inputs directly to heap values (no serialization!)
+        if !inputs.is_empty() {
+            let json_map = starlark::collections::SmallMap::from_iter(inputs);
+            ctx.set_json_inputs(json_map)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
         }
 
         // Evaluate the module
-        let main_path = PathBuf::from(&self.main_file);
-        let result = ctx
-            .set_source_path(main_path)
-            .set_module_name(self.module_name.clone())
-            .set_inputs(input_map)
-            .eval();
+        let result = ctx.eval();
 
         // Extract schematic from the result
         let schematic_opt = result

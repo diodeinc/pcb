@@ -382,8 +382,10 @@ where
     }
 
     // Create the interface instance
+    let promotion_by_type = get_promotion_map(factory_value);
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
+        promotion_by_type,
         factory: factory_value,
     });
 
@@ -735,12 +737,16 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> DeepCopyToHeap for InterfaceFactoryGe
     }
 }
 
-#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, Allocative, Freeze, serde::Serialize)]
 #[repr(C)]
+#[serde(bound = "V: serde::Serialize")]
 pub struct InterfaceValueGen<V> {
     fields: SmallMap<String, V>,
-    factory: V, // store reference to the Interface *type* that created this instance
+    promotion_by_type: SmallMap<String, String>,
+    #[serde(skip)]
+    factory: V, // Runtime only - factory has NoSerialize so can't be JSON-serialized
 }
+
 starlark_complex_value!(pub InterfaceValue);
 
 #[starlark_value(type = "InterfaceValue")]
@@ -768,9 +774,6 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
         let mut items: Vec<_> = self.fields.iter().collect();
         items.sort_by_key(|(k, _)| *k);
 
-        // Get promotion information from the factory
-        let promotion_by_type = get_promotion_map(self.factory.to_value());
-
         // Get the actual interface type name from the factory
         let type_name =
             get_promotion_key(self.factory.to_value()).unwrap_or_else(|_| "Interface".to_string());
@@ -787,7 +790,8 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
 
             // Check if this field was marked with using() by checking if there's a promotion
             // entry for this type that points to this field name
-            let is_using_field = promotion_by_type
+            let is_using_field = self
+                .promotion_by_type
                 .get(&value_type_name)
                 .is_some_and(|field_name| field_name == k.as_str());
 
@@ -815,6 +819,12 @@ impl<'v, V: ValueLike<'v>> InterfaceValueGen<V> {
     pub fn factory(&self) -> &V {
         &self.factory
     }
+
+    // Provide read-only access to promotion map
+    #[inline]
+    pub fn promotion_by_type(&self) -> &SmallMap<String, String> {
+        &self.promotion_by_type
+    }
 }
 
 // Implement deep copy support
@@ -834,7 +844,11 @@ impl<'v, V: ValueLike<'v>> DeepCopyToHeap for InterfaceValueGen<V> {
         // remains connected to its type information in the destination heap.
         let factory = copy_value(self.factory.to_value(), dst)?;
 
-        Ok(dst.alloc(InterfaceValue { fields, factory }))
+        Ok(dst.alloc(InterfaceValue {
+            fields,
+            promotion_by_type: self.promotion_by_type.clone(),
+            factory,
+        }))
     }
 }
 

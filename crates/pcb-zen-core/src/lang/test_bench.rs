@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::input::{InputMap, InputValue};
 use crate::lang::module::{FrozenModuleValue, ModuleLoader};
 use crate::Diagnostic;
 use allocative::Allocative;
@@ -121,11 +120,11 @@ impl ModuleLoader {
         &self,
         test_bench_name: String,
         eval: &mut Evaluator<'v, '_, '_>,
-        inputs: InputMap,
+        parent_values: SmallMap<String, Value<'v>>,
         case_name: Option<&str>,
     ) -> anyhow::Result<Option<FrozenModuleValue>> {
         // Create a child context with strict_io_config = true
-        let ctx = eval
+        let mut ctx = eval
             .eval_context()
             .expect("expected eval context")
             .child_context()
@@ -136,10 +135,13 @@ impl ModuleLoader {
             None => test_bench_name,
         };
 
-        let ctx = ctx
+        ctx = ctx
             .set_source_path(std::path::PathBuf::from(&self.source_path))
-            .set_module_name(module_name)
-            .set_inputs(inputs);
+            .set_module_name(module_name);
+
+        // Copy parent values to child heap upfront
+        ctx.copy_and_set_inputs_from_values(parent_values)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         let (output, diagnostics) = ctx.eval().unpack();
 
@@ -223,16 +225,18 @@ impl ModuleLoader {
     }
 }
 
-/// Build an InputMap from a test case dictionary
-fn build_input_map<'v>(case_dict: &DictRef<'v>) -> anyhow::Result<InputMap> {
-    let mut inputs = InputMap::new();
+/// Collect parent values from a test case dictionary
+fn collect_parent_values<'v>(
+    case_dict: &DictRef<'v>,
+) -> anyhow::Result<SmallMap<String, Value<'v>>> {
+    let mut values = SmallMap::new();
     for (key, value) in case_dict.iter() {
         let key_str = key
             .unpack_str()
             .ok_or_else(|| anyhow::anyhow!("test case keys must be strings, got: {}", key))?;
-        inputs.insert(key_str.to_string(), InputValue::from_value(value));
+        values.insert(key_str.to_string(), value);
     }
-    Ok(inputs)
+    Ok(values)
 }
 
 #[starlark_module]
@@ -288,12 +292,16 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                 anyhow::anyhow!("test case '{}' must be a dictionary", case_name_str)
             })?;
 
-            // Build InputMap from case parameters
-            let inputs = build_input_map(&case_dict)?;
+            // Collect parent values from case parameters
+            let parent_values = collect_parent_values(&case_dict)?;
 
             // Evaluate the module with this test case
-            let evaluated_module =
-                loader.evaluate_with_inputs(name.clone(), eval, inputs, Some(case_name_str))?;
+            let evaluated_module = loader.evaluate_with_inputs(
+                name.clone(),
+                eval,
+                parent_values,
+                Some(case_name_str),
+            )?;
 
             // Store case parameters for later
             let mut params = SmallMap::new();
