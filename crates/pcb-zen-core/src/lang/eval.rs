@@ -15,7 +15,7 @@ use starlark::{
     typing::TypeMap,
     values::{
         dict::{AllocDict, DictRef},
-        Heap, Value, ValueLike,
+        FrozenValue, Heap, Value, ValueLike,
     },
     PrintHandler,
 };
@@ -639,53 +639,59 @@ impl EvalContext {
         &mut self,
         parent_inputs: SmallMap<String, Value<'_>>,
     ) -> starlark::Result<()> {
-        let child_heap = self.module.heap();
         let eval = Evaluator::new(&self.module);
-
         if self.module.extra_value().is_none() {
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
         }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
-        if let Some(ctx_val) = self
-            .module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            let mut module = ctx_val.module_mut();
-            for (name, parent_value) in parent_inputs.iter() {
-                let copied =
-                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
-                module.add_input(name.clone(), copied);
-            }
+        let mut module = ctx_value.module_mut();
+        for (name, parent_value) in parent_inputs.iter() {
+            let copied =
+                copy_value(*parent_value, eval.heap()).map_err(starlark::Error::new_other)?;
+            module.add_input(name.clone(), copied);
+        }
+        Ok(())
+    }
+
+    /// Set inputs from already frozen parent values.
+    pub fn set_inputs_from_frozen_values(
+        &mut self,
+        parent_inputs: SmallMap<String, FrozenValue>,
+    ) -> starlark::Result<()> {
+        let eval = Evaluator::new(&self.module);
+        if self.module.extra_value().is_none() {
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
+        }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
+
+        let mut module = ctx_value.module_mut();
+        for (name, value) in parent_inputs.into_iter() {
+            module.add_input(name, value.to_value());
         }
 
         Ok(())
     }
 
-    /// Copy and set properties from parent values to child module
-    pub fn copy_and_set_properties(
+    /// Set properties from already frozen parent values.
+    pub fn set_properties_from_frozen_values(
         &mut self,
-        parent_properties: SmallMap<String, Value<'_>>,
+        parent_properties: SmallMap<String, FrozenValue>,
     ) -> starlark::Result<()> {
-        let child_heap = self.module.heap();
         let eval = Evaluator::new(&self.module);
-
         if self.module.extra_value().is_none() {
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
         }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
-        if let Some(ctx_val) = self
-            .module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            for (name, parent_value) in parent_properties.iter() {
-                let copied =
-                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
-                ctx_val.add_property(name.clone(), copied);
-            }
+        for (name, value) in parent_properties.into_iter() {
+            ctx_value.add_property(name, value.to_value());
         }
 
         Ok(())
@@ -696,31 +702,18 @@ impl EvalContext {
         &mut self,
         json_inputs: SmallMap<String, serde_json::Value>,
     ) -> anyhow::Result<()> {
-        let heap = self.module.heap();
-        let mut values = SmallMap::new();
-
-        // Convert all JSON to heap values
-        for (key, json) in json_inputs.iter() {
-            let value = json_value_to_heap_value(json, heap)?;
-            values.insert(key.clone(), value);
-        }
-
-        // Ensure ContextValue exists and populate inputs
         let eval = Evaluator::new(&self.module);
         if self.module.extra_value().is_none() {
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
         }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
-        if let Some(ctx_val) = self
-            .module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            let mut module = ctx_val.module_mut();
-            for (name, value) in values.into_iter() {
-                module.add_input(name, value);
-            }
+        let mut module = ctx_value.module_mut();
+        for (name, json) in json_inputs.iter() {
+            let value = json_value_to_heap_value(json, eval.heap())?;
+            module.add_input(name.clone(), value);
         }
 
         Ok(())
