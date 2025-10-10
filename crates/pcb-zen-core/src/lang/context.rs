@@ -17,6 +17,8 @@ use starlark::{
 
 use starlark::collections::SmallMap;
 
+use crate::lang::eval::EvalContext;
+
 use super::module::{parse_positions, FrozenModuleValue, ModuleLoader, ModuleValue};
 use super::net::NetId;
 
@@ -48,7 +50,7 @@ pub(crate) struct ContextValue<'v> {
     /// The eval::Context that the current evaluator is running in.
     #[allocative(skip)]
     #[serde(skip)]
-    context: *const crate::lang::eval::EvalContext,
+    context: *const EvalContext,
     #[allocative(skip)]
     #[serde(skip)]
     pending_children: RefCell<Vec<PendingChild<'v>>>,
@@ -66,27 +68,21 @@ pub(crate) struct FrozenContextValue {
 impl Freeze for ContextValue<'_> {
     type Frozen = FrozenContextValue;
 
-    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
-        let mut module = self.module.into_inner();
-        let mut diagnostics = self.diagnostics.into_inner();
-        let strict_io_config = self.strict_io_config;
-        let pending_children = self.pending_children.into_inner();
-        let parent_context = unsafe { &*self.context };
+    fn freeze(mut self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+        let pending_children = self
+            .pending_children
+            .get_mut()
+            .drain(..)
+            .collect::<Vec<_>>();
 
         for pending in pending_children {
-            process_pending_child(
-                pending,
-                parent_context,
-                freezer,
-                &mut module,
-                &mut diagnostics,
-            )?;
+            process_pending_child(pending, &mut self, freezer)?;
         }
 
         Ok(FrozenContextValue {
-            module: module.freeze(freezer)?,
-            strict_io_config,
-            diagnostics,
+            module: self.module.freeze(freezer)?,
+            strict_io_config: self.strict_io_config,
+            diagnostics: self.diagnostics.into_inner(),
         })
     }
 }
@@ -123,7 +119,7 @@ impl FrozenContextValue {
 
 impl<'v> ContextValue<'v> {
     /// Create a new `ContextValue` with a parent eval::Context for sharing caches
-    pub(crate) fn from_context(context: &crate::lang::eval::EvalContext) -> Self {
+    pub(crate) fn from_context(context: &EvalContext) -> Self {
         let source_path = context
             .source_path
             .as_ref()
@@ -158,9 +154,13 @@ impl<'v> ContextValue<'v> {
     }
 
     /// Get the parent eval::Context
-    pub(crate) fn parent_context(&self) -> &crate::lang::eval::EvalContext {
+    pub(crate) fn parent_context(&self) -> &EvalContext {
         // SAFETY: We ensure the parent Context outlives this ContextValue
         unsafe { &*self.context }
+    }
+
+    pub(crate) fn child_context(&self) -> EvalContext {
+        self.parent_context().child_context()
     }
 
     /// Return whether missing required io()/config() placeholders should be treated as
@@ -236,10 +236,8 @@ impl<'v> ContextValue<'v> {
 
 fn process_pending_child<'v>(
     pending: PendingChild<'v>,
-    parent_context: &crate::lang::eval::EvalContext,
+    context_value: &mut ContextValue<'v>,
     freezer: &Freezer,
-    module: &mut ModuleValue<'v>,
-    diagnostics: &mut Vec<crate::Diagnostic>,
 ) -> FreezeResult<()> {
     let PendingChild {
         loader,
@@ -266,7 +264,7 @@ fn process_pending_child<'v>(
         frozen_properties = Some(map);
     }
 
-    let mut child_ctx = parent_context
+    let mut child_ctx = context_value
         .child_context()
         .set_strict_io_config(true)
         .set_source_path(std::path::PathBuf::from(&loader.source_path))
@@ -309,7 +307,7 @@ fn process_pending_child<'v>(
             }
         };
 
-        diagnostics.push(diag_to_add);
+        context_value.diagnostics.borrow_mut().push(diag_to_add);
     }
 
     match output {
@@ -319,7 +317,7 @@ fn process_pending_child<'v>(
                 .add_reference(output.star_module.frozen_heap());
 
             let child_value = freezer.frozen_heap().alloc(output.sch_module).to_value();
-            module.add_child(child_value);
+            context_value.module.borrow_mut().add_child(child_value);
 
             let used_inputs: HashSet<String> = output
                 .star_module
@@ -347,7 +345,7 @@ fn process_pending_child<'v>(
 
                 let mut diag = EvalMessage::from_any_error(Path::new(&call_site_path), &msg);
                 diag.span = Some(call_site_span);
-                diagnostics.push(diag.into());
+                context_value.diagnostics.borrow_mut().push(diag.into());
             }
         }
         None => {
@@ -355,7 +353,7 @@ fn process_pending_child<'v>(
                 let msg = format!("Failed to instantiate module {}", loader.name);
                 let mut diag = EvalMessage::from_any_error(Path::new(&call_site_path), &msg);
                 diag.span = Some(call_site_span);
-                diagnostics.push(diag.into());
+                context_value.diagnostics.borrow_mut().push(diag.into());
             }
         }
     }
