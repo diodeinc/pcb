@@ -13,10 +13,11 @@ use itertools::Itertools;
 use pcb_sch::position::Position;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
 use starlark::values::FrozenValue;
-use starlark::values::ValueLike;
+use starlark::values::{dict::DictRef, Value, ValueLike};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,102 @@ struct ParameterInfo {
     value: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     default_value: Option<serde_json::Value>,
+}
+
+fn serialize_signature_value(value: FrozenValue) -> Option<JsonValue> {
+    Some(serialize_value(value.to_value()))
+}
+
+fn serialize_value(value: Value) -> JsonValue {
+    if let Some(list) = ListRef::from_value(value) {
+        return JsonValue::Array(list.iter().map(serialize_value).collect());
+    }
+
+    if let Some(dict) = DictRef::from_value(value) {
+        return JsonValue::Object(
+            dict.iter()
+                .map(|(key, val)| {
+                    let key = key
+                        .unpack_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| key.to_string());
+                    (key, serialize_value(val))
+                })
+                .collect(),
+        );
+    }
+
+    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        return serialize_net(net);
+    }
+
+    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
+        return serialize_interface(interface);
+    }
+
+    match value.to_json_value() {
+        Ok(json) => json,
+        Err(_) => {
+            let mut unsupported = JsonMap::new();
+            unsupported.insert(
+                "Unsupported".to_string(),
+                JsonValue::String(value.get_type().to_string()),
+            );
+            JsonValue::Object(unsupported)
+        }
+    }
+}
+
+fn serialize_net(net: &FrozenNetValue) -> JsonValue {
+    let properties = JsonValue::Object(
+        net.properties()
+            .iter()
+            .map(|(key, val)| (key.clone(), serialize_value(val.to_value())))
+            .collect(),
+    );
+
+    wrap(
+        "Net",
+        JsonValue::Object(JsonMap::from_iter([
+            (
+                "id".to_string(),
+                JsonValue::Number(JsonNumber::from(net.id())),
+            ),
+            ("name".to_string(), JsonValue::String(net.name().to_owned())),
+            ("properties".to_string(), properties),
+        ])),
+    )
+}
+
+fn serialize_interface(interface: &FrozenInterfaceValue) -> JsonValue {
+    let mut inner = JsonMap::from_iter([(
+        "fields".to_string(),
+        JsonValue::Object(
+            interface
+                .fields()
+                .iter()
+                .map(|(key, val)| (key.clone(), serialize_value(val.to_value())))
+                .collect(),
+        ),
+    )]);
+
+    let promotion: JsonMap<_, _> = interface
+        .promotion_by_type()
+        .iter()
+        .map(|(ty, path)| (ty.clone(), JsonValue::String(path.clone())))
+        .collect();
+    if !promotion.is_empty() {
+        inner.insert(
+            "promotion_by_type".to_string(),
+            JsonValue::Object(promotion),
+        );
+    }
+
+    wrap("Interface", JsonValue::Object(inner))
+}
+
+fn wrap(tag: &str, inner: JsonValue) -> JsonValue {
+    JsonValue::Object(JsonMap::from_iter([(tag.to_string(), inner)]))
 }
 
 impl ModuleConverter {
@@ -293,20 +390,17 @@ impl ModuleConverter {
 
         // Process the module's signature
         for param in module.signature().iter() {
+            let type_info = TypeInfo::from_value(param.type_value.to_value());
             // Add to signature
             signature.parameters.push(ParameterInfo {
                 name: param.name.clone(),
-                typ: TypeInfo::from_value(param.type_value.to_value()),
+                typ: type_info,
                 optional: param.optional,
                 has_default: param.default_value.is_some(),
                 is_config: param.is_config,
                 help: param.help.clone(),
-                value: param
-                    .actual_value
-                    .and_then(|v| v.to_value().to_json_value().ok()),
-                default_value: param
-                    .default_value
-                    .and_then(|v| v.to_value().to_json_value().ok()),
+                value: param.actual_value.and_then(serialize_signature_value),
+                default_value: param.default_value.and_then(serialize_signature_value),
             });
         }
 
