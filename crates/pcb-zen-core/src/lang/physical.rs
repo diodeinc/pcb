@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::{cmp::Ordering, fmt, hash::Hash, str::FromStr};
 
 use allocative::Allocative;
@@ -1127,10 +1129,6 @@ impl PhysicalValueType {
     }
 
     fn type_instance_id(&self) -> TypeInstanceId {
-        use std::collections::HashMap;
-        use std::sync::Mutex;
-        use std::sync::OnceLock;
-
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
 
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -1549,10 +1547,6 @@ impl PhysicalRangeType {
     }
 
     fn type_instance_id(&self) -> TypeInstanceId {
-        use std::collections::HashMap;
-        use std::sync::Mutex;
-        use std::sync::OnceLock;
-
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
 
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
