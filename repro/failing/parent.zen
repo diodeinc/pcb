@@ -1,4 +1,0 @@
-load("child.zen", "Package")
-Child = Module("child.zen")
-
-Child(name="CHILD", PACKAGE=Package("A"))

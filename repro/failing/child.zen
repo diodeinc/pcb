@@ -1,9 +1,0 @@
-Package = enum("A", "B", "C")
-
-package = config("PACKAGE", Package, default=Package("A"))
-
-def accept_package(package: Package):
-    print(package)
-    print(type(package))
-
-accept_package(package)
