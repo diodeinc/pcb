@@ -171,33 +171,28 @@ where
 
         let eval_ctx = eval.eval_context().unwrap();
 
-        let load_resolver = eval_ctx
-            .get_load_resolver()
-            .ok_or_else(|| starlark::Error::new_other(anyhow!("No load resolver available")))?;
-
         let current_file = eval_ctx
             .source_path
             .as_ref()
             .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
-        let resolved_path = load_resolver
+        let resolved_path = eval_ctx
+            .get_load_resolver()
             .resolve_path(&path, std::path::Path::new(&current_file))
             .map_err(|e| {
                 starlark::Error::new_other(anyhow!("Failed to resolve spice model path: {}", e))
             })?;
 
-        let file_provider = eval_ctx
-            .file_provider
-            .as_ref()
-            .ok_or_else(|| starlark::Error::new_other(anyhow!("No file provider available")))?;
-
-        let contents = file_provider.read_file(&resolved_path).map_err(|e| {
-            starlark::Error::new_other(anyhow!(
-                "Failed to read symbol library '{}': {}",
-                resolved_path.display(),
-                e
-            ))
-        })?;
+        let contents = eval_ctx
+            .file_provider()
+            .read_file(&resolved_path)
+            .map_err(|e| {
+                starlark::Error::new_other(anyhow!(
+                    "Failed to read symbol library '{}': {}",
+                    resolved_path.display(),
+                    e
+                ))
+            })?;
 
         let circuit = get_sub_circuit(&contents, &name)?;
 

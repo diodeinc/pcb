@@ -28,18 +28,14 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
             .eval_context()
             .ok_or_else(|| anyhow::anyhow!("No evaluation context available"))?;
 
-        // Get the load resolver
-        let load_resolver = eval_context
-            .get_load_resolver()
-            .ok_or_else(|| anyhow::anyhow!("No load resolver available"))?;
-
         // Get the current file path
         let current_file = eval_context
             .get_source_path()
             .ok_or_else(|| anyhow::anyhow!("No source path available"))?;
 
         // Resolve the path using the load resolver
-        let resolved_path = load_resolver
+        let resolved_path = eval_context
+            .get_load_resolver()
             .resolve_path(&path, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve file path '{}': {}", path, e))?;
 
@@ -68,11 +64,6 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
             .eval_context()
             .ok_or_else(|| anyhow::anyhow!("No evaluation context available"))?;
 
-        // Get the load resolver
-        let load_resolver = eval_context
-            .get_load_resolver()
-            .ok_or_else(|| anyhow::anyhow!("No load resolver available"))?;
-
         // Get the current file path
         let current_file = eval_context
             .get_source_path()
@@ -97,12 +88,13 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
         }
 
         // Use the load resolver to resolve the LoadSpec to an absolute path
-        let resolved_path = load_resolver
+        let resolved_path = eval_context
+            .get_load_resolver()
             .resolve_spec(&load_spec, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve path '{}': {}", path, e))?;
 
         // If resolved_path doesn't exist, emit a warning diagnostic
-        if !load_resolver.file_provider().exists(&resolved_path) {
+        if !eval_context.file_provider().exists(&resolved_path) {
             let call_stack = eval.call_stack();
 
             // Start with the innermost diagnostic (deepest frame - always has location)

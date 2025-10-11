@@ -65,9 +65,7 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
         load_resolver.track_file(&pcb_toml_path);
     }
 
-    EvalContext::new()
-        .set_file_provider(file_provider)
-        .set_load_resolver(load_resolver)
+    EvalContext::new(load_resolver)
         .set_source_path(abs_path)
         .set_module_name("<root>".to_string())
         .eval()
