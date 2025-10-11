@@ -3,10 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::lang::r#enum::{EnumType, EnumValue};
 use allocative::Allocative;
 use log::error;
 use starlark::environment::FrozenModule;
-use starlark::values::enumeration::{EnumType, EnumValue, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::{TypeCompiled, TypeType};
 use starlark::values::{Heap, UnpackValue, ValueLifetimeless};
@@ -30,7 +30,7 @@ use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, Span};
 use starlark::values::dict::{AllocDict, DictRef};
-use starlark::values::enumeration::FrozenEnumValue;
+
 use starlark::values::record::{FrozenRecord, Record};
 use std::fs;
 
@@ -902,22 +902,8 @@ fn default_for_type<'v>(
         }
     }
 
-    if let Some(frozen_enum_type) = typ.downcast_ref::<FrozenEnumType>() {
-        let variants = frozen_enum_type
-            .get_attr("variants", heap)
-            .expect("expected variants attribute");
-
-        let list_ref =
-            ListRef::from_value(variants).expect("expected variants attribute to be a list");
-
-        if let Some(first_variant) = list_ref.first() {
-            return Ok(first_variant.to_value());
-        } else {
-            return Err(anyhow::anyhow!(
-                "EnumType provided to config/io() has no variants"
-            ));
-        }
-    }
+    // Our EnumType is a simple value (no separate Frozen version)
+    // It's already handled above, so this block is no longer needed
 
     if typ.downcast_ref::<RecordType>().is_some()
         || typ.downcast_ref::<FrozenRecordType>().is_some()
@@ -1025,10 +1011,7 @@ fn validate_type<'v>(
         return Ok(());
     }
 
-    if (typ.downcast_ref::<EnumType>().is_some() || typ.downcast_ref::<FrozenEnumType>().is_some())
-        && (EnumValue::from_value(value).is_some()
-            || value.downcast_ref::<FrozenEnumValue>().is_some())
-    {
+    if typ.downcast_ref::<EnumType>().is_some() && value.downcast_ref::<EnumValue>().is_some() {
         return Ok(());
     }
 
@@ -1104,13 +1087,13 @@ fn try_enum_conversion<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
     // Only applicable for EnumType values.
-    if typ.downcast_ref::<EnumType>().is_none() && typ.downcast_ref::<FrozenEnumType>().is_none() {
+    if typ.downcast_ref::<EnumType>().is_none() {
         return Ok(None);
     }
 
     // If the value is already an EnumValue, bail early – the caller should have
     // succeeded the type check in that case.
-    if EnumValue::from_value(value).is_some() {
+    if value.downcast_ref::<EnumValue>().is_some() {
         return Ok(None);
     }
 

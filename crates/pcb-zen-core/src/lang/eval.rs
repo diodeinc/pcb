@@ -97,30 +97,6 @@ impl<'v> DeepCopyToHeap for DictRef<'v> {
     }
 }
 
-// Implement DeepCopyToHeap for EnumValue
-impl<'v> DeepCopyToHeap for starlark::values::enumeration::EnumValue<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // Extract variant from string representation: EnumType("variant")
-        // Return as string - try_enum_conversion() will convert back to EnumValue
-        let repr = self.to_string();
-        let variant = if let Some(first_quote) = repr.find('"') {
-            if let Some(last_quote) = repr.rfind('"') {
-                if first_quote < last_quote {
-                    &repr[first_quote + 1..last_quote]
-                } else {
-                    &repr
-                }
-            } else {
-                &repr
-            }
-        } else {
-            &repr
-        };
-
-        Ok(dst.alloc_str(variant).to_value())
-    }
-}
-
 // Implement DeepCopyToHeap for Record
 impl<'v> DeepCopyToHeap for starlark::values::record::Record<'v> {
     fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
@@ -185,12 +161,6 @@ pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<
     // definition and don't need cross-heap copying in normal usage patterns.
     if v.get_type() == "field" {
         return Ok(Value::new_none());
-    }
-
-    // Handle EnumValue - use trait implementation
-    use starlark::values::enumeration::EnumValue;
-    if let Some(enum_val) = EnumValue::from_value(v) {
-        return enum_val.deep_copy_to(dst);
     }
 
     // Handle Record/FrozenRecord - use trait implementations
@@ -490,7 +460,6 @@ impl EvalContext {
     fn build_globals() -> starlark::environment::Globals {
         GlobalsBuilder::extended_by(&[
             LibraryExtension::RecordType,
-            LibraryExtension::EnumType,
             LibraryExtension::Typing,
             LibraryExtension::StructType,
             LibraryExtension::Print,
