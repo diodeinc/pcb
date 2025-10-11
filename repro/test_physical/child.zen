@@ -1,0 +1,9 @@
+Voltage = builtin.Voltage()
+
+voltage = config("VOLTAGE", Voltage, default=Voltage("3.3V"))
+
+def accept_voltage(v: Voltage):
+    print(v)
+    print(type(v))
+
+accept_voltage(voltage)

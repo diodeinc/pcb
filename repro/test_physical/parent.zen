@@ -1,0 +1,4 @@
+Voltage = builtin.Voltage()
+Child = Module("child.zen")
+
+Child(name="CHILD", VOLTAGE=Voltage("5V"))
