@@ -18,8 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Mutex, OnceLock};
 
-use crate::lang::eval::DeepCopyToHeap;
-
 #[derive(thiserror::Error, Debug)]
 enum EnumError {
     #[error("enum values must all be distinct, but repeated `{0}`")]
@@ -274,10 +272,6 @@ impl EnumValue {
 
 #[starlark_value(type = "enum")]
 impl<'v> StarlarkValue<'v> for EnumValue {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
         std::hash::Hash::hash(self, hasher);
         Ok(())
@@ -358,11 +352,5 @@ fn enum_value_methods(builder: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn value<'v>(this: &EnumValue, heap: &'v Heap) -> starlark::Result<Value<'v>> {
         Ok(heap.alloc(this.value()))
-    }
-}
-
-impl DeepCopyToHeap for EnumValue {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(self.clone()))
     }
 }

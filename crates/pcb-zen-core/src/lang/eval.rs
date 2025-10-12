@@ -6,21 +6,17 @@ use std::{
 };
 
 use anyhow::anyhow;
+use starlark::{codemap::ResolvedSpan, collections::SmallMap};
+use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
-    any::ProvidesStaticType,
     environment::{GlobalsBuilder, LibraryExtension},
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
     typing::TypeMap,
-    values::{
-        dict::{AllocDict, DictRef},
-        FrozenValue, Heap, Value, ValueLike,
-    },
+    values::{FrozenValue, Heap, Value, ValueLike},
     PrintHandler,
 };
-use starlark::{codemap::ResolvedSpan, collections::SmallMap};
-use starlark::{environment::FrozenModule, typing::Interface};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
@@ -63,124 +59,6 @@ impl PrintHandler for CollectingPrintHandler {
         self.output.borrow_mut().push(text.to_string());
         Ok(())
     }
-}
-
-pub(crate) trait DeepCopyToHeap {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>>;
-}
-
-unsafe impl<'v> ProvidesStaticType<'v> for dyn DeepCopyToHeap + 'v {
-    type StaticType = dyn DeepCopyToHeap;
-}
-
-// Implement DeepCopyToHeap for ListRef
-impl<'v> DeepCopyToHeap for starlark::values::list::ListRef<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        let mut new_list = Vec::new();
-        for item in self.iter() {
-            new_list.push(copy_value(item, dst)?);
-        }
-        Ok(dst.alloc(new_list))
-    }
-}
-
-// Implement DeepCopyToHeap for DictRef
-impl<'v> DeepCopyToHeap for DictRef<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        let mut new_map = Vec::new();
-        for (k, v) in self.iter() {
-            let new_key = copy_value(k, dst)?;
-            let new_value = copy_value(v, dst)?;
-            new_map.push((new_key, new_value));
-        }
-        Ok(dst.alloc(AllocDict(new_map)))
-    }
-}
-
-// Implement DeepCopyToHeap for Record
-impl<'v> DeepCopyToHeap for starlark::values::record::Record<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // Convert record to dict - try_record_conversion() will reconstruct it
-        let mut pairs = Vec::new();
-        for (field_name, field_value) in self.iter() {
-            let copied_value = copy_value(field_value.to_value(), dst)?;
-            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-        }
-        Ok(dst.alloc(AllocDict(pairs)))
-    }
-}
-
-// Implement DeepCopyToHeap for FrozenRecord
-impl DeepCopyToHeap for starlark::values::record::FrozenRecord {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // Convert record to dict - try_record_conversion() will reconstruct it
-        let mut pairs = Vec::new();
-        for (field_name, field_value) in self.iter() {
-            let copied_value = copy_value(field_value.to_value(), dst)?;
-            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-        }
-        Ok(dst.alloc(AllocDict(pairs)))
-    }
-}
-
-pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-    if v.is_none() {
-        return Ok(Value::new_none().to_value());
-    }
-
-    if let Some(b) = v.unpack_bool() {
-        return Ok(Value::new_bool(b).to_value());
-    }
-
-    if let Some(i) = v.unpack_i32() {
-        return Ok(dst.alloc(i));
-    }
-
-    if let Some(f) = v.downcast_ref::<starlark::values::float::StarlarkFloat>() {
-        return Ok(dst.alloc(starlark::values::float::StarlarkFloat(f.0)));
-    }
-
-    if let Some(s) = v.unpack_str() {
-        return Ok(dst.alloc_str(s).to_value());
-    }
-
-    // Handle ListRef - use trait implementation
-    use starlark::values::list::ListRef;
-    if let Some(list) = ListRef::from_value(v) {
-        return list.deep_copy_to(dst);
-    }
-
-    // Handle DictRef - use trait implementation
-    if let Some(dict) = DictRef::from_value(v) {
-        return dict.deep_copy_to(dst);
-    }
-
-    // Handle FieldGen from external starlark crate
-    // Since FieldGen doesn't implement DeepCopyToHeap and we can't modify external types,
-    // we return None. This works because field objects are typically used during interface
-    // definition and don't need cross-heap copying in normal usage patterns.
-    if v.get_type() == "field" {
-        return Ok(Value::new_none());
-    }
-
-    // Handle Record/FrozenRecord - use trait implementations
-    use starlark::values::record::{FrozenRecord, Record};
-    if let Some(record) = v.downcast_ref::<Record>() {
-        return record.deep_copy_to(dst);
-    }
-    if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
-        return frozen_record.deep_copy_to(dst);
-    }
-
-    // Fallback to generic DeepCopyToHeap trait for other types
-    if let Some(dc) = v.request_value::<&dyn DeepCopyToHeap>() {
-        return dc.deep_copy_to(dst);
-    }
-
-    Err(anyhow!(
-        "internal error: cannot extract value of `{}`",
-        v.get_type()
-    ))
 }
 
 #[derive(Clone)]
@@ -575,28 +453,6 @@ impl EvalContext {
     pub fn set_module_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
         self
-    }
-
-    /// Copy and set inputs from parent values to child module
-    pub fn copy_and_set_inputs_from_values(
-        &mut self,
-        parent_inputs: SmallMap<String, Value<'_>>,
-    ) -> starlark::Result<()> {
-        let eval = Evaluator::new(&self.module);
-        if self.module.extra_value().is_none() {
-            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
-            self.module.set_extra_value(ctx_value);
-        }
-        let extra_value = self.module.extra_value().unwrap();
-        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
-
-        let mut module = ctx_value.module_mut();
-        for (name, parent_value) in parent_inputs.iter() {
-            let copied =
-                copy_value(*parent_value, eval.heap()).map_err(starlark::Error::new_other)?;
-            module.add_input(name.clone(), copied);
-        }
-        Ok(())
     }
 
     /// Set inputs from already frozen parent values.

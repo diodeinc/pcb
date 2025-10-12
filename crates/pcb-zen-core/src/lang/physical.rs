@@ -880,13 +880,6 @@ impl<'v> StarlarkValue<'v> for PhysicalUnitDims {
 
 starlark_simple_value!(PhysicalValue);
 
-impl crate::lang::eval::DeepCopyToHeap for PhysicalValue {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // PhysicalValue is Copy, so just allocate on dst heap
-        Ok(dst.alloc_simple(*self))
-    }
-}
-
 #[starlark::starlark_module]
 fn physical_value_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
@@ -987,10 +980,6 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
 
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn crate::lang::eval::DeepCopyToHeap>(self);
-    }
-
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(physical_value_methods)
@@ -1328,13 +1317,6 @@ pub struct PhysicalRange {
 
 starlark_simple_value!(PhysicalRange);
 
-impl crate::lang::eval::DeepCopyToHeap for PhysicalRange {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // PhysicalRange is Clone, so clone and allocate on dst heap
-        Ok(dst.alloc_simple(self.clone()))
-    }
-}
-
 impl fmt::Display for PhysicalRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let unit = self.r#type.unit;
@@ -1412,10 +1394,6 @@ impl PhysicalRange {
 
 #[starlark_value(type = PhysicalRange::TYPE)]
 impl<'v> StarlarkValue<'v> for PhysicalRange {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn crate::lang::eval::DeepCopyToHeap>(self);
-    }
-
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(range_methods)

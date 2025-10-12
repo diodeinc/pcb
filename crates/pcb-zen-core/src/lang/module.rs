@@ -271,7 +271,7 @@ where
 
 impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Find a child at the given path (supports nested paths like "foo.bar")
-    fn find_at_path(&self, path: &str) -> starlark::Result<Value<'v>> {
+    pub fn find_at_path(&self, path: &str) -> starlark::Result<Value<'v>> {
         // Handle nested paths (e.g., "foo.bar")
         if let Some(dot_pos) = path.find('.') {
             let (first, rest) = path.split_at(dot_pos);
@@ -1158,47 +1158,6 @@ fn try_interface_promotion<'v>(
     }
 }
 
-// Helper to attempt converting dict to record by calling RecordType with kwargs
-fn try_record_conversion<'v>(
-    value: Value<'v>,
-    typ: Value<'v>,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Option<Value<'v>>> {
-    // Only applicable for RecordType values
-    if typ.downcast_ref::<RecordType>().is_none()
-        && typ.downcast_ref::<FrozenRecordType>().is_none()
-    {
-        return Ok(None);
-    }
-
-    // If value is already a record, bail (should have passed validation)
-    use starlark::values::record::Record;
-    if Record::from_value(value).is_some() {
-        return Ok(None);
-    }
-
-    // Try to convert from dict - extract field names and values
-    if let Some(dict) = DictRef::from_value(value) {
-        let mut kwargs = Vec::new();
-        for (k, v) in dict.iter() {
-            if let Some(key_str) = k.unpack_str() {
-                kwargs.push((key_str, v));
-            } else {
-                return Err(anyhow::anyhow!("Record field names must be strings"));
-            }
-        }
-
-        // Call RecordType with kwargs: RecordType(field1=val1, field2=val2, ...)
-        // Return Ok(None) on failure so other conversion strategies can be tried.
-        match eval.eval_function(typ, &[], &kwargs) {
-            Ok(converted) => Ok(Some(converted)),
-            Err(_) => Ok(None), // Can't convert - let caller try other strategies
-        }
-    } else {
-        Ok(None) // Not a dict, can't convert
-    }
-}
-
 fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
@@ -1211,14 +1170,7 @@ fn validate_or_convert<'v>(
         return Ok(value);
     }
 
-    // 1. Try automatic conversions for values that were downgraded during copy_value()
-    //    These must happen BEFORE custom converter to preserve transparent copying
-
-    // 1a. If expected type is record and value is dict, auto-convert (record was downgraded)
-    if let Some(converted) = try_record_conversion(value, typ, eval)? {
-        validate_type(name, converted, typ, eval.heap())?;
-        return Ok(converted);
-    }
+    // 1. Try automatic conversions for values
 
     // 1b. If expected type is enum and value is string, auto-convert (enum was downgraded)
     if let Some(converted) = try_enum_conversion(value, typ, eval)? {

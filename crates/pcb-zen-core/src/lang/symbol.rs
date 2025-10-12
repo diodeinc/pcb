@@ -17,7 +17,6 @@ use starlark::{
 
 use std::collections::HashMap;
 
-use crate::lang::eval::DeepCopyToHeap;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::EvalContext;
 
@@ -85,10 +84,6 @@ impl<'v> StarlarkValue<'v> for SymbolValue
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
         match attr {
             "properties" => {
@@ -349,12 +344,6 @@ impl<'v> SymbolValue {
     }
 }
 
-impl DeepCopyToHeap for SymbolValue {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(self.clone()))
-    }
-}
-
 /// SymbolType is a factory for creating Symbol values
 #[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -373,10 +362,6 @@ impl<'v> StarlarkValue<'v> for SymbolType
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -622,10 +607,4 @@ pub fn load_symbol_from_library(
 
     // Now try again
     load_symbol_from_library(path, symbol_name, file_provider)
-}
-
-impl DeepCopyToHeap for SymbolType {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(SymbolType))
-    }
 }

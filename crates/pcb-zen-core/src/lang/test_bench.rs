@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::module::{FrozenModuleValue, ModuleLoader};
+use crate::lang::module::ModuleLoader;
 use crate::Diagnostic;
 use allocative::Allocative;
 use starlark::environment::GlobalsBuilder;
@@ -35,11 +35,10 @@ pub struct DeferredCheckGen<V: ValueLifetimeless> {
 pub struct DeferredTestCaseGen<V: ValueLifetimeless> {
     /// The name of this test case
     pub case_name: String,
-    /// The test case parameters that were provided
+    /// The final module name (e.g., "bench__case")
+    pub case_final_name: String,
+    /// The test case parameters that were provided (for check execution)
     pub params: SmallMap<String, V>,
-    /// The evaluated module (None if evaluation failed)
-    #[freeze(identity)]
-    pub evaluated: Option<FrozenModuleValue>,
     /// Check functions to run later
     pub checks: Vec<DeferredCheckGen<V>>,
 }
@@ -49,18 +48,22 @@ pub struct DeferredTestCaseGen<V: ValueLifetimeless> {
 #[repr(C)]
 pub struct TestBenchValueGen<V: ValueLifetimeless> {
     /// Name of this TestBench instance
-    name: String,
+    pub(crate) name: String,
     /// The module loader that was used
     #[freeze(identity)]
     module_loader: ModuleLoader,
     /// Deferred test cases (used when checks are deferred)
-    deferred_cases: Vec<DeferredTestCaseGen<V>>,
+    pub(crate) deferred_cases: Vec<DeferredTestCaseGen<V>>,
     /// Source file path where TestBench was defined (for diagnostic context)
     source_path: String,
     /// Span of the TestBench() call for diagnostic context
     #[freeze(identity)]
     #[allocative(skip)]
     call_span: Option<starlark::codemap::ResolvedSpan>,
+    /// Call stack at TestBench() invocation for diagnostic context
+    #[freeze(identity)]
+    #[allocative(skip)]
+    call_stack: starlark::eval::CallStack,
 }
 
 starlark_complex_value!(pub TestBenchValue);
@@ -113,118 +116,6 @@ impl<'v, V: ValueLike<'v>> TestBenchValueGen<V> {
     }
 }
 
-/// Extension to ModuleLoader for TestBench evaluation
-impl ModuleLoader {
-    /// Evaluate this module with specific inputs for TestBench
-    pub fn evaluate_with_inputs<'v>(
-        &self,
-        test_bench_name: String,
-        eval: &mut Evaluator<'v, '_, '_>,
-        parent_values: SmallMap<String, Value<'v>>,
-        case_name: Option<&str>,
-    ) -> anyhow::Result<Option<FrozenModuleValue>> {
-        // Create a child context with strict_io_config = true
-        let mut ctx = eval
-            .eval_context()
-            .expect("expected eval context")
-            .child_context()
-            .set_strict_io_config(true); // Strict mode - require all inputs
-
-        let module_name = match case_name {
-            Some(name) => format!("{}__{}", test_bench_name, name),
-            None => test_bench_name,
-        };
-
-        ctx = ctx
-            .set_source_path(std::path::PathBuf::from(&self.source_path))
-            .set_module_name(module_name);
-
-        // Copy parent values to child heap upfront
-        ctx.copy_and_set_inputs_from_values(parent_values)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        let (output, diagnostics) = ctx.eval().unpack();
-
-        // Get the parent context for diagnostic propagation
-        let parent_context = eval
-            .module()
-            .extra_value()
-            .and_then(|extra| extra.downcast_ref::<crate::lang::context::ContextValue>())
-            .ok_or_else(|| anyhow::anyhow!("unexpected context - ContextValue not found"))?;
-
-        let call_site = eval.call_stack_top_location();
-
-        // Propagate diagnostics from the testbench module
-        for child in diagnostics.into_iter() {
-            let diag_to_add = if let Some(cs) = &call_site {
-                // Wrap diagnostics with call-site context
-                let (severity, message) = match child.severity {
-                    EvalSeverity::Error => {
-                        let case_suffix = case_name
-                            .map(|n| format!(" case '{}'", n))
-                            .unwrap_or_default();
-                        (
-                            EvalSeverity::Error,
-                            format!("Error in TestBench module `{}`{}", self.name, case_suffix),
-                        )
-                    }
-                    EvalSeverity::Warning => {
-                        let case_suffix = case_name
-                            .map(|n| format!(" case '{}'", n))
-                            .unwrap_or_default();
-                        (
-                            EvalSeverity::Warning,
-                            format!(
-                                "Warning from TestBench module `{}`{}",
-                                self.name, case_suffix
-                            ),
-                        )
-                    }
-                    other => {
-                        let case_suffix = case_name
-                            .map(|n| format!(" case '{}'", n))
-                            .unwrap_or_default();
-                        (
-                            other,
-                            format!("Issue in TestBench module `{}`{}", self.name, case_suffix),
-                        )
-                    }
-                };
-
-                Diagnostic {
-                    path: cs.filename().to_string(),
-                    span: Some(cs.resolve_span()),
-                    severity,
-                    body: message,
-                    call_stack: Some(eval.call_stack().clone()),
-                    child: Some(Box::new(child)),
-                    source_error: None,
-                }
-            } else {
-                child
-            };
-
-            // Propagate the diagnostic upwards
-            parent_context.add_diagnostic(diag_to_add);
-        }
-
-        match output {
-            Some(output) => {
-                // Add a reference to the dependent module's frozen heap so it stays alive
-                eval.frozen_heap()
-                    .add_reference(output.star_module.frozen_heap());
-
-                Ok(Some(output.sch_module))
-            }
-            None => {
-                // Module evaluation failed, but we still return Ok with None
-                // The diagnostics have already been propagated
-                Ok(None)
-            }
-        }
-    }
-}
-
 /// Collect parent values from a test case dictionary
 fn collect_parent_values<'v>(
     case_dict: &DictRef<'v>,
@@ -269,6 +160,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             .map(|cs| cs.filename().to_string())
             .unwrap_or_default();
         let call_span = call_site.map(|cs| cs.resolve_span());
+        let call_stack = eval.call_stack().clone();
 
         // Parse checks list once if provided
         let checks_list =
@@ -281,8 +173,11 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             };
 
         let mut deferred_cases = Vec::new();
+        let ctx = eval
+            .context_value()
+            .ok_or_else(|| anyhow::anyhow!("TestBench requires a ContextValue"))?;
 
-        // Process each test case
+        // Process each test case - enqueue for freeze-time evaluation
         for (case_name, case_value) in test_cases_dict.iter() {
             let case_name_str = case_name.unpack_str().ok_or_else(|| {
                 anyhow::anyhow!("test case names must be strings, got: {}", case_name)
@@ -292,16 +187,23 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                 anyhow::anyhow!("test case '{}' must be a dictionary", case_name_str)
             })?;
 
-            // Collect parent values from case parameters
-            let parent_values = collect_parent_values(&case_dict)?;
+            // Collect input values from case parameters
+            let inputs = collect_parent_values(&case_dict)?;
 
-            // Evaluate the module with this test case
-            let evaluated_module = loader.evaluate_with_inputs(
-                name.clone(),
-                eval,
-                parent_values,
-                Some(case_name_str),
-            )?;
+            // Compute the final module name
+            let case_final_name = format!("{}__{}", name, case_name_str);
+
+            // Enqueue for freeze-time evaluation with frozen inputs (as regular child)
+            ctx.enqueue_child(crate::lang::context::PendingChild {
+                loader: loader.clone(),
+                final_name: case_final_name.clone(),
+                inputs,
+                properties: None,
+                provided_names: Vec::new(),
+                call_site_path: source_path.clone(),
+                call_site_span: call_span.unwrap_or_default(),
+                call_stack: call_stack.clone(),
+            });
 
             // Store case parameters for later
             let mut params = SmallMap::new();
@@ -347,14 +249,14 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
 
             deferred_cases.push(DeferredTestCaseGen {
                 case_name: case_name_str.to_string(),
+                case_final_name,
                 params,
-                evaluated: evaluated_module,
                 checks: deferred_checks,
             });
         }
 
         log::info!(
-            "TestBench '{}': {} cases registered with deferred checks",
+            "TestBench '{}': {} cases enqueued for freeze-time evaluation",
             name,
             deferred_cases.len()
         );
@@ -366,6 +268,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             deferred_cases,
             source_path,
             call_span,
+            call_stack,
         };
 
         let testbench_value = eval.heap().alloc(testbench);
