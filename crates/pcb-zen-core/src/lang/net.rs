@@ -409,7 +409,10 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
     /// Returns the parameter specification for this type's constructor
     fn param_spec(&self) -> ParamSpec {
-        let mut named_params = vec![(ArcStr::from("name"), ParamIsRequired::No, Ty::string())];
+        let mut named_params = vec![
+            (ArcStr::from("NET"), ParamIsRequired::No, Ty::any()),
+            (ArcStr::from("name"), ParamIsRequired::No, Ty::string()),
+        ];
 
         // Add all field parameters as optional named-only
         // TODO(type-hints): Extract Ty from field specs for better LSP hints. Currently Ty::any().
@@ -425,7 +428,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [(ParamIsRequired::No, Ty::any())], // positional-only - accepts string or NetValue
             [],                                 // pos_or_named
             None,                               // *args
-            named_params,                       // keyword-only (name + fields)
+            named_params,                       // keyword-only (NET, name + fields)
             None,                               // **kwargs
         )
         .expect("ParamSpec creation should not fail")
@@ -433,7 +436,10 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
     /// Returns the runtime parameter specification for parsing arguments
     fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
-        let mut named_params = vec![("name", ParametersSpecParam::Optional)];
+        let mut named_params = vec![
+            ("NET", ParametersSpecParam::Optional),
+            ("name", ParametersSpecParam::Optional),
+        ];
 
         for field_name in self.fields.keys() {
             named_params.push((field_name.as_str(), ParametersSpecParam::Optional));
@@ -444,7 +450,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
             [],                                         // pos_or_named (args)
             false,
-            named_params, // named-only (name + fields)
+            named_params, // named-only (NET, name + fields)
             false,
         )
     }
@@ -470,6 +476,19 @@ fn validate_field_value<'v>(
     );
 }
 
+/// Extract default value from a field spec (if it's a FieldGen with a default).
+fn default_from_field<'v>(spec: Value<'v>) -> Option<Value<'v>> {
+    use starlark::values::types::record::field::FieldGen;
+
+    if let Some(fg) = spec.downcast_ref::<FieldGen<Value>>() {
+        fg.default().map(|d| d.to_value())
+    } else if let Some(fg) = spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        fg.default().map(|d| d.to_value())
+    } else {
+        None
+    }
+}
+
 #[starlark_value(type = "NetType")]
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
 where
@@ -487,22 +506,10 @@ where
                 let heap = eval.heap();
                 let type_name = self.instance_ty_name();
 
-                // Parse arguments
-                let value_param: Option<Value> = param_parser.next_opt()?;
-                let name_keyword_str = param_parser
-                    .next_opt()?
-                    .map(|v: Value| {
-                        v.unpack_str()
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "{}() 'name' must be string, got {}",
-                                    type_name,
-                                    v.get_type()
-                                )
-                            })
-                            .map(|s| s.to_string())
-                    })
-                    .transpose()?;
+                // Parse arguments: positional value, NET= keyword, name= keyword, and field values
+                let positional_value: Option<Value> = param_parser.next_opt()?;
+                let net_keyword: Option<Value> = param_parser.next_opt()?;
+                let name_keyword: Option<Value> = param_parser.next_opt()?;
 
                 // Parse field values (all optional)
                 let mut field_values = SmallMap::new();
@@ -512,55 +519,75 @@ where
                     }
                 }
 
-                // Determine name, properties, net_id, and original_name from value_param
-                let (original_name, mut properties, net_id) = match value_param {
-                    Some(value) if value.unpack_str().is_some() => {
-                        if name_keyword_str.is_some() {
-                            return Err(anyhow::anyhow!(
-                                "{}() cannot have both positional string and name keyword",
-                                type_name
-                            )
-                            .into());
-                        }
-                        let name = value.unpack_str().unwrap().to_string();
-                        validate_identifier_name(&name, "Net name")?;
-                        (Some(name), SmallMap::new(), generate_net_id())
-                    }
-                    Some(value) => {
-                        let source_net = NetValue::from_value(value).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "{}() expects string or {}, got {}",
-                                type_name,
-                                type_name,
-                                value.get_type()
-                            )
-                        })?;
+                // Extract name keyword as string if provided
+                let name_from_kw: Option<String> = name_keyword
+                    .map(|v| {
+                        v.unpack_str()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "{}() 'name' must be string, got {}",
+                                    type_name,
+                                    v.get_type()
+                                )
+                            })
+                            .map(|s| s.to_owned())
+                    })
+                    .transpose()?;
 
-                        // Allow overriding the name with explicit name= keyword, otherwise preserve original
-                        let original_name = match &name_keyword_str {
-                            Some(n) => {
-                                validate_identifier_name(n, "Net name")?;
-                                Some(n.clone())
-                            }
-                            None => source_net.original_name.clone(),
-                        };
-                        // Preserve net_id when casting between net types
-                        (
-                            original_name,
-                            source_net.properties.clone(),
-                            source_net.net_id,
+                // Determine base_net and/or positional name
+                let mut base_net: Option<&NetValue> = None;
+                let mut name_from_pos: Option<String> = None;
+
+                if let Some(v) = positional_value {
+                    if let Some(s) = v.unpack_str() {
+                        name_from_pos = Some(s.to_owned());
+                    } else if let Some(nv) = NetValue::from_value(v) {
+                        base_net = Some(nv);
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "{}() expects string or Net value as positional, got {}",
+                            type_name,
+                            v.get_type()
                         )
+                        .into());
                     }
-                    None => {
-                        if let Some(n) = &name_keyword_str {
-                            validate_identifier_name(n, "Net name")?;
-                        }
-                        (name_keyword_str, SmallMap::new(), generate_net_id())
+                }
+
+                if let Some(v) = net_keyword {
+                    let nv = NetValue::from_value(v).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{}() NET= expects Net value, got {}",
+                            type_name,
+                            v.get_type()
+                        )
+                    })?;
+                    if base_net.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "{}() cannot provide both a positional Net and NET=",
+                            type_name
+                        )
+                        .into());
                     }
+                    base_net = Some(nv);
+                }
+
+                // Choose requested name: name= overrides positional string, which overrides base net's original name
+                let requested_name: Option<String> = name_from_kw
+                    .or(name_from_pos)
+                    .or_else(|| base_net.and_then(|n| n.original_name.clone()));
+
+                if let Some(ref n) = requested_name {
+                    validate_identifier_name(n, "Net name")?;
+                }
+
+                // Build (original_name, properties, net_id)
+                let (original_name, mut properties, net_id) = if let Some(n) = base_net {
+                    (requested_name, n.properties.clone(), n.net_id)
+                } else {
+                    (requested_name, SmallMap::new(), generate_net_id())
                 };
 
                 // Merge field values into properties, applying defaults for unprovided fields
-                use starlark::values::types::record::field::FieldGen;
                 for (field_name, field_spec) in &self.fields {
                     if let Some(provided_val) = field_values.get(field_name) {
                         // User provided a value - validate it against the field's type spec
@@ -570,24 +597,11 @@ where
                         let validated_val = validate_field_value(field_name, &tc, *provided_val)
                             .map_err(starlark::Error::new_other)?;
                         properties.insert(field_name.clone(), validated_val);
-                    } else {
+                    } else if let Some(default_val) = default_from_field(field_spec.to_value()) {
                         // User didn't provide value - try to apply default from field() spec
-                        if let Some(field_gen) =
-                            field_spec.to_value().downcast_ref::<FieldGen<Value>>()
-                        {
-                            if let Some(default_val) = field_gen.default() {
-                                properties.insert(field_name.clone(), default_val.to_value());
-                            }
-                        } else if let Some(field_gen) = field_spec
-                            .to_value()
-                            .downcast_ref::<FieldGen<FrozenValue>>()
-                        {
-                            if let Some(default_val) = field_gen.default() {
-                                properties.insert(field_name.clone(), default_val.to_value());
-                            }
-                        }
-                        // If no field() wrapper or no default, field won't be in properties
+                        properties.insert(field_name.clone(), default_val);
                     }
+                    // If no provided value and no default, field won't be in properties
                 }
 
                 // Extract symbol metadata if a symbol field exists (from explicit value or default)
