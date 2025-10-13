@@ -62,9 +62,7 @@ pub fn make_default_net_type(heap: &FrozenHeap) -> FrozenNetType {
     // Field: voltage = VoltageRange
     fields.insert(
         "voltage".to_owned(),
-        heap.alloc(PhysicalRangeType::new(
-            pcb_sch::PhysicalUnit::Volts.into(),
-        )),
+        heap.alloc(PhysicalRangeType::new(pcb_sch::PhysicalUnit::Volts.into())),
     );
 
     // Field: impedance = Resistance (using PhysicalValueType for single values)
@@ -487,8 +485,8 @@ where
                     }
                 }
 
-                // Determine name and properties from value_param
-                let (original_name, mut properties) = match value_param {
+                // Determine name, properties, net_id, and original_name from value_param
+                let (original_name, mut properties, net_id) = match value_param {
                     Some(value) if value.unpack_str().is_some() => {
                         if name_keyword_str.is_some() {
                             return Err(anyhow::anyhow!(
@@ -499,7 +497,7 @@ where
                         }
                         let name = value.unpack_str().unwrap().to_string();
                         validate_identifier_name(&name, "Net name")?;
-                        (Some(name), SmallMap::new())
+                        (Some(name), SmallMap::new(), generate_net_id())
                     }
                     Some(value) => {
                         let source_net = NetValue::from_value(value).ok_or_else(|| {
@@ -511,20 +509,26 @@ where
                             )
                         })?;
 
-                        let name = match &name_keyword_str {
+                        // Allow overriding the name with explicit name= keyword, otherwise preserve original
+                        let original_name = match &name_keyword_str {
                             Some(n) => {
                                 validate_identifier_name(n, "Net name")?;
-                                n.clone()
+                                Some(n.clone())
                             }
-                            None => source_net.name.clone(),
+                            None => source_net.original_name.clone(),
                         };
-                        (Some(name), source_net.properties.clone())
+                        // Preserve net_id when casting between net types
+                        (
+                            original_name,
+                            source_net.properties.clone(),
+                            source_net.net_id,
+                        )
                     }
                     None => {
                         if let Some(n) = &name_keyword_str {
                             validate_identifier_name(n, "Net name")?;
                         }
-                        (name_keyword_str, SmallMap::new())
+                        (name_keyword_str, SmallMap::new(), generate_net_id())
                     }
                 };
 
@@ -585,8 +589,7 @@ where
                     }
                 }
 
-                // Register net and create instance
-                let net_id = generate_net_id();
+                // Register net (or reuse existing registration for casts)
                 let net_name = original_name.clone().unwrap_or_default();
                 let final_name = eval
                     .module()
