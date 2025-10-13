@@ -119,9 +119,6 @@ semver = "1.0"
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-
-# Optimize for size + performance
-[profile.release]
 lto = "fat"           # Maximum link-time optimization
 codegen-units = 1     # Better optimization
 strip = "debuginfo"   # Strip debug symbols
