@@ -18,18 +18,12 @@ Module {
                         Net {
                             name: "in_signal",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "OUT": FrozenValue(
                         Net {
                             name: "out_signal",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },
@@ -67,18 +61,12 @@ Module {
                         Net {
                             name: "in2",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "OUT": FrozenValue(
                         Net {
                             name: "out2",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },

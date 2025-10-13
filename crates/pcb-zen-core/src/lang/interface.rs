@@ -81,7 +81,6 @@ impl InstancePrefix {
 fn alloc_net<'v>(
     name_hint: &str,
     props: SmallMap<String, Value<'v>>,
-    symbol: Value<'v>,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
@@ -96,7 +95,7 @@ fn alloc_net<'v>(
         name_hint.to_owned()
     };
 
-    Ok(heap.alloc(NetValue::new(net_id, final_name, props, symbol)))
+    Ok(heap.alloc(NetValue::new(net_id, final_name, props)))
 }
 
 /// Helper to check if an interface factory has exactly one net field
@@ -277,7 +276,6 @@ fn clone_net_template<'v>(
         new_net.id(),
         final_name,
         new_net.properties().clone(),
-        new_net.symbol().to_value(),
     )))
 }
 
@@ -347,7 +345,7 @@ fn create_field_value<'v>(
         )
     } else if field_spec.get_type() == "NetType" {
         let new_name = compute_net_name(prefix, None, Some(field_name), suffix_net_name, eval);
-        alloc_net(&new_name, SmallMap::new(), Value::new_none(), heap, eval)
+        alloc_net(&new_name, SmallMap::new(), heap, eval)
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, &child_prefix, heap, eval)
@@ -977,7 +975,7 @@ mod tests {
     use starlark::assert::Assert;
     use starlark::environment::GlobalsBuilder;
 
-    use crate::lang::component::component_globals;
+    use crate::lang::component::{component_globals, init_net_global};
     use crate::lang::interface::interface_globals;
 
     #[test]
@@ -986,6 +984,7 @@ mod tests {
         // Extend the default globals with the language constructs we need.
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1005,6 +1004,7 @@ eval_type(Power).matches(instance)
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1022,6 +1022,7 @@ assert_eq(str(Power), "Power")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1062,6 +1063,7 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1118,6 +1120,7 @@ assert_eq(instance5.vcc.name, "PWR")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1148,6 +1151,7 @@ assert_eq(power.NET.name, "_VCC")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1175,6 +1179,7 @@ assert_eq(power_default.NET.name, "_NET")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1190,6 +1195,7 @@ assert_eq(power_default.NET.name, "_NET")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1210,6 +1216,7 @@ interface(
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1231,6 +1238,7 @@ interface(
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 

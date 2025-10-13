@@ -12,13 +12,15 @@ use starlark::{
     values::{
         starlark_value,
         typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Coerce, Freeze, FreezeResult, Freezer, FrozenValue, Heap, NoSerialize, StarlarkValue,
-        Trace, Value, ValueLike,
+        Coerce, Freeze, FreezeResult, Freezer, FrozenHeap, FrozenValue, Heap, NoSerialize,
+        StarlarkValue, Trace, Value, ValueLike,
     },
 };
 use std::sync::OnceLock;
 
 use super::context::ContextValue;
+use super::physical::{PhysicalRangeType, PhysicalValueType};
+use super::symbol::SymbolType;
 use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
@@ -48,6 +50,33 @@ pub fn reset_net_id_counter() {
     NEXT_NET_ID.with(|counter| {
         *counter.borrow_mut() = 1;
     });
+}
+
+/// Create the default builtin Net type with standard fields (symbol, voltage, impedance)
+pub fn make_default_net_type(heap: &FrozenHeap) -> FrozenNetType {
+    let mut fields: SmallMap<String, FrozenValue> = SmallMap::new();
+
+    // Field: symbol = Symbol
+    fields.insert("symbol".to_owned(), heap.alloc(SymbolType));
+
+    // Field: voltage = VoltageRange
+    fields.insert(
+        "voltage".to_owned(),
+        heap.alloc(PhysicalRangeType::new(
+            pcb_sch::PhysicalUnit::Volts.into(),
+        )),
+    );
+
+    // Field: impedance = Resistance (using PhysicalValueType for single values)
+    fields.insert(
+        "impedance".to_owned(),
+        heap.alloc(PhysicalValueType::new(pcb_sch::PhysicalUnit::Ohms.into())),
+    );
+
+    FrozenNetType {
+        type_name: "Net".to_owned(),
+        fields,
+    }
 }
 
 /// Extract the TypeCompiled from a field spec (FieldGen or direct type Value)
@@ -99,10 +128,8 @@ pub struct NetValueGen<V> {
     pub original_name: Option<String>,
     /// The type name (e.g., "Net", "Power", "Ground")
     pub(crate) type_name: String,
-    /// Properties extracted from symbol (if provided)
+    /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
-    /// The Symbol value if one was provided
-    pub(crate) symbol: V,
 }
 
 starlark_complex_value!(pub NetValue);
@@ -124,7 +151,6 @@ impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
             debug.field("properties", &props_map);
         }
 
-        debug.field("symbol", &self.symbol);
         debug.finish()
     }
 }
@@ -166,14 +192,13 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Create a new NetValue
-    pub fn new(net_id: NetId, name: String, properties: SmallMap<String, V>, symbol: V) -> Self {
+    pub fn new(net_id: NetId, name: String, properties: SmallMap<String, V>) -> Self {
         Self {
             net_id,
             name,
             original_name: None,
             type_name: "Net".to_string(),
             properties,
-            symbol,
         }
     }
 
@@ -207,18 +232,13 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         &self.properties
     }
 
-    /// Return the symbol associated with this net (if any).
-    pub fn symbol(&self) -> &V {
-        &self.symbol
-    }
-
     /// Return the original name as Option (None if auto-generated)
     pub fn original_name_opt(&self) -> Option<&str> {
         self.original_name.as_deref()
     }
 
     /// Create a new net with the same fields but a fresh net ID.
-    /// This avoids deep copying - properties and symbols are shared via Value references.
+    /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
@@ -232,7 +252,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             original_name: self.original_name.clone(),
             type_name: self.type_name.clone(),
             properties,
-            symbol: self.symbol.to_value(),
         })
     }
 }
@@ -365,10 +384,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
     /// Returns the parameter specification for this type's constructor
     fn param_spec(&self) -> ParamSpec {
-        let mut named_params = vec![
-            (ArcStr::from("name"), ParamIsRequired::No, Ty::string()),
-            (ArcStr::from("symbol"), ParamIsRequired::No, Ty::any()),
-        ];
+        let mut named_params = vec![(ArcStr::from("name"), ParamIsRequired::No, Ty::string())];
 
         // Add all field parameters as optional named-only
         // TODO(type-hints): Extract Ty from field specs for better LSP hints. Currently Ty::any().
@@ -384,7 +400,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [(ParamIsRequired::No, Ty::any())], // positional-only - accepts string or NetValue
             [],                                 // pos_or_named
             None,                               // *args
-            named_params,                       // keyword-only (name, symbol, + fields)
+            named_params,                       // keyword-only (name + fields)
             None,                               // **kwargs
         )
         .expect("ParamSpec creation should not fail")
@@ -392,10 +408,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
     /// Returns the runtime parameter specification for parsing arguments
     fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
-        let mut named_params = vec![
-            ("name", ParametersSpecParam::Optional),
-            ("symbol", ParametersSpecParam::Optional),
-        ];
+        let mut named_params = vec![("name", ParametersSpecParam::Optional)];
 
         for field_name in self.fields.keys() {
             named_params.push((field_name.as_str(), ParametersSpecParam::Optional));
@@ -406,7 +419,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
             [],                                         // pos_or_named (args)
             false,
-            named_params, // named-only (name, symbol, + fields)
+            named_params, // named-only (name + fields)
             false,
         )
     }
@@ -465,7 +478,6 @@ where
                             .map(|s| s.to_string())
                     })
                     .transpose()?;
-                let symbol_value: Option<Value> = param_parser.next_opt()?;
 
                 // Parse field values (all optional)
                 let mut field_values = SmallMap::new();
@@ -475,8 +487,8 @@ where
                     }
                 }
 
-                // Determine name, properties, and symbol from value_param
-                let (original_name, mut properties, mut symbol) = match value_param {
+                // Determine name and properties from value_param
+                let (original_name, mut properties) = match value_param {
                     Some(value) if value.unpack_str().is_some() => {
                         if name_keyword_str.is_some() {
                             return Err(anyhow::anyhow!(
@@ -487,7 +499,7 @@ where
                         }
                         let name = value.unpack_str().unwrap().to_string();
                         validate_identifier_name(&name, "Net name")?;
-                        (Some(name), SmallMap::new(), Value::new_none())
+                        (Some(name), SmallMap::new())
                     }
                     Some(value) => {
                         let source_net = NetValue::from_value(value).ok_or_else(|| {
@@ -506,49 +518,15 @@ where
                             }
                             None => source_net.name.clone(),
                         };
-                        (
-                            Some(name),
-                            source_net.properties.clone(),
-                            source_net.symbol.to_value(),
-                        )
+                        (Some(name), source_net.properties.clone())
                     }
                     None => {
                         if let Some(n) = &name_keyword_str {
                             validate_identifier_name(n, "Net name")?;
                         }
-                        (name_keyword_str, SmallMap::new(), Value::new_none())
+                        (name_keyword_str, SmallMap::new())
                     }
                 };
-
-                // Process symbol parameter (overrides copied properties)
-                if let Some(symbol_val) = symbol_value {
-                    if symbol_val.get_type() != "Symbol" {
-                        return Err(anyhow::anyhow!(
-                            "'symbol' must be Symbol, got {}",
-                            symbol_val.get_type()
-                        )
-                        .into());
-                    }
-
-                    if let Some(sym) = symbol_val.downcast_ref::<crate::lang::symbol::SymbolValue>()
-                    {
-                        if let Some(name) = sym.name() {
-                            properties
-                                .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
-                        }
-                        if let Some(path) = sym.source_path() {
-                            properties
-                                .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
-                        }
-                        if let Some(raw_sexp) = sym.raw_sexp() {
-                            properties.insert(
-                                "__symbol_value".to_string(),
-                                heap.alloc_str(raw_sexp).to_value(),
-                            );
-                        }
-                    }
-                    symbol = symbol_val;
-                }
 
                 // Merge field values into properties, applying defaults for unprovided fields
                 use starlark::values::types::record::field::FieldGen;
@@ -561,6 +539,32 @@ where
                         let validated_val = validate_field_value(field_name, &tc, *provided_val)
                             .map_err(starlark::Error::new_other)?;
                         properties.insert(field_name.clone(), validated_val);
+
+                        // Extract symbol metadata if this is a symbol field
+                        if field_name == "symbol" {
+                            if let Some(sym) =
+                                validated_val.downcast_ref::<crate::lang::symbol::SymbolValue>()
+                            {
+                                if let Some(name) = sym.name() {
+                                    properties.insert(
+                                        "symbol_name".to_string(),
+                                        heap.alloc_str(name).to_value(),
+                                    );
+                                }
+                                if let Some(path) = sym.source_path() {
+                                    properties.insert(
+                                        "symbol_path".to_string(),
+                                        heap.alloc_str(path).to_value(),
+                                    );
+                                }
+                                if let Some(raw_sexp) = sym.raw_sexp() {
+                                    properties.insert(
+                                        "__symbol_value".to_string(),
+                                        heap.alloc_str(raw_sexp).to_value(),
+                                    );
+                                }
+                            }
+                        }
                     } else {
                         // User didn't provide value - try to apply default from field() spec
                         if let Some(field_gen) =
@@ -599,7 +603,6 @@ where
                     original_name,
                     type_name: self.type_name.clone(),
                     properties,
-                    symbol,
                 }))
             })
     }

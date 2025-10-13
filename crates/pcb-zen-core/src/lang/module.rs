@@ -944,7 +944,6 @@ fn default_for_type<'v>(
                 generate_net_id(),
                 String::new(),
                 SmallMap::new(),
-                Value::new_none(),
             ))
             .to_value(),
         "InterfaceFactory" => typ
@@ -1239,7 +1238,6 @@ fn io_generated_default<'v>(
                     net_id,
                     final_name,
                     starlark::collections::SmallMap::new(),
-                    Value::new_none(),
                 ))
                 .to_value())
         }

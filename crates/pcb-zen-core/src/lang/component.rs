@@ -18,7 +18,6 @@ use crate::{
     FrozenSpiceModelValue,
 };
 
-use super::net::FrozenNetType;
 use super::symbol::{SymbolType, SymbolValue};
 use super::validation::validate_identifier_name;
 
@@ -685,12 +684,14 @@ impl std::fmt::Display for ComponentType {
     }
 }
 
+/// Initialize Net with fields before adding to globals
+pub fn init_net_global(builder: &mut GlobalsBuilder) {
+    let net_type = super::net::make_default_net_type(builder.frozen_heap());
+    builder.set("Net", builder.frozen_heap().alloc(net_type));
+}
+
 #[starlark_module]
 pub fn component_globals(builder: &mut GlobalsBuilder) {
     const Component: ComponentType = ComponentType;
-    const Net: FrozenNetType = FrozenNetType {
-        type_name: "Net".to_string(),
-        fields: SmallMap::new(),
-    };
     const Symbol: SymbolType = SymbolType;
 }

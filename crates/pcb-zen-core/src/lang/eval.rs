@@ -18,7 +18,7 @@ use starlark::{
     PrintHandler,
 };
 
-use crate::lang::assert::assert_globals;
+use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::file::file_globals;
 use crate::lang::spice_model::model_globals;
 use crate::lang::{
@@ -349,6 +349,7 @@ impl EvalContext {
         ])
         .with(builtin_globals)
         .with(component_globals)
+        .with(init_net_global)
         .with(module_globals)
         .with(interface_globals)
         .with(assert_globals)

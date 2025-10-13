@@ -21,9 +21,6 @@ Module {
                                     Net {
                                         name: "N4",
                                         id: "<ID>",
-                                        symbol: FrozenValue(
-                                            NoneType,
-                                        ),
                                     },
                                 ),
                             },
