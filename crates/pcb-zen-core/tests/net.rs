@@ -109,6 +109,111 @@ snapshot_eval!(net_duplicate_names_uniq, {
     "#,
 });
 
+snapshot_eval!(net_field_with_field_spec, {
+    "test.zen" => r#"
+        # Create a net type with field() specs
+        Power = builtin.net("Power", voltage=field(str, "3.3V"))
+        
+        # Create instances with different voltages
+        vcc = Power("VCC", voltage="5V")
+        vdd = Power("VDD", voltage="3.3V")
+        
+        # Access field values
+        print("vcc.voltage:", vcc.voltage)
+        print("vdd.voltage:", vdd.voltage)
+        
+        check(vcc.voltage == "5V", "vcc.voltage should be '5V'")
+        check(vdd.voltage == "3.3V", "vdd.voltage should be '3.3V'")
+    "#
+});
+
+snapshot_eval!(net_field_with_direct_type, {
+    "test.zen" => r#"
+        # Create a net type with direct type constructor
+        Signal = builtin.net("Signal", frequency=int)
+        
+        # Create instance
+        clk = Signal("CLK", frequency=8000000)
+        
+        print("clk.frequency:", clk.frequency)
+        check(clk.frequency == 8000000, "clk.frequency should be 8000000")
+    "#
+});
+
+snapshot_eval!(net_field_type_mismatch, {
+    "test.zen" => r#"
+        # Create a net type with string field
+        Power = builtin.net("Power", voltage=str)
+        
+        # This should fail - providing int instead of str
+        vcc = Power("VCC", voltage=123)
+    "#
+});
+
+snapshot_eval!(net_field_default_applied, {
+    "test.zen" => r#"
+        # Create a net type with defaulted field
+        Power = builtin.net("Power", voltage=field(str, "3.3V"))
+        
+        # Create instance without providing voltage - should get default
+        vcc = Power("VCC")
+        
+        print("vcc.voltage:", vcc.voltage)
+        check(vcc.voltage == "3.3V", "vcc.voltage should use default '3.3V'")
+    "#
+});
+
+snapshot_eval!(net_field_with_enum, {
+    "test.zen" => r#"
+        # Create enum and net type with enum field
+        Level = enum("LOW", "HIGH")
+        Signal = builtin.net("Signal", level=Level)
+        
+        # Create instances
+        sig1 = Signal("SIG1", level=Level("HIGH"))
+        sig2 = Signal("SIG2", level=Level("LOW"))
+        
+        print("sig1.level:", sig1.level)
+        check(sig1.level == Level("HIGH"), "sig1.level should be HIGH")
+    "#
+});
+
+snapshot_eval!(net_field_with_physical_value, {
+    "test.zen" => r#"
+        load("@stdlib/units.zen", "Voltage", "unit")
+        
+        # Create net type with physical value field
+        Power = builtin.net("Power", voltage=Voltage)
+        
+        # Create instance
+        vcc = Power("VCC", voltage=unit("5V", Voltage))
+        
+        print("vcc.voltage:", vcc.voltage)
+    "#
+});
+
+snapshot_eval!(net_field_multiple_fields, {
+    "test.zen" => r#"
+        # Create net type with multiple fields of different types
+        Power = builtin.net("Power", 
+            voltage=field(str, "3.3V"),
+            max_current=field(int, 1000),
+            regulated=field(bool, True)
+        )
+        
+        # Create instance overriding some defaults
+        vcc = Power("VCC", voltage="5V", max_current=2000)
+        
+        print("vcc.voltage:", vcc.voltage)
+        print("vcc.max_current:", vcc.max_current)
+        print("vcc.regulated:", vcc.regulated)
+        
+        check(vcc.voltage == "5V", "voltage override should work")
+        check(vcc.max_current == 2000, "max_current override should work")
+        check(vcc.regulated == True, "regulated default should apply")
+    "#
+});
+
 snapshot_eval!(interface_net_template_naming, {
     "test.zen" => r#"
         # Test single-net interface naming behavior with name conflicts

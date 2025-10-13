@@ -1,0 +1,11 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+vcc.voltage: 5V
+vdd.voltage: 3.3V
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

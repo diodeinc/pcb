@@ -1,5 +1,5 @@
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
-use crate::lang::net::{NetType, NetValue};
+use crate::lang::net::{FrozenNetType, NetType, NetValue};
 use crate::lang::r#enum::EnumType;
 use crate::FrozenNetValue;
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,7 @@ impl TypeInfo {
 
         // Check for Net type by type name
         if value.downcast_ref::<NetType>().is_some()
+            || value.downcast_ref::<FrozenNetType>().is_some()
             || value.downcast_ref::<NetValue>().is_some()
             || value.downcast_ref::<FrozenNetValue>().is_some()
         {

@@ -1,0 +1,12 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+vcc.voltage: 5V
+vcc.max_current: 2000
+vcc.regulated: True
+Module {
+    name: "<root>",
+    source: "test.zen",
+}
+[]

@@ -1,19 +1,19 @@
-use std::{cell::RefCell, collections::HashMap, fmt, hash::Hash, sync::Mutex};
+use std::{cell::RefCell, collections::HashMap, fmt, sync::Mutex};
 
 use allocative::Allocative;
-use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::{Methods, MethodsBuilder, MethodsStatic},
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
-    starlark_complex_value, starlark_module, starlark_simple_value,
+    starlark_complex_value, starlark_module,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     util::ArcStr,
     values::{
         starlark_value,
-        typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
-        Coerce, Freeze, FreezeResult, FrozenValue, Heap, StarlarkValue, Trace, Value, ValueLike,
+        typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
+        Coerce, Freeze, FreezeResult, Freezer, FrozenValue, Heap, NoSerialize, StarlarkValue,
+        Trace, Value, ValueLike,
     },
 };
 use std::sync::OnceLock;
@@ -48,6 +48,29 @@ pub fn reset_net_id_counter() {
     NEXT_NET_ID.with(|counter| {
         *counter.borrow_mut() = 1;
     });
+}
+
+/// Extract the TypeCompiled from a field spec (FieldGen or direct type Value)
+///
+/// For FieldGen, extract the inner TypeCompiled. For direct types, create TypeCompiled.
+fn field_spec_to_type_compiled<'v>(
+    spec: Value<'v>,
+    heap: &'v Heap,
+) -> anyhow::Result<TypeCompiled<Value<'v>>> {
+    use starlark::values::types::record::field::FieldGen;
+
+    // If it's a FieldGen, extract the inner TypeCompiled directly
+    if let Some(field_gen) = spec.downcast_ref::<FieldGen<Value<'v>>>() {
+        return Ok(*field_gen.typ());
+    }
+    if spec.downcast_ref::<FieldGen<FrozenValue>>().is_some() {
+        // For frozen FieldGen, we need to get the type and create a new TypeCompiled
+        // The TypeCompiled inside is for FrozenValue, we need one for Value
+        return TypeCompiled::new(spec, heap); // Let TypeCompiled handle the conversion
+    }
+
+    // Otherwise it's a direct type constructor - create TypeCompiled from it
+    TypeCompiled::new(spec, heap)
 }
 
 #[derive(
@@ -114,6 +137,24 @@ where
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(builtin_net_methods)
+    }
+
+    fn get_attr(&self, attribute: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+        // Check if the attribute is a field stored in properties
+        self.properties.get(attribute).map(|v| v.to_value())
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        // Return all field names from properties
+        let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
+        // Also include the built-in attributes from methods
+        attrs.extend(vec![
+            "name".to_string(),
+            "net_id".to_string(),
+            "original_name".to_string(),
+            "type".to_string(),
+        ]);
+        attrs
     }
 }
 
@@ -225,45 +266,29 @@ fn builtin_net_methods(methods: &mut MethodsBuilder) {
 /// - `Net = builtin.net("Net")`
 /// - `Power = builtin.net("Power")`
 /// - `Ground = builtin.net("Ground")`
-#[derive(Clone, Hash, Debug, PartialEq, ProvidesStaticType, Allocative, Serialize, Deserialize)]
-pub struct NetType {
+#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, Allocative, NoSerialize)]
+#[repr(C)]
+pub struct NetTypeGen<V> {
     /// The type name (e.g., "Net", "Power", "Ground")
     pub(crate) type_name: String,
+    /// Field specifications: field name -> field spec value (FieldGen or type constructor)
+    /// Types are validated at net type definition time, re-compiled at net instantiation time
+    pub(crate) fields: SmallMap<String, V>,
 }
 
-impl Freeze for NetType {
-    type Frozen = Self;
-    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
-        Ok(self)
+starlark_complex_value!(pub NetType);
+
+impl<'v> Freeze for NetType<'v> {
+    type Frozen = FrozenNetType;
+    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+        Ok(FrozenNetType {
+            type_name: self.type_name,
+            fields: self.fields.freeze(freezer)?,
+        })
     }
 }
 
-starlark_simple_value!(NetType);
-
-impl fmt::Display for NetType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.instance_ty_name())
-    }
-}
-
-impl NetType {
-    /// Create a new NetType with the given type name
-    pub fn new(type_name: String) -> Self {
-        NetType { type_name }
-    }
-
-    /// Get the unique TypeInstanceId for this NetType
-    /// Each type_name gets a unique ID that's cached globally
-    fn type_instance_id(&self) -> TypeInstanceId {
-        static CACHE: OnceLock<Mutex<HashMap<String, TypeInstanceId>>> = OnceLock::new();
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        *cache
-            .lock()
-            .unwrap()
-            .entry(self.type_name.clone())
-            .or_insert_with(TypeInstanceId::r#gen)
-    }
-
+impl<V> NetTypeGen<V> {
     /// Returns the instance type name (e.g., "Net", "Power", "Ground")
     fn instance_ty_name(&self) -> String {
         self.type_name.to_string()
@@ -273,43 +298,146 @@ impl NetType {
     fn ty_name(&self) -> String {
         format!("{}Type", self.type_name)
     }
+}
+
+impl<V> fmt::Display for NetTypeGen<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.instance_ty_name())
+    }
+}
+
+impl<'v> NetType<'v> {
+    /// Create a new NetType with the given type name and field specifications
+    pub fn new(
+        type_name: String,
+        kwargs: SmallMap<String, Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NetType<'v>> {
+        let mut fields = SmallMap::new();
+
+        // Process each field parameter and validate types
+        for (field_name, field_value) in kwargs {
+            // Reserved field name
+            if field_name == "name" {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "Field name 'name' is reserved (conflicts with implicit name parameter)"
+                )));
+            }
+
+            // Validate the field spec by compiling its type - this fails early if invalid
+            // This handles field(), direct types (str/int), and custom types (Enum/PhysicalValue) uniformly
+            field_spec_to_type_compiled(field_value, eval.heap()).map_err(|e| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "Invalid type spec for field '{}': {}",
+                    field_name,
+                    e
+                ))
+            })?;
+
+            fields.insert(field_name, field_value);
+        }
+
+        Ok(NetType { type_name, fields })
+    }
+}
+
+impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
+    /// Get the unique TypeInstanceId for this NetType based on structural equivalence.
+    /// Net types with identical type_name AND field names share the same TypeInstanceId.
+    fn type_instance_id(&self) -> TypeInstanceId {
+        type NetTypeCache = HashMap<(String, Vec<String>), TypeInstanceId>;
+        static CACHE: OnceLock<Mutex<NetTypeCache>> = OnceLock::new();
+
+        // Build field signature from field names only (not types, for backward compat)
+        let mut field_names: Vec<String> = self.fields.keys().cloned().collect();
+
+        // Sort by field name for structural equivalence
+        field_names.sort();
+
+        let cache_key = (self.type_name.clone(), field_names);
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        *cache
+            .lock()
+            .unwrap()
+            .entry(cache_key)
+            .or_insert_with(TypeInstanceId::r#gen)
+    }
 
     /// Returns the parameter specification for this type's constructor
     fn param_spec(&self) -> ParamSpec {
+        let mut named_params = vec![
+            (ArcStr::from("name"), ParamIsRequired::No, Ty::string()),
+            (ArcStr::from("symbol"), ParamIsRequired::No, Ty::any()),
+        ];
+
+        // Add all field parameters as optional named-only
+        // TODO(type-hints): Extract Ty from field specs for better LSP hints. Currently Ty::any().
+        for field_name in self.fields.keys() {
+            named_params.push((
+                ArcStr::from(field_name.as_str()),
+                ParamIsRequired::No,
+                Ty::any(),
+            ));
+        }
+
         ParamSpec::new_parts(
             [(ParamIsRequired::No, Ty::any())], // positional-only - accepts string or NetValue
             [],                                 // pos_or_named
             None,                               // *args
-            [
-                (ArcStr::from("name"), ParamIsRequired::No, Ty::string()), // keyword-only
-                (ArcStr::from("symbol"), ParamIsRequired::No, Ty::any()),  // keyword-only
-            ],
-            None, // **kwargs
+            named_params,                       // keyword-only (name, symbol, + fields)
+            None,                               // **kwargs
         )
         .expect("ParamSpec creation should not fail")
     }
 
     /// Returns the runtime parameter specification for parsing arguments
     fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
+        let mut named_params = vec![
+            ("name", ParametersSpecParam::Optional),
+            ("symbol", ParametersSpecParam::Optional),
+        ];
+
+        for field_name in self.fields.keys() {
+            named_params.push((field_name.as_str(), ParametersSpecParam::Optional));
+        }
+
         ParametersSpec::new_parts(
             self.instance_ty_name().as_str(),
             [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
             [],                                         // pos_or_named (args)
             false,
-            [
-                ("name", ParametersSpecParam::Optional), // named-only (kwargs)
-                ("symbol", ParametersSpecParam::Optional), // named-only (kwargs)
-            ],
+            named_params, // named-only (name, symbol, + fields)
             false,
         )
     }
 }
 
+/// Validate a field value using a pre-compiled TypeCompiled.
+///
+/// The TypeCompiled was validated and stored at net type definition time,
+/// so we know it's valid and can directly use it for matching.
+fn validate_field_value<'v>(
+    field_name: &str,
+    type_compiled: &TypeCompiled<Value<'v>>,
+    provided_value: Value<'v>,
+) -> anyhow::Result<Value<'v>> {
+    if type_compiled.matches(provided_value) {
+        return Ok(provided_value);
+    }
+    anyhow::bail!(
+        "Field '{}' has wrong type: expected {}, got {}",
+        field_name,
+        type_compiled,
+        provided_value.get_type()
+    );
+}
+
 #[starlark_value(type = "NetType")]
-impl<'v> StarlarkValue<'v> for NetType
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
 where
     Self: ProvidesStaticType<'v>,
 {
+    type Canonical = FrozenNetType;
     fn invoke(
         &self,
         _: Value<'v>,
@@ -338,6 +466,14 @@ where
                     })
                     .transpose()?;
                 let symbol_value: Option<Value> = param_parser.next_opt()?;
+
+                // Parse field values (all optional)
+                let mut field_values = SmallMap::new();
+                for field_name in self.fields.keys() {
+                    if let Some(field_val) = param_parser.next_opt::<Value>()? {
+                        field_values.insert(field_name.clone(), field_val);
+                    }
+                }
 
                 // Determine name, properties, and symbol from value_param
                 let (original_name, mut properties, mut symbol) = match value_param {
@@ -412,6 +548,37 @@ where
                         }
                     }
                     symbol = symbol_val;
+                }
+
+                // Merge field values into properties, applying defaults for unprovided fields
+                use starlark::values::types::record::field::FieldGen;
+                for (field_name, field_spec) in &self.fields {
+                    if let Some(provided_val) = field_values.get(field_name) {
+                        // User provided a value - validate it against the field's type spec
+                        let tc = field_spec_to_type_compiled(field_spec.to_value(), heap)
+                            .map_err(|e| anyhow::anyhow!("Internal error: {}", e))
+                            .map_err(starlark::Error::new_other)?;
+                        let validated_val = validate_field_value(field_name, &tc, *provided_val)
+                            .map_err(starlark::Error::new_other)?;
+                        properties.insert(field_name.clone(), validated_val);
+                    } else {
+                        // User didn't provide value - try to apply default from field() spec
+                        if let Some(field_gen) =
+                            field_spec.to_value().downcast_ref::<FieldGen<Value>>()
+                        {
+                            if let Some(default_val) = field_gen.default() {
+                                properties.insert(field_name.clone(), default_val.to_value());
+                            }
+                        } else if let Some(field_gen) = field_spec
+                            .to_value()
+                            .downcast_ref::<FieldGen<FrozenValue>>()
+                        {
+                            if let Some(default_val) = field_gen.default() {
+                                properties.insert(field_name.clone(), default_val.to_value());
+                            }
+                        }
+                        // If no field() wrapper or no default, field won't be in properties
+                    }
                 }
 
                 // Register net and create instance

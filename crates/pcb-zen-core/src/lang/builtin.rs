@@ -4,6 +4,7 @@ use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
+    collections::SmallMap,
     environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
     eval::Evaluator,
     starlark_module, starlark_simple_value,
@@ -195,45 +196,35 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         Ok(PhysicalValueType::new(unit.into()))
     }
 
-    fn net(#[allow(unused_variables)] this: &Builtin, name: String) -> starlark::Result<NetType> {
-        Ok(NetType::new(name))
+    fn net<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        name: String,
+        #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let net_type = NetType::new(name, kwargs, eval)?;
+        Ok(eval.heap().alloc(net_type))
     }
 
     fn add_electrical_check<'v>(
         #[allow(unused_variables)] this: &Builtin,
         #[starlark(require = named)] name: String,
         #[starlark(require = named)] check_fn: Value<'v>,
-        #[starlark(require = named)] inputs: Option<Value<'v>>,
-        #[starlark(require = named)] severity: Option<String>,
+        #[starlark(require = named, default = SmallMap::default())] inputs: SmallMap<
+            String,
+            Value<'v>,
+        >,
+        #[starlark(require = named, default = "error".to_string())] severity: String,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
         use crate::lang::electrical_check::ElectricalCheckGen;
-        use starlark::values::dict::DictRef;
 
-        let severity = severity.unwrap_or_else(|| "error".to_string());
         if !["error", "warning", "advice"].contains(&severity.as_str()) {
             return Err(Error::new_other(anyhow::anyhow!(
                 "Invalid severity '{}'. Must be 'error', 'warning', or 'advice'",
                 severity
             )));
         }
-
-        let inputs_map = if let Some(inputs_value) = inputs {
-            let inputs_dict = DictRef::from_value(inputs_value).ok_or_else(|| {
-                Error::new_other(anyhow::anyhow!("'inputs' parameter must be a dictionary"))
-            })?;
-
-            let mut map = starlark::collections::SmallMap::new();
-            for (key, value) in inputs_dict.iter() {
-                let key_str = key.unpack_str().ok_or_else(|| {
-                    Error::new_other(anyhow::anyhow!("input keys must be strings, got: {}", key))
-                })?;
-                map.insert(key_str.to_string(), value);
-            }
-            map
-        } else {
-            starlark::collections::SmallMap::new()
-        };
 
         let call_site = eval.call_stack_top_location();
         let source_path = call_site
@@ -244,7 +235,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
         let check = ElectricalCheckGen::<Value> {
             name,
-            inputs: inputs_map,
+            inputs,
             check_func: check_fn,
             severity,
             source_path,
