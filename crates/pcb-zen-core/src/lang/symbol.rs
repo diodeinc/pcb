@@ -1,6 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use allocative::Allocative;
 use once_cell::sync::Lazy;
@@ -9,9 +9,10 @@ use starlark::{
     collections::SmallMap,
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
+    typing::{Ty, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        list::ListRef, starlark_value, tuple::TupleRef, Freeze, Heap, NoSerialize, StarlarkValue,
-        Trace, Value,
+        list::ListRef, starlark_value, tuple::TupleRef, typing::TypeInstanceId, Freeze, Heap,
+        NoSerialize, StarlarkValue, Trace, Value,
     },
 };
 
@@ -357,6 +358,14 @@ impl std::fmt::Display for SymbolType {
     }
 }
 
+impl SymbolType {
+    /// Return a stable TypeInstanceId for Symbol across all evaluations
+    fn type_instance_id() -> TypeInstanceId {
+        static SYMBOL_TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
+        *SYMBOL_TYPE_ID.get_or_init(TypeInstanceId::r#gen)
+    }
+}
+
 #[starlark_value(type = "Symbol")]
 impl<'v> StarlarkValue<'v> for SymbolType
 where
@@ -441,8 +450,18 @@ where
         )?))
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<SymbolType as StarlarkValue>::get_type_starlark_repr())
+    fn eval_type(&self) -> Option<Ty> {
+        let id = SymbolType::type_instance_id();
+        let ty = Ty::custom(
+            TyUser::new(
+                "Symbol".to_string(),
+                TyStarlarkValue::new::<SymbolValue>(),
+                id,
+                TyUserParams::default(),
+            )
+            .ok()?,
+        );
+        Some(ty)
     }
 }
 
