@@ -18,6 +18,8 @@ use starlark::{
 };
 use std::sync::OnceLock;
 
+use crate::lang::symbol::SymbolValue;
+
 use super::context::ContextValue;
 use super::physical::{PhysicalRangeType, PhysicalValueType};
 use super::symbol::SymbolType;
@@ -543,32 +545,6 @@ where
                         let validated_val = validate_field_value(field_name, &tc, *provided_val)
                             .map_err(starlark::Error::new_other)?;
                         properties.insert(field_name.clone(), validated_val);
-
-                        // Extract symbol metadata if this is a symbol field
-                        if field_name == "symbol" {
-                            if let Some(sym) =
-                                validated_val.downcast_ref::<crate::lang::symbol::SymbolValue>()
-                            {
-                                if let Some(name) = sym.name() {
-                                    properties.insert(
-                                        "symbol_name".to_string(),
-                                        heap.alloc_str(name).to_value(),
-                                    );
-                                }
-                                if let Some(path) = sym.source_path() {
-                                    properties.insert(
-                                        "symbol_path".to_string(),
-                                        heap.alloc_str(path).to_value(),
-                                    );
-                                }
-                                if let Some(raw_sexp) = sym.raw_sexp() {
-                                    properties.insert(
-                                        "__symbol_value".to_string(),
-                                        heap.alloc_str(raw_sexp).to_value(),
-                                    );
-                                }
-                            }
-                        }
                     } else {
                         // User didn't provide value - try to apply default from field() spec
                         if let Some(field_gen) =
@@ -586,6 +562,26 @@ where
                             }
                         }
                         // If no field() wrapper or no default, field won't be in properties
+                    }
+                }
+
+                // Extract symbol metadata if a symbol field exists (from explicit value or default)
+                if let Some(symbol_val) = properties.get("symbol") {
+                    if let Some(sym) = symbol_val.downcast_ref::<SymbolValue>() {
+                        if let Some(name) = sym.name() {
+                            properties
+                                .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
+                        }
+                        if let Some(path) = sym.source_path() {
+                            properties
+                                .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+                        }
+                        if let Some(raw_sexp) = sym.raw_sexp() {
+                            properties.insert(
+                                "__symbol_value".to_string(),
+                                heap.alloc_str(raw_sexp).to_value(),
+                            );
+                        }
                     }
                 }
 
