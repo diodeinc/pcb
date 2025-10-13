@@ -25,7 +25,9 @@ use starlark::{
 use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::{ContextValue, PendingChild};
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::interface::{FrozenInterfaceValue, InterfaceValue};
+use crate::lang::interface::{
+    FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
+};
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, Span};
@@ -49,10 +51,9 @@ macro_rules! downcast_frozen_module {
     };
 }
 
-use super::net::{generate_net_id, NetValue};
+use super::net::{generate_net_id, FrozenNetType, FrozenNetValue, NetId, NetType, NetValue};
 use crate::lang::context::FrozenContextValue;
-use crate::lang::net::NetId;
-use crate::{FrozenComponentValue, FrozenNetValue};
+use crate::FrozenComponentValue;
 use starlark::errors::EvalMessage;
 
 /// Position data from pcb:sch comments  
@@ -1014,24 +1015,46 @@ fn validate_type<'v>(
         return Ok(());
     }
 
-    let type_name = typ.get_type();
+    // NetType validation with asymmetric conversion rules
+    if let Some(expected_type_name) = typ
+        .downcast_ref::<NetType>()
+        .map(|nt| &nt.type_name)
+        .or_else(|| {
+            typ.downcast_ref::<FrozenNetType>()
+                .map(|fnt| &fnt.type_name)
+        })
+    {
+        let actual_type_name = value
+            .downcast_ref::<NetValue>()
+            .map(|nv| nv.net_type_name())
+            .or_else(|| {
+                value
+                    .downcast_ref::<FrozenNetValue>()
+                    .map(|fnv| fnv.net_type_name())
+            });
 
-    match type_name {
-        "NetType" => {
-            if value.downcast_ref::<NetValue>().is_some()
-                || value.downcast_ref::<FrozenNetValue>().is_some()
-            {
+        if let Some(actual_type_name) = actual_type_name {
+            // Only allow exact type match - conversion will be handled by try_net_conversion
+            if expected_type_name == actual_type_name {
                 return Ok(());
             }
+
+            // Type mismatch - fail validation
+            // Note: If expected is "Net" and actual is different (e.g., "Power"),
+            // this will fail here and try_net_conversion will handle the conversion
+            anyhow::bail!(
+                "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
+            );
         }
-        "InterfaceFactory" => {
-            if value.downcast_ref::<InterfaceValue>().is_some()
-                || value.downcast_ref::<FrozenInterfaceValue>().is_some()
-            {
-                return Ok(());
-            }
-        }
-        _ => {}
+    }
+
+    // InterfaceFactory validation
+    if (typ.downcast_ref::<InterfaceFactory>().is_some()
+        || typ.downcast_ref::<FrozenInterfaceFactory>().is_some())
+        && (value.downcast_ref::<InterfaceValue>().is_some()
+            || value.downcast_ref::<FrozenInterfaceValue>().is_some())
+    {
+        return Ok(());
     }
 
     if TypeType::unpack_value_opt(typ).is_some() {
@@ -1106,6 +1129,54 @@ fn try_enum_conversion<'v>(
     }
 }
 
+// Helper function to attempt net type conversion when passing a typed net to
+// a parameter expecting a different net type (e.g., Power -> Net).
+// Returns `Ok(Some(converted))` if conversion succeeds, `Ok(None)` if not applicable.
+fn try_net_conversion<'v>(
+    value: Value<'v>,
+    expected_typ: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    // Check if expected type is a NetType
+    let expected_type_name = expected_typ
+        .downcast_ref::<NetType>()
+        .map(|nt| &nt.type_name)
+        .or_else(|| {
+            expected_typ
+                .downcast_ref::<FrozenNetType>()
+                .map(|fnt| &fnt.type_name)
+        });
+
+    let Some(expected_type_name) = expected_type_name else {
+        return Ok(None); // Expected type is not a NetType
+    };
+
+    // Check if value is a NetValue
+    let actual_type_name = value
+        .downcast_ref::<NetValue>()
+        .map(|nv| nv.net_type_name())
+        .or_else(|| {
+            value
+                .downcast_ref::<FrozenNetValue>()
+                .map(|fnv| fnv.net_type_name())
+        });
+
+    let Some(actual_type_name) = actual_type_name else {
+        return Ok(None); // Value is not a NetValue
+    };
+
+    // Only convert if expected type is "Net" and actual type is different
+    if expected_type_name == "Net" && actual_type_name != "Net" {
+        // Call Net(value) to convert typed net to base Net
+        let converted = eval
+            .eval_function(expected_typ, &[value], &[])
+            .map_err(|e| anyhow::anyhow!("Failed to convert {} to Net: {}", actual_type_name, e))?;
+        return Ok(Some(converted));
+    }
+
+    Ok(None) // No conversion needed
+}
+
 // Helper function to attempt interface promotion when passing an interface to
 // a parameter expecting a simpler type (e.g., Power -> Net).
 // Returns `Ok(Some(promoted))` if promotion succeeds, `Ok(None)` if value is not
@@ -1170,6 +1241,12 @@ fn validate_or_convert<'v>(
     }
 
     // 1. Try automatic conversions for values
+
+    // 1a. Try net type conversion (e.g., Power -> Net)
+    if let Some(converted) = try_net_conversion(value, typ, eval)? {
+        validate_type(name, converted, typ, eval.heap())?;
+        return Ok(converted);
+    }
 
     // 1b. If expected type is enum and value is string, auto-convert (enum was downgraded)
     if let Some(converted) = try_enum_conversion(value, typ, eval)? {
