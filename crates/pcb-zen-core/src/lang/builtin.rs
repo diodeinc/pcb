@@ -7,7 +7,7 @@ use starlark::{
     environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
     eval::Evaluator,
     starlark_module, starlark_simple_value,
-    values::{none::NoneType, starlark_value, Freeze, StarlarkValue, Value},
+    values::{none::NoneType, starlark_value, tuple::UnpackTuple, Freeze, StarlarkValue, Value},
     Error,
 };
 
@@ -35,6 +35,21 @@ impl<'v> StarlarkValue<'v> for Builtin {
 #[starlark_module]
 pub fn builtin_globals(builder: &mut GlobalsBuilder) {
     const builtin: Builtin = Builtin;
+
+    fn r#enum<'v>(
+        #[starlark(args)] args: UnpackTuple<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let mut variant_strings = Vec::new();
+        for val in args.items {
+            let variant = val.unpack_str().ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!("All enum variants must be strings"))
+            })?;
+            variant_strings.push(variant.to_string());
+        }
+        let enum_type = crate::lang::r#enum::EnumType::new(variant_strings)?;
+        Ok(eval.heap().alloc(enum_type))
+    }
 }
 
 #[starlark_module]

@@ -6,21 +6,17 @@ use std::{
 };
 
 use anyhow::anyhow;
+use starlark::{codemap::ResolvedSpan, collections::SmallMap};
+use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
-    any::ProvidesStaticType,
     environment::{GlobalsBuilder, LibraryExtension},
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
     typing::TypeMap,
-    values::{
-        dict::{AllocDict, DictRef},
-        Heap, Value, ValueLike,
-    },
+    values::{FrozenValue, Heap, Value, ValueLike},
     PrintHandler,
 };
-use starlark::{codemap::ResolvedSpan, collections::SmallMap};
-use starlark::{environment::FrozenModule, typing::Interface};
 
 use crate::lang::assert::assert_globals;
 use crate::lang::file::file_globals;
@@ -32,18 +28,6 @@ use crate::lang::{
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::{Diagnostic, WithDiagnostics};
-
-#[cfg(feature = "native")]
-fn default_file_provider() -> Arc<dyn crate::FileProvider> {
-    Arc::new(crate::DefaultFileProvider::new()) as Arc<dyn crate::FileProvider>
-}
-
-#[cfg(not(feature = "native"))]
-fn default_file_provider() -> Arc<dyn crate::FileProvider> {
-    panic!(
-        "No default file provider available in WASM mode. A custom FileProvider must be provided."
-    )
-}
 
 use super::{
     context::{ContextValue, FrozenContextValue},
@@ -77,154 +61,6 @@ impl PrintHandler for CollectingPrintHandler {
     }
 }
 
-pub(crate) trait DeepCopyToHeap {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>>;
-}
-
-unsafe impl<'v> ProvidesStaticType<'v> for dyn DeepCopyToHeap + 'v {
-    type StaticType = dyn DeepCopyToHeap;
-}
-
-// Implement DeepCopyToHeap for ListRef
-impl<'v> DeepCopyToHeap for starlark::values::list::ListRef<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        let mut new_list = Vec::new();
-        for item in self.iter() {
-            new_list.push(copy_value(item, dst)?);
-        }
-        Ok(dst.alloc(new_list))
-    }
-}
-
-// Implement DeepCopyToHeap for DictRef
-impl<'v> DeepCopyToHeap for DictRef<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        let mut new_map = Vec::new();
-        for (k, v) in self.iter() {
-            let new_key = copy_value(k, dst)?;
-            let new_value = copy_value(v, dst)?;
-            new_map.push((new_key, new_value));
-        }
-        Ok(dst.alloc(AllocDict(new_map)))
-    }
-}
-
-// Implement DeepCopyToHeap for EnumValue
-impl<'v> DeepCopyToHeap for starlark::values::enumeration::EnumValue<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // Extract variant from string representation: EnumType("variant")
-        // Return as string - try_enum_conversion() will convert back to EnumValue
-        let repr = self.to_string();
-        let variant = if let Some(first_quote) = repr.find('"') {
-            if let Some(last_quote) = repr.rfind('"') {
-                if first_quote < last_quote {
-                    &repr[first_quote + 1..last_quote]
-                } else {
-                    &repr
-                }
-            } else {
-                &repr
-            }
-        } else {
-            &repr
-        };
-
-        Ok(dst.alloc_str(variant).to_value())
-    }
-}
-
-// Implement DeepCopyToHeap for Record
-impl<'v> DeepCopyToHeap for starlark::values::record::Record<'v> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // Convert record to dict - try_record_conversion() will reconstruct it
-        let mut pairs = Vec::new();
-        for (field_name, field_value) in self.iter() {
-            let copied_value = copy_value(field_value.to_value(), dst)?;
-            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-        }
-        Ok(dst.alloc(AllocDict(pairs)))
-    }
-}
-
-// Implement DeepCopyToHeap for FrozenRecord
-impl DeepCopyToHeap for starlark::values::record::FrozenRecord {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // Convert record to dict - try_record_conversion() will reconstruct it
-        let mut pairs = Vec::new();
-        for (field_name, field_value) in self.iter() {
-            let copied_value = copy_value(field_value.to_value(), dst)?;
-            pairs.push((dst.alloc_str(field_name).to_value(), copied_value));
-        }
-        Ok(dst.alloc(AllocDict(pairs)))
-    }
-}
-
-pub(crate) fn copy_value<'dst>(v: Value<'_>, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-    if v.is_none() {
-        return Ok(Value::new_none().to_value());
-    }
-
-    if let Some(b) = v.unpack_bool() {
-        return Ok(Value::new_bool(b).to_value());
-    }
-
-    if let Some(i) = v.unpack_i32() {
-        return Ok(dst.alloc(i));
-    }
-
-    if let Some(f) = v.downcast_ref::<starlark::values::float::StarlarkFloat>() {
-        return Ok(dst.alloc(starlark::values::float::StarlarkFloat(f.0)));
-    }
-
-    if let Some(s) = v.unpack_str() {
-        return Ok(dst.alloc_str(s).to_value());
-    }
-
-    // Handle ListRef - use trait implementation
-    use starlark::values::list::ListRef;
-    if let Some(list) = ListRef::from_value(v) {
-        return list.deep_copy_to(dst);
-    }
-
-    // Handle DictRef - use trait implementation
-    if let Some(dict) = DictRef::from_value(v) {
-        return dict.deep_copy_to(dst);
-    }
-
-    // Handle FieldGen from external starlark crate
-    // Since FieldGen doesn't implement DeepCopyToHeap and we can't modify external types,
-    // we return None. This works because field objects are typically used during interface
-    // definition and don't need cross-heap copying in normal usage patterns.
-    if v.get_type() == "field" {
-        return Ok(Value::new_none());
-    }
-
-    // Handle EnumValue - use trait implementation
-    use starlark::values::enumeration::EnumValue;
-    if let Some(enum_val) = EnumValue::from_value(v) {
-        return enum_val.deep_copy_to(dst);
-    }
-
-    // Handle Record/FrozenRecord - use trait implementations
-    use starlark::values::record::{FrozenRecord, Record};
-    if let Some(record) = v.downcast_ref::<Record>() {
-        return record.deep_copy_to(dst);
-    }
-    if let Some(frozen_record) = v.downcast_ref::<FrozenRecord>() {
-        return frozen_record.deep_copy_to(dst);
-    }
-
-    // Fallback to generic DeepCopyToHeap trait for other types
-    if let Some(dc) = v.request_value::<&dyn DeepCopyToHeap>() {
-        return dc.deep_copy_to(dst);
-    }
-
-    Err(anyhow!(
-        "internal error: cannot extract value of `{}`",
-        v.get_type()
-    ))
-}
-
 #[derive(Clone)]
 pub struct EvalOutput {
     pub ast: AstModule,
@@ -235,13 +71,13 @@ pub struct EvalOutput {
     /// Print output collected during evaluation
     pub print_output: Vec<String>,
     /// Load resolver used for this evaluation, when available
-    pub load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+    pub load_resolver: Arc<dyn crate::LoadResolver>,
 }
 
 impl EvalOutput {
     /// If the underlying resolver is a CoreLoadResolver, return a reference to it
     pub fn core_resolver(&self) -> Option<Arc<crate::CoreLoadResolver>> {
-        let load_resolver = self.load_resolver.clone()?;
+        let load_resolver = self.load_resolver.clone();
         (load_resolver as Arc<dyn std::any::Any + Send + Sync>)
             .downcast::<crate::CoreLoadResolver>()
             .ok()
@@ -373,21 +209,18 @@ pub struct EvalContext {
     /// diagnostics attached to the ContextValue.
     diagnostics: RefCell<Vec<Diagnostic>>,
 
-    /// File provider for accessing file system operations
-    pub(crate) file_provider: Option<Arc<dyn crate::FileProvider>>,
-
     /// Load resolver for resolving load() paths
-    pub(crate) load_resolver: Option<Arc<dyn crate::LoadResolver>>,
+    pub(crate) load_resolver: Arc<dyn crate::LoadResolver>,
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
 }
 
-impl Default for EvalContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// impl Default for EvalContext {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
 
 /// Helper to recursively convert JSON to heap values
 fn json_value_to_heap_value<'v>(
@@ -427,7 +260,7 @@ fn json_value_to_heap_value<'v>(
 }
 
 impl EvalContext {
-    pub fn new() -> Self {
+    pub fn new(load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
         // Build a `Globals` instance so we can harvest the documentation for
         // all built-in symbols. We replicate the same extensions that
         // `build_globals` uses so that the docs are in sync with what the
@@ -450,28 +283,18 @@ impl EvalContext {
             contents: None,
             name: None,
             diagnostics: RefCell::new(Vec::new()),
-            file_provider: None,
-            load_resolver: None,
+            load_resolver,
             current_load_index: RefCell::new(0),
         }
     }
 
-    /// Create a new EvalContext with a custom file provider
-    pub fn with_file_provider(file_provider: Arc<dyn crate::FileProvider>) -> Self {
-        let mut ctx = Self::new();
-        ctx.file_provider = Some(file_provider);
-        ctx
+    pub fn file_provider(&self) -> &dyn crate::FileProvider {
+        self.load_resolver.file_provider()
     }
 
     /// Set the file provider for this context
-    pub fn set_file_provider(mut self, file_provider: Arc<dyn crate::FileProvider>) -> Self {
-        self.file_provider = Some(file_provider);
-        self
-    }
-
-    /// Set the load resolver for this context
     pub fn set_load_resolver(mut self, load_resolver: Arc<dyn crate::LoadResolver>) -> Self {
-        self.load_resolver = Some(load_resolver);
+        self.load_resolver = load_resolver;
         self
     }
 
@@ -499,7 +322,6 @@ impl EvalContext {
             contents: None,
             name: None,
             diagnostics: RefCell::new(Vec::new()),
-            file_provider: self.file_provider.clone(),
             load_resolver: self.load_resolver.clone(),
             current_load_index: RefCell::new(0),
         }
@@ -516,7 +338,6 @@ impl EvalContext {
     fn build_globals() -> starlark::environment::Globals {
         GlobalsBuilder::extended_by(&[
             LibraryExtension::RecordType,
-            LibraryExtension::EnumType,
             LibraryExtension::Typing,
             LibraryExtension::StructType,
             LibraryExtension::Print,
@@ -634,58 +455,42 @@ impl EvalContext {
         self
     }
 
-    /// Copy and set inputs from parent values to child module
-    pub fn copy_and_set_inputs_from_values(
+    /// Set inputs from already frozen parent values.
+    pub fn set_inputs_from_frozen_values(
         &mut self,
-        parent_inputs: SmallMap<String, Value<'_>>,
+        parent_inputs: SmallMap<String, FrozenValue>,
     ) -> starlark::Result<()> {
-        let child_heap = self.module.heap();
         let eval = Evaluator::new(&self.module);
-
         if self.module.extra_value().is_none() {
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
         }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
-        if let Some(ctx_val) = self
-            .module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            let mut module = ctx_val.module_mut();
-            for (name, parent_value) in parent_inputs.iter() {
-                let copied =
-                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
-                module.add_input(name.clone(), copied);
-            }
+        let mut module = ctx_value.module_mut();
+        for (name, value) in parent_inputs.into_iter() {
+            module.add_input(name, value.to_value());
         }
 
         Ok(())
     }
 
-    /// Copy and set properties from parent values to child module
-    pub fn copy_and_set_properties(
+    /// Set properties from already frozen parent values.
+    pub fn set_properties_from_frozen_values(
         &mut self,
-        parent_properties: SmallMap<String, Value<'_>>,
+        parent_properties: SmallMap<String, FrozenValue>,
     ) -> starlark::Result<()> {
-        let child_heap = self.module.heap();
         let eval = Evaluator::new(&self.module);
-
         if self.module.extra_value().is_none() {
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
         }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
-        if let Some(ctx_val) = self
-            .module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            for (name, parent_value) in parent_properties.iter() {
-                let copied =
-                    copy_value(*parent_value, child_heap).map_err(starlark::Error::new_other)?;
-                ctx_val.add_property(name.clone(), copied);
-            }
+        for (name, value) in parent_properties.into_iter() {
+            ctx_value.add_property(name, value.to_value());
         }
 
         Ok(())
@@ -696,31 +501,18 @@ impl EvalContext {
         &mut self,
         json_inputs: SmallMap<String, serde_json::Value>,
     ) -> anyhow::Result<()> {
-        let heap = self.module.heap();
-        let mut values = SmallMap::new();
-
-        // Convert all JSON to heap values
-        for (key, json) in json_inputs.iter() {
-            let value = json_value_to_heap_value(json, heap)?;
-            values.insert(key.clone(), value);
-        }
-
-        // Ensure ContextValue exists and populate inputs
         let eval = Evaluator::new(&self.module);
         if self.module.extra_value().is_none() {
-            self.module
-                .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(self)));
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
         }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
 
-        if let Some(ctx_val) = self
-            .module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            let mut module = ctx_val.module_mut();
-            for (name, value) in values.into_iter() {
-                module.add_input(name, value);
-            }
+        let mut module = ctx_value.module_mut();
+        for (name, json) in json_inputs.iter() {
+            let value = json_value_to_heap_value(json, eval.heap())?;
+            module.add_input(name.clone(), value);
         }
 
         Ok(())
@@ -738,20 +530,12 @@ impl EvalContext {
             }
         };
 
-        if let Some(load_resolver) = &self.load_resolver {
-            load_resolver.track_file(source_path);
-        }
-
-        // Get or create a default file provider if none was set
-        let file_provider = self
-            .file_provider
-            .clone()
-            .unwrap_or_else(|| default_file_provider());
+        self.load_resolver.track_file(source_path);
 
         // Fetch contents: prefer explicit override, otherwise read from disk.
         let contents_owned = match &self.contents {
             Some(c) => c.clone(),
-            None => match file_provider.read_file(source_path) {
+            None => match self.file_provider().read_file(source_path) {
                 Ok(c) => {
                     // Cache the read contents for subsequent accesses.
                     self.contents = Some(c.clone());
@@ -949,13 +733,7 @@ impl EvalContext {
                             }
                         }
 
-                        // Get or create a default file provider if none was set
-                        let file_provider = self
-                            .file_provider
-                            .clone()
-                            .unwrap_or_else(|| default_file_provider());
-
-                        if let Ok(canon) = file_provider.canonicalize(&p) {
+                        if let Ok(canon) = self.file_provider().canonicalize(&p) {
                             p = canon;
                         }
 
@@ -1071,14 +849,8 @@ impl EvalContext {
     ) -> anyhow::Result<Vec<PathBuf>> {
         let mut files = Vec::new();
 
-        // Get or create a default file provider if none was set
-        let file_provider = self
-            .file_provider
-            .clone()
-            .unwrap_or_else(|| default_file_provider());
-
         for root in workspace_roots {
-            if !file_provider.exists(root) {
+            if !self.file_provider().exists(root) {
                 continue;
             }
 
@@ -1159,8 +931,8 @@ impl EvalContext {
     }
 
     /// Get the load resolver if available
-    pub fn get_load_resolver(&self) -> Option<&Arc<dyn crate::LoadResolver>> {
-        self.load_resolver.as_ref()
+    pub fn get_load_resolver(&self) -> &Arc<dyn crate::LoadResolver> {
+        &self.load_resolver
     }
 
     /// Append a diagnostic that was produced while this context was active.
@@ -1272,10 +1044,7 @@ impl EvalContext {
             "Trying to load path {path} with current path {:?}",
             self.source_path
         );
-        let load_resolver = self
-            .load_resolver
-            .clone()
-            .ok_or_else(|| starlark::Error::new_other(anyhow!("No LoadResolver provided")))?;
+        let load_resolver = self.load_resolver.clone();
         let file_provider = load_resolver.file_provider();
 
         let module_path = self.source_path.clone();

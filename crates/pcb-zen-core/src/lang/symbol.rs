@@ -1,6 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use allocative::Allocative;
 use once_cell::sync::Lazy;
@@ -9,15 +9,15 @@ use starlark::{
     collections::SmallMap,
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
+    typing::{Ty, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        list::ListRef, starlark_value, tuple::TupleRef, Freeze, Heap, NoSerialize, StarlarkValue,
-        Trace, Value,
+        list::ListRef, starlark_value, tuple::TupleRef, typing::TypeInstanceId, Freeze, Heap,
+        NoSerialize, StarlarkValue, Trace, Value,
     },
 };
 
 use std::collections::HashMap;
 
-use crate::lang::eval::DeepCopyToHeap;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::EvalContext;
 
@@ -85,10 +85,6 @@ impl<'v> StarlarkValue<'v> for SymbolValue
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
         match attr {
             "properties" => {
@@ -222,35 +218,28 @@ impl<'v> SymbolValue {
         }
         // Case 2: Load from library
         else if let Some(library_path) = library {
-            let load_resolver = eval_ctx
-                .get_load_resolver()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("No load resolver available")))?;
-
             let current_file = eval_ctx
                 .source_path
                 .as_ref()
                 .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
 
-            let resolved_path = load_resolver
+            let resolved_path = eval_ctx
+                .get_load_resolver()
                 .resolve_path(&library_path, std::path::Path::new(&current_file))
                 .map_err(|e| {
                     starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", e))
                 })?;
 
-            let file_provider = eval_ctx
-                .file_provider
-                .as_ref()
-                .ok_or_else(|| starlark::Error::new_other(anyhow!("No file provider available")))?;
+            let file_provider = eval_ctx.file_provider();
 
             // If we have a specific symbol name, use lazy loading
             let selected_symbol = if let Some(name) = name {
                 // Load only the specific symbol we need
-                match load_symbol_from_library(&resolved_path, &name, file_provider.as_ref())? {
+                match load_symbol_from_library(&resolved_path, &name, file_provider)? {
                     Some(symbol) => symbol,
                     None => {
                         // If not found, we need to load all symbols to provide a helpful error
-                        let symbols =
-                            load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
+                        let symbols = load_symbols_from_library(&resolved_path, file_provider)?;
                         return Err(starlark::Error::new_other(anyhow!(
                             "Symbol '{}' not found in library '{}'. Available symbols: {}",
                             name,
@@ -265,7 +254,7 @@ impl<'v> SymbolValue {
                 }
             } else {
                 // No specific name provided, need to check if library has exactly one symbol
-                let symbols = load_symbols_from_library(&resolved_path, file_provider.as_ref())?;
+                let symbols = load_symbols_from_library(&resolved_path, file_provider)?;
 
                 if symbols.len() == 1 {
                     // Only one symbol, use it
@@ -356,12 +345,6 @@ impl<'v> SymbolValue {
     }
 }
 
-impl DeepCopyToHeap for SymbolValue {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(self.clone()))
-    }
-}
-
 /// SymbolType is a factory for creating Symbol values
 #[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
@@ -375,15 +358,19 @@ impl std::fmt::Display for SymbolType {
     }
 }
 
+impl SymbolType {
+    /// Return a stable TypeInstanceId for Symbol across all evaluations
+    fn type_instance_id() -> TypeInstanceId {
+        static SYMBOL_TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
+        *SYMBOL_TYPE_ID.get_or_init(TypeInstanceId::r#gen)
+    }
+}
+
 #[starlark_value(type = "Symbol")]
 impl<'v> StarlarkValue<'v> for SymbolType
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -463,8 +450,18 @@ where
         )?))
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<SymbolType as StarlarkValue>::get_type_starlark_repr())
+    fn eval_type(&self) -> Option<Ty> {
+        let id = SymbolType::type_instance_id();
+        let ty = Ty::custom(
+            TyUser::new(
+                "Symbol".to_string(),
+                TyStarlarkValue::new::<SymbolValue>(),
+                id,
+                TyUserParams::default(),
+            )
+            .ok()?,
+        );
+        Some(ty)
     }
 }
 
@@ -629,10 +626,4 @@ pub fn load_symbol_from_library(
 
     // Now try again
     load_symbol_from_library(path, symbol_name, file_provider)
-}
-
-impl DeepCopyToHeap for SymbolType {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(SymbolType))
-    }
 }

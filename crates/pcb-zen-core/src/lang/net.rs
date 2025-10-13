@@ -12,7 +12,6 @@ use starlark::{
 };
 use std::cell::RefCell;
 
-use super::eval::{copy_value, DeepCopyToHeap};
 use super::validation::validate_identifier_name;
 use crate::lang::context::ContextValue;
 
@@ -88,10 +87,6 @@ impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
         match attribute {
             "name" => Some(heap.alloc(self.name.clone())),
@@ -106,27 +101,6 @@ where
 
     fn dir_attr(&self) -> Vec<String> {
         vec!["name".to_string(), "original_name".to_string()]
-    }
-}
-
-impl<'v, V: ValueLike<'v>> DeepCopyToHeap for NetValueGen<V> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        let properties = self
-            .properties
-            .iter()
-            .map(|(k, v)| {
-                let copied_value = copy_value(v.to_value(), dst)?;
-                Ok((k.clone(), copied_value))
-            })
-            .collect::<Result<SmallMap<String, Value<'dst>>, anyhow::Error>>()?;
-
-        Ok(dst.alloc(NetValue {
-            id: self.id,
-            name: self.name.clone(),
-            original_name: self.original_name.clone(),
-            properties,
-            symbol: copy_value(self.symbol.to_value(), dst)?,
-        }))
     }
 }
 
@@ -170,6 +144,29 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     pub fn symbol(&self) -> &V {
         &self.symbol
     }
+
+    /// Return the original name as Option (None if auto-generated)
+    pub fn original_name_opt(&self) -> Option<&str> {
+        self.original_name.as_deref()
+    }
+
+    /// Create a new net with the same fields but a fresh net ID.
+    /// This avoids deep copying - properties and symbols are shared via Value references.
+    pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            id: generate_net_id(),
+            name: self.name.clone(),
+            original_name: self.original_name.clone(),
+            properties,
+            symbol: self.symbol.to_value(),
+        })
+    }
 }
 
 #[derive(Debug, ProvidesStaticType, NoSerialize, Allocative)]
@@ -187,10 +184,6 @@ impl<'v> StarlarkValue<'v> for NetType
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -328,11 +321,5 @@ where
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
         Some(<NetValue as StarlarkValue>::get_type_starlark_repr())
-    }
-}
-
-impl DeepCopyToHeap for NetType {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(NetType))
     }
 }
