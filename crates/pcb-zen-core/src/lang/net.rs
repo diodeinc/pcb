@@ -1,6 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, fmt, sync::Mutex};
+use std::sync::{Mutex, OnceLock};
+use std::{cell::RefCell, collections::HashMap, fmt};
 
 use allocative::Allocative;
+use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -16,7 +18,7 @@ use starlark::{
         StarlarkValue, Trace, Value, ValueLike,
     },
 };
-use std::sync::OnceLock;
+use starlark_map::sorted_map::SortedMap;
 
 use crate::lang::symbol::SymbolValue;
 
@@ -170,6 +172,10 @@ where
         self.properties.get(attribute).map(|v| v.to_value())
     }
 
+    fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
+        self.properties.contains_key(attribute)
+    }
+
     fn dir_attr(&self) -> Vec<String> {
         // Return all field names from properties
         let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
@@ -276,6 +282,25 @@ fn builtin_net_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn r#type<'v>(this: &NetValue<'v>) -> starlark::Result<String> {
         Ok(this.net_type_name().to_string())
+    }
+
+    /// Convert this net to base Net type, preserving all properties
+    /// TODO: Deprecated - use `Net(...)` to cast instead
+    #[starlark(attribute)]
+    fn NET<'v>(this: &NetValue<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        let properties: SmallMap<String, Value<'v>> = this
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        Ok(heap.alloc(NetValue {
+            net_id: this.net_id,
+            name: this.name.clone(),
+            original_name: this.original_name.clone(),
+            type_name: "Net".to_string(),
+            properties,
+        }))
     }
 }
 
@@ -608,6 +633,15 @@ where
 
     fn eval_type(&self) -> Option<Ty> {
         let id = self.type_instance_id();
+
+        // Build known fields from self.fields
+        // TODO(type-hints): Extract proper Ty from field specs instead of Ty::any()
+        let known_fields: SortedMap<String, Ty> = self
+            .fields
+            .keys()
+            .map(|field_name| (field_name.clone(), Ty::any()))
+            .collect();
+
         Some(Ty::custom(
             TyUser::new(
                 self.instance_ty_name(),
@@ -617,6 +651,10 @@ where
                     matcher: Some(TypeMatcherFactory::new(NetTypeMatcher {
                         type_name: self.type_name.clone(),
                     })),
+                    fields: TyUserFields {
+                        known: known_fields,
+                        unknown: false,
+                    },
                     ..TyUserParams::default()
                 },
             )
