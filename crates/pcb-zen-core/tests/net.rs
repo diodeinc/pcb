@@ -40,6 +40,7 @@ snapshot_eval!(net_symbol_from_library, {
 
         # Print the net directly
         print("Data net:", data_net)
+        print("Data net symbol:", data_net.symbol)
     "#
 });
 
@@ -62,7 +63,9 @@ snapshot_eval!(net_symbol_deep_copy, {
         
         # Print both nets
         print("Net1:", net1)
+        print("Net1 symbol:", net1.symbol)
         print("Net2:", net2)
+        print("Net2 symbol:", net2.symbol)
     "#
 });
 

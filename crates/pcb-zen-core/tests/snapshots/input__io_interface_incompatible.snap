@@ -3,4 +3,4 @@ source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
 Error: parent.zen:7:1-30 Error instantiating `Module`
-Error: /Module.zen:2:10-27 Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net { name: "SIG", id: "<ID>" })
+Error: /Module.zen:2:10-27 Input 'signal' (type) has wrong type for this placeholder: expected Net, got SingleNet(signal=Net(name: "SIG", id: <ID>))

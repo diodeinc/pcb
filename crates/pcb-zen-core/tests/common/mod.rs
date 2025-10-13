@@ -228,7 +228,7 @@ macro_rules! snapshot_eval {
             let result = ctx.eval();
 
             // Format the output similar to the original tests
-            let output = if result.is_success() {
+            let mut output = if result.is_success() {
                 if let Some(eval_output) = result.output {
                     let mut output_parts = vec![];
 
@@ -253,6 +253,18 @@ macro_rules! snapshot_eval {
                     .collect::<Vec<_>>()
                     .join("\n")
             };
+
+            // Sanitize net IDs for stable snapshots (apply to both success and error output)
+            // Replace patterns like id: "123" with id: "<ID>"
+            output = regex::Regex::new(r#"id: "\d+""#)
+                .unwrap()
+                .replace_all(&output, r#"id: "<ID>""#)
+                .to_string();
+            // Replace patterns like "id: 123" with "id: <ID>"
+            output = regex::Regex::new(r#"id: \d+"#)
+                .unwrap()
+                .replace_all(&output, "id: <ID>")
+                .to_string();
 
             insta::assert_snapshot!(output);
         }
