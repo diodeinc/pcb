@@ -1219,34 +1219,18 @@ fn io_generated_default<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
     typ: Value<'v>,
     name: &str,
-    register: bool,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     match typ.get_type() {
         "NetType" => {
-            let heap = eval.heap();
-            let net_id = generate_net_id();
-            let mut final_name = name.to_string();
-
-            if register {
-                if let Some(ctx) = eval.context_value() {
-                    final_name = ctx.register_net(net_id, &final_name)?;
-                }
-            }
-
-            Ok(heap
-                .alloc(NetValue::new(
-                    net_id,
-                    final_name,
-                    starlark::collections::SmallMap::new(),
-                ))
-                .to_value())
+            // Invoke the NetType constructor to apply defaults and extract metadata
+            let instance_name = eval.heap().alloc_str(name).to_value();
+            eval.eval_function(typ, &[instance_name], &[])
         }
         "InterfaceFactory" => {
             let instance_name = eval.heap().alloc_str(name).to_value();
             eval.eval_function(typ, &[instance_name], &[])
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
         }
-        _ => default_for_type(eval, typ),
+        _ => default_for_type(eval, typ).map_err(starlark::Error::from),
     }
 }
 
@@ -1583,13 +1567,13 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 // Value provided by parent - validate/convert it
                 let value = validate_or_convert(&name, provided, typ, None, eval)?;
 
-                // Determine metadata default
+                // When a value is provided, only use explicit default for metadata
+                // Don't synthesize defaults since actual_value already contains the value
                 let metadata_default = if let Some(explicit_default) = default {
                     validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
                     Some(explicit_default)
                 } else {
-                    // Synthesize default without side effects (no net registration)
-                    Some(io_generated_default(eval, typ, &name, false)?)
+                    None
                 };
 
                 (value, metadata_default)
@@ -1600,7 +1584,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     (default_val, Some(default_val))
                 } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
                     // Generate and register nets/interfaces for optional Net/Interface types
-                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    let generated = io_generated_default(eval, typ, &name)?;
                     (generated, Some(generated))
                 } else {
                     // Other types: return None but record a default for metadata
@@ -1626,7 +1610,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     validate_type(name.as_str(), default_val, typ, eval.heap())?;
                     (default_val, Some(default_val))
                 } else {
-                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    let generated = io_generated_default(eval, typ, &name)?;
                     (generated, Some(generated))
                 }
             };

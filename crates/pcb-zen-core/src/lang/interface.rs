@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface_validation::ensure_field_compat;
-use crate::lang::net::{generate_net_id, NetValue};
+use crate::lang::net::NetValue;
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -78,26 +78,6 @@ impl InstancePrefix {
 }
 
 /// Unified helper to allocate a net with proper registration
-fn alloc_net<'v>(
-    name_hint: &str,
-    props: SmallMap<String, Value<'v>>,
-    heap: &'v Heap,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>> {
-    let net_id = generate_net_id();
-    let final_name = if let Some(ctx) = eval
-        .module()
-        .extra_value()
-        .and_then(|e| e.downcast_ref::<ContextValue>())
-    {
-        ctx.register_net(net_id, name_hint)?
-    } else {
-        name_hint.to_owned()
-    };
-
-    Ok(heap.alloc(NetValue::new(net_id, final_name, props)))
-}
-
 /// Helper to check if an interface factory has exactly one net field
 fn is_single_net_interface<'v, V>(factory: &InterfaceFactoryGen<V>) -> bool
 where
@@ -344,8 +324,11 @@ fn create_field_value<'v>(
             eval,
         )
     } else if field_spec.get_type() == "NetType" {
+        // Invoke the NetType constructor to apply defaults and extract metadata
         let new_name = compute_net_name(prefix, None, Some(field_name), suffix_net_name, eval);
-        alloc_net(&new_name, SmallMap::new(), heap, eval)
+        let args = vec![heap.alloc(new_name)];
+        eval.eval_function(field_spec, &args, &[])
+            .map_err(|e| e.into_anyhow())
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, &child_prefix, heap, eval)

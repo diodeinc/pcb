@@ -15,7 +15,7 @@ Module {
             Object {
                 "name": String("P1"),
                 "net_id": Number(1),
-                "original_name": Null,
+                "original_name": String("P1"),
                 "properties": Object {},
                 "type_name": String("Net"),
             },
@@ -30,7 +30,7 @@ Module {
             Object {
                 "name": String("P2"),
                 "net_id": Number(2),
-                "original_name": Null,
+                "original_name": String("P2"),
                 "properties": Object {},
                 "type_name": String("Net"),
             },
