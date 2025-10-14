@@ -226,7 +226,7 @@ snapshot_eval!(interface_net_template_naming, {
         
         # Define single-net interface
         Power = interface(
-            NET = using(Net("VCC")),
+            NET = Net("VCC"),
         )
         
         # Create power interface instance - always suffixes field name

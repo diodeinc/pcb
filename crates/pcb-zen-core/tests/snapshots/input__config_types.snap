@@ -168,9 +168,6 @@ Module {
                         "type_name": String("Net"),
                     },
                 },
-                "promotion_by_type": Object {
-                    "Power": String(""),
-                },
             },
         ),
         help: None,
@@ -208,9 +205,6 @@ Module {
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
-                },
-                "promotion_by_type": Object {
-                    "Power": String(""),
                 },
             },
         ),
@@ -260,9 +254,6 @@ Module {
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
-                },
-                "promotion_by_type": Object {
-                    "DataBus": String(""),
                 },
             },
         ),
@@ -343,9 +334,6 @@ Module {
                                 "type_name": String("Net"),
                             },
                         },
-                        "promotion_by_type": Object {
-                            "DataBus": String(""),
-                        },
                     },
                     "power": Object {
                         "fields": Object {
@@ -364,9 +352,6 @@ Module {
                                 "type_name": String("Net"),
                             },
                         },
-                        "promotion_by_type": Object {
-                            "Power": String(""),
-                        },
                     },
                     "reset": Object {
                         "name": String("system_io_reset"),
@@ -375,9 +360,6 @@ Module {
                         "properties": Object {},
                         "type_name": String("Net"),
                     },
-                },
-                "promotion_by_type": Object {
-                    "System": String(""),
                 },
             },
         ),

@@ -120,7 +120,7 @@ fn serialize_net(net: &FrozenNetValue) -> JsonValue {
 }
 
 fn serialize_interface(interface: &FrozenInterfaceValue) -> JsonValue {
-    let mut inner = JsonMap::from_iter([(
+    let inner = JsonMap::from_iter([(
         "fields".to_string(),
         JsonValue::Object(
             interface
@@ -130,18 +130,6 @@ fn serialize_interface(interface: &FrozenInterfaceValue) -> JsonValue {
                 .collect(),
         ),
     )]);
-
-    let promotion: JsonMap<_, _> = interface
-        .promotion_by_type()
-        .iter()
-        .map(|(ty, path)| (ty.clone(), JsonValue::String(path.clone())))
-        .collect();
-    if !promotion.is_empty() {
-        inner.insert(
-            "promotion_by_type".to_string(),
-            JsonValue::Object(promotion),
-        );
-    }
 
     wrap("Interface", JsonValue::Object(inner))
 }

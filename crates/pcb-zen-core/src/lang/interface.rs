@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::interface_validation::ensure_field_compat;
 use crate::lang::net::NetValue;
 use crate::lang::validation::validate_identifier_name;
 
@@ -73,87 +72,6 @@ impl InstancePrefix {
     }
 }
 
-/// Unified helper to allocate a net with proper registration
-/// Helper to check if an interface factory has exactly one net field
-/// Get promotion key for any value
-pub fn get_promotion_key(value: Value) -> anyhow::Result<String> {
-    let value_type = value.get_type();
-    if value_type == "NetType" || value_type == "Net" {
-        Ok("Net".to_string())
-    } else if value_type == "InterfaceValue" {
-        let factory_val = if let Some(interface_val) = value.downcast_ref::<InterfaceValue>() {
-            interface_val.factory().to_value()
-        } else if let Some(frozen_interface_val) = value.downcast_ref::<FrozenInterfaceValue>() {
-            frozen_interface_val.factory().to_value()
-        } else {
-            value // fallback
-        };
-        get_promotion_key(factory_val)
-    } else {
-        // Check for interface factories
-        if let Some(factory) = value.downcast_ref::<InterfaceFactory>() {
-            if let Some(type_data) = <Value as InterfaceCell>::get_ty(&factory.interface_type_data)
-            {
-                Ok(type_data.name.clone())
-            } else {
-                Err(anyhow::anyhow!(
-                        "Anonymous interfaces are not allowed. All interfaces must be assigned to a variable (e.g., MyInterface = interface(...))"
-                    ))
-            }
-        } else if let Some(frozen_factory) = value.downcast_ref::<FrozenInterfaceFactory>() {
-            if let Some(type_data) = &frozen_factory.interface_type_data {
-                Ok(type_data.name.clone())
-            } else {
-                Err(anyhow::anyhow!(
-                        "Anonymous interfaces are not allowed. All interfaces must be assigned to a variable (e.g., MyInterface = interface(...))"
-                    ))
-            }
-        } else {
-            Ok(value.get_type().to_string())
-        }
-    }
-}
-
-/// Get promotion map for any value - handles both factories and instances
-pub fn get_promotion_map(value: Value) -> SmallMap<String, String> {
-    if let Some(factory) = value.downcast_ref::<InterfaceFactory>() {
-        // Use the initialized type data if available (includes self-promotion)
-        if let Some(type_data) = <Value as InterfaceCell>::get_ty(&factory.interface_type_data) {
-            type_data.promotion_by_type.clone()
-        } else {
-            factory.promotion_by_type.clone()
-        }
-    } else if let Some(frozen_factory) = value.downcast_ref::<FrozenInterfaceFactory>() {
-        // Use the type data if available (includes self-promotion)
-        if let Some(type_data) = &frozen_factory.interface_type_data {
-            type_data.promotion_by_type.clone()
-        } else {
-            frozen_factory.promotion_by_type.clone()
-        }
-    } else if value.get_type() == "InterfaceValue" {
-        // Interface instance - get promotion map from its factory
-        let factory_val = if let Some(interface_val) = value.downcast_ref::<InterfaceValue>() {
-            interface_val.factory().to_value()
-        } else if let Some(frozen_interface_val) = value.downcast_ref::<FrozenInterfaceValue>() {
-            frozen_interface_val.factory().to_value()
-        } else {
-            value
-        };
-        get_promotion_map(factory_val)
-    } else {
-        SmallMap::new()
-    }
-}
-
-/// Unwrap using() wrapper if present
-pub fn unwrap_using(value: Value) -> Value {
-    if let Some(using_val) = value.downcast_ref::<Using>() {
-        using_val.value.to_value()
-    } else {
-        value
-    }
-}
-
 /// Return the factory of an Interface instance (handles both frozen and unfrozen)
 /// Recursively unregister all nets within an interface instance
 fn unregister_interface_nets<'v>(interface: &InterfaceValue<'v>, ctx: &ContextValue) {
@@ -174,27 +92,25 @@ fn clone_net_template<'v>(
     field_name_opt: Option<&str>,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     use crate::lang::net::{FrozenNetValue, NetValue};
 
     // Extract original name (None if auto-generated) and create new net with fresh ID
-    let (template_name_opt, new_net_value) =
-        if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
-            (
-                net_val.original_name_opt().map(|s| s.to_owned()),
-                net_val.with_new_id(heap),
-            )
-        } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
-            (
-                frozen_net.original_name_opt().map(|s| s.to_owned()),
-                frozen_net.with_new_id(heap),
-            )
-        } else {
-            return Err(anyhow::anyhow!(
-                "Expected Net template, got {}",
-                template.get_type()
-            ));
-        };
+    let (template_name_opt, new_net_value) = if let Some(net_val) =
+        template.downcast_ref::<NetValue<'v>>()
+    {
+        (
+            net_val.original_name_opt().map(|s| s.to_owned()),
+            net_val.with_new_id(heap),
+        )
+    } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
+        (
+            frozen_net.original_name_opt().map(|s| s.to_owned()),
+            frozen_net.with_new_id(heap),
+        )
+    } else {
+        return Err(anyhow::anyhow!("Expected Net template, got {}", template.get_type()).into());
+    };
 
     let net_name = compute_net_name(prefix, template_name_opt.as_deref(), field_name_opt, eval);
     let new_net = new_net_value.downcast_ref::<NetValue<'v>>().unwrap();
@@ -244,15 +160,15 @@ fn clone_interface_template<'v>(
     prefix: &InstancePrefix,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     // Helper to clone a field value based on its type
-    fn clone_one_field<'v>(
+    fn clone_field<'v>(
         name: &str,
         val: Value<'v>,
         prefix: &InstancePrefix,
         heap: &'v Heap,
         eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
+    ) -> starlark::Result<Value<'v>> {
         match val.get_type() {
             "Net" => clone_net_template(val, prefix, Some(name), heap, eval),
             "InterfaceValue" => clone_interface_template(val, &prefix.child(name), heap, eval),
@@ -266,7 +182,7 @@ fn clone_interface_template<'v>(
         for (name, value) in iv.fields.iter() {
             cloned.insert(
                 name.clone(),
-                clone_one_field(name, value.to_value(), prefix, heap, eval)?,
+                clone_field(name, value.to_value(), prefix, heap, eval)?,
             );
         }
         (iv.factory().to_value(), cloned)
@@ -275,22 +191,17 @@ fn clone_interface_template<'v>(
         for (name, value) in fiv.fields.iter() {
             cloned.insert(
                 name.clone(),
-                clone_one_field(name, value.to_value(), prefix, heap, eval)?,
+                clone_field(name, value.to_value(), prefix, heap, eval)?,
             );
         }
         (fiv.factory().to_value(), cloned)
     } else {
-        return Err(anyhow::anyhow!(
-            "expected InterfaceValue, got {}",
-            instance.get_type()
-        ));
+        return Err(anyhow::anyhow!("expected InterfaceValue, got {}", instance.get_type()).into());
     };
 
     // Create new InterfaceValue with cloned fields
-    let promotion_by_type = get_promotion_map(factory_val);
     Ok(heap.alloc(InterfaceValue {
         fields,
-        promotion_by_type,
         factory: factory_val,
     }))
 }
@@ -303,7 +214,7 @@ fn create_field_value<'v>(
     prefix: &InstancePrefix,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     if let Some(provided) = provided_value {
         // Value supplied by the caller - use it directly (validation should be done by caller)
         return Ok(provided);
@@ -329,7 +240,6 @@ fn create_field_value<'v>(
         let new_name = compute_net_name(prefix, None, Some(field_name), eval);
         let args = vec![heap.alloc(new_name)];
         eval.eval_function(field_spec, &args, &[])
-            .map_err(|e| e.into_anyhow())
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, &child_prefix, heap, eval)
@@ -344,16 +254,16 @@ fn create_interface_instance<'v, V>(
     prefix: &InstancePrefix,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>>
+) -> starlark::Result<Value<'v>>
 where
     V: ValueLike<'v> + InterfaceCell,
 {
     // Validate provided values match field specs
-    for (name, provided_value) in &provided_values {
-        if let Some(field_spec) = factory.fields.get(name) {
-            ensure_field_compat(field_spec.to_value(), *provided_value, name)?;
-        }
-    }
+    // for (name, provided_value) in &provided_values {
+    //     if let Some(field_spec) = factory.fields.get(name) {
+    //         ensure_field_compat(field_spec.to_value(), *provided_value, name)?;
+    //     }
+    // }
 
     // Build the field map, recursively creating values where necessary
     let mut fields = SmallMap::with_capacity(factory.fields.len());
@@ -372,10 +282,8 @@ where
     }
 
     // Create the interface instance
-    let promotion_by_type = get_promotion_map(factory_value);
     let interface_instance = heap.alloc(InterfaceValue {
         fields,
-        promotion_by_type,
         factory: factory_value,
     });
 
@@ -383,69 +291,11 @@ where
     if let Some(post_init_fn) = factory.post_init_fn.as_ref() {
         let post_init_val = post_init_fn.to_value();
         if !post_init_val.is_none() {
-            eval.eval_function(post_init_val, &[interface_instance], &[])
-                .map_err(|e| anyhow::anyhow!(e))?;
+            eval.eval_function(post_init_val, &[interface_instance], &[])?;
         }
     }
 
     Ok(interface_instance)
-}
-
-/// Recursively collect promotion paths that originate from *using()* fields.
-///
-/// `current_path` is the dot-qualified path that reaches `field_value` from the
-/// parent interface ("uart", "spi.cs", …).
-fn discover_promotion_paths<'v>(
-    _field_name: &str,
-    field_value: Value<'v>,
-    current_path: &str,
-) -> anyhow::Result<SmallMap<String, String>> {
-    let mut paths = SmallMap::new();
-
-    // Only proceed if the field itself is wrapped in using().
-    let Some(using_val) = field_value.downcast_ref::<Using<'v>>() else {
-        return Ok(paths); // regular field ⇒ no promotion
-    };
-
-    let inner = using_val.value.to_value();
-    let type_name = get_promotion_key(inner)?;
-    paths.insert(type_name, current_path.to_owned());
-
-    // Add transitive promotion paths if inner value has them
-    let nested_map = get_promotion_map(inner);
-    for (nested_ty, nested_path) in &nested_map {
-        let full_path = if nested_path.is_empty() {
-            current_path.to_owned()
-        } else {
-            format!("{current_path}.{nested_path}")
-        };
-        paths.insert(nested_ty.clone(), full_path);
-    }
-
-    Ok(paths)
-}
-
-/// Wrapper for using() specifications that marks fields for promotion
-#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct UsingGen<V> {
-    value: V,
-}
-
-starlark_complex_value!(pub Using);
-
-#[starlark_value(type = "using")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for UsingGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-    type Canonical = FrozenUsing;
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Display for UsingGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "using({})", self.value.to_value())
-    }
 }
 
 /// Build a consistent parameter spec for interface factories, excluding reserved field names
@@ -475,8 +325,6 @@ pub struct InterfaceTypeData {
     /// Creating these on every invoke is pretty expensive (profiling shows)
     /// so compute them in advance and cache.
     parameter_spec: ParametersSpec<FrozenValue>,
-    /// Track which fields are marked with using() for promotion, by type name
-    promotion_by_type: SmallMap<String, String>,
 }
 
 // Trait to handle the difference between mutable and frozen values
@@ -532,7 +380,6 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     fields: SmallMap<String, V>,
     post_init_fn: Option<V>,
     param_spec: ParametersSpec<FrozenValue>,
-    promotion_by_type: SmallMap<String, String>,
 }
 
 starlark_complex_value!(pub InterfaceFactory);
@@ -549,7 +396,6 @@ impl Freeze for InterfaceFactory<'_> {
             fields: self.fields.freeze(freezer)?,
             post_init_fn: self.post_init_fn.freeze(freezer)?,
             param_spec: self.param_spec,
-            promotion_by_type: self.promotion_by_type,
         })
     }
 }
@@ -568,8 +414,7 @@ where
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         // Collect provided `name` (optional) and field values using the cached parameter spec.
-        let mut provided_values: SmallMap<String, Value<'v>> =
-            SmallMap::with_capacity(self.fields.len());
+        let mut provided_values = SmallMap::with_capacity(self.fields.len());
         let mut instance_name_opt: Option<String> = None;
 
         self.param_spec.parser(args, eval, |param_parser, _extra| {
@@ -601,7 +446,6 @@ where
             InstancePrefix::empty()
         };
         create_interface_instance(self, _me, provided_values, &prefix, eval.heap(), eval)
-            .map_err(starlark::Error::new_other)
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
@@ -617,15 +461,10 @@ where
         _eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
         V::get_or_init_ty(&self.interface_type_data, || {
-            // Add the interface's own type to promotion_by_type with empty path
-            let mut promotion_by_type = self.promotion_by_type.clone();
-            promotion_by_type.insert(variable_name.to_owned(), "".to_owned());
-
             Ok(Arc::new(InterfaceTypeData {
                 name: variable_name.to_owned(),
                 id: self.id,
                 parameter_spec: build_interface_param_spec(&self.fields),
-                promotion_by_type,
             }))
         })
     }
@@ -676,7 +515,6 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
 #[serde(bound = "V: serde::Serialize")]
 pub struct InterfaceValueGen<V> {
     fields: SmallMap<String, V>,
-    promotion_by_type: SmallMap<String, String>,
     #[serde(skip)]
     factory: V, // Runtime only - factory has NoSerialize so can't be JSON-serialized
 }
@@ -704,32 +542,28 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
         let mut items: Vec<_> = self.fields.iter().collect();
         items.sort_by_key(|(k, _)| *k);
 
-        // Get the actual interface type name from the factory
-        let type_name =
-            get_promotion_key(self.factory.to_value()).unwrap_or_else(|_| "Interface".to_string());
+        let name = if let Some(factory) = self.factory.downcast_ref::<InterfaceFactory>() {
+            factory
+                .interface_type_data
+                .get()
+                .map(|type_data| type_data.name.clone())
+        } else if let Some(factory) = self.factory.downcast_ref::<FrozenInterfaceFactory>() {
+            factory
+                .interface_type_data
+                .as_ref()
+                .map(|type_data| type_data.name.clone())
+        } else {
+            None
+        };
+        let type_name = name.unwrap_or_else(|| "<Unknown>".to_string());
 
         write!(f, "{type_name}(")?;
         for (i, (k, v)) in items.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
-
             let value = v.to_value();
-            let value_type_name =
-                get_promotion_key(value).unwrap_or_else(|_| value.get_type().to_string());
-
-            // Check if this field was marked with using() by checking if there's a promotion
-            // entry for this type that points to this field name
-            let is_using_field = self
-                .promotion_by_type
-                .get(&value_type_name)
-                .is_some_and(|field_name| field_name == k.as_str());
-
-            if is_using_field {
-                write!(f, "{k}=using({value})")?;
-            } else {
-                write!(f, "{k}={value}")?;
-            }
+            write!(f, "{k}={value}")?;
         }
         write!(f, ")")
     }
@@ -749,45 +583,13 @@ impl<'v, V: ValueLike<'v>> InterfaceValueGen<V> {
     pub fn factory(&self) -> &V {
         &self.factory
     }
-
-    // Provide read-only access to promotion map
-    #[inline]
-    pub fn promotion_by_type(&self) -> &SmallMap<String, String> {
-        &self.promotion_by_type
-    }
 }
 
 #[starlark_module]
 pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
-    fn using<'v>(value: Value<'v>, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
-        let value_type = value.get_type();
-
-        // Validate that only Net types/instances or Interface types/instances can be wrapped
-        if value_type == "Net"
-            || value_type == "NetType"
-            || value_type == "InterfaceValue"
-            || value.downcast_ref::<InterfaceFactory<'v>>().is_some()
-            || value.downcast_ref::<FrozenInterfaceFactory>().is_some()
-        {
-            // If a Net instance was provided, unregister it from the current module
-            // so it does not count as an introduced net. It will be registered when used.
-            if let Some(net_val) = value.downcast_ref::<NetValue<'v>>() {
-                if let Some(ctx) = eval
-                    .module()
-                    .extra_value()
-                    .and_then(|e| e.downcast_ref::<ContextValue>())
-                {
-                    ctx.unregister_net(net_val.id());
-                }
-            }
-
-            Ok(eval.heap().alloc(Using { value }))
-        } else {
-            Err(anyhow::anyhow!(
-                "using() can only wrap Net or Interface types/instances, got {}",
-                value_type
-            ))
-        }
+    fn using<'v>(value: Value<'v>, _eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        // Passthrough using() for backwards compatibility
+        Ok(value)
     }
 
     fn interface<'v>(
@@ -797,7 +599,6 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         let heap = eval.heap();
         let mut fields = SmallMap::new();
         let mut post_init_fn = None;
-        let mut all_promotion_paths: SmallMap<String, String> = SmallMap::new();
 
         // Process field specifications and validate reserved names
         for (name, v) in &kwargs {
@@ -810,32 +611,11 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     "Field name 'name' is reserved (conflicts with implicit name parameter)"
                 ));
             } else {
-                // Discover all promotion paths from this field (direct and transitive)
-                let field_promotion_paths = discover_promotion_paths(name, v.to_value(), name)?;
-
-                // Check for conflicts with existing promotion paths
-                for (type_name, path) in &field_promotion_paths {
-                    if let Some(existing_path) = all_promotion_paths.get(type_name) {
-                        return Err(anyhow::anyhow!(
-                            "Interface has conflicting promotion paths to type '{}': '{}' and '{}'",
-                            type_name,
-                            existing_path,
-                            path
-                        ));
-                    }
-                }
-
-                // Add all discovered paths to the global promotion map
-                for (type_name, path) in field_promotion_paths {
-                    all_promotion_paths.insert(type_name, path);
-                }
-
-                // Extract field value (unwrap using() if present)
-                let field_value = unwrap_using(v.to_value());
-
+                // Extract field value
+                let field_value = v.to_value();
                 let type_str = field_value.get_type();
 
-                // Accept Net type, Net instance, Interface factory, Interface instance, field() specs, or using() wrapped values
+                // Accept Net type, Net instance, Interface factory, Interface instance, or field() specs
                 if type_str == "NetType"
                     || type_str == "Net"
                     || type_str == "InterfaceValue"
@@ -877,7 +657,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     fields.insert(name.clone(), field_value);
                 } else {
                     return Err(anyhow::anyhow!(
-                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, field() specification, or using() wrapped value, got `{}`",
+                        "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, or  field() specification, got `{}`",
                         name,
                         type_str
                     ));
@@ -895,7 +675,6 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
             fields,
             post_init_fn,
             param_spec,
-            promotion_by_type: all_promotion_paths,
         });
 
         // TODO: Add validation to ensure interfaces are assigned to variables
@@ -912,7 +691,7 @@ fn instantiate_interface<'v>(
     prefix: &InstancePrefix,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     // Handle interface factories first
     if let Some(factory) = spec.downcast_ref::<InterfaceFactory<'v>>() {
         return create_interface_instance(factory, spec, SmallMap::new(), prefix, heap, eval);
@@ -926,7 +705,7 @@ fn instantiate_interface<'v>(
     Err(anyhow::anyhow!(
         "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory)",
         spec.get_type()
-    ))
+    ).into())
 }
 
 impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
@@ -943,12 +722,6 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
     #[inline]
     pub fn field(&self, name: &str) -> Option<&V> {
         self.fields.get(name)
-    }
-
-    /// Return the promotion mapping for serialization purposes
-    #[inline]
-    pub fn promotion_by_type(&self) -> &SmallMap<String, String> {
-        &self.promotion_by_type
     }
 }
 
@@ -1093,145 +866,6 @@ Power5 = interface(vcc = Net())
 instance5 = Power5("PWR")
 # Net() behaves the same as Net type with prefix
 assert_eq(instance5.vcc.name, "PWR_vcc")
-"#,
-        );
-    }
-
-    #[test]
-    fn using_function_basic() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
-
-        // Test using() function availability and basic usage
-        a.pass(
-            r#"
-# Test using() with Net instance - just verify it works
-net = Net("TEST")
-using_net = using(net)
-
-# Test using() with Net type - should work now
-using_net_type = using(Net)
-
-# Test using() in interface definition
-Power = interface(
-    NET = using(Net("VCC")),
-    voltage = field(str, "3.3V"),
-)
-
-power = Power()
-assert_eq(power.NET.name, "_VCC")
-"#,
-        );
-    }
-
-    #[test]
-    fn using_net_type_functionality() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
-
-        // Test that using(Net) behaves correctly in interface definitions
-        a.pass(
-            r#"
-# Interface using Net type instead of Net instance
-Power = interface(
-    NET = using(Net),  # Should work like using(Net()) 
-)
-
-# Create instance with prefix - always includes field name
-power = Power("VCC")
-assert_eq(power.NET.name, "VCC_NET")
-
-# Create instance without prefix
-power_default = Power()
-assert_eq(power_default.NET.name, "_NET")
-"#,
-        );
-    }
-
-    #[test]
-    fn using_validation() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
-
-        // Test using() validation - should error with invalid types
-        a.fail(
-            r#"using("invalid")"#,
-            "using() can only wrap Net or Interface types/instances",
-        );
-    }
-
-    #[test]
-    fn using_duplicate_promotion() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
-
-        // Test duplicate using() fields of same type should error
-        a.fail(
-            r#"
-interface(
-    net1 = using(Net("NET1")),
-    net2 = using(Net("NET2")),
-)
-"#,
-            "Interface has conflicting promotion paths",
-        );
-    }
-
-    #[test]
-    fn using_transitive_conflict() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
-
-        // Test transitive conflict detection
-        a.fail(
-            r#"
-Power = interface(NET = using(Net("VCC")))
-interface(
-    power = using(Power()),        # Transitive Net via power.NET
-    direct_net = using(Net("GND")) # CONFLICT: Direct Net
-)
-"#,
-            "conflicting promotion paths to type 'Net'",
-        );
-    }
-
-    #[test]
-    fn using_chain_validation() {
-        let mut a = Assert::new();
-        a.globals_add(|builder: &mut GlobalsBuilder| {
-            component_globals(builder);
-            init_net_global(builder);
-            interface_globals(builder);
-        });
-
-        // Test that regular (non-using) fields don't contribute promotion paths
-        a.pass(
-            r#"
-Power = interface(NET = using(Net("VCC")))
-ValidSystem = interface(
-    power = using(Power()),     # Complete using() chain - should work
-    backup = Power(),           # Regular field - should NOT create conflicts
-)
 "#,
         );
     }

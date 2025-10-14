@@ -1171,57 +1171,6 @@ fn try_net_conversion<'v>(
     Ok(None) // No conversion needed or value is not a NetValue
 }
 
-// Helper function to attempt interface promotion when passing an interface to
-// a parameter expecting a simpler type (e.g., Power -> Net).
-// Returns `Ok(Some(promoted))` if promotion succeeds, `Ok(None)` if value is not
-// an interface or can't promote, and `Err(..)` if promotion was attempted but failed.
-fn try_interface_promotion<'v>(
-    value: Value<'v>,
-    expected_typ: Value<'v>,
-    _eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Option<Value<'v>>> {
-    use crate::lang::interface::{get_promotion_key, FrozenInterfaceValue, InterfaceValue};
-
-    // Check if value is an interface instance
-    let (interface_fields, promotion_map) =
-        if let Some(iface) = value.downcast_ref::<InterfaceValue>() {
-            (iface.fields().clone(), iface.promotion_by_type().clone())
-        } else if let Some(frozen_iface) = value.downcast_ref::<FrozenInterfaceValue>() {
-            // For frozen interfaces, we need to collect fields into a map we can access
-            let mut fields = SmallMap::new();
-            for (k, v) in frozen_iface.fields().iter() {
-                fields.insert(k.clone(), v.to_value());
-            }
-            (fields, frozen_iface.promotion_by_type().clone())
-        } else {
-            return Ok(None); // Not an interface
-        };
-
-    // Get the promotion key for the expected type (e.g., "Net")
-    let expected_key = match get_promotion_key(expected_typ) {
-        Ok(key) => key,
-        Err(_) => return Ok(None), // Can't determine key
-    };
-
-    // Check if the interface can promote to the expected type
-    if let Some(promotion_path) = promotion_map.get(&expected_key) {
-        // Extract the field name from the promotion path (e.g., "NET" from "NET" or "NET.foo")
-        let field_name = promotion_path
-            .split('.')
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Invalid promotion path: {}", promotion_path))?;
-
-        // Get the promoted field value
-        let promoted_value = interface_fields.get(field_name).ok_or_else(|| {
-            anyhow::anyhow!("Promotion field '{}' not found in interface", field_name)
-        })?;
-
-        Ok(Some(*promoted_value))
-    } else {
-        Ok(None) // Can't promote to this type
-    }
-}
-
 fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
@@ -1246,12 +1195,6 @@ fn validate_or_convert<'v>(
     if let Some(converted) = try_enum_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
-    }
-
-    // 1c. Try interface promotion
-    if let Some(promoted) = try_interface_promotion(value, typ, eval)? {
-        validate_type(name, promoted, typ, eval.heap())?;
-        return Ok(promoted);
     }
 
     // 2. If a custom converter is provided, use it for other conversions
