@@ -1045,53 +1045,78 @@ impl EvalContext {
     }
 
     fn hijack_interfaces(&mut self) {
+        use super::symbol::SymbolValue;
         use pcb_sch::PhysicalUnit;
+        use starlark::values::types::record::field::FieldGen;
+        use starlark::values::typing::TypeCompiled;
+
         let heap = self.module.heap();
 
-        // Hijack Power, Ground, Analog, Gpio, Pwm to use builtin.net_type()
-        // This provides backcompat with old stdlib while using new implementations
-        // Following make_default_net_type pattern to add symbol, voltage, impedance fields
+        // Helper to create a symbol field with default by loading from KiCad library
+        let make_symbol_field = |symbol_name: &str| -> Result<Value, starlark::Error> {
+            // Use Symbol::from_args to load the symbol from @kicad-symbols/power.kicad_sym
+            let symbol_value = SymbolValue::from_args(
+                Some(symbol_name.to_string()),
+                None, // no definition
+                Some("@kicad-symbols/power.kicad_sym".to_string()),
+                self,
+            )?;
+            let default_symbol = heap.alloc(symbol_value);
+            let symbol_type_compiled =
+                TypeCompiled::new(heap.alloc(SymbolType).to_value(), heap).unwrap();
+            Ok(heap
+                .alloc(FieldGen::new(
+                    symbol_type_compiled,
+                    Some(default_symbol.to_value()),
+                ))
+                .to_value())
+        };
 
-        let make_net_type = |name: &str, with_voltage: bool, with_impedance: bool| {
-            let mut fields = SmallMap::new();
-            fields.insert("symbol".to_owned(), heap.alloc(SymbolType));
-            if with_voltage {
+        // Power: symbol=VCC, voltage
+        if self.module.get("Power").is_some() {
+            if let Ok(symbol_field) = make_symbol_field("VCC") {
+                let mut fields = SmallMap::new();
+                fields.insert("symbol".to_owned(), symbol_field);
                 fields.insert(
                     "voltage".to_owned(),
                     heap.alloc(PhysicalRangeType::new(PhysicalUnit::Volts.into())),
                 );
-            }
-            if with_impedance {
-                fields.insert(
-                    "impedance".to_owned(),
-                    heap.alloc(PhysicalValueType::new(PhysicalUnit::Ohms.into())),
+                self.module.set(
+                    "Power",
+                    heap.alloc(NetType {
+                        type_name: "Power".to_string(),
+                        fields,
+                    }),
                 );
             }
-            NetType {
-                type_name: name.to_string(),
-                fields,
-            }
-        };
+        }
 
-        if self.module.get("Power").is_some() {
-            self.module
-                .set("Power", heap.alloc(make_net_type("Power", true, false)));
-        }
+        // Ground: symbol=GND
         if self.module.get("Ground").is_some() {
-            self.module
-                .set("Ground", heap.alloc(make_net_type("Ground", false, false)));
+            if let Ok(symbol_field) = make_symbol_field("GND") {
+                let mut fields = SmallMap::new();
+                fields.insert("symbol".to_owned(), symbol_field);
+                self.module.set(
+                    "Ground",
+                    heap.alloc(NetType {
+                        type_name: "Ground".to_string(),
+                        fields,
+                    }),
+                );
+            }
         }
-        if self.module.get("Analog").is_some() {
-            self.module
-                .set("Analog", heap.alloc(make_net_type("Analog", true, true)));
-        }
-        if self.module.get("Gpio").is_some() {
-            self.module
-                .set("Gpio", heap.alloc(make_net_type("Gpio", true, true)));
-        }
-        if self.module.get("Pwm").is_some() {
-            self.module
-                .set("Pwm", heap.alloc(make_net_type("Pwm", true, true)));
+
+        // Analog, Gpio, Pwm: empty types
+        for name in ["Analog", "Gpio", "Pwm"] {
+            if self.module.get(name).is_some() {
+                self.module.set(
+                    name,
+                    heap.alloc(NetType {
+                        type_name: name.to_string(),
+                        fields: SmallMap::new(),
+                    }),
+                );
+            }
         }
     }
 

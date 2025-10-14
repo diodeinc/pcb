@@ -289,3 +289,50 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
         check(GND.NET.name == "GND", "Ground net name should be 'GND', not qualified")
     "#
 });
+
+snapshot_eval!(stdlib_power_ground_have_default_symbols, {
+    "interfaces.zen" => r#"
+        # Mock stdlib interfaces.zen that gets hijacked
+        # The hijack_interfaces() function replaces these with versions that have default symbols
+        Power = builtin.net_type(
+            "Power",
+            symbol=field(Symbol, default=Symbol(name="VCC", definition=[("VCC", ["1"])])),
+            voltage=str,
+        )
+
+        Ground = builtin.net_type(
+            "Ground",
+            symbol=field(Symbol, default=Symbol(name="GND", definition=[("GND", ["1"])])),
+        )
+
+        Analog = builtin.net_type("Analog")
+        Gpio = builtin.net_type("Gpio")
+        Pwm = builtin.net_type("Pwm")
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "Power", "Ground", "Analog", "Gpio", "Pwm")
+
+        # Test that Power has default symbol (hijacked version should preserve defaults)
+        vcc = Power("VCC")
+        print("Power net:", vcc)
+        print("Power symbol:", vcc.symbol)
+        # The symbol field should exist and not be None
+        check(vcc.symbol != None, "Power should have default symbol")
+
+        # Test that Ground has default symbol (hijacked version should preserve defaults)
+        gnd = Ground("GND")
+        print("Ground net:", gnd)
+        print("Ground symbol:", gnd.symbol)
+        # The symbol field should exist and not be None
+        check(gnd.symbol != None, "Ground should have default symbol")
+
+        # Test that Analog/Gpio/Pwm work (no default symbols expected)
+        analog = Analog("ANALOG")
+        gpio = Gpio("GPIO")
+        pwm = Pwm("PWM")
+
+        print("Analog net:", analog.name)
+        print("Gpio net:", gpio.name)
+        print("Pwm net:", pwm.name)
+    "#
+});
