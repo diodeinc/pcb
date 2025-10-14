@@ -26,3 +26,7 @@ FrequencyRange = builtin.physical_range("Hz")
 TemperatureRange = builtin.physical_range("K")
 TimeRange = builtin.physical_range("s")
 PowerRange = builtin.physical_range("W")
+
+
+def unit(spec, type):
+    return type(spec)
