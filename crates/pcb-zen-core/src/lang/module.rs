@@ -25,7 +25,9 @@ use starlark::{
 use crate::graph::starlark::ModuleGraphValueGen;
 use crate::lang::context::{ContextValue, PendingChild};
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::interface::{FrozenInterfaceValue, InterfaceValue};
+use crate::lang::interface::{
+    FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
+};
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, Span};
@@ -49,10 +51,9 @@ macro_rules! downcast_frozen_module {
     };
 }
 
-use super::net::{generate_net_id, NetValue};
+use super::net::{generate_net_id, FrozenNetType, FrozenNetValue, NetId, NetType, NetValue};
 use crate::lang::context::FrozenContextValue;
-use crate::lang::net::NetId;
-use crate::{FrozenComponentValue, FrozenNetValue};
+use crate::FrozenComponentValue;
 use starlark::errors::EvalMessage;
 
 /// Position data from pcb:sch comments  
@@ -944,7 +945,6 @@ fn default_for_type<'v>(
                 generate_net_id(),
                 String::new(),
                 SmallMap::new(),
-                Value::new_none(),
             ))
             .to_value(),
         "InterfaceFactory" => typ
@@ -1015,24 +1015,46 @@ fn validate_type<'v>(
         return Ok(());
     }
 
-    let type_name = typ.get_type();
+    // NetType validation with asymmetric conversion rules
+    if let Some(expected_type_name) = typ
+        .downcast_ref::<NetType>()
+        .map(|nt| &nt.type_name)
+        .or_else(|| {
+            typ.downcast_ref::<FrozenNetType>()
+                .map(|fnt| &fnt.type_name)
+        })
+    {
+        let actual_type_name = value
+            .downcast_ref::<NetValue>()
+            .map(|nv| nv.net_type_name())
+            .or_else(|| {
+                value
+                    .downcast_ref::<FrozenNetValue>()
+                    .map(|fnv| fnv.net_type_name())
+            });
 
-    match type_name {
-        "NetType" => {
-            if value.downcast_ref::<NetValue>().is_some()
-                || value.downcast_ref::<FrozenNetValue>().is_some()
-            {
+        if let Some(actual_type_name) = actual_type_name {
+            // Only allow exact type match - conversion will be handled by try_net_conversion
+            if expected_type_name == actual_type_name {
                 return Ok(());
             }
+
+            // Type mismatch - fail validation
+            // Note: If expected is "Net" and actual is different (e.g., "Power"),
+            // this will fail here and try_net_conversion will handle the conversion
+            anyhow::bail!(
+                "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
+            );
         }
-        "InterfaceFactory" => {
-            if value.downcast_ref::<InterfaceValue>().is_some()
-                || value.downcast_ref::<FrozenInterfaceValue>().is_some()
-            {
-                return Ok(());
-            }
-        }
-        _ => {}
+    }
+
+    // InterfaceFactory validation
+    if (typ.downcast_ref::<InterfaceFactory>().is_some()
+        || typ.downcast_ref::<FrozenInterfaceFactory>().is_some())
+        && (value.downcast_ref::<InterfaceValue>().is_some()
+            || value.downcast_ref::<FrozenInterfaceValue>().is_some())
+    {
+        return Ok(());
     }
 
     if TypeType::unpack_value_opt(typ).is_some() {
@@ -1107,6 +1129,48 @@ fn try_enum_conversion<'v>(
     }
 }
 
+// Helper function to attempt net type conversion when passing a typed net to
+// a parameter expecting a different net type (e.g., Power -> Net).
+// Returns `Ok(Some(converted))` if conversion succeeds, `Ok(None)` if not applicable.
+fn try_net_conversion<'v>(
+    value: Value<'v>,
+    expected_typ: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    // Check if expected type is a NetType
+    let expected_type_name = expected_typ
+        .downcast_ref::<NetType>()
+        .map(|nt| &nt.type_name)
+        .or_else(|| {
+            expected_typ
+                .downcast_ref::<FrozenNetType>()
+                .map(|fnt| &fnt.type_name)
+        });
+
+    let Some(expected_type_name) = expected_type_name else {
+        return Ok(None); // Expected type is not a NetType
+    };
+
+    // Check if value is a NetValue
+    if let Some(nv) = value.downcast_ref::<NetValue>() {
+        let actual_type_name = nv.net_type_name();
+        // Only convert if expected type is "Net" and actual type is different
+        if expected_type_name == "Net" && actual_type_name != "Net" {
+            // Use with_net_type helper to cast the net type without creating a new instance
+            return Ok(Some(nv.with_net_type("Net", eval.heap())));
+        }
+    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
+        let actual_type_name = fnv.net_type_name();
+        // Only convert if expected type is "Net" and actual type is different
+        if expected_type_name == "Net" && actual_type_name != "Net" {
+            // Use with_net_type helper for frozen nets too
+            return Ok(Some(fnv.with_net_type("Net", eval.heap())));
+        }
+    }
+
+    Ok(None) // No conversion needed or value is not a NetValue
+}
+
 // Helper function to attempt interface promotion when passing an interface to
 // a parameter expecting a simpler type (e.g., Power -> Net).
 // Returns `Ok(Some(promoted))` if promotion succeeds, `Ok(None)` if value is not
@@ -1172,6 +1236,12 @@ fn validate_or_convert<'v>(
 
     // 1. Try automatic conversions for values
 
+    // 1a. Try net type conversion (e.g., Power -> Net)
+    if let Some(converted) = try_net_conversion(value, typ, eval)? {
+        validate_type(name, converted, typ, eval.heap())?;
+        return Ok(converted);
+    }
+
     // 1b. If expected type is enum and value is string, auto-convert (enum was downgraded)
     if let Some(converted) = try_enum_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
@@ -1220,35 +1290,18 @@ fn io_generated_default<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
     typ: Value<'v>,
     name: &str,
-    register: bool,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     match typ.get_type() {
         "NetType" => {
-            let heap = eval.heap();
-            let net_id = generate_net_id();
-            let mut final_name = name.to_string();
-
-            if register {
-                if let Some(ctx) = eval.context_value() {
-                    final_name = ctx.register_net(net_id, &final_name)?;
-                }
-            }
-
-            Ok(heap
-                .alloc(NetValue::new(
-                    net_id,
-                    final_name,
-                    starlark::collections::SmallMap::new(),
-                    Value::new_none(),
-                ))
-                .to_value())
+            // Invoke the NetType constructor to apply defaults and extract metadata
+            let instance_name = eval.heap().alloc_str(name).to_value();
+            eval.eval_function(typ, &[instance_name], &[])
         }
         "InterfaceFactory" => {
             let instance_name = eval.heap().alloc_str(name).to_value();
             eval.eval_function(typ, &[instance_name], &[])
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
         }
-        _ => default_for_type(eval, typ),
+        _ => default_for_type(eval, typ).map_err(starlark::Error::from),
     }
 }
 
@@ -1585,13 +1638,13 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 // Value provided by parent - validate/convert it
                 let value = validate_or_convert(&name, provided, typ, None, eval)?;
 
-                // Determine metadata default
+                // When a value is provided, only use explicit default for metadata
+                // Don't synthesize defaults since actual_value already contains the value
                 let metadata_default = if let Some(explicit_default) = default {
                     validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
                     Some(explicit_default)
                 } else {
-                    // Synthesize default without side effects (no net registration)
-                    Some(io_generated_default(eval, typ, &name, false)?)
+                    None
                 };
 
                 (value, metadata_default)
@@ -1602,7 +1655,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     (default_val, Some(default_val))
                 } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
                     // Generate and register nets/interfaces for optional Net/Interface types
-                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    let generated = io_generated_default(eval, typ, &name)?;
                     (generated, Some(generated))
                 } else {
                     // Other types: return None but record a default for metadata
@@ -1628,7 +1681,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     validate_type(name.as_str(), default_val, typ, eval.heap())?;
                     (default_val, Some(default_val))
                 } else {
-                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    let generated = io_generated_default(eval, typ, &name)?;
                     (generated, Some(generated))
                 }
             };

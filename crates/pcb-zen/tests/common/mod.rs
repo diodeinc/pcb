@@ -174,6 +174,8 @@ macro_rules! star_snapshot {
 
         let mut filters = vec![
             (temp_dir_pattern.as_ref(), "[TEMP_DIR]"),
+            // Sanitize net IDs for stable snapshots
+            (r#"id: \d+"#, "id: <ID>"),
         ];
 
         // Add cache directory filter if it exists

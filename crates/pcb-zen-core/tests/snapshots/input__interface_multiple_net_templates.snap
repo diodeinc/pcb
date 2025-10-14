@@ -17,27 +17,18 @@ Module {
                         Net {
                             name: "MCU_EN",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "GND": FrozenValue(
                         Net {
                             name: "MCU_GND",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "VCC": FrozenValue(
                         Net {
                             name: "MCU_3V3",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },
@@ -64,27 +55,18 @@ Module {
                         Net {
                             name: "SENSOR_EN",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "VDD": FrozenValue(
                         Net {
                             name: "SENSOR_3V3",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "VSS": FrozenValue(
                         Net {
                             name: "SENSOR_GND",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },

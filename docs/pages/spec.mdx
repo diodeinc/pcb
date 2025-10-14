@@ -691,6 +691,119 @@ add_property("layout_group", "power_supply")
 add_property("critical", True)
 ```
 
+### builtin.net(type_name, **fields)
+
+**Built-in function** that creates custom typed net constructors with optional field parameters.
+
+```python
+# Create a basic net type (equivalent to the builtin Net)
+Net = builtin.net("Net")
+
+# Create a typed net with field() specifications (with defaults)
+Power = builtin.net("Power", 
+    voltage=field(str, "3.3V"),
+    max_current=field(int, 1000)
+)
+
+# Create a typed net with direct type constructors (no defaults)
+Signal = builtin.net("Signal", frequency=int, slew_rate=str)
+
+# Create a typed net with physical value fields
+load("@stdlib/units.zen", "Voltage", "VoltageRange")
+Supply = builtin.net("Supply", 
+    voltage=Voltage,
+    range=VoltageRange
+)
+
+# Create a typed net with enum fields
+Level = enum("LOW", "HIGH")
+DigitalSignal = builtin.net("DigitalSignal", level=Level)
+```
+
+**Parameters:**
+
+- `type_name`: String name for the net type (required, positional)
+- `**fields`: Keyword arguments defining optional typed fields
+  - Each field can be a `field()` spec (with default), a type constructor (str/int/float/bool), an enum type, or a physical value type
+
+**Field Specifications:**
+
+Fields accept any of these specifications:
+
+- `field(type, default)` - Typed field with a default value (from starlark's builtin `field()`)
+- `str`, `int`, `float`, `bool` - Direct type constructors (no default)
+- `EnumType` - Enum type created with `enum()`
+- `Voltage`, `Current`, etc. - Physical value types from stdlib
+
+**Usage:**
+
+All fields are **optional** during net instantiation - you can create a net without providing any field values:
+
+```python
+Power = builtin.net("Power", voltage=field(str, "3.3V"), max_current=field(int, 1000))
+
+# Provide all fields
+vcc = Power("VCC", voltage="5V", max_current=2000)
+
+# Provide some fields (others get defaults from field() specs)
+vdd = Power("VDD", voltage="3.3V")  # max_current uses default 1000
+
+# Provide no fields (all use defaults from field() specs)
+v3v3 = Power("3V3")  # voltage="3.3V", max_current=1000
+
+# Access field values as attributes
+print(vcc.voltage)        # "5V"
+print(vcc.max_current)    # 2000
+```
+
+**Field Access:**
+
+- Fields can be accessed as attributes on net instances: `net.field_name`
+- If a field was not provided and has no default, accessing it will fail
+- Fields are stored in the net's properties and can be introspected
+
+**Type Validation:**
+
+- Field values are validated at net instantiation time using starlark's type system
+- Type mismatches produce clear error messages:
+  ```python
+  Power = builtin.net("Power", voltage=str)
+  vcc = Power("VCC", voltage=123)  # Error: Field 'voltage' has wrong type: expected str, got int
+  ```
+- Validation works uniformly for all type specifications: builtin types, field() wrappers, enums, and custom types
+
+**Typical Use Cases:**
+
+```python
+# Power nets with voltage specifications
+Power = builtin.net("Power", voltage=field(str, "3.3V"))
+vcc_3v3 = Power("VCC_3V3", voltage="3.3V")
+vcc_5v = Power("VCC_5V", voltage="5V")
+
+# Clock signals with frequency metadata
+Clock = builtin.net("Clock", frequency=int)
+main_clk = Clock("MAIN_CLK", frequency=8000000)
+rtc_clk = Clock("RTC_CLK", frequency=32768)
+
+# Digital signals with logic level
+Level = enum("1V8", "3V3", "5V")
+Gpio = builtin.net("Gpio", level=Level)
+gpio_pin = Gpio("GPIO_1", level=Level("3V3"))
+
+# Power rails with electrical specifications
+load("@stdlib/units.zen", "Voltage", "Current", "unit")
+PowerRail = builtin.net("PowerRail", 
+    nominal_voltage=Voltage,
+    max_current=Current
+)
+main_rail = PowerRail("MAIN_RAIL",
+    nominal_voltage=unit("3.3V", Voltage),
+    max_current=unit("2A", Current)
+)
+```
+
+**Returns:** A callable net type constructor that creates typed net instances
+
 ### builtin.physical_range(unit)
 
 **Built-in function** that creates unit-specific range constructor types for defining bounded physical value ranges.

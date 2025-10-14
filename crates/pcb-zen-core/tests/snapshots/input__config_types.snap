@@ -17,9 +17,6 @@ Module {
                         Net {
                             name: "TEST",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },
@@ -113,10 +110,11 @@ Module {
         required: true,
         default_value: Some(
             Object {
-                "id": Number(1),
                 "name": String("net_io"),
-                "original_name": Null,
+                "net_id": Number(1),
+                "original_name": String("net_io"),
                 "properties": Object {},
+                "type_name": String("Net"),
             },
         ),
         help: None,
@@ -127,10 +125,11 @@ Module {
         required: false,
         default_value: Some(
             Object {
-                "id": Number(2),
                 "name": String("opt_net_io"),
-                "original_name": Null,
+                "net_id": Number(2),
+                "original_name": String("opt_net_io"),
                 "properties": Object {},
+                "type_name": String("Net"),
             },
         ),
         help: None,
@@ -155,16 +154,18 @@ Module {
             Object {
                 "fields": Object {
                     "gnd": Object {
-                        "id": Number(4),
                         "name": String("power_io_gnd"),
-                        "original_name": Null,
+                        "net_id": Number(4),
+                        "original_name": String("power_io_gnd"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                     "vcc": Object {
-                        "id": Number(3),
                         "name": String("power_io_vcc"),
-                        "original_name": Null,
+                        "net_id": Number(3),
+                        "original_name": String("power_io_vcc"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                 },
                 "promotion_by_type": Object {
@@ -194,16 +195,18 @@ Module {
             Object {
                 "fields": Object {
                     "gnd": Object {
-                        "id": Number(6),
                         "name": String("opt_power_io_gnd"),
-                        "original_name": Null,
+                        "net_id": Number(6),
+                        "original_name": String("opt_power_io_gnd"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                     "vcc": Object {
-                        "id": Number(5),
                         "name": String("opt_power_io_vcc"),
-                        "original_name": Null,
+                        "net_id": Number(5),
+                        "original_name": String("opt_power_io_vcc"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                 },
                 "promotion_by_type": Object {
@@ -237,22 +240,25 @@ Module {
             Object {
                 "fields": Object {
                     "clock": Object {
-                        "id": Number(8),
                         "name": String("bus_io_clock"),
-                        "original_name": Null,
+                        "net_id": Number(8),
+                        "original_name": String("bus_io_clock"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                     "data": Object {
-                        "id": Number(7),
                         "name": String("bus_io_data"),
-                        "original_name": Null,
+                        "net_id": Number(7),
+                        "original_name": String("bus_io_data"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                     "enable": Object {
-                        "id": Number(9),
                         "name": String("bus_io_enable"),
-                        "original_name": Null,
+                        "net_id": Number(9),
+                        "original_name": String("bus_io_enable"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                 },
                 "promotion_by_type": Object {
@@ -316,22 +322,25 @@ Module {
                     "bus": Object {
                         "fields": Object {
                             "clock": Object {
-                                "id": Number(13),
                                 "name": String("system_io_bus_clock"),
-                                "original_name": Null,
+                                "net_id": Number(13),
+                                "original_name": String("system_io_bus_clock"),
                                 "properties": Object {},
+                                "type_name": String("Net"),
                             },
                             "data": Object {
-                                "id": Number(12),
                                 "name": String("system_io_bus_data"),
-                                "original_name": Null,
+                                "net_id": Number(12),
+                                "original_name": String("system_io_bus_data"),
                                 "properties": Object {},
+                                "type_name": String("Net"),
                             },
                             "enable": Object {
-                                "id": Number(14),
                                 "name": String("system_io_bus_enable"),
-                                "original_name": Null,
+                                "net_id": Number(14),
+                                "original_name": String("system_io_bus_enable"),
                                 "properties": Object {},
+                                "type_name": String("Net"),
                             },
                         },
                         "promotion_by_type": Object {
@@ -341,16 +350,18 @@ Module {
                     "power": Object {
                         "fields": Object {
                             "gnd": Object {
-                                "id": Number(11),
                                 "name": String("system_io_power_gnd"),
-                                "original_name": Null,
+                                "net_id": Number(11),
+                                "original_name": String("system_io_power_gnd"),
                                 "properties": Object {},
+                                "type_name": String("Net"),
                             },
                             "vcc": Object {
-                                "id": Number(10),
                                 "name": String("system_io_power_vcc"),
-                                "original_name": Null,
+                                "net_id": Number(10),
+                                "original_name": String("system_io_power_vcc"),
                                 "properties": Object {},
+                                "type_name": String("Net"),
                             },
                         },
                         "promotion_by_type": Object {
@@ -358,10 +369,11 @@ Module {
                         },
                     },
                     "reset": Object {
-                        "id": Number(15),
                         "name": String("system_io_reset"),
-                        "original_name": Null,
+                        "net_id": Number(15),
+                        "original_name": String("system_io_reset"),
                         "properties": Object {},
+                        "type_name": String("Net"),
                     },
                 },
                 "promotion_by_type": Object {

@@ -8,8 +8,8 @@ use starlark::starlark_module;
 use starlark::values::types::record::field::FieldGen;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
-    starlark_value, Coerce, Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
-    Value, ValueLike,
+    starlark_value, Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType,
+    StarlarkValue, Trace, Value, ValueLike,
 };
 
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface_validation::ensure_field_compat;
-use crate::lang::net::{generate_net_id, NetValue};
+use crate::lang::net::NetValue;
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -78,27 +78,6 @@ impl InstancePrefix {
 }
 
 /// Unified helper to allocate a net with proper registration
-fn alloc_net<'v>(
-    name_hint: &str,
-    props: SmallMap<String, Value<'v>>,
-    symbol: Value<'v>,
-    heap: &'v Heap,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Value<'v>> {
-    let net_id = generate_net_id();
-    let final_name = if let Some(ctx) = eval
-        .module()
-        .extra_value()
-        .and_then(|e| e.downcast_ref::<ContextValue>())
-    {
-        ctx.register_net(net_id, name_hint)?
-    } else {
-        name_hint.to_owned()
-    };
-
-    Ok(heap.alloc(NetValue::new(net_id, final_name, props, symbol)))
-}
-
 /// Helper to check if an interface factory has exactly one net field
 fn is_single_net_interface<'v, V>(factory: &InterfaceFactoryGen<V>) -> bool
 where
@@ -277,7 +256,6 @@ fn clone_net_template<'v>(
         new_net.id(),
         final_name,
         new_net.properties().clone(),
-        new_net.symbol().to_value(),
     )))
 }
 
@@ -317,17 +295,11 @@ fn create_field_value<'v>(
     }
 
     // Handle field() specifications specially - extract default value
-    if field_spec.get_type() == "field" {
-        return if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
-            Ok(field_obj.default().unwrap().to_value())
-        } else if let Some(field_obj) =
-            field_spec.downcast_ref::<FieldGen<starlark::values::FrozenValue>>()
-        {
-            Ok(field_obj.default().unwrap().to_value())
-        } else {
-            Err(anyhow::anyhow!("Invalid field specification"))
-        };
-    }
+    if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
+        return Ok(field_obj.default().unwrap().to_value());
+    } else if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        return Ok(field_obj.default().unwrap().to_value());
+    };
 
     // Handle different field types
     let child_prefix = prefix.child(field_name);
@@ -346,8 +318,11 @@ fn create_field_value<'v>(
             eval,
         )
     } else if field_spec.get_type() == "NetType" {
+        // Invoke the NetType constructor to apply defaults and extract metadata
         let new_name = compute_net_name(prefix, None, Some(field_name), suffix_net_name, eval);
-        alloc_net(&new_name, SmallMap::new(), Value::new_none(), heap, eval)
+        let args = vec![heap.alloc(new_name)];
+        eval.eval_function(field_spec, &args, &[])
+            .map_err(|e| e.into_anyhow())
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
         instantiate_interface(field_spec, &child_prefix, heap, eval)
@@ -471,7 +446,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for UsingGen<V> {
 /// Build a consistent parameter spec for interface factories, excluding reserved field names
 fn build_interface_param_spec<'v, V: ValueLike<'v>>(
     fields: &SmallMap<String, V>,
-) -> ParametersSpec<starlark::values::FrozenValue> {
+) -> ParametersSpec<FrozenValue> {
     ParametersSpec::new_parts(
         "InterfaceInstance",
         std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
@@ -494,7 +469,7 @@ pub struct InterfaceTypeData {
     id: TypeInstanceId,
     /// Creating these on every invoke is pretty expensive (profiling shows)
     /// so compute them in advance and cache.
-    parameter_spec: ParametersSpec<starlark::values::FrozenValue>,
+    parameter_spec: ParametersSpec<FrozenValue>,
     /// Track which fields are marked with using() for promotion, by type name
     promotion_by_type: SmallMap<String, String>,
 }
@@ -526,7 +501,7 @@ impl InterfaceCell for Value<'_> {
     }
 }
 
-impl InterfaceCell for starlark::values::FrozenValue {
+impl InterfaceCell for FrozenValue {
     type InterfaceTypeDataOpt = Option<Arc<InterfaceTypeData>>;
 
     fn get_or_init_ty(
@@ -551,7 +526,7 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     interface_type_data: V::InterfaceTypeDataOpt,
     fields: SmallMap<String, V>,
     post_init_fn: Option<V>,
-    param_spec: ParametersSpec<starlark::values::FrozenValue>,
+    param_spec: ParametersSpec<FrozenValue>,
     promotion_by_type: SmallMap<String, String>,
 }
 
@@ -977,7 +952,7 @@ mod tests {
     use starlark::assert::Assert;
     use starlark::environment::GlobalsBuilder;
 
-    use crate::lang::component::component_globals;
+    use crate::lang::component::{component_globals, init_net_global};
     use crate::lang::interface::interface_globals;
 
     #[test]
@@ -986,6 +961,7 @@ mod tests {
         // Extend the default globals with the language constructs we need.
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1005,6 +981,7 @@ eval_type(Power).matches(instance)
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1022,6 +999,7 @@ assert_eq(str(Power), "Power")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1062,6 +1040,7 @@ assert_eq(sorted(dir(system_instance.power)), ["gnd", "vcc"])
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1118,6 +1097,7 @@ assert_eq(instance5.vcc.name, "PWR")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1148,6 +1128,7 @@ assert_eq(power.NET.name, "_VCC")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1175,6 +1156,7 @@ assert_eq(power_default.NET.name, "_NET")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1190,6 +1172,7 @@ assert_eq(power_default.NET.name, "_NET")
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1210,6 +1193,7 @@ interface(
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 
@@ -1231,6 +1215,7 @@ interface(
         let mut a = Assert::new();
         a.globals_add(|builder: &mut GlobalsBuilder| {
             component_globals(builder);
+            init_net_global(builder);
             interface_globals(builder);
         });
 

@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+Error: test.zen:2:1-45 Remote fetch for Github { user: "diodeinc", repo: "stdlib", rev: "HEAD", path: "units.zen" } blocked because --offline mode is enabled. Run 'pcb vendor' to download dependencies locally.

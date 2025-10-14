@@ -1,0 +1,69 @@
+# Example demonstrating typed nets using builtin.net_type()
+
+# Create different net types
+Net = builtin.net_type("Net")
+Power = builtin.net_type("Power")
+Ground = builtin.net_type("Ground")
+
+# Create instances of each type with names
+net1 = Net("data_line")
+vcc = Power("vcc_3v3")
+gnd = Ground("gnd")
+
+# Net type casting - convert between net types
+print("\n=== Net Type Casting ===")
+gnd2 = Ground("foobar")
+power_from_gnd = Power(gnd2)  # Cast Ground to Power
+print("Cast Ground to Power:", power_from_gnd)
+print("  name:", power_from_gnd.name)
+print("  type:", power_from_gnd.type)
+
+# Cast with name override
+power_with_new_name = Power(gnd2, name="vcc_override")
+print("\nCast with name override:", power_with_new_name)
+print("  name:", power_with_new_name.name)
+print("  original_name:", power_with_new_name.original_name)
+
+# Type checking with casting
+def accept_power(powa: Power):
+    print("\nAccepted power net:", powa)
+
+accept_power(Power(Ground("test_cast")))
+
+# Access attributes
+print("Net instance:", net1)
+print("  name:", net1.name)
+print("  original_name:", net1.original_name)
+print("  type:", net1.type)
+print("  net_id:", net1.net_id)
+
+print("\nPower net:", vcc)
+print("  name:", vcc.name)
+print("  original_name:", vcc.original_name)
+print("  type:", vcc.type)
+print("  net_id:", vcc.net_id)
+
+print("\nGround net:", gnd)
+print("  name:", gnd.name)
+print("  original_name:", gnd.original_name)
+print("  type:", gnd.type)
+print("  net_id:", gnd.net_id)
+
+# Create net with optional name (defaults to empty string, then gets auto-named)
+unnamed_net = Net()
+print("\nUnnamed net:", unnamed_net)
+print("  name:", unnamed_net.name)
+print("  net_id:", unnamed_net.net_id)
+
+# Create net using name as keyword argument
+net2 = Net(name="control_signal")
+print("\nNet with keyword name:", net2)
+print("  name:", net2.name)
+print("  net_id:", net2.net_id)
+
+print(Net())
+
+# The type system ensures these are distinct types
+# Net("x") has type "Net"
+# Power("y") has type "Power"
+# Ground("z") has type "Ground"
