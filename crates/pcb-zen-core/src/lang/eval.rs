@@ -33,6 +33,8 @@ use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
     module::{module_globals, FrozenModuleValue, ModuleLoader},
+    net::NetType,
+    symbol::SymbolType,
     test_bench::test_bench_globals,
 };
 
@@ -949,10 +951,16 @@ impl EvalContext {
         let Some(source_path) = self.get_source_path() else {
             return;
         };
-        if source_path.file_name().and_then(|name| name.to_str()) != Some("units.zen") {
-            return;
-        }
+        let file_name = source_path.file_name().and_then(|name| name.to_str());
 
+        if file_name == Some("units.zen") {
+            self.hijack_units();
+        } else if file_name == Some("interfaces.zen") {
+            self.hijack_interfaces();
+        }
+    }
+
+    fn hijack_units(&mut self) {
         use pcb_sch::PhysicalUnit;
         let heap = self.module.heap();
 
@@ -1033,6 +1041,57 @@ impl EvalContext {
                 "MagneticFlux",
                 heap.alloc_simple(PhysicalValueType::new(PhysicalUnit::Webers.into())),
             );
+        }
+    }
+
+    fn hijack_interfaces(&mut self) {
+        use pcb_sch::PhysicalUnit;
+        let heap = self.module.heap();
+
+        // Hijack Power, Ground, Analog, Gpio, Pwm to use builtin.net()
+        // This provides backcompat with old stdlib while using new implementations
+        // Following make_default_net_type pattern to add symbol, voltage, impedance fields
+
+        let make_net_type = |name: &str, with_voltage: bool, with_impedance: bool| {
+            let mut fields = SmallMap::new();
+            fields.insert("symbol".to_owned(), heap.alloc(SymbolType));
+            if with_voltage {
+                fields.insert(
+                    "voltage".to_owned(),
+                    heap.alloc(PhysicalRangeType::new(PhysicalUnit::Volts.into())),
+                );
+            }
+            if with_impedance {
+                fields.insert(
+                    "impedance".to_owned(),
+                    heap.alloc(PhysicalValueType::new(PhysicalUnit::Ohms.into())),
+                );
+            }
+            NetType {
+                type_name: name.to_string(),
+                fields,
+            }
+        };
+
+        if self.module.get("Power").is_some() {
+            self.module
+                .set("Power", heap.alloc(make_net_type("Power", true, false)));
+        }
+        if self.module.get("Ground").is_some() {
+            self.module
+                .set("Ground", heap.alloc(make_net_type("Ground", false, false)));
+        }
+        if self.module.get("Analog").is_some() {
+            self.module
+                .set("Analog", heap.alloc(make_net_type("Analog", true, true)));
+        }
+        if self.module.get("Gpio").is_some() {
+            self.module
+                .set("Gpio", heap.alloc(make_net_type("Gpio", true, true)));
+        }
+        if self.module.get("Pwm").is_some() {
+            self.module
+                .set("Pwm", heap.alloc(make_net_type("Pwm", true, true)));
         }
     }
 
