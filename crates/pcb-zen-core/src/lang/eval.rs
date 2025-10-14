@@ -1048,7 +1048,7 @@ impl EvalContext {
         use pcb_sch::PhysicalUnit;
         let heap = self.module.heap();
 
-        // Hijack Power, Ground, Analog, Gpio, Pwm to use builtin.net()
+        // Hijack Power, Ground, Analog, Gpio, Pwm to use builtin.net_type()
         // This provides backcompat with old stdlib while using new implementations
         // Following make_default_net_type pattern to add symbol, voltage, impedance fields
 

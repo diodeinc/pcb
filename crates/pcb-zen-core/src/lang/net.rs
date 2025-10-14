@@ -315,10 +315,10 @@ fn builtin_net_methods(methods: &mut MethodsBuilder) {
 
 /// A callable type constructor for creating typed nets
 ///
-/// Created by `builtin.net(name)`, e.g.:
-/// - `Net = builtin.net("Net")`
-/// - `Power = builtin.net("Power")`
-/// - `Ground = builtin.net("Ground")`
+/// Created by `builtin.net_type(name)`, e.g.:
+/// - `Net = builtin.net_type("Net")`
+/// - `Power = builtin.net_type("Power")`
+/// - `Ground = builtin.net_type("Ground")`
 #[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, Allocative, NoSerialize)]
 #[repr(C)]
 pub struct NetTypeGen<V> {

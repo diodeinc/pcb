@@ -1,9 +1,9 @@
-# Example demonstrating typed nets using builtin.net()
+# Example demonstrating typed nets using builtin.net_type()
 
 # Create different net types
-Net = builtin.net("Net")
-Power = builtin.net("Power")
-Ground = builtin.net("Ground")
+Net = builtin.net_type("Net")
+Power = builtin.net_type("Power")
+Ground = builtin.net_type("Ground")
 
 # Create instances of each type with names
 net1 = Net("data_line")

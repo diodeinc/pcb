@@ -115,7 +115,7 @@ snapshot_eval!(net_duplicate_names_uniq, {
 snapshot_eval!(net_field_with_field_spec, {
     "test.zen" => r#"
         # Create a net type with field() specs
-        Power = builtin.net("Power", voltage=field(str, "3.3V"))
+        Power = builtin.net_type("Power", voltage=field(str, "3.3V"))
         
         # Create instances with different voltages
         vcc = Power("VCC", voltage="5V")
@@ -133,7 +133,7 @@ snapshot_eval!(net_field_with_field_spec, {
 snapshot_eval!(net_field_with_direct_type, {
     "test.zen" => r#"
         # Create a net type with direct type constructor
-        Signal = builtin.net("Signal", frequency=int)
+        Signal = builtin.net_type("Signal", frequency=int)
         
         # Create instance
         clk = Signal("CLK", frequency=8000000)
@@ -146,7 +146,7 @@ snapshot_eval!(net_field_with_direct_type, {
 snapshot_eval!(net_field_type_mismatch, {
     "test.zen" => r#"
         # Create a net type with string field
-        Power = builtin.net("Power", voltage=str)
+        Power = builtin.net_type("Power", voltage=str)
         
         # This should fail - providing int instead of str
         vcc = Power("VCC", voltage=123)
@@ -156,7 +156,7 @@ snapshot_eval!(net_field_type_mismatch, {
 snapshot_eval!(net_field_default_applied, {
     "test.zen" => r#"
         # Create a net type with defaulted field
-        Power = builtin.net("Power", voltage=field(str, "3.3V"))
+        Power = builtin.net_type("Power", voltage=field(str, "3.3V"))
         
         # Create instance without providing voltage - should get default
         vcc = Power("VCC")
@@ -170,7 +170,7 @@ snapshot_eval!(net_field_with_enum, {
     "test.zen" => r#"
         # Create enum and net type with enum field
         Level = enum("LOW", "HIGH")
-        Signal = builtin.net("Signal", level=Level)
+        Signal = builtin.net_type("Signal", level=Level)
         
         # Create instances
         sig1 = Signal("SIG1", level=Level("HIGH"))
@@ -186,7 +186,7 @@ snapshot_eval!(net_field_with_physical_value, {
         load("@stdlib/units.zen", "Voltage", "unit")
         
         # Create net type with physical value field
-        Power = builtin.net("Power", voltage=Voltage)
+        Power = builtin.net_type("Power", voltage=Voltage)
         
         # Create instance
         vcc = Power("VCC", voltage=unit("5V", Voltage))
@@ -198,7 +198,7 @@ snapshot_eval!(net_field_with_physical_value, {
 snapshot_eval!(net_field_multiple_fields, {
     "test.zen" => r#"
         # Create net type with multiple fields of different types
-        Power = builtin.net("Power", 
+        Power = builtin.net_type("Power", 
             voltage=field(str, "3.3V"),
             max_current=field(int, 1000),
             regulated=field(bool, True)

@@ -196,7 +196,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         Ok(PhysicalValueType::new(unit.into()))
     }
 
-    fn net<'v>(
+    fn net_type<'v>(
         #[allow(unused_variables)] this: &Builtin,
         name: String,
         #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,

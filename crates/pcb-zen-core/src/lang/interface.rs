@@ -8,8 +8,8 @@ use starlark::starlark_module;
 use starlark::values::types::record::field::FieldGen;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
-    starlark_value, Coerce, Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
-    Value, ValueLike,
+    starlark_value, Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType,
+    StarlarkValue, Trace, Value, ValueLike,
 };
 
 use std::sync::Arc;
@@ -295,17 +295,11 @@ fn create_field_value<'v>(
     }
 
     // Handle field() specifications specially - extract default value
-    if field_spec.get_type() == "field" {
-        return if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
-            Ok(field_obj.default().unwrap().to_value())
-        } else if let Some(field_obj) =
-            field_spec.downcast_ref::<FieldGen<starlark::values::FrozenValue>>()
-        {
-            Ok(field_obj.default().unwrap().to_value())
-        } else {
-            Err(anyhow::anyhow!("Invalid field specification"))
-        };
-    }
+    if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
+        return Ok(field_obj.default().unwrap().to_value());
+    } else if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        return Ok(field_obj.default().unwrap().to_value());
+    };
 
     // Handle different field types
     let child_prefix = prefix.child(field_name);
@@ -452,7 +446,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for UsingGen<V> {
 /// Build a consistent parameter spec for interface factories, excluding reserved field names
 fn build_interface_param_spec<'v, V: ValueLike<'v>>(
     fields: &SmallMap<String, V>,
-) -> ParametersSpec<starlark::values::FrozenValue> {
+) -> ParametersSpec<FrozenValue> {
     ParametersSpec::new_parts(
         "InterfaceInstance",
         std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
@@ -475,7 +469,7 @@ pub struct InterfaceTypeData {
     id: TypeInstanceId,
     /// Creating these on every invoke is pretty expensive (profiling shows)
     /// so compute them in advance and cache.
-    parameter_spec: ParametersSpec<starlark::values::FrozenValue>,
+    parameter_spec: ParametersSpec<FrozenValue>,
     /// Track which fields are marked with using() for promotion, by type name
     promotion_by_type: SmallMap<String, String>,
 }
@@ -507,7 +501,7 @@ impl InterfaceCell for Value<'_> {
     }
 }
 
-impl InterfaceCell for starlark::values::FrozenValue {
+impl InterfaceCell for FrozenValue {
     type InterfaceTypeDataOpt = Option<Arc<InterfaceTypeData>>;
 
     fn get_or_init_ty(
@@ -532,7 +526,7 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     interface_type_data: V::InterfaceTypeDataOpt,
     fields: SmallMap<String, V>,
     post_init_fn: Option<V>,
-    param_spec: ParametersSpec<starlark::values::FrozenValue>,
+    param_spec: ParametersSpec<FrozenValue>,
     promotion_by_type: SmallMap<String, String>,
 }
 
