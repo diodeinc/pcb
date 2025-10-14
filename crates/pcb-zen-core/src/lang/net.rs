@@ -463,6 +463,15 @@ pub(crate) fn validate_field<'v>(
     provided_value: Option<Value<'v>>,
     heap: &'v Heap,
 ) -> starlark::Result<Option<Value<'v>>> {
+    // Try to extract default from field() spec first (before type compilation)
+    let default = if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value>>() {
+        fg.default().map(|d| d.to_value())
+    } else if let Some(fg) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        fg.default().map(|d| d.to_value())
+    } else {
+        None
+    };
+
     // Extract TypeCompiled from field spec (FieldGen or direct type)
     let type_compiled = if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
         Ok(*field_gen.typ())
@@ -473,9 +482,10 @@ pub(crate) fn validate_field<'v>(
     let type_compiled = match type_compiled {
         Ok(t) => t,
         Err(_err) => {
-            // This means that field_spec is not a valid type annotation.
-            // Unfortunately, we need to allow this as we have such fields
-            return Ok(None);
+            // Type compilation failed. If there's a default value, use it without validation.
+            // If there's a provided value, we can't validate it, so just use it.
+            // This is needed for forward compatibility with new field types.
+            return Ok(provided_value.or(default));
         }
     };
 
@@ -495,15 +505,7 @@ pub(crate) fn validate_field<'v>(
             .into())
         }
     } else {
-        // No provided value - try to extract default from field() spec
-        let default = if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value>>() {
-            fg.default().map(|d| d.to_value())
-        } else if let Some(fg) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
-            fg.default().map(|d| d.to_value())
-        } else {
-            None
-        };
-
+        // No provided value - use default if available
         Ok(default)
     }
 }
