@@ -1596,7 +1596,18 @@ class SetupBoard(Step):
                     setattr(ds, ds_attr, pcbnew.FromMM(value))
                     logger.info(f"Set {display_name}: {value}mm")
 
+    def _setup_title_block(self):
+        """Configure the title block with variable placeholders."""
+        title_block = self.board.GetTitleBlock()
+        title_block.SetTitle("${PCB_NAME}")
+        title_block.SetDate("${CURRENT_DATE}")
+        title_block.SetRevision("${PCB_VERSION}")
+        logger.info("Configured title block with variable placeholders")
+
     def run(self):
+        # Setup title block with variable placeholders
+        self._setup_title_block()
+
         # Apply board config logic
         should_apply_config = self.board_config_path and self.sync_board_config
 
