@@ -6,10 +6,9 @@ Severity = enum("error", "warning", "advice")
 def ElectricalCheck(check_fn: typing.Callable, **kwargs):
     check_fn(**kwargs)
 
-
-Power = interface(
-    NET=Net("VCC", symbol=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")),
-    voltage=field(VoltageRange | None, None),
+Power = builtin.net_type(
+    "Power",
+    voltage=VoltageRange,
 )
 
 
@@ -27,7 +26,7 @@ def check_voltage_within(
         check(min_valid and max_valid, err_msg)
     def check_gen(power: Power, severity: Severity = severity, name: str = name):
         check_name = power.NET.name + "_" + name
-        if not power.voltage:
+        if not getattr(power, "voltage", None):
             return
         builtin.add_electrical_check(
             name=check_name,
