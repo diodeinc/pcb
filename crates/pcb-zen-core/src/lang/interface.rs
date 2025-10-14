@@ -5,7 +5,6 @@ use starlark::environment::GlobalsBuilder;
 use starlark::eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam};
 use starlark::starlark_complex_value;
 use starlark::starlark_module;
-use starlark::values::types::record::field::FieldGen;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
     starlark_value, Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType,
@@ -16,7 +15,7 @@ use std::sync::Arc;
 
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::net::NetValue;
+use crate::lang::net::{validate_field, NetValue};
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -215,17 +214,9 @@ fn create_field_value<'v>(
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    if let Some(provided) = provided_value {
-        // Value supplied by the caller - use it directly (validation should be done by caller)
-        return Ok(provided);
+    if let Some(value) = validate_field(field_name, field_spec, provided_value, heap)? {
+        return Ok(value);
     }
-
-    // Handle field() specifications specially - extract default value
-    if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
-        return Ok(field_obj.default().unwrap().to_value());
-    } else if let Some(field_obj) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
-        return Ok(field_obj.default().unwrap().to_value());
-    };
 
     // Handle different field types
     let child_prefix = prefix.child(field_name);
@@ -258,13 +249,6 @@ fn create_interface_instance<'v, V>(
 where
     V: ValueLike<'v> + InterfaceCell,
 {
-    // Validate provided values match field specs
-    // for (name, provided_value) in &provided_values {
-    //     if let Some(field_spec) = factory.fields.get(name) {
-    //         ensure_field_compat(field_spec.to_value(), *provided_value, name)?;
-    //     }
-    // }
-
     // Build the field map, recursively creating values where necessary
     let mut fields = SmallMap::with_capacity(factory.fields.len());
 
