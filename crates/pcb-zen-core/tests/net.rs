@@ -239,3 +239,53 @@ snapshot_eval!(interface_net_template_naming, {
         check(power.NET.name == "POWER", "Single-net interface should use instance name directly")
     "#,
 });
+
+snapshot_eval!(net_type_cast_preserves_name_across_modules, {
+    "component.zen" => r#"
+        # Component expecting plain Net (not Power interface)
+        P1 = io("P1", Net)
+        P2 = io("P2", Net)
+
+        Component(
+            name = "R",
+            prefix = "R",
+            footprint = "TEST:0402",
+            pin_defs = {"P1": "1", "P2": "2"},
+            pins = {"P1": P1, "P2": P2},
+            properties = {"value": "10kOhm", "type": "resistor"},
+        )
+    "#,
+    "child.zen" => r#"
+        # Child module that receives Power interface and passes to component
+        Power = interface(NET = using(Net()))
+        Ground = interface(NET = using(Net()))
+        
+        io_V3V3 = io("io_V3V3", Power)
+        io_GND = io("io_GND", Ground)
+        
+        Resistor = Module("component.zen")
+        
+        # This should trigger interface promotion: Power -> Net
+        # The net name "3V3" should be preserved, not qualified as "child.R1.3V3"
+        R1 = Resistor(name = "R1", P1 = io_V3V3, P2 = io_GND)
+    "#,
+    "test.zen" => r#"
+        # Parent module that creates Power interface with specific name
+        Power = interface(NET = using(Net()))
+        Ground = interface(NET = using(Net()))
+        
+        Child = Module("child.zen")
+        
+        V3V3 = Power("3V3")
+        GND = Ground("GND")
+        
+        print("Created Power:", V3V3.NET.name)
+        print("Created Ground:", GND.NET.name)
+        
+        Child(name = "child", io_V3V3 = V3V3, io_GND = GND)
+        
+        # Verify net names are preserved (not qualified as "child.R1.3V3")
+        check(V3V3.NET.name == "3V3", "Power net name should be '3V3', not qualified")
+        check(GND.NET.name == "GND", "Ground net name should be 'GND', not qualified")
+    "#
+});

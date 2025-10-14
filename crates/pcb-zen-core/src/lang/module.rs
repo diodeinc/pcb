@@ -1152,29 +1152,23 @@ fn try_net_conversion<'v>(
     };
 
     // Check if value is a NetValue
-    let actual_type_name = value
-        .downcast_ref::<NetValue>()
-        .map(|nv| nv.net_type_name())
-        .or_else(|| {
-            value
-                .downcast_ref::<FrozenNetValue>()
-                .map(|fnv| fnv.net_type_name())
-        });
-
-    let Some(actual_type_name) = actual_type_name else {
-        return Ok(None); // Value is not a NetValue
-    };
-
-    // Only convert if expected type is "Net" and actual type is different
-    if expected_type_name == "Net" && actual_type_name != "Net" {
-        // Call Net(value) to convert typed net to base Net
-        let converted = eval
-            .eval_function(expected_typ, &[value], &[])
-            .map_err(|e| anyhow::anyhow!("Failed to convert {} to Net: {}", actual_type_name, e))?;
-        return Ok(Some(converted));
+    if let Some(nv) = value.downcast_ref::<NetValue>() {
+        let actual_type_name = nv.net_type_name();
+        // Only convert if expected type is "Net" and actual type is different
+        if expected_type_name == "Net" && actual_type_name != "Net" {
+            // Use with_net_type helper to cast the net type without creating a new instance
+            return Ok(Some(nv.with_net_type("Net", eval.heap())));
+        }
+    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
+        let actual_type_name = fnv.net_type_name();
+        // Only convert if expected type is "Net" and actual type is different
+        if expected_type_name == "Net" && actual_type_name != "Net" {
+            // Use with_net_type helper for frozen nets too
+            return Ok(Some(fnv.with_net_type("Net", eval.heap())));
+        }
     }
 
-    Ok(None) // No conversion needed
+    Ok(None) // No conversion needed or value is not a NetValue
 }
 
 // Helper function to attempt interface promotion when passing an interface to

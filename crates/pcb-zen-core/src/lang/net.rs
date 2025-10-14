@@ -264,6 +264,24 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             properties,
         })
     }
+
+    /// Create a new net with the same ID/name/properties but a different type name.
+    /// Used for casting between net types (e.g., Power -> Net).
+    pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            net_id: self.net_id,
+            name: self.name.clone(),
+            original_name: self.original_name.clone(),
+            type_name: new_type_name.to_string(),
+            properties,
+        })
+    }
 }
 
 #[starlark_module]
@@ -289,22 +307,9 @@ fn builtin_net_methods(methods: &mut MethodsBuilder) {
     }
 
     /// Convert this net to base Net type, preserving all properties
-    /// TODO: Deprecated - use `Net(...)` to cast instead
     #[starlark(attribute)]
     fn NET<'v>(this: &NetValue<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        let properties: SmallMap<String, Value<'v>> = this
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), v.to_value()))
-            .collect();
-
-        Ok(heap.alloc(NetValue {
-            net_id: this.net_id,
-            name: this.name.clone(),
-            original_name: this.original_name.clone(),
-            type_name: "Net".to_string(),
-            properties,
-        }))
+        Ok(this.with_net_type("Net", heap))
     }
 }
 
@@ -628,7 +633,7 @@ where
                     }
                 }
 
-                // Register net (or reuse existing registration for casts)
+                // Register net in the current module
                 let net_name = original_name.clone().unwrap_or_default();
                 let final_name = eval
                     .module()
@@ -638,6 +643,30 @@ where
                     .transpose()
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?
                     .unwrap_or_else(|| net_name.clone());
+
+                // Generate automatic moved directive for interface-like typed nets
+                // to maintain backward compatibility with old single-net interface naming
+                // Old format: {instance_name}_{LEGACY_SUFFIX} (e.g., "3V3_VCC" for Power)
+                // New format: {instance_name} (e.g., "3V3")
+                if base_net.is_none() && !net_name.is_empty() {
+                    // Map typed net names to their legacy interface field suffixes
+                    let legacy_suffix = match self.type_name.as_str() {
+                        "Power" => Some("VCC"),
+                        "Ground" => Some("GND"),
+                        _ => None,
+                    };
+
+                    if let Some(suffix) = legacy_suffix {
+                        let old_name = format!("{}_{}", net_name, suffix);
+                        if let Some(ctx) = eval
+                            .module()
+                            .extra_value()
+                            .and_then(|e| e.downcast_ref::<ContextValue>())
+                        {
+                            ctx.add_moved_directive(old_name, net_name.clone(), true);
+                        }
+                    }
+                }
 
                 Ok(heap.alloc(NetValue {
                     net_id,

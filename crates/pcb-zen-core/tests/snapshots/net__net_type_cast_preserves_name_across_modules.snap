@@ -1,0 +1,79 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+Created Power: 3V3
+Created Ground: GND
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Module {
+                name: "child",
+                source: "/child.zen",
+                children: [
+                    FrozenValue(
+                        Module {
+                            name: "R1",
+                            source: "/component.zen",
+                            children: [
+                                FrozenValue(
+                                    Component {
+                                        name: "R",
+                                        footprint: "TEST:0402",
+                                        prefix: "R",
+                                        connections: {
+                                            "P1": FrozenValue(
+                                                Net {
+                                                    name: "3V3",
+                                                    id: "<ID>",
+                                                },
+                                            ),
+                                            "P2": FrozenValue(
+                                                Net {
+                                                    name: "GND",
+                                                    id: "<ID>",
+                                                },
+                                            ),
+                                        },
+                                        properties: {
+                                            "__value__": FrozenValue(
+                                                PhysicalValue {
+                                                    value: 10000,
+                                                    tolerance: 0,
+                                                    unit: PhysicalUnitDims {
+                                                        current: -1,
+                                                        time: 0,
+                                                        voltage: 1,
+                                                        temp: 0,
+                                                    },
+                                                },
+                                            ),
+                                            "type": FrozenValue(
+                                                "resistor",
+                                            ),
+                                            "value": FrozenValue(
+                                                "10kOhm",
+                                            ),
+                                        },
+                                        symbol: FrozenValue(
+                                            Symbol {
+                                                name: None,
+                                                pins: {
+                                                    "1": "P1",
+                                                    "2": "P2",
+                                                },
+                                            },
+                                        ),
+                                    },
+                                ),
+                            ],
+                        },
+                    ),
+                ],
+            },
+        ),
+    ],
+}
+[]
