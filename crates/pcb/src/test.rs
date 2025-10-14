@@ -100,7 +100,7 @@ pub fn test(
 
             // Execute checks for each TestBench
             for testbench in testbenches {
-                let check_diagnostics = execute_testbench_checks(testbench);
+                let check_diagnostics = execute_testbench_checks(testbench, root_module);
                 diagnostics.diagnostics.extend(check_diagnostics);
             }
         }
@@ -129,6 +129,7 @@ pub fn test(
 /// Execute all deferred checks for a TestBench
 fn execute_testbench_checks(
     testbench: &pcb_zen_core::lang::test_bench::FrozenTestBenchValue,
+    root_module: &pcb_zen_core::FrozenModuleValue,
 ) -> Vec<pcb_zen_core::Diagnostic> {
     use pcb_zen_core::lang::test_bench::execute_deferred_check;
     use starlark::environment::Module;
@@ -144,14 +145,14 @@ fn execute_testbench_checks(
     let module = Module::new();
     let mut eval = Evaluator::new(&module);
 
-    for deferred_case in testbench.deferred_cases() {
-        if let Some(frozen_module) = &deferred_case.evaluated {
-            // FrozenModuleValue is ModuleValueGen<FrozenValue>, which is a complex starlark value
-            // We need to get it as a heap-allocated value to use in function calls
-            // Since it's already frozen, we can reference it directly through its identity
-            let module_value = heap.alloc_simple(frozen_module.clone());
+    for deferred_case in testbench.deferred_cases().iter() {
+        // Look up evaluated module from root_module children by name using find_at_path
+        let case_module = root_module
+            .find_at_path(&deferred_case.case_final_name)
+            .ok();
 
-            // Reconstruct inputs dict from frozen params
+        if let Some(module_value) = case_module {
+            // Reconstruct inputs dict from deferred case params
             let inputs_dict = heap
                 .alloc(AllocDict(
                     deferred_case

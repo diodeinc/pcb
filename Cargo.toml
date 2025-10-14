@@ -3,18 +3,18 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 repository = "https://github.com/diodeinc/pcb"
 homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
-starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "1851d265" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "2e40f1bb" }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "2e40f1bb" }
+starlark_derive = { git = "https://github.com/diodeinc/starlark-rust", rev = "2e40f1bb" }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "2e40f1bb" }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "2e40f1bb" }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.13.0" }
@@ -119,9 +119,6 @@ semver = "1.0"
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-
-# Optimize for size + performance
-[profile.release]
 lto = "fat"           # Maximum link-time optimization
 codegen-units = 1     # Better optimization
 strip = "debuginfo"   # Strip debug symbols

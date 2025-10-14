@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::{cmp::Ordering, fmt, hash::Hash, str::FromStr};
 
 use allocative::Allocative;
@@ -878,13 +880,6 @@ impl<'v> StarlarkValue<'v> for PhysicalUnitDims {
 
 starlark_simple_value!(PhysicalValue);
 
-impl crate::lang::eval::DeepCopyToHeap for PhysicalValue {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // PhysicalValue is Copy, so just allocate on dst heap
-        Ok(dst.alloc_simple(*self))
-    }
-}
-
 #[starlark::starlark_module]
 fn physical_value_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
@@ -985,10 +980,6 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
 
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn crate::lang::eval::DeepCopyToHeap>(self);
-    }
-
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(physical_value_methods)
@@ -1127,10 +1118,6 @@ impl PhysicalValueType {
     }
 
     fn type_instance_id(&self) -> TypeInstanceId {
-        use std::collections::HashMap;
-        use std::sync::Mutex;
-        use std::sync::OnceLock;
-
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
 
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -1330,13 +1317,6 @@ pub struct PhysicalRange {
 
 starlark_simple_value!(PhysicalRange);
 
-impl crate::lang::eval::DeepCopyToHeap for PhysicalRange {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        // PhysicalRange is Clone, so clone and allocate on dst heap
-        Ok(dst.alloc_simple(self.clone()))
-    }
-}
-
 impl fmt::Display for PhysicalRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let unit = self.r#type.unit;
@@ -1414,10 +1394,6 @@ impl PhysicalRange {
 
 #[starlark_value(type = PhysicalRange::TYPE)]
 impl<'v> StarlarkValue<'v> for PhysicalRange {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn crate::lang::eval::DeepCopyToHeap>(self);
-    }
-
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(range_methods)
@@ -1549,10 +1525,6 @@ impl PhysicalRangeType {
     }
 
     fn type_instance_id(&self) -> TypeInstanceId {
-        use std::collections::HashMap;
-        use std::sync::Mutex;
-        use std::sync::OnceLock;
-
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
 
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));

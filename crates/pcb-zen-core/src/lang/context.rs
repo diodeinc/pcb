@@ -1,16 +1,38 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::{cell::RefCell, fmt::Display};
+use std::{cell::RefCell, collections::HashSet, fmt::Display, path::Path};
 
 use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
-    values::{starlark_value, Freeze, FreezeResult, Freezer, StarlarkValue, Trace, Value},
+    codemap::ResolvedSpan,
+    errors::{EvalMessage, EvalSeverity},
+    eval::CallStack,
+    values::{
+        starlark_value, Freeze, FreezeError, FreezeResult, Freezer, FrozenValue, StarlarkValue,
+        Trace, Value, ValueLike,
+    },
 };
 
-use super::module::{parse_positions, FrozenModuleValue, ModuleValue};
+use starlark::collections::SmallMap;
+
+use crate::lang::eval::EvalContext;
+
+use super::module::{parse_positions, FrozenModuleValue, ModuleLoader, ModuleValue};
 use super::net::NetId;
+
+#[derive(Debug, Trace)]
+pub(crate) struct PendingChild<'v> {
+    pub(crate) loader: ModuleLoader,
+    pub(crate) final_name: String,
+    pub(crate) inputs: SmallMap<String, Value<'v>>,
+    pub(crate) properties: Option<SmallMap<String, Value<'v>>>,
+    pub(crate) provided_names: Vec<String>,
+    pub(crate) call_site_path: String,
+    pub(crate) call_site_span: ResolvedSpan,
+    pub(crate) call_stack: CallStack,
+}
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
@@ -28,7 +50,10 @@ pub(crate) struct ContextValue<'v> {
     /// The eval::Context that the current evaluator is running in.
     #[allocative(skip)]
     #[serde(skip)]
-    context: *const crate::lang::eval::EvalContext,
+    context: *const EvalContext,
+    #[allocative(skip)]
+    #[serde(skip)]
+    pending_children: RefCell<Vec<PendingChild<'v>>>,
 }
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
@@ -43,7 +68,17 @@ pub(crate) struct FrozenContextValue {
 impl Freeze for ContextValue<'_> {
     type Frozen = FrozenContextValue;
 
-    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+    fn freeze(mut self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+        let pending_children = self
+            .pending_children
+            .get_mut()
+            .drain(..)
+            .collect::<Vec<_>>();
+
+        for pending in pending_children {
+            process_pending_child(pending, &mut self, freezer)?;
+        }
+
         Ok(FrozenContextValue {
             module: self.module.freeze(freezer)?,
             strict_io_config: self.strict_io_config,
@@ -84,7 +119,7 @@ impl FrozenContextValue {
 
 impl<'v> ContextValue<'v> {
     /// Create a new `ContextValue` with a parent eval::Context for sharing caches
-    pub(crate) fn from_context(context: &crate::lang::eval::EvalContext) -> Self {
+    pub(crate) fn from_context(context: &EvalContext) -> Self {
         let source_path = context
             .source_path
             .as_ref()
@@ -92,9 +127,9 @@ impl<'v> ContextValue<'v> {
 
         // Parse position data if file provider is available
         let positions = context
-            .file_provider
-            .as_ref()
-            .and_then(|fp| fp.read_file(source_path).ok())
+            .file_provider()
+            .read_file(source_path)
+            .ok()
             .map(|content| parse_positions(&content))
             .unwrap_or_default();
 
@@ -114,13 +149,18 @@ impl<'v> ContextValue<'v> {
             missing_inputs: RefCell::new(Vec::new()),
             diagnostics: RefCell::new(Vec::new()),
             context: context as *const _,
+            pending_children: RefCell::new(Vec::new()),
         }
     }
 
     /// Get the parent eval::Context
-    pub(crate) fn parent_context(&self) -> &crate::lang::eval::EvalContext {
+    pub(crate) fn parent_context(&self) -> &EvalContext {
         // SAFETY: We ensure the parent Context outlives this ContextValue
         unsafe { &*self.context }
+    }
+
+    pub(crate) fn child_context(&self) -> EvalContext {
+        self.parent_context().child_context()
     }
 
     /// Return whether missing required io()/config() placeholders should be treated as
@@ -156,6 +196,10 @@ impl<'v> ContextValue<'v> {
         self.diagnostics.borrow_mut().push(diag.into());
     }
 
+    pub(crate) fn enqueue_child(&self, child: PendingChild<'v>) {
+        self.pending_children.borrow_mut().push(child);
+    }
+
     #[allow(dead_code)]
     pub(crate) fn diagnostics(&self) -> std::cell::Ref<'_, Vec<crate::Diagnostic>> {
         self.diagnostics.borrow()
@@ -188,4 +232,131 @@ impl<'v> ContextValue<'v> {
     pub(crate) fn unregister_net(&self, id: NetId) {
         self.module.borrow_mut().unregister_net(id)
     }
+}
+
+fn process_pending_child<'v>(
+    pending: PendingChild<'v>,
+    context_value: &mut ContextValue<'v>,
+    freezer: &Freezer,
+) -> FreezeResult<()> {
+    let PendingChild {
+        loader,
+        final_name,
+        inputs,
+        properties,
+        provided_names,
+        call_site_path,
+        call_site_span,
+        call_stack,
+    } = pending;
+
+    let mut frozen_inputs: SmallMap<String, FrozenValue> = SmallMap::new();
+    for (name, value) in inputs.into_iter() {
+        frozen_inputs.insert(name, freezer.freeze(value)?);
+    }
+
+    let mut frozen_properties: Option<SmallMap<String, FrozenValue>> = None;
+    if let Some(props) = properties {
+        let mut map = SmallMap::new();
+        for (name, value) in props.into_iter() {
+            map.insert(name, freezer.freeze(value)?);
+        }
+        frozen_properties = Some(map);
+    }
+
+    let mut child_ctx = context_value
+        .child_context()
+        .set_strict_io_config(true)
+        .set_source_path(std::path::PathBuf::from(&loader.source_path))
+        .set_module_name(final_name.clone());
+
+    if let Some(props) = frozen_properties {
+        child_ctx
+            .set_properties_from_frozen_values(props)
+            .map_err(|e| FreezeError::new(e.to_string()))?;
+    }
+    child_ctx
+        .set_inputs_from_frozen_values(frozen_inputs)
+        .map_err(|e| FreezeError::new(e.to_string()))?;
+
+    let (output, child_diags) = child_ctx.eval().unpack();
+    let had_errors = child_diags.has_errors();
+
+    for child_diag in child_diags.into_iter() {
+        let diag_to_add = {
+            let (severity, message) = match child_diag.severity {
+                EvalSeverity::Error => (
+                    EvalSeverity::Error,
+                    format!("Error instantiating `{}`", loader.name),
+                ),
+                EvalSeverity::Warning => (
+                    EvalSeverity::Warning,
+                    format!("Warning from `{}`", loader.name),
+                ),
+                other => (other, format!("Issue in `{}`", loader.name)),
+            };
+
+            crate::Diagnostic {
+                path: call_site_path.clone(),
+                span: Some(call_site_span),
+                severity,
+                body: message,
+                call_stack: Some(call_stack.clone()),
+                child: Some(Box::new(child_diag)),
+                source_error: None,
+            }
+        };
+
+        context_value.diagnostics.borrow_mut().push(diag_to_add);
+    }
+
+    match output {
+        Some(output) => {
+            freezer
+                .frozen_heap()
+                .add_reference(output.star_module.frozen_heap());
+
+            let child_value = freezer.frozen_heap().alloc(output.sch_module).to_value();
+            context_value.module.borrow_mut().add_child(child_value);
+
+            let used_inputs: HashSet<String> = output
+                .star_module
+                .extra_value()
+                .and_then(|extra| extra.downcast_ref::<FrozenContextValue>())
+                .map(|fctx| {
+                    fctx.module
+                        .signature()
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let provided_set: HashSet<String> = provided_names.into_iter().collect();
+
+            let unused: Vec<String> = provided_set.difference(&used_inputs).cloned().collect();
+
+            if !unused.is_empty() {
+                let msg = format!(
+                    "Unknown argument(s) provided to module {}: {}",
+                    loader.name,
+                    unused.join(", ")
+                );
+
+                let mut diag = EvalMessage::from_any_error(Path::new(&call_site_path), &msg);
+                diag.span = Some(call_site_span);
+                context_value.diagnostics.borrow_mut().push(diag.into());
+            }
+        }
+        None => {
+            if !had_errors {
+                let msg = format!("Failed to instantiate module {}", loader.name);
+                let mut diag = EvalMessage::from_any_error(Path::new(&call_site_path), &msg);
+                diag.span = Some(call_site_span);
+                context_value.diagnostics.borrow_mut().push(diag.into());
+            }
+        }
+    }
+
+    Ok(())
 }

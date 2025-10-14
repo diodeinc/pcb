@@ -17,36 +17,24 @@ Module {
                         Net {
                             name: "PORT1_D+",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "D-": FrozenValue(
                         Net {
                             name: "PORT1_D-",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "GND": FrozenValue(
                         Net {
                             name: "PORT1_power_GND",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "VBUS": FrozenValue(
                         Net {
                             name: "PORT1_power_VCC",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },

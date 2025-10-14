@@ -4,14 +4,15 @@ use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
+    collections::SmallMap,
     environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
     eval::Evaluator,
     starlark_module, starlark_simple_value,
-    values::{none::NoneType, starlark_value, Freeze, StarlarkValue, Value},
+    values::{none::NoneType, starlark_value, tuple::UnpackTuple, Freeze, StarlarkValue, Value},
     Error,
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, physical::*, stackup::BoardConfig};
+use crate::lang::{evaluator_ext::EvaluatorExt, net::*, physical::*, stackup::BoardConfig};
 
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;
@@ -35,6 +36,21 @@ impl<'v> StarlarkValue<'v> for Builtin {
 #[starlark_module]
 pub fn builtin_globals(builder: &mut GlobalsBuilder) {
     const builtin: Builtin = Builtin;
+
+    fn r#enum<'v>(
+        #[starlark(args)] args: UnpackTuple<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let mut variant_strings = Vec::new();
+        for val in args.items {
+            let variant = val.unpack_str().ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!("All enum variants must be strings"))
+            })?;
+            variant_strings.push(variant.to_string());
+        }
+        let enum_type = crate::lang::r#enum::EnumType::new(variant_strings)?;
+        Ok(eval.heap().alloc(enum_type))
+    }
 }
 
 #[starlark_module]
@@ -180,41 +196,35 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         Ok(PhysicalValueType::new(unit.into()))
     }
 
+    fn net_type<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        name: String,
+        #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let net_type = NetType::new(name, kwargs, eval)?;
+        Ok(eval.heap().alloc(net_type))
+    }
+
     fn add_electrical_check<'v>(
         #[allow(unused_variables)] this: &Builtin,
         #[starlark(require = named)] name: String,
         #[starlark(require = named)] check_fn: Value<'v>,
-        #[starlark(require = named)] inputs: Option<Value<'v>>,
-        #[starlark(require = named)] severity: Option<String>,
+        #[starlark(require = named, default = SmallMap::default())] inputs: SmallMap<
+            String,
+            Value<'v>,
+        >,
+        #[starlark(require = named, default = "error".to_string())] severity: String,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
         use crate::lang::electrical_check::ElectricalCheckGen;
-        use starlark::values::dict::DictRef;
 
-        let severity = severity.unwrap_or_else(|| "error".to_string());
         if !["error", "warning", "advice"].contains(&severity.as_str()) {
             return Err(Error::new_other(anyhow::anyhow!(
                 "Invalid severity '{}'. Must be 'error', 'warning', or 'advice'",
                 severity
             )));
         }
-
-        let inputs_map = if let Some(inputs_value) = inputs {
-            let inputs_dict = DictRef::from_value(inputs_value).ok_or_else(|| {
-                Error::new_other(anyhow::anyhow!("'inputs' parameter must be a dictionary"))
-            })?;
-
-            let mut map = starlark::collections::SmallMap::new();
-            for (key, value) in inputs_dict.iter() {
-                let key_str = key.unpack_str().ok_or_else(|| {
-                    Error::new_other(anyhow::anyhow!("input keys must be strings, got: {}", key))
-                })?;
-                map.insert(key_str.to_string(), value);
-            }
-            map
-        } else {
-            starlark::collections::SmallMap::new()
-        };
 
         let call_site = eval.call_stack_top_location();
         let source_path = call_site
@@ -225,7 +235,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
         let check = ElectricalCheckGen::<Value> {
             name,
-            inputs: inputs_map,
+            inputs,
             check_func: check_fn,
             severity,
             source_path,

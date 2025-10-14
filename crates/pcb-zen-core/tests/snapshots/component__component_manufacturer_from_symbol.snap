@@ -17,18 +17,12 @@ Module {
                         Net {
                             name: "GND",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                     "VCC": FrozenValue(
                         Net {
                             name: "VCC",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },

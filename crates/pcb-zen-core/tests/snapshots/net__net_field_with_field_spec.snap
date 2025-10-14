@@ -2,7 +2,8 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Ground net: Net(name: "GND", id: <ID>)
+vcc.voltage: 5V
+vdd.voltage: 3.3V
 Module {
     name: "<root>",
     source: "test.zen",

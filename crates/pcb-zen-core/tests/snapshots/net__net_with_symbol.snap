@@ -2,7 +2,7 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Power net: Net { name: "POWER", id: "<ID>", properties: {"symbol_name": Value("TestSymbol")}, symbol: Value(Symbol { name: Some("TestSymbol"), pins: {"1": "VCC"} }) }
+Power net: Net(name: "POWER", id: <ID>)
 Module {
     name: "<root>",
     source: "test.zen",

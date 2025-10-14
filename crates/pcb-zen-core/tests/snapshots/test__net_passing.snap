@@ -27,18 +27,12 @@ Module {
                                                 Net {
                                                     name: "INTERFACE_p1",
                                                     id: "<ID>",
-                                                    symbol: FrozenValue(
-                                                        NoneType,
-                                                    ),
                                                 },
                                             ),
                                             "P2": FrozenValue(
                                                 Net {
                                                     name: "INTERFACE_p2",
                                                     id: "<ID>",
-                                                    symbol: FrozenValue(
-                                                        NoneType,
-                                                    ),
                                                 },
                                             ),
                                         },

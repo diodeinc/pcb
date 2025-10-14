@@ -18,9 +18,6 @@ Module {
                         Net {
                             name: "EN",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },
@@ -44,9 +41,6 @@ Module {
                         Net {
                             name: "EN_2",
                             id: "<ID>",
-                            symbol: FrozenValue(
-                                NoneType,
-                            ),
                         },
                     ),
                 },

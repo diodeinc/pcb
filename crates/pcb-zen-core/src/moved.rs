@@ -82,11 +82,24 @@ pub fn collect_existing_paths(
 
 #[cfg(test)]
 mod tests {
+    use crate::EvalContext;
+    use std::{path::PathBuf, sync::Arc};
+
     use super::*;
+
+    fn eval_context(test_path: PathBuf) -> EvalContext {
+        let parent_dir = test_path.parent().unwrap();
+        let load_resolver = Arc::new(crate::CoreLoadResolver::new(
+            Arc::new(crate::DefaultFileProvider::new()),
+            Arc::new(crate::NoopRemoteFetcher),
+            parent_dir.to_path_buf(),
+            false,
+        ));
+        EvalContext::new(load_resolver).set_source_path(test_path)
+    }
 
     #[test]
     fn test_moved_directive_storage() {
-        use crate::lang::eval::EvalContext;
         use starlark::values::ValueLike;
 
         let test_content = r#"
@@ -99,9 +112,7 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         let temp_path = std::env::temp_dir().join("test_moved.zen");
         std::fs::write(&temp_path, test_content).unwrap();
 
-        // Evaluate it
-        let result = EvalContext::new()
-            .set_source_path(temp_path.clone())
+        let result = eval_context(temp_path.clone())
             .set_module_name("test_moved".to_string())
             .eval();
 
@@ -136,7 +147,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
 
     #[test]
     fn test_moved_directive_empty() {
-        use crate::lang::eval::EvalContext;
         use starlark::values::ValueLike;
 
         let test_content = r#"
@@ -148,8 +158,7 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         std::fs::write(&temp_path, test_content).unwrap();
 
         // Evaluate it
-        let result = EvalContext::new()
-            .set_source_path(temp_path.clone())
+        let result = eval_context(temp_path.clone())
             .set_module_name("test_moved_empty".to_string())
             .eval();
 
@@ -286,7 +295,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
     #[test]
     fn test_schematic_moved_paths_integration() {
         use crate::convert::ToSchematic;
-        use crate::lang::eval::EvalContext;
 
         let test_content = r#"
 moved("old.component", "new.component")
@@ -300,10 +308,7 @@ moved("POW.PS1", "PS1")
         std::fs::write(&temp_path, test_content).unwrap();
 
         // Evaluate it
-        let result = EvalContext::new()
-            .set_source_path(temp_path.clone())
-            .set_module_name("test_schematic_moved".to_string())
-            .eval();
+        let result = eval_context(temp_path.clone()).eval();
 
         // Clean up the temp file
         std::fs::remove_file(&temp_path).ok();

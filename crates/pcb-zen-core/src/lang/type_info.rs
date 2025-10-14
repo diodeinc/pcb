@@ -1,8 +1,8 @@
 use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
-use crate::lang::net::{NetType, NetValue};
+use crate::lang::net::{FrozenNetType, NetType, NetValue};
+use crate::lang::r#enum::EnumType;
 use crate::FrozenNetValue;
 use serde::{Deserialize, Serialize};
-use starlark::values::enumeration::{EnumType, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::TypeType;
 use starlark::values::{UnpackValue, Value, ValueLike};
@@ -63,30 +63,10 @@ impl TypeInfo {
         let type_name = value.get_type();
 
         if let Some(enum_type) = value.downcast_ref::<EnumType>() {
-            let variants = enum_type
-                .elements()
-                .keys()
-                .map(|v| v.unpack_str().unwrap_or_default().to_string())
-                .collect();
+            // Our EnumType is a simple value with variants as Vec<String>
             return TypeInfo::Enum {
                 name: type_name.to_string(),
-                variants,
-            };
-        }
-
-        if let Some(enum_type) = value.downcast_ref::<FrozenEnumType>() {
-            let variants = enum_type
-                .elements()
-                .keys()
-                .map(|v| {
-                    v.downcast_frozen_str()
-                        .map(|s| s.to_string())
-                        .unwrap_or_default()
-                })
-                .collect();
-            return TypeInfo::Enum {
-                name: type_name.to_string(),
-                variants,
+                variants: enum_type.variants().to_vec(),
             };
         }
 
@@ -104,6 +84,7 @@ impl TypeInfo {
 
         // Check for Net type by type name
         if value.downcast_ref::<NetType>().is_some()
+            || value.downcast_ref::<FrozenNetType>().is_some()
             || value.downcast_ref::<NetValue>().is_some()
             || value.downcast_ref::<FrozenNetValue>().is_some()
         {

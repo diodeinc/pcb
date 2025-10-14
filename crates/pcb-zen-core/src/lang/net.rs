@@ -1,20 +1,31 @@
-#![allow(clippy::needless_lifetimes)]
+use std::sync::{Mutex, OnceLock};
+use std::{cell::RefCell, collections::HashMap, fmt};
 
 use allocative::Allocative;
-use starlark::starlark_complex_value;
-use starlark::values::{Coerce, Heap, ValueLike};
+use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
-    eval::{Arguments, Evaluator},
-    starlark_simple_value,
-    values::{starlark_value, Freeze, NoSerialize, StarlarkValue, Trace, Value},
+    environment::{Methods, MethodsBuilder, MethodsStatic},
+    eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
+    starlark_complex_value, starlark_module,
+    typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
+    util::ArcStr,
+    values::{
+        starlark_value,
+        typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
+        Coerce, Freeze, FreezeResult, Freezer, FrozenHeap, FrozenValue, Heap, NoSerialize,
+        StarlarkValue, Trace, Value, ValueLike,
+    },
 };
-use std::cell::RefCell;
+use starlark_map::sorted_map::SortedMap;
 
-use super::eval::{copy_value, DeepCopyToHeap};
+use crate::lang::symbol::SymbolValue;
+
+use super::context::ContextValue;
+use super::physical::{PhysicalRangeType, PhysicalValueType};
+use super::symbol::SymbolType;
 use super::validation::validate_identifier_name;
-use crate::lang::context::ContextValue;
 
 pub type NetId = u64;
 
@@ -45,24 +56,92 @@ pub fn reset_net_id_counter() {
     });
 }
 
+/// Create the default builtin Net type with standard fields (symbol, voltage, impedance)
+pub fn make_default_net_type(heap: &FrozenHeap) -> FrozenNetType {
+    let mut fields: SmallMap<String, FrozenValue> = SmallMap::new();
+
+    // Field: symbol = Symbol
+    fields.insert("symbol".to_owned(), heap.alloc(SymbolType));
+
+    // Field: voltage = VoltageRange
+    fields.insert(
+        "voltage".to_owned(),
+        heap.alloc(PhysicalRangeType::new(pcb_sch::PhysicalUnit::Volts.into())),
+    );
+
+    // Field: impedance = Resistance (using PhysicalValueType for single values)
+    fields.insert(
+        "impedance".to_owned(),
+        heap.alloc(PhysicalValueType::new(pcb_sch::PhysicalUnit::Ohms.into())),
+    );
+
+    FrozenNetType {
+        type_name: "Net".to_owned(),
+        fields,
+    }
+}
+
+/// Extract the TypeCompiled from a field spec (FieldGen or direct type Value)
+///
+/// For FieldGen, extract the inner TypeCompiled. For direct types, create TypeCompiled.
+fn field_spec_to_type_compiled<'v>(
+    spec: Value<'v>,
+    heap: &'v Heap,
+) -> anyhow::Result<TypeCompiled<Value<'v>>> {
+    use starlark::values::types::record::field::FieldGen;
+
+    // If it's a FieldGen, extract the inner TypeCompiled directly
+    if let Some(field_gen) = spec.downcast_ref::<FieldGen<Value<'v>>>() {
+        return Ok(*field_gen.typ());
+    }
+    if spec.downcast_ref::<FieldGen<FrozenValue>>().is_some() {
+        // For frozen FieldGen, we need to get the type and create a new TypeCompiled
+        // The TypeCompiled inside is for FrozenValue, we need one for Value
+        return TypeCompiled::new(spec, heap); // Let TypeCompiled handle the conversion
+    }
+
+    // Otherwise it's a direct type constructor - create TypeCompiled from it
+    TypeCompiled::new(spec, heap)
+}
+
 #[derive(
-    Clone, PartialEq, Eq, ProvidesStaticType, Allocative, Trace, Freeze, Coerce, serde::Serialize,
+    Clone,
+    PartialEq,
+    Eq,
+    ProvidesStaticType,
+    Allocative,
+    Trace,
+    Freeze,
+    Coerce,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[repr(C)]
-#[serde(bound = "V: serde::Serialize")]
+#[serde(bound(
+    serialize = "V: serde::Serialize",
+    deserialize = "V: serde::Deserialize<'de>"
+))]
 pub struct NetValueGen<V> {
-    id: NetId,
-    name: String,
+    /// The globally unique identifier for this net
+    pub(crate) net_id: NetId,
+    /// The final name after deduplication
+    pub(crate) name: String,
+    /// The name originally requested before deduplication
     pub original_name: Option<String>,
-    properties: SmallMap<String, V>, // Auto-serializes since V: Serialize!
-    #[serde(skip)]
-    symbol: V,
+    /// The type name (e.g., "Net", "Power", "Ground")
+    pub(crate) type_name: String,
+    /// Properties (including symbol, voltage, impedance, etc. if provided)
+    pub(crate) properties: SmallMap<String, V>,
 }
+
+starlark_complex_value!(pub NetValue);
 
 impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Use "Net" as struct name for backwards compatibility with old snapshots
         let mut debug = f.debug_struct("Net");
         debug.field("name", &self.name);
+        // Use "id" as field name for backwards compatibility
         debug.field("id", &"<ID>"); // Normalize ID for stable snapshots
 
         // Sort properties for deterministic output
@@ -74,91 +153,88 @@ impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
             debug.field("properties", &props_map);
         }
 
-        // Show symbol field
-        debug.field("symbol", &self.symbol);
-
         debug.finish()
     }
 }
-
-starlark_complex_value!(pub NetValue);
 
 #[starlark_value(type = "Net")]
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(builtin_net_methods)
     }
 
-    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
-        match attribute {
-            "name" => Some(heap.alloc(self.name.clone())),
-            "original_name" => self.original_name.as_ref().map(|n| heap.alloc(n.clone())),
-            _ => None,
-        }
+    fn get_attr(&self, attribute: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+        // Check if the attribute is a field stored in properties
+        self.properties.get(attribute).map(|v| v.to_value())
     }
 
     fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
-        matches!(attribute, "name" | "original_name")
+        self.properties.contains_key(attribute)
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        vec!["name".to_string(), "original_name".to_string()]
-    }
-}
-
-impl<'v, V: ValueLike<'v>> DeepCopyToHeap for NetValueGen<V> {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        let properties = self
-            .properties
-            .iter()
-            .map(|(k, v)| {
-                let copied_value = copy_value(v.to_value(), dst)?;
-                Ok((k.clone(), copied_value))
-            })
-            .collect::<Result<SmallMap<String, Value<'dst>>, anyhow::Error>>()?;
-
-        Ok(dst.alloc(NetValue {
-            id: self.id,
-            name: self.name.clone(),
-            original_name: self.original_name.clone(),
-            properties,
-            symbol: copy_value(self.symbol.to_value(), dst)?,
-        }))
+        // Return all field names from properties
+        let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
+        // Also include the built-in attributes from methods
+        attrs.extend(vec![
+            "name".to_string(),
+            "net_id".to_string(),
+            "original_name".to_string(),
+            "type".to_string(),
+        ]);
+        attrs
     }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        write!(
+            f,
+            "{}(name: {:?}, id: {:?})",
+            self.type_name, self.name, self.net_id
+        )
     }
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    pub fn new(id: NetId, name: String, properties: SmallMap<String, V>, symbol: V) -> Self {
+    /// Create a new NetValue
+    pub fn new(net_id: NetId, name: String, properties: SmallMap<String, V>) -> Self {
         Self {
-            id,
+            net_id,
             name,
             original_name: None,
+            type_name: "Net".to_string(),
             properties,
-            symbol,
         }
     }
 
+    /// Returns the instance name of this net
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Return the original requested name, falling back to the final name if no original was stored
+    /// Returns the net ID (backwards compatible alias for net_id)
+    pub fn id(&self) -> NetId {
+        self.net_id
+    }
+
+    /// Returns the net ID
+    pub fn net_id(&self) -> NetId {
+        self.net_id
+    }
+
+    /// Returns the original requested name, falling back to the final name if no original was stored
     pub fn original_name(&self) -> &str {
         self.original_name.as_deref().unwrap_or(&self.name)
     }
 
-    /// Return the globally‐unique identifier of this net instance.
-    pub fn id(&self) -> NetId {
-        self.id
+    /// Returns the type name of this net
+    pub fn net_type_name(&self) -> &str {
+        &self.type_name
     }
 
     /// Return the properties map of this net instance.
@@ -166,173 +242,520 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         &self.properties
     }
 
-    /// Return the symbol associated with this net (if any).
-    pub fn symbol(&self) -> &V {
-        &self.symbol
+    /// Return the original name as Option (None if auto-generated)
+    pub fn original_name_opt(&self) -> Option<&str> {
+        self.original_name.as_deref()
+    }
+
+    /// Create a new net with the same fields but a fresh net ID.
+    /// This avoids deep copying - properties are shared via Value references.
+    pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            net_id: generate_net_id(),
+            name: self.name.clone(),
+            original_name: self.original_name.clone(),
+            type_name: self.type_name.clone(),
+            properties,
+        })
+    }
+
+    /// Create a new net with the same ID/name/properties but a different type name.
+    /// Used for casting between net types (e.g., Power -> Net).
+    pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
+        let properties: SmallMap<String, Value<'v>> = self
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_value()))
+            .collect();
+
+        heap.alloc(NetValue {
+            net_id: self.net_id,
+            name: self.name.clone(),
+            original_name: self.original_name.clone(),
+            type_name: new_type_name.to_string(),
+            properties,
+        })
     }
 }
 
-#[derive(Debug, ProvidesStaticType, NoSerialize, Allocative)]
-pub struct NetType;
-starlark_simple_value!(NetType);
+#[starlark_module]
+fn builtin_net_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn name<'v>(this: &NetValue<'v>) -> starlark::Result<String> {
+        Ok(this.name().to_string())
+    }
 
-impl std::fmt::Display for NetType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Net")
+    #[starlark(attribute)]
+    fn net_id<'v>(this: &NetValue<'v>) -> starlark::Result<i64> {
+        Ok(this.net_id() as i64)
+    }
+
+    #[starlark(attribute)]
+    fn original_name<'v>(this: &NetValue<'v>) -> starlark::Result<String> {
+        Ok(this.original_name().to_string())
+    }
+
+    #[starlark(attribute)]
+    fn r#type<'v>(this: &NetValue<'v>) -> starlark::Result<String> {
+        Ok(this.net_type_name().to_string())
+    }
+
+    /// Convert this net to base Net type, preserving all properties
+    #[starlark(attribute)]
+    fn NET<'v>(this: &NetValue<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        Ok(this.with_net_type("Net", heap))
+    }
+}
+
+/// A callable type constructor for creating typed nets
+///
+/// Created by `builtin.net_type(name)`, e.g.:
+/// - `Net = builtin.net_type("Net")`
+/// - `Power = builtin.net_type("Power")`
+/// - `Ground = builtin.net_type("Ground")`
+#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, Allocative, NoSerialize)]
+#[repr(C)]
+pub struct NetTypeGen<V> {
+    /// The type name (e.g., "Net", "Power", "Ground")
+    pub(crate) type_name: String,
+    /// Field specifications: field name -> field spec value (FieldGen or type constructor)
+    /// Types are validated at net type definition time, re-compiled at net instantiation time
+    pub(crate) fields: SmallMap<String, V>,
+}
+
+starlark_complex_value!(pub NetType);
+
+impl<'v> Freeze for NetType<'v> {
+    type Frozen = FrozenNetType;
+    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+        Ok(FrozenNetType {
+            type_name: self.type_name,
+            fields: self.fields.freeze(freezer)?,
+        })
+    }
+}
+
+impl<V> NetTypeGen<V> {
+    /// Returns the instance type name (e.g., "Net", "Power", "Ground")
+    fn instance_ty_name(&self) -> String {
+        self.type_name.to_string()
+    }
+
+    /// Returns the callable type name (e.g., "NetType", "PowerType", "GroundType")
+    fn ty_name(&self) -> String {
+        format!("{}Type", self.type_name)
+    }
+}
+
+impl<V> fmt::Display for NetTypeGen<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.instance_ty_name())
+    }
+}
+
+impl<'v> NetType<'v> {
+    /// Create a new NetType with the given type name and field specifications
+    pub fn new(
+        type_name: String,
+        kwargs: SmallMap<String, Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NetType<'v>> {
+        let mut fields = SmallMap::new();
+
+        // Process each field parameter and validate types
+        for (field_name, field_value) in kwargs {
+            // Reserved field name
+            if field_name == "name" {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "Field name 'name' is reserved (conflicts with implicit name parameter)"
+                )));
+            }
+
+            // Validate the field spec by compiling its type - this fails early if invalid
+            // This handles field(), direct types (str/int), and custom types (Enum/PhysicalValue) uniformly
+            field_spec_to_type_compiled(field_value, eval.heap()).map_err(|e| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "Invalid type spec for field '{}': {}",
+                    field_name,
+                    e
+                ))
+            })?;
+
+            fields.insert(field_name, field_value);
+        }
+
+        Ok(NetType { type_name, fields })
+    }
+}
+
+impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
+    /// Get the unique TypeInstanceId for this NetType based on structural equivalence.
+    /// Net types with identical type_name AND field names share the same TypeInstanceId.
+    fn type_instance_id(&self) -> TypeInstanceId {
+        type NetTypeCache = HashMap<(String, Vec<String>), TypeInstanceId>;
+        static CACHE: OnceLock<Mutex<NetTypeCache>> = OnceLock::new();
+
+        // Build field signature from field names only (not types, for backward compat)
+        let mut field_names: Vec<String> = self.fields.keys().cloned().collect();
+
+        // Sort by field name for structural equivalence
+        field_names.sort();
+
+        let cache_key = (self.type_name.clone(), field_names);
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        *cache
+            .lock()
+            .unwrap()
+            .entry(cache_key)
+            .or_insert_with(TypeInstanceId::r#gen)
+    }
+
+    /// Returns the parameter specification for this type's constructor
+    fn param_spec(&self) -> ParamSpec {
+        let mut named_params = vec![
+            (ArcStr::from("NET"), ParamIsRequired::No, Ty::any()),
+            (ArcStr::from("name"), ParamIsRequired::No, Ty::string()),
+        ];
+
+        // Add all field parameters as optional named-only
+        // TODO(type-hints): Extract Ty from field specs for better LSP hints. Currently Ty::any().
+        for field_name in self.fields.keys() {
+            named_params.push((
+                ArcStr::from(field_name.as_str()),
+                ParamIsRequired::No,
+                Ty::any(),
+            ));
+        }
+
+        ParamSpec::new_parts(
+            [(ParamIsRequired::No, Ty::any())], // positional-only - accepts string or NetValue
+            [],                                 // pos_or_named
+            None,                               // *args
+            named_params,                       // keyword-only (NET, name + fields)
+            None,                               // **kwargs
+        )
+        .expect("ParamSpec creation should not fail")
+    }
+
+    /// Returns the runtime parameter specification for parsing arguments
+    fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
+        let mut named_params = vec![
+            ("NET", ParametersSpecParam::Optional),
+            ("name", ParametersSpecParam::Optional),
+        ];
+
+        for field_name in self.fields.keys() {
+            named_params.push((field_name.as_str(), ParametersSpecParam::Optional));
+        }
+
+        ParametersSpec::new_parts(
+            self.instance_ty_name().as_str(),
+            [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
+            [],                                         // pos_or_named (args)
+            false,
+            named_params, // named-only (NET, name + fields)
+            false,
+        )
+    }
+}
+
+/// Validate a field value using a pre-compiled TypeCompiled.
+///
+/// The TypeCompiled was validated and stored at net type definition time,
+/// so we know it's valid and can directly use it for matching.
+fn validate_field_value<'v>(
+    field_name: &str,
+    type_compiled: &TypeCompiled<Value<'v>>,
+    provided_value: Value<'v>,
+) -> anyhow::Result<Value<'v>> {
+    if type_compiled.matches(provided_value) {
+        return Ok(provided_value);
+    }
+    anyhow::bail!(
+        "Field '{}' has wrong type: expected {}, got {}",
+        field_name,
+        type_compiled,
+        provided_value.get_type()
+    );
+}
+
+/// Extract default value from a field spec (if it's a FieldGen with a default).
+fn default_from_field<'v>(spec: Value<'v>) -> Option<Value<'v>> {
+    use starlark::values::types::record::field::FieldGen;
+
+    if let Some(fg) = spec.downcast_ref::<FieldGen<Value>>() {
+        fg.default().map(|d| d.to_value())
+    } else if let Some(fg) = spec.downcast_ref::<FieldGen<FrozenValue>>() {
+        fg.default().map(|d| d.to_value())
+    } else {
+        None
     }
 }
 
 #[starlark_value(type = "NetType")]
-impl<'v> StarlarkValue<'v> for NetType
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn provide(&'v self, demand: &mut starlark::values::Demand<'_, 'v>) {
-        demand.provide_value::<&dyn DeepCopyToHeap>(self);
-    }
-
+    type Canonical = FrozenNetType;
     fn invoke(
         &self,
-        _me: Value<'v>,
+        _: Value<'v>,
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        let heap = eval.heap();
-        // Parse positional args for name
-        let positions_iter = args.positions(heap)?;
-        let positions: Vec<Value> = positions_iter.collect();
-        if positions.len() > 1 {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "Too many positional args to Net()"
-            )));
-        }
-        let name_pos: Option<String> = if let Some(v) = positions.first() {
-            let name = v
-                .unpack_str()
-                .ok_or_else(|| {
-                    starlark::Error::new_other(anyhow::anyhow!("Expected string for net name"))
-                })?
-                .to_owned();
+        self.parameters_spec()
+            .parser(args, eval, |param_parser, eval| {
+                let heap = eval.heap();
+                let type_name = self.instance_ty_name();
 
-            // Validate the positional net name
-            validate_identifier_name(&name, "Net name")?;
+                // Parse arguments: positional value, NET= keyword, name= keyword, and field values
+                let positional_value: Option<Value> = param_parser.next_opt()?;
+                let net_keyword: Option<Value> = param_parser.next_opt()?;
+                let name_keyword: Option<Value> = param_parser.next_opt()?;
 
-            Some(name)
-        } else {
-            None
-        };
-
-        // Check if "name" was provided as a kwarg
-        let mut name_kwarg: Option<String> = None;
-        let names_map = args.names_map()?;
-
-        let mut symbol_val: Option<Value<'v>> = None;
-
-        for (key, value) in names_map.iter() {
-            match key.as_str() {
-                "name" => {
-                    // Special handling for "name" kwarg
-                    let name = value
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow::anyhow!(
-                                "Expected string for net name"
-                            ))
-                        })?
-                        .to_owned();
-
-                    // Validate the kwarg net name
-                    validate_identifier_name(&name, "Net name")?;
-
-                    name_kwarg = Some(name);
-                }
-                "symbol" => {
-                    // Check that the value is a Symbol
-                    if value.get_type() != "Symbol" {
-                        return Err(starlark::Error::new_other(anyhow::anyhow!(
-                            "Expected Symbol for 'symbol' parameter, got {}",
-                            value.get_type()
-                        )));
+                // Parse field values (all optional)
+                let mut field_values = SmallMap::new();
+                for field_name in self.fields.keys() {
+                    if let Some(field_val) = param_parser.next_opt::<Value>()? {
+                        field_values.insert(field_name.clone(), field_val);
                     }
-                    symbol_val = Some(*value);
-                }
-                _ => {
-                    // No other kwargs accepted
-                    return Err(starlark::Error::new_other(anyhow::anyhow!(
-                        "Net() does not accept keyword argument '{}'. Only 'name' and 'symbol' are allowed.",
-                        key.as_str()
-                    )));
-                }
-            }
-        }
-
-        // Generate a deterministic, per-thread unique ID for this net. A thread-local
-        // counter guarantees deterministic results within a single evaluation and
-        // avoids cross-test interference when Rust tests execute in parallel.
-        let net_id = generate_net_id();
-
-        // Use positional name if provided, otherwise use kwarg name (may be empty).
-        let original_name = name_pos.or(name_kwarg);
-        let net_name = original_name.clone().unwrap_or_default();
-
-        // Initialize with empty properties map
-        let mut properties = SmallMap::new();
-
-        // Register this net with the current module context so its local name is
-        // recorded at creation time. This ensures explicit names like "EN"
-        // are associated with the module where the literal appears.
-        let final_name = if let Some(ctx) = eval
-            .module()
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<ContextValue>())
-        {
-            match ctx.register_net(net_id, &net_name) {
-                Ok(n) => n,
-                Err(e) => return Err(starlark::Error::new_other(anyhow::anyhow!(e.to_string()))),
-            }
-        } else {
-            net_name.clone()
-        };
-
-        // If a symbol was provided, extract its properties and add them to the net properties
-        if let Some(symbol) = symbol_val {
-            if let Some(symbol_value) = symbol.downcast_ref::<crate::lang::symbol::SymbolValue>() {
-                // Add symbol_name
-                if let Some(name) = symbol_value.name() {
-                    properties.insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
                 }
 
-                // Add symbol_path if available
-                if let Some(path) = symbol_value.source_path() {
-                    properties.insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+                // Extract name keyword as string if provided
+                let name_from_kw: Option<String> = name_keyword
+                    .map(|v| {
+                        v.unpack_str()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "{}() 'name' must be string, got {}",
+                                    type_name,
+                                    v.get_type()
+                                )
+                            })
+                            .map(|s| s.to_owned())
+                    })
+                    .transpose()?;
+
+                // Determine base_net and/or positional name
+                let mut base_net: Option<&NetValue> = None;
+                let mut name_from_pos: Option<String> = None;
+
+                if let Some(v) = positional_value {
+                    if let Some(s) = v.unpack_str() {
+                        name_from_pos = Some(s.to_owned());
+                    } else if let Some(nv) = NetValue::from_value(v) {
+                        base_net = Some(nv);
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "{}() expects string or Net value as positional, got {}",
+                            type_name,
+                            v.get_type()
+                        )
+                        .into());
+                    }
                 }
 
-                // Add the raw s-expression if available
-                if let Some(raw_sexp) = symbol_value.raw_sexp() {
-                    properties.insert(
-                        "__symbol_value".to_string(),
-                        heap.alloc_str(raw_sexp).to_value(),
-                    );
+                if let Some(v) = net_keyword {
+                    let nv = NetValue::from_value(v).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{}() NET= expects Net value, got {}",
+                            type_name,
+                            v.get_type()
+                        )
+                    })?;
+                    if base_net.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "{}() cannot provide both a positional Net and NET=",
+                            type_name
+                        )
+                        .into());
+                    }
+                    base_net = Some(nv);
                 }
-            }
-        }
 
-        Ok(heap.alloc(NetValue {
-            id: net_id,
-            name: final_name,
-            original_name,
-            properties,
-            symbol: symbol_val.unwrap_or_else(Value::new_none),
-        }))
+                // Choose requested name: name= overrides positional string, which overrides base net's original name
+                let requested_name: Option<String> = name_from_kw
+                    .or(name_from_pos)
+                    .or_else(|| base_net.and_then(|n| n.original_name.clone()));
+
+                if let Some(ref n) = requested_name {
+                    validate_identifier_name(n, "Net name")?;
+                }
+
+                // Build (original_name, properties, net_id)
+                let (original_name, mut properties, net_id) = if let Some(n) = base_net {
+                    (requested_name, n.properties.clone(), n.net_id)
+                } else {
+                    (requested_name, SmallMap::new(), generate_net_id())
+                };
+
+                // Merge field values into properties, applying defaults for unprovided fields
+                for (field_name, field_spec) in &self.fields {
+                    if let Some(provided_val) = field_values.get(field_name) {
+                        // User provided a value - validate it against the field's type spec
+                        let tc = field_spec_to_type_compiled(field_spec.to_value(), heap)
+                            .map_err(|e| anyhow::anyhow!("Internal error: {}", e))
+                            .map_err(starlark::Error::new_other)?;
+                        let validated_val = validate_field_value(field_name, &tc, *provided_val)
+                            .map_err(starlark::Error::new_other)?;
+                        properties.insert(field_name.clone(), validated_val);
+                    } else if let Some(default_val) = default_from_field(field_spec.to_value()) {
+                        // User didn't provide value - try to apply default from field() spec
+                        properties.insert(field_name.clone(), default_val);
+                    }
+                    // If no provided value and no default, field won't be in properties
+                }
+
+                // Extract symbol metadata if a symbol field exists (from explicit value or default)
+                if let Some(symbol_val) = properties.get("symbol") {
+                    if let Some(sym) = symbol_val.downcast_ref::<SymbolValue>() {
+                        if let Some(name) = sym.name() {
+                            properties
+                                .insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
+                        }
+                        if let Some(path) = sym.source_path() {
+                            properties
+                                .insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+                        }
+                        if let Some(raw_sexp) = sym.raw_sexp() {
+                            properties.insert(
+                                "__symbol_value".to_string(),
+                                heap.alloc_str(raw_sexp).to_value(),
+                            );
+                        }
+                    }
+                }
+
+                // Register net in the current module
+                let net_name = original_name.clone().unwrap_or_default();
+                let final_name = eval
+                    .module()
+                    .extra_value()
+                    .and_then(|e| e.downcast_ref::<ContextValue>())
+                    .map(|ctx| ctx.register_net(net_id, &net_name))
+                    .transpose()
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                    .unwrap_or_else(|| net_name.clone());
+
+                // Generate automatic moved directive for interface-like typed nets
+                // to maintain backward compatibility with old single-net interface naming
+                // Old format: {instance_name}_{LEGACY_SUFFIX} (e.g., "3V3_VCC" for Power)
+                // New format: {instance_name} (e.g., "3V3")
+                if base_net.is_none() && !net_name.is_empty() {
+                    // Map typed net names to their legacy interface field suffixes
+                    let legacy_suffix = match self.type_name.as_str() {
+                        "Power" => Some("VCC"),
+                        "Ground" => Some("GND"),
+                        _ => None,
+                    };
+
+                    if let Some(suffix) = legacy_suffix {
+                        let old_name = format!("{}_{}", net_name, suffix);
+                        if let Some(ctx) = eval
+                            .module()
+                            .extra_value()
+                            .and_then(|e| e.downcast_ref::<ContextValue>())
+                        {
+                            ctx.add_moved_directive(old_name, net_name.clone(), true);
+                        }
+                    }
+                }
+
+                Ok(heap.alloc(NetValue {
+                    net_id,
+                    name: final_name,
+                    original_name,
+                    type_name: self.type_name.clone(),
+                    properties,
+                }))
+            })
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<NetValue as StarlarkValue>::get_type_starlark_repr())
+    fn eval_type(&self) -> Option<Ty> {
+        let id = self.type_instance_id();
+
+        // Build known fields from self.fields
+        // TODO(type-hints): Extract proper Ty from field specs instead of Ty::any()
+        let known_fields: SortedMap<String, Ty> = self
+            .fields
+            .keys()
+            .map(|field_name| (field_name.clone(), Ty::any()))
+            .collect();
+
+        Some(Ty::custom(
+            TyUser::new(
+                self.instance_ty_name(),
+                TyStarlarkValue::new::<NetValue>(),
+                id,
+                TyUserParams {
+                    matcher: Some(TypeMatcherFactory::new(NetTypeMatcher {
+                        type_name: self.type_name.clone(),
+                    })),
+                    fields: TyUserFields {
+                        known: known_fields,
+                        unknown: false,
+                    },
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        ))
+    }
+
+    fn typechecker_ty(&self) -> Option<Ty> {
+        Some(Ty::custom(
+            TyUser::new(
+                self.ty_name(),
+                TyStarlarkValue::new::<Self>(),
+                TypeInstanceId::r#gen(),
+                TyUserParams {
+                    callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        ))
+    }
+
+    fn get_methods() -> Option<&'static Methods> {
+        static RES: MethodsStatic = MethodsStatic::new();
+        RES.methods(net_type_methods)
     }
 }
 
-impl DeepCopyToHeap for NetType {
-    fn deep_copy_to<'dst>(&self, dst: &'dst Heap) -> anyhow::Result<Value<'dst>> {
-        Ok(dst.alloc(NetType))
+#[starlark_module]
+fn net_type_methods(methods: &mut MethodsBuilder) {
+    #[starlark(attribute)]
+    fn r#type(this: &NetType) -> starlark::Result<String> {
+        Ok(this.ty_name())
+    }
+
+    #[starlark(attribute)]
+    fn type_name(this: &NetType) -> starlark::Result<String> {
+        Ok(this.type_name.to_string())
+    }
+}
+
+/// Runtime type matcher for typed nets
+///
+/// Validates that a NetValue instance has the expected type_name
+#[derive(Hash, Debug, PartialEq, Clone, Allocative)]
+struct NetTypeMatcher {
+    type_name: String,
+}
+
+impl TypeMatcher for NetTypeMatcher {
+    fn matches(&self, value: Value) -> bool {
+        match NetValue::from_value(value) {
+            Some(net) => net.type_name == self.type_name,
+            None => false,
+        }
     }
 }

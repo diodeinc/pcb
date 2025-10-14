@@ -3,10 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::lang::r#enum::{EnumType, EnumValue};
 use allocative::Allocative;
 use log::error;
 use starlark::environment::FrozenModule;
-use starlark::values::enumeration::{EnumType, EnumValue, FrozenEnumType};
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::{TypeCompiled, TypeType};
 use starlark::values::{Heap, UnpackValue, ValueLifetimeless};
@@ -23,14 +23,17 @@ use starlark::{
 };
 
 use crate::graph::starlark::ModuleGraphValueGen;
-use crate::lang::context::ContextValue;
+use crate::lang::context::{ContextValue, PendingChild};
 use crate::lang::evaluator_ext::EvaluatorExt;
+use crate::lang::interface::{
+    FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
+};
 use crate::lang::validation::validate_identifier_name;
-use crate::Diagnostic;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, Span};
-use starlark::errors::EvalSeverity;
 use starlark::values::dict::{AllocDict, DictRef};
+
+use starlark::values::record::{FrozenRecord, Record};
 use std::fs;
 
 /// Helper macro for frozen module downcasting to reduce repetition
@@ -48,10 +51,9 @@ macro_rules! downcast_frozen_module {
     };
 }
 
-use super::net::{generate_net_id, NetValue};
+use super::net::{generate_net_id, FrozenNetType, FrozenNetValue, NetId, NetType, NetValue};
 use crate::lang::context::FrozenContextValue;
-use crate::lang::net::NetId;
-use crate::{FrozenComponentValue, FrozenNetValue};
+use crate::FrozenComponentValue;
 use starlark::errors::EvalMessage;
 
 /// Position data from pcb:sch comments  
@@ -270,7 +272,7 @@ where
 
 impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Find a child at the given path (supports nested paths like "foo.bar")
-    fn find_at_path(&self, path: &str) -> starlark::Result<Value<'v>> {
+    pub fn find_at_path(&self, path: &str) -> starlark::Result<Value<'v>> {
         // Handle nested paths (e.g., "foo.bar")
         if let Some(dot_pos) = path.find('.') {
             let (first, rest) = path.split_at(dot_pos);
@@ -823,27 +825,6 @@ where
             self.name.clone()
         };
 
-        // Create child context and get its heap for copying
-        let mut ctx = eval
-            .eval_context()
-            .expect("expected eval context")
-            .child_context()
-            .set_strict_io_config(true);
-
-        ctx = ctx
-            .set_source_path(std::path::PathBuf::from(&self.source_path))
-            .set_module_name(final_name.clone());
-
-        // Copy properties to child heap if provided
-        if let Some(props_map) = properties_override {
-            ctx.copy_and_set_properties(props_map)?;
-        }
-
-        // Copy parent values to child heap upfront (before evaluation starts)
-        ctx.copy_and_set_inputs_from_values(parent_values)?;
-
-        let (output, diagnostics) = ctx.eval().unpack();
-
         let context = eval
             .module()
             .extra_value()
@@ -854,111 +835,29 @@ where
                 ))
             })?;
 
-        let call_site = eval.call_stack_top_location();
+        let call_site = eval
+            .call_stack_top_location()
+            .expect("Module instantiation requires a call site");
 
-        // Propagate diagnostics from the instantiated module, but avoid
-        // showing the same error twice: instead create a new diagnostic whose
-        // primary span is the call-site inside the parent file and which
-        // carries the child error(s) as `related` entries.
-        // For warnings, preserve them as warnings.
+        let call_site_path = call_site.filename().to_string();
+        let call_site_span = call_site.resolve_span();
+        let call_stack = eval.call_stack().clone();
 
-        let had_errors = diagnostics.has_errors();
-        for child in diagnostics.into_iter() {
-            let diag_to_add = if let Some(cs) = &call_site {
-                // Wrap both errors and warnings with call-site context
-                let (severity, message) = match child.severity {
-                    EvalSeverity::Error => (
-                        EvalSeverity::Error,
-                        format!("Error instantiating `{}`", self.name),
-                    ),
-                    EvalSeverity::Warning => (
-                        EvalSeverity::Warning,
-                        format!("Warning from `{}`", self.name),
-                    ),
-                    other => (other, format!("Issue in `{}`", self.name)),
-                };
+        let provided_names: Vec<String> = provided_names.into_iter().collect();
 
-                Diagnostic {
-                    path: cs.filename().to_string(),
-                    span: Some(cs.resolve_span()),
-                    severity,
-                    body: message,
-                    call_stack: Some(eval.call_stack().clone()),
-                    child: Some(Box::new(child)),
-                    source_error: None,
-                }
-            } else {
-                child
-            };
+        context.enqueue_child(PendingChild {
+            loader: self.clone(),
+            final_name,
+            inputs: parent_values,
+            properties: properties_override,
+            provided_names,
+            call_site_path,
+            call_site_span,
+            call_stack,
+        });
 
-            // Propagate the diagnostic upwards.
-            context.add_diagnostic(diag_to_add);
-        }
-
-        match output {
-            Some(output) => {
-                // Add a reference to the dependent module's frozen heap so it stays alive.
-                eval.frozen_heap()
-                    .add_reference(output.star_module.frozen_heap());
-
-                // Add the evaluated module as a child on the *current* evaluation context so that
-                // it shows up in the final schematic.
-                context.add_child(eval.frozen_heap().alloc(output.sch_module).to_value());
-
-                let used_inputs: HashSet<String> = output
-                    .star_module
-                    .extra_value()
-                    .and_then(|extra| extra.downcast_ref::<FrozenContextValue>())
-                    .map(|fctx| {
-                        fctx.module
-                            .signature()
-                            .iter()
-                            .map(|param| param.name.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                // Remove any potential `name` override from the unused-check set.
-                let unused: Vec<String> =
-                    provided_names.difference(&used_inputs).cloned().collect();
-
-                if !unused.is_empty() {
-                    let msg = format!(
-                        "Unknown argument(s) provided to module {}: {}",
-                        self.name,
-                        unused.join(", ")
-                    );
-
-                    if let Some(cs) = &call_site {
-                        let mut unused_diag =
-                            EvalMessage::from_any_error(Path::new(cs.filename()), &msg);
-                        unused_diag.span = Some(cs.resolve_span());
-                        context.add_diagnostic(unused_diag);
-                    } else {
-                        context.add_diagnostic(EvalMessage::from_any_error(
-                            Path::new(&self.source_path),
-                            &msg,
-                        ));
-                    }
-                    // Continue execution without raising an error.
-                }
-
-                // Return `None` – in line with other factory functions like Component.
-                Ok(Value::new_none())
-            }
-            None => {
-                if !had_errors {
-                    if let Some(call_site) = eval.call_stack_top_location() {
-                        let msg = format!("Failed to instantiate module {}", self.name);
-                        let mut call_diag =
-                            EvalMessage::from_any_error(Path::new(call_site.filename()), &msg);
-                        call_diag.span = Some(call_site.resolve_span());
-                        context.add_diagnostic(call_diag);
-                    }
-                }
-                Ok(Value::new_none())
-            }
-        }
+        // Return `None` – in line with other factory functions like Component.
+        Ok(Value::new_none())
     }
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
         Some(<ModuleLoader as StarlarkValue>::get_type_starlark_repr())
@@ -1004,22 +903,8 @@ fn default_for_type<'v>(
         }
     }
 
-    if let Some(frozen_enum_type) = typ.downcast_ref::<FrozenEnumType>() {
-        let variants = frozen_enum_type
-            .get_attr("variants", heap)
-            .expect("expected variants attribute");
-
-        let list_ref =
-            ListRef::from_value(variants).expect("expected variants attribute to be a list");
-
-        if let Some(first_variant) = list_ref.first() {
-            return Ok(first_variant.to_value());
-        } else {
-            return Err(anyhow::anyhow!(
-                "EnumType provided to config/io() has no variants"
-            ));
-        }
-    }
+    // Our EnumType is a simple value (no separate Frozen version)
+    // It's already handled above, so this block is no longer needed
 
     if typ.downcast_ref::<RecordType>().is_some()
         || typ.downcast_ref::<FrozenRecordType>().is_some()
@@ -1060,7 +945,6 @@ fn default_for_type<'v>(
                 generate_net_id(),
                 String::new(),
                 SmallMap::new(),
-                Value::new_none(),
             ))
             .to_value(),
         "InterfaceFactory" => typ
@@ -1119,36 +1003,99 @@ fn validate_type<'v>(
     typ: Value<'v>,
     heap: &'v Heap,
 ) -> anyhow::Result<()> {
+    if (typ.downcast_ref::<RecordType>().is_some()
+        || typ.downcast_ref::<FrozenRecordType>().is_some())
+        && (value.downcast_ref::<Record>().is_some()
+            || value.downcast_ref::<FrozenRecord>().is_some())
+    {
+        return Ok(());
+    }
+
+    if typ.downcast_ref::<EnumType>().is_some() && value.downcast_ref::<EnumValue>().is_some() {
+        return Ok(());
+    }
+
+    // NetType validation with asymmetric conversion rules
+    if let Some(expected_type_name) = typ
+        .downcast_ref::<NetType>()
+        .map(|nt| &nt.type_name)
+        .or_else(|| {
+            typ.downcast_ref::<FrozenNetType>()
+                .map(|fnt| &fnt.type_name)
+        })
+    {
+        let actual_type_name = value
+            .downcast_ref::<NetValue>()
+            .map(|nv| nv.net_type_name())
+            .or_else(|| {
+                value
+                    .downcast_ref::<FrozenNetValue>()
+                    .map(|fnv| fnv.net_type_name())
+            });
+
+        if let Some(actual_type_name) = actual_type_name {
+            // Only allow exact type match - conversion will be handled by try_net_conversion
+            if expected_type_name == actual_type_name {
+                return Ok(());
+            }
+
+            // Type mismatch - fail validation
+            // Note: If expected is "Net" and actual is different (e.g., "Power"),
+            // this will fail here and try_net_conversion will handle the conversion
+            anyhow::bail!(
+                "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
+            );
+        }
+    }
+
+    // InterfaceFactory validation
+    if (typ.downcast_ref::<InterfaceFactory>().is_some()
+        || typ.downcast_ref::<FrozenInterfaceFactory>().is_some())
+        && (value.downcast_ref::<InterfaceValue>().is_some()
+            || value.downcast_ref::<FrozenInterfaceValue>().is_some())
+    {
+        return Ok(());
+    }
+
     if TypeType::unpack_value_opt(typ).is_some() {
         let tc = TypeCompiled::new(typ, heap)?;
         if tc.matches(value) {
             return Ok(());
         }
 
+        let rendered_value = format!("{value}").replace("FrozenValue(", "Value(");
+
         anyhow::bail!(
-            "Input '{name}' (type) has wrong type for this placeholder: expected {typ}, got {value}"
+            "Input '{name}' (type) has wrong type for this placeholder: expected {typ}, got {rendered_value}"
         );
     }
 
-    let is_ok = match typ.get_type() {
-        "NetType" => value.downcast_ref::<crate::lang::net::NetValue>().is_some(),
-        "InterfaceFactory" => value
-            .downcast_ref::<crate::lang::interface::InterfaceValue>()
-            .is_some(),
-        "EnumType" => EnumValue::from_value(value).is_some(),
-        "str" | "string" | "String" => value.unpack_str().is_some(),
-        "int" | "Int" => value.unpack_i32().is_some(),
-        "float" | "Float" => value.downcast_ref::<StarlarkFloat>().is_some(),
-        _ => false,
-    };
+    let simple_type = typ.get_type();
 
-    if !is_ok {
-        anyhow::bail!(
-            "Input '{name}' has wrong type for this placeholder: expected {typ}, got {value}"
-        );
+    match simple_type {
+        "str" | "string" | "String" => {
+            if value.unpack_str().is_some() {
+                return Ok(());
+            }
+        }
+        "int" | "Int" => {
+            if value.unpack_i32().is_some() {
+                return Ok(());
+            }
+        }
+        "float" | "Float" => {
+            if value.downcast_ref::<StarlarkFloat>().is_some() {
+                return Ok(());
+            }
+        }
+        _ => {}
     }
 
-    Ok(())
+    let rendered_value = format!("{value}").replace("FrozenValue(", "Value(");
+
+    anyhow::bail!(
+        "Input '{name}' has wrong type for this placeholder: expected {typ}, got {rendered_value}"
+    );
 }
 
 // Add helper function to attempt converting a value to an enum variant when
@@ -1162,13 +1109,13 @@ fn try_enum_conversion<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
     // Only applicable for EnumType values.
-    if typ.downcast_ref::<EnumType>().is_none() && typ.downcast_ref::<FrozenEnumType>().is_none() {
+    if typ.downcast_ref::<EnumType>().is_none() {
         return Ok(None);
     }
 
     // If the value is already an EnumValue, bail early – the caller should have
     // succeeded the type check in that case.
-    if EnumValue::from_value(value).is_some() {
+    if value.downcast_ref::<EnumValue>().is_some() {
         return Ok(None);
     }
 
@@ -1180,6 +1127,48 @@ fn try_enum_conversion<'v>(
         Ok(converted) => Ok(Some(converted)),
         Err(_) => Ok(None), // Can't convert - let caller try other strategies
     }
+}
+
+// Helper function to attempt net type conversion when passing a typed net to
+// a parameter expecting a different net type (e.g., Power -> Net).
+// Returns `Ok(Some(converted))` if conversion succeeds, `Ok(None)` if not applicable.
+fn try_net_conversion<'v>(
+    value: Value<'v>,
+    expected_typ: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> anyhow::Result<Option<Value<'v>>> {
+    // Check if expected type is a NetType
+    let expected_type_name = expected_typ
+        .downcast_ref::<NetType>()
+        .map(|nt| &nt.type_name)
+        .or_else(|| {
+            expected_typ
+                .downcast_ref::<FrozenNetType>()
+                .map(|fnt| &fnt.type_name)
+        });
+
+    let Some(expected_type_name) = expected_type_name else {
+        return Ok(None); // Expected type is not a NetType
+    };
+
+    // Check if value is a NetValue
+    if let Some(nv) = value.downcast_ref::<NetValue>() {
+        let actual_type_name = nv.net_type_name();
+        // Only convert if expected type is "Net" and actual type is different
+        if expected_type_name == "Net" && actual_type_name != "Net" {
+            // Use with_net_type helper to cast the net type without creating a new instance
+            return Ok(Some(nv.with_net_type("Net", eval.heap())));
+        }
+    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
+        let actual_type_name = fnv.net_type_name();
+        // Only convert if expected type is "Net" and actual type is different
+        if expected_type_name == "Net" && actual_type_name != "Net" {
+            // Use with_net_type helper for frozen nets too
+            return Ok(Some(fnv.with_net_type("Net", eval.heap())));
+        }
+    }
+
+    Ok(None) // No conversion needed or value is not a NetValue
 }
 
 // Helper function to attempt interface promotion when passing an interface to
@@ -1233,47 +1222,6 @@ fn try_interface_promotion<'v>(
     }
 }
 
-// Helper to attempt converting dict to record by calling RecordType with kwargs
-fn try_record_conversion<'v>(
-    value: Value<'v>,
-    typ: Value<'v>,
-    eval: &mut Evaluator<'v, '_, '_>,
-) -> anyhow::Result<Option<Value<'v>>> {
-    // Only applicable for RecordType values
-    if typ.downcast_ref::<RecordType>().is_none()
-        && typ.downcast_ref::<FrozenRecordType>().is_none()
-    {
-        return Ok(None);
-    }
-
-    // If value is already a record, bail (should have passed validation)
-    use starlark::values::record::Record;
-    if Record::from_value(value).is_some() {
-        return Ok(None);
-    }
-
-    // Try to convert from dict - extract field names and values
-    if let Some(dict) = DictRef::from_value(value) {
-        let mut kwargs = Vec::new();
-        for (k, v) in dict.iter() {
-            if let Some(key_str) = k.unpack_str() {
-                kwargs.push((key_str, v));
-            } else {
-                return Err(anyhow::anyhow!("Record field names must be strings"));
-            }
-        }
-
-        // Call RecordType with kwargs: RecordType(field1=val1, field2=val2, ...)
-        // Return Ok(None) on failure so other conversion strategies can be tried.
-        match eval.eval_function(typ, &[], &kwargs) {
-            Ok(converted) => Ok(Some(converted)),
-            Err(_) => Ok(None), // Can't convert - let caller try other strategies
-        }
-    } else {
-        Ok(None) // Not a dict, can't convert
-    }
-}
-
 fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
@@ -1286,11 +1234,10 @@ fn validate_or_convert<'v>(
         return Ok(value);
     }
 
-    // 1. Try automatic conversions for values that were downgraded during copy_value()
-    //    These must happen BEFORE custom converter to preserve transparent copying
+    // 1. Try automatic conversions for values
 
-    // 1a. If expected type is record and value is dict, auto-convert (record was downgraded)
-    if let Some(converted) = try_record_conversion(value, typ, eval)? {
+    // 1a. Try net type conversion (e.g., Power -> Net)
+    if let Some(converted) = try_net_conversion(value, typ, eval)? {
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
     }
@@ -1343,35 +1290,18 @@ fn io_generated_default<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
     typ: Value<'v>,
     name: &str,
-    register: bool,
-) -> anyhow::Result<Value<'v>> {
+) -> starlark::Result<Value<'v>> {
     match typ.get_type() {
         "NetType" => {
-            let heap = eval.heap();
-            let net_id = generate_net_id();
-            let mut final_name = name.to_string();
-
-            if register {
-                if let Some(ctx) = eval.context_value() {
-                    final_name = ctx.register_net(net_id, &final_name)?;
-                }
-            }
-
-            Ok(heap
-                .alloc(NetValue::new(
-                    net_id,
-                    final_name,
-                    starlark::collections::SmallMap::new(),
-                    Value::new_none(),
-                ))
-                .to_value())
+            // Invoke the NetType constructor to apply defaults and extract metadata
+            let instance_name = eval.heap().alloc_str(name).to_value();
+            eval.eval_function(typ, &[instance_name], &[])
         }
         "InterfaceFactory" => {
             let instance_name = eval.heap().alloc_str(name).to_value();
             eval.eval_function(typ, &[instance_name], &[])
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
         }
-        _ => default_for_type(eval, typ),
+        _ => default_for_type(eval, typ).map_err(starlark::Error::from),
     }
 }
 
@@ -1708,13 +1638,13 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 // Value provided by parent - validate/convert it
                 let value = validate_or_convert(&name, provided, typ, None, eval)?;
 
-                // Determine metadata default
+                // When a value is provided, only use explicit default for metadata
+                // Don't synthesize defaults since actual_value already contains the value
                 let metadata_default = if let Some(explicit_default) = default {
                     validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
                     Some(explicit_default)
                 } else {
-                    // Synthesize default without side effects (no net registration)
-                    Some(io_generated_default(eval, typ, &name, false)?)
+                    None
                 };
 
                 (value, metadata_default)
@@ -1725,7 +1655,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     (default_val, Some(default_val))
                 } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
                     // Generate and register nets/interfaces for optional Net/Interface types
-                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    let generated = io_generated_default(eval, typ, &name)?;
                     (generated, Some(generated))
                 } else {
                     // Other types: return None but record a default for metadata
@@ -1751,7 +1681,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     validate_type(name.as_str(), default_val, typ, eval.heap())?;
                     (default_val, Some(default_val))
                 } else {
-                    let generated = io_generated_default(eval, typ, &name, true)?;
+                    let generated = io_generated_default(eval, typ, &name)?;
                     (generated, Some(generated))
                 }
             };

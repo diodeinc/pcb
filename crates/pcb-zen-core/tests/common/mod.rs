@@ -213,25 +213,22 @@ macro_rules! snapshot_eval {
             // The last file in the list is the main file
             let main_file = file_list.last().unwrap().0.clone();
 
-            let file_provider = Arc::new(InMemoryFileProvider::new(files));
             let load_resolver = Arc::new(CoreLoadResolver::new(
-                file_provider.clone(),
+                Arc::new(InMemoryFileProvider::new(files)),
                 Arc::new(NoopRemoteFetcher::default()),
                 std::path::PathBuf::from("/"),
                 true,
             ));
 
 
-            let ctx = EvalContext::new()
-                .set_file_provider(file_provider)
-                .set_load_resolver(load_resolver)
+            let ctx = EvalContext::new(load_resolver)
                 .set_source_path(std::path::PathBuf::from(&main_file))
                 .set_module_name("<root>");
 
             let result = ctx.eval();
 
             // Format the output similar to the original tests
-            let output = if result.is_success() {
+            let mut output = if result.is_success() {
                 if let Some(eval_output) = result.output {
                     let mut output_parts = vec![];
 
@@ -256,6 +253,18 @@ macro_rules! snapshot_eval {
                     .collect::<Vec<_>>()
                     .join("\n")
             };
+
+            // Sanitize net IDs for stable snapshots (apply to both success and error output)
+            // Replace patterns like id: "123" with id: "<ID>"
+            output = regex::Regex::new(r#"id: "\d+""#)
+                .unwrap()
+                .replace_all(&output, r#"id: "<ID>""#)
+                .to_string();
+            // Replace patterns like "id: 123" with "id: <ID>"
+            output = regex::Regex::new(r#"id: \d+"#)
+                .unwrap()
+                .replace_all(&output, "id: <ID>")
+                .to_string();
 
             insta::assert_snapshot!(output);
         }

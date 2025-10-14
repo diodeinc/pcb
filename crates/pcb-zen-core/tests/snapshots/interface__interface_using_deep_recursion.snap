@@ -20,7 +20,8 @@ expression: output
                     "Net": {
                       "id": 4,
                       "name": "L3_level2_level1",
-                      "properties": {}
+                      "properties": {},
+                      "type_name": "Net"
                     }
                   }
                 },
