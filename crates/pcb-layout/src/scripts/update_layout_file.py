@@ -1922,13 +1922,19 @@ class ImportNetlist(Step):
                 self.board.Delete(fp)
 
         def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
+            # Collect fields to remove first to avoid modifying collection during iteration
+            fields_to_remove = []
             for field in fp.GetFields():
                 if (
                     not field.IsValue()
                     and not field.IsReference()
                     and not field.IsDatasheet()
                 ):
-                    fp.RemoveField(field.GetName())
+                    fields_to_remove.append(field)
+
+            # Remove collected fields
+            for field in fields_to_remove:
+                fp.Remove(field)
 
             fp.SetReference(part.ref)
             fp.SetValue(part.value)
