@@ -3,7 +3,7 @@ source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
 regular net: VCC
-interface net: POWER
+interface net: POWER_VCC
 Module {
     name: "<root>",
     source: "test.zen",

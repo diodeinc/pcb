@@ -2,4 +2,4 @@
 source: crates/pcb-zen-core/tests/net.rs
 expression: output
 ---
-Error: test.zen:6:7-32 Field 'voltage' has wrong type: expected str, got int
+Error: test.zen:6:7-32 Field `voltage` has wrong type: expected `str`, got value `123` of type `int`

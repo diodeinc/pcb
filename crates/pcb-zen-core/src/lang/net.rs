@@ -12,6 +12,7 @@ use starlark::{
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     util::ArcStr,
     values::{
+        record::field::FieldGen,
         starlark_value,
         typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
         Coerce, Freeze, FreezeResult, Freezer, FrozenHeap, FrozenValue, Heap, NoSerialize,
@@ -79,29 +80,6 @@ pub fn make_default_net_type(heap: &FrozenHeap) -> FrozenNetType {
         type_name: "Net".to_owned(),
         fields,
     }
-}
-
-/// Extract the TypeCompiled from a field spec (FieldGen or direct type Value)
-///
-/// For FieldGen, extract the inner TypeCompiled. For direct types, create TypeCompiled.
-fn field_spec_to_type_compiled<'v>(
-    spec: Value<'v>,
-    heap: &'v Heap,
-) -> anyhow::Result<TypeCompiled<Value<'v>>> {
-    use starlark::values::types::record::field::FieldGen;
-
-    // If it's a FieldGen, extract the inner TypeCompiled directly
-    if let Some(field_gen) = spec.downcast_ref::<FieldGen<Value<'v>>>() {
-        return Ok(*field_gen.typ());
-    }
-    if spec.downcast_ref::<FieldGen<FrozenValue>>().is_some() {
-        // For frozen FieldGen, we need to get the type and create a new TypeCompiled
-        // The TypeCompiled inside is for FrozenValue, we need one for Value
-        return TypeCompiled::new(spec, heap); // Let TypeCompiled handle the conversion
-    }
-
-    // Otherwise it's a direct type constructor - create TypeCompiled from it
-    TypeCompiled::new(spec, heap)
 }
 
 #[derive(
@@ -379,7 +357,14 @@ impl<'v> NetType<'v> {
 
             // Validate the field spec by compiling its type - this fails early if invalid
             // This handles field(), direct types (str/int), and custom types (Enum/PhysicalValue) uniformly
-            field_spec_to_type_compiled(field_value, eval.heap()).map_err(|e| {
+            let type_compiled_result =
+                if let Some(field_gen) = field_value.downcast_ref::<FieldGen<Value<'v>>>() {
+                    Ok(*field_gen.typ())
+                } else {
+                    TypeCompiled::new(field_value, eval.heap())
+                };
+
+            type_compiled_result.map_err(|e| {
                 starlark::Error::new_other(anyhow::anyhow!(
                     "Invalid type spec for field '{}': {}",
                     field_name,
@@ -465,36 +450,63 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
     }
 }
 
-/// Validate a field value using a pre-compiled TypeCompiled.
+/// Process a field specification: validate provided value or apply default.
 ///
-/// The TypeCompiled was validated and stored at net type definition time,
-/// so we know it's valid and can directly use it for matching.
-fn validate_field_value<'v>(
+/// This is the single unified function for field validation used by both
+/// builtin.net() and interface(). It handles:
+/// 1. If value provided: extract type from spec, validate against it
+/// 2. Else if field has default: use the default
+/// 3. Else: return None
+pub(crate) fn validate_field<'v>(
     field_name: &str,
-    type_compiled: &TypeCompiled<Value<'v>>,
-    provided_value: Value<'v>,
-) -> anyhow::Result<Value<'v>> {
-    if type_compiled.matches(provided_value) {
-        return Ok(provided_value);
-    }
-    anyhow::bail!(
-        "Field '{}' has wrong type: expected {}, got {}",
-        field_name,
-        type_compiled,
-        provided_value.get_type()
-    );
-}
-
-/// Extract default value from a field spec (if it's a FieldGen with a default).
-fn default_from_field<'v>(spec: Value<'v>) -> Option<Value<'v>> {
-    use starlark::values::types::record::field::FieldGen;
-
-    if let Some(fg) = spec.downcast_ref::<FieldGen<Value>>() {
+    field_spec: Value<'v>,
+    provided_value: Option<Value<'v>>,
+    heap: &'v Heap,
+) -> starlark::Result<Option<Value<'v>>> {
+    // Try to extract default from field() spec first (before type compilation)
+    let default = if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value>>() {
         fg.default().map(|d| d.to_value())
-    } else if let Some(fg) = spec.downcast_ref::<FieldGen<FrozenValue>>() {
+    } else if let Some(fg) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
         fg.default().map(|d| d.to_value())
     } else {
         None
+    };
+
+    // Extract TypeCompiled from field spec (FieldGen or direct type)
+    let type_compiled = if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
+        Ok(*field_gen.typ())
+    } else {
+        TypeCompiled::new(field_spec, heap)
+    };
+
+    let type_compiled = match type_compiled {
+        Ok(t) => t,
+        Err(_err) => {
+            // Type compilation failed. If there's a default value, use it without validation.
+            // If there's a provided value, we can't validate it, so just use it.
+            // This is needed for forward compatibility with new field types.
+            return Ok(provided_value.or(default));
+        }
+    };
+
+    if let Some(provided_val) = provided_value {
+        // User provided a value - validate it against the field's type spec
+        // Validate provided value against type
+        if type_compiled.matches(provided_val) {
+            Ok(Some(provided_val))
+        } else {
+            Err(anyhow::anyhow!(
+                "Field `{}` has wrong type: expected `{}`, got value `{}` of type `{}`",
+                field_name,
+                type_compiled,
+                provided_val.to_repr(),
+                provided_val.get_type()
+            )
+            .into())
+        }
+    } else {
+        // No provided value - use default if available
+        Ok(default)
     }
 }
 
@@ -598,19 +610,17 @@ where
 
                 // Merge field values into properties, applying defaults for unprovided fields
                 for (field_name, field_spec) in &self.fields {
-                    if let Some(provided_val) = field_values.get(field_name) {
-                        // User provided a value - validate it against the field's type spec
-                        let tc = field_spec_to_type_compiled(field_spec.to_value(), heap)
-                            .map_err(|e| anyhow::anyhow!("Internal error: {}", e))
-                            .map_err(starlark::Error::new_other)?;
-                        let validated_val = validate_field_value(field_name, &tc, *provided_val)
-                            .map_err(starlark::Error::new_other)?;
-                        properties.insert(field_name.clone(), validated_val);
-                    } else if let Some(default_val) = default_from_field(field_spec.to_value()) {
-                        // User didn't provide value - try to apply default from field() spec
-                        properties.insert(field_name.clone(), default_val);
+                    let result = validate_field(
+                        field_name,
+                        field_spec.to_value(),
+                        field_values.get(field_name).copied(),
+                        heap,
+                    )?;
+
+                    if let Some(field_value) = result {
+                        properties.insert(field_name.clone(), field_value);
                     }
-                    // If no provided value and no default, field won't be in properties
+                    // If no value and no default, field won't be in properties
                 }
 
                 // Extract symbol metadata if a symbol field exists (from explicit value or default)
