@@ -2,7 +2,7 @@ use anyhow::{Context, Result as AnyhowResult};
 use log::{debug, info};
 use pcb_sch::{AttributeValue, Schematic, ATTR_LAYOUT_PATH};
 use pcb_zen_core::lang::stackup::{
-    ApproxEq, BoardConfig, BoardConfigError, Stackup, StackupError, THICKNESS_EPS,
+    ApproxEq, BoardConfig, BoardConfigError, NetClass, Stackup, StackupError, THICKNESS_EPS,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,9 @@ pub enum LayoutError {
 
     #[error("Board config error: {0}")]
     BoardConfigError(#[from] BoardConfigError),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Helper struct for layout file paths
@@ -116,19 +119,16 @@ pub fn process_layout(
         )
     })?;
 
-    // Extract board config if it exists
-    let board_config_json = utils::extract_board_config(schematic);
-    let board_config_path = if let Some(ref json) = board_config_json {
-        fs::write(&paths.board_config, json).with_context(|| {
-            format!(
-                "Failed to write board config: {}",
-                paths.board_config.display()
-            )
-        })?;
-        Some(paths.board_config.to_str().unwrap())
-    } else {
-        None
-    };
+    // Extract board config once for both Python script and patching
+    let board_config = utils::extract_board_config(schematic);
+
+    // Write board config for Python script if it exists
+    let board_config_path = board_config.as_ref().and_then(|config| {
+        serde_json::to_string(config).ok().and_then(|json| {
+            fs::write(&paths.board_config, json).ok()?;
+            Some(paths.board_config.to_str().unwrap().to_string())
+        })
+    });
 
     // Write footprint library table
     utils::write_footprint_library_table(&layout_dir, schematic)?;
@@ -156,7 +156,7 @@ pub fn process_layout(
         .arg(paths.snapshot.to_str().unwrap());
 
     // Add board config argument if we have one
-    if let Some(board_config) = board_config_path {
+    if let Some(ref board_config) = board_config_path {
         script_builder = script_builder.arg("--board-config").arg(board_config);
     }
 
@@ -182,10 +182,17 @@ pub fn process_layout(
             )
         })?;
 
-    // NEW: Apply stackup configuration if present and enabled
+    // Apply board config (stackup + netclass patterns)
     if sync_board_config {
-        if let Some(ref json) = board_config_json {
-            patch_stackup_if_needed(&paths.pcb, json)?;
+        if let Some(ref config) = board_config {
+            if let Some(ref stackup) = config.stackup {
+                patch_stackup_if_needed(&paths.pcb, stackup)?;
+            }
+
+            let assignments = build_netclass_assignments(schematic, config.netclasses());
+            if !assignments.is_empty() {
+                patch_netclass_patterns(&paths.pcb, &assignments)?;
+            }
         }
     }
 
@@ -233,56 +240,24 @@ pub mod utils {
         }
     }
 
-    /// Extract board config from schematic's root instance attributes using the same
-    /// priority logic as pcb layout command.
-    ///
-    /// Priority order:
-    /// 1. If `default_board_config` property exists, use that specific config
-    /// 2. Otherwise, collect all `board_config.*` properties, sort alphabetically
-    /// 3. If there's a config named "default", choose that one
-    /// 4. Otherwise, choose the first one alphabetically
-    pub fn extract_board_config(schematic: &Schematic) -> Option<String> {
-        let root_ref = schematic.root_ref.as_ref()?;
-        let root = schematic.instances.get(root_ref)?;
+    /// Extract and parse board config from schematic's root instance attributes
+    pub fn extract_board_config(schematic: &Schematic) -> Option<BoardConfig> {
+        let root = schematic.instances.get(schematic.root_ref.as_ref()?)?;
 
-        // First, check if there's a default_board_config set
-        if let Some(default_config_name) = root
+        // Find board_config.* property (prefer "default")
+        let config_json = root
             .attributes
-            .get("default_board_config")
-            .and_then(|v| v.string())
-        {
-            // Look up the specific config
-            let config_key = format!("board_config.{}", default_config_name);
-            if let Some(config_json) = root.attributes.get(&config_key).and_then(|v| v.string()) {
-                return Some(config_json.to_string());
-            }
-        }
+            .iter()
+            .filter(|(k, _)| k.starts_with("board_config."))
+            .find(|(k, _)| k == &"board_config.default")
+            .or_else(|| {
+                root.attributes
+                    .iter()
+                    .find(|(k, _)| k.starts_with("board_config."))
+            })
+            .and_then(|(_, v)| v.string())?;
 
-        // If no default is set, collect all board_config.* properties
-        let mut configs: Vec<(String, String)> = Vec::new();
-        for (key, value) in &root.attributes {
-            if key.starts_with("board_config.") {
-                if let Some(config_json) = value.string() {
-                    let config_name = key.strip_prefix("board_config.").unwrap();
-                    configs.push((config_name.to_string(), config_json.to_string()));
-                }
-            }
-        }
-
-        if configs.is_empty() {
-            return None;
-        }
-
-        // Sort alphabetically by config name
-        configs.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // If there's a config named "default", choose that one
-        if let Some((_, config_json)) = configs.iter().find(|(name, _)| name == "default") {
-            return Some(config_json.clone());
-        }
-
-        // Otherwise, choose the first one alphabetically
-        Some(configs[0].1.clone())
+        BoardConfig::from_json_str(config_json).ok()
     }
 
     /// Write footprint library table for a layout
@@ -318,14 +293,88 @@ pub mod utils {
     }
 }
 
-/// Apply stackup configuration if it differs from existing PCB file
-fn patch_stackup_if_needed(pcb_path: &Path, board_config_json: &str) -> Result<(), LayoutError> {
-    let board_config = BoardConfig::from_json_str(board_config_json)?;
-    let Some(zen_stackup) = board_config.stackup else {
-        debug!("No stackup configuration found in board config");
-        return Ok(()); // No stackup to apply
-    };
+/// Build netclass assignments from net impedance properties
+fn build_netclass_assignments(
+    schematic: &Schematic,
+    netclasses: &[NetClass],
+) -> std::collections::HashMap<String, String> {
+    const TOLERANCE: f64 = 0.05; // ±5%
 
+    let mut assignments = std::collections::HashMap::new();
+
+    for (net_name, net) in &schematic.nets {
+        // Extract impedance from net properties
+        let impedance = net.properties.get("impedance").and_then(|attr| match attr {
+            AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms => {
+                use rust_decimal::prelude::ToPrimitive;
+                pv.value.to_f64()
+            }
+            _ => None,
+        });
+
+        if let Some(imp) = impedance {
+            // Find matching netclass (try differential first, then single-ended)
+            let matched = netclasses
+                .iter()
+                .filter_map(|nc| {
+                    nc.differential_pair_impedance_ohms()
+                        .or_else(|| nc.single_ended_impedance_ohms())
+                        .map(|target| {
+                            let error = ((imp - target) / target).abs();
+                            (nc, error)
+                        })
+                })
+                .filter(|(_, err)| *err <= TOLERANCE)
+                .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
+
+            if let Some((nc, _)) = matched {
+                assignments.insert(net_name.clone(), nc.name.clone());
+            }
+        }
+    }
+
+    assignments
+}
+
+/// Apply netclass pattern assignments to .kicad_pro file
+fn patch_netclass_patterns(
+    pcb_path: &Path,
+    assignments: &std::collections::HashMap<String, String>,
+) -> Result<(), LayoutError> {
+    if assignments.is_empty() {
+        debug!("No netclass assignments to write");
+        return Ok(());
+    }
+
+    let pro_path = pcb_path.with_extension("kicad_pro");
+    info!(
+        "Writing {} netclass patterns to {}",
+        assignments.len(),
+        pro_path.display()
+    );
+
+    // Read, modify, and write .kicad_pro JSON
+    let pro_content = fs::read_to_string(&pro_path)
+        .with_context(|| format!("Failed to read {}", pro_path.display()))?;
+
+    let mut pro_json: serde_json::Value = serde_json::from_str(&pro_content)
+        .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
+
+    pro_json["net_settings"]["netclass_patterns"] = serde_json::json!(assignments
+        .iter()
+        .map(|(net_name, netclass_name)| {
+            serde_json::json!({"pattern": net_name, "netclass": netclass_name})
+        })
+        .collect::<Vec<_>>());
+
+    fs::write(&pro_path, serde_json::to_string_pretty(&pro_json)?)
+        .with_context(|| format!("Failed to write {}", pro_path.display()))?;
+
+    Ok(())
+}
+
+/// Apply stackup configuration if it differs from existing PCB file
+fn patch_stackup_if_needed(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(), LayoutError> {
     // Read current PCB file
     let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
         LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
@@ -357,11 +406,8 @@ fn patch_stackup_if_needed(pcb_path: &Path, board_config_json: &str) -> Result<(
 
     info!("Updating stackup configuration in {}", pcb_path.display());
 
-    // Get number of user layers from board config
-    let num_user_layers = board_config.num_user_layers;
-
-    // Generate new S-expressions
-    let layers_sexpr = zen_stackup.generate_layers_sexpr(num_user_layers);
+    // Generate new S-expressions (using default user layers)
+    let layers_sexpr = zen_stackup.generate_layers_sexpr(4);
     let stackup_sexpr = zen_stackup.generate_stackup_sexpr();
 
     // Use surgical string replacement to avoid parsing issues with hex numbers
