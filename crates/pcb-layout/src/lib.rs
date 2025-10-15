@@ -4,6 +4,7 @@ use pcb_sch::{AttributeValue, Schematic, ATTR_LAYOUT_PATH};
 use pcb_zen_core::lang::stackup::{
     ApproxEq, BoardConfig, BoardConfigError, NetClass, Stackup, StackupError, THICKNESS_EPS,
 };
+use rust_decimal::prelude::ToPrimitive;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -303,28 +304,49 @@ fn build_netclass_assignments(
     let mut assignments = std::collections::HashMap::new();
 
     for (net_name, net) in &schematic.nets {
-        // Extract impedance from net properties
-        let impedance = net.properties.get("impedance").and_then(|attr| match attr {
+        // Check for differential impedance (from DiffPair propagation)
+        let diff_impedance =
+            net.properties
+                .get("differential_impedance")
+                .and_then(|attr| match attr {
+                    AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms => {
+                        pv.value.to_f64()
+                    }
+                    _ => None,
+                });
+
+        // Check for single-ended impedance (from individual nets)
+        let se_impedance = net.properties.get("impedance").and_then(|attr| match attr {
             AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms => {
-                use rust_decimal::prelude::ToPrimitive;
                 pv.value.to_f64()
             }
             _ => None,
         });
 
-        if let Some(imp) = impedance {
-            // Find matching netclass (try differential first, then single-ended)
+        // Match differential impedance to differential netclasses
+        if let Some(imp) = diff_impedance {
             let matched = netclasses
                 .iter()
                 .filter_map(|nc| {
-                    nc.differential_pair_impedance_ohms()
-                        .or_else(|| nc.single_ended_impedance_ohms())
-                        .map(|target| {
-                            let error = ((imp - target) / target).abs();
-                            (nc, error)
-                        })
+                    let target = nc.differential_pair_impedance_ohms()?;
+                    let error = ((imp - target) / target).abs();
+                    (error <= TOLERANCE).then_some((nc, error))
                 })
-                .filter(|(_, err)| *err <= TOLERANCE)
+                .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
+
+            if let Some((nc, _)) = matched {
+                assignments.insert(net_name.clone(), nc.name.clone());
+            }
+        }
+        // Match single-ended impedance to single-ended netclasses
+        else if let Some(imp) = se_impedance {
+            let matched = netclasses
+                .iter()
+                .filter_map(|nc| {
+                    let target = nc.single_ended_impedance_ohms()?;
+                    let error = ((imp - target) / target).abs();
+                    (error <= TOLERANCE).then_some((nc, error))
+                })
                 .min_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
 
             if let Some((nc, _)) = matched {

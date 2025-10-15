@@ -849,7 +849,7 @@ fn propagate_from_value(
             // Check if nested interface with impedance (DiffPair)
             if let Some(nested) = fv.downcast_ref::<FrozenInterfaceValue>() {
                 if let Some(impedance_val) = nested.fields().get("impedance") {
-                    // Has impedance - propagate to P/N nets
+                    // Has impedance - propagate to P/N nets as differential_impedance
                     if let (Some(p), Some(n)) = (
                         nested
                             .fields()
@@ -860,16 +860,15 @@ fn propagate_from_value(
                             .get("N")
                             .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
                     ) {
-                        // Convert impedance to AttributeValue
                         if let Ok(attr) = to_attribute_value(*impedance_val) {
                             net_props
                                 .entry(p.id())
                                 .or_default()
-                                .insert("impedance".to_string(), attr.clone());
+                                .insert("differential_impedance".to_string(), attr.clone());
                             net_props
                                 .entry(n.id())
                                 .or_default()
-                                .insert("impedance".to_string(), attr);
+                                .insert("differential_impedance".to_string(), attr);
                         }
                     }
                 } else {
