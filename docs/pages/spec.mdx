@@ -102,18 +102,33 @@ local-lib = "./path/to/local/lib"
 
 ### Net
 
-A `Net` represents an electrical connection between component pins.
+A `Net` represents an electrical connection between component pins. Nets can optionally specify electrical properties like impedance, voltage range, and schematic symbols.
 
 ```python
 # Create a net with optional name
 net1 = Net()
 net2 = Net("VCC")
+
+# Net with impedance (for controlled impedance routing)
+load("@stdlib/units.zen", "Impedance")
+clk = Net("CLK", impedance=Impedance(50))  # 50Ω single-ended
+
+# Net with voltage range
+load("@stdlib/units.zen", "VoltageRange")
+vdd = Net("VDD_3V3", voltage=VoltageRange("3.0V to 3.6V"))
+
+# Net with custom schematic symbol
+vcc_sym = Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")
+vcc = Net("VCC", symbol=vcc_sym)
 ```
 
-**Type**: `Net`  
-**Constructor**: `Net(name="")`
+**Type**: `Net`
+**Constructor**: `Net(name="", symbol=None, voltage=None, impedance=None)`
 
 - `name` (optional): String identifier for the net
+- `symbol` (optional): Symbol object for schematic representation
+- `voltage` (optional): VoltageRange specification for the net
+- `impedance` (optional): Impedance specification for single-ended nets (in Ohms)
 
 ### Symbol
 
@@ -203,7 +218,30 @@ Key parameters:
 
 ### Interface
 
-Interfaces define reusable connection patterns with field specifications and type validation.
+Interfaces define reusable connection patterns with field specifications and type validation. Interfaces can specify impedance requirements that automatically propagate to their constituent nets during layout.
+
+**Differential Pair Example:**
+
+```python
+load("@stdlib/units.zen", "Impedance")
+
+# DiffPair interface with 90Ω differential impedance
+DiffPair = interface(
+    P=Net(),
+    N=Net(),
+    impedance=field(Impedance, None),  # Optional impedance
+)
+
+# USB interface uses DiffPair with 90Ω impedance
+Usb2 = interface(
+    D=DiffPair(impedance=Impedance(90)),
+)
+
+# When instantiated, impedance automatically propagates to P/N nets
+usb = Usb2("USB")  # USB.D.P and USB.D.N both get 90Ω differential impedance
+```
+
+The impedance from DiffPair interfaces is stored as `differential_impedance` on the P and N nets, allowing the layout system to assign appropriate netclasses for differential pair routing.
 
 #### Basic Syntax
 
