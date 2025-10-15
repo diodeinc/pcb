@@ -47,7 +47,9 @@ fn starlark_value_to_decimal(
     }
 }
 
-#[derive(Copy, Clone, Debug, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize,
+)]
 pub struct PhysicalValue {
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]

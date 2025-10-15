@@ -2900,6 +2900,7 @@ dependencies = [
  "pcb-sch",
  "pcb-zen",
  "pcb-zen-core",
+ "rust_decimal",
  "serde_json",
  "serial_test",
  "tempfile",
