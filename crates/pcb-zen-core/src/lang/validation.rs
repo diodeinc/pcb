@@ -6,8 +6,12 @@ pub enum ValidationError {
     EmptyName { context: String },
     #[error("{context} cannot contain whitespace. Got: {name:?}")]
     NameContainsWhitespace { context: String, name: String },
-    #[error("{context} cannot contain dots. Got: {name:?}")]
-    NameContainsDots { context: String, name: String },
+    #[error("{context} cannot contain invalid characters {invalid_chars}. Got: {name:?}")]
+    NameContainsInvalidChars {
+        context: String,
+        name: String,
+        invalid_chars: String,
+    },
     #[error("{context} must contain only ASCII characters. Got: {name:?}")]
     NameNotAscii { context: String, name: String },
 }
@@ -45,9 +49,10 @@ pub fn validate_identifier_name(name: &str, context: &str) -> Result<(), Validat
 
     // Check for dots (confusing for hierarchical references)
     if name.contains('.') {
-        return Err(ValidationError::NameContainsDots {
+        return Err(ValidationError::NameContainsInvalidChars {
             context: context.to_string(),
             name: name.to_string(),
+            invalid_chars: ".".to_string(),
         });
     }
 
@@ -56,6 +61,15 @@ pub fn validate_identifier_name(name: &str, context: &str) -> Result<(), Validat
         return Err(ValidationError::NameNotAscii {
             context: context.to_string(),
             name: name.to_string(),
+        });
+    }
+
+    // Check for @ sign
+    if name.contains('@') {
+        return Err(ValidationError::NameContainsInvalidChars {
+            context: context.to_string(),
+            name: name.to_string(),
+            invalid_chars: "@".to_string(),
         });
     }
 
