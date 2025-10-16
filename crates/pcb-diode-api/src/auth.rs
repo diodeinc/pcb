@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use colored::Colorize;
 use rand::Rng;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -9,33 +8,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 
-fn get_api_base_url() -> String {
-    if let Ok(url) = std::env::var("DIODE_API_URL") {
-        return url;
-    }
-
-    #[cfg(debug_assertions)]
-    return "http://localhost:3001".to_string();
-    #[cfg(not(debug_assertions))]
-    return "https://api.diode.computer".to_string();
-}
-
-fn get_web_base_url() -> String {
-    if let Ok(url) = std::env::var("DIODE_APP_URL") {
-        return url;
-    }
-
-    #[cfg(debug_assertions)]
-    return "http://localhost:3000".to_string();
-    #[cfg(not(debug_assertions))]
-    return "https://app.diode.computer".to_string();
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthTokens {
     pub access_token: String,
     pub refresh_token: String,
-    pub expires_at: i64, // Unix timestamp in seconds
+    pub expires_at: i64,
     pub email: Option<String>,
 }
 
@@ -45,7 +22,6 @@ impl AuthTokens {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        // Consider expired if less than 5 minutes remaining
         self.expires_at - now < 300
     }
 
@@ -71,86 +47,74 @@ impl AuthTokens {
 fn get_auth_file_path() -> Result<PathBuf> {
     let home_dir = dirs::home_dir().context("Failed to get home directory")?;
     let pcb_dir = home_dir.join(".pcb");
-    fs::create_dir_all(&pcb_dir).context("Failed to create .pcb directory")?;
+    fs::create_dir_all(&pcb_dir)?;
     Ok(pcb_dir.join("auth.toml"))
 }
 
 pub fn load_tokens() -> Result<Option<AuthTokens>> {
-    let auth_file_path = get_auth_file_path()?;
-
-    if !auth_file_path.exists() {
+    let path = get_auth_file_path()?;
+    if !path.exists() {
         return Ok(None);
     }
-
-    let contents = fs::read_to_string(&auth_file_path).context("Failed to read auth.toml")?;
-
-    let tokens: AuthTokens = toml::from_str(&contents).context("Failed to parse auth.toml")?;
-
-    Ok(Some(tokens))
+    let contents = fs::read_to_string(&path)?;
+    Ok(Some(toml::from_str(&contents)?))
 }
 
-pub fn save_tokens(
+fn save_tokens(
     access_token: &str,
     refresh_token: &str,
     expires_at: i64,
     email: Option<&str>,
 ) -> Result<()> {
-    let auth_file_path = get_auth_file_path()?;
-
     let tokens = AuthTokens {
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
         expires_at,
         email: email.map(|s| s.to_string()),
     };
+    let contents = toml::to_string(&tokens)?;
+    fs::write(get_auth_file_path()?, contents)?;
+    Ok(())
+}
 
-    let contents = toml::to_string(&tokens).context("Failed to serialize auth tokens")?;
-
-    fs::write(&auth_file_path, contents).context("Failed to write auth.toml")?;
-
+fn clear_tokens() -> Result<()> {
+    let path = get_auth_file_path()?;
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
     Ok(())
 }
 
 #[derive(Serialize)]
-struct RefreshTokenRequest {
+struct RefreshRequest {
     refresh_token: String,
 }
 
 #[derive(Deserialize)]
-struct RefreshTokenResponse {
+struct RefreshResponse {
     access_token: String,
     refresh_token: String,
-    expires_at: i64, // Unix timestamp
+    expires_at: i64,
 }
 
 pub fn refresh_tokens() -> Result<AuthTokens> {
     let tokens = load_tokens()?.context("No tokens to refresh")?;
+    let api_url = crate::get_api_base_url();
+    let url = format!("{}/api/auth/refresh", api_url);
 
-    let client = Client::new();
-    let api_base_url = get_api_base_url();
-    let url = format!("{}/api/auth/refresh", api_base_url);
-
-    let request_body = RefreshTokenRequest {
-        refresh_token: tokens.refresh_token.clone(),
-    };
-
-    let response = client
+    let response = Client::new()
         .post(&url)
-        .json(&request_body)
-        .send()
-        .context("Failed to refresh token")?;
+        .json(&RefreshRequest {
+            refresh_token: tokens.refresh_token.clone(),
+        })
+        .send()?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().unwrap_or_default();
-        anyhow::bail!("Token refresh failed ({}): {}", status, error_text);
+        anyhow::bail!("Token refresh failed: {}", response.status());
     }
 
-    let refresh_response: RefreshTokenResponse = response
-        .json()
-        .context("Failed to parse refresh response")?;
+    let refresh_response: RefreshResponse = response.json()?;
 
-    // Save new tokens
     save_tokens(
         &refresh_response.access_token,
         &refresh_response.refresh_token,
@@ -166,46 +130,19 @@ pub fn refresh_tokens() -> Result<AuthTokens> {
     })
 }
 
-fn clear_tokens() -> Result<()> {
-    let auth_file_path = get_auth_file_path()?;
+pub fn get_valid_token() -> Result<String> {
+    let tokens =
+        load_tokens()?.context("Not authenticated. Run `pcb auth login` to authenticate.")?;
 
-    if auth_file_path.exists() {
-        fs::remove_file(&auth_file_path).context("Failed to remove auth.toml")?;
+    if tokens.is_expired() {
+        let new_tokens = refresh_tokens()?;
+        return Ok(new_tokens.access_token);
     }
 
-    Ok(())
+    Ok(tokens.access_token)
 }
 
-#[derive(Args, Debug)]
-#[command(about = "Manage authentication")]
-pub struct AuthArgs {
-    #[command(subcommand)]
-    command: Option<AuthCommand>,
-}
-
-#[derive(Subcommand, Debug)]
-enum AuthCommand {
-    /// Log in to Diode (opens browser)
-    Login(LoginArgs),
-    /// Log out and clear stored tokens
-    Logout,
-    /// Show current authentication status
-    Status,
-}
-
-#[derive(Args, Debug)]
-struct LoginArgs {}
-
-pub fn execute(args: AuthArgs) -> Result<()> {
-    match args.command {
-        Some(AuthCommand::Login(_)) | None => login(),
-        Some(AuthCommand::Logout) => logout(),
-        Some(AuthCommand::Status) => status(),
-    }
-}
-
-fn login() -> Result<()> {
-    // Generate 6-character alphanumeric code
+pub fn login() -> Result<()> {
     let code: String = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(6)
@@ -213,15 +150,11 @@ fn login() -> Result<()> {
         .collect::<String>()
         .to_uppercase();
 
-    // Start TCP listener on random port
-    let listener = TcpListener::bind("127.0.0.1:0").context("Failed to bind to local address")?;
+    let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://localhost:{}/callback", port);
 
-    // Get web base URL
-    let base_url = get_web_base_url();
-
-    // Construct auth URL
+    let base_url = crate::get_web_base_url();
     let auth_url = format!(
         "{}/cli-auth?code={}&redirect_uri={}",
         base_url,
@@ -229,40 +162,29 @@ fn login() -> Result<()> {
         urlencoding::encode(&redirect_uri)
     );
 
-    // Display code to user
-    println!("{} {}", "Code:".dimmed(), code.bold().cyan());
-    println!("{}", "Opening browser...".dimmed());
+    println!("Code: {}", code);
+    println!("Opening browser...");
 
-    // Open browser
     if let Err(e) = open::that(&auth_url) {
-        eprintln!("{}", format!("Failed to open browser: {}", e).yellow());
+        eprintln!("Failed to open browser: {}", e);
         eprintln!("Please manually open: {}", auth_url);
     }
 
-    let (mut stream, _) = listener.accept().context("Failed to accept connection")?;
+    let (mut stream, _) = listener.accept()?;
 
-    // Read HTTP request
     let mut reader = BufReader::new(&stream);
     let mut request_line = String::new();
-    reader
-        .read_line(&mut request_line)
-        .context("Failed to read request")?;
+    reader.read_line(&mut request_line)?;
 
-    // Parse query string from request line
-    // Format: GET /callback?access_token=...&refresh_token=... HTTP/1.1
     let tokens = parse_tokens_from_request(&request_line)?;
 
-    // Send 302 redirect response to close the browser tab
     let response = format!(
         "HTTP/1.1 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\n\r\n",
         base_url
     );
-    stream
-        .write_all(response.as_bytes())
-        .context("Failed to send response")?;
+    stream.write_all(response.as_bytes())?;
     stream.flush()?;
 
-    // Save tokens
     save_tokens(
         &tokens.access_token,
         &tokens.refresh_token,
@@ -270,21 +192,21 @@ fn login() -> Result<()> {
         tokens.email.as_deref(),
     )?;
 
-    println!("{}", "✓ Authentication successful!".green().bold());
+    println!("✓ Authentication successful!");
     if let Some(email) = &tokens.email {
-        println!("  Logged in as: {}", email.cyan());
+        println!("  Logged in as: {}", email);
     }
 
     Ok(())
 }
 
-fn logout() -> Result<()> {
+pub fn logout() -> Result<()> {
     clear_tokens()?;
-    println!("{}", "✓ Logged out successfully".green());
+    println!("✓ Logged out successfully");
     Ok(())
 }
 
-fn status() -> Result<()> {
+pub fn status() -> Result<()> {
     match load_tokens()? {
         Some(tokens) => {
             println!("Authentication Status:");
@@ -316,20 +238,13 @@ struct CallbackTokens {
 }
 
 fn parse_tokens_from_request(request_line: &str) -> Result<CallbackTokens> {
-    // Extract query string from request line
-    // Format: GET /callback?access_token=...&refresh_token=...&expires_at=... HTTP/1.1
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
         anyhow::bail!("Invalid HTTP request format");
     }
 
-    let path_and_query = parts[1];
-    let query_string = path_and_query
-        .split('?')
-        .nth(1)
-        .context("No query string in callback")?;
+    let query_string = parts[1].split('?').nth(1).context("No query string")?;
 
-    // Parse query parameters
     let mut access_token = None;
     let mut refresh_token = None;
     let mut expires_at = None;
@@ -348,15 +263,32 @@ fn parse_tokens_from_request(request_line: &str) -> Result<CallbackTokens> {
         }
     }
 
-    let access_token = access_token.context("Missing access_token in callback")?;
-    let refresh_token = refresh_token.context("Missing refresh_token in callback")?;
-    let expires_at_str = expires_at.context("Missing expires_at in callback")?;
-    let expires_at: i64 = expires_at_str.parse().context("Invalid expires_at value")?;
-
     Ok(CallbackTokens {
-        access_token,
-        refresh_token,
-        expires_at,
-        email: None, // Email will be fetched from API if needed
+        access_token: access_token.context("Missing access_token")?,
+        refresh_token: refresh_token.context("Missing refresh_token")?,
+        expires_at: expires_at.context("Missing expires_at")?.parse()?,
+        email: None,
     })
+}
+
+#[derive(Args, Debug)]
+#[command(about = "Manage authentication")]
+pub struct AuthArgs {
+    #[command(subcommand)]
+    command: Option<AuthCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthCommand {
+    Login,
+    Logout,
+    Status,
+}
+
+pub fn execute(args: AuthArgs) -> Result<()> {
+    match args.command {
+        Some(AuthCommand::Login) | None => login(),
+        Some(AuthCommand::Logout) => logout(),
+        Some(AuthCommand::Status) => status(),
+    }
 }

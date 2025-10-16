@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::{Args, ValueEnum};
 use colored::Colorize;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,29 @@ pub struct ScanOptions {
     pub images: bool,
 }
 
+pub fn scan_with_defaults(
+    auth_token: &str,
+    file: PathBuf,
+    output: Option<PathBuf>,
+    model: Option<ScanModel>,
+    images: bool,
+) -> Result<ScanResult> {
+    let output_dir = output.unwrap_or_else(|| {
+        file.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    });
+
+    let options = ScanOptions {
+        file,
+        output_dir,
+        model,
+        images,
+    };
+
+    scan_pdf(auth_token, options)
+}
+
 pub struct ScanResult {
     pub output_path: PathBuf,
     pub page_count: u32,
@@ -67,7 +91,7 @@ struct UploadUrlRequest {
     filename: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct UploadUrlResponse {
     #[serde(rename = "uploadUrl")]
     upload_url: Option<String>,
@@ -84,7 +108,7 @@ struct ProcessRequest {
     model: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct ProcessResponse {
     #[serde(rename = "markdownUrl")]
     markdown_url: String,
@@ -93,7 +117,7 @@ struct ProcessResponse {
     metadata: ProcessMetadata,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct ProcessMetadata {
     page_count: u32,
     image_count: u32,
@@ -103,8 +127,7 @@ struct ProcessMetadata {
     processing_time_ms: u32,
 }
 
-pub fn scan_pdf(api_base_url: &str, auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
-    // Validate file exists
+pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     if !options.file.exists() {
         anyhow::bail!("File not found: {}", options.file.display());
     }
@@ -113,10 +136,8 @@ pub fn scan_pdf(api_base_url: &str, auth_token: &str, options: ScanOptions) -> R
         anyhow::bail!("File must be a PDF: {}", options.file.display());
     }
 
-    // Create output directory
-    fs::create_dir_all(&options.output_dir).context("Failed to create output directory")?;
+    fs::create_dir_all(&options.output_dir)?;
 
-    // Get filename
     let filename = options
         .file
         .file_name()
@@ -126,22 +147,19 @@ pub fn scan_pdf(api_base_url: &str, auth_token: &str, options: ScanOptions) -> R
 
     println!("{} {}", "Scanning".dimmed(), filename.bold());
 
-    // Calculate SHA256
     println!("  {} Calculating hash...", "→".dimmed());
     let sha256 = calculate_sha256(&options.file)?;
 
-    // Create HTTP client with 3 minute timeout
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .context("Failed to create HTTP client")?;
+        .build()?;
 
-    // Request upload URL
+    let api_base_url = crate::get_api_base_url();
+
     println!("  {} Requesting upload URL...", "→".dimmed());
     let upload_response =
-        request_upload_url(&client, auth_token, api_base_url, &sha256, &filename)?;
+        request_upload_url(&client, auth_token, &api_base_url, &sha256, &filename)?;
 
-    // Upload PDF if needed
     if let Some(upload_url) = &upload_response.upload_url {
         println!("  {} Uploading PDF...", "→".dimmed());
         upload_pdf(&client, upload_url, &options.file)?;
@@ -149,31 +167,27 @@ pub fn scan_pdf(api_base_url: &str, auth_token: &str, options: ScanOptions) -> R
         println!("  {} PDF already exists, skipping upload", "✓".green());
     }
 
-    // Request processing
     println!("  {} Processing PDF...", "→".dimmed());
     let process_response = request_process(
         &client,
         auth_token,
-        api_base_url,
+        &api_base_url,
         &upload_response.scan_id,
         &filename,
         options.model.as_ref().map(|m| m.as_str()),
     )?;
 
-    // Download markdown
     let md_filename = filename.replace(".pdf", ".md");
     let md_path = options.output_dir.join(&md_filename);
     println!("  {} Downloading markdown...", "→".dimmed());
     download_file(&client, &process_response.markdown_url, &md_path)?;
 
-    // Download images if requested
     if options.images {
         if let Some(images_url) = &process_response.images_zip_url {
             println!("  {} Downloading images...", "→".dimmed());
             let images_zip_path = options.output_dir.join("images.zip");
             download_file(&client, images_url, &images_zip_path)?;
 
-            // Extract images
             println!("  {} Extracting images...", "→".dimmed());
             let images_dir = options.output_dir.join("images");
             extract_zip(&images_zip_path, &images_dir)?;
@@ -183,7 +197,6 @@ pub fn scan_pdf(api_base_url: &str, auth_token: &str, options: ScanOptions) -> R
         }
     }
 
-    // Success message
     println!();
     println!("{}", "✓ Scan complete!".green().bold());
     println!("  Output: {}", md_path.display().to_string().cyan());
@@ -207,12 +220,12 @@ pub fn scan_pdf(api_base_url: &str, auth_token: &str, options: ScanOptions) -> R
 }
 
 fn calculate_sha256(path: &Path) -> Result<String> {
-    let mut file = File::open(path).context("Failed to open file")?;
+    let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
 
     loop {
-        let n = file.read(&mut buffer).context("Failed to read file")?;
+        let n = file.read(&mut buffer)?;
         if n == 0 {
             break;
         }
@@ -230,42 +243,34 @@ fn request_upload_url(
     filename: &str,
 ) -> Result<UploadUrlResponse> {
     let url = format!("{}/api/scan/upload-url", base_url);
-    let body = UploadUrlRequest {
-        sha256: sha256.to_string(),
-        filename: filename.to_string(),
-    };
 
     let response = client
         .post(&url)
         .bearer_auth(token)
-        .json(&body)
-        .send()
-        .context("Failed to request upload URL")?;
+        .json(&UploadUrlRequest {
+            sha256: sha256.to_string(),
+            filename: filename.to_string(),
+        })
+        .send()?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().unwrap_or_default();
-        anyhow::bail!("API error ({}): {}", status, error_text);
+        anyhow::bail!("API error: {}", response.status());
     }
 
-    response
-        .json::<UploadUrlResponse>()
-        .context("Failed to parse upload URL response")
+    Ok(response.json()?)
 }
 
 fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) -> Result<()> {
-    let file_data = fs::read(file_path).context("Failed to read PDF file")?;
+    let file_data = fs::read(file_path)?;
 
     let response = client
         .put(upload_url)
         .header("Content-Type", "application/pdf")
         .body(file_data)
-        .send()
-        .context("Failed to upload PDF")?;
+        .send()?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Upload failed with status: {}", status);
+        anyhow::bail!("Upload failed: {}", response.status());
     }
 
     Ok(())
@@ -280,66 +285,108 @@ fn request_process(
     model: Option<&str>,
 ) -> Result<ProcessResponse> {
     let url = format!("{}/api/scan/process", base_url);
-    let body = ProcessRequest {
-        scan_id: scan_id.to_string(),
-        filename: filename.to_string(),
-        model: model.map(|s| s.to_string()),
-    };
 
     let response = client
         .post(&url)
         .bearer_auth(token)
-        .json(&body)
-        .send()
-        .context("Failed to request processing")?;
+        .json(&ProcessRequest {
+            scan_id: scan_id.to_string(),
+            filename: filename.to_string(),
+            model: model.map(|s| s.to_string()),
+        })
+        .send()?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().unwrap_or_default();
-        anyhow::bail!("API error ({}): {}", status, error_text);
+        anyhow::bail!("API error: {}", response.status());
     }
 
-    response
-        .json::<ProcessResponse>()
-        .context("Failed to parse process response")
+    Ok(response.json()?)
 }
 
 fn download_file(client: &Client, url: &str, path: &Path) -> Result<()> {
-    let response = client.get(url).send().context("Failed to download file")?;
+    let response = client.get(url).send()?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        anyhow::bail!("Download failed with status: {}", status);
+        anyhow::bail!("Download failed: {}", response.status());
     }
 
-    let content = response.bytes().context("Failed to read response bytes")?;
-    let mut file = File::create(path).context("Failed to create output file")?;
-    file.write_all(&content)
-        .context("Failed to write output file")?;
-
+    let mut file = File::create(path)?;
+    file.write_all(&response.bytes()?)?;
     Ok(())
 }
 
 fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
-    let file = File::open(zip_path).context("Failed to open zip file")?;
-    let mut archive = zip::ZipArchive::new(file).context("Failed to read zip archive")?;
+    let file = File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
 
-    fs::create_dir_all(output_dir).context("Failed to create images directory")?;
+    fs::create_dir_all(output_dir)?;
 
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).context("Failed to read zip entry")?;
+        let mut file = archive.by_index(i)?;
         let outpath = output_dir.join(file.name());
 
         if file.is_dir() {
-            fs::create_dir_all(&outpath).context("Failed to create directory")?;
+            fs::create_dir_all(&outpath)?;
         } else {
             if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent).context("Failed to create parent directory")?;
+                fs::create_dir_all(parent)?;
             }
-            let mut outfile = File::create(&outpath).context("Failed to create file")?;
-            std::io::copy(&mut file, &mut outfile).context("Failed to extract file")?;
+            let mut outfile = File::create(&outpath)?;
+            std::io::copy(&mut file, &mut outfile)?;
         }
     }
 
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScanModelArg {
+    #[value(name = "mistral-ocr-latest")]
+    MistralOcrLatest,
+    #[value(name = "gpt-4o")]
+    Gpt4o,
+    #[value(name = "gpt-4o-mini")]
+    Gpt4oMini,
+}
+
+impl From<ScanModelArg> for ScanModel {
+    fn from(arg: ScanModelArg) -> Self {
+        match arg {
+            ScanModelArg::MistralOcrLatest => ScanModel::MistralOcrLatest,
+            ScanModelArg::Gpt4o => ScanModel::Gpt4o,
+            ScanModelArg::Gpt4oMini => ScanModel::Gpt4oMini,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+#[command(about = "Scan PDF datasheets with OCR")]
+pub struct ScanArgs {
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    #[arg(short, long, value_name = "DIR")]
+    pub output: Option<PathBuf>,
+
+    #[arg(short, long, value_enum)]
+    pub model: Option<ScanModelArg>,
+
+    #[arg(long)]
+    pub images: bool,
+}
+
+pub fn execute(args: ScanArgs) -> Result<()> {
+    if args.images && !matches!(args.model, None | Some(ScanModelArg::MistralOcrLatest)) {
+        anyhow::bail!("The --images flag is only supported with the mistral-ocr-latest model");
+    }
+
+    let token = crate::auth::get_valid_token()?;
+    scan_with_defaults(
+        &token,
+        args.file,
+        args.output,
+        args.model.map(Into::into),
+        args.images,
+    )?;
     Ok(())
 }
