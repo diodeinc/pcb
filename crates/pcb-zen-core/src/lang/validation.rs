@@ -6,7 +6,7 @@ pub enum ValidationError {
     EmptyName { context: String },
     #[error("{context} cannot contain whitespace. Got: {name:?}")]
     NameContainsWhitespace { context: String, name: String },
-    #[error("{context} cannot contain invalid characters {invalid_chars}. Got: {name:?}")]
+    #[error("{context} cannot contain invalid characters {invalid_chars:?}. Got: {name:?}")]
     NameContainsInvalidChars {
         context: String,
         name: String,
@@ -98,7 +98,6 @@ mod tests {
             "power-rail",
             "VCC+",          // Plus signs allowed
             "GND-",          // Minus signs allowed
-            "R@1",           // @ signs allowed
             "C#1",           // # signs allowed
             "L$1",           // $ signs allowed
             "Q&1",           // & signs allowed
@@ -149,6 +148,23 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_names_with_at_sign() {
+        let invalid_names = vec!["R@1", "LED@STATUS", "power@rail"];
+        for name in invalid_names {
+            let result = validate_identifier_name(name, "Test name");
+            assert!(result.is_err(), "Expected '{}' to be invalid", name);
+            let error_msg = format!("{}", result.unwrap_err());
+            assert!(
+                error_msg.contains("cannot contain invalid characters")
+                    && error_msg.contains("\"@\""),
+                "Expected @ sign error for '{}', got: {}",
+                name,
+                error_msg
+            );
+        }
+    }
+
+    #[test]
     fn test_invalid_names_with_dots() {
         let invalid_names = vec![
             "power.rail", // Single dot
@@ -164,7 +180,8 @@ mod tests {
             assert!(result.is_err(), "Expected '{}' to be invalid", name);
             let error_msg = format!("{}", result.unwrap_err());
             assert!(
-                error_msg.contains("cannot contain dots"),
+                error_msg.contains("cannot contain invalid characters")
+                    && error_msg.contains("\".\""),
                 "Expected dot error for '{}', got: {}",
                 name,
                 error_msg
