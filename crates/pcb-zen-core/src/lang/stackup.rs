@@ -3,6 +3,7 @@ use serde_json::Value as JsonValue;
 use std::{borrow::Cow, collections::HashMap, fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
+use crate::lang::physical::PhysicalValue;
 use pcb_sexpr::{kv, ListBuilder, Sexpr};
 
 pub const THICKNESS_EPS: f64 = f64::EPSILON * 1000.0; // Floating point precision tolerance
@@ -305,9 +306,72 @@ fn default_num_user_layers() -> usize {
     4
 }
 
+/// Netclass definition with impedance specifications
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetClass {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via_diameter: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via_drill: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub microvia_diameter: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub microvia_drill: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_pair_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_pair_gap: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_pair_via_gap: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Single-ended impedance target (in Ohms)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub single_ended_impedance: Option<PhysicalValue>,
+    /// Differential pair impedance target (in Ohms)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub differential_pair_impedance: Option<PhysicalValue>,
+}
+
+impl NetClass {
+    /// Get the single-ended impedance value in Ohms, if specified
+    pub fn single_ended_impedance_ohms(&self) -> Option<f64> {
+        use rust_decimal::prelude::ToPrimitive;
+        self.single_ended_impedance
+            .as_ref()
+            .and_then(|pv| pv.value.to_f64())
+    }
+
+    /// Get the differential pair impedance value in Ohms, if specified
+    pub fn differential_pair_impedance_ohms(&self) -> Option<f64> {
+        use rust_decimal::prelude::ToPrimitive;
+        self.differential_pair_impedance
+            .as_ref()
+            .and_then(|pv| pv.value.to_f64())
+    }
+}
+
+/// Design rules including netclasses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignRules {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predefined_sizes: Option<JsonValue>,
+    #[serde(default)]
+    pub netclasses: Vec<NetClass>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardConfig {
-    pub design_rules: Option<JsonValue>,
+    pub design_rules: Option<DesignRules>,
     pub stackup: Option<Stackup>,
     #[serde(default = "default_num_user_layers")]
     pub num_user_layers: usize,
@@ -326,6 +390,14 @@ impl BoardConfig {
         }
 
         Ok(board_config)
+    }
+
+    /// Get all netclasses defined in this board config
+    pub fn netclasses(&self) -> &[NetClass] {
+        self.design_rules
+            .as_ref()
+            .map(|dr| dr.netclasses.as_slice())
+            .unwrap_or(&[])
     }
 }
 

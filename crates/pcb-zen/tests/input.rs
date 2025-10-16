@@ -112,7 +112,7 @@ fn test_interface_input() {
     env.add_files_from_blob(
         r#"
 # --- sub.zen
-Power = interface(vcc = Net)
+Power = builtin.net_type("Power")
 PdmMic = interface(power = Power, data = Net, select = Net, clock = Net)
 
 pdm = io("pdm", PdmMic)

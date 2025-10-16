@@ -102,18 +102,33 @@ local-lib = "./path/to/local/lib"
 
 ### Net
 
-A `Net` represents an electrical connection between component pins.
+A `Net` represents an electrical connection between component pins. Nets can optionally specify electrical properties like impedance, voltage range, and schematic symbols.
 
 ```python
 # Create a net with optional name
 net1 = Net()
 net2 = Net("VCC")
+
+# Net with impedance (for controlled impedance routing)
+load("@stdlib/units.zen", "Impedance")
+clk = Net("CLK", impedance=Impedance(50))  # 50Ω single-ended
+
+# Net with voltage range
+load("@stdlib/units.zen", "VoltageRange")
+vdd = Net("VDD_3V3", voltage=VoltageRange("3.0V to 3.6V"))
+
+# Net with custom schematic symbol
+vcc_sym = Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")
+vcc = Net("VCC", symbol=vcc_sym)
 ```
 
-**Type**: `Net`  
-**Constructor**: `Net(name="")`
+**Type**: `Net`
+**Constructor**: `Net(name="", symbol=None, voltage=None, impedance=None)`
 
 - `name` (optional): String identifier for the net
+- `symbol` (optional): Symbol object for schematic representation
+- `voltage` (optional): VoltageRange specification for the net
+- `impedance` (optional): Impedance specification for single-ended nets (in Ohms)
 
 ### Symbol
 
@@ -203,7 +218,30 @@ Key parameters:
 
 ### Interface
 
-Interfaces define reusable connection patterns with field specifications, type validation, and promotion semantics.
+Interfaces define reusable connection patterns with field specifications and type validation. Interfaces can specify impedance requirements that automatically propagate to their constituent nets during layout.
+
+**Differential Pair Example:**
+
+```python
+load("@stdlib/units.zen", "Impedance")
+
+# DiffPair interface with 90Ω differential impedance
+DiffPair = interface(
+    P=Net(),
+    N=Net(),
+    impedance=field(Impedance, None),  # Optional impedance
+)
+
+# USB interface uses DiffPair with 90Ω impedance
+Usb2 = interface(
+    D=DiffPair(impedance=Impedance(90)),
+)
+
+# When instantiated, impedance automatically propagates to P/N nets
+usb = Usb2("USB")  # USB.D.P and USB.D.N both get 90Ω differential impedance
+```
+
+The impedance from DiffPair interfaces is stored as `differential_impedance` on the P and N nets, allowing the layout system to assign appropriate netclasses for differential pair routing.
 
 #### Basic Syntax
 
@@ -235,12 +273,6 @@ freqs = field(list[str], ["100kHz", "400kHz"])
 count = field(int, 42)
 ```
 
-**using() Specifications**: Mark fields as promotion targets for automatic type conversion
-```python
-NET = using(Net("VCC"))
-uart = using(Uart())
-```
-
 #### Interface Instantiation
 
 ```python
@@ -256,7 +288,7 @@ InterfaceName([name], field1=value1, field2=value2, ...)
 ```python
 # Define interfaces
 Power = interface(
-    NET = using(Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VCC"))),
+    NET = Net("VCC", symbol = Symbol(library = "@kicad-symbols/power.kicad_sym", name = "VCC")),
     voltage = field(Voltage, unit("3.3V", Voltage)),
 )
 
@@ -266,8 +298,8 @@ Uart = interface(
 )
 
 SystemInterface = interface(
-    power = using(Power()),
-    uart = using(Uart()),
+    power = Power(),
+    uart = Uart(),
     debug = field(bool, False),
 )
 
@@ -279,36 +311,6 @@ custom = Power("MAIN", voltage=unit("5V", Voltage))  # Named with override
 system = SystemInterface("MAIN", debug=True)
 ```
 
-#### Promotion Semantics
-
-Fields marked with `using()` enable automatic type promotion when passing interfaces across module boundaries:
-
-**Rules:**
-- **Unique promotion targets**: Only one `using()` field per type per interface - duplicate promotion targets to the same type are not allowed
-- **Cross-module promotion**: Automatic conversion when crossing module boundaries
-- **Same-module access**: Explicit field access required within same module
-- **Type safety**: Promotion only occurs when target type exactly matches the expected type
-
-```python
-# Valid: Single promotion target per type
-Power = interface(
-    NET = using(Net("VCC")),        # Only Net promotion target
-    voltage = field(Voltage, ...),
-)
-
-# Invalid: Multiple promotion targets for same type
-InvalidInterface = interface(
-    NET1 = using(Net("VCC")),       # Error: duplicate Net promotion target
-    NET2 = using(Net("GND")),       # Error: duplicate Net promotion target
-)
-
-# Automatic promotion when passed to modules
-Resistor("R1", "10kOhm", "0603", P1=power, P2=gnd)  # power promotes to power.NET
-
-# Explicit access within same module
-net = power.NET  # Must use .NET explicitly
-```
-
 #### Post-Initialization Callbacks
 
 ```python
@@ -317,7 +319,7 @@ def _power_post_init(self):
         error("Power voltage must be positive")
 
 Power = interface(
-    NET = using(Net("VCC")),
+    NET = Net("VCC"),
     voltage = field(Voltage, unit("3.3V", Voltage)),
     __post_init__ = _power_post_init,
 )
@@ -328,7 +330,7 @@ Callbacks receive `self` and cannot be overridden during instantiation.
 **Type**: `interface`  
 **Constructor**: `interface(**fields)`
 
-- Fields can be Net instances, interface instances, `field()` specifications, or `using()` specifications
+- Fields can be Net instances, interface instances, or `field()` specifications
 
 ### Module
 

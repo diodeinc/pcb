@@ -219,30 +219,35 @@ snapshot_eval!(net_field_multiple_fields, {
 
 snapshot_eval!(interface_net_template_naming, {
     "test.zen" => r#"
-        # Test single-net interface naming behavior with name conflicts
+        # Test interface net naming - always includes field name with prefix
         
-        # Create a regular net with same name as interface instance
+        # Create a regular net
         net = Net("VCC")
         
         # Define single-net interface
         Power = interface(
-            NET = using(Net("VCC")),
+            NET = Net("VCC"),
         )
         
-        # Create power interface instance - with single-net naming, uses instance name directly
+        # Create power interface instance - always suffixes field name
         power = Power("POWER")
         
         print("regular net:", net.name)
         print("interface net:", power.NET.name)
         
-        # Check that single-net interface uses instance name directly
-        check(power.NET.name == "POWER", "Single-net interface should use instance name directly")
+        # Check that interface includes field name with prefix
+        check(power.NET.name == "POWER_VCC", "Interface net should include field name suffix")
     "#,
 });
 
 snapshot_eval!(net_type_cast_preserves_name_across_modules, {
+    "interfaces.zen" => r#"
+        # Typed net definitions for testing net type promotion
+        Power = builtin.net_type("Power")
+        Ground = builtin.net_type("Ground")
+    "#,
     "component.zen" => r#"
-        # Component expecting plain Net (not Power interface)
+        # Component expecting plain Net (not Power/Ground typed net)
         P1 = io("P1", Net)
         P2 = io("P2", Net)
 
@@ -256,36 +261,81 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
         )
     "#,
     "child.zen" => r#"
-        # Child module that receives Power interface and passes to component
-        Power = interface(NET = using(Net()))
-        Ground = interface(NET = using(Net()))
+        # Child module that receives Power/Ground typed nets and passes to component
+        load("interfaces.zen", "Power", "Ground")
         
         io_V3V3 = io("io_V3V3", Power)
         io_GND = io("io_GND", Ground)
         
         Resistor = Module("component.zen")
         
-        # This should trigger interface promotion: Power -> Net
-        # The net name "3V3" should be preserved, not qualified as "child.R1.3V3"
+        # This should trigger net type cast: Power/Ground -> Net
+        # The net names should be preserved
         R1 = Resistor(name = "R1", P1 = io_V3V3, P2 = io_GND)
     "#,
     "test.zen" => r#"
-        # Parent module that creates Power interface with specific name
-        Power = interface(NET = using(Net()))
-        Ground = interface(NET = using(Net()))
+        # Parent module that creates typed nets with specific names
+        load("interfaces.zen", "Power", "Ground")
         
         Child = Module("child.zen")
         
         V3V3 = Power("3V3")
         GND = Ground("GND")
         
-        print("Created Power:", V3V3.NET.name)
-        print("Created Ground:", GND.NET.name)
+        print("Created Power:", V3V3.name)
+        print("Created Ground:", GND.name)
         
         Child(name = "child", io_V3V3 = V3V3, io_GND = GND)
         
-        # Verify net names are preserved (not qualified as "child.R1.3V3")
-        check(V3V3.NET.name == "3V3", "Power net name should be '3V3', not qualified")
-        check(GND.NET.name == "GND", "Ground net name should be 'GND', not qualified")
+        # Verify net names are preserved (typed nets don't have field suffix)
+        check(V3V3.name == "3V3", "Power net should be '3V3'")
+        check(GND.name == "GND", "Ground net should be 'GND'")
+    "#
+});
+
+snapshot_eval!(stdlib_power_ground_have_default_symbols, {
+    "interfaces.zen" => r#"
+        # Mock stdlib interfaces.zen that gets hijacked
+        # The hijack_interfaces() function replaces these with versions that have default symbols
+        Power = builtin.net_type(
+            "Power",
+            symbol=field(Symbol, default=Symbol(name="VCC", definition=[("VCC", ["1"])])),
+            voltage=str,
+        )
+
+        Ground = builtin.net_type(
+            "Ground",
+            symbol=field(Symbol, default=Symbol(name="GND", definition=[("GND", ["1"])])),
+        )
+
+        Analog = builtin.net_type("Analog")
+        Gpio = builtin.net_type("Gpio")
+        Pwm = builtin.net_type("Pwm")
+    "#,
+    "test.zen" => r#"
+        load("interfaces.zen", "Power", "Ground", "Analog", "Gpio", "Pwm")
+
+        # Test that Power has default symbol (hijacked version should preserve defaults)
+        vcc = Power("VCC")
+        print("Power net:", vcc)
+        print("Power symbol:", vcc.symbol)
+        # The symbol field should exist and not be None
+        check(vcc.symbol != None, "Power should have default symbol")
+
+        # Test that Ground has default symbol (hijacked version should preserve defaults)
+        gnd = Ground("GND")
+        print("Ground net:", gnd)
+        print("Ground symbol:", gnd.symbol)
+        # The symbol field should exist and not be None
+        check(gnd.symbol != None, "Ground should have default symbol")
+
+        # Test that Analog/Gpio/Pwm work (no default symbols expected)
+        analog = Analog("ANALOG")
+        gpio = Gpio("GPIO")
+        pwm = Pwm("PWM")
+
+        print("Analog net:", analog.name)
+        print("Gpio net:", gpio.name)
+        print("Pwm net:", pwm.name)
     "#
 });

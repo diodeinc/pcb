@@ -120,7 +120,7 @@ fn serialize_net(net: &FrozenNetValue) -> JsonValue {
 }
 
 fn serialize_interface(interface: &FrozenInterfaceValue) -> JsonValue {
-    let mut inner = JsonMap::from_iter([(
+    let inner = JsonMap::from_iter([(
         "fields".to_string(),
         JsonValue::Object(
             interface
@@ -130,18 +130,6 @@ fn serialize_interface(interface: &FrozenInterfaceValue) -> JsonValue {
                 .collect(),
         ),
     )]);
-
-    let promotion: JsonMap<_, _> = interface
-        .promotion_by_type()
-        .iter()
-        .map(|(ty, path)| (ty.clone(), JsonValue::String(path.clone())))
-        .collect();
-    if !promotion.is_empty() {
-        inner.insert(
-            "promotion_by_type".to_string(),
-            JsonValue::Object(promotion),
-        );
-    }
 
     wrap("Interface", JsonValue::Object(inner))
 }
@@ -177,6 +165,9 @@ impl ModuleConverter {
             };
         }
         self.schematic.set_root_ref(root_instance_ref);
+
+        // Propagate impedance from DiffPair interfaces to P/N nets (before creating Net objects)
+        propagate_diffpair_impedance(module, &mut self.net_to_properties);
 
         // Create Net objects directly using the names recorded per-module.
         // Ensure global uniqueness and stable creation order by sorting names.
@@ -710,8 +701,13 @@ impl ModuleConverter {
     }
 
     fn is_instance_position(&self, key: &str, instance_ref: &InstanceRef) -> Option<()> {
+        // Strip @U suffix from the key if present (for multi-unit symbols)
+        // e.g., "U1.OPEN_Q_6490CS@U1" -> "U1.OPEN_Q_6490CS"
+        let key_without_unit = key.split('@').next().unwrap_or(key);
+
         // Traverse the instance hierarchy using the dot-separated key
-        key.split('.')
+        key_without_unit
+            .split('.')
             .try_fold(instance_ref, |current_ref, part| {
                 self.schematic
                     .instances
@@ -823,6 +819,68 @@ impl ModuleConverter {
         }
 
         (diagnostics, filtered)
+    }
+}
+
+/// Propagate impedance from DiffPair interfaces to P/N nets
+fn propagate_diffpair_impedance(
+    module: &FrozenModuleValue,
+    net_props: &mut HashMap<NetId, HashMap<String, AttributeValue>>,
+) {
+    // Check signature for interfaces
+    for param in module.signature().iter().filter(|p| !p.is_config) {
+        if let Some(val) = param.actual_value {
+            propagate_from_value(val.to_value(), net_props);
+        }
+    }
+
+    // Recurse into children
+    for child in module.children().iter() {
+        if let Some(m) = child.downcast_ref::<FrozenModuleValue>() {
+            propagate_diffpair_impedance(m, net_props);
+        }
+    }
+}
+
+/// Propagate impedance from interfaces to nested nets
+fn propagate_from_value(
+    value: Value,
+    net_props: &mut HashMap<NetId, HashMap<String, AttributeValue>>,
+) {
+    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
+        for field in interface.fields().values() {
+            let fv = field.to_value();
+
+            // Check if nested interface with impedance (DiffPair)
+            if let Some(nested) = fv.downcast_ref::<FrozenInterfaceValue>() {
+                if let Some(impedance_val) = nested.fields().get("impedance") {
+                    // Has impedance - propagate to P/N nets as differential_impedance
+                    if let (Some(p), Some(n)) = (
+                        nested
+                            .fields()
+                            .get("P")
+                            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
+                        nested
+                            .fields()
+                            .get("N")
+                            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
+                    ) {
+                        if let Ok(attr) = to_attribute_value(*impedance_val) {
+                            net_props
+                                .entry(p.id())
+                                .or_default()
+                                .insert("differential_impedance".to_string(), attr.clone());
+                            net_props
+                                .entry(n.id())
+                                .or_default()
+                                .insert("differential_impedance".to_string(), attr);
+                        }
+                    }
+                } else {
+                    propagate_from_value(fv, net_props);
+                }
+            }
+        }
     }
 }
 

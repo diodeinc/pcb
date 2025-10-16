@@ -62,7 +62,7 @@ dependencies = [
 [[package]]
 name = "allocative"
 version = "0.3.4"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "allocative_derive",
  "bumpalo",
@@ -74,7 +74,7 @@ dependencies = [
 [[package]]
 name = "allocative_derive"
 version = "0.3.3"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -645,7 +645,7 @@ dependencies = [
 [[package]]
 name = "cmp_any"
 version = "0.8.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 
 [[package]]
 name = "collection_literals"
@@ -1120,7 +1120,7 @@ dependencies = [
 [[package]]
 name = "display_container"
 version = "0.9.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "either",
  "indenter",
@@ -1179,9 +1179,9 @@ dependencies = [
 [[package]]
 name = "dupe"
 version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
- "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb)",
+ "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e80bd650)",
 ]
 
 [[package]]
@@ -1198,7 +1198,7 @@ dependencies = [
 [[package]]
 name = "dupe_derive"
 version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2795,7 +2795,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pcb"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-command-runner"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "log",
@@ -2850,7 +2850,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-eda"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -2862,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-fmt"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "ruff_formatter",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-kicad"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2888,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-layout"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2900,6 +2900,7 @@ dependencies = [
  "pcb-sch",
  "pcb-zen",
  "pcb-zen-core",
+ "rust_decimal",
  "serde_json",
  "serial_test",
  "tempfile",
@@ -2910,7 +2911,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sch"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "chrono",
  "dirs",
@@ -2929,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sexpr"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "log",
  "serde",
@@ -2937,7 +2938,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sim"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2967,7 +2968,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-starlark-lsp"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "derivative",
@@ -2988,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-test-utils"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "assert_cmd",
  "assert_fs",
@@ -3007,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ui"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "colored",
@@ -3020,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3072,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-core"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3120,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-wasm"
-version = "0.2.10"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "base64",
@@ -4577,7 +4578,7 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 [[package]]
 name = "starlark"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "allocative",
  "anyhow",
@@ -4586,8 +4587,8 @@ dependencies = [
  "debugserver-types",
  "derivative",
  "derive_more",
- "display_container 0.9.0 (git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb)",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb)",
+ "display_container 0.9.0 (git+https://github.com/diodeinc/starlark-rust?rev=e80bd650)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e80bd650)",
  "either",
  "erased-serde",
  "hashbrown 0.14.5",
@@ -4617,9 +4618,9 @@ dependencies = [
 [[package]]
 name = "starlark_derive"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e80bd650)",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -4628,10 +4629,10 @@ dependencies = [
 [[package]]
 name = "starlark_map"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "allocative",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e80bd650)",
  "equivalent",
  "fxhash",
  "hashbrown 0.14.5",
@@ -4642,14 +4643,14 @@ dependencies = [
 [[package]]
 name = "starlark_syntax"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "allocative",
  "annotate-snippets",
  "anyhow",
  "derivative",
  "derive_more",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e80bd650)",
  "lalrpop",
  "lalrpop-util",
  "logos",
@@ -4692,7 +4693,7 @@ dependencies = [
 [[package]]
 name = "strong_hash"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "ref-cast",
  "strong_hash_derive",
@@ -4701,7 +4702,7 @@ dependencies = [
 [[package]]
 name = "strong_hash_derive"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=2e40f1bb#2e40f1bb67c082c0a767d897a49b18d623f5aeb0"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e80bd650#e80bd650036d81e4dfe51d896ff078bf924880e3"
 dependencies = [
  "quote",
  "syn 2.0.104",

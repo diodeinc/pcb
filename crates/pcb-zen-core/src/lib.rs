@@ -60,6 +60,7 @@ pub use file_provider::InMemoryFileProvider;
 
 // Re-export types needed by pcb-zen
 pub use lang::component::FrozenComponentValue;
+pub use lang::interface::FrozenInterfaceValue;
 pub use lang::module::FrozenModuleValue;
 pub use lang::net::{FrozenNetValue, NetId};
 pub use lang::spice_model::FrozenSpiceModelValue;

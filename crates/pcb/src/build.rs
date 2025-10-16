@@ -159,7 +159,11 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             }
         } else if args.board_config {
             match pcb_layout::utils::extract_board_config(&schematic) {
-                Some(config) => println!("{config}"),
+                Some(config) => {
+                    if let Ok(json) = serde_json::to_string_pretty(&config) {
+                        println!("{json}");
+                    }
+                }
                 None => {
                     eprintln!("No board config found in {}", file_name);
                     std::process::exit(1);

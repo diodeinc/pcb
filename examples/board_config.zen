@@ -1,3 +1,5 @@
+load("units.zen", "Impedance")
+
 # Copper constraints - all clearances and widths for copper features
 Copper = record(
     minimum_clearance=field(float | None, None),  # Minimum clearance between copper features
@@ -73,6 +75,8 @@ NetClass = record(
     diff_pair_via_gap=field(float | None, None),  # Differential pair via gap in mm
     priority=field(int | None, None),  # Priority for netclass resolution (higher = higher priority)
     color=field(str | None, None),  # PCB color (hex like "#FF0000" or CSS name)
+    single_ended_impedance=field(Impedance | None, None),
+    differential_pair_impedance=field(Impedance | None, None),
 )
 
 # Design rules container
@@ -105,6 +109,11 @@ DielectricLayer = record(
 )
 
 # Board stackup configuration
+# Default soldermask thickness assumptions (not currently configurable):
+#   - On FR-4: 1.2 mil (0.03048 mm)
+#   - On Copper: 0.6 mil (0.01524 mm)
+#   - Between Traces: 1.2 mil (0.03048 mm)
+#   - Dielectric Constant: 3.8
 Stackup = record(
     materials=field(list[Material] | None, None),  # List of Material objects
     silk_screen_color=field(str | None, None),  # Hex color like "#44805BFF"
@@ -251,17 +260,26 @@ def Board(
             error("Either 'config' or 'layers' must be provided")
         elif layers == 2:
             stackup = BASE_2L_STACKUP
+            netclasses = BASE_2L_NETCLASSES
         elif layers == 4:
             stackup = BASE_4L_STACKUP
+            netclasses = BASE_4L_NETCLASSES
         elif layers == 6:
             stackup = BASE_6L_STACKUP
+            netclasses = BASE_6L_NETCLASSES
         elif layers == 8:
             stackup = BASE_8L_STACKUP
+            netclasses = BASE_8L_NETCLASSES
         else:
             error("layers must be 2, 4, 6, or 8")
 
+        design_rules = DesignRules(
+            constraints=BASE_CONSTRAINTS,
+            predefined_sizes=BASE_PREDEFINED_SIZES,
+            netclasses=netclasses,
+        )
         config = BoardConfig(
-            design_rules=BASE_DESIGN_RULES,
+            design_rules=design_rules,
             stackup=stackup,
         )
 
@@ -276,6 +294,17 @@ def Board(
 
 
 # Standard Base Configurations
+
+# Default netclass for general-purpose PCB manufacturing
+DEFAULT_NETCLASS = NetClass(
+    name="Default",
+    clearance=0.15,  # Conservative clearance (different nets)
+    track_width=0.15,  # Safe track width for most manufacturers
+    via_diameter=0.5,  # Standard via size (5.3:1 aspect ratio on 1.6mm board)
+    via_drill=0.3,  # Standard drill size
+    diff_pair_width=0.2,  # Reasonable diff pair width
+    diff_pair_gap=0.2,  # Reasonable diff pair gap
+)
 
 # Common materials that can be reused across board configurations
 
@@ -292,10 +321,32 @@ BASE_PREPREG = Material(
     loss_tangent=0.025,  # Standard prepreg material
 )
 
+# Stackup Design Philosophy
+#
+# Layer convention for 4L/6L/8L stackups:
+#   - First 3 layers: SIG/GND/PWR (always)
+#   - Last layer: SIG (always)
+#
+# This enables module reusability - a 4L module can be ported to 6L/8L by using the
+# same top 3 layers and bottom layer. Internal layers provide additional routing.
+#
+# Impedance Control:
+#   - GCPW (Grounded Coplanar Waveguide) for all impedance-controlled routing
+#   - L1 (top) is primary impedance-controlled layer
+#   - L6/L8 (bottom) serve as backup impedance-controlled layers on 6L/8L
+#   - 8L also provides L6 as symmetric stripline (GND/SIG/GND)
+#
+# Selection:
+#   - 2L: Simple, low speed
+#   - 4L: Standard, L1 impedance-controlled
+#   - 6L: More routing, L1 + L6 impedance-controlled
+#   - 8L: High density, L1 + L6 (stripline) + L8 impedance-controlled
+
 # Common stackup configurations
 
 # Base 2-layer stackup (1.6mm, 1oz outer)
 # SIG/SIG
+# Use case: Simple designs without dedicated power/ground planes
 BASE_2L_STACKUP = Stackup(
     materials=[FR4_CORE],
     thickness=1.6,
@@ -309,9 +360,18 @@ BASE_2L_STACKUP = Stackup(
         CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
     ],
 )
+BASE_2L_NETCLASSES = [DEFAULT_NETCLASS]
 
 # Base 4-layer stackup (1.6mm, 1oz outer/0.5oz inner)
 # SIG/GND/PWR/SIG
+#
+# Layers:
+#   L1: Mixed + impedance-controlled (GCPW, ref L2, 0.21mm coupling)
+#   L2: GND plane
+#   L3: PWR plane
+#   L4: Mixed signal
+#
+# Use: Standard stackup with dedicated GND/PWR planes. L1 for high-speed routing.
 BASE_4L_STACKUP = Stackup(
     materials=[FR4_CORE, BASE_PREPREG],
     thickness=1.6,
@@ -322,7 +382,7 @@ BASE_4L_STACKUP = Stackup(
     layers=[
         CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
         DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L2 (0.5oz)
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
         DielectricLayer(thickness=1.065, material="FR4-Core", form="core"),
         CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
         DielectricLayer(thickness=0.21040, material="Prepreg", form="prepreg"),
@@ -330,8 +390,58 @@ BASE_4L_STACKUP = Stackup(
     ],
 )
 
+# 4L Impedance-Controlled Netclasses (L1 GCPW, 0.21mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+BASE_4L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.2908,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.2235,
+        diff_pair_width=0.2235,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.1867,
+        diff_pair_width=0.1867,
+        diff_pair_gap=0.127,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.1334,
+        diff_pair_width=0.1334,
+        diff_pair_gap=0.127,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
+
 # Base 6-layer stackup (1.6mm, 1oz outer/0.5oz inner)
-# SIG/GND/(SIG/PWR)/(SIG/PWR)/GND/SIG
+# SIG/GND/PWR/SIG/GND/SIG
+#
+# Layers:
+#   L1: Primary impedance-controlled (GCPW, ref L2, 0.099mm coupling)
+#   L2: GND plane
+#   L3: PWR plane
+#   L4: Mixed signal
+#   L5: GND plane
+#   L6: Backup impedance-controlled (GCPW, ref L5, 0.099mm coupling)
+#
+# Use: More routing space than 4L. Two ground planes for return paths.
 BASE_6L_STACKUP = Stackup(
     materials=[
         FR4_CORE,
@@ -354,20 +464,72 @@ BASE_6L_STACKUP = Stackup(
     layers=[
         CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
         DielectricLayer(thickness=0.09940, material="3313", form="prepreg"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L2 (0.5oz)
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
         DielectricLayer(thickness=0.55, material="FR4-Core", form="core"),
-        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L3 (0.5oz)
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
         DielectricLayer(thickness=0.11640, material="2116", form="prepreg"),
         CopperLayer(thickness=0.0152, role="mixed"),  # Inner L4 (0.5oz)
         DielectricLayer(thickness=0.55, material="FR4-Core", form="core"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L5 (0.5oz)
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L5 (0.5oz)
         DielectricLayer(thickness=0.09940, material="3313", form="prepreg"),
         CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
     ],
 )
 
+# 6L Impedance-Controlled Netclasses (L1 GCPW, 0.099mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+BASE_6L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.1461,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.141,
+        diff_pair_width=0.141,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.1359,
+        diff_pair_width=0.1359,
+        diff_pair_gap=0.1524,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.127,
+        diff_pair_width=0.127,
+        diff_pair_gap=0.2286,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
+
 # Base 8-layer stackup (1.6mm, 1oz outer/0.5oz inner)
-# SIG/GND/SIG/PWR/GND/SIG/GND/SIG
+# SIG/GND/PWR/SIG/GND/SIG/GND/SIG
+#
+# Layers:
+#   L1: Primary impedance-controlled (GCPW, ref L2, 0.116mm coupling)
+#   L2: GND plane
+#   L3: PWR plane
+#   L4: Mixed signal
+#   L5: GND plane
+#   L6: Secondary impedance-controlled (symmetric stripline, L5/L7 refs)
+#   L7: GND plane
+#   L8: Backup impedance-controlled (GCPW, ref L7)
+#
+# Use: High routing density. Three ground planes. L6 symmetric stripline for EMI control.
 BASE_8L_STACKUP = Stackup(
     materials=[
         FR4_CORE,
@@ -390,23 +552,66 @@ BASE_8L_STACKUP = Stackup(
     layers=[
         CopperLayer(thickness=0.035, role="mixed"),  # Top layer (1oz)
         DielectricLayer(thickness=0.1164, material="2116", form="prepreg"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L2 (0.5oz)
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L2 (0.5oz)
         DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
-        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L3 (0.5oz)
+        CopperLayer(thickness=0.0152, role="power"),  # Inner L3 (0.5oz)
         DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
         DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L4 (0.5oz)
+        CopperLayer(thickness=0.0152, role="mixed"),  # Inner L4 (0.5oz)
         DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L5 (0.5oz)
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L5 (0.5oz)
         DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
         DielectricLayer(thickness=0.0764, material="1080", form="prepreg"),
         CopperLayer(thickness=0.0152, role="mixed"),  # Inner L6 (0.5oz)
         DielectricLayer(thickness=0.3, material="FR4-Core", form="core"),
-        CopperLayer(thickness=0.0152, role="power"),  # Inner L7 (0.5oz)
+        CopperLayer(thickness=0.0152, role="ground"),  # Inner L7 (0.5oz)
         DielectricLayer(thickness=0.1164, material="2116", form="prepreg"),
         CopperLayer(thickness=0.035, role="mixed"),  # Bottom layer (1oz)
     ],
 )
+
+# 8L Impedance-Controlled Netclasses (L1 GCPW, 0.1164mm dielectric, 0.2mm coplanar gap)
+# Calculated using Sierra Circuits impedance calculator
+# Note: These geometries also work on L6 (asymmetric stripline) with acceptable tolerance:
+#   50Ohm SE → 48.5Ohm (-3%), 85Ohm Diff → 83.5Ohm (-1.7%), 90Ohm Diff → 88.0Ohm (-2.2%), 100Ohm Diff → 97.6Ohm (-2.4%)
+#   Worst case is still within reasonable bounds for most applications.
+BASE_8L_NETCLASSES = [
+    DEFAULT_NETCLASS,
+    NetClass(
+        name="50Ohm SE",
+        clearance=0.2,
+        track_width=0.1702,
+        color="#0000C2FF",
+        single_ended_impedance=Impedance(50),
+    ),
+    NetClass(
+        name="85Ohm Diff",
+        clearance=0.2,
+        track_width=0.1588,
+        diff_pair_width=0.1588,
+        diff_pair_gap=0.127,
+        color="#C200C2FF",
+        differential_pair_impedance=Impedance(85),
+    ),
+    NetClass(
+        name="90Ohm Diff",
+        clearance=0.2,
+        track_width=0.1384,
+        diff_pair_width=0.1384,
+        diff_pair_gap=0.127,
+        color="#00C200FF",
+        differential_pair_impedance=Impedance(90),
+    ),
+    NetClass(
+        name="100Ohm Diff",
+        clearance=0.2,
+        track_width=0.127,
+        diff_pair_width=0.127,
+        diff_pair_gap=0.1778,
+        color="#C2C200FF",
+        differential_pair_impedance=Impedance(100),
+    ),
+]
 
 # Common constraint sets for different fabrication capabilities
 
@@ -456,33 +661,20 @@ HEAVY_COPPER_CONSTRAINTS = Constraints(
     ),
 )
 
-# Common netclass definitions
-
-# Default netclass for general-purpose PCB manufacturing
-DEFAULT_NETCLASS = NetClass(
-    name="Default",
-    clearance=0.15,  # Conservative clearance (different nets)
-    track_width=0.15,  # Safe track width for most manufacturers
-    via_diameter=0.4,  # Standard via size
-    via_drill=0.2,  # Standard drill size
-    diff_pair_width=0.2,  # Reasonable diff pair width
-    diff_pair_gap=0.2,  # Reasonable diff pair gap
-)
 
 # Common predefined sizes for design tool dropdowns
 
 # Base predefined sizes for common PCB design
 BASE_PREDEFINED_SIZES = PredefinedSizes(
     track_widths=[
-        0.1,  # Safe minimum
-        0.2,  # Standard signals
-        0.4,  # Power traces
-        0.8,  # Heavy power
+        0.127,
+        0.2,
+        0.4,
+        0.8,
     ],
     via_dimensions=[
-        ViaDimension(diameter=0.35, drill=0.2),  # Small via
-        ViaDimension(diameter=0.4, drill=0.25),  # Standard via
-        ViaDimension(diameter=0.45, drill=0.3),  # Large via
+        ViaDimension(diameter=0.4, drill=0.2),
+        ViaDimension(diameter=0.5, drill=0.3),
     ],
 )
 
