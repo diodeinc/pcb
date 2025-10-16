@@ -701,8 +701,13 @@ impl ModuleConverter {
     }
 
     fn is_instance_position(&self, key: &str, instance_ref: &InstanceRef) -> Option<()> {
+        // Strip @U suffix from the key if present (for multi-unit symbols)
+        // e.g., "U1.OPEN_Q_6490CS@U1" -> "U1.OPEN_Q_6490CS"
+        let key_without_unit = key.split('@').next().unwrap_or(key);
+
         // Traverse the instance hierarchy using the dot-separated key
-        key.split('.')
+        key_without_unit
+            .split('.')
             .try_fold(instance_ref, |current_ref, part| {
                 self.schematic
                     .instances
