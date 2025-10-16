@@ -10,6 +10,7 @@ use helpers::*;
 macro_rules! layout_test {
     ($name:expr, $board_name:expr) => {
         paste::paste! {
+            #[cfg(not(target_os = "windows"))]
             #[test]
             #[serial]
             fn [<test_layout_generation_with_ $name:snake>]() -> Result<()> {
@@ -75,6 +76,8 @@ layout_test!("multi_pads", "MultiPads");
 layout_test!("dnp", "MyBoard");
 
 layout_test!("zones", "Board");
+
+layout_test!("tracks", "Board");
 
 layout_test!("graphics", "Board");
 

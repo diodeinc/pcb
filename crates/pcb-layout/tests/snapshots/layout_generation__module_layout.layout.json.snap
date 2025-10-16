@@ -1037,5 +1037,7 @@ expression: content
       "name": "MODULE2"
     }
   ],
+  "tracks": [],
+  "vias": [],
   "zones": []
 }

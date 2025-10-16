@@ -119,9 +119,11 @@ where
         command.current_dir(dir);
     }
 
-    // Configure stdin if input is provided
+    // Configure stdin if input is provided, otherwise set to null
     if options.stdin_input.is_some() {
         command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
     }
 
     let mut output = CommandOutput::new();
@@ -144,6 +146,8 @@ where
                 stdin
                     .write_all(input.as_bytes())
                     .context("Failed to write to stdin")?;
+                // Explicitly drop stdin to close the pipe immediately (important for Windows)
+                drop(stdin);
             }
         }
 
@@ -197,6 +201,8 @@ where
                 stdin
                     .write_all(input.as_bytes())
                     .context("Failed to write to stdin")?;
+                // Explicitly drop stdin to close the pipe immediately (important for Windows)
+                drop(stdin);
             }
         }
 
