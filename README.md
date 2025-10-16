@@ -9,7 +9,9 @@
 [Zener](https://github.com/diodeinc/pcb/blob/main/docs/pages/spec.mdx) language to describe
 PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
-> [!NOTE] > **Windows support is experimental.** Some features may be limited or unstable. For the best
+> [!WARNING]
+
+> **Windows support is experimental.** Some features may be limited or unstable. For the best
 > experience, we recommend using WSL2 or macOS/Linux. If you encounter issues, please open an
 > issue in our [issue tracker](https://github.com/diodeinc/pcb/issues).
 
