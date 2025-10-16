@@ -4,6 +4,7 @@ use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
+mod auth;
 mod bom;
 mod build;
 mod clean;
@@ -14,6 +15,7 @@ mod layout;
 mod lsp;
 mod open;
 mod release;
+mod scan;
 mod sim;
 mod tag;
 mod test;
@@ -35,6 +37,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage authentication
+    Auth(auth::AuthArgs),
+
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
@@ -80,6 +85,9 @@ enum Commands {
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
+    /// Scan PDF datasheets with OCR
+    Scan(scan::ScanArgs),
+
     /// Run SPICE simulations
     Sim(sim::SimArgs),
 
@@ -105,6 +113,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
+        Commands::Auth(args) => auth::execute(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
@@ -118,6 +127,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
+        Commands::Scan(args) => scan::execute(args),
         Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
