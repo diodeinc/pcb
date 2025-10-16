@@ -4,7 +4,8 @@ use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
-mod auth;
+#[cfg(feature = "api")]
+mod api;
 mod bom;
 mod build;
 mod clean;
@@ -15,8 +16,6 @@ mod layout;
 mod lsp;
 mod open;
 mod release;
-mod scan;
-mod search;
 mod sim;
 mod tag;
 mod test;
@@ -39,7 +38,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Manage authentication
-    Auth(auth::AuthArgs),
+    #[cfg(feature = "api")]
+    Auth(api::AuthArgs),
 
     /// Build PCB projects
     #[command(alias = "b")]
@@ -87,10 +87,12 @@ enum Commands {
     Vendor(vendor::VendorArgs),
 
     /// Scan PDF datasheets with OCR
-    Scan(scan::ScanArgs),
+    #[cfg(feature = "api")]
+    Scan(api::ScanArgs),
 
     /// Search for electronic components
-    Search(search::SearchArgs),
+    #[cfg(feature = "api")]
+    Search(api::SearchArgs),
 
     /// Run SPICE simulations
     Sim(sim::SimArgs),
@@ -117,7 +119,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Commands::Auth(args) => auth::execute(args),
+        #[cfg(feature = "api")]
+        Commands::Auth(args) => api::execute_auth(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
@@ -131,8 +134,10 @@ fn main() -> anyhow::Result<()> {
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
-        Commands::Scan(args) => scan::execute(args),
-        Commands::Search(args) => search::execute(args),
+        #[cfg(feature = "api")]
+        Commands::Scan(args) => api::execute_scan(args),
+        #[cfg(feature = "api")]
+        Commands::Search(args) => api::execute_search(args),
         Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {

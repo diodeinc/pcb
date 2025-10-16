@@ -2808,7 +2808,6 @@ dependencies = [
  "comfy-table",
  "crossterm 0.28.1",
  "dir-diff",
- "dirs",
  "duct",
  "env_logger",
  "gltfpack-sys",
@@ -2820,20 +2819,17 @@ dependencies = [
  "log",
  "open",
  "pathdiff",
- "pcb-component",
+ "pcb-diode-api",
  "pcb-eda",
  "pcb-fmt",
  "pcb-kicad",
  "pcb-layout",
- "pcb-scan",
  "pcb-sch",
  "pcb-sim",
  "pcb-test-utils",
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
- "rand 0.8.5",
- "reqwest",
  "semver",
  "serde",
  "serde_json",
@@ -2841,9 +2837,7 @@ dependencies = [
  "starlark_syntax",
  "tempfile",
  "terminal_size",
- "toml",
  "unicode-width 0.2.1",
- "urlencoding",
  "walkdir",
  "zip 4.3.0",
 ]
@@ -2860,15 +2854,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-component"
+name = "pcb-diode-api"
 version = "0.2.12"
 dependencies = [
  "anyhow",
  "base64",
+ "chrono",
+ "clap",
  "colored",
+ "dirs",
+ "indicatif",
+ "inquire",
+ "open",
+ "pcb-eda",
+ "pcb-zen-core",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
+ "terminal_size",
+ "toml",
+ "unicode-width 0.2.1",
+ "urlencoding",
+ "walkdir",
+ "zip 4.3.0",
 ]
 
 [[package]]
@@ -2929,20 +2939,6 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "walkdir",
- "zip 4.3.0",
-]
-
-[[package]]
-name = "pcb-scan"
-version = "0.2.12"
-dependencies = [
- "anyhow",
- "colored",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
  "zip 4.3.0",
 ]
 
