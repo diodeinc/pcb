@@ -36,6 +36,7 @@ pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
 pcb-fmt = { path = "crates/pcb-fmt" }
 pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
+pcb-scan = { path = "crates/pcb-scan" }
 
 anyhow = "1.0"
 ariadne = { version = "0.5", features = ["auto-color"] }
