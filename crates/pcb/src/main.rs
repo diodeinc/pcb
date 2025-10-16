@@ -16,6 +16,7 @@ mod lsp;
 mod open;
 mod release;
 mod scan;
+mod search;
 mod sim;
 mod tag;
 mod test;
@@ -88,6 +89,9 @@ enum Commands {
     /// Scan PDF datasheets with OCR
     Scan(scan::ScanArgs),
 
+    /// Search for electronic components
+    Search(search::SearchArgs),
+
     /// Run SPICE simulations
     Sim(sim::SimArgs),
 
@@ -128,6 +132,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Scan(args) => scan::execute(args),
+        Commands::Search(args) => search::execute(args),
         Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {

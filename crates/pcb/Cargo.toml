@@ -26,6 +26,8 @@ pcb-sch = { workspace = true }
 pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
 pcb-scan = { workspace = true }
+pcb-component = { workspace = true }
+pcb-eda = { workspace = true }
 log = { workspace = true }
 ariadne = { workspace = true }
 env_logger = { workspace = true }
@@ -49,6 +51,9 @@ tempfile = { workspace = true }
 ignore = { workspace = true }
 semver = { workspace = true }
 crossterm = { workspace = true }
+terminal_size = { workspace = true }
+unicode-width = { workspace = true }
+indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
 
 # Auth dependencies
