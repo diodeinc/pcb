@@ -9,9 +9,9 @@
 [Zener](https://github.com/diodeinc/pcb/blob/main/docs/pages/spec.mdx) language to describe
 PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
-> [!WARNING]
-> We're still in the early days of getting this out into the world; expect breaking changes
-> and better documentation in the next few days.
+> [!NOTE] > **Windows support is experimental.** Some features may be limited or unstable. For the best
+> experience, we recommend using WSL2 or macOS/Linux. If you encounter issues, please open an
+> issue in our [issue tracker](https://github.com/diodeinc/pcb/issues).
 
 ## Table of Contents
 
@@ -54,7 +54,8 @@ cd pcb
 
 Create a file called `blinky.zen`:
 
-[embed-readme]:# (examples/blinky.zen python)
+[embed-readme]: # "examples/blinky.zen python"
+
 ```python
 # Load standard library
 load("@stdlib:v0.2.23/properties.zen", "Layout")
