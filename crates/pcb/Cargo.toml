@@ -50,6 +50,16 @@ semver = { workspace = true }
 crossterm = { workspace = true }
 gltfpack-sys = { workspace = true }
 
+# Auth dependencies
+rand = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+urlencoding = { workspace = true }
+
+# Scan dependencies
+sha2 = { workspace = true }
+reqwest = { workspace = true }
+
 axoupdater = { version = "0.9", features = ["blocking"] }
 
 [dev-dependencies]
