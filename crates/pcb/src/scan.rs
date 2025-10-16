@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 use crate::auth;
 
 fn get_valid_token() -> Result<String> {
-    let tokens = auth::load_tokens()?.context(
-        "Not authenticated. Run `pcb auth login` to authenticate."
-    )?;
+    let tokens =
+        auth::load_tokens()?.context("Not authenticated. Run `pcb auth login` to authenticate.")?;
 
     // If token is expired, try to refresh it automatically
     if tokens.is_expired() {
@@ -35,11 +34,15 @@ fn get_valid_token() -> Result<String> {
     Ok(tokens.access_token)
 }
 
-fn get_api_base_url() -> &'static str {
+fn get_api_base_url() -> String {
+    if let Ok(url) = std::env::var("DIODE_API_URL") {
+        return url;
+    }
+
     #[cfg(debug_assertions)]
-    return "http://localhost:3001";
+    return "http://localhost:3001".to_string();
     #[cfg(not(debug_assertions))]
-    return "https://api.diode.computer";
+    return "https://api.diode.computer".to_string();
 }
 
 #[derive(Serialize)]
@@ -110,7 +113,7 @@ pub fn execute(args: ScanArgs) -> Result<()> {
         anyhow::bail!("File not found: {}", args.file.display());
     }
 
-    if !args.file.extension().map_or(false, |ext| ext == "pdf") {
+    if args.file.extension().is_none_or(|ext| ext != "pdf") {
         anyhow::bail!("File must be a PDF: {}", args.file.display());
     }
 
@@ -149,7 +152,7 @@ pub fn execute(args: ScanArgs) -> Result<()> {
 
     // Request upload URL
     println!("  {} Requesting upload URL...", "→".dimmed());
-    let upload_response = request_upload_url(&client, &token, base_url, &sha256, &filename)?;
+    let upload_response = request_upload_url(&client, &token, &base_url, &sha256, &filename)?;
 
     // Upload PDF if needed
     if let Some(upload_url) = &upload_response.upload_url {
@@ -164,7 +167,7 @@ pub fn execute(args: ScanArgs) -> Result<()> {
     let process_response = request_process(
         &client,
         &token,
-        base_url,
+        &base_url,
         &upload_response.scan_id,
         &filename,
         args.model.as_deref(),

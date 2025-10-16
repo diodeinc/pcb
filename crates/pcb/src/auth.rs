@@ -9,18 +9,26 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 
-fn get_api_base_url() -> &'static str {
+fn get_api_base_url() -> String {
+    if let Ok(url) = std::env::var("DIODE_API_URL") {
+        return url;
+    }
+
     #[cfg(debug_assertions)]
-    return "http://localhost:3001";
+    return "http://localhost:3001".to_string();
     #[cfg(not(debug_assertions))]
-    return "https://api.diode.computer";
+    return "https://api.diode.computer".to_string();
 }
 
-fn get_web_base_url() -> &'static str {
+fn get_web_base_url() -> String {
+    if let Ok(url) = std::env::var("DIODE_APP_URL") {
+        return url;
+    }
+
     #[cfg(debug_assertions)]
-    return "http://localhost:3000";
+    return "http://localhost:3000".to_string();
     #[cfg(not(debug_assertions))]
-    return "https://app.diode.computer";
+    return "https://app.diode.computer".to_string();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,11 +82,9 @@ pub fn load_tokens() -> Result<Option<AuthTokens>> {
         return Ok(None);
     }
 
-    let contents =
-        fs::read_to_string(&auth_file_path).context("Failed to read auth.toml")?;
+    let contents = fs::read_to_string(&auth_file_path).context("Failed to read auth.toml")?;
 
-    let tokens: AuthTokens =
-        toml::from_str(&contents).context("Failed to parse auth.toml")?;
+    let tokens: AuthTokens = toml::from_str(&contents).context("Failed to parse auth.toml")?;
 
     Ok(Some(tokens))
 }
@@ -98,8 +104,7 @@ pub fn save_tokens(
         email: email.map(|s| s.to_string()),
     };
 
-    let contents =
-        toml::to_string(&tokens).context("Failed to serialize auth tokens")?;
+    let contents = toml::to_string(&tokens).context("Failed to serialize auth tokens")?;
 
     fs::write(&auth_file_path, contents).context("Failed to write auth.toml")?;
 
@@ -209,8 +214,7 @@ fn login() -> Result<()> {
         .to_uppercase();
 
     // Start TCP listener on random port
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .context("Failed to bind to local address")?;
+    let listener = TcpListener::bind("127.0.0.1:0").context("Failed to bind to local address")?;
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://localhost:{}/callback", port);
 
@@ -235,9 +239,7 @@ fn login() -> Result<()> {
         eprintln!("Please manually open: {}", auth_url);
     }
 
-    let (mut stream, _) = listener
-        .accept()
-        .context("Failed to accept connection")?;
+    let (mut stream, _) = listener.accept().context("Failed to accept connection")?;
 
     // Read HTTP request
     let mut reader = BufReader::new(&stream);
@@ -349,9 +351,7 @@ fn parse_tokens_from_request(request_line: &str) -> Result<CallbackTokens> {
     let access_token = access_token.context("Missing access_token in callback")?;
     let refresh_token = refresh_token.context("Missing refresh_token in callback")?;
     let expires_at_str = expires_at.context("Missing expires_at in callback")?;
-    let expires_at: i64 = expires_at_str
-        .parse()
-        .context("Invalid expires_at value")?;
+    let expires_at: i64 = expires_at_str.parse().context("Invalid expires_at value")?;
 
     Ok(CallbackTokens {
         access_token,
