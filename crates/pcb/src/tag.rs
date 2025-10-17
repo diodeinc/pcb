@@ -33,6 +33,10 @@ pub struct TagArgs {
 
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
+
+    /// Exclude specific manufacturing artifacts from the release validation (can be specified multiple times)
+    #[arg(long, value_enum)]
+    pub exclude: Vec<release::ArtifactType>,
 }
 
 /// Information gathered for tag operation
@@ -51,6 +55,8 @@ pub struct TagInfo {
     pub force: bool,
     /// Original path argument for workspace discovery
     pub discovery_path: Option<String>,
+    /// Artifacts to exclude from release validation
+    pub exclude: Vec<release::ArtifactType>,
 }
 
 type TaskFn = fn(&TagInfo) -> Result<()>;
@@ -104,6 +110,7 @@ pub fn execute(args: TagArgs) -> Result<()> {
             push: args.push,
             force: args.force,
             discovery_path: args.path.clone(),
+            exclude: args.exclude,
         };
         info_spinner.finish();
         info
@@ -155,7 +162,7 @@ fn run_release(info: &TagInfo) -> Result<()> {
         source_only: false,                // Don't need manufacturing artifacts for tagging
         output_dir: None,                  // Use default
         output_name: None,                 // Use default
-        exclude: vec![],                   // Don't exclude any artifacts for tag validation
+        exclude: info.exclude.clone(),     // Pass through exclude list from tag command
     };
 
     // Run the full release process - this validates everything
