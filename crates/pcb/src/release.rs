@@ -50,6 +50,52 @@ impl std::fmt::Display for ReleaseOutputFormat {
     }
 }
 
+#[derive(ValueEnum, Debug, Clone, PartialEq)]
+#[value(rename_all = "lowercase")]
+pub enum ArtifactType {
+    Bom,
+    Gerbers,
+    Cpl,
+    Assembly,
+    Odb,
+    Step,
+    Vrml,
+    Glb,
+    Svg,
+}
+
+impl ArtifactType {
+    /// Get the human-readable task name for this artifact type
+    fn task_name(&self) -> &'static str {
+        match self {
+            ArtifactType::Bom => "Generating design BOM",
+            ArtifactType::Gerbers => "Generating gerber files",
+            ArtifactType::Cpl => "Generating pick-and-place file",
+            ArtifactType::Assembly => "Generating assembly drawings",
+            ArtifactType::Odb => "Generating ODB++ files",
+            ArtifactType::Step => "Generating STEP model",
+            ArtifactType::Vrml => "Generating VRML model",
+            ArtifactType::Glb => "Generating GLB model",
+            ArtifactType::Svg => "Generating SVG rendering",
+        }
+    }
+
+    /// Get the task function for this artifact type
+    fn task_fn(&self) -> TaskFn {
+        match self {
+            ArtifactType::Bom => generate_design_bom,
+            ArtifactType::Gerbers => generate_gerbers,
+            ArtifactType::Cpl => generate_cpl,
+            ArtifactType::Assembly => generate_assembly_drawings,
+            ArtifactType::Odb => generate_odb,
+            ArtifactType::Step => generate_step_model,
+            ArtifactType::Vrml => generate_vrml_model,
+            ArtifactType::Glb => generate_glb_model,
+            ArtifactType::Svg => generate_svg_rendering,
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct ReleaseArgs {
     /// Board name to release
@@ -83,6 +129,10 @@ pub struct ReleaseArgs {
     /// Name of the output .zip file (defaults to <board>-<version>.zip)
     #[arg(long)]
     pub output_name: Option<String>,
+
+    /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
+    #[arg(long, value_enum)]
+    pub exclude: Vec<ArtifactType>,
 }
 
 /// All information gathered during the release preparation phase
@@ -119,21 +169,32 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Substituting version variables", substitute_variables),
 ];
 
-const MANUFACTURING_TASKS: &[(&str, TaskFn)] = &[
-    ("Generating design BOM", generate_design_bom),
-    ("Generating gerber files", generate_gerbers),
-    ("Generating pick-and-place file", generate_cpl),
-    ("Generating assembly drawings", generate_assembly_drawings),
-    ("Generating ODB++ files", generate_odb),
-    ("Generating STEP model", generate_step_model),
-    ("Generating VRML model", generate_vrml_model),
-    ("Generating GLB model", generate_glb_model),
-    ("Generating SVG rendering", generate_svg_rendering),
+/// All manufacturing artifacts in the order they should be generated
+const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
+    ArtifactType::Bom,
+    ArtifactType::Gerbers,
+    ArtifactType::Cpl,
+    ArtifactType::Assembly,
+    ArtifactType::Odb,
+    ArtifactType::Step,
+    ArtifactType::Vrml,
+    ArtifactType::Glb,
+    ArtifactType::Svg,
 ];
+
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
     ("Creating release archive", zip_release),
 ];
+
+/// Get manufacturing tasks as (name, function) pairs, filtered by exclusions
+fn get_manufacturing_tasks(excluded: &[ArtifactType]) -> Vec<(&'static str, TaskFn)> {
+    MANUFACTURING_ARTIFACTS
+        .iter()
+        .filter(|artifact| !excluded.contains(artifact))
+        .map(|artifact| (artifact.task_name(), artifact.task_fn()))
+        .collect()
+}
 
 /// Execute a list of tasks with proper error handling and UI feedback
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)]) -> Result<()> {
@@ -157,20 +218,20 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     // Gather all release information based on whether board or file was provided
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
-        let info = if let Some(board_name) = args.board {
+        let info = if let Some(board_name) = &args.board {
             gather_release_info(
-                board_name,
-                args.path,
+                board_name.clone(),
+                args.path.clone(),
                 args.source_only,
-                args.output_dir,
-                args.output_name,
+                args.output_dir.clone(),
+                args.output_name.clone(),
             )?
-        } else if let Some(zen_file) = args.file {
+        } else if let Some(zen_file) = &args.file {
             gather_release_info_from_file(
-                zen_file,
+                zen_file.clone(),
                 args.source_only,
-                args.output_dir,
-                args.output_name,
+                args.output_dir.clone(),
+                args.output_name.clone(),
             )?
         } else {
             unreachable!("Either board or file must be provided due to clap validation")
@@ -185,7 +246,8 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
 
     // Execute manufacturing tasks if full release
     if matches!(release_info.kind, ReleaseKind::Full) {
-        execute_tasks(&release_info, MANUFACTURING_TASKS)?;
+        let manufacturing_tasks = get_manufacturing_tasks(&args.exclude);
+        execute_tasks(&release_info, &manufacturing_tasks)?;
     }
 
     // Execute finalization tasks
