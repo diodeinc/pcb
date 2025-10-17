@@ -8,6 +8,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use walkdir::WalkDir;
@@ -115,7 +116,9 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
         .send()?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Download failed: {}", response.status());
+        let status = response.status();
+        let error_text = response.text().unwrap_or_default();
+        anyhow::bail!("Download failed ({}): {}", status, error_text);
     }
 
     let download_response: DownloadResponse = response.json()?;
@@ -133,12 +136,16 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
 }
 
 pub fn download_file(_auth_token: &str, url: &str, output_path: &Path) -> Result<()> {
-    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("pcb-cli")
+        .build()?;
 
     let response = client.get(url).send()?;
 
     if !response.status().is_success() {
-        anyhow::bail!("File download failed: {}", response.status());
+        anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
     }
 
     std::fs::write(output_path, response.bytes()?)?;
@@ -160,10 +167,21 @@ pub fn decode_component_id(component_id: &str) -> Result<(String, String)> {
     Ok((parsed.source, parsed.part_id))
 }
 
+fn filename_from_url(url: &str) -> Option<String> {
+    // Parse URL and extract filename from path, before query params
+    url.split('?')
+        .next()?
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .last()
+        .map(|s| s.to_string())
+}
+
 pub fn add_component_to_workspace(
     auth_token: &str,
     component: &ComponentSearchResult,
     workspace_root: &std::path::Path,
+    spinner: Option<&ProgressBar>,
 ) -> Result<AddComponentResult> {
     let component_dir = workspace_root
         .join("components")
@@ -181,58 +199,89 @@ pub fn add_component_to_workspace(
     let download = download_component(auth_token, &component.component_id)?;
 
     fs::create_dir_all(&component_dir)?;
-    let eda_dir = component_dir.join("eda");
-    fs::create_dir_all(&eda_dir)?;
 
-    let mut symbol_path = None;
+    // Collect all download tasks
+    let mut download_tasks = Vec::new();
+    let mut symbol_filename = None;
 
     if let Some(url) = &download.symbol_url {
-        let path = eda_dir.join(format!("{}.kicad_sym", component.part_number));
-        download_file(auth_token, url, &path)?;
-        symbol_path = Some(path);
-    }
-
-    if let Some(url) = &download.footprint_url {
-        let path = eda_dir.join(format!("{}.kicad_mod", component.part_number));
-        download_file(auth_token, url, &path)?;
-    }
-
-    if let Some(url) = &download.step_url {
-        let path = eda_dir.join(format!("{}.step", component.part_number));
-        download_file(auth_token, url, &path)?;
-    }
-
-    for (idx, url) in component.datasheets.iter().enumerate() {
-        if url.ends_with(".pdf") {
-            let filename = if component.datasheets.len() == 1 {
-                format!("{}.pdf", component.part_number)
-            } else {
-                format!("{}_{}.pdf", component.part_number, idx + 1)
-            };
-            download_file(auth_token, url, &component_dir.join(filename))?;
+        if let Some(filename) = filename_from_url(url) {
+            symbol_filename = Some(filename.clone());
+            download_tasks.push((url.clone(), component_dir.join(filename)));
         }
     }
 
-    if let Some(symbol_file) = &symbol_path {
-        let symbol_lib = pcb_eda::SymbolLibrary::from_file(symbol_file)?;
-        let symbol = symbol_lib
-            .first_symbol()
-            .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
+    if let Some(url) = &download.footprint_url {
+        if let Some(filename) = filename_from_url(url) {
+            download_tasks.push((url.clone(), component_dir.join(filename)));
+        }
+    }
 
-        generate_zen_file(
-            &component_dir,
-            &component.part_number,
-            symbol,
-            &component.datasheets,
-        )?;
+    if let Some(url) = &download.step_url {
+        if let Some(filename) = filename_from_url(url) {
+            download_tasks.push((url.clone(), component_dir.join(filename)));
+        }
+    }
 
-        let scanned_pdfs = scan_component_pdfs(&component_dir, auth_token)?;
+    if let Some(url) = component.datasheets.first() {
+        let filename = format!("{}.pdf", component.part_number);
+        download_tasks.push((url.clone(), component_dir.join(filename)));
+    }
 
-        return Ok(AddComponentResult {
-            component_path: component_file,
-            already_exists: false,
-            scanned_pdfs,
-        });
+    // Download all files in parallel
+    let errors = Arc::new(Mutex::new(Vec::new()));
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = download_tasks
+            .into_iter()
+            .map(|(url, path)| {
+                let errors = Arc::clone(&errors);
+                s.spawn(move || {
+                    if let Err(e) = download_file(auth_token, &url, &path) {
+                        errors.lock().unwrap().push(e);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let _ = handle.join();
+        }
+    });
+
+    let errors = Arc::try_unwrap(errors).unwrap().into_inner().unwrap();
+    if let Some(first_error) = errors.into_iter().next() {
+        return Err(first_error);
+    }
+
+    if let Some(filename) = symbol_filename {
+        let symbol_path = component_dir.join(&filename);
+        if symbol_path.exists() {
+            let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
+            let symbol = symbol_lib
+                .first_symbol()
+                .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
+
+            generate_zen_file(
+                &component_dir,
+                &component.part_number,
+                symbol,
+                &component.datasheets,
+            )?;
+
+            // Finish spinner before PDF scanning to avoid output conflicts
+            if let Some(s) = spinner {
+                s.finish_and_clear();
+            }
+
+            let scanned_pdfs = scan_component_pdfs(&component_dir, auth_token)?;
+
+            return Ok(AddComponentResult {
+                component_path: component_file,
+                already_exists: false,
+                scanned_pdfs,
+            });
+        }
     }
 
     Ok(AddComponentResult {
@@ -359,7 +408,11 @@ fn format_search_result(result: &ComponentSearchResult) -> String {
     let models_width = 14;
     let desc_width = get_terminal_width().saturating_sub(part_width + pkg_width + models_width + 3);
 
-    let part = format!("{:<part_width$}", result.part_number).bold();
+    let part = format!(
+        "{:<part_width$}",
+        truncate_text(&result.part_number, part_width)
+    )
+    .bold();
 
     let pkg_text = result
         .package_category
@@ -367,7 +420,8 @@ fn format_search_result(result: &ComponentSearchResult) -> String {
         .filter(|p| p.len() <= 10 && !p.contains(' '))
         .map(|p| p.as_str())
         .unwrap_or("");
-    let pkg = format!("{:<pkg_width$}", pkg_text).yellow();
+    let pkg_truncated = truncate_text(pkg_text, pkg_width);
+    let pkg = format!("{:<pkg_width$}", pkg_truncated).yellow();
 
     let models = format!(
         "[2D {}] [3D {}]",
@@ -460,8 +514,16 @@ pub fn search_interactive(
         selected_component.part_number.cyan()
     ));
 
-    let result = add_component_to_workspace(auth_token, selected_component, workspace_root)?;
-    spinner.finish_and_clear();
+    let result = add_component_to_workspace(
+        auth_token,
+        selected_component,
+        workspace_root,
+        Some(&spinner),
+    )?;
+    // Spinner is finished inside add_component_to_workspace before PDF scanning
+    if result.scanned_pdfs.is_empty() {
+        spinner.finish_and_clear();
+    }
 
     let display_path = result
         .component_path
@@ -477,6 +539,13 @@ pub fn search_interactive(
         return Ok(());
     }
 
+    println!(
+        "{} Added {} to {}",
+        "✓".green().bold(),
+        selected_component.part_number.bold(),
+        display_path.display().to_string().cyan()
+    );
+
     if !result.scanned_pdfs.is_empty() {
         println!(
             "{} Scanned {} datasheet(s)",
@@ -484,13 +553,6 @@ pub fn search_interactive(
             result.scanned_pdfs.len()
         );
     }
-
-    println!(
-        "{} Added {} to {}",
-        "✓".green().bold(),
-        selected_component.part_number.bold(),
-        display_path.display().to_string().cyan()
-    );
 
     Ok(())
 }
@@ -571,8 +633,11 @@ pub fn search_and_add_single(
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
     spinner.set_message(format!("Downloading {}...", component.part_number.cyan()));
 
-    let result = add_component_to_workspace(auth_token, component, workspace_root)?;
-    spinner.finish_and_clear();
+    let result = add_component_to_workspace(auth_token, component, workspace_root, Some(&spinner))?;
+    // Spinner is finished inside add_component_to_workspace before PDF scanning
+    if result.scanned_pdfs.is_empty() {
+        spinner.finish_and_clear();
+    }
 
     let display_path = result
         .component_path
@@ -588,6 +653,13 @@ pub fn search_and_add_single(
         return Ok(());
     }
 
+    println!(
+        "{} Added {} to {}",
+        "✓".green().bold(),
+        component.part_number.bold(),
+        display_path.display().to_string().cyan()
+    );
+
     if !result.scanned_pdfs.is_empty() {
         println!(
             "{} Scanned {} datasheet(s)",
@@ -595,13 +667,6 @@ pub fn search_and_add_single(
             result.scanned_pdfs.len()
         );
     }
-
-    println!(
-        "{} Added {} to {}",
-        "✓".green().bold(),
-        component.part_number.bold(),
-        display_path.display().to_string().cyan()
-    );
 
     Ok(())
 }

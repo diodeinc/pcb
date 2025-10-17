@@ -127,6 +127,20 @@ struct ProcessMetadata {
     processing_time_ms: u32,
 }
 
+fn with_spinner<F, R>(message: &str, completion: &str, f: F) -> Result<R>
+where
+    F: FnOnce() -> Result<R>,
+{
+    use indicatif::ProgressBar;
+    let spinner = ProgressBar::new_spinner();
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    spinner.set_message(format!(" {}", message));
+    let result = f()?;
+    spinner.finish_and_clear();
+    println!("  {} {}", "✓".green(), completion);
+    Ok(result)
+}
+
 pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     if !options.file.exists() {
         anyhow::bail!("File not found: {}", options.file.display());
@@ -145,10 +159,11 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
         .to_string_lossy()
         .to_string();
 
-    println!("{} {}", "Scanning".dimmed(), filename.bold());
+    println!("\n{} {}", "Scanning".green().bold(), filename.bold());
 
-    println!("  {} Calculating hash...", "→".dimmed());
-    let sha256 = calculate_sha256(&options.file)?;
+    let sha256 = with_spinner("Calculating hash...", "Hash calculated", || {
+        calculate_sha256(&options.file)
+    })?;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(180))
@@ -156,42 +171,49 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
 
     let api_base_url = crate::get_api_base_url();
 
-    println!("  {} Requesting upload URL...", "→".dimmed());
-    let upload_response =
-        request_upload_url(&client, auth_token, &api_base_url, &sha256, &filename)?;
+    let upload_response = with_spinner("Requesting upload URL...", "Upload URL received", || {
+        request_upload_url(&client, auth_token, &api_base_url, &sha256, &filename)
+    })?;
 
     if let Some(upload_url) = &upload_response.upload_url {
-        println!("  {} Uploading PDF...", "→".dimmed());
-        upload_pdf(&client, upload_url, &options.file)?;
+        with_spinner("Uploading PDF...", "PDF uploaded", || {
+            upload_pdf(&client, upload_url, &options.file)
+        })?;
     } else {
         println!("  {} PDF already exists, skipping upload", "✓".green());
     }
 
-    println!("  {} Processing PDF...", "→".dimmed());
-    let process_response = request_process(
-        &client,
-        auth_token,
-        &api_base_url,
-        &upload_response.scan_id,
-        &filename,
-        options.model.as_ref().map(|m| m.as_str()),
-    )?;
+    let process_response = with_spinner("Processing PDF...", "PDF processed", || {
+        request_process(
+            &client,
+            auth_token,
+            &api_base_url,
+            &upload_response.scan_id,
+            &filename,
+            options.model.as_ref().map(|m| m.as_str()),
+        )
+    })?;
 
     let md_filename = filename.replace(".pdf", ".md");
     let md_path = options.output_dir.join(&md_filename);
-    println!("  {} Downloading markdown...", "→".dimmed());
-    download_file(&client, &process_response.markdown_url, &md_path)?;
+
+    with_spinner("Downloading markdown...", "Markdown downloaded", || {
+        download_file(&client, &process_response.markdown_url, &md_path)
+    })?;
 
     if options.images {
         if let Some(images_url) = &process_response.images_zip_url {
-            println!("  {} Downloading images...", "→".dimmed());
             let images_zip_path = options.output_dir.join("images.zip");
-            download_file(&client, images_url, &images_zip_path)?;
+            with_spinner("Downloading images...", "Images downloaded", || {
+                download_file(&client, images_url, &images_zip_path)
+            })?;
 
-            println!("  {} Extracting images...", "→".dimmed());
             let images_dir = options.output_dir.join("images");
-            extract_zip(&images_zip_path, &images_dir)?;
-            fs::remove_file(&images_zip_path)?;
+            with_spinner("Extracting images...", "Images extracted", || {
+                extract_zip(&images_zip_path, &images_dir)?;
+                fs::remove_file(&images_zip_path)?;
+                Ok(())
+            })?;
         } else {
             println!("  {} No images found", "ℹ".blue());
         }
