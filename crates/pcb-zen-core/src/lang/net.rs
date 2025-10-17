@@ -433,6 +433,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         let mut named_params = vec![
             ("NET", ParametersSpecParam::Optional),
             ("name", ParametersSpecParam::Optional),
+            ("__register", ParametersSpecParam::Optional),
         ];
 
         for field_name in self.fields.keys() {
@@ -444,7 +445,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
             [],                                         // pos_or_named (args)
             false,
-            named_params, // named-only (NET, name + fields)
+            named_params, // named-only (NET, name + fields + __register)
             false,
         )
     }
@@ -531,6 +532,9 @@ where
                 let positional_value: Option<Value> = param_parser.next_opt()?;
                 let net_keyword: Option<Value> = param_parser.next_opt()?;
                 let name_keyword: Option<Value> = param_parser.next_opt()?;
+
+                // Parse hidden __register parameter (for internal use only)
+                let should_register: bool = param_parser.next_opt()?.unwrap_or(true);
 
                 // Parse field values (all optional)
                 let mut field_values = SmallMap::new();
@@ -643,16 +647,19 @@ where
                     }
                 }
 
-                // Register net in the current module
+                // Register net in the current module (or skip if __register=false)
                 let net_name = original_name.clone().unwrap_or_default();
-                let final_name = eval
-                    .module()
-                    .extra_value()
-                    .and_then(|e| e.downcast_ref::<ContextValue>())
-                    .map(|ctx| ctx.register_net(net_id, &net_name))
-                    .transpose()
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                    .unwrap_or_else(|| net_name.clone());
+                let final_name = if should_register {
+                    eval.module()
+                        .extra_value()
+                        .and_then(|e| e.downcast_ref::<ContextValue>())
+                        .map(|ctx| ctx.register_net(net_id, &net_name))
+                        .transpose()
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                        .unwrap_or_else(|| net_name.clone())
+                } else {
+                    net_name.clone()
+                };
 
                 // Generate automatic moved directive for interface-like typed nets
                 // to maintain backward compatibility with old single-net interface naming

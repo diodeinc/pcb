@@ -20,19 +20,19 @@ use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
 #[derive(Debug, Clone, Default)]
-struct InstancePrefix {
+pub(crate) struct InstancePrefix {
     old_style: String, // legacy: "DEBUG_UART_TX"
     new_style: String, // modern: "debug_uart_tx"
 }
 
 impl InstancePrefix {
     #[inline]
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self::default()
     }
 
     #[inline]
-    fn from_root(root: &str) -> Self {
+    pub(crate) fn from_root(root: &str) -> Self {
         Self {
             old_style: root.to_owned(),
             new_style: root.to_owned(),
@@ -89,6 +89,7 @@ fn clone_net_template<'v>(
     template: Value<'v>,
     prefix: &InstancePrefix,
     field_name_opt: Option<&str>,
+    should_register: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
@@ -114,14 +115,17 @@ fn clone_net_template<'v>(
     let net_name = compute_net_name(prefix, template_name_opt.as_deref(), field_name_opt, eval);
     let new_net = new_net_value.downcast_ref::<NetValue<'v>>().unwrap();
 
-    // Register and get final name
-    let final_name = eval
-        .module()
-        .extra_value()
-        .and_then(|e| e.downcast_ref::<ContextValue>())
-        .map(|ctx| ctx.register_net(new_net.id(), &net_name))
-        .transpose()?
-        .unwrap_or(net_name);
+    // Register and get final name (or skip registration if should_register=false)
+    let final_name = if should_register {
+        eval.module()
+            .extra_value()
+            .and_then(|e| e.downcast_ref::<ContextValue>())
+            .map(|ctx| ctx.register_net(new_net.id(), &net_name))
+            .transpose()?
+            .unwrap_or(net_name)
+    } else {
+        net_name
+    };
 
     // Create new net preserving original_name from template for future cloning
     Ok(heap.alloc(NetValue {
@@ -157,6 +161,7 @@ fn compute_net_name<'v>(
 fn clone_interface_template<'v>(
     instance: Value<'v>,
     prefix: &InstancePrefix,
+    should_register: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
@@ -165,12 +170,15 @@ fn clone_interface_template<'v>(
         name: &str,
         val: Value<'v>,
         prefix: &InstancePrefix,
+        should_register: bool,
         heap: &'v Heap,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         match val.get_type() {
-            "Net" => clone_net_template(val, prefix, Some(name), heap, eval),
-            "InterfaceValue" => clone_interface_template(val, &prefix.child(name), heap, eval),
+            "Net" => clone_net_template(val, prefix, Some(name), should_register, heap, eval),
+            "InterfaceValue" => {
+                clone_interface_template(val, &prefix.child(name), should_register, heap, eval)
+            }
             _ => Ok(val),
         }
     }
@@ -181,7 +189,7 @@ fn clone_interface_template<'v>(
         for (name, value) in iv.fields.iter() {
             cloned.insert(
                 name.clone(),
-                clone_field(name, value.to_value(), prefix, heap, eval)?,
+                clone_field(name, value.to_value(), prefix, should_register, heap, eval)?,
             );
         }
         (iv.factory().to_value(), cloned)
@@ -190,7 +198,7 @@ fn clone_interface_template<'v>(
         for (name, value) in fiv.fields.iter() {
             cloned.insert(
                 name.clone(),
-                clone_field(name, value.to_value(), prefix, heap, eval)?,
+                clone_field(name, value.to_value(), prefix, should_register, heap, eval)?,
             );
         }
         (fiv.factory().to_value(), cloned)
@@ -211,6 +219,7 @@ fn create_field_value<'v>(
     field_spec: Value<'v>,
     provided_value: Option<Value<'v>>,
     prefix: &InstancePrefix,
+    should_register: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
@@ -222,18 +231,32 @@ fn create_field_value<'v>(
     let child_prefix = prefix.child(field_name);
     if field_spec.get_type() == "InterfaceValue" {
         // Clone the interface template with new prefix, reusing non-net values
-        clone_interface_template(field_spec, &child_prefix, heap, eval)
+        clone_interface_template(field_spec, &child_prefix, should_register, heap, eval)
     } else if field_spec.get_type() == "Net" {
         // For Net templates, use clone_net_template directly with field name
-        clone_net_template(field_spec, prefix, Some(field_name), heap, eval)
+        clone_net_template(
+            field_spec,
+            prefix,
+            Some(field_name),
+            should_register,
+            heap,
+            eval,
+        )
     } else if field_spec.get_type() == "NetType" {
         // Invoke the NetType constructor to apply defaults and extract metadata
         let new_name = compute_net_name(prefix, None, Some(field_name), eval);
         let args = vec![heap.alloc(new_name)];
-        eval.eval_function(field_spec, &args, &[])
+        if should_register {
+            // Normal case - omit __register kwarg (defaults to true)
+            eval.eval_function(field_spec, &args, &[])
+        } else {
+            // Metadata-only - explicitly pass __register=false
+            let kwargs = vec![("__register", heap.alloc(false))];
+            eval.eval_function(field_spec, &args, &kwargs)
+        }
     } else {
         // For InterfaceFactory, delegate to instantiate_interface
-        instantiate_interface(field_spec, &child_prefix, heap, eval)
+        instantiate_interface(field_spec, &child_prefix, should_register, heap, eval)
     }
 }
 
@@ -243,6 +266,7 @@ fn create_interface_instance<'v, V>(
     factory_value: Value<'v>,
     provided_values: SmallMap<String, Value<'v>>,
     prefix: &InstancePrefix,
+    should_register: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>>
@@ -258,6 +282,7 @@ where
             field_spec.to_value(),
             provided_values.get(field_name).copied(),
             prefix,
+            should_register,
             heap,
             eval,
         )?;
@@ -429,7 +454,8 @@ where
         } else {
             InstancePrefix::empty()
         };
-        create_interface_instance(self, _me, provided_values, &prefix, eval.heap(), eval)
+        // Normal instantiation - always register nets
+        create_interface_instance(self, _me, provided_values, &prefix, true, eval.heap(), eval)
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
@@ -670,18 +696,35 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
 
 /// Helper function to instantiate an interface spec recursively
 /// This is a simplified dispatcher that delegates to the appropriate creation function
-fn instantiate_interface<'v>(
+pub(crate) fn instantiate_interface<'v>(
     spec: Value<'v>,
     prefix: &InstancePrefix,
+    should_register: bool,
     heap: &'v Heap,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     // Handle interface factories first
     if let Some(factory) = spec.downcast_ref::<InterfaceFactory<'v>>() {
-        return create_interface_instance(factory, spec, SmallMap::new(), prefix, heap, eval);
+        return create_interface_instance(
+            factory,
+            spec,
+            SmallMap::new(),
+            prefix,
+            should_register,
+            heap,
+            eval,
+        );
     }
     if let Some(factory) = spec.downcast_ref::<FrozenInterfaceFactory>() {
-        return create_interface_instance(factory, spec, SmallMap::new(), prefix, heap, eval);
+        return create_interface_instance(
+            factory,
+            spec,
+            SmallMap::new(),
+            prefix,
+            should_register,
+            heap,
+            eval,
+        );
     }
 
     // This path should never be hit - all InterfaceValue instances should have
