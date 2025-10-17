@@ -1233,16 +1233,32 @@ fn io_generated_default<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
     typ: Value<'v>,
     name: &str,
+    for_metadata_only: bool,
 ) -> starlark::Result<Value<'v>> {
+    let heap = eval.heap();
+
     match typ.get_type() {
         "NetType" => {
-            // Invoke the NetType constructor to apply defaults and extract metadata
-            let instance_name = eval.heap().alloc_str(name).to_value();
-            eval.eval_function(typ, &[instance_name], &[])
+            let instance_name = heap.alloc_str(name).to_value();
+            if for_metadata_only {
+                // Pass __register=false for metadata-only defaults
+                let kwargs = vec![("__register", heap.alloc(false))];
+                eval.eval_function(typ, &[instance_name], &kwargs)
+            } else {
+                // Normal instantiation - no need to pass __register (defaults to true)
+                eval.eval_function(typ, &[instance_name], &[])
+            }
         }
         "InterfaceFactory" => {
-            let instance_name = eval.heap().alloc_str(name).to_value();
-            eval.eval_function(typ, &[instance_name], &[])
+            // Use internal instantiation path with explicit registration control
+            use crate::lang::interface::{instantiate_interface, InstancePrefix};
+            instantiate_interface(
+                typ,
+                &InstancePrefix::from_root(name),
+                !for_metadata_only, // should_register
+                heap,
+                eval,
+            )
         }
         _ => default_for_type(eval, typ).map_err(starlark::Error::from),
     }
@@ -1575,35 +1591,37 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
     ) -> starlark::Result<Value<'v>> {
         let is_optional = optional.unwrap_or(false);
 
+        // Helper to compute default value
+        let compute_default = |eval: &mut Evaluator<'v, '_, '_>,
+                               for_metadata_only: bool|
+         -> starlark::Result<Value<'v>> {
+            if let Some(explicit_default) = default {
+                validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
+                Ok(explicit_default)
+            } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+                io_generated_default(eval, typ, &name, for_metadata_only)
+            } else {
+                Ok(default_for_type(eval, typ)?)
+            }
+        };
+
         // Compute the actual value and metadata default
         let (result_value, default_for_metadata) =
             if let Some(provided) = eval.request_input(&name)? {
                 // Value provided by parent - validate/convert it
                 let value = validate_or_convert(&name, provided, typ, None, eval)?;
-
-                // When a value is provided, only use explicit default for metadata
-                // Don't synthesize defaults since actual_value already contains the value
-                let metadata_default = if let Some(explicit_default) = default {
-                    validate_type(name.as_str(), explicit_default, typ, eval.heap())?;
-                    Some(explicit_default)
-                } else {
-                    None
-                };
-
-                (value, metadata_default)
+                // Generate default for metadata only (with unique name to avoid duplicates)
+                let metadata_default = compute_default(eval, true)?;
+                (value, Some(metadata_default))
             } else if is_optional {
                 // Optional parameter with no provided value
-                if let Some(default_val) = default {
-                    validate_type(name.as_str(), default_val, typ, eval.heap())?;
+                let default_val = compute_default(eval, false)?;
+                if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
+                    // Use generated net/interface as actual value
                     (default_val, Some(default_val))
-                } else if matches!(typ.get_type(), "NetType" | "InterfaceFactory") {
-                    // Generate and register nets/interfaces for optional Net/Interface types
-                    let generated = io_generated_default(eval, typ, &name)?;
-                    (generated, Some(generated))
                 } else {
-                    // Other types: return None but record a default for metadata
-                    let metadata_default = default_for_type(eval, typ)?;
-                    (Value::new_none(), Some(metadata_default))
+                    // Other types: return None but record default for metadata
+                    (Value::new_none(), Some(default_val))
                 }
             } else {
                 // Required parameter with no provided value
@@ -1619,14 +1637,9 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                     return Err(MissingInputError { name: name.clone() }.into());
                 }
 
-                // Non-strict mode: use default or generate one
-                if let Some(default_val) = default {
-                    validate_type(name.as_str(), default_val, typ, eval.heap())?;
-                    (default_val, Some(default_val))
-                } else {
-                    let generated = io_generated_default(eval, typ, &name)?;
-                    (generated, Some(generated))
-                }
+                // Non-strict mode: use computed default
+                let default_val = compute_default(eval, false)?;
+                (default_val, Some(default_val))
             };
 
         // Run checks
