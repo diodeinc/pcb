@@ -155,6 +155,7 @@ fn run_release(info: &TagInfo) -> Result<()> {
         source_only: false,                // Don't need manufacturing artifacts for tagging
         output_dir: None,                  // Use default
         output_name: None,                 // Use default
+        exclude: vec![],                   // Don't exclude any artifacts for tag validation
     };
 
     // Run the full release process - this validates everything
