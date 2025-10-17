@@ -173,7 +173,7 @@ fn filename_from_url(url: &str) -> Option<String> {
         .next()?
         .split('/')
         .filter(|s| !s.is_empty())
-        .last()
+        .next_back()
         .map(|s| s.to_string())
 }
 
