@@ -64,6 +64,38 @@ pub enum ArtifactType {
     Svg,
 }
 
+impl ArtifactType {
+    /// Get the human-readable task name for this artifact type
+    fn task_name(&self) -> &'static str {
+        match self {
+            ArtifactType::Bom => "Generating design BOM",
+            ArtifactType::Gerbers => "Generating gerber files",
+            ArtifactType::Cpl => "Generating pick-and-place file",
+            ArtifactType::Assembly => "Generating assembly drawings",
+            ArtifactType::Odb => "Generating ODB++ files",
+            ArtifactType::Step => "Generating STEP model",
+            ArtifactType::Vrml => "Generating VRML model",
+            ArtifactType::Glb => "Generating GLB model",
+            ArtifactType::Svg => "Generating SVG rendering",
+        }
+    }
+
+    /// Get the task function for this artifact type
+    fn task_fn(&self) -> TaskFn {
+        match self {
+            ArtifactType::Bom => generate_design_bom,
+            ArtifactType::Gerbers => generate_gerbers,
+            ArtifactType::Cpl => generate_cpl,
+            ArtifactType::Assembly => generate_assembly_drawings,
+            ArtifactType::Odb => generate_odb,
+            ArtifactType::Step => generate_step_model,
+            ArtifactType::Vrml => generate_vrml_model,
+            ArtifactType::Glb => generate_glb_model,
+            ArtifactType::Svg => generate_svg_rendering,
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct ReleaseArgs {
     /// Board name to release
@@ -137,51 +169,30 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Substituting version variables", substitute_variables),
 ];
 
-const MANUFACTURING_TASKS: &[(&str, TaskFn)] = &[
-    ("Generating design BOM", generate_design_bom),
-    ("Generating gerber files", generate_gerbers),
-    ("Generating pick-and-place file", generate_cpl),
-    ("Generating assembly drawings", generate_assembly_drawings),
-    ("Generating ODB++ files", generate_odb),
-    ("Generating STEP model", generate_step_model),
-    ("Generating VRML model", generate_vrml_model),
-    ("Generating GLB model", generate_glb_model),
-    ("Generating SVG rendering", generate_svg_rendering),
+/// All manufacturing artifacts in the order they should be generated
+const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
+    ArtifactType::Bom,
+    ArtifactType::Gerbers,
+    ArtifactType::Cpl,
+    ArtifactType::Assembly,
+    ArtifactType::Odb,
+    ArtifactType::Step,
+    ArtifactType::Vrml,
+    ArtifactType::Glb,
+    ArtifactType::Svg,
 ];
+
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
     ("Creating release archive", zip_release),
 ];
 
-/// Map task name to artifact type for filtering
-fn task_to_artifact_type(task_name: &str) -> Option<ArtifactType> {
-    match task_name {
-        "Generating design BOM" => Some(ArtifactType::Bom),
-        "Generating gerber files" => Some(ArtifactType::Gerbers),
-        "Generating pick-and-place file" => Some(ArtifactType::Cpl),
-        "Generating assembly drawings" => Some(ArtifactType::Assembly),
-        "Generating ODB++ files" => Some(ArtifactType::Odb),
-        "Generating STEP model" => Some(ArtifactType::Step),
-        "Generating VRML model" => Some(ArtifactType::Vrml),
-        "Generating GLB model" => Some(ArtifactType::Glb),
-        "Generating SVG rendering" => Some(ArtifactType::Svg),
-        _ => None,
-    }
-}
-
-/// Filter tasks based on excluded artifacts
-fn filter_tasks<'a>(
-    tasks: &'a [(&'a str, TaskFn)],
-    excluded: &[ArtifactType],
-) -> Vec<(&'a str, TaskFn)> {
-    tasks
+/// Get manufacturing tasks as (name, function) pairs, filtered by exclusions
+fn get_manufacturing_tasks(excluded: &[ArtifactType]) -> Vec<(&'static str, TaskFn)> {
+    MANUFACTURING_ARTIFACTS
         .iter()
-        .filter(|(name, _)| {
-            task_to_artifact_type(name)
-                .map(|artifact| !excluded.contains(&artifact))
-                .unwrap_or(true) // Keep tasks that don't map to artifacts (always run)
-        })
-        .copied()
+        .filter(|artifact| !excluded.contains(artifact))
+        .map(|artifact| (artifact.task_name(), artifact.task_fn()))
         .collect()
 }
 
@@ -235,8 +246,8 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
 
     // Execute manufacturing tasks if full release
     if matches!(release_info.kind, ReleaseKind::Full) {
-        let filtered_tasks = filter_tasks(MANUFACTURING_TASKS, &args.exclude);
-        execute_tasks(&release_info, &filtered_tasks)?;
+        let manufacturing_tasks = get_manufacturing_tasks(&args.exclude);
+        execute_tasks(&release_info, &manufacturing_tasks)?;
     }
 
     // Execute finalization tasks
