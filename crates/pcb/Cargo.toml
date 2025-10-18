@@ -7,6 +7,10 @@ description = "next-gen tooling for pcb design"
 homepage = { workspace = true }
 authors = { workspace = true }
 
+[features]
+default = ["api"]
+api = ["dep:pcb-diode-api"]
+
 [package.metadata.wix]
 upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"
 path-guid = "019D9AC1-AFB6-4D44-9FE5-F7BCA676A7DF"
@@ -25,6 +29,8 @@ pcb-zen = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
+pcb-diode-api = { workspace = true, optional = true }
+pcb-eda = { workspace = true }
 log = { workspace = true }
 ariadne = { workspace = true }
 env_logger = { workspace = true }
@@ -48,7 +54,11 @@ tempfile = { workspace = true }
 ignore = { workspace = true }
 semver = { workspace = true }
 crossterm = { workspace = true }
+terminal_size = { workspace = true }
+unicode-width = { workspace = true }
+indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
+
 
 axoupdater = { version = "0.9", features = ["blocking"] }
 

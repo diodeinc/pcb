@@ -4,6 +4,8 @@ use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
+#[cfg(feature = "api")]
+mod api;
 mod bom;
 mod build;
 mod clean;
@@ -35,6 +37,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Manage authentication
+    #[cfg(feature = "api")]
+    Auth(api::AuthArgs),
+
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
@@ -80,6 +86,14 @@ enum Commands {
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
+    /// Scan PDF datasheets with OCR
+    #[cfg(feature = "api")]
+    Scan(api::ScanArgs),
+
+    /// Search for electronic components
+    #[cfg(feature = "api")]
+    Search(api::SearchArgs),
+
     /// Run SPICE simulations
     Sim(sim::SimArgs),
 
@@ -105,6 +119,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
+        #[cfg(feature = "api")]
+        Commands::Auth(args) => api::execute_auth(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
@@ -118,6 +134,10 @@ fn main() -> anyhow::Result<()> {
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
+        #[cfg(feature = "api")]
+        Commands::Scan(args) => api::execute_scan(args),
+        #[cfg(feature = "api")]
+        Commands::Search(args) => api::execute_search(args),
         Commands::Sim(args) => sim::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
