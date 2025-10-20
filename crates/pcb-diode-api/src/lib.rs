@@ -6,8 +6,7 @@ pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCom
 pub use component::{
     add_component_to_workspace, download_component, execute as execute_search,
     search_and_add_single, search_components, search_interactive, search_json, AddComponentResult,
-    ComponentDownloadResult, ComponentSearchOptions, ComponentSearchResult, ModelAvailability,
-    SearchArgs,
+    ComponentDownloadResult, ComponentSearchResult, ModelAvailability, SearchArgs,
 };
 pub use scan::{
     execute as execute_scan, scan_pdf, scan_with_defaults, ScanArgs, ScanModel, ScanModelArg,

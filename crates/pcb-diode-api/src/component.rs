@@ -32,11 +32,6 @@ pub struct ComponentSearchResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentSearchOptions {
-    pub mpn: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct ComponentDownloadMetadata {
     pub mpn: String,
     pub timestamp: String,
@@ -108,10 +103,7 @@ struct DownloadResponseMetadata {
     file_hashes: Option<std::collections::HashMap<String, String>>,
 }
 
-pub fn search_components(
-    auth_token: &str,
-    options: ComponentSearchOptions,
-) -> Result<Vec<ComponentSearchResult>> {
+pub fn search_components(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
     let api_base_url = crate::get_api_base_url();
     let url = format!("{}/api/component/search", api_base_url);
 
@@ -120,7 +112,9 @@ pub fn search_components(
     let response = client
         .post(&url)
         .bearer_auth(auth_token)
-        .json(&SearchRequest { mpn: options.mpn })
+        .json(&SearchRequest {
+            mpn: mpn.to_string(),
+        })
         .send()?;
 
     if !response.status().is_success() {
@@ -174,7 +168,7 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
     })
 }
 
-pub fn download_file(_auth_token: &str, url: &str, output_path: &Path) -> Result<()> {
+pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -193,16 +187,29 @@ pub fn download_file(_auth_token: &str, url: &str, output_path: &Path) -> Result
 
 // Helper: Search and filter for ECAD-available components
 fn search_and_filter(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
-    let results = search_components(
-        auth_token,
-        ComponentSearchOptions {
-            mpn: mpn.to_string(),
-        },
-    )?;
+    let results = search_components(auth_token, mpn)?;
     Ok(results
         .into_iter()
         .filter(|r| r.model_availability.ecad_model)
         .collect())
+}
+
+// Helper: Show component already exists message and return early
+fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> bool {
+    if !result.already_exists {
+        return false;
+    }
+
+    let display_path = result
+        .component_path
+        .strip_prefix(workspace_root)
+        .unwrap_or(&result.component_path);
+    println!(
+        "{} Component already exists at: {}",
+        "ℹ".blue().bold(),
+        display_path.display().to_string().cyan()
+    );
+    true
 }
 
 // Helper: Show component added message
@@ -345,7 +352,7 @@ pub fn add_component_to_workspace(
         for (url, path, label) in download_tasks {
             let errors = Arc::clone(&errors);
             handles.push(s.spawn(move || {
-                if let Err(e) = download_file(auth_token, &url, &path) {
+                if let Err(e) = download_file(&url, &path) {
                     errors.lock().unwrap().push(format!("{}: {}", label, e));
                 }
             }));
@@ -639,21 +646,21 @@ pub fn search_interactive(
 
     let selection = Select::new(
         "Select a component to download and add to ./components:",
-        items.clone(),
+        items,
     )
     .with_page_size(page_size)
     .with_formatter(&|_| String::new()) // Hide the final selection output
     .prompt()?;
 
-    let selected_index = items
+    let selected_index = filtered_results
         .iter()
-        .position(|s| s == &selection)
+        .position(|r| format_search_result(r) == selection)
         .context("Selected component not found")?;
     let selected_component = &filtered_results[selected_index];
     println!(
         "{} {}",
         "Selected:".green().bold(),
-        selected_component.part_number.clone().bold()
+        selected_component.part_number.bold()
     );
     if let Some(description) = &selected_component.description {
         println!("{} {}", "Description:".cyan(), description);
@@ -661,16 +668,7 @@ pub fn search_interactive(
 
     let result = add_component_to_workspace(auth_token, selected_component, workspace_root)?;
 
-    if result.already_exists {
-        let display_path = result
-            .component_path
-            .strip_prefix(workspace_root)
-            .unwrap_or(&result.component_path);
-        println!(
-            "{} Component already exists at: {}",
-            "ℹ".blue().bold(),
-            display_path.display().to_string().cyan()
-        );
+    if handle_already_exists(workspace_root, &result) {
         return Ok(());
     }
 
@@ -727,21 +725,12 @@ pub fn search_and_add_single(
     println!(
         "{} Found exactly one component: {}",
         "✓".green().bold(),
-        component.part_number.clone().bold()
+        component.part_number.bold()
     );
 
     let result = add_component_to_workspace(auth_token, component, workspace_root)?;
 
-    if result.already_exists {
-        let display_path = result
-            .component_path
-            .strip_prefix(workspace_root)
-            .unwrap_or(&result.component_path);
-        println!(
-            "{} Component already exists at: {}",
-            "ℹ".blue().bold(),
-            display_path.display().to_string().cyan()
-        );
+    if handle_already_exists(workspace_root, &result) {
         return Ok(());
     }
 
