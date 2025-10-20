@@ -14,6 +14,7 @@ mod fmt;
 mod info;
 mod layout;
 mod lsp;
+mod mcp;
 mod open;
 mod release;
 mod sim;
@@ -97,6 +98,9 @@ enum Commands {
     /// Run SPICE simulations
     Sim(sim::SimArgs),
 
+    /// Start the Model Context Protocol (MCP) server
+    Mcp(mcp::McpArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -139,6 +143,7 @@ fn main() -> anyhow::Result<()> {
         #[cfg(feature = "api")]
         Commands::Search(args) => api::execute_search(args),
         Commands::Sim(args) => sim::execute(args),
+        Commands::Mcp(args) => mcp::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");

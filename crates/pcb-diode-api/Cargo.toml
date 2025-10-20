@@ -32,3 +32,4 @@ zstd = "0.13"
 regex = { workspace = true }
 base64 = { workspace = true }
 fslock = { workspace = true }
+pcb-mcp = { workspace = true }

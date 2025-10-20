@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod component;
+pub mod mcp;
 pub mod scan;
 
 pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCommand, AuthTokens};
