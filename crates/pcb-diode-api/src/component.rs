@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose, Engine as _};
 use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
@@ -190,19 +189,36 @@ pub fn download_file(_auth_token: &str, url: &str, output_path: &Path) -> Result
     Ok(())
 }
 
-pub fn decode_component_id(component_id: &str) -> Result<(String, String)> {
-    let decoded = general_purpose::STANDARD.decode(component_id)?;
-    let decoded_str = String::from_utf8(decoded)?;
+// Helper: Search and filter for ECAD-available components
+fn search_and_filter(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
+    let results = search_components(
+        auth_token,
+        ComponentSearchOptions {
+            mpn: mpn.to_string(),
+        },
+    )?;
+    Ok(results
+        .into_iter()
+        .filter(|r| r.model_availability.ecad_model)
+        .collect())
+}
 
-    #[derive(Deserialize)]
-    struct ComponentId {
-        source: String,
-        part_id: String,
-    }
-
-    let parsed: ComponentId = serde_json::from_str(&decoded_str)?;
-
-    Ok((parsed.source, parsed.part_id))
+// Helper: Show component added message
+fn show_component_added(
+    component: &ComponentSearchResult,
+    workspace_root: &Path,
+    result: &AddComponentResult,
+) {
+    let display_path = result
+        .component_path
+        .strip_prefix(workspace_root)
+        .unwrap_or(&result.component_path);
+    println!(
+        "{} Added {} to {}",
+        "✓".green().bold(),
+        component.part_number.bold(),
+        display_path.display().to_string().cyan()
+    );
 }
 
 /// Parse storage path from Supabase presigned URL
@@ -240,7 +256,6 @@ pub fn add_component_to_workspace(
         return Ok(AddComponentResult {
             component_path: component_file,
             already_exists: true,
-            scanned_pdfs: vec![],
         });
     }
 
@@ -297,7 +312,7 @@ pub fn add_component_to_workspace(
 
     // Show task summary
     println!(
-        "\n{} {}",
+        "{} {}",
         "Downloading".green().bold(),
         component.part_number.bold()
     );
@@ -398,7 +413,6 @@ pub fn add_component_to_workspace(
     }
 
     // Generate .zen file if symbol was downloaded
-    let mut scanned_pdfs = Vec::new();
     if let Some(filename) = &download.metadata.symbol_filename {
         let symbol_path = component_dir.join(filename);
         if symbol_path.exists() {
@@ -407,7 +421,6 @@ pub fn add_component_to_workspace(
                 .first_symbol()
                 .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
 
-            // Use datasheet URLs from download metadata (original URLs, not presigned)
             let datasheet_urls = download
                 .metadata
                 .datasheet_urls
@@ -420,30 +433,18 @@ pub fn add_component_to_workspace(
                 symbol,
                 datasheet_urls,
             )?;
-
-            // Collect scanned PDFs
-            if let Some(filenames) = &download.metadata.datasheet_filenames {
-                for filename in filenames {
-                    let pdf_path = component_dir.join(filename);
-                    if pdf_path.with_extension("md").exists() {
-                        scanned_pdfs.push(pdf_path);
-                    }
-                }
-            }
         }
     }
 
     Ok(AddComponentResult {
         component_path: component_file,
         already_exists: false,
-        scanned_pdfs,
     })
 }
 
 pub struct AddComponentResult {
-    pub component_path: std::path::PathBuf,
+    pub component_path: PathBuf,
     pub already_exists: bool,
-    pub scanned_pdfs: Vec<std::path::PathBuf>,
 }
 
 fn generate_zen_file(
@@ -567,18 +568,8 @@ pub fn search_interactive(
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
     spinner.set_message("Searching for components...");
 
-    let results = search_components(
-        auth_token,
-        ComponentSearchOptions {
-            mpn: mpn.to_string(),
-        },
-    )?;
+    let filtered_results = search_and_filter(auth_token, mpn)?;
     spinner.finish_and_clear();
-
-    let filtered_results: Vec<ComponentSearchResult> = results
-        .into_iter()
-        .filter(|r| r.model_availability.ecad_model)
-        .collect();
 
     if filtered_results.is_empty() {
         println!("No results found with ECAD data available.");
@@ -618,12 +609,11 @@ pub fn search_interactive(
 
     let result = add_component_to_workspace(auth_token, selected_component, workspace_root)?;
 
-    let display_path = result
-        .component_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&result.component_path);
-
     if result.already_exists {
+        let display_path = result
+            .component_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&result.component_path);
         println!(
             "{} Component already exists at: {}",
             "ℹ".blue().bold(),
@@ -632,28 +622,12 @@ pub fn search_interactive(
         return Ok(());
     }
 
-    println!(
-        "{} Added {} to {}",
-        "✓".green().bold(),
-        selected_component.part_number.bold(),
-        display_path.display().to_string().cyan()
-    );
-
+    show_component_added(selected_component, workspace_root, &result);
     Ok(())
 }
 
 pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
-    let results = search_components(
-        auth_token,
-        ComponentSearchOptions {
-            mpn: mpn.to_string(),
-        },
-    )?;
-
-    let filtered_results: Vec<ComponentSearchResult> = results
-        .into_iter()
-        .filter(|r| r.model_availability.ecad_model)
-        .collect();
+    let filtered_results = search_and_filter(auth_token, mpn)?;
 
     let json_results: Vec<serde_json::Value> = filtered_results
         .iter()
@@ -678,17 +652,7 @@ pub fn search_and_add_single(
     mpn: &str,
     workspace_root: &std::path::Path,
 ) -> Result<()> {
-    let results = search_components(
-        auth_token,
-        ComponentSearchOptions {
-            mpn: mpn.to_string(),
-        },
-    )?;
-
-    let filtered_results: Vec<ComponentSearchResult> = results
-        .into_iter()
-        .filter(|r| r.model_availability.ecad_model)
-        .collect();
+    let filtered_results = search_and_filter(auth_token, mpn)?;
 
     if filtered_results.is_empty() {
         println!("No results found with ECAD data available.");
@@ -716,12 +680,11 @@ pub fn search_and_add_single(
 
     let result = add_component_to_workspace(auth_token, component, workspace_root)?;
 
-    let display_path = result
-        .component_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&result.component_path);
-
     if result.already_exists {
+        let display_path = result
+            .component_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&result.component_path);
         println!(
             "{} Component already exists at: {}",
             "ℹ".blue().bold(),
@@ -730,13 +693,7 @@ pub fn search_and_add_single(
         return Ok(());
     }
 
-    println!(
-        "{} Added {} to {}",
-        "✓".green().bold(),
-        component.part_number.bold(),
-        display_path.display().to_string().cyan()
-    );
-
+    show_component_added(component, workspace_root, &result);
     Ok(())
 }
 

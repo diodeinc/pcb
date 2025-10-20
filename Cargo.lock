@@ -2858,7 +2858,6 @@ name = "pcb-diode-api"
 version = "0.2.13"
 dependencies = [
  "anyhow",
- "base64",
  "chrono",
  "clap",
  "colored",
@@ -2877,7 +2876,6 @@ dependencies = [
  "toml",
  "unicode-width 0.2.1",
  "urlencoding",
- "walkdir",
  "zip 4.3.0",
 ]
 
