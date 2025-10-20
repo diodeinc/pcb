@@ -42,8 +42,8 @@ pub struct ComponentDownloadMetadata {
     pub symbol_filename: Option<String>,
     pub footprint_filename: Option<String>,
     pub step_filename: Option<String>,
-    pub datasheet_filenames: Option<Vec<String>>,
-    pub datasheet_urls: Option<Vec<String>>,
+    pub datasheet_filename: Option<String>,
+    pub datasheet_url: Option<String>,
     pub file_hashes: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -52,7 +52,7 @@ pub struct ComponentDownloadResult {
     pub symbol_url: Option<String>,
     pub footprint_url: Option<String>,
     pub step_url: Option<String>,
-    pub datasheet_urls: Option<Vec<String>>,
+    pub datasheet_url: Option<String>,
     pub metadata: ComponentDownloadMetadata,
 }
 
@@ -74,8 +74,8 @@ struct DownloadResponse {
     footprint_url: Option<String>,
     #[serde(rename = "stepUrl")]
     step_url: Option<String>,
-    #[serde(rename = "datasheetUrls")]
-    datasheet_urls: Option<Vec<String>>,
+    #[serde(rename = "datasheetUrl")]
+    datasheet_url: Option<String>,
     metadata: DownloadResponseMetadata,
 }
 
@@ -95,10 +95,10 @@ struct DownloadResponseMetadata {
     footprint_filename: Option<String>,
     #[serde(rename = "stepFilename")]
     step_filename: Option<String>,
-    #[serde(rename = "datasheetFilenames")]
-    datasheet_filenames: Option<Vec<String>>,
-    #[serde(rename = "datasheetUrls")]
-    datasheet_urls: Option<Vec<String>>,
+    #[serde(rename = "datasheetFilename")]
+    datasheet_filename: Option<String>,
+    #[serde(rename = "datasheetUrl")]
+    datasheet_url: Option<String>,
     #[serde(rename = "fileHashes")]
     file_hashes: Option<std::collections::HashMap<String, String>>,
 }
@@ -150,7 +150,7 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
         symbol_url: download_response.symbol_url,
         footprint_url: download_response.footprint_url,
         step_url: download_response.step_url,
-        datasheet_urls: download_response.datasheet_urls,
+        datasheet_url: download_response.datasheet_url,
         metadata: ComponentDownloadMetadata {
             mpn: download_response.metadata.mpn,
             timestamp: download_response.metadata.timestamp,
@@ -161,8 +161,8 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
             symbol_filename: download_response.metadata.symbol_filename,
             footprint_filename: download_response.metadata.footprint_filename,
             step_filename: download_response.metadata.step_filename,
-            datasheet_filenames: download_response.metadata.datasheet_filenames,
-            datasheet_urls: download_response.metadata.datasheet_urls,
+            datasheet_filename: download_response.metadata.datasheet_filename,
+            datasheet_url: download_response.metadata.datasheet_url,
             file_hashes: download_response.metadata.file_hashes,
         },
     })
@@ -181,7 +181,22 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
         anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
     }
 
-    std::fs::write(output_path, response.bytes()?)?;
+    let bytes = response.bytes()?;
+
+    // Normalize line endings for text files (KiCad files)
+    if let Some(ext) = output_path.extension().and_then(|e| e.to_str()) {
+        if matches!(
+            ext,
+            "kicad_sym" | "kicad_mod" | "kicad_pcb" | "kicad_sch" | "kicad_pro"
+        ) {
+            let text = String::from_utf8_lossy(&bytes);
+            let normalized = text.replace("\r\n", "\n");
+            std::fs::write(output_path, normalized.as_bytes())?;
+            return Ok(());
+        }
+    }
+
+    std::fs::write(output_path, bytes)?;
     Ok(())
 }
 
@@ -406,20 +421,18 @@ pub fn add_component_to_workspace(
         download_tasks.push((url.clone(), component_dir.join(filename), "step"));
     }
 
-    if let (Some(urls), Some(filenames)) = (
-        &download.datasheet_urls,
-        &download.metadata.datasheet_filenames,
+    if let (Some(url), Some(filename)) = (
+        &download.datasheet_url,
+        &download.metadata.datasheet_filename,
     ) {
-        for (url, filename) in urls.iter().zip(filenames.iter()) {
-            file_count += 1;
-            download_tasks.push((url.clone(), component_dir.join(filename), "datasheet"));
+        file_count += 1;
+        download_tasks.push((url.clone(), component_dir.join(filename), "datasheet"));
 
-            if let Some(storage_path) = parse_storage_path_from_url(url) {
-                let md_path = component_dir.join(filename).with_extension("md");
-                if !md_path.exists() {
-                    scan_count += 1;
-                    scan_tasks.push((storage_path, filename.clone()));
-                }
+        if let Some(storage_path) = parse_storage_path_from_url(url) {
+            let md_path = component_dir.join(filename).with_extension("md");
+            if !md_path.exists() {
+                scan_count += 1;
+                scan_tasks.push((storage_path, filename.clone()));
             }
         }
     }
@@ -544,9 +557,10 @@ pub fn add_component_to_workspace(
             let embedded_content =
                 embed_step_in_footprint(footprint_content, step_bytes, step_filename)?;
 
-            // Write to temporary file
+            // Normalize line endings and write to temporary file
+            let normalized_content = embedded_content.replace("\r\n", "\n");
             let temp_path = footprint_path.with_extension("kicad_mod.tmp");
-            fs::write(&temp_path, embedded_content)
+            fs::write(&temp_path, normalized_content)
                 .context("Failed to write temporary footprint file")?;
 
             // Atomic rename to replace original
@@ -572,7 +586,7 @@ pub fn add_component_to_workspace(
                 symbol,
                 symbol_filename,
                 download.metadata.footprint_filename.as_deref(),
-                download.metadata.datasheet_filenames.as_deref(),
+                download.metadata.datasheet_filename.as_deref(),
             )?;
 
             fs::write(&component_file, content)?;
@@ -625,7 +639,7 @@ fn generate_zen_file(
     symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
     footprint_filename: Option<&str>,
-    datasheet_filenames: Option<&[String]>,
+    datasheet_filename: Option<&str>,
 ) -> Result<String> {
     // Group pins by sanitized name to handle duplicates
     let mut pin_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -670,7 +684,7 @@ fn generate_zen_file(
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
             "description": symbol.description,
-            "datasheet_file": datasheet_filenames.and_then(|files| files.first()),
+            "datasheet_file": datasheet_filename,
         }))?;
 
     Ok(content)
