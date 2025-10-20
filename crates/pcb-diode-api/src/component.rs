@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
+use deunicode::deunicode;
 use indicatif::ProgressBar;
 use inquire::Select;
 use minijinja::Environment;
@@ -200,6 +201,30 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Upgrade a .kicad_sym file to the latest version using kicad-cli
+/// Returns Ok(()) if upgrade succeeds or kicad-cli is not available (non-fatal)
+fn upgrade_symbol(symbol_path: &Path) -> Result<()> {
+    pcb_kicad::KiCadCliBuilder::new()
+        .command("sym")
+        .subcommand("upgrade")
+        .arg(symbol_path.to_string_lossy().as_ref())
+        .run()
+}
+
+/// Upgrade a footprint library directory using kicad-cli
+/// Returns Ok(()) if upgrade succeeds or kicad-cli is not available (non-fatal)
+fn upgrade_footprint(footprint_path: &Path) -> Result<()> {
+    let lib_dir = footprint_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Footprint path has no parent directory"))?;
+
+    pcb_kicad::KiCadCliBuilder::new()
+        .command("fp")
+        .subcommand("upgrade")
+        .arg(lib_dir.to_string_lossy().as_ref())
+        .run()
+}
+
 /// Embed a STEP file into a KiCad footprint using the KiCad 8/9 embedded files format.
 ///
 /// This function:
@@ -361,10 +386,9 @@ pub fn add_component_to_workspace(
     component: &ComponentSearchResult,
     workspace_root: &std::path::Path,
 ) -> Result<AddComponentResult> {
-    let component_dir = workspace_root
-        .join("components")
-        .join(&component.part_number);
-    let component_file = component_dir.join(format!("{}.zen", &component.part_number));
+    let sanitized_path = sanitize_mpn_for_path(&component.part_number);
+    let component_dir = workspace_root.join("components").join(&sanitized_path);
+    let component_file = component_dir.join(format!("{}.zen", &sanitized_path));
 
     if component_file.exists() {
         return Ok(AddComponentResult {
@@ -388,18 +412,23 @@ pub fn add_component_to_workspace(
     let mut scan_count = 0;
     let mut download_tasks = Vec::new();
     let mut scan_tasks = Vec::new();
+    let mut upgrade_tasks = Vec::new();
 
     if let (Some(url), Some(filename)) = (&download.symbol_url, &download.metadata.symbol_filename)
     {
         file_count += 1;
-        download_tasks.push((url.clone(), component_dir.join(filename), "symbol"));
+        let path = component_dir.join(filename);
+        download_tasks.push((url.clone(), path.clone(), "symbol"));
+        upgrade_tasks.push(("symbol", path));
     }
     if let (Some(url), Some(filename)) = (
         &download.footprint_url,
         &download.metadata.footprint_filename,
     ) {
         file_count += 1;
-        download_tasks.push((url.clone(), component_dir.join(filename), "footprint"));
+        let path = component_dir.join(filename);
+        download_tasks.push((url.clone(), path.clone(), "footprint"));
+        upgrade_tasks.push(("footprint", path));
     }
     if let (Some(url), Some(filename)) = (&download.step_url, &download.metadata.step_filename) {
         file_count += 1;
@@ -461,7 +490,44 @@ pub fn add_component_to_workspace(
             }));
         }
 
-        // Scan tasks (parallel with downloads)
+        // Wait for downloads to complete
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let mut handles = Vec::new();
+
+        // Upgrade tasks (after downloads complete)
+        for (file_type, path) in upgrade_tasks {
+            let errors = Arc::clone(&errors);
+            handles.push(s.spawn(move || {
+                let result = match file_type {
+                    "symbol" => upgrade_symbol(&path),
+                    "footprint" => upgrade_footprint(&path),
+                    _ => return,
+                };
+
+                // Silently skip if kicad-cli not available, report other errors
+                if let Err(e) = result {
+                    let err_msg = e.to_string();
+                    if !err_msg.contains("KiCad CLI not found") {
+                        errors
+                            .lock()
+                            .unwrap()
+                            .push(format!("upgrade {}: {}", file_type, e));
+                    }
+                }
+            }));
+        }
+
+        // Wait for upgrades to complete
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let mut handles = Vec::new();
+
+        // Scan tasks (after upgrades)
         for (storage_path, filename) in scan_tasks {
             let output_dir = component_dir.clone();
             let errors = Arc::clone(&errors);
@@ -566,8 +632,10 @@ pub fn add_component_to_workspace(
                 .first_symbol()
                 .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
 
+            let sanitized_name = sanitize_mpn_for_path(&component.part_number);
             let content = generate_zen_file(
                 &component.part_number,
+                &sanitized_name,
                 symbol,
                 symbol_filename,
                 download.metadata.footprint_filename.as_deref(),
@@ -589,7 +657,48 @@ pub struct AddComponentResult {
     pub already_exists: bool,
 }
 
-/// Sanitize a name to create a valid identifier by replacing special characters
+/// Sanitize an MPN for use as a directory/file name and Component name
+///
+/// Process:
+/// 1. Replace unsafe ASCII → underscore (keep a-z A-Z 0-9 - _, keep Unicode)
+/// 2. Transliterate Unicode → ASCII
+/// 3. Replace leftover unsafe chars → underscore
+/// 4. Cleanup: collapse multiple underscores, trim leading/trailing
+fn sanitize_mpn_for_path(mpn: &str) -> String {
+    fn is_safe(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '-' || c == '_'
+    }
+
+    // Replace unsafe ASCII with _, keep Unicode for transliteration
+    let ascii_cleaned: String = mpn
+        .chars()
+        .map(|c| if c.is_ascii() && !is_safe(c) { '_' } else { c })
+        .collect();
+
+    // Transliterate Unicode to ASCII
+    let transliterated = deunicode(&ascii_cleaned);
+
+    // Replace any remaining unsafe chars from transliteration
+    let all_safe: String = transliterated
+        .chars()
+        .map(|c| if is_safe(c) { c } else { '_' })
+        .collect();
+
+    // Collapse multiple underscores and trim
+    let cleaned: String = all_safe
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+
+    if cleaned.is_empty() {
+        "component".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Sanitize a pin name to create a valid Starlark identifier
 fn sanitize(name: &str) -> String {
     let result = name
         .chars()
@@ -621,6 +730,7 @@ fn sanitize(name: &str) -> String {
 
 fn generate_zen_file(
     mpn: &str,
+    component_name: &str,
     symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
     footprint_filename: Option<&str>,
@@ -663,7 +773,8 @@ fn generate_zen_file(
     let content = env
         .get_template("component.zen")?
         .render(serde_json::json!({
-            "component_name": mpn,
+            "component_name": component_name,
+            "mpn": mpn,
             "sym_path": symbol_filename,
             "footprint_path": footprint_filename.unwrap_or(&format!("{}.kicad_mod", mpn)),
             "pin_groups": pin_groups_vec,
@@ -903,4 +1014,154 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_mpn_for_path_basic() {
+        // Normal alphanumeric MPNs pass through unchanged
+        assert_eq!(sanitize_mpn_for_path("STM32F407VGT6"), "STM32F407VGT6");
+        assert_eq!(sanitize_mpn_for_path("TPS82140"), "TPS82140");
+        assert_eq!(sanitize_mpn_for_path("LM358"), "LM358");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_punctuation() {
+        // ASCII punctuation replaced with underscore
+        assert_eq!(sanitize_mpn_for_path("PESD2CAN,215"), "PESD2CAN_215");
+        assert_eq!(sanitize_mpn_for_path("IC@123#456"), "IC_123_456");
+        assert_eq!(
+            sanitize_mpn_for_path("Part.Number:Test"),
+            "Part_Number_Test"
+        );
+        assert_eq!(
+            sanitize_mpn_for_path("Part/Number\\Test"),
+            "Part_Number_Test"
+        );
+        assert_eq!(sanitize_mpn_for_path("Device(123)"), "Device_123");
+        assert_eq!(sanitize_mpn_for_path("IC[5V]"), "IC_5V");
+        assert_eq!(sanitize_mpn_for_path("Part;Number"), "Part_Number");
+        assert_eq!(sanitize_mpn_for_path("Part'Number"), "Part_Number");
+        assert_eq!(sanitize_mpn_for_path("Part\"Number"), "Part_Number");
+
+        // Real-world examples from user
+        assert_eq!(sanitize_mpn_for_path("AT86RF212B.ZU"), "AT86RF212B_ZU");
+        assert_eq!(sanitize_mpn_for_path("MC34063A/D"), "MC34063A_D");
+        assert_eq!(sanitize_mpn_for_path("Part#123@Test"), "Part_123_Test");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_spaces() {
+        // Spaces become underscores
+        assert_eq!(sanitize_mpn_for_path("TPS82140 SILR"), "TPS82140_SILR");
+        assert_eq!(
+            sanitize_mpn_for_path("Part Number Test"),
+            "Part_Number_Test"
+        );
+
+        // Multiple spaces collapse to single underscore
+        assert_eq!(sanitize_mpn_for_path("Part  Number"), "Part_Number");
+
+        // Leading/trailing spaces trimmed
+        assert_eq!(sanitize_mpn_for_path("   spaces   "), "spaces");
+        assert_eq!(sanitize_mpn_for_path(" Part "), "Part");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_hyphens_underscores() {
+        // Hyphens and underscores are preserved as safe characters
+        assert_eq!(sanitize_mpn_for_path("STM32-F407"), "STM32-F407");
+        assert_eq!(sanitize_mpn_for_path("IC_123"), "IC_123");
+        assert_eq!(sanitize_mpn_for_path("Part-Name_123"), "Part-Name_123");
+
+        // Multiple consecutive underscores collapse (hyphens preserved)
+        assert_eq!(sanitize_mpn_for_path("Part---Test"), "Part---Test");
+        assert_eq!(sanitize_mpn_for_path("Part___Test"), "Part_Test");
+        assert_eq!(sanitize_mpn_for_path("Part-_-Test"), "Part-_-Test");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_unicode() {
+        // Unicode characters are transliterated
+        assert_eq!(
+            sanitize_mpn_for_path("µController-2000"),
+            "uController-2000"
+        );
+        assert_eq!(sanitize_mpn_for_path("αβγ-Component"), "abg-Component");
+        assert_eq!(sanitize_mpn_for_path("Ω-Resistor"), "O-Resistor");
+
+        // Cyrillic
+        assert_eq!(sanitize_mpn_for_path("Микроконтроллер"), "Mikrokontroller");
+
+        // Chinese (transliterates - exact output depends on deunicode library)
+        let chinese_result = sanitize_mpn_for_path("电阻器");
+        assert!(!chinese_result.is_empty());
+        assert_eq!(chinese_result.chars().all(|c| c.is_ascii()), true);
+
+        // Accented characters
+        assert_eq!(sanitize_mpn_for_path("Café-IC"), "Cafe-IC");
+        assert_eq!(sanitize_mpn_for_path("Résistance"), "Resistance");
+
+        // Real-world examples from user
+        assert_eq!(
+            sanitize_mpn_for_path("Würth Elektronik"),
+            "Wurth_Elektronik"
+        );
+
+        // Trademark symbol transliterates (deunicode produces "tm" without parens)
+        assert_eq!(sanitize_mpn_for_path("LM358™"), "LM358tm");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_mixed() {
+        // Complex real-world examples
+        assert_eq!(
+            sanitize_mpn_for_path("TPS82140SILR (Texas Instruments)"),
+            "TPS82140SILR_Texas_Instruments"
+        );
+        assert_eq!(
+            sanitize_mpn_for_path("µPD78F0730GB-GAH-AX"),
+            "uPD78F0730GB-GAH-AX"
+        );
+        assert_eq!(sanitize_mpn_for_path("AT91SAM7S256-AU"), "AT91SAM7S256-AU");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_edge_cases() {
+        // Empty string falls back to "component"
+        assert_eq!(sanitize_mpn_for_path(""), "component");
+
+        // Only punctuation falls back to "component"
+        assert_eq!(sanitize_mpn_for_path("!!!"), "component");
+        assert_eq!(sanitize_mpn_for_path("@#$%"), "component");
+        assert_eq!(sanitize_mpn_for_path("..."), "component");
+
+        // Only spaces falls back to "component"
+        assert_eq!(sanitize_mpn_for_path("     "), "component");
+
+        // Single character
+        assert_eq!(sanitize_mpn_for_path("A"), "A");
+        assert_eq!(sanitize_mpn_for_path("1"), "1");
+        assert_eq!(sanitize_mpn_for_path(","), "component");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_numbers() {
+        // Numbers are allowed anywhere (no special handling)
+        assert_eq!(sanitize_mpn_for_path("123-456"), "123-456");
+        assert_eq!(sanitize_mpn_for_path("9000IC"), "9000IC");
+        assert_eq!(sanitize_mpn_for_path("0805"), "0805");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_case_preserved() {
+        // Case is preserved
+        assert_eq!(sanitize_mpn_for_path("STM32f407"), "STM32f407");
+        assert_eq!(sanitize_mpn_for_path("AbCdEf"), "AbCdEf");
+        assert_eq!(sanitize_mpn_for_path("lowercase"), "lowercase");
+        assert_eq!(sanitize_mpn_for_path("UPPERCASE"), "UPPERCASE");
+    }
 }

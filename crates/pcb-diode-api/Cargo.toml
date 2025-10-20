@@ -25,6 +25,8 @@ unicode-width = { workspace = true }
 terminal_size = { workspace = true }
 clap = { workspace = true }
 pcb-zen-core = { workspace = true }
+pcb-kicad = { workspace = true }
+deunicode = { workspace = true }
 minijinja = "2.5"
 zstd = "0.13"
 regex = { workspace = true }
