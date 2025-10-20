@@ -354,7 +354,7 @@ fn scan_component_pdfs(
             file: pdf_path.to_path_buf(),
             output_dir: component_dir.to_path_buf(),
             model: None,
-            images: false,
+            images: true,
         };
 
         match crate::scan::scan_pdf(auth_token, options) {

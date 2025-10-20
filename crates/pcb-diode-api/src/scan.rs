@@ -393,7 +393,7 @@ pub struct ScanArgs {
     #[arg(short, long, value_enum)]
     pub model: Option<ScanModelArg>,
 
-    #[arg(long)]
+    #[arg(long, default_value_t = true)]
     pub images: bool,
 }
 
