@@ -25,3 +25,4 @@ unicode-width = { workspace = true }
 terminal_size = { workspace = true }
 clap = { workspace = true }
 pcb-zen-core = { workspace = true }
+minijinja = "2.5"

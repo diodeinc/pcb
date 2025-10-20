@@ -3,8 +3,10 @@ use clap::Args;
 use colored::Colorize;
 use indicatif::ProgressBar;
 use inquire::Select;
+use minijinja::Environment;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -413,26 +415,23 @@ pub fn add_component_to_workspace(
     }
 
     // Generate .zen file if symbol was downloaded
-    if let Some(filename) = &download.metadata.symbol_filename {
-        let symbol_path = component_dir.join(filename);
+    if let Some(symbol_filename) = &download.metadata.symbol_filename {
+        let symbol_path = component_dir.join(symbol_filename);
         if symbol_path.exists() {
             let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
             let symbol = symbol_lib
                 .first_symbol()
                 .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
 
-            let datasheet_urls = download
-                .metadata
-                .datasheet_urls
-                .as_deref()
-                .unwrap_or(&component.datasheets);
-
-            generate_zen_file(
-                &component_dir,
+            let content = generate_zen_file(
                 &component.part_number,
                 symbol,
-                datasheet_urls,
+                symbol_filename,
+                download.metadata.footprint_filename.as_deref(),
+                download.metadata.datasheet_filenames.as_deref(),
             )?;
+
+            fs::write(&component_file, content)?;
         }
     }
 
@@ -447,37 +446,90 @@ pub struct AddComponentResult {
     pub already_exists: bool,
 }
 
+/// Sanitize a name to create a valid identifier by replacing special characters
+fn sanitize(name: &str) -> String {
+    let result = name
+        .chars()
+        .map(|c| match c {
+            '+' => 'P', // Plus becomes P (e.g., V+ → VP)
+            '-' => 'M', // Minus becomes M (e.g., V- → VM)
+            '~' => 'n', // Tilde (NOT) becomes n (e.g., ~CS → nCS)
+            '!' => 'n', // Bang (NOT) also becomes n
+            '#' => 'h', // Hash becomes h (e.g., CS# → CSh)
+            c if c.is_alphanumeric() => c,
+            _ => '_',
+        })
+        .collect::<String>();
+
+    // Remove consecutive underscores and trim underscores from start/end
+    let sanitized = result
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+
+    // Prefix with P if starts with digit
+    if sanitized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("P{}", sanitized)
+    } else {
+        sanitized
+    }
+}
+
 fn generate_zen_file(
-    component_dir: &std::path::Path,
     mpn: &str,
     symbol: &pcb_eda::Symbol,
-    datasheet_urls: &[String],
-) -> Result<()> {
-    let pins = symbol
-        .pins
+    symbol_filename: &str,
+    footprint_filename: Option<&str>,
+    datasheet_filenames: Option<&[String]>,
+) -> Result<String> {
+    // Group pins by sanitized name to handle duplicates
+    let mut pin_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for pin in &symbol.pins {
+        pin_groups
+            .entry(sanitize(&pin.name))
+            .or_default()
+            .push(pin.name.clone());
+    }
+
+    // Prepare template data - collect unique pins
+    let pin_groups_vec: Vec<_> = pin_groups
+        .keys()
+        .map(|name| serde_json::json!({"sanitized_name": name}))
+        .collect();
+
+    let pin_mappings: Vec<_> = pin_groups
         .iter()
-        .map(|pin| format!("        \"{}\": \"{}\",", pin.number, pin.name))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .flat_map(|(sanitized, originals)| {
+            originals.iter().map(move |orig| {
+                serde_json::json!({
+                    "original_name": orig,
+                    "sanitized_name": sanitized
+                })
+            })
+        })
+        .collect();
 
-    let datasheet = datasheet_urls
-        .first()
-        .map(|url| format!("    datasheet=\"{}\",\n", url))
-        .unwrap_or_default();
+    // Render template
+    let mut env = Environment::new();
+    env.add_template(
+        "component.zen",
+        include_str!("../templates/component.zen.jinja"),
+    )?;
 
-    let description = symbol
-        .description
-        .as_ref()
-        .map(|d| format!("    description=\"{}\",\n", d.replace('"', "\\\"")))
-        .unwrap_or_default();
+    let content = env
+        .get_template("component.zen")?
+        .render(serde_json::json!({
+            "component_name": mpn,
+            "sym_path": symbol_filename,
+            "footprint_path": footprint_filename.unwrap_or(&format!("{}.kicad_mod", mpn)),
+            "pin_groups": pin_groups_vec,
+            "pin_mappings": pin_mappings,
+            "description": symbol.description,
+            "datasheet_file": datasheet_filenames.and_then(|files| files.first()),
+        }))?;
 
-    let content = format!(
-        "load(\"@stdlib/Component.zen\", \"Component\")\n\n{} = Component(\n    footprint=\"{}\",\n{}{}    pins={{\n{}\n    }},\n)\n",
-        mpn, symbol.footprint, datasheet, description, pins
-    );
-
-    std::fs::write(component_dir.join(format!("{}.zen", mpn)), content)?;
-    Ok(())
+    Ok(content)
 }
 
 fn get_terminal_width() -> usize {

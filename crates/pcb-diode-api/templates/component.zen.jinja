@@ -1,0 +1,33 @@
+"""
+{{ component_name }}
+{%- if description %}
+
+{{ description }}
+{%- endif %}
+
+Auto-generated using `pcb search`. Do not modify.
+"""
+
+Pins = struct(
+{%- for pin in pin_groups %}
+    {{ pin.sanitized_name }} = io("{{ pin.sanitized_name }}", Net){{ "," if not loop.last }}
+{%- endfor %}
+)
+
+Component(
+    name = "{{ component_name }}",
+    mpn = "{{ component_name }}",
+{%- if description %}
+    description = "{{ description }}",
+{%- endif %}
+{%- if datasheet_file %}
+    datasheet = File("{{ datasheet_file }}"),
+{%- endif %}
+    symbol = Symbol(library = "{{ sym_path }}"),
+    footprint = File("{{ footprint_path }}"),
+    pins = {
+{%- for pin in pin_mappings %}
+        "{{ pin.original_name }}": Pins.{{ pin.sanitized_name }}{{ "," if not loop.last }}
+{%- endfor %}
+    },
+)
