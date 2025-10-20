@@ -230,6 +230,16 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 
+pub fn refresh() -> Result<()> {
+    let tokens = refresh_tokens()?;
+    println!("✓ Token refreshed successfully");
+    if let Some(email) = &tokens.email {
+        println!("  Logged in as: {}", email);
+    }
+    println!("  Token expires in: {}", tokens.time_until_expiry());
+    Ok(())
+}
+
 struct CallbackTokens {
     access_token: String,
     refresh_token: String,
@@ -283,6 +293,7 @@ pub enum AuthCommand {
     Login,
     Logout,
     Status,
+    Refresh,
 }
 
 pub fn execute(args: AuthArgs) -> Result<()> {
@@ -290,5 +301,6 @@ pub fn execute(args: AuthArgs) -> Result<()> {
         Some(AuthCommand::Login) | None => login(),
         Some(AuthCommand::Logout) => logout(),
         Some(AuthCommand::Status) => status(),
+        Some(AuthCommand::Refresh) => refresh(),
     }
 }
