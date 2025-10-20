@@ -185,6 +185,111 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Embed a STEP file into a KiCad footprint using the KiCad 8/9 embedded files format.
+///
+/// This function:
+/// 1. Compresses the STEP data with ZSTD (level 3 - balanced)
+/// 2. Base64 encodes the compressed data
+/// 3. Computes MurmurHash3 checksum of raw STEP data
+/// 4. Inserts an (embedded_files ...) S-expression block into the footprint
+/// 5. Updates the model reference to use kicad-embed:// URI
+fn embed_step_in_footprint(
+    footprint_content: String,
+    step_bytes: Vec<u8>,
+    step_filename: &str,
+) -> Result<String> {
+    use base64::Engine;
+    use murmurhash3::murmurhash3_x86_32;
+    use std::io::Write;
+
+    // Compress STEP data with ZSTD (level 3 = balanced)
+    let mut encoder = zstd::Encoder::new(Vec::new(), 3)?;
+    encoder.write_all(&step_bytes)?;
+    let compressed_data = encoder.finish()?;
+
+    // Base64 encode compressed data
+    let b64_data = base64::engine::general_purpose::STANDARD.encode(&compressed_data);
+
+    // Compute MurmurHash3 checksum of raw data (KiCad uses seed 0xABBA2345)
+    let checksum = murmurhash3_x86_32(&step_bytes, 0xABBA2345);
+    let checksum_hex = format!("{:08X}", checksum);
+
+    // Format base64 data with line breaks (80 chars per line, indented)
+    let indent = "\t";
+    let b64_lines: Vec<String> = b64_data
+        .as_bytes()
+        .chunks(80)
+        .map(|chunk| {
+            format!(
+                "{}{}{}{}{}",
+                indent,
+                indent,
+                indent,
+                indent,
+                std::str::from_utf8(chunk).unwrap()
+            )
+        })
+        .collect();
+    let b64_formatted = b64_lines.join("\n");
+
+    // Build the embedded_files S-expression block
+    let embed_block = format!(
+        "{indent}(embedded_files\n\
+         {indent}{indent}(file\n\
+         {indent}{indent}{indent}(name {step_filename})\n\
+         {indent}{indent}{indent}(type model)\n\
+         {indent}{indent}{indent}(data |\n\
+         {b64_formatted}\n\
+         {indent}{indent}{indent}|)\n\
+         {indent}{indent}{indent}(checksum \"{checksum_hex}\")\n\
+         {indent}{indent})\n\
+         {indent})\n",
+        indent = indent,
+        step_filename = step_filename,
+        b64_formatted = b64_formatted,
+        checksum_hex = checksum_hex
+    );
+
+    let mut text = footprint_content;
+
+    // Insert embedded_files block before final ')' if not already present
+    if !text.contains("(embedded_files") {
+        if let Some(insert_pos) = text.rfind(')') {
+            text.insert_str(insert_pos, &embed_block);
+        }
+    }
+
+    // Update model reference to kicad-embed:// URI
+    // Use regex to find and replace the model path while preserving offset/scale/rotate
+    let model_pattern = regex::RegexBuilder::new(r##"(^\s*\(model\s+)(?:"[^"]+"|[^\s)]+)"##)
+        .multi_line(true)
+        .build()
+        .context("Failed to compile model regex")?;
+
+    let new_text =
+        model_pattern.replace(&text, format!("${{1}}\"kicad-embed://{}\"", step_filename));
+
+    // If no model block found, add one before the final ')'
+    if !text.contains("(model") {
+        if let Some(insert_pos) = new_text.rfind(')') {
+            let model_block = format!(
+                "\n{indent}(model \"kicad-embed://{step_filename}\"\n\
+                 {indent}{indent}(offset (xyz 0 0 0))\n\
+                 {indent}{indent}(scale (xyz 1 1 1))\n\
+                 {indent}{indent}(rotate (xyz 0 0 0))\n\
+                 {indent})\n",
+                indent = indent,
+                step_filename = step_filename
+            );
+            let mut result = new_text.to_string();
+            result.insert_str(insert_pos, &model_block);
+            return Ok(result);
+        }
+    }
+
+    Ok(new_text.to_string())
+}
+
 // Helper: Search and filter for ECAD-available components
 fn search_and_filter(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
     let results = search_components(auth_token, mpn)?;
@@ -418,6 +523,38 @@ pub fn add_component_to_workspace(
         );
         for err in &errors {
             println!("    • {}", err.dimmed());
+        }
+    }
+
+    // Post-process: Embed STEP into footprint if both files exist
+    if let (Some(footprint_filename), Some(step_filename)) = (
+        &download.metadata.footprint_filename,
+        &download.metadata.step_filename,
+    ) {
+        let footprint_path = component_dir.join(footprint_filename);
+        let step_path = component_dir.join(step_filename);
+
+        if footprint_path.exists() && step_path.exists() {
+            // Read both files
+            let footprint_content =
+                fs::read_to_string(&footprint_path).context("Failed to read footprint file")?;
+            let step_bytes = fs::read(&step_path).context("Failed to read STEP file")?;
+
+            // Embed STEP into footprint
+            let embedded_content =
+                embed_step_in_footprint(footprint_content, step_bytes, step_filename)?;
+
+            // Write to temporary file
+            let temp_path = footprint_path.with_extension("kicad_mod.tmp");
+            fs::write(&temp_path, embedded_content)
+                .context("Failed to write temporary footprint file")?;
+
+            // Atomic rename to replace original
+            fs::rename(&temp_path, &footprint_path)
+                .context("Failed to rename temporary footprint file")?;
+
+            // Delete standalone STEP file
+            fs::remove_file(&step_path).context("Failed to remove standalone STEP file")?;
         }
     }
 
