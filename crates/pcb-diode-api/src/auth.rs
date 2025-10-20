@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use fslock::LockFile;
 use rand::Rng;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,13 @@ fn save_tokens(
         email: email.map(|s| s.to_string()),
     };
     let contents = toml::to_string(&tokens)?;
-    fs::write(get_auth_file_path()?, contents)?;
+
+    // Write to temp file then rename for atomic operation
+    let auth_path = get_auth_file_path()?;
+    let temp_path = auth_path.with_extension("toml.tmp");
+    fs::write(&temp_path, &contents)?;
+    fs::rename(&temp_path, &auth_path)?;
+
     Ok(())
 }
 
@@ -98,7 +105,19 @@ struct RefreshResponse {
 }
 
 pub fn refresh_tokens() -> Result<AuthTokens> {
+    // Acquire exclusive lock to prevent concurrent refresh attempts
+    let lock_path = get_auth_file_path()?.with_extension("toml.lock");
+    let mut lock = LockFile::open(&lock_path)?;
+    lock.lock()?;
+
+    // Re-read tokens after acquiring lock (another process may have already refreshed)
     let tokens = load_tokens()?.context("No tokens to refresh")?;
+
+    // Check if tokens are still expired after acquiring lock
+    if !tokens.is_expired() {
+        return Ok(tokens);
+    }
+
     let api_url = crate::get_api_base_url();
     let url = format!("{}/api/auth/refresh", api_url);
 
