@@ -205,7 +205,7 @@ pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
 /// This function:
 /// 1. Compresses the STEP data with ZSTD (level 3 - balanced)
 /// 2. Base64 encodes the compressed data
-/// 3. Computes MurmurHash3 checksum of raw STEP data
+/// 3. Computes SHA256 checksum of raw STEP data
 /// 4. Inserts an (embedded_files ...) S-expression block into the footprint
 /// 5. Updates the model reference to use kicad-embed:// URI
 fn embed_step_in_footprint(
@@ -214,95 +214,80 @@ fn embed_step_in_footprint(
     step_filename: &str,
 ) -> Result<String> {
     use base64::Engine;
-    use murmurhash3::murmurhash3_x86_32;
+    use sha2::{Digest, Sha256};
     use std::io::Write;
 
-    // Compress STEP data with ZSTD (level 3 = balanced)
+    let filename = step_filename.replace(".stp", ".step");
+    let indent = "\t";
+
+    // Compress, encode, and checksum
     let mut encoder = zstd::Encoder::new(Vec::new(), 3)?;
     encoder.write_all(&step_bytes)?;
-    let compressed_data = encoder.finish()?;
+    let compressed = encoder.finish()?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+    let checksum = format!("{:x}", Sha256::digest(&step_bytes));
 
-    // Base64 encode compressed data
-    let b64_data = base64::engine::general_purpose::STANDARD.encode(&compressed_data);
-
-    // Compute MurmurHash3 checksum of raw data (KiCad uses seed 0xABBA2345)
-    let checksum = murmurhash3_x86_32(&step_bytes, 0xABBA2345);
-    let checksum_hex = format!("{:08X}", checksum);
-
-    // Format base64 data with line breaks (80 chars per line, indented)
-    let indent = "\t";
-    let b64_lines: Vec<String> = b64_data
+    // Format base64: first line unindented, rest indented
+    let b64_formatted = b64
         .as_bytes()
         .chunks(80)
-        .map(|chunk| {
-            format!(
-                "{}{}{}{}{}",
-                indent,
-                indent,
-                indent,
-                indent,
-                std::str::from_utf8(chunk).unwrap()
-            )
+        .enumerate()
+        .map(|(i, chunk)| {
+            let line = std::str::from_utf8(chunk).unwrap();
+            if i == 0 {
+                line.to_string()
+            } else {
+                format!("{indent}{indent}{indent}{indent}{line}")
+            }
         })
-        .collect();
-    let b64_formatted = b64_lines.join("\n");
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    // Build the embedded_files S-expression block
     let embed_block = format!(
         "{indent}(embedded_files\n\
          {indent}{indent}(file\n\
-         {indent}{indent}{indent}(name {step_filename})\n\
+         {indent}{indent}{indent}(name {filename})\n\
          {indent}{indent}{indent}(type model)\n\
-         {indent}{indent}{indent}(data |\n\
-         {b64_formatted}\n\
-         {indent}{indent}{indent}|)\n\
-         {indent}{indent}{indent}(checksum \"{checksum_hex}\")\n\
+         {indent}{indent}{indent}(data |{b64_formatted}|)\n\
+         {indent}{indent}{indent}(checksum \"{checksum}\")\n\
          {indent}{indent})\n\
-         {indent})\n",
-        indent = indent,
-        step_filename = step_filename,
-        b64_formatted = b64_formatted,
-        checksum_hex = checksum_hex
+         {indent})\n"
+    );
+
+    let model_block = format!(
+        "\n{indent}(model \"kicad-embed://{filename}\"\n\
+         {indent}{indent}(offset\n\
+         {indent}{indent}{indent}(xyz 0 0 0)\n\
+         {indent}{indent})\n\
+         {indent}{indent}(scale\n\
+         {indent}{indent}{indent}(xyz 1 1 1)\n\
+         {indent}{indent})\n\
+         {indent}{indent}(rotate\n\
+         {indent}{indent}{indent}(xyz 0 0 0)\n\
+         {indent}{indent})\n\
+         {indent})\n"
     );
 
     let mut text = footprint_content;
 
-    // Insert embedded_files block before final ')' if not already present
-    if !text.contains("(embedded_files") {
-        if let Some(insert_pos) = text.rfind(')') {
-            text.insert_str(insert_pos, &embed_block);
-        }
-    }
-
-    // Update model reference to kicad-embed:// URI
-    // Use regex to find and replace the model path while preserving offset/scale/rotate
-    let model_pattern = regex::RegexBuilder::new(r##"(^\s*\(model\s+)(?:"[^"]+"|[^\s)]+)"##)
+    // Remove existing model blocks
+    let model_pattern = regex::RegexBuilder::new(r#"^\s*\(model\s+.*?^\s*\)"#)
         .multi_line(true)
-        .build()
-        .context("Failed to compile model regex")?;
+        .dot_matches_new_line(true)
+        .build()?;
+    text = model_pattern.replace(&text, "").to_string();
 
-    let new_text =
-        model_pattern.replace(&text, format!("${{1}}\"kicad-embed://{}\"", step_filename));
-
-    // If no model block found, add one before the final ')'
-    if !text.contains("(model") {
-        if let Some(insert_pos) = new_text.rfind(')') {
-            let model_block = format!(
-                "\n{indent}(model \"kicad-embed://{step_filename}\"\n\
-                 {indent}{indent}(offset (xyz 0 0 0))\n\
-                 {indent}{indent}(scale (xyz 1 1 1))\n\
-                 {indent}{indent}(rotate (xyz 0 0 0))\n\
-                 {indent})\n",
-                indent = indent,
-                step_filename = step_filename
-            );
-            let mut result = new_text.to_string();
-            result.insert_str(insert_pos, &model_block);
-            return Ok(result);
+    // Insert embedded_files then model block before final ')'
+    if !text.contains("(embedded_files") {
+        if let Some(pos) = text.rfind(')') {
+            text.insert_str(pos, &embed_block);
         }
     }
+    if let Some(pos) = text.rfind(')') {
+        text.insert_str(pos, &model_block);
+    }
 
-    Ok(new_text.to_string())
+    Ok(text)
 }
 
 // Helper: Search and filter for ECAD-available components
