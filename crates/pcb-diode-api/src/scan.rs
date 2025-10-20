@@ -77,6 +77,99 @@ pub fn scan_with_defaults(
     scan_pdf(auth_token, options)
 }
 
+/// Scan a PDF that already exists in Supabase storage (no upload needed)
+///
+/// # Arguments
+/// * `auth_token` - Authentication token
+/// * `source_path` - Path in Supabase storage, e.g. "components/cse/Bosch/BMI323/datasheet.pdf"
+/// * `output_dir` - Directory to save markdown and images
+/// * `model` - Optional model to use for OCR
+/// * `images` - Whether to download and extract images
+/// * `show_output` - Whether to show progress and completion output
+pub fn scan_from_source_path(
+    auth_token: &str,
+    source_path: &str,
+    output_dir: impl AsRef<Path>,
+    model: Option<ScanModel>,
+    images: bool,
+    show_output: bool,
+) -> Result<ScanResult> {
+    let output_dir = output_dir.as_ref();
+    fs::create_dir_all(output_dir)?;
+
+    let filename = source_path
+        .split('/')
+        .next_back()
+        .context("Invalid source_path")?;
+
+    if show_output {
+        println!(
+            "\n{} {} (from {})",
+            "Scanning".green().bold(),
+            filename.bold(),
+            source_path.dimmed()
+        );
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
+
+    let api_base_url = crate::get_api_base_url();
+    let process_response = request_process(
+        &client,
+        auth_token,
+        &api_base_url,
+        source_path,
+        model.as_ref().map(|m| m.as_str()),
+    )?;
+
+    let md_filename = filename.replace(".pdf", ".md");
+    let md_path = output_dir.join(&md_filename);
+
+    download_file(&client, &process_response.markdown_url, &md_path)?;
+
+    if images {
+        if let Some(images_url) = &process_response.images_zip_url {
+            let images_zip_path = output_dir.join("images.zip");
+            download_file(&client, images_url, &images_zip_path)?;
+
+            let images_dir = output_dir.join("images");
+            extract_zip(&images_zip_path, &images_dir)?;
+            fs::remove_file(&images_zip_path)?;
+        }
+    }
+
+    let result = ScanResult {
+        output_path: md_path,
+        page_count: process_response.metadata.page_count,
+        image_count: process_response.metadata.image_count,
+        processing_time_ms: process_response.metadata.processing_time_ms,
+        model: process_response.metadata.model,
+    };
+
+    if show_output {
+        println!();
+        println!("{}", "✓ Scan complete!".green().bold());
+        println!(
+            "  Output: {}",
+            result.output_path.display().to_string().cyan()
+        );
+        println!(
+            "  Pages: {} | Images: {} | Time: {:.1}s",
+            result.page_count,
+            result.image_count,
+            result.processing_time_ms as f64 / 1000.0
+        );
+        if let Some(model) = &result.model {
+            println!("  Model: {}", model.dimmed());
+        }
+    }
+
+    Ok(result)
+}
+
+#[derive(Debug)]
 pub struct ScanResult {
     pub output_path: PathBuf,
     pub page_count: u32,
@@ -95,17 +188,18 @@ struct UploadUrlRequest {
 struct UploadUrlResponse {
     #[serde(rename = "uploadUrl")]
     upload_url: Option<String>,
-    #[serde(rename = "scanId")]
-    scan_id: String,
+    #[serde(rename = "sourcePath")]
+    source_path: String,
 }
 
 #[derive(Serialize)]
 struct ProcessRequest {
-    #[serde(rename = "scanId")]
-    scan_id: String,
-    filename: String,
+    #[serde(rename = "sourcePath")]
+    source_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    concurrency: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -188,8 +282,7 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
             &client,
             auth_token,
             &api_base_url,
-            &upload_response.scan_id,
-            &filename,
+            &upload_response.source_path,
             options.model.as_ref().map(|m| m.as_str()),
         )
     })?;
@@ -302,8 +395,7 @@ fn request_process(
     client: &Client,
     token: &str,
     base_url: &str,
-    scan_id: &str,
-    filename: &str,
+    source_path: &str,
     model: Option<&str>,
 ) -> Result<ProcessResponse> {
     let url = format!("{}/api/scan/process", base_url);
@@ -312,9 +404,9 @@ fn request_process(
         .post(&url)
         .bearer_auth(token)
         .json(&ProcessRequest {
-            scan_id: scan_id.to_string(),
-            filename: filename.to_string(),
+            source_path: source_path.to_string(),
             model: model.map(|s| s.to_string()),
+            concurrency: None,
         })
         .send()?;
 

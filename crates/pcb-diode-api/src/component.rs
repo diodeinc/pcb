@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelAvailability {
@@ -206,11 +205,31 @@ pub fn decode_component_id(component_id: &str) -> Result<(String, String)> {
     Ok((parsed.source, parsed.part_id))
 }
 
+/// Parse storage path from Supabase presigned URL
+/// Example: https://xxx.supabase.co/storage/v1/object/sign/components/cse/Bosch/BMI323/datasheet.pdf?token=...
+/// Returns: "components/cse/Bosch/BMI323/datasheet.pdf"
+fn parse_storage_path_from_url(url: &str) -> Option<String> {
+    // Look for /storage/v1/object/sign/ or /storage/v1/object/
+    let patterns = ["/storage/v1/object/sign/", "/storage/v1/object/"];
+
+    for pattern in &patterns {
+        if let Some(start) = url.find(pattern) {
+            let path_start = start + pattern.len();
+            // Extract until '?' (query params) or end of string
+            let path_end = url[path_start..]
+                .find('?')
+                .unwrap_or(url.len() - path_start);
+            return Some(url[path_start..path_start + path_end].to_string());
+        }
+    }
+
+    None
+}
+
 pub fn add_component_to_workspace(
     auth_token: &str,
     component: &ComponentSearchResult,
     workspace_root: &std::path::Path,
-    spinner: Option<&ProgressBar>,
 ) -> Result<AddComponentResult> {
     let component_dir = workspace_root
         .join("components")
@@ -225,69 +244,161 @@ pub fn add_component_to_workspace(
         });
     }
 
+    // Show progress during API call
+    let spinner = ProgressBar::new_spinner();
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    spinner.set_message(format!("Fetching {}...", component.part_number));
+
     let download = download_component(auth_token, &component.component_id)?;
+    spinner.finish_and_clear();
 
     fs::create_dir_all(&component_dir)?;
 
-    // Collect all download tasks using metadata filenames (more reliable than URL parsing)
+    // Count tasks and collect work
+    let mut file_count = 0;
+    let mut scan_count = 0;
     let mut download_tasks = Vec::new();
+    let mut scan_tasks = Vec::new();
 
-    // Symbol file
     if let (Some(url), Some(filename)) = (&download.symbol_url, &download.metadata.symbol_filename)
     {
-        download_tasks.push((url.clone(), component_dir.join(filename)));
+        file_count += 1;
+        download_tasks.push((url.clone(), component_dir.join(filename), "symbol"));
     }
-
-    // Footprint file
     if let (Some(url), Some(filename)) = (
         &download.footprint_url,
         &download.metadata.footprint_filename,
     ) {
-        download_tasks.push((url.clone(), component_dir.join(filename)));
+        file_count += 1;
+        download_tasks.push((url.clone(), component_dir.join(filename), "footprint"));
     }
-
-    // STEP file
     if let (Some(url), Some(filename)) = (&download.step_url, &download.metadata.step_filename) {
-        download_tasks.push((url.clone(), component_dir.join(filename)));
+        file_count += 1;
+        download_tasks.push((url.clone(), component_dir.join(filename), "step"));
     }
 
-    // Datasheets - download all from presigned URLs with metadata filenames
     if let (Some(urls), Some(filenames)) = (
         &download.datasheet_urls,
         &download.metadata.datasheet_filenames,
     ) {
         for (url, filename) in urls.iter().zip(filenames.iter()) {
-            download_tasks.push((url.clone(), component_dir.join(filename)));
+            file_count += 1;
+            download_tasks.push((url.clone(), component_dir.join(filename), "datasheet"));
+
+            if let Some(storage_path) = parse_storage_path_from_url(url) {
+                let md_path = component_dir.join(filename).with_extension("md");
+                if !md_path.exists() {
+                    scan_count += 1;
+                    scan_tasks.push((storage_path, filename.clone()));
+                }
+            }
         }
     }
 
-    // Download all files in parallel
+    // Show task summary
+    println!(
+        "\n{} {}",
+        "Downloading".green().bold(),
+        component.part_number.bold()
+    );
+    println!(
+        "• {} files{}",
+        file_count,
+        if scan_count > 0 {
+            format!(", {} datasheets to scan", scan_count)
+        } else {
+            String::new()
+        }
+    );
+
+    let start = std::time::Instant::now();
+
+    // Execute all tasks in parallel with progress indicator
+    let spinner = ProgressBar::new_spinner();
+    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+    spinner.set_message("Processing...");
+
+    let scan_results = Arc::new(Mutex::new(Vec::new()));
     let errors = Arc::new(Mutex::new(Vec::new()));
 
     std::thread::scope(|s| {
-        let handles: Vec<_> = download_tasks
-            .into_iter()
-            .map(|(url, path)| {
-                let errors = Arc::clone(&errors);
-                s.spawn(move || {
-                    if let Err(e) = download_file(auth_token, &url, &path) {
-                        errors.lock().unwrap().push(e);
+        let mut handles = Vec::new();
+
+        // Download tasks
+        for (url, path, label) in download_tasks {
+            let errors = Arc::clone(&errors);
+            handles.push(s.spawn(move || {
+                if let Err(e) = download_file(auth_token, &url, &path) {
+                    errors.lock().unwrap().push(format!("{}: {}", label, e));
+                }
+            }));
+        }
+
+        // Scan tasks (parallel with downloads)
+        for (storage_path, filename) in scan_tasks {
+            let output_dir = component_dir.clone();
+            let errors = Arc::clone(&errors);
+            let scan_results = Arc::clone(&scan_results);
+            handles.push(s.spawn(move || {
+                match crate::scan::scan_from_source_path(
+                    auth_token,
+                    &storage_path,
+                    &output_dir,
+                    None,
+                    true,
+                    false,
+                ) {
+                    Ok(result) => {
+                        scan_results.lock().unwrap().push(result);
                     }
-                })
-            })
-            .collect();
+                    Err(e) => {
+                        errors
+                            .lock()
+                            .unwrap()
+                            .push(format!("Scan {}: {}", filename, e));
+                    }
+                }
+            }));
+        }
 
         for handle in handles {
             let _ = handle.join();
         }
     });
 
+    spinner.finish_and_clear();
+
+    let elapsed = start.elapsed();
+    let scan_results = Arc::try_unwrap(scan_results).unwrap().into_inner().unwrap();
     let errors = Arc::try_unwrap(errors).unwrap().into_inner().unwrap();
-    if let Some(first_error) = errors.into_iter().next() {
-        return Err(first_error);
+
+    // Show results
+    if errors.is_empty() {
+        println!(
+            "{} Downloaded {} files{} ({:.1}s)",
+            "✓".green(),
+            file_count,
+            if !scan_results.is_empty() {
+                format!(", scanned {} datasheets", scan_results.len())
+            } else {
+                String::new()
+            },
+            elapsed.as_secs_f64()
+        );
+    } else {
+        println!(
+            "  {} Completed with {} errors ({:.1}s)",
+            "!".yellow(),
+            errors.len(),
+            elapsed.as_secs_f64()
+        );
+        for err in &errors {
+            println!("    • {}", err.dimmed());
+        }
     }
 
     // Generate .zen file if symbol was downloaded
+    let mut scanned_pdfs = Vec::new();
     if let Some(filename) = &download.metadata.symbol_filename {
         let symbol_path = component_dir.join(filename);
         if symbol_path.exists() {
@@ -310,25 +421,22 @@ pub fn add_component_to_workspace(
                 datasheet_urls,
             )?;
 
-            // Finish spinner before PDF scanning to avoid output conflicts
-            if let Some(s) = spinner {
-                s.finish_and_clear();
+            // Collect scanned PDFs
+            if let Some(filenames) = &download.metadata.datasheet_filenames {
+                for filename in filenames {
+                    let pdf_path = component_dir.join(filename);
+                    if pdf_path.with_extension("md").exists() {
+                        scanned_pdfs.push(pdf_path);
+                    }
+                }
             }
-
-            let scanned_pdfs = scan_component_pdfs(&component_dir, auth_token)?;
-
-            return Ok(AddComponentResult {
-                component_path: component_file,
-                already_exists: false,
-                scanned_pdfs,
-            });
         }
     }
 
     Ok(AddComponentResult {
         component_path: component_file,
         already_exists: false,
-        scanned_pdfs: vec![],
+        scanned_pdfs,
     })
 }
 
@@ -369,46 +477,6 @@ fn generate_zen_file(
 
     std::fs::write(component_dir.join(format!("{}.zen", mpn)), content)?;
     Ok(())
-}
-
-fn scan_component_pdfs(
-    component_dir: &std::path::Path,
-    auth_token: &str,
-) -> Result<Vec<std::path::PathBuf>> {
-    let pdfs: Vec<_> = WalkDir::new(component_dir)
-        .max_depth(1)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("pdf"))
-        .collect();
-
-    let mut scanned = Vec::new();
-
-    for entry in pdfs {
-        let pdf_path = entry.path();
-        if pdf_path.with_extension("md").exists() {
-            scanned.push(pdf_path.to_path_buf());
-            continue;
-        }
-
-        let options = crate::scan::ScanOptions {
-            file: pdf_path.to_path_buf(),
-            output_dir: component_dir.to_path_buf(),
-            model: None,
-            images: true,
-        };
-
-        match crate::scan::scan_pdf(auth_token, options) {
-            Ok(_) => {
-                scanned.push(pdf_path.to_path_buf());
-            }
-            Err(_) => {
-                // Silently continue on scan failures
-            }
-        }
-    }
-
-    Ok(scanned)
 }
 
 fn get_terminal_width() -> usize {
@@ -531,6 +599,7 @@ pub fn search_interactive(
         items.clone(),
     )
     .with_page_size(page_size)
+    .with_formatter(&|_| String::new()) // Hide the final selection output
     .prompt()?;
 
     let selected_index = items
@@ -538,9 +607,8 @@ pub fn search_interactive(
         .position(|s| s == &selection)
         .context("Selected component not found")?;
     let selected_component = &filtered_results[selected_index];
-
     println!(
-        "\n{} {}",
+        "{} {}",
         "Selected:".green().bold(),
         selected_component.part_number.clone().bold()
     );
@@ -548,23 +616,7 @@ pub fn search_interactive(
         println!("{} {}", "Description:".cyan(), description);
     }
 
-    let spinner = ProgressBar::new_spinner();
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message(format!(
-        "Downloading {}...",
-        selected_component.part_number.cyan()
-    ));
-
-    let result = add_component_to_workspace(
-        auth_token,
-        selected_component,
-        workspace_root,
-        Some(&spinner),
-    )?;
-    // Spinner is finished inside add_component_to_workspace before PDF scanning
-    if result.scanned_pdfs.is_empty() {
-        spinner.finish_and_clear();
-    }
+    let result = add_component_to_workspace(auth_token, selected_component, workspace_root)?;
 
     let display_path = result
         .component_path
@@ -586,14 +638,6 @@ pub fn search_interactive(
         selected_component.part_number.bold(),
         display_path.display().to_string().cyan()
     );
-
-    if !result.scanned_pdfs.is_empty() {
-        println!(
-            "{} Scanned {} datasheet(s)",
-            "✓".green(),
-            result.scanned_pdfs.len()
-        );
-    }
 
     Ok(())
 }
@@ -670,15 +714,7 @@ pub fn search_and_add_single(
         component.part_number.clone().bold()
     );
 
-    let spinner = ProgressBar::new_spinner();
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message(format!("Downloading {}...", component.part_number.cyan()));
-
-    let result = add_component_to_workspace(auth_token, component, workspace_root, Some(&spinner))?;
-    // Spinner is finished inside add_component_to_workspace before PDF scanning
-    if result.scanned_pdfs.is_empty() {
-        spinner.finish_and_clear();
-    }
+    let result = add_component_to_workspace(auth_token, component, workspace_root)?;
 
     let display_path = result
         .component_path
@@ -700,14 +736,6 @@ pub fn search_and_add_single(
         component.part_number.bold(),
         display_path.display().to_string().cyan()
     );
-
-    if !result.scanned_pdfs.is_empty() {
-        println!(
-            "{} Scanned {} datasheet(s)",
-            "✓".green(),
-            result.scanned_pdfs.len()
-        );
-    }
 
     Ok(())
 }
