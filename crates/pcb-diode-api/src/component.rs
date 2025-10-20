@@ -41,6 +41,15 @@ pub struct ComponentDownloadMetadata {
     pub mpn: String,
     pub timestamp: String,
     pub source: String,
+    pub manufacturer: Option<String>,
+    pub part_view_url: Option<String>,
+    pub part_id: Option<String>,
+    pub symbol_filename: Option<String>,
+    pub footprint_filename: Option<String>,
+    pub step_filename: Option<String>,
+    pub datasheet_filenames: Option<Vec<String>>,
+    pub datasheet_urls: Option<Vec<String>>,
+    pub file_hashes: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +57,7 @@ pub struct ComponentDownloadResult {
     pub symbol_url: Option<String>,
     pub footprint_url: Option<String>,
     pub step_url: Option<String>,
+    pub datasheet_urls: Option<Vec<String>>,
     pub metadata: ComponentDownloadMetadata,
 }
 
@@ -69,6 +79,8 @@ struct DownloadResponse {
     footprint_url: Option<String>,
     #[serde(rename = "stepUrl")]
     step_url: Option<String>,
+    #[serde(rename = "datasheetUrls")]
+    datasheet_urls: Option<Vec<String>>,
     metadata: DownloadResponseMetadata,
 }
 
@@ -77,6 +89,23 @@ struct DownloadResponseMetadata {
     mpn: String,
     timestamp: String,
     source: String,
+    manufacturer: Option<String>,
+    #[serde(rename = "partViewUrl")]
+    part_view_url: Option<String>,
+    #[serde(rename = "partId")]
+    part_id: Option<String>,
+    #[serde(rename = "symbolFilename")]
+    symbol_filename: Option<String>,
+    #[serde(rename = "footprintFilename")]
+    footprint_filename: Option<String>,
+    #[serde(rename = "stepFilename")]
+    step_filename: Option<String>,
+    #[serde(rename = "datasheetFilenames")]
+    datasheet_filenames: Option<Vec<String>>,
+    #[serde(rename = "datasheetUrls")]
+    datasheet_urls: Option<Vec<String>>,
+    #[serde(rename = "fileHashes")]
+    file_hashes: Option<std::collections::HashMap<String, String>>,
 }
 
 pub fn search_components(
@@ -127,10 +156,20 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
         symbol_url: download_response.symbol_url,
         footprint_url: download_response.footprint_url,
         step_url: download_response.step_url,
+        datasheet_urls: download_response.datasheet_urls,
         metadata: ComponentDownloadMetadata {
             mpn: download_response.metadata.mpn,
             timestamp: download_response.metadata.timestamp,
             source: download_response.metadata.source,
+            manufacturer: download_response.metadata.manufacturer,
+            part_view_url: download_response.metadata.part_view_url,
+            part_id: download_response.metadata.part_id,
+            symbol_filename: download_response.metadata.symbol_filename,
+            footprint_filename: download_response.metadata.footprint_filename,
+            step_filename: download_response.metadata.step_filename,
+            datasheet_filenames: download_response.metadata.datasheet_filenames,
+            datasheet_urls: download_response.metadata.datasheet_urls,
+            file_hashes: download_response.metadata.file_hashes,
         },
     })
 }
@@ -167,16 +206,6 @@ pub fn decode_component_id(component_id: &str) -> Result<(String, String)> {
     Ok((parsed.source, parsed.part_id))
 }
 
-fn filename_from_url(url: &str) -> Option<String> {
-    // Parse URL and extract filename from path, before query params
-    url.split('?')
-        .next()?
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .next_back()
-        .map(|s| s.to_string())
-}
-
 pub fn add_component_to_workspace(
     auth_token: &str,
     component: &ComponentSearchResult,
@@ -200,32 +229,36 @@ pub fn add_component_to_workspace(
 
     fs::create_dir_all(&component_dir)?;
 
-    // Collect all download tasks
+    // Collect all download tasks using metadata filenames (more reliable than URL parsing)
     let mut download_tasks = Vec::new();
-    let mut symbol_filename = None;
 
-    if let Some(url) = &download.symbol_url {
-        if let Some(filename) = filename_from_url(url) {
-            symbol_filename = Some(filename.clone());
-            download_tasks.push((url.clone(), component_dir.join(filename)));
-        }
-    }
-
-    if let Some(url) = &download.footprint_url {
-        if let Some(filename) = filename_from_url(url) {
-            download_tasks.push((url.clone(), component_dir.join(filename)));
-        }
-    }
-
-    if let Some(url) = &download.step_url {
-        if let Some(filename) = filename_from_url(url) {
-            download_tasks.push((url.clone(), component_dir.join(filename)));
-        }
-    }
-
-    if let Some(url) = component.datasheets.first() {
-        let filename = format!("{}.pdf", component.part_number);
+    // Symbol file
+    if let (Some(url), Some(filename)) = (&download.symbol_url, &download.metadata.symbol_filename)
+    {
         download_tasks.push((url.clone(), component_dir.join(filename)));
+    }
+
+    // Footprint file
+    if let (Some(url), Some(filename)) = (
+        &download.footprint_url,
+        &download.metadata.footprint_filename,
+    ) {
+        download_tasks.push((url.clone(), component_dir.join(filename)));
+    }
+
+    // STEP file
+    if let (Some(url), Some(filename)) = (&download.step_url, &download.metadata.step_filename) {
+        download_tasks.push((url.clone(), component_dir.join(filename)));
+    }
+
+    // Datasheets - download all from presigned URLs with metadata filenames
+    if let (Some(urls), Some(filenames)) = (
+        &download.datasheet_urls,
+        &download.metadata.datasheet_filenames,
+    ) {
+        for (url, filename) in urls.iter().zip(filenames.iter()) {
+            download_tasks.push((url.clone(), component_dir.join(filename)));
+        }
     }
 
     // Download all files in parallel
@@ -254,19 +287,27 @@ pub fn add_component_to_workspace(
         return Err(first_error);
     }
 
-    if let Some(filename) = symbol_filename {
-        let symbol_path = component_dir.join(&filename);
+    // Generate .zen file if symbol was downloaded
+    if let Some(filename) = &download.metadata.symbol_filename {
+        let symbol_path = component_dir.join(filename);
         if symbol_path.exists() {
             let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
             let symbol = symbol_lib
                 .first_symbol()
                 .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
 
+            // Use datasheet URLs from download metadata (original URLs, not presigned)
+            let datasheet_urls = download
+                .metadata
+                .datasheet_urls
+                .as_deref()
+                .unwrap_or(&component.datasheets);
+
             generate_zen_file(
                 &component_dir,
                 &component.part_number,
                 symbol,
-                &component.datasheets,
+                datasheet_urls,
             )?;
 
             // Finish spinner before PDF scanning to avoid output conflicts
