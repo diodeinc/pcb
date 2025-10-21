@@ -303,6 +303,9 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     moved_directives: SmallMap<String, (String, bool)>,
     /// Local values (components, electrical checks, testbenches). Child modules are in module_tree.
     children: Vec<V>,
+    /// Component modifier functions registered via builtin.add_component_modifier().
+    /// These are called in order on every component created in this module.
+    component_modifiers: Vec<V>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -408,6 +411,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             positions,
             moved_directives: SmallMap::new(),
             children: Vec::new(),
+            component_modifiers: Vec::new(),
         }
     }
 
@@ -430,6 +434,16 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Return a reference to the custom property map attached to this Module.
     pub fn properties(&self) -> &SmallMap<String, V> {
         &self.properties
+    }
+
+    /// Get the component modifiers registered for this module.
+    pub fn component_modifiers(&self) -> &Vec<V> {
+        &self.component_modifiers
+    }
+
+    /// Add a component modifier function to this module.
+    pub fn add_component_modifier(&mut self, modifier_fn: V) {
+        self.component_modifiers.push(modifier_fn);
     }
 
     /// Add a parameter to the module's signature with full metadata.
