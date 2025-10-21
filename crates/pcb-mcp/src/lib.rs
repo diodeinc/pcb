@@ -11,6 +11,15 @@ pub struct ToolInfo {
     pub output_schema: Option<Value>,
 }
 
+#[derive(Clone)]
+pub struct ResourceInfo {
+    pub uri: String,
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub mime_type: String,
+}
+
 /// Context passed to tool handlers
 pub struct McpContext {
     progress_token: Option<String>,
@@ -63,6 +72,18 @@ pub struct CallToolResult {
 pub enum CallToolResultContent {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "resource_link")]
+    ResourceLink {
+        uri: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotations: Option<Value>,
+    },
 }
 
 impl CallToolResult {
@@ -85,10 +106,44 @@ impl CallToolResult {
             is_error: true,
         }
     }
+
+    pub fn resource_link(
+        uri: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        mime_type: Option<&str>,
+    ) -> Self {
+        let text = match (description, name) {
+            (Some(desc), Some(_)) => format!("{}: {}", desc, uri),
+            (Some(desc), None) => format!("{}: {}", desc, uri),
+            (None, Some(n)) => format!("{}: {}", n, uri),
+            (None, None) => uri.to_string(),
+        };
+
+        Self {
+            content: vec![
+                CallToolResultContent::Text { text },
+                CallToolResultContent::ResourceLink {
+                    uri: uri.to_string(),
+                    name: name.map(|s| s.to_string()),
+                    description: description.map(|s| s.to_string()),
+                    mime_type: mime_type.map(|s| s.to_string()),
+                    annotations: Some(json!({
+                        "audience": ["assistant"],
+                        "priority": 0.9
+                    })),
+                },
+            ],
+            structured_content: Some(json!({
+                "uri": uri
+            })),
+            is_error: false,
+        }
+    }
 }
 
 /// Run MCP server on stdin/stdout
-pub fn run_server<F>(tools: &[ToolInfo], handler: F) -> Result<()>
+pub fn run_server<F>(tools: &[ToolInfo], resources: &[ResourceInfo], handler: F) -> Result<()>
 where
     F: Fn(&str, Option<Value>, &McpContext) -> Result<CallToolResult>,
 {
@@ -122,7 +177,7 @@ where
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {"name": "pcb-mcp", "version": env!("CARGO_PKG_VERSION")},
-                    "capabilities": {"tools": {}, "logging": {}}
+                    "capabilities": {"tools": {}, "logging": {}, "resources": {}}
                 }
             }),
             "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
@@ -146,6 +201,30 @@ where
                     .collect();
 
                 json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tool_list}})
+            }
+            "resources/list" => {
+                let resource_list: Vec<_> = resources
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "uri": r.uri,
+                            "name": r.name,
+                            "title": r.title,
+                            "description": r.description,
+                            "mimeType": r.mime_type,
+                        })
+                    })
+                    .collect();
+
+                json!({"jsonrpc": "2.0", "id": id, "result": {"resources": resource_list}})
+            }
+            "resources/read" => {
+                // All our resources are HTTPS URLs that clients should fetch directly
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": "HTTPS resources should be fetched by client"}
+                })
             }
             "tools/call" => {
                 let params = req.get("params");

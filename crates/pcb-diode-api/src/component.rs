@@ -383,10 +383,11 @@ fn parse_storage_path_from_url(url: &str) -> Option<String> {
 
 pub fn add_component_to_workspace(
     auth_token: &str,
-    component: &ComponentSearchResult,
+    component_id: &str,
+    part_number: &str,
     workspace_root: &std::path::Path,
 ) -> Result<AddComponentResult> {
-    let sanitized_path = sanitize_mpn_for_path(&component.part_number);
+    let sanitized_path = sanitize_mpn_for_path(part_number);
     let component_dir = workspace_root.join("components").join(&sanitized_path);
     let component_file = component_dir.join(format!("{}.zen", &sanitized_path));
 
@@ -400,9 +401,9 @@ pub fn add_component_to_workspace(
     // Show progress during API call
     let spinner = ProgressBar::new_spinner();
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message(format!("Fetching {}...", component.part_number));
+    spinner.set_message(format!("Fetching {}...", part_number));
 
-    let download = download_component(auth_token, &component.component_id)?;
+    let download = download_component(auth_token, component_id)?;
     spinner.finish_and_clear();
 
     fs::create_dir_all(&component_dir)?;
@@ -452,11 +453,7 @@ pub fn add_component_to_workspace(
     }
 
     // Show task summary
-    println!(
-        "{} {}",
-        "Downloading".green().bold(),
-        component.part_number.bold()
-    );
+    println!("{} {}", "Downloading".green().bold(), part_number.bold());
     println!(
         "• {} files{}",
         file_count,
@@ -632,9 +629,9 @@ pub fn add_component_to_workspace(
                 .first_symbol()
                 .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
 
-            let sanitized_name = sanitize_mpn_for_path(&component.part_number);
+            let sanitized_name = sanitize_mpn_for_path(part_number);
             let content = generate_zen_file(
-                &component.part_number,
+                part_number,
                 &sanitized_name,
                 symbol,
                 symbol_filename,
@@ -913,7 +910,12 @@ pub fn search_interactive(
         println!("{} {}", "Description:".cyan(), description);
     }
 
-    let result = add_component_to_workspace(auth_token, selected_component, workspace_root)?;
+    let result = add_component_to_workspace(
+        auth_token,
+        &selected_component.component_id,
+        &selected_component.part_number,
+        workspace_root,
+    )?;
 
     if handle_already_exists(workspace_root, &result) {
         return Ok(());
@@ -975,7 +977,12 @@ pub fn search_and_add_single(
         component.part_number.bold()
     );
 
-    let result = add_component_to_workspace(auth_token, component, workspace_root)?;
+    let result = add_component_to_workspace(
+        auth_token,
+        &component.component_id,
+        &component.part_number,
+        workspace_root,
+    )?;
 
     if handle_already_exists(workspace_root, &result) {
         return Ok(());
