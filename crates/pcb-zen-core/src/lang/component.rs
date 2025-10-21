@@ -650,6 +650,18 @@ where
             Ok(component)
         })?;
 
+        // Run component modifiers before adding to module
+        // Extract modifiers first to avoid holding a borrow during eval_function
+        let modifiers = eval
+            .module_value()
+            .map(|module| module.component_modifiers().clone())
+            .unwrap_or_default();
+        
+        for modifier_fn in modifiers {
+            // Invoke the modifier with the component as the only argument
+            eval.eval_function(modifier_fn, &[component_val], &[])?;
+        }
+
         // Add to current module context if available
         if let Some(mut module) = eval.module_value_mut() {
             module.add_child(component_val);
