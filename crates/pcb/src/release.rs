@@ -483,18 +483,33 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     let source_only = matches!(info.kind, ReleaseKind::SourceOnly);
     let rfc3339_timestamp = Utc::now().to_rfc3339();
 
+    // Get board description if available
+    let board_description = info
+        .workspace
+        .config
+        .board_info_for_zen(&info.workspace.zen_path)
+        .map(|b| b.description.as_str())
+        .filter(|d| !d.is_empty());
+
+    let mut release_obj = serde_json::json!({
+        "schema_version": RELEASE_SCHEMA_VERSION,
+        "board_name": info.board_name,
+        "git_version": info.version,
+        "created_at": rfc3339_timestamp,
+        "zen_file": info.workspace.zen_path.strip_prefix(info.workspace.root()).expect("zen_file must be within workspace_root"),
+        "workspace_root": info.workspace.root(),
+        "staging_directory": info.staging_dir,
+        "layout_path": info.layout_path,
+        "source_only": source_only
+    });
+
+    // Add description if present
+    if let Some(desc) = board_description {
+        release_obj["description"] = serde_json::json!(desc);
+    }
+
     serde_json::json!({
-        "release": {
-            "schema_version": RELEASE_SCHEMA_VERSION,
-            "board_name": info.board_name,
-            "git_version": info.version,
-            "created_at": rfc3339_timestamp,
-            "zen_file": info.workspace.zen_path.strip_prefix(info.workspace.root()).expect("zen_file must be within workspace_root"),
-            "workspace_root": info.workspace.root(),
-            "staging_directory": info.staging_dir,
-            "layout_path": info.layout_path,
-            "source_only": source_only
-        },
+        "release": release_obj,
         "system": {
             "user": std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
             "platform": std::env::consts::OS,

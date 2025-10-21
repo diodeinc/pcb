@@ -85,6 +85,16 @@ name = "TB0002"
 path = "TB0002.zen"
 "#;
 
+const BOARD_WITH_DESCRIPTION_PCB_TOML: &str = r#"
+[board]
+name = "DescBoard"
+path = "DescBoard.zen"
+description = "A test board with a description"
+
+[packages]
+stdlib = "@github/diodeinc/stdlib:v0.2.10"
+"#;
+
 const SIMPLE_COMPONENT: &str = r#"
 value = config("value", str, default = "10kOhm")
 
@@ -382,4 +392,43 @@ fn test_pcb_release_with_file() {
         ],
     );
     assert_snapshot!("release_with_file_build", build_ouput);
+}
+
+#[test]
+fn test_pcb_release_with_description() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .seed_stdlib(&["v0.2.10"])
+        .seed_kicad(&["9.0.0"])
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_WITH_DESCRIPTION_PCB_TOML)
+        .write("modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/DescBoard.zen", TEST_BOARD_ZEN)
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .ignore_globs(["layout/*"]);
+
+    // Run source-only release with JSON output
+    let output = sb
+        .cmd(
+            cargo_bin!("pcb"),
+            [
+                "release",
+                "--board",
+                "DescBoard",
+                "--source-only",
+                "-f",
+                "json",
+            ],
+        )
+        .read()
+        .expect("Failed to run pcb release command");
+
+    // Parse JSON output to get staging directory
+    let json: Value = serde_json::from_str(&output).expect("Failed to parse JSON output");
+    let staging_dir = json["release"]["staging_directory"]
+        .as_str()
+        .expect("Missing staging_directory in JSON");
+
+    // Snapshot the staging directory contents including metadata.json with description
+    assert_snapshot!("release_with_description", sb.snapshot_dir(staging_dir));
 }
