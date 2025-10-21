@@ -556,6 +556,8 @@ version = "1.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d487aa071b5f64da6f19a3e848e3578944b726ee5a4854b82172f02aa876bfdc"
 dependencies = [
+ "jobserver",
+ "libc",
  "shlex",
 ]
 
@@ -594,9 +596,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.40"
+version = "4.5.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40b6887a1d8685cebccf115538db5c0efe625ccac9696ad45c409d96566e910f"
+checksum = "f4512b90fa68d3a9932cea5184017c5d200f5921df706d45e853537dea51508f"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -604,9 +606,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.40"
+version = "4.5.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c66c08ce9f0c698cbce5c0279d0bb6ac936d8674174fe48f736533b964f59e"
+checksum = "0025e98baa12e766c67ba13ff4695a887a1eba19569aad00a472546795bd6730"
 dependencies = [
  "anstream",
  "anstyle",
@@ -617,9 +619,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.40"
+version = "4.5.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c7947ae4cc3d851207c1adb5b5e260ff0cca11446b1d6d1423788e442257ce"
+checksum = "2a0b5487afeab2deb2ff4e03a807ad1a03ac532ff5a2cee5d86884440c7f7671"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -1033,6 +1035,12 @@ dependencies = [
  "syn 2.0.104",
  "unicode-xid",
 ]
+
+[[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "diff"
@@ -2216,6 +2224,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jobserver"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
+dependencies = [
+ "getrandom 0.3.3",
+ "libc",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.77"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2498,6 +2516,15 @@ checksum = "f27fe9f1cc3c22e1687f9446c2083c4c5fc7f0bcf1c7a86bdbded14985895b4b"
 dependencies = [
  "cc",
  "walkdir",
+]
+
+[[package]]
+name = "minijinja"
+version = "2.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9f264d75233323f4b7d2f03aefe8a990690cdebfbfe26ea86bcbaec5e9ac990"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -2812,12 +2839,15 @@ dependencies = [
  "env_logger",
  "gltfpack-sys",
  "ignore",
+ "indicatif",
  "inquire",
  "insta",
  "itertools 0.13.0",
  "log",
  "open",
  "pathdiff",
+ "pcb-diode-api",
+ "pcb-eda",
  "pcb-fmt",
  "pcb-kicad",
  "pcb-layout",
@@ -2833,6 +2863,8 @@ dependencies = [
  "starlark",
  "starlark_syntax",
  "tempfile",
+ "terminal_size",
+ "unicode-width 0.2.1",
  "walkdir",
  "zip 4.3.0",
 ]
@@ -2846,6 +2878,39 @@ dependencies = [
  "os_pipe",
  "strip-ansi-escapes",
  "tempfile",
+]
+
+[[package]]
+name = "pcb-diode-api"
+version = "0.2.13"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "clap",
+ "colored",
+ "deunicode",
+ "dirs",
+ "fslock",
+ "indicatif",
+ "inquire",
+ "minijinja",
+ "open",
+ "pcb-eda",
+ "pcb-kicad",
+ "pcb-zen-core",
+ "rand 0.8.5",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "terminal_size",
+ "toml",
+ "unicode-width 0.2.1",
+ "urlencoding",
+ "zip 4.3.0",
+ "zstd",
 ]
 
 [[package]]
@@ -5283,6 +5348,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6147,4 +6218,32 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.16+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
