@@ -165,6 +165,7 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
     ("Validating build from staged sources", validate_build),
     ("Copying layout files", copy_layout),
+    ("Generating board config", generate_board_config),
     ("Copying documentation", copy_docs),
     ("Substituting version variables", substitute_variables),
 ];
@@ -633,6 +634,28 @@ fn copy_layout(info: &ReleaseInfo) -> Result<()> {
             fs::copy(entry.path(), layout_staging_dir.join(filename))?;
         }
     }
+    Ok(())
+}
+
+/// Generate board config JSON file
+fn generate_board_config(info: &ReleaseInfo) -> Result<()> {
+    // Extract board config from the schematic
+    let Some(board_config) = pcb_layout::utils::extract_board_config(&info.schematic) else {
+        debug!("No board config found in schematic, skipping");
+        return Ok(());
+    };
+
+    // Write board config to layout directory
+    let layout_staging_dir = info.staging_dir.join("layout");
+    let board_config_path = layout_staging_dir.join("board_config.json");
+
+    let board_config_json = serde_json::to_string_pretty(&board_config)
+        .context("Failed to serialize board config to JSON")?;
+
+    fs::write(&board_config_path, board_config_json)
+        .context("Failed to write board config file")?;
+
+    debug!("Generated board config at: {}", board_config_path.display());
     Ok(())
 }
 

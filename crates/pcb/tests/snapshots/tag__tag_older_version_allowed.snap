@@ -13,6 +13,7 @@ Exit Code: 0
 ✓ Copying source files and dependencies
 ✓ Validating build from staged sources
 ✓ Copying layout files
+✓ Generating board config
 ✓ Copying documentation
 ✓ Substituting version variables
 ✓ Generating design BOM
