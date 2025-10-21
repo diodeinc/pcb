@@ -13,6 +13,8 @@ use thiserror::Error;
 use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
+pub mod fab_drawing;
+
 /// Result of layout generation/update
 #[derive(Debug)]
 pub struct LayoutResult {

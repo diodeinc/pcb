@@ -62,6 +62,7 @@ pub enum ArtifactType {
     Vrml,
     Glb,
     Svg,
+    FabHtml,
 }
 
 impl ArtifactType {
@@ -77,6 +78,7 @@ impl ArtifactType {
             ArtifactType::Vrml => "Generating VRML model",
             ArtifactType::Glb => "Generating GLB model",
             ArtifactType::Svg => "Generating SVG rendering",
+            ArtifactType::FabHtml => "Generating fabrication drawing",
         }
     }
 
@@ -92,6 +94,7 @@ impl ArtifactType {
             ArtifactType::Vrml => generate_vrml_model,
             ArtifactType::Glb => generate_glb_model,
             ArtifactType::Svg => generate_svg_rendering,
+            ArtifactType::FabHtml => generate_fab_drawing,
         }
     }
 }
@@ -172,6 +175,7 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
 
 /// All manufacturing artifacts in the order they should be generated
 const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
+    ArtifactType::FabHtml,
     ArtifactType::Bom,
     ArtifactType::Gerbers,
     ArtifactType::Cpl,
@@ -671,6 +675,25 @@ fn generate_board_config(info: &ReleaseInfo) -> Result<()> {
         .context("Failed to write board config file")?;
 
     debug!("Generated board config at: {}", board_config_path.display());
+    Ok(())
+}
+
+/// Generate fabrication drawing HTML file
+fn generate_fab_drawing(info: &ReleaseInfo) -> Result<()> {
+    // Extract board config from the schematic
+    let Some(board_config) = pcb_layout::utils::extract_board_config(&info.schematic) else {
+        debug!("No board config found in schematic, skipping fab drawing");
+        return Ok(());
+    };
+
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    // Generate HTML fab drawing
+    let html = pcb_layout::fab_drawing::generate_html(&board_config);
+    let html_path = manufacturing_dir.join("fab_drawing.html");
+    fs::write(&html_path, html).context("Failed to write HTML fab drawing")?;
+    debug!("Generated HTML fab drawing at: {}", html_path.display());
     Ok(())
 }
 
