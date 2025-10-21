@@ -1,6 +1,7 @@
 use log::debug;
-use pcb_zen_core::{LoadSpec, RefKind, RemoteRefMeta};
+use pcb_zen_core::{LoadSpec, RefKind, RemoteRef, RemoteRefMeta};
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs as unix_fs;
 #[cfg(windows)]
 use std::os::windows::fs as win_fs;
+use std::sync::Mutex;
 
 use crate::git;
 
@@ -67,23 +69,18 @@ fn ensure_symlinks(
 }
 
 /// Classify a remote Git repository to determine reference type
-fn classify_remote(cache_root: &Path, spec: &LoadSpec) -> Option<RemoteRefMeta> {
-    let expected_ref = match spec {
-        LoadSpec::Github { rev, .. } | LoadSpec::Gitlab { rev, .. } => rev,
-        _ => unreachable!(),
-    };
-
+fn classify_remote(cache_root: &Path, rev: &str) -> Option<RemoteRefMeta> {
     let sha1 = git::rev_parse_head(cache_root)?;
     let kind = {
-        let tag_sha1 = git::rev_parse(cache_root, &format!("{expected_ref}^{{commit}}"));
-        if git::tag_exists(cache_root, expected_ref) && tag_sha1 == Some(sha1.clone()) {
-            debug!("Tag {expected_ref} exists, and it's at HEAD");
+        let tag_sha1 = git::rev_parse(cache_root, &format!("{rev}^{{commit}}"));
+        if git::tag_exists(cache_root, rev) && tag_sha1 == Some(sha1.clone()) {
+            debug!("Tag {rev} exists, and it's at HEAD");
             RefKind::Tag
-        } else if expected_ref.len() >= 7 && sha1.starts_with(expected_ref) {
-            debug!("Hash matches {expected_ref} ref");
+        } else if rev.len() >= 7 && sha1.starts_with(rev) {
+            debug!("Hash matches {rev} ref");
             RefKind::Commit
         } else {
-            debug!("{expected_ref} is unstable");
+            debug!("{rev} is unstable");
             RefKind::Unstable
         }
     };
@@ -311,15 +308,13 @@ fn expose_alias_symlink(
 /// remote resources (GitHub repos, GitLab repos, packages).
 #[derive(Debug)]
 pub struct DefaultRemoteFetcher {
-    metadata_cache: std::sync::Mutex<
-        std::collections::HashMap<pcb_zen_core::RemoteRef, pcb_zen_core::RemoteRefMeta>,
-    >,
+    metadata_cache: Mutex<HashMap<RemoteRef, RemoteRefMeta>>,
 }
 
 impl Default for DefaultRemoteFetcher {
     fn default() -> Self {
         Self {
-            metadata_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            metadata_cache: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -336,17 +331,6 @@ impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
         // Step 2: Resolve specific file path within cache and create symlinks
         let file_path = ensure_symlinks(spec, workspace_root, &cache_root)?;
 
-        // Step 3: Classify Git repository and cache metadata (only if not already cached)
-        let remote_ref = spec
-            .remote_ref()
-            .expect("remote specs should always have remote_ref");
-        let mut cache = self.metadata_cache.lock().unwrap();
-        if let Entry::Vacant(entry) = cache.entry(remote_ref) {
-            if let Some(metadata) = classify_remote(&cache_root, spec) {
-                entry.insert(metadata);
-            }
-        }
-
         Ok(file_path)
     }
 
@@ -354,7 +338,37 @@ impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
         &self,
         remote_ref: &pcb_zen_core::RemoteRef,
     ) -> Option<pcb_zen_core::RemoteRefMeta> {
-        self.metadata_cache.lock().unwrap().get(remote_ref).cloned()
+        let mut cache = self.metadata_cache.lock().unwrap();
+        let metadata = match cache.entry(remote_ref.clone()) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                // Lazy classification: only run git commands on cache miss
+                let (cache_root, rev) = match remote_ref {
+                    RemoteRef::GitHub { user, repo, rev } => {
+                        let cache_root = cache_dir()
+                            .ok()?
+                            .join("github")
+                            .join(user)
+                            .join(repo)
+                            .join(rev);
+                        (cache_root, rev.as_str())
+                    }
+                    RemoteRef::GitLab { project_path, rev } => {
+                        let cache_root = cache_dir()
+                            .ok()?
+                            .join("gitlab")
+                            .join(project_path)
+                            .join(rev);
+                        (cache_root, rev.as_str())
+                    }
+                };
+
+                let metadata = classify_remote(&cache_root, rev)?;
+                e.insert(metadata).clone()
+            }
+        };
+
+        Some(metadata)
     }
 }
 // Add unit tests for LoadSpec::parse
