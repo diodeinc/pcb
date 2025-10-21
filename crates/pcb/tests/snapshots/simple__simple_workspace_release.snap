@@ -15,6 +15,7 @@ Exit Code: 0
   "release": {
     "board_name": "TestBoard",
     "created_at": "<TIMESTAMP>",
+    "description": "Main test board for validation",
     "git_version": "unknown",
     "layout_path": "<TEMP_DIR>/boards/build/TestBoard",
     "schema_version": "1",
