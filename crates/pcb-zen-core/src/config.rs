@@ -440,6 +440,15 @@ impl WorkspaceInfo {
             .map(|b| b.name.clone())
     }
 
+    /// Given an absolute .zen path, return the full BoardInfo
+    /// (or None if the file is not one of the workspace boards).
+    pub fn board_info_for_zen(&self, zen_path: &Path) -> Option<&BoardInfo> {
+        let canon = zen_path.canonicalize().ok()?;
+        self.boards
+            .iter()
+            .find(|b| b.absolute_zen_path(&self.root) == canon)
+    }
+
     /// Find a board by name, returning an error with available boards if not found
     pub fn find_board_by_name(&self, board_name: &str) -> Result<&BoardInfo> {
         self.boards
