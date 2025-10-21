@@ -170,8 +170,8 @@ pub fn generate_html(board_config: &BoardConfig) -> String {
 
     let copper_count = copper_thicknesses.len();
     assert!(
-        copper_count > 2,
-        "Board must have more than 2 copper layers (has {})",
+        copper_count >= 2,
+        "Board must have at least 2 copper layers (has {})",
         copper_count
     );
 
@@ -181,9 +181,23 @@ pub fn generate_html(board_config: &BoardConfig) -> String {
 
     let outer_oz = validate_copper_oz(copper_thicknesses[0] / 0.035, "Outer").unwrap();
 
-    let inner_avg: f64 =
-        copper_thicknesses[1..copper_count - 1].iter().sum::<f64>() / (copper_count - 2) as f64;
-    let inner_oz = validate_copper_oz(inner_avg / 0.035, "Inner").unwrap();
+    // Check if we have inner layers and if they're consistent
+    let inner_oz = if copper_count > 2 {
+        let inner_layers = &copper_thicknesses[1..copper_count - 1];
+        if inner_layers.len() >= 2 {
+            let first = inner_layers[0];
+            let consistent = inner_layers.iter().all(|&t| (t - first).abs() < 0.001);
+            if consistent {
+                Some(validate_copper_oz(first / 0.035, "Inner").unwrap())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Build summary items
     let mut summary = vec![
@@ -206,12 +220,15 @@ pub fn generate_html(board_config: &BoardConfig) -> String {
             value: format!("{:.1} oz", outer_oz),
             color: None,
         },
-        SummaryItem {
-            label: "Inner Copper:".to_string(),
-            value: format!("{:.1} oz", inner_oz),
-            color: None,
-        },
     ];
+
+    if let Some(oz) = inner_oz {
+        summary.push(SummaryItem {
+            label: "Inner Copper:".to_string(),
+            value: format!("{:.1} oz", oz),
+            color: None,
+        });
+    }
 
     if let Some(finish) = &stackup.copper_finish {
         summary.push(SummaryItem {
