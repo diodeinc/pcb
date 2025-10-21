@@ -1,0 +1,44 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+DNP before: None
+DNP after: True
+DNP reset: False
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "R1",
+                footprint: "0603",
+                prefix: "U",
+                connections: {
+                    "1": FrozenValue(
+                        Net {
+                            name: "A",
+                            id: "<ID>",
+                        },
+                    ),
+                    "2": FrozenValue(
+                        Net {
+                            name: "B",
+                            id: "<ID>",
+                        },
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "1",
+                            "2": "2",
+                        },
+                    },
+                ),
+            },
+        ),
+    ],
+}
+[]

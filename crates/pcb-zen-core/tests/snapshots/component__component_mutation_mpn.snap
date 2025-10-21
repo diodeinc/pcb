@@ -1,0 +1,44 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+MPN before: None
+MPN after: RC0603FR-0710KL
+Module {
+    name: "<root>",
+    source: "test.zen",
+    children: [
+        FrozenValue(
+            Component {
+                name: "R1",
+                mpn: "RC0603FR-0710KL",
+                footprint: "0603",
+                prefix: "U",
+                connections: {
+                    "1": FrozenValue(
+                        Net {
+                            name: "A",
+                            id: "<ID>",
+                        },
+                    ),
+                    "2": FrozenValue(
+                        Net {
+                            name: "B",
+                            id: "<ID>",
+                        },
+                    ),
+                },
+                symbol: FrozenValue(
+                    Symbol {
+                        name: None,
+                        pins: {
+                            "1": "1",
+                            "2": "2",
+                        },
+                    },
+                ),
+            },
+        ),
+    ],
+}
+[]
