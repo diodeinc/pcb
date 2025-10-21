@@ -17,6 +17,8 @@ log = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 rust_decimal = { workspace = true }
+minijinja = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }
