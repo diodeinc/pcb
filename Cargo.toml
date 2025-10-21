@@ -37,6 +37,7 @@ pcb-fmt = { path = "crates/pcb-fmt" }
 pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
 pcb-diode-api = { path = "crates/pcb-diode-api" }
+pcb-mcp = { path = "crates/pcb-mcp" }
 
 anyhow = "1.0"
 ariadne = { version = "0.5", features = ["auto-color"] }
