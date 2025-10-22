@@ -2,40 +2,42 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "test_comp_dnp",
-                footprint: "test_footprint",
-                prefix: "U",
-                connections: {
-                    "in": FrozenValue(
-                        Net {
-                            name: "in",
-                            id: "<ID>",
-                        },
-                    ),
-                    "out": FrozenValue(
-                        Net {
-                            name: "out",
-                            id: "<ID>",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "test_comp_dnp",
+                    footprint: "test_footprint",
+                    prefix: "U",
+                    connections: {
+                        "in": FrozenValue(
+                            Net {
+                                name: "in",
+                                id: "<ID>",
+                            },
+                        ),
+                        "out": FrozenValue(
+                            Net {
+                                name: "out",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "in",
+                                "2": "out",
+                            },
                         },
                     ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "in",
-                            "2": "out",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []

@@ -2,8 +2,10 @@
 source: crates/pcb-zen-core/tests/file.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "subdir/test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "subdir/test.zen",
+    },
 }
 []

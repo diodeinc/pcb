@@ -1,7 +1,9 @@
 use crate::graph::{CircuitGraph, FactorId, PortId, PortPath};
-use starlark::collections::SmallMap;
+use crate::lang::module::ModulePath;
+use crate::FrozenComponentValue;
+
 use starlark::values::{tuple::TupleRef, Heap, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl CircuitGraph {
     /// Resolve a label (net name or port tuple) to a PortId
@@ -57,7 +59,7 @@ impl CircuitGraph {
         &self,
         port_path: &[PortId],
         factors: &[FactorId],
-        components: &SmallMap<String, Value<'v>>,
+        components: &HashMap<ModulePath, FrozenComponentValue>,
         heap: &'v Heap,
     ) -> starlark::Result<Value<'v>> {
         use crate::graph::starlark::PathValueGen;
@@ -87,13 +89,14 @@ impl CircuitGraph {
         for &factor_id in factors {
             if let crate::graph::FactorType::Component(comp_path) = self.factor_type(factor_id) {
                 if !seen_components.contains(comp_path) {
-                    let component_value = components.get(comp_path).ok_or_else(|| {
+                    let comp_module_path = ModulePath::from(comp_path.as_str());
+                    let component_value = components.get(&comp_module_path).ok_or_else(|| {
                         starlark::Error::new_other(anyhow::anyhow!(
                             "Component '{}' not found",
                             comp_path
                         ))
                     })?;
-                    path_components.push(*component_value);
+                    path_components.push(heap.alloc_complex(component_value.clone()));
                     seen_components.insert(comp_path.clone());
                 }
             }

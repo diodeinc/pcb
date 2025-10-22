@@ -630,7 +630,7 @@ where
                 })
                 .unwrap_or_else(|| "U".to_owned());
 
-            let component = eval_ctx.heap().alloc_complex(ComponentValue {
+            let component_data = ComponentValue {
                 name,
                 mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 manufacturer: final_manufacturer,
@@ -645,15 +645,18 @@ where
                 dnp: dnp_val.and_then(|v| v.unpack_bool()),
                 datasheet: final_datasheet,
                 description: final_description,
-            });
+            };
+
+            // Allocate component first
+            let component = eval_ctx.heap().alloc_complex(component_data);
+
+            // Add to current module context if available
+            if let Some(mut module) = eval_ctx.module_value_mut() {
+                module.add_child(component);
+            }
 
             Ok(component)
         })?;
-
-        // Add to current module context if available
-        if let Some(mut module) = eval.module_value_mut() {
-            module.add_child(component_val);
-        }
 
         Ok(component_val)
     }

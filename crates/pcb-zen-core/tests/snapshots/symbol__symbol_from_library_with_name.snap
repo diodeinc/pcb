@@ -3,8 +3,10 @@ source: crates/pcb-zen-core/tests/symbol.rs
 expression: output
 ---
 Symbol { name: "Symbol2", pins: { "2": "B" } }
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 []

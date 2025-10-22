@@ -271,11 +271,12 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             call_stack,
         };
 
+        // Allocate testbench first
         let testbench_value = eval.heap().alloc(testbench);
 
-        // Add the TestBench to the module's children so it can be collected later
-        if let Some(ctx) = eval.context_value() {
-            ctx.add_child(testbench_value);
+        // Add to current module context if available
+        if let Some(mut module) = eval.module_value_mut() {
+            module.add_child(testbench_value);
         }
 
         Ok(testbench_value)

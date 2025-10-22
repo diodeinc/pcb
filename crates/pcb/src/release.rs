@@ -6,7 +6,6 @@ use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_sch::generate_bom_with_fallback;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen_core::config::get_workspace_info;
-use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
@@ -353,7 +352,7 @@ fn build_release_info(
         .eval_result
         .output
         .as_ref()
-        .map(|m| m.sch_module.to_schematic())
+        .map(|m| m.to_schematic())
         .transpose()?
         .context("No schematic output from zen file")?;
     let kind = if source_only {

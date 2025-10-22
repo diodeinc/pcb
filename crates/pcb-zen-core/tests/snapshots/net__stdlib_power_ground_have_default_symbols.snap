@@ -9,8 +9,10 @@ Ground symbol: Symbol { name: "GND", pins: { "1": "GND" } }
 Analog net: ANALOG
 Gpio net: GPIO
 Pwm net: PWM
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 []

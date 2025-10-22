@@ -1,12 +1,14 @@
+#![allow(clippy::arc_with_non_send_sync)]
+
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
-use starlark::{codemap::ResolvedSpan, collections::SmallMap};
+use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
     environment::{GlobalsBuilder, LibraryExtension},
@@ -18,8 +20,6 @@ use starlark::{
     PrintHandler,
 };
 
-use crate::lang::file::file_globals;
-use crate::lang::spice_model::model_globals;
 use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
     builtin::builtin_globals,
@@ -27,13 +27,20 @@ use crate::lang::{
     physical::*,
     type_info::{ParameterInfo, TypeInfo},
 };
+use crate::lang::{
+    electrical_check::FrozenElectricalCheck,
+    file::file_globals,
+    module::{FrozenModuleValue, ModulePath},
+};
+use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 use crate::{Diagnostic, WithDiagnostics};
 
 use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
-    module::{module_globals, FrozenModuleValue, ModuleLoader},
+    module::{module_globals, ModuleLoader},
     net::NetType,
+    spice_model::model_globals,
     symbol::SymbolType,
     test_bench::test_bench_globals,
 };
@@ -74,9 +81,76 @@ pub struct EvalOutput {
     pub print_output: Vec<String>,
     /// Load resolver used for this evaluation, when available
     pub load_resolver: Arc<dyn crate::LoadResolver>,
+    /// Module tree containing all child modules (components are stored in modules)
+    pub module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
+    pub frozen_heap: Arc<FrozenHeap>,
 }
 
 impl EvalOutput {
+    /// Convert to schematic with diagnostics
+    pub fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<pcb_sch::Schematic> {
+        let converter = ModuleConverter::new();
+        converter.build(self.module_tree.clone())
+    }
+
+    /// Convert to schematic (error if conversion fails)
+    pub fn to_schematic(&self) -> anyhow::Result<pcb_sch::Schematic> {
+        let result = self.to_schematic_with_diagnostics();
+        match result.output {
+            Some(schematic) if !result.diagnostics.has_errors() => Ok(schematic),
+            Some(_) => {
+                let errors: Vec<String> = result
+                    .diagnostics
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect();
+                Err(anyhow::anyhow!(
+                    "Schematic conversion had errors:\n{}",
+                    errors.join("\n")
+                ))
+            }
+            None => {
+                let errors: Vec<String> = result
+                    .diagnostics
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect();
+                Err(anyhow::anyhow!(
+                    "Schematic conversion failed:\n{}",
+                    errors.join("\n")
+                ))
+            }
+        }
+    }
+
+    /// Collect all testbenches from all modules in the tree
+    pub fn collect_testbenches(&self) -> Vec<&crate::lang::test_bench::FrozenTestBenchValue> {
+        let mut result = Vec::new();
+
+        // Iterate through all modules in the tree
+        for module in self.module_tree.values() {
+            // Get testbenches from this module
+            for testbench in module.testbenches() {
+                result.push(testbench);
+            }
+        }
+
+        result
+    }
+
+    /// Collect all electrical checks from all modules in the tree
+    pub fn collect_electrical_checks(&self) -> Vec<(&FrozenElectricalCheck, &FrozenModuleValue)> {
+        let mut result = Vec::new();
+        for module in self.module_tree.values() {
+            for check in module.electrical_checks() {
+                result.push((check, module));
+            }
+        }
+        result
+    }
+
     /// If the underlying resolver is a CoreLoadResolver, return a reference to it
     pub fn core_resolver(&self) -> Option<Arc<crate::CoreLoadResolver>> {
         let load_resolver = self.load_resolver.clone();
@@ -193,6 +267,10 @@ pub struct EvalContext {
     /// evaluation.  This is enabled when a module is instantiated via `ModuleLoader`.
     pub(crate) strict_io_config: bool,
 
+    /// When `true`, process pending_children to build the full circuit hierarchy.
+    /// False for library loads (introspection only), true for actual circuit builds.
+    build_circuit: bool,
+
     /// When `true`, the surrounding LSP wishes to eagerly parse all files in the workspace.
     /// Defaults to `true` so that features work out-of-the-box. Clients can opt-out via CLI
     /// flag which toggles this value before the server starts.
@@ -204,8 +282,8 @@ pub struct EvalContext {
     /// The contents of the module we are evaluating.
     contents: Option<String>,
 
-    /// The name of the module we are evaluating.
-    pub(crate) name: Option<String>,
+    /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
+    pub(crate) module_path: ModulePath,
 
     /// Additional diagnostics from this evaluation context that will be merged with any other
     /// diagnostics attached to the ContextValue.
@@ -216,47 +294,45 @@ pub struct EvalContext {
 
     /// Index to track which load statement we're currently processing (for span resolution)
     current_load_index: RefCell<usize>,
+
+    /// Tree of all child modules indexed by fully qualified path.
+    /// Keys are paths like "root", "root.child"
+    /// Components are stored in each module's components field, not in this tree.
+    pub module_tree: Arc<Mutex<BTreeMap<ModulePath, FrozenModuleValue>>>,
+
+    frozen_heap: Arc<FrozenHeap>,
 }
 
-// impl Default for EvalContext {
-//     fn default() -> Self {
-//         Self::new()
-//     }
-// }
-
 /// Helper to recursively convert JSON to heap values
-fn json_value_to_heap_value<'v>(
-    json: &serde_json::Value,
-    heap: &'v Heap,
-) -> anyhow::Result<Value<'v>> {
+fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Value<'v> {
     use starlark::values::dict::AllocDict;
     match json {
-        serde_json::Value::Null => Ok(Value::new_none()),
-        serde_json::Value::Bool(b) => Ok(Value::new_bool(*b)),
+        serde_json::Value::Null => Value::new_none(),
+        serde_json::Value::Bool(b) => Value::new_bool(*b),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Ok(heap.alloc(i as i32))
+                heap.alloc(i as i32)
             } else if let Some(f) = n.as_f64() {
-                Ok(heap.alloc(starlark::values::float::StarlarkFloat(f)))
+                heap.alloc(starlark::values::float::StarlarkFloat(f))
             } else {
-                Err(anyhow::anyhow!("Invalid number"))
+                panic!("Invalid number")
             }
         }
-        serde_json::Value::String(s) => Ok(heap.alloc_str(s).to_value()),
+        serde_json::Value::String(s) => heap.alloc_str(s).to_value(),
         serde_json::Value::Array(arr) => {
             let mut values = Vec::new();
             for item in arr {
-                values.push(json_value_to_heap_value(item, heap)?);
+                values.push(json_value_to_heap_value(item, heap));
             }
-            Ok(heap.alloc(values))
+            heap.alloc(values)
         }
         serde_json::Value::Object(obj) => {
             let mut pairs = Vec::new();
             for (k, v) in obj {
-                let val = json_value_to_heap_value(v, heap)?;
+                let val = json_value_to_heap_value(v, heap);
                 pairs.push((heap.alloc_str(k).to_value(), val));
             }
-            Ok(heap.alloc(AllocDict(pairs)))
+            heap.alloc(AllocDict(pairs))
         }
     }
 }
@@ -280,13 +356,16 @@ impl EvalContext {
             state: Arc::new(Mutex::new(EvalContextState::default())),
             builtin_docs,
             strict_io_config: false,
+            build_circuit: false, // Default to introspection mode
             eager: true,
             source_path: None,
             contents: None,
-            name: None,
+            module_path: ModulePath::root(),
             diagnostics: RefCell::new(Vec::new()),
             load_resolver,
             current_load_index: RefCell::new(0),
+            module_tree: Arc::new(Mutex::new(BTreeMap::new())),
+            frozen_heap: Arc::new(FrozenHeap::new()),
         }
     }
 
@@ -306,6 +385,13 @@ impl EvalContext {
         self
     }
 
+    fn freeze(&mut self) -> FrozenModule {
+        let module = std::mem::take(&mut self.module);
+        let frozen = module.freeze().expect("failed to freeze module");
+        self.frozen_heap.add_reference(frozen.frozen_heap());
+        frozen
+    }
+
     /// Enable or disable eager workspace parsing.
     pub fn set_eager(mut self, eager: bool) -> Self {
         self.eager = eager;
@@ -313,19 +399,26 @@ impl EvalContext {
     }
 
     /// Create a new Context that shares caches with this one
-    pub fn child_context(&self) -> Self {
+    pub fn child_context(&self, name: Option<&str>) -> Self {
+        let mut module_path = self.module_path.clone();
+        if let Some(name) = name {
+            module_path.push(name);
+        }
         Self {
             module: starlark::environment::Module::new(),
             state: self.state.clone(),
             builtin_docs: self.builtin_docs.clone(),
             strict_io_config: false,
+            build_circuit: false,
             eager: true,
             source_path: None,
             contents: None,
-            name: None,
+            module_path,
             diagnostics: RefCell::new(Vec::new()),
             load_resolver: self.load_resolver.clone(),
             current_load_index: RefCell::new(0),
+            module_tree: self.module_tree.clone(),
+            frozen_heap: self.frozen_heap.clone(),
         }
     }
 
@@ -451,18 +544,8 @@ impl EvalContext {
         self
     }
 
-    /// Override the module name that is exposed to user code via `ContextValue`.
-    /// When unset, callers should rely on their own default (e.g. "<root>").
-    pub fn set_module_name<S: Into<String>>(mut self, name: S) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
     /// Set inputs from already frozen parent values.
-    pub fn set_inputs_from_frozen_values(
-        &mut self,
-        parent_inputs: SmallMap<String, FrozenValue>,
-    ) -> starlark::Result<()> {
+    pub fn set_inputs_from_frozen_values(&mut self, parent_inputs: SmallMap<String, FrozenValue>) {
         let eval = Evaluator::new(&self.module);
         if self.module.extra_value().is_none() {
             let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
@@ -475,15 +558,13 @@ impl EvalContext {
         for (name, value) in parent_inputs.into_iter() {
             module.add_input(name, value.to_value());
         }
-
-        Ok(())
     }
 
     /// Set properties from already frozen parent values.
     pub fn set_properties_from_frozen_values(
         &mut self,
         parent_properties: SmallMap<String, FrozenValue>,
-    ) -> starlark::Result<()> {
+    ) {
         let eval = Evaluator::new(&self.module);
         if self.module.extra_value().is_none() {
             let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
@@ -495,15 +576,10 @@ impl EvalContext {
         for (name, value) in parent_properties.into_iter() {
             ctx_value.add_property(name, value.to_value());
         }
-
-        Ok(())
     }
 
     /// Convert JSON inputs directly to heap values and set them (for external APIs)
-    pub fn set_json_inputs(
-        &mut self,
-        json_inputs: SmallMap<String, serde_json::Value>,
-    ) -> anyhow::Result<()> {
+    pub fn set_json_inputs(&mut self, json_inputs: SmallMap<String, serde_json::Value>) {
         let eval = Evaluator::new(&self.module);
         if self.module.extra_value().is_none() {
             let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
@@ -514,11 +590,9 @@ impl EvalContext {
 
         let mut module = ctx_value.module_mut();
         for (name, json) in json_inputs.iter() {
-            let value = json_value_to_heap_value(json, eval.heap())?;
+            let value = json_value_to_heap_value(json, eval.heap());
             module.add_input(name.clone(), value);
         }
-
-        Ok(())
     }
 
     /// Evaluate the configured module. All required fields must be provided
@@ -598,7 +672,13 @@ impl EvalContext {
         match eval_result {
             Ok(_) => {
                 self.hijack_builtins();
-                let frozen_module = self.module.freeze().expect("failed to freeze module");
+
+                // Extract needed references before freezing (which moves self.module)
+                let module_tree_ref = self.module_tree.clone();
+                let load_resolver_ref = self.load_resolver.clone();
+                let diagnostics_ref = self.diagnostics.clone();
+
+                let frozen_module = self.freeze();
                 let extra = frozen_module
                     .extra_value()
                     .expect("extra value should be set before freezing")
@@ -629,17 +709,39 @@ impl EvalContext {
                     })
                     .collect();
 
+                // Process pending children after parent is frozen
+                // Only process children if building circuit (root with build_circuit=true, or child instantiation)
+                let module_path = extra.module.path().clone();
+                let is_root = module_path.segments.is_empty();
+
+                // Add this module to the tree at its path
+                if self.build_circuit || is_root {
+                    module_tree_ref
+                        .lock()
+                        .unwrap()
+                        .insert(module_path, extra.module.clone());
+                    for pending in extra.pending_children.iter().cloned() {
+                        self.child_context(Some(&pending.final_name))
+                            .process_pending_child(pending, &diagnostics_ref)
+                    }
+                }
+
+                // Clone the module tree from the shared state
+                let module_tree = module_tree_ref.lock().unwrap().clone();
+
                 let output = EvalOutput {
                     ast,
                     star_module: frozen_module,
                     sch_module: extra.module.clone(),
                     signature,
                     print_output,
-                    load_resolver: self.load_resolver.clone(),
+                    load_resolver: load_resolver_ref.clone(),
+                    module_tree,
+                    frozen_heap: self.frozen_heap.clone(),
                 };
                 let mut ret = WithDiagnostics::success(output);
                 ret.diagnostics.extend(extra.diagnostics().clone());
-                ret.diagnostics.extend(self.diagnostics.borrow().clone());
+                ret.diagnostics.extend(diagnostics_ref.borrow().clone());
                 ret
             }
             Err(err) => {
@@ -705,9 +807,8 @@ impl EvalContext {
 
         // Evaluate the file
         let result = self
-            .child_context()
+            .child_context(None)
             .set_source_path(path.clone())
-            .set_module_name("<root>")
             .set_source_contents(contents)
             .eval();
 
@@ -1184,9 +1285,8 @@ impl EvalContext {
             .unwrap_or("")
             .to_string();
         let result = self
-            .child_context()
+            .child_context(Some(&name))
             .set_source_path(canonical_path.clone())
-            .set_module_name(name)
             .eval();
 
         result.diagnostics.iter().for_each(|diag| {
@@ -1233,6 +1333,93 @@ impl EvalContext {
                 source_error: None,
             };
             Err(diagnostic.into())
+        }
+    }
+
+    /// Process a pending child after the parent module has been frozen
+    /// Returns the child's FrozenModule to keep its heap alive
+    fn process_pending_child(
+        mut self,
+        pending: FrozenPendingChild,
+        diagnostics: &RefCell<Vec<crate::Diagnostic>>,
+    ) {
+        self.strict_io_config = true;
+        self.build_circuit = true;
+        self.source_path = Some(PathBuf::from(&pending.loader.source_path));
+
+        if let Some(props) = pending.properties {
+            self.set_properties_from_frozen_values(props);
+        }
+        self.set_inputs_from_frozen_values(pending.inputs);
+
+        let child_result = self.eval();
+
+        // Add child's diagnostics to parent with proper context
+        for child_diag in child_result.diagnostics.diagnostics.iter() {
+            let (severity, message) = match child_diag.severity {
+                EvalSeverity::Error => (
+                    EvalSeverity::Error,
+                    format!("Error instantiating `{}`", pending.loader.name),
+                ),
+                EvalSeverity::Warning => (
+                    EvalSeverity::Warning,
+                    format!("Warning from `{}`", pending.loader.name),
+                ),
+                other => (other, format!("Issue in `{}`", pending.loader.name)),
+            };
+
+            let diag_to_add = crate::Diagnostic {
+                path: pending.call_site_path.clone(),
+                span: Some(pending.call_site_span),
+                severity,
+                body: message,
+                call_stack: Some(pending.call_stack.clone()),
+                child: Some(Box::new(child_diag.clone())),
+                source_error: None,
+            };
+
+            diagnostics.borrow_mut().push(diag_to_add);
+        }
+
+        // If child evaluation failed, return None (errors already propagated to diagnostics)
+        let Some(output) = child_result.output else {
+            return;
+        };
+
+        // Validate unused arguments
+        let used_inputs: HashSet<String> = output
+            .star_module
+            .extra_value()
+            .and_then(|extra| extra.downcast_ref::<FrozenContextValue>())
+            .map(|fctx| {
+                fctx.module
+                    .signature()
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let provided_set: HashSet<String> = pending.provided_names.into_iter().collect();
+        let unused: Vec<String> = provided_set.difference(&used_inputs).cloned().collect();
+
+        if !unused.is_empty() {
+            let msg = format!(
+                "Unknown argument(s) provided to module {}: {}",
+                pending.loader.name,
+                unused.join(", ")
+            );
+
+            let diag = crate::Diagnostic {
+                path: pending.call_site_path.clone(),
+                span: Some(pending.call_site_span),
+                severity: EvalSeverity::Error,
+                body: msg,
+                call_stack: Some(pending.call_stack.clone()),
+                child: None,
+                source_error: None,
+            };
+            diagnostics.borrow_mut().push(diag);
         }
     }
 }

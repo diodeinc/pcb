@@ -1,11 +1,15 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
+use crate::lang::component::FrozenComponentValue;
+use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
+use crate::lang::test_bench::FrozenTestBenchValue;
 use allocative::Allocative;
 use log::error;
+use serde::Serialize;
 use starlark::environment::FrozenModule;
 use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::{TypeCompiled, TypeType};
@@ -53,8 +57,106 @@ macro_rules! downcast_frozen_module {
 
 use super::net::{generate_net_id, FrozenNetType, FrozenNetValue, NetId, NetType, NetValue};
 use crate::lang::context::FrozenContextValue;
-use crate::FrozenComponentValue;
 use starlark::errors::EvalMessage;
+
+#[derive(Clone, PartialEq, Eq, Hash, Allocative, Freeze, Serialize)]
+pub struct ModulePath {
+    pub segments: Vec<String>,
+}
+
+impl ModulePath {
+    pub fn name(&self) -> String {
+        self.segments
+            .last()
+            .cloned()
+            .unwrap_or("<root>".to_string())
+    }
+
+    pub fn root() -> Self {
+        ModulePath { segments: vec![] }
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    pub fn push<S: Into<String>>(&mut self, segment: S) {
+        self.segments.push(segment.into());
+    }
+
+    pub fn parent(&self) -> Option<ModulePath> {
+        if self.segments.is_empty() {
+            None
+        } else {
+            Some(ModulePath {
+                segments: self.segments[..self.segments.len() - 1].to_vec(),
+            })
+        }
+    }
+
+    /// Check if this path starts with the given base path
+    pub fn starts_with(&self, base: &ModulePath) -> bool {
+        self.segments.starts_with(&base.segments)
+    }
+
+    /// Strip the base path prefix, returning the relative path
+    pub fn strip_prefix(&self, base: &ModulePath) -> Option<ModulePath> {
+        if self.starts_with(base) {
+            Some(ModulePath {
+                segments: self.segments[base.segments.len()..].to_vec(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Convert to a relative string path (relative to base)
+    pub fn to_rel_string(&self, base: &ModulePath) -> Option<String> {
+        self.strip_prefix(base).map(|p| p.segments.join("."))
+    }
+}
+
+impl std::fmt::Display for ModulePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.segments.join("."))
+    }
+}
+
+impl std::fmt::Debug for ModulePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.segments.is_empty() {
+            f.write_str("<root>")
+        } else {
+            write!(f, "{}", self.segments.join("."))
+        }
+    }
+}
+
+impl From<&str> for ModulePath {
+    fn from(s: &str) -> Self {
+        ModulePath {
+            segments: s.split('.').map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+impl From<String> for ModulePath {
+    fn from(s: String) -> Self {
+        ModulePath::from(s.as_str())
+    }
+}
+
+impl PartialOrd for ModulePath {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ModulePath {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.segments.cmp(&other.segments)
+    }
+}
 
 /// Position data from pcb:sch comments  
 #[derive(Clone, Debug, ProvidesStaticType, NoSerialize, Allocative)]
@@ -186,10 +288,9 @@ impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
 #[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct ModuleValueGen<V: ValueLifetimeless> {
-    name: String,
+    path: ModulePath,
     source_path: String,
     inputs: SmallMap<String, V>,
-    children: Vec<V>,
     properties: SmallMap<String, V>,
     signature: Vec<ParameterMetadataGen<V>>,
     /// Nets that are introduced (created) by this module. Map of `net id → local name`.
@@ -200,6 +301,8 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     positions: PositionMap,
     /// Path movement directives from moved() calls. Map of `old path → (new path, auto_generated)`.
     moved_directives: SmallMap<String, (String, bool)>,
+    /// Local values (components, electrical checks, testbenches). Child modules are in module_tree.
+    children: Vec<V>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -246,157 +349,18 @@ where
             "graph".to_string(),
         ]
     }
-
-    fn at(&self, index: Value<'v>, _heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        let key = index.unpack_str().ok_or_else(|| {
-            starlark::Error::new_other(anyhow::anyhow!(
-                "Module index must be a string, got {}",
-                index.get_type()
-            ))
-        })?;
-
-        self.find_at_path(key)
-    }
-
-    fn is_in(&self, other: Value<'v>) -> starlark::Result<bool> {
-        let key = other.unpack_str().ok_or_else(|| {
-            starlark::Error::new_other(anyhow::anyhow!(
-                "Module membership test requires a string, got {}",
-                other.get_type()
-            ))
-        })?;
-
-        Ok(self.contains_at_path(key))
-    }
-}
-
-impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
-    /// Find a child at the given path (supports nested paths like "foo.bar")
-    pub fn find_at_path(&self, path: &str) -> starlark::Result<Value<'v>> {
-        // Handle nested paths (e.g., "foo.bar")
-        if let Some(dot_pos) = path.find('.') {
-            let (first, rest) = path.split_at(dot_pos);
-            let rest = &rest[1..]; // Skip the dot
-
-            // Find the first part in children
-            for child in self.children().iter() {
-                if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
-                    if component.name() == first {
-                        return Err(starlark::Error::new_other(anyhow::anyhow!(
-                            "Cannot access '{}' on component '{}' - components don't have child elements",
-                            rest, first
-                        )));
-                    }
-                } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
-                    if submodule.name() == first {
-                        return submodule.find_at_path(rest);
-                    }
-                }
-            }
-
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "Module '{}' has no child named '{}'",
-                self.name(),
-                first
-            )));
-        }
-
-        // Single key - look for exact match
-        for child in self.children().iter() {
-            if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
-                if component.name() == path {
-                    return Ok(child.to_value());
-                }
-            } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
-                if submodule.name() == path {
-                    return Ok(child.to_value());
-                }
-            }
-        }
-
-        Err(starlark::Error::new_other(anyhow::anyhow!(
-            "Module '{}' has no child named '{}'",
-            self.name(),
-            path
-        )))
-    }
-
-    /// Check if a path exists in the given module (supports nested paths like "foo.bar")
-    fn contains_at_path(&self, path: &str) -> bool {
-        // Handle nested paths (e.g., "foo.bar")
-        if let Some(dot_pos) = path.find('.') {
-            let (first, rest) = path.split_at(dot_pos);
-            let rest = &rest[1..]; // Skip the dot
-
-            // Find the first part in children
-            for child in self.children().iter() {
-                if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
-                    if component.name() == first {
-                        return false; // Can't go deeper into components
-                    }
-                } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
-                    if submodule.name() == first {
-                        return submodule.contains_at_path(rest);
-                    }
-                }
-            }
-            return false;
-        }
-
-        // Single key - look for exact match
-        for child in self.children().iter() {
-            if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
-                if component.name() == path {
-                    return true;
-                }
-            } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
-                if submodule.name() == path {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Recursively collect components from this module and its submodules
-    pub fn collect_components(&self, path_prefix: &str) -> SmallMap<String, Value<'v>> {
-        let mut components = SmallMap::new();
-
-        for child in self.children().iter() {
-            if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
-                let path = if path_prefix.is_empty() {
-                    component.name().to_string()
-                } else {
-                    format!("{}.{}", path_prefix, component.name())
-                };
-                components.insert(path, child.to_value());
-            } else if let Some(submodule) = child.downcast_ref::<FrozenModuleValue>() {
-                let subpath = if path_prefix.is_empty() {
-                    submodule.name().to_string()
-                } else {
-                    format!("{}.{}", path_prefix, submodule.name())
-                };
-                // Recurse into submodule
-                let subcomponents = submodule.collect_components(&subpath);
-                components.extend(subcomponents);
-            }
-        }
-
-        components
-    }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Display for ModuleValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Module({})", self.name)
+        write!(f, "Module({})", self.path)
     }
 }
 
 impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Module");
-        debug.field("name", &self.name);
+        debug.field("path", &self.path);
         debug.field("source", &self.source_path);
 
         // Hide inputs from Debug output (internal implementation detail)
@@ -406,14 +370,14 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
         if !self.properties.is_empty() {
             let mut props: Vec<_> = self.properties.iter().collect();
             props.sort_by_key(|(k, _)| k.as_str());
-            let props_map: std::collections::BTreeMap<_, _> = props
+            let props_map: BTreeMap<_, _> = props
                 .into_iter()
                 .map(|(k, v)| (k.as_str(), format!("{v:?}")))
                 .collect();
             debug.field("properties", &props_map);
         }
 
-        // Children - Vec already implements Debug properly
+        // Print children (components, electrical checks, testbenches)
         if !self.children.is_empty() {
             debug.field("children", &self.children);
         }
@@ -423,10 +387,6 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
-    pub(crate) fn add_child(&mut self, child: V) {
-        self.children.push(child);
-    }
-
     pub(crate) fn add_property(&mut self, name: String, value: V) {
         self.properties.insert(name, value);
     }
@@ -435,19 +395,19 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         self.inputs.insert(name, value);
     }
 
-    pub fn new(name: String, source_path: &Path, positions: PositionMap) -> Self {
+    pub fn new(path: ModulePath, source_path: &Path, positions: PositionMap) -> Self {
         let source_path = source_path.to_string_lossy().into_owned();
         ModuleValueGen {
-            name,
+            path,
             source_path,
             inputs: SmallMap::new(),
-            children: Vec::new(),
             properties: SmallMap::new(),
             signature: Vec::new(),
             introduced_nets: SmallMap::new(),
             net_name_to_id: SmallMap::new(),
             positions,
             moved_directives: SmallMap::new(),
+            children: Vec::new(),
         }
     }
 
@@ -459,24 +419,17 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &self.positions
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn path(&self) -> &ModulePath {
+        &self.path
     }
+
     pub fn inputs(&self) -> &SmallMap<String, V> {
         &self.inputs
-    }
-    pub fn children(&self) -> &Vec<V> {
-        &self.children
     }
 
     /// Return a reference to the custom property map attached to this Module.
     pub fn properties(&self) -> &SmallMap<String, V> {
         &self.properties
-    }
-
-    /// Set the user-visible name for this Module.
-    pub fn set_name(&mut self, name: String) {
-        self.name = name;
     }
 
     /// Add a parameter to the module's signature with full metadata.
@@ -511,23 +464,47 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &self.signature
     }
 
-    /// Collect all TestBench values from this module tree (recursively)
-    pub fn collect_testbenches(&'v self) -> Vec<&'v crate::lang::test_bench::FrozenTestBenchValue> {
-        let mut benches = Vec::new();
-        for child in &self.children {
-            let child_value = child.to_value();
-            // Check if this child is a TestBench (need to check frozen type)
-            if let Some(tb) =
-                child_value.downcast_ref::<crate::lang::test_bench::FrozenTestBenchValue>()
-            {
-                benches.push(tb);
-            }
-            // Recursively collect from child modules (also check frozen type)
-            if let Some(module) = child_value.downcast_ref::<FrozenModuleValue>() {
-                benches.extend(module.collect_testbenches());
-            }
-        }
-        benches
+    /// Add a child value (component, electrical check, or testbench) to this module
+    pub fn add_child(&mut self, child: V) {
+        self.children.push(child);
+    }
+
+    /// Get all children (components, electrical checks, testbenches) in this module
+    pub fn children(&self) -> &Vec<V> {
+        &self.children
+    }
+
+    /// Get all electrical checks registered in this module (requires downcasting)
+    pub fn electrical_checks<'a>(&'a self) -> impl Iterator<Item = &'a FrozenElectricalCheck> + 'a
+    where
+        V: 'a,
+        'v: 'a,
+    {
+        self.children
+            .iter()
+            .filter_map(move |child| child.downcast_ref::<FrozenElectricalCheck>())
+    }
+
+    /// Get all components created in this module (requires downcasting)
+    pub fn components<'a>(&'a self) -> impl Iterator<Item = &'a FrozenComponentValue> + 'a
+    where
+        V: 'a,
+        'v: 'a,
+    {
+        self.children
+            .iter()
+            .filter_map(move |child| child.downcast_ref::<FrozenComponentValue>())
+    }
+
+    /// Get all testbenches created in this module (requires downcasting)
+    pub fn testbenches<'a>(&'a self) -> impl Iterator<Item = &'a FrozenTestBenchValue> + 'a
+    where
+        V: 'a,
+        'v: 'a,
+    {
+        self.children
+            .iter()
+            .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
     }
 
     /// Record that this module introduced a net with `id` and `local_name`.
@@ -660,30 +637,6 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             }
             self.net_name_to_id = rebuilt_lookup;
         }
-    }
-}
-
-impl FrozenModuleValue {
-    /// Collect all ElectricalCheck values with their defining modules (recursively)
-    pub fn collect_electrical_checks(
-        &self,
-    ) -> Vec<(
-        &crate::lang::electrical_check::FrozenElectricalCheck,
-        &FrozenModuleValue,
-    )> {
-        let mut checks = Vec::new();
-        for child in &self.children {
-            let child_value = child.to_value();
-            if let Some(check) =
-                child_value.downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
-            {
-                checks.push((check, self));
-            }
-            if let Some(module) = child_value.downcast_ref::<FrozenModuleValue>() {
-                checks.extend(module.collect_electrical_checks());
-            }
-        }
-        checks
     }
 }
 
@@ -859,6 +812,7 @@ where
         // Return `None` – in line with other factory functions like Component.
         Ok(Value::new_none())
     }
+
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
         Some(<ModuleLoader as StarlarkValue>::get_type_starlark_repr())
     }
@@ -1321,24 +1275,22 @@ where
 
         // Get the module and collect its components
         let module_ref = downcast_frozen_module!(self.module);
-
-        let components = module_ref.collect_components("");
+        let components = eval.collect_components(module_ref.path());
 
         // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
         let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
 
-        for (comp_path, comp_val) in components.iter() {
-            let comp_val = comp_val.to_value();
-            if let Some(component) = comp_val.downcast_ref::<FrozenComponentValue>() {
-                for (pin_name, net_val) in component.connections().iter() {
-                    if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
-                        let port_tuple =
-                            heap.alloc((heap.alloc_str(comp_path), heap.alloc_str(pin_name)));
-                        net_to_ports
-                            .entry(net.name().to_string())
-                            .or_default()
-                            .push(port_tuple.to_value());
-                    }
+        for (comp_path, component) in components.iter() {
+            for (pin_name, net_val) in component.connections().iter() {
+                if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
+                    let port_tuple = heap.alloc((
+                        heap.alloc_str(comp_path.to_string().as_str()),
+                        heap.alloc_str(pin_name),
+                    ));
+                    net_to_ports
+                        .entry(net.name().to_string())
+                        .or_default()
+                        .push(port_tuple.to_value());
                 }
             }
         }
@@ -1403,13 +1355,19 @@ where
 
         // Get the module and collect its components
         let module_ref = downcast_frozen_module!(self.module);
-
-        let components = module_ref.collect_components("");
+        let base_path = module_ref.path();
+        let components = eval.collect_components(base_path);
 
         Ok(heap.alloc(AllocDict(
             components
                 .iter()
-                .map(|(path, comp_val)| (heap.alloc_str(path).to_value(), comp_val.to_value()))
+                .map(|(path, comp_val)| {
+                    let key = path.to_rel_string(base_path).unwrap_or_default();
+                    (
+                        heap.alloc_str(&key).to_value(),
+                        heap.alloc_complex((*comp_val).clone()).to_value(),
+                    )
+                })
                 .collect::<Vec<_>>(),
         )))
     }
@@ -1443,32 +1401,28 @@ where
 
         // Get the module and collect its components
         let module_ref = downcast_frozen_module!(self.module);
-
-        let components = module_ref.collect_components("");
+        let components = eval.collect_components(module_ref.path());
 
         // Collect all component connections to build nets using proper types
-        use crate::graph::{ComponentPath, PortPath};
+        use crate::graph::PortPath;
         let mut net_to_ports: HashMap<String, Vec<PortPath>> = HashMap::new();
-        let mut component_pins: HashMap<ComponentPath, Vec<String>> = HashMap::new();
+        let mut component_pins: HashMap<ModulePath, Vec<String>> = HashMap::new();
 
-        for (comp_path, comp_val) in components.iter() {
-            let comp_val = comp_val.to_value();
-            if let Some(component) = comp_val.downcast_ref::<crate::FrozenComponentValue>() {
-                let mut pins = Vec::new();
-                for (pin_name, net_val) in component.connections().iter() {
-                    if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
-                        let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
-                        pins.push(pin_name.clone());
+        for (comp_path, component) in components.iter() {
+            let mut pins = Vec::new();
+            for (pin_name, net_val) in component.connections().iter() {
+                if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
+                    let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
+                    pins.push(pin_name.clone());
 
-                        net_to_ports
-                            .entry(net.name().to_string())
-                            .or_default()
-                            .push(port_path);
-                    }
+                    net_to_ports
+                        .entry(net.name().to_string())
+                        .or_default()
+                        .push(port_path);
                 }
-                if !pins.is_empty() {
-                    component_pins.insert(comp_path.clone().into(), pins);
-                }
+            }
+            if !pins.is_empty() {
+                component_pins.insert(comp_path.clone(), pins);
             }
         }
 
@@ -1548,7 +1502,7 @@ where
             }
         }
         let loader = ModuleLoader {
-            name: output.sch_module.name.clone(),
+            name: output.sch_module.path.name().clone(),
             source_path: output.sch_module.source_path.clone(),
             params,
             param_types,

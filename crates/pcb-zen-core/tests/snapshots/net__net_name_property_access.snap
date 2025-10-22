@@ -4,8 +4,10 @@ expression: output
 ---
 net1.name: POWER_3V3
 net2.name: GND
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 []

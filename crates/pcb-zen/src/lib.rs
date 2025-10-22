@@ -12,7 +12,6 @@ use std::sync::Arc;
 use crate::load::DefaultRemoteFetcher;
 use pcb_sch::Schematic;
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
@@ -67,7 +66,6 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
 
     EvalContext::new(load_resolver)
         .set_source_path(abs_path)
-        .set_module_name("<root>".to_string())
         .eval()
 }
 
@@ -84,7 +82,7 @@ pub fn run(file: &Path, cfg: EvalConfig) -> WithDiagnostics<Schematic> {
     }
 
     let eval_output = eval_result.output.unwrap();
-    let mut schematic_result = eval_output.sch_module.to_schematic_with_diagnostics();
+    let mut schematic_result = eval_output.to_schematic_with_diagnostics();
     // Merge diagnostics from eval and schematic conversion
     schematic_result.diagnostics.extend(eval_result.diagnostics);
     schematic_result

@@ -4,8 +4,10 @@ expression: output
 ---
 Data net: Net(name: "DATA", id: <ID>)
 Data net symbol: Symbol { name: "NB3N551DG", pins: { "1": "ICLK", "2": "Q1", "3": "Q2", "4": "Q3", "5": "Q4", "6": "GND", "7": "VDD", "8": "OE" } }
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 []

@@ -4,8 +4,10 @@ expression: output
 ---
 vcc.voltage: 5V
 vdd.voltage: 3.3V
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 []

@@ -30,7 +30,6 @@ use std::{
 };
 
 use crate::load::DefaultRemoteFetcher;
-use pcb_zen_core::convert::ToSchematic;
 
 // JSON-RPC 2.0 error codes
 const INVALID_PARAMS: i32 = -32602;
@@ -250,7 +249,7 @@ impl LspContext for LspEvalContext {
                 // Parse and analyze the file with the load resolver set
                 let mut result = self
                     .inner
-                    .child_context()
+                    .child_context(None)
                     .set_load_resolver(load_resolver)
                     .parse_and_analyze_file(path.clone(), content.clone());
 
@@ -584,18 +583,15 @@ impl LspContext for LspEvalContext {
 
                             let eval_result = if let Some(contents) = maybe_contents {
                                 ctx.set_source_path(path_buf.clone())
-                                    .set_module_name("<root>".to_string())
                                     .set_source_contents(contents)
                                     .eval()
                             } else {
-                                ctx.set_source_path(path_buf.clone())
-                                    .set_module_name("<root>".to_string())
-                                    .eval()
+                                ctx.set_source_path(path_buf.clone()).eval()
                             };
 
                             eval_result
                                 .output
-                                .and_then(|fmv| fmv.sch_module.to_schematic().ok())
+                                .and_then(|fmv| fmv.to_schematic().ok())
                                 .and_then(|schematic| serde_json::to_value(&schematic).ok())
                         }
                         _ => None,
@@ -888,8 +884,8 @@ impl LspEvalContext {
         // Create evaluation context
         let load_resolver = create_standard_load_resolver(self.file_provider.clone(), path_buf);
         let mut ctx = EvalContext::new(load_resolver)
-            .set_module_name(module_name)
-            .set_source_path(path_buf.clone());
+            .set_source_path(path_buf.clone())
+            .child_context(Some(&module_name));
 
         ctx = if let Some(contents) = maybe_contents {
             ctx.set_source_contents(contents)
@@ -900,7 +896,7 @@ impl LspEvalContext {
         // Convert JSON inputs directly to heap values (no serialization!)
         if !params.inputs.is_empty() {
             let json_map = starlark::collections::SmallMap::from_iter(params.inputs);
-            ctx.set_json_inputs(json_map)?;
+            ctx.set_json_inputs(json_map);
         }
 
         // Evaluate the module
@@ -916,7 +912,7 @@ impl LspEvalContext {
         let schematic = eval_result
             .output
             .as_ref()
-            .and_then(|output| output.sch_module.to_schematic().ok())
+            .and_then(|output| output.to_schematic().ok())
             .and_then(|schematic| serde_json::to_value(&schematic).ok());
 
         // Convert diagnostics

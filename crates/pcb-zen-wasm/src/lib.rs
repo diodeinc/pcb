@@ -1,6 +1,5 @@
 use log::debug;
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::convert::ToSchematic;
 use pcb_zen_core::{EvalContext, FileProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -484,13 +483,12 @@ impl Module {
         let main_path = PathBuf::from(&self.main_file);
         let mut ctx = EvalContext::new(self.load_resolver.clone())
             .set_source_path(main_path)
-            .set_module_name(self.module_name.clone());
+            .child_context(Some(&self.module_name));
 
         // Convert JSON inputs directly to heap values (no serialization!)
         if !inputs.is_empty() {
             let json_map = starlark::collections::SmallMap::from_iter(inputs);
-            ctx.set_json_inputs(json_map)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            ctx.set_json_inputs(json_map);
         }
 
         // Evaluate the module
@@ -500,7 +498,7 @@ impl Module {
         let schematic_opt = result
             .output
             .as_ref()
-            .and_then(|output| output.sch_module.to_schematic().ok());
+            .and_then(|output| output.to_schematic().ok());
 
         let parameters = result
             .output

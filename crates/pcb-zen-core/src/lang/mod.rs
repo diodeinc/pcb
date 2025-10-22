@@ -1,6 +1,6 @@
 pub mod builtin;
 pub mod component;
-pub(crate) mod context;
+pub mod context;
 pub mod electrical_check;
 pub mod r#enum;
 pub mod eval;

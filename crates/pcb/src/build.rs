@@ -3,7 +3,6 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
-use pcb_zen_core::convert::ToSchematic;
 use std::path::{Path, PathBuf};
 
 use crate::file_walker;
@@ -84,7 +83,7 @@ pub fn build(
     let mut diagnostics = eval_result.diagnostics;
 
     let output = if let Some(eval_output) = eval_result.output {
-        for (check, defining_module) in eval_output.sch_module.collect_electrical_checks() {
+        for (check, defining_module) in eval_output.collect_electrical_checks() {
             diagnostics
                 .diagnostics
                 .push(execute_electrical_check(check, defining_module));
@@ -96,7 +95,7 @@ pub fn build(
 
     // Convert to schematic and merge diagnostics
     let schematic = output.and_then(|eval_output| {
-        let schematic_result = eval_output.sch_module.to_schematic_with_diagnostics();
+        let schematic_result = eval_output.to_schematic_with_diagnostics();
         diagnostics
             .diagnostics
             .extend(schematic_result.diagnostics.diagnostics);
