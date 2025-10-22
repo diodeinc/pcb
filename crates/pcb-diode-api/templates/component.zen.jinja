@@ -17,6 +17,9 @@ Pins = struct(
 Component(
     name = "{{ component_name }}",
     mpn = "{{ mpn }}",
+{%- if manufacturer %}
+    manufacturer = "{{ manufacturer }}",
+{%- endif %}
 {%- if description %}
     description = "{{ description }}",
 {%- endif %}
