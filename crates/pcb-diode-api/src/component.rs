@@ -25,11 +25,13 @@ pub struct ModelAvailability {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComponentSearchResult {
     pub part_number: String,
+    pub manufacturer: Option<String>,
     pub description: Option<String>,
     pub package_category: Option<String>,
     pub component_id: String,
     pub datasheets: Vec<String>,
     pub model_availability: ModelAvailability,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -387,17 +389,6 @@ pub fn add_component_to_workspace(
     part_number: &str,
     workspace_root: &std::path::Path,
 ) -> Result<AddComponentResult> {
-    let sanitized_path = sanitize_mpn_for_path(part_number);
-    let component_dir = workspace_root.join("components").join(&sanitized_path);
-    let component_file = component_dir.join(format!("{}.zen", &sanitized_path));
-
-    if component_file.exists() {
-        return Ok(AddComponentResult {
-            component_path: component_file,
-            already_exists: true,
-        });
-    }
-
     // Show progress during API call
     let spinner = ProgressBar::new_spinner();
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -405,6 +396,27 @@ pub fn add_component_to_workspace(
 
     let download = download_component(auth_token, component_id)?;
     spinner.finish_and_clear();
+
+    // Build path: components/<manufacturer>/<part_number>/<part_number>.zen
+    let sanitized_mfr = download
+        .metadata
+        .manufacturer
+        .as_deref()
+        .map(sanitize_mpn_for_path)
+        .unwrap_or_else(|| "unknown".to_string());
+    let sanitized_mpn = sanitize_mpn_for_path(part_number);
+    let component_dir = workspace_root
+        .join("components")
+        .join(&sanitized_mfr)
+        .join(&sanitized_mpn);
+    let component_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+
+    if component_file.exists() {
+        return Ok(AddComponentResult {
+            component_path: component_file,
+            already_exists: true,
+        });
+    }
 
     fs::create_dir_all(&component_dir)?;
 
@@ -637,6 +649,7 @@ pub fn add_component_to_workspace(
                 symbol_filename,
                 download.metadata.footprint_filename.as_deref(),
                 download.metadata.datasheet_filename.as_deref(),
+                download.metadata.manufacturer.as_deref(),
             )?;
 
             fs::write(&component_file, content)?;
@@ -732,6 +745,7 @@ fn generate_zen_file(
     symbol_filename: &str,
     footprint_filename: Option<&str>,
     datasheet_filename: Option<&str>,
+    manufacturer: Option<&str>,
 ) -> Result<String> {
     // Group pins by sanitized name to handle duplicates
     let mut pin_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -772,6 +786,7 @@ fn generate_zen_file(
         .render(serde_json::json!({
             "component_name": component_name,
             "mpn": mpn,
+            "manufacturer": manufacturer,
             "sym_path": symbol_filename,
             "footprint_path": footprint_filename.unwrap_or(&format!("{}.kicad_mod", mpn)),
             "pin_groups": pin_groups_vec,
@@ -815,51 +830,123 @@ fn truncate_text(text: &str, max_width: usize) -> String {
     result + "..."
 }
 
-fn format_search_result(result: &ComponentSearchResult) -> String {
-    let part_width = 20;
-    let pkg_width = 12;
-    let models_width = 14;
-    let desc_width = get_terminal_width().saturating_sub(part_width + pkg_width + models_width + 3);
+struct ColumnWidths {
+    src: usize,
+    part: usize,
+    mfr: usize,
+    pkg: usize,
+    #[allow(dead_code)] // Fixed width, not used in formatting but kept for completeness
+    models: usize,
+    desc: usize,
+}
 
-    let part = format!(
-        "{:<part_width$}",
-        truncate_text(&result.part_number, part_width)
-    )
-    .bold();
+/// Helper to check if a package should be displayed
+fn is_displayable_package(pkg: &str) -> bool {
+    pkg.len() <= 15 && !pkg.contains(' ') && pkg != "Other"
+}
 
-    let pkg_text = result
-        .package_category
-        .as_ref()
-        .filter(|p| p.len() <= 10 && !p.contains(' '))
-        .map(|p| p.as_str())
-        .unwrap_or("");
-    let pkg_truncated = truncate_text(pkg_text, pkg_width);
-    let pkg = format!("{:<pkg_width$}", pkg_truncated).yellow();
+/// Helper to get source abbreviation: "C" for CSE, "L" for LCSC
+fn source_abbrev(source: Option<&str>) -> &'static str {
+    source
+        .and_then(|s| match s.to_lowercase().as_str() {
+            s if s.contains("cse") => Some("C"),
+            s if s.contains("lcsc") => Some("L"),
+            _ => None,
+        })
+        .unwrap_or("?")
+}
 
-    let models = format!(
-        "[2D {}] [3D {}]",
-        if result.model_availability.ecad_model {
-            "✓".green()
-        } else {
-            "✗".red()
-        },
-        if result.model_availability.step_model {
-            "✓".green()
-        } else {
-            "✗".red()
-        }
-    );
+/// Helper to format a column with padding
+fn format_column(text: &str, width: usize) -> String {
+    format!("{:<width$}", truncate_text(text, width), width = width)
+}
 
-    let desc = result
-        .description
-        .as_deref()
-        .unwrap_or("")
+/// Helper to get check/cross icon
+fn check_icon(available: bool) -> colored::ColoredString {
+    if available {
+        "✓".green()
+    } else {
+        "✗".red()
+    }
+}
+
+/// Helper to calculate max width for a column with min/max bounds
+fn calc_col_width<'a, I>(items: I, min: usize, max: usize) -> usize
+where
+    I: Iterator<Item = &'a str>,
+{
+    items
+        .map(|s| s.width())
+        .max()
+        .unwrap_or(min)
+        .max(min)
+        .min(max)
+}
+
+/// Helper to clean description text (ASCII + whitespace only)
+fn clean_description(desc: Option<&str>) -> String {
+    desc.unwrap_or("")
         .chars()
         .filter(|c| c.is_ascii() || c.is_whitespace())
-        .collect::<String>();
-    let desc_truncated = truncate_text(&desc, desc_width).dimmed();
+        .collect()
+}
 
-    format!("{} {} {} {}", part, pkg, models, desc_truncated)
+fn calculate_column_widths(results: &[ComponentSearchResult]) -> ColumnWidths {
+    let terminal_width = get_terminal_width().saturating_sub(2);
+
+    let part = calc_col_width(results.iter().map(|r| r.part_number.as_str()), 10, 30);
+    let mfr = calc_col_width(
+        results.iter().filter_map(|r| r.manufacturer.as_deref()),
+        3,
+        20,
+    );
+    let pkg = calc_col_width(
+        results
+            .iter()
+            .filter_map(|r| r.package_category.as_deref())
+            .filter(|p| is_displayable_package(p)),
+        3,
+        12,
+    );
+
+    let used = 1 + part + mfr + pkg + 14 + 10; // src(1) + part + mfr + pkg + models(14) + spacing(10)
+    let desc = terminal_width.saturating_sub(used).max(20);
+
+    ColumnWidths {
+        src: 1,
+        part,
+        mfr,
+        pkg,
+        models: 14,
+        desc,
+    }
+}
+
+fn format_search_result(result: &ComponentSearchResult, widths: &ColumnWidths) -> String {
+    let src = format_column(source_abbrev(result.source.as_deref()), widths.src).bright_black();
+    let part = format_column(&result.part_number, widths.part).bold();
+    let mfr = format_column(result.manufacturer.as_deref().unwrap_or(""), widths.mfr).cyan();
+    let pkg = format_column(
+        result
+            .package_category
+            .as_deref()
+            .filter(|p| is_displayable_package(p))
+            .unwrap_or(""),
+        widths.pkg,
+    )
+    .yellow();
+    let models = format!(
+        "[2D {}] [3D {}]",
+        check_icon(result.model_availability.ecad_model),
+        check_icon(result.model_availability.step_model)
+    );
+    let desc = format_column(
+        &clean_description(result.description.as_deref()),
+        widths.desc,
+    )
+    .dimmed();
+
+    format!("{}  {}  {}  {}  {}  {}", src, part, mfr, pkg, models, desc)
 }
 
 pub fn search_interactive(
@@ -885,7 +972,11 @@ pub fn search_interactive(
         filtered_results.len()
     );
 
-    let items: Vec<String> = filtered_results.iter().map(format_search_result).collect();
+    let widths = calculate_column_widths(&filtered_results);
+    let items: Vec<String> = filtered_results
+        .iter()
+        .map(|r| format_search_result(r, &widths))
+        .collect();
     let page_size = get_terminal_height().saturating_sub(5).max(5);
 
     let selection = Select::new(
@@ -898,7 +989,7 @@ pub fn search_interactive(
 
     let selected_index = filtered_results
         .iter()
-        .position(|r| format_search_result(r) == selection)
+        .position(|r| format_search_result(r, &widths) == selection)
         .context("Selected component not found")?;
     let selected_component = &filtered_results[selected_index];
     println!(
@@ -933,12 +1024,14 @@ pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
         .map(|r| {
             serde_json::json!({
                 "part_number": r.part_number,
+                "manufacturer": r.manufacturer,
                 "description": r.description,
                 "package_category": r.package_category,
                 "component_id": r.component_id,
                 "has_2d_model": r.model_availability.ecad_model,
                 "has_3d_model": r.model_availability.step_model,
                 "datasheets": r.datasheets,
+                "source": r.source,
             })
         })
         .collect();
