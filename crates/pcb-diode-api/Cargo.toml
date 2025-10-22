@@ -4,6 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 description = "Diode API client for authentication, component search, and PDF scanning"
 
+[dev-dependencies]
+insta = { workspace = true }
+
 [dependencies]
 anyhow = { workspace = true }
 reqwest = { workspace = true }

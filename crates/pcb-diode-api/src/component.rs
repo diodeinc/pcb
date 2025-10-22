@@ -227,6 +227,29 @@ fn upgrade_footprint(footprint_path: &Path) -> Result<()> {
         .run()
 }
 
+/// Replace the model path in existing model blocks, preserving offset/scale/rotate.
+/// Returns (new_text, number_of_replacements).
+///
+/// This function ONLY replaces the filename/path in `(model "path")`, leaving any
+/// existing offset/scale/rotate parameters intact. This preserves manually-tuned
+/// transformations that users may have configured.
+fn replace_model_path(text: &str, new_path: &str) -> (String, usize) {
+    use regex::Regex;
+
+    // Regex to match: (whitespace)(model )(quoted or unquoted path)
+    // Captures group 1: the prefix including "(model "
+    // Matches but doesn't capture: the old path
+    let model_pattern = Regex::new(r#"(?m)(^\s*\(model\s+)(?:"[^"]+"|[^\s)]+)"#).unwrap();
+
+    let mut count = 0;
+    let result = model_pattern.replace_all(text, |caps: &regex::Captures| {
+        count += 1;
+        format!("{}\"{}\"", &caps[1], new_path)
+    });
+
+    (result.to_string(), count)
+}
+
 /// Embed a STEP file into a KiCad footprint using the KiCad 8/9 embedded files format.
 ///
 /// This function:
@@ -297,21 +320,22 @@ fn embed_step_in_footprint(
 
     let mut text = footprint_content;
 
-    // Remove existing model blocks
-    let model_pattern = regex::RegexBuilder::new(r#"^\s*\(model\s+.*?^\s*\)"#)
-        .multi_line(true)
-        .dot_matches_new_line(true)
-        .build()?;
-    text = model_pattern.replace(&text, "").to_string();
+    // Try to replace the path in existing model blocks, preserving offset/scale/rotate
+    let (new_text, num_replaced) = replace_model_path(&text, &format!("kicad-embed://{filename}"));
+    text = new_text;
 
-    // Insert embedded_files then model block before final ')'
+    // If no model block was found, add a new one with default transforms
+    if num_replaced == 0 {
+        if let Some(pos) = text.rfind(')') {
+            text.insert_str(pos, &model_block);
+        }
+    }
+
+    // Add embedded_files block if not already present
     if !text.contains("(embedded_files") {
         if let Some(pos) = text.rfind(')') {
             text.insert_str(pos, &embed_block);
         }
-    }
-    if let Some(pos) = text.rfind(')') {
-        text.insert_str(pos, &model_block);
     }
 
     Ok(text)
@@ -1263,5 +1287,68 @@ mod tests {
         assert_eq!(sanitize_mpn_for_path("AbCdEf"), "AbCdEf");
         assert_eq!(sanitize_mpn_for_path("lowercase"), "lowercase");
         assert_eq!(sanitize_mpn_for_path("UPPERCASE"), "UPPERCASE");
+    }
+
+    #[test]
+    fn test_embed_step_in_footprint_basic() {
+        // Test adding a model to a footprint with no existing model
+        let footprint = r#"(footprint "Test"
+	(layer "F.Cu")
+	(pad "1" smd rect
+		(at 0 0)
+		(size 1 1)
+		(layers "F.Cu")
+	)
+)"#;
+        let step_data = b"STEP DATA HERE".to_vec();
+        let result =
+            embed_step_in_footprint(footprint.to_string(), step_data, "test.step").unwrap();
+
+        // Verify balanced parentheses
+        assert_eq!(
+            result.chars().filter(|&c| c == '(').count(),
+            result.chars().filter(|&c| c == ')').count(),
+        );
+
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_embed_step_in_footprint_preserves_transforms() {
+        // Test that we preserve existing offset/scale/rotate when replacing the model path
+        let footprint = r#"(footprint "Test"
+	(layer "F.Cu")
+	(pad "1" smd rect
+		(at 0 0)
+		(size 1 1)
+		(layers "F.Cu")
+	)
+	(model "old-model.step"
+		(offset
+			(xyz 1 2 3)
+		)
+		(scale
+			(xyz 2 2 2)
+		)
+		(rotate
+			(xyz 45 90 180)
+		)
+	)
+)"#;
+        let step_data = b"NEW STEP DATA".to_vec();
+        let result = embed_step_in_footprint(footprint.to_string(), step_data, "new.step").unwrap();
+
+        // Verify the transforms were preserved
+        assert!(result.contains("(xyz 1 2 3)"));
+        assert!(result.contains("(xyz 2 2 2)"));
+        assert!(result.contains("(xyz 45 90 180)"));
+
+        // Verify balanced parentheses
+        assert_eq!(
+            result.chars().filter(|&c| c == '(').count(),
+            result.chars().filter(|&c| c == ')').count(),
+        );
+
+        insta::assert_snapshot!(result);
     }
 }

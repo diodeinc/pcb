@@ -2942,6 +2942,7 @@ dependencies = [
  "fslock",
  "indicatif",
  "inquire",
+ "insta",
  "minijinja",
  "open",
  "pcb-eda",
