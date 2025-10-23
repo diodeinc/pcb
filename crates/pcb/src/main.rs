@@ -117,8 +117,8 @@ fn main() -> anyhow::Result<()> {
     };
     env_logger::Builder::from_env(env).init();
 
-    // Skip auto-update in CI environments
-    if std::env::var("CI").is_err() {
+    // Skip auto-update check in CI environments or when running the update command
+    if std::env::var("CI").is_err() && !is_update_command(&cli.command) {
         check_and_update();
     }
 
@@ -184,6 +184,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+fn is_update_command(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::External(args) if args.first().map(|s| s.to_string_lossy() == "update").unwrap_or(false)
+    )
 }
 
 fn check_and_update() {
