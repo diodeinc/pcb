@@ -5,6 +5,7 @@ use deunicode::deunicode;
 use indicatif::ProgressBar;
 use inquire::Select;
 use minijinja::Environment;
+use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -227,6 +228,80 @@ fn upgrade_footprint(footprint_path: &Path) -> Result<()> {
         .run()
 }
 
+/// Replace the model path in existing model blocks, preserving offset/scale/rotate.
+/// Returns (new_text, number_of_replacements).
+///
+/// This function ONLY replaces the filename/path in `(model "path")`, leaving any
+/// existing offset/scale/rotate parameters intact. This preserves manually-tuned
+/// transformations that users may have configured.
+fn replace_model_path(text: &str, new_path: &str) -> (String, usize) {
+    use regex::Regex;
+
+    // Regex to match: (whitespace)(model )(quoted or unquoted path)
+    // Captures group 1: the prefix including "(model "
+    // Matches but doesn't capture: the old path
+    let model_pattern = Regex::new(r#"(?m)(^\s*\(model\s+)(?:"[^"]+"|[^\s)]+)"#).unwrap();
+
+    let mut count = 0;
+    let result = model_pattern.replace_all(text, |caps: &regex::Captures| {
+        count += 1;
+        format!("{}\"{}\"", &caps[1], new_path)
+    });
+
+    (result.to_string(), count)
+}
+
+/// Find and extract an S-expression block starting with a given pattern.
+/// Returns Some((extracted_text, remaining_text)) or None if not found.
+///
+/// This function:
+/// 1. Finds the pattern in the text
+/// 2. Captures leading whitespace from the start of the line
+/// 3. Matches balanced parentheses to find the complete block
+/// 4. Includes trailing newline if present
+/// 5. Returns both the extracted block and the text with the block removed
+fn extract_sexp_block(text: &str, pattern: &str) -> Option<(String, String)> {
+    // Use regex to find the pattern at the start of a line (with optional leading whitespace)
+    let pattern_regex = Regex::new(&format!(r"(?m)^(\s*)({})", regex::escape(pattern))).unwrap();
+    let captures = pattern_regex.captures(text)?;
+    let line_start = captures.get(1)?.start();
+    let block_start = captures.get(2)?.start();
+
+    // Count parentheses to find the matching closing paren
+    let mut depth = 0;
+    let mut end_pos = block_start;
+
+    for (i, ch) in text[block_start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end_pos = block_start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if end_pos <= block_start || depth != 0 {
+        return None;
+    }
+
+    // Include trailing newline if present
+    let extract_end = if text[end_pos..].starts_with('\n') {
+        end_pos + 1
+    } else {
+        end_pos
+    };
+
+    let extracted = text[line_start..extract_end].to_string();
+    let remaining = text[..line_start].to_string() + &text[extract_end..];
+
+    Some((extracted, remaining))
+}
+
 /// Embed a STEP file into a KiCad footprint using the KiCad 8/9 embedded files format.
 ///
 /// This function:
@@ -282,7 +357,7 @@ fn embed_step_in_footprint(
     );
 
     let model_block = format!(
-        "\n{indent}(model \"kicad-embed://{filename}\"\n\
+        "{indent}(model \"kicad-embed://{filename}\"\n\
          {indent}{indent}(offset\n\
          {indent}{indent}{indent}(xyz 0 0 0)\n\
          {indent}{indent})\n\
@@ -297,21 +372,39 @@ fn embed_step_in_footprint(
 
     let mut text = footprint_content;
 
-    // Remove existing model blocks
-    let model_pattern = regex::RegexBuilder::new(r#"^\s*\(model\s+.*?^\s*\)"#)
-        .multi_line(true)
-        .dot_matches_new_line(true)
-        .build()?;
-    text = model_pattern.replace(&text, "").to_string();
+    // Try to replace the path in existing model blocks, preserving offset/scale/rotate
+    let (new_text, num_replaced) = replace_model_path(&text, &format!("kicad-embed://{filename}"));
+    text = new_text;
 
-    // Insert embedded_files then model block before final ')'
+    // If a model block exists, we need to extract it and reinsert it at the end
+    // (after embedded_files) to maintain the correct order: embedded_files → model
+    let extracted_model = if num_replaced > 0 {
+        extract_sexp_block(&text, "(model ").map(|(model_text, remaining_text)| {
+            text = remaining_text;
+            model_text
+        })
+    } else {
+        None
+    };
+
+    // Add embedded_files block if not already present
     if !text.contains("(embedded_files") {
         if let Some(pos) = text.rfind(')') {
             text.insert_str(pos, &embed_block);
         }
     }
-    if let Some(pos) = text.rfind(')') {
-        text.insert_str(pos, &model_block);
+
+    // Add or re-insert model block at the end (after embedded_files)
+    if let Some(existing_model) = extracted_model {
+        // Re-insert the extracted model block
+        if let Some(pos) = text.rfind(')') {
+            text.insert_str(pos, &existing_model);
+        }
+    } else if num_replaced == 0 {
+        // No existing model block, add a new one with default transforms
+        if let Some(pos) = text.rfind(')') {
+            text.insert_str(pos, &model_block);
+        }
     }
 
     Ok(text)
@@ -1263,5 +1356,68 @@ mod tests {
         assert_eq!(sanitize_mpn_for_path("AbCdEf"), "AbCdEf");
         assert_eq!(sanitize_mpn_for_path("lowercase"), "lowercase");
         assert_eq!(sanitize_mpn_for_path("UPPERCASE"), "UPPERCASE");
+    }
+
+    #[test]
+    fn test_embed_step_in_footprint_basic() {
+        // Test adding a model to a footprint with no existing model
+        let footprint = r#"(footprint "Test"
+	(layer "F.Cu")
+	(pad "1" smd rect
+		(at 0 0)
+		(size 1 1)
+		(layers "F.Cu")
+	)
+)"#;
+        let step_data = b"STEP DATA HERE".to_vec();
+        let result =
+            embed_step_in_footprint(footprint.to_string(), step_data, "test.step").unwrap();
+
+        // Verify balanced parentheses
+        assert_eq!(
+            result.chars().filter(|&c| c == '(').count(),
+            result.chars().filter(|&c| c == ')').count(),
+        );
+
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_embed_step_in_footprint_preserves_transforms() {
+        // Test that we preserve existing offset/scale/rotate when replacing the model path
+        let footprint = r#"(footprint "Test"
+	(layer "F.Cu")
+	(pad "1" smd rect
+		(at 0 0)
+		(size 1 1)
+		(layers "F.Cu")
+	)
+	(model "old-model.step"
+		(offset
+			(xyz 1 2 3)
+		)
+		(scale
+			(xyz 2 2 2)
+		)
+		(rotate
+			(xyz 45 90 180)
+		)
+	)
+)"#;
+        let step_data = b"NEW STEP DATA".to_vec();
+        let result = embed_step_in_footprint(footprint.to_string(), step_data, "new.step").unwrap();
+
+        // Verify the transforms were preserved
+        assert!(result.contains("(xyz 1 2 3)"));
+        assert!(result.contains("(xyz 2 2 2)"));
+        assert!(result.contains("(xyz 45 90 180)"));
+
+        // Verify balanced parentheses
+        assert_eq!(
+            result.chars().filter(|&c| c == '(').count(),
+            result.chars().filter(|&c| c == ')').count(),
+        );
+
+        insta::assert_snapshot!(result);
     }
 }
