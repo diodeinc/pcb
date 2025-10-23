@@ -1,0 +1,171 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Content roleRef="Owner">
+    <FunctionMode mode="BOM"/>
+    <StepRef name="testcase10-RevC"/>
+    <BomRef name="BOM_testcase10-RevC"/>
+    <DictionaryColor>
+      </DictionaryColor>
+    <DictionaryLineDesc units="INCH">
+      <EntryLineDesc id="ROUND_0">
+        <LineDesc lineEnd="ROUND" lineWidth="0.0"/>
+        </EntryLineDesc>
+      </DictionaryLineDesc>
+    <DictionaryFillDesc units="INCH">
+      <EntryFillDesc id="SOLID_FILL">
+        <FillDesc fillProperty="FILL"/>
+        </EntryFillDesc>
+      <EntryFillDesc id="HOLLOW">
+        <FillDesc fillProperty="HOLLOW"/>
+        </EntryFillDesc>
+      </DictionaryFillDesc>
+    <DictionaryStandard units="INCH">
+      </DictionaryStandard>
+    <DictionaryUser units="INCH">
+      </DictionaryUser>
+    </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="UNKNOWN"/>
+    <Person name="eba" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+    </LogisticHeader>
+  <HistoryRecord number="1" origination="2021-08-02T14:38:55" software="allegro_17.4S019(7/14/2021)" lastChange="2021-08-02T14:38:28">
+    <FileRevision fileRevisionId="1" comment="">
+      <SoftwarePackage name="Allegro" revision="allegro_17.4S019(7/14/2021)" vendor="Cadence">
+        <Certification certificationStatus="CERTIFIED"/>
+        </SoftwarePackage>
+      </FileRevision>
+    </HistoryRecord>
+  <Bom name="BOM_testcase10-RevC">
+    <BomHeader assembly="testcase10-RevC" revision="1.0">
+      <StepRef name="testcase10-RevC"/>
+      </BomHeader>
+    <BomItem OEMDesignNumberRef="BGA_25X25_1MM" quantity="1" pinCount="576" category="ELECTRICAL">
+      <RefDes name="U1" packageRef="BGA_25X25_1MM" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="BGA_25X25_1MM"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="CAPACITORS_MASTER-4.7UF" quantity="3" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C12" packageRef="SMC0805" populate="true" layerRef="TOP"/>
+      <RefDes name="C11" packageRef="SMC0805" populate="true" layerRef="TOP"/>
+      <RefDes name="C10" packageRef="SMC0805" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="CAPACITORS_MASTER-4.7UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="VALUE" textualCharacteristicValue="4.7UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="TYPE" textualCharacteristicValue="X5R"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT_PART" textualCharacteristicValue="CAPACITORS_MASTER-4.7UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PART_TYPE" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="CAPACITORS_MASTER-10NF" quantity="29" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C52" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C51" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C50" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C49" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C36" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C35" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C34" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C33" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C13" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C9" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C8" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C7" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C6" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C5" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C26" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C25" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C24" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C23" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C22" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C21" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C20" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C19" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C18" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C17" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C16" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C15" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C14" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C27" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <RefDes name="C28" packageRef="SMC0402" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="CAPACITORS_MASTER-10NF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="VALUE" textualCharacteristicValue="10NF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="TYPE" textualCharacteristicValue="X7R"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT_PART" textualCharacteristicValue="CAPACITORS_MASTER-10NF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PART_TYPE" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="CAPACITORS_MASTER-100NF" quantity="12" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C48" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C47" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C46" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C45" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C32" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C31" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C30" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C29" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C4" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C3" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C2" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C1" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="CAPACITORS_MASTER-100NF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="VALUE" textualCharacteristicValue="100NF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="TYPE" textualCharacteristicValue="X7R"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT_PART" textualCharacteristicValue="CAPACITORS_MASTER-100NF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PART_TYPE" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="CAPACITORS_MASTER-1.0UF" quantity="8" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C44" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C43" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C42" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C41" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C40" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C39" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C38" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C37" packageRef="SMC0402" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="CAPACITORS_MASTER-1.0UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="VALUE" textualCharacteristicValue="1.0UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="TYPE" textualCharacteristicValue="X5R"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT_PART" textualCharacteristicValue="CAPACITORS_MASTER-1.0UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PPT" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="PARENT_PART_TYPE" textualCharacteristicValue="CAPACITORS_MASTER"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="GGGG" quantity="2" pinCount="484" category="ELECTRICAL">
+      <RefDes name="U3" packageRef="BGA_484" populate="true" layerRef="TOP"/>
+      <RefDes name="U2" packageRef="BGA_484" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="GGGG"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="PCIEX8_CONN" quantity="1" pinCount="100" category="ELECTRICAL">
+      <RefDes name="J1" packageRef="PCIE_CONN" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="PCIEX8_CONN"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IO"/>
+        </Characteristics>
+      </BomItem>
+    </Bom>
+  <Ecad name="Design">
+    <CadHeader units="INCH">
+      </CadHeader>
+    <CadData>
+      <Step name="testcase10-RevC">
+        <Datum x="0.0" y="0.0"/>
+        </Step>
+      </CadData>
+    </Ecad>
+  </IPC-2581>

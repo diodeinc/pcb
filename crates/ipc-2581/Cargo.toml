@@ -7,3 +7,13 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
+roxmltree = "0.20"
+bumpalo = "3.16"
+md-5 = "0.10"
+base64 = "0.22"
+thiserror = "2.0"
+rustc-hash = "2.1"
+phf = { version = "0.11", features = ["macros"] }
+
+[dev-dependencies]
+walkdir = "2.5"

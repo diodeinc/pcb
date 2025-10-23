@@ -1,0 +1,373 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Content roleRef="Owner">
+    <FunctionMode mode="STENCIL"/>
+    <StepRef name="testcase11-rdgflx-RevC"/>
+    <DictionaryColor>
+      </DictionaryColor>
+    <DictionaryLineDesc units="INCH">
+      <EntryLineDesc id="ROUND_0">
+        <LineDesc lineEnd="ROUND" lineWidth="0.0"/>
+        </EntryLineDesc>
+      </DictionaryLineDesc>
+    <DictionaryFillDesc units="INCH">
+      <EntryFillDesc id="SOLID_FILL">
+        <FillDesc fillProperty="FILL"/>
+        </EntryFillDesc>
+      <EntryFillDesc id="HOLLOW">
+        <FillDesc fillProperty="HOLLOW"/>
+        </EntryFillDesc>
+      </DictionaryFillDesc>
+    <DictionaryStandard units="INCH">
+      </DictionaryStandard>
+    <DictionaryUser units="INCH">
+      </DictionaryUser>
+    </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="UNKNOWN"/>
+    <Person name="eba" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+    </LogisticHeader>
+  <HistoryRecord number="1" origination="2021-08-02T14:09:15" software="allegro_17.4S019(7/14/2021)" lastChange="2021-08-02T14:08:52">
+    <FileRevision fileRevisionId="1" comment="">
+      <SoftwarePackage name="Allegro" revision="allegro_17.4S019(7/14/2021)" vendor="Cadence">
+        <Certification certificationStatus="CERTIFIED"/>
+        </SoftwarePackage>
+      </FileRevision>
+    </HistoryRecord>
+  <Ecad name="Design">
+    <CadHeader units="INCH">
+      </CadHeader>
+    <CadData>
+      <Step name="testcase11-rdgflx-RevC">
+        <Datum x="0.0" y="0.0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="3.142678" y="-3.400000"/>
+            <PolyStepSegment x="4.082322" y="-3.400000"/>
+            <PolyStepSegment x="4.100000" y="-3.382322"/>
+            <PolyStepSegment x="4.100000" y="0.875000"/>
+            <PolyStepCurve x="4.150000" y="0.875000" centerX="4.12500000" centerY="0.87500000" clockwise="true"/>
+            <PolyStepSegment x="4.150000" y="0.825000"/>
+            <PolyStepSegment x="4.300000" y="0.825000"/>
+            <PolyStepSegment x="4.300000" y="1.925000"/>
+            <PolyStepSegment x="3.450000" y="1.925000"/>
+            <PolyStepSegment x="3.450000" y="1.875000"/>
+            <PolyStepCurve x="3.400000" y="1.875000" centerX="3.42500000" centerY="1.87500000" clockwise="true"/>
+            <PolyStepSegment x="3.400000" y="2.275000"/>
+            <PolyStepCurve x="3.475000" y="2.350000" centerX="3.47500000" centerY="2.27500000" clockwise="true"/>
+            <PolyStepSegment x="4.300000" y="2.350000"/>
+            <PolyStepSegment x="4.300000" y="2.500000"/>
+            <PolyStepCurve x="4.375000" y="2.575000" centerX="4.37500000" centerY="2.50000000" clockwise="true"/>
+            <PolyStepSegment x="4.625000" y="2.575000"/>
+            <PolyStepCurve x="4.675000" y="2.525000" centerX="4.62500000" centerY="2.52500000" clockwise="true"/>
+            <PolyStepSegment x="4.675000" y="2.500000"/>
+            <PolyStepCurve x="4.725000" y="2.450000" centerX="4.72500000" centerY="2.50000000" clockwise="false"/>
+            <PolyStepSegment x="4.875000" y="2.450000"/>
+            <PolyStepCurve x="4.925000" y="2.500000" centerX="4.87500000" centerY="2.50000000" clockwise="false"/>
+            <PolyStepSegment x="4.925000" y="2.850000"/>
+            <PolyStepCurve x="4.875000" y="2.900000" centerX="4.87500000" centerY="2.85000000" clockwise="false"/>
+            <PolyStepSegment x="4.725000" y="2.900000"/>
+            <PolyStepCurve x="4.675000" y="2.850000" centerX="4.72500000" centerY="2.85000000" clockwise="false"/>
+            <PolyStepSegment x="4.675000" y="2.800000"/>
+            <PolyStepCurve x="4.625000" y="2.750000" centerX="4.62500000" centerY="2.80000000" clockwise="true"/>
+            <PolyStepSegment x="4.375000" y="2.750000"/>
+            <PolyStepCurve x="4.300000" y="2.825000" centerX="4.37500000" centerY="2.82500000" clockwise="true"/>
+            <PolyStepSegment x="4.300000" y="3.000000"/>
+            <PolyStepSegment x="2.850000" y="3.000000"/>
+            <PolyStepSegment x="2.850000" y="2.350000"/>
+            <PolyStepSegment x="3.025000" y="2.350000"/>
+            <PolyStepCurve x="3.100000" y="2.275000" centerX="3.02500000" centerY="2.27500000" clockwise="true"/>
+            <PolyStepSegment x="3.100000" y="1.875000"/>
+            <PolyStepCurve x="3.050000" y="1.875000" centerX="3.07500000" centerY="1.87500000" clockwise="true"/>
+            <PolyStepSegment x="3.050000" y="1.925000"/>
+            <PolyStepSegment x="2.850000" y="1.925000"/>
+            <PolyStepSegment x="2.850000" y="1.800000"/>
+            <PolyStepCurve x="2.800000" y="1.750000" centerX="2.80000000" centerY="1.80000000" clockwise="true"/>
+            <PolyStepSegment x="2.575000" y="1.750000"/>
+            <PolyStepCurve x="2.075000" y="2.250000" centerX="2.57500000" centerY="2.25000000" clockwise="true"/>
+            <PolyStepSegment x="2.075000" y="2.325000"/>
+            <PolyStepCurve x="0.825000" y="3.575000" centerX="0.82500000" centerY="2.32500000" clockwise="false"/>
+            <PolyStepSegment x="-0.525000" y="3.575000"/>
+            <PolyStepCurve x="-0.600000" y="3.650000" centerX="-0.52500000" centerY="3.65000000" clockwise="true"/>
+            <PolyStepSegment x="-0.600000" y="4.550000"/>
+            <PolyStepCurve x="-0.850000" y="4.800000" centerX="-0.85000000" centerY="4.55000000" clockwise="false"/>
+            <PolyStepSegment x="-2.375000" y="4.800000"/>
+            <PolyStepCurve x="-2.625000" y="4.550000" centerX="-2.37500000" centerY="4.55000000" clockwise="false"/>
+            <PolyStepSegment x="-2.625000" y="1.850000"/>
+            <PolyStepCurve x="-2.375000" y="1.600000" centerX="-2.37500000" centerY="1.85000000" clockwise="false"/>
+            <PolyStepSegment x="-0.850000" y="1.600000"/>
+            <PolyStepCurve x="-0.600000" y="1.850000" centerX="-0.85000000" centerY="1.85000000" clockwise="false"/>
+            <PolyStepSegment x="-0.600000" y="2.750000"/>
+            <PolyStepCurve x="-0.525000" y="2.825000" centerX="-0.52500000" centerY="2.75000000" clockwise="true"/>
+            <PolyStepSegment x="0.825000" y="2.825000"/>
+            <PolyStepCurve x="1.325000" y="2.325000" centerX="0.82500000" centerY="2.32500000" clockwise="true"/>
+            <PolyStepSegment x="1.325000" y="2.250000"/>
+            <PolyStepCurve x="2.575000" y="1.000000" centerX="2.57500000" centerY="2.25000000" clockwise="false"/>
+            <PolyStepSegment x="2.800000" y="1.000000"/>
+            <PolyStepCurve x="2.850000" y="0.950000" centerX="2.80000000" centerY="0.95000000" clockwise="true"/>
+            <PolyStepSegment x="2.850000" y="0.825000"/>
+            <PolyStepSegment x="3.075000" y="0.825000"/>
+            <PolyStepSegment x="3.075000" y="0.875000"/>
+            <PolyStepCurve x="3.125000" y="0.875000" centerX="3.10000000" centerY="0.87500000" clockwise="true"/>
+            <PolyStepSegment x="3.125000" y="-3.382322"/>
+            <PolyStepSegment x="3.142678" y="-3.400000"/>
+            </Polygon>
+          </Profile>
+        <BendArea name="ALG:BEND6">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="0.800000" y="2.825000"/>
+              <PolyStepCurve x="1.325000" y="2.250000" centerX="0.82012367" centerY="2.31619987" clockwise="true"/>
+              <PolyStepSegment x="2.075000" y="2.250000"/>
+              <PolyStepCurve x="0.800000" y="3.575000" centerX="0.83156766" centerY="2.32943303" clockwise="false"/>
+              <PolyStepSegment x="0.800000" y="2.825000"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="90.000000" innerRadius="0.500000" innerSide="BOTTOM">
+            <BendLine startX="0.825000" startY="2.325000" endX="1.975000" endY="3.375000">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <BendArea name="ALG:BEND2">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-0.555000" y="3.575000"/>
+              <PolyStepSegment x="-0.555000" y="2.825000"/>
+              <PolyStepSegment x="0.590000" y="2.825000"/>
+              <PolyStepSegment x="0.590000" y="3.575000"/>
+              <PolyStepSegment x="-0.555000" y="3.575000"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="90.000000" innerRadius="0.500000" innerSide="BOTTOM">
+            <BendLine startX="0.100000" startY="2.825000" endX="0.100000" endY="3.575000">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <BendArea name="ALG:BEND4">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="4.375000" y="2.750000"/>
+              <PolyStepSegment x="4.625000" y="2.750000"/>
+              <PolyStepSegment x="4.625000" y="2.575000"/>
+              <PolyStepSegment x="4.375000" y="2.575000"/>
+              <PolyStepSegment x="4.375000" y="2.750000"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="90.000000" innerRadius="0.125000" innerSide="TOP">
+            <BendLine startX="4.500000" startY="2.800000" endX="4.500000" endY="2.550000">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <BendArea name="ALG:BEND5">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="2.835000" y="1.000000"/>
+              <PolyStepSegment x="2.835000" y="1.750000"/>
+              <PolyStepSegment x="2.550000" y="1.750000"/>
+              <PolyStepCurve x="2.075000" y="2.225000" centerX="2.56666679" centerY="2.24166679" clockwise="true"/>
+              <PolyStepSegment x="1.325000" y="2.225000"/>
+              <PolyStepCurve x="2.525000" y="1.000000" centerX="2.56851439" centerY="2.24288144" clockwise="false"/>
+              <PolyStepSegment x="2.835000" y="1.000000"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="90.000000" innerRadius="0.500000" innerSide="TOP">
+            <BendLine startX="2.600000" startY="2.225000" endX="1.325000" endY="1.200000">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <BendArea name="ALG:BEND1">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="3.100000" y="1.875000"/>
+              <PolyStepSegment x="3.100000" y="2.350000"/>
+              <PolyStepSegment x="3.400000" y="2.350000"/>
+              <PolyStepSegment x="3.400000" y="1.875000"/>
+              <PolyStepSegment x="3.100000" y="1.875000"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="180.000000" innerRadius="0.525000" innerSide="TOP">
+            <BendLine startX="3.530000" startY="2.110000" endX="3.030000" endY="2.110000">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <BendArea name="ALG:BEND3">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="3.125000" y="-0.575000"/>
+              <PolyStepSegment x="4.100000" y="-0.575000"/>
+              <PolyStepSegment x="4.100000" y="0.860000"/>
+              <PolyStepSegment x="3.125000" y="0.860000"/>
+              <PolyStepSegment x="3.125000" y="-0.575000"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="90.000000" innerRadius="0.600000" innerSide="TOP">
+            <BendLine startX="3.125000" startY="0.125000" endX="4.100000" endY="0.125000">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <StackupZone name="FLEX_ZONE_1" stackupRef="FLEX-1">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="-0.600000" y="2.750000"/>
+              <PolyStepSegment x="-0.600000" y="3.650000"/>
+              <PolyStepCurve x="-0.525000" y="3.575000" centerX="-0.52500000" centerY="3.65000000" clockwise="false"/>
+              <PolyStepSegment x="0.825000" y="3.575000"/>
+              <PolyStepCurve x="2.075000" y="2.325000" centerX="0.82500000" centerY="2.32500000" clockwise="true"/>
+              <PolyStepSegment x="2.075000" y="2.250000"/>
+              <PolyStepCurve x="2.575000" y="1.750000" centerX="2.57500000" centerY="2.25000000" clockwise="false"/>
+              <PolyStepSegment x="2.800000" y="1.750000"/>
+              <PolyStepCurve x="2.850000" y="1.800000" centerX="2.80000000" centerY="1.80000000" clockwise="false"/>
+              <PolyStepSegment x="2.850000" y="0.950000"/>
+              <PolyStepCurve x="2.800000" y="1.000000" centerX="2.80000000" centerY="0.95000000" clockwise="false"/>
+              <PolyStepSegment x="2.575000" y="1.000000"/>
+              <PolyStepCurve x="1.325000" y="2.250000" centerX="2.57500000" centerY="2.25000000" clockwise="true"/>
+              <PolyStepSegment x="1.325000" y="2.325000"/>
+              <PolyStepCurve x="0.825000" y="2.825000" centerX="0.82500000" centerY="2.32500000" clockwise="false"/>
+              <PolyStepSegment x="-0.525000" y="2.825000"/>
+              <PolyStepCurve x="-0.600000" y="2.750000" centerX="-0.52500000" centerY="2.75000000" clockwise="false"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX_ZONE_2" stackupRef="FLEX-2">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="4.725000" y="2.900000"/>
+              <PolyStepSegment x="4.875000" y="2.900000"/>
+              <PolyStepCurve x="4.925000" y="2.850000" centerX="4.87500000" centerY="2.85000000" clockwise="true"/>
+              <PolyStepSegment x="4.925000" y="2.500000"/>
+              <PolyStepCurve x="4.875000" y="2.450000" centerX="4.87500000" centerY="2.50000000" clockwise="true"/>
+              <PolyStepSegment x="4.725000" y="2.450000"/>
+              <PolyStepCurve x="4.675000" y="2.500000" centerX="4.72500000" centerY="2.50000000" clockwise="true"/>
+              <PolyStepSegment x="4.675000" y="2.525000"/>
+              <PolyStepCurve x="4.625000" y="2.575000" centerX="4.62500000" centerY="2.52500000" clockwise="false"/>
+              <PolyStepSegment x="4.375000" y="2.575000"/>
+              <PolyStepCurve x="4.300000" y="2.500000" centerX="4.37500000" centerY="2.50000000" clockwise="false"/>
+              <PolyStepSegment x="4.300000" y="2.825000"/>
+              <PolyStepCurve x="4.375000" y="2.750000" centerX="4.37500000" centerY="2.82500000" clockwise="false"/>
+              <PolyStepSegment x="4.625000" y="2.750000"/>
+              <PolyStepCurve x="4.675000" y="2.800000" centerX="4.62500000" centerY="2.80000000" clockwise="false"/>
+              <PolyStepSegment x="4.675000" y="2.850000"/>
+              <PolyStepCurve x="4.725000" y="2.900000" centerX="4.72500000" centerY="2.85000000" clockwise="true"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX_ZONE_3" stackupRef="FLEX-3">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.025000" y="2.350000"/>
+              <PolyStepSegment x="3.475000" y="2.350000"/>
+              <PolyStepCurve x="3.400000" y="2.275000" centerX="3.47500000" centerY="2.27500000" clockwise="false"/>
+              <PolyStepSegment x="3.400000" y="1.875000"/>
+              <PolyStepCurve x="3.425000" y="1.850000" centerX="3.42500000" centerY="1.87500000" clockwise="false"/>
+              <PolyStepSegment x="3.075000" y="1.850000"/>
+              <PolyStepCurve x="3.100000" y="1.875000" centerX="3.07500000" centerY="1.87500000" clockwise="false"/>
+              <PolyStepSegment x="3.100000" y="2.275000"/>
+              <PolyStepCurve x="3.025000" y="2.350000" centerX="3.02500000" centerY="2.27500000" clockwise="false"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="RIGID_ZONE_1" stackupRef="RIGID-2">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="2.850000" y="3.000000"/>
+              <PolyStepSegment x="4.300000" y="3.000000"/>
+              <PolyStepSegment x="4.300000" y="2.350000"/>
+              <PolyStepSegment x="2.850000" y="2.350000"/>
+              <PolyStepSegment x="2.850000" y="3.000000"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="RIGID_ZONE_2" stackupRef="RIGID-2">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.450000" y="1.925000"/>
+              <PolyStepSegment x="4.300000" y="1.925000"/>
+              <PolyStepSegment x="4.300000" y="0.825000"/>
+              <PolyStepSegment x="4.150000" y="0.825000"/>
+              <PolyStepSegment x="4.150000" y="0.875000"/>
+              <PolyStepCurve x="4.125000" y="0.900000" centerX="4.12500000" centerY="0.87500000" clockwise="false"/>
+              <PolyStepCurve x="4.110000" y="0.895000" centerX="4.12500000" centerY="0.87500000" clockwise="false"/>
+              <PolyStepSegment x="3.115000" y="0.895000"/>
+              <PolyStepCurve x="3.100000" y="0.900000" centerX="3.10000000" centerY="0.87500000" clockwise="false"/>
+              <PolyStepCurve x="3.075000" y="0.875000" centerX="3.10000000" centerY="0.87500000" clockwise="false"/>
+              <PolyStepSegment x="3.075000" y="0.825000"/>
+              <PolyStepSegment x="2.850000" y="0.825000"/>
+              <PolyStepSegment x="2.850000" y="1.925000"/>
+              <PolyStepSegment x="3.050000" y="1.925000"/>
+              <PolyStepSegment x="3.050000" y="1.875000"/>
+              <PolyStepCurve x="3.075000" y="1.850000" centerX="3.07500000" centerY="1.87500000" clockwise="false"/>
+              <PolyStepSegment x="3.425000" y="1.850000"/>
+              <PolyStepCurve x="3.450000" y="1.875000" centerX="3.42500000" centerY="1.87500000" clockwise="false"/>
+              <PolyStepSegment x="3.450000" y="1.925000"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="CONECTOR_ZONE" stackupRef="FLEX-3">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.125000" y="-3.015000"/>
+              <PolyStepSegment x="4.100000" y="-3.015000"/>
+              <PolyStepSegment x="4.100000" y="-3.382322"/>
+              <PolyStepSegment x="4.082322" y="-3.400000"/>
+              <PolyStepSegment x="3.142678" y="-3.400000"/>
+              <PolyStepSegment x="3.125000" y="-3.382322"/>
+              <PolyStepSegment x="3.125000" y="-3.015000"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX_ZONE_5" stackupRef="FLEX-3">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.115000" y="0.895000"/>
+              <PolyStepSegment x="4.110000" y="0.895000"/>
+              <PolyStepCurve x="4.100000" y="0.875000" centerX="4.12500000" centerY="0.87500000" clockwise="false"/>
+              <PolyStepSegment x="4.100000" y="-0.590000"/>
+              <PolyStepSegment x="3.125000" y="-0.590000"/>
+              <PolyStepSegment x="3.125000" y="0.875000"/>
+              <PolyStepCurve x="3.115000" y="0.895000" centerX="3.10000000" centerY="0.87500000" clockwise="false"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX_ZONE_6" stackupRef="FLEX-STIFFENER">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.125000" y="-0.590000"/>
+              <PolyStepSegment x="4.100000" y="-0.590000"/>
+              <PolyStepSegment x="4.100000" y="-3.015000"/>
+              <PolyStepSegment x="3.125000" y="-3.015000"/>
+              <PolyStepSegment x="3.125000" y="-0.590000"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="PRIMARY-1" comment="Automatically created default primary zone" stackupRef="PRIMARY">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="-2.375000" y="4.800000"/>
+              <PolyStepSegment x="-0.850000" y="4.800000"/>
+              <PolyStepCurve x="-0.600000" y="4.550000" centerX="-0.85000000" centerY="4.55000000" clockwise="true"/>
+              <PolyStepSegment x="-0.600000" y="1.850000"/>
+              <PolyStepCurve x="-0.850000" y="1.600000" centerX="-0.85000000" centerY="1.85000000" clockwise="true"/>
+              <PolyStepSegment x="-2.375000" y="1.600000"/>
+              <PolyStepCurve x="-2.625000" y="1.850000" centerX="-2.37500000" centerY="1.85000000" clockwise="true"/>
+              <PolyStepSegment x="-2.625000" y="4.550000"/>
+              <PolyStepCurve x="-2.375000" y="4.800000" centerX="-2.37500000" centerY="4.55000000" clockwise="true"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        </Step>
+      </CadData>
+    </Ecad>
+  </IPC-2581>

@@ -1,0 +1,762 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Content roleRef="Manager">
+    <FunctionMode mode="STACKUP"/>
+    <StepRef name="testcase5-174"/>
+    <LayerRef name="DIELECTRIC_INDEX_1"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="DIELECTRIC_INDEX_3"/>
+    <LayerRef name="GND2"/>
+    <LayerRef name="DIELECTRIC_INDEX_5"/>
+    <LayerRef name="L10"/>
+    <LayerRef name="DIELECTRIC_INDEX_7"/>
+    <LayerRef name="L9"/>
+    <LayerRef name="DIELECTRIC_INDEX_9"/>
+    <LayerRef name="VCC2"/>
+    <LayerRef name="DIELECTRIC_INDEX_11"/>
+    <LayerRef name="L7"/>
+    <LayerRef name="DIELECTRIC_INDEX_13"/>
+    <LayerRef name="DRILLPADS"/>
+    <LayerRef name="DIELECTRIC_INDEX_15"/>
+    <LayerRef name="L6"/>
+    <LayerRef name="DIELECTRIC_INDEX_17"/>
+    <LayerRef name="VCC"/>
+    <LayerRef name="DIELECTRIC_INDEX_19"/>
+    <LayerRef name="L4"/>
+    <LayerRef name="DIELECTRIC_INDEX_21"/>
+    <LayerRef name="L3"/>
+    <LayerRef name="DIELECTRIC_INDEX_23"/>
+    <LayerRef name="GND"/>
+    <LayerRef name="DIELECTRIC_INDEX_25"/>
+    <LayerRef name="BOTTOM"/>
+    <LayerRef name="DIELECTRIC_INDEX_27"/>
+    <DictionaryColor>
+      <EntryColor id="COLOR_TOP">
+        <Color r="255" g="0" b="0"/>
+        </EntryColor>
+      <EntryColor id="COLOR_GND2">
+        <Color r="0" g="221" b="0"/>
+        </EntryColor>
+      <EntryColor id="COLOR_L10">
+        <Color r="255" g="255" b="0"/>
+        </EntryColor>
+      <EntryColor id="COLOR_L9">
+        <Color r="166" g="16" b="255"/>
+        </EntryColor>
+      <EntryColor id="COLOR_VCC2">
+        <Color r="255" g="0" b="0"/>
+        </EntryColor>
+      <EntryColor id="COLOR_L7">
+        <Color r="239" g="155" b="63"/>
+        </EntryColor>
+      <EntryColor id="COLOR_DRILLPADS">
+        <Color r="255" g="255" b="255"/>
+        </EntryColor>
+      <EntryColor id="COLOR_L6">
+        <Color r="0" g="255" b="255"/>
+        </EntryColor>
+      <EntryColor id="COLOR_VCC">
+        <Color r="255" g="0" b="0"/>
+        </EntryColor>
+      <EntryColor id="COLOR_L4">
+        <Color r="121" g="153" b="196"/>
+        </EntryColor>
+      <EntryColor id="COLOR_L3">
+        <Color r="255" g="111" b="255"/>
+        </EntryColor>
+      <EntryColor id="COLOR_GND">
+        <Color r="0" g="221" b="0"/>
+        </EntryColor>
+      <EntryColor id="COLOR_BOTTOM">
+        <Color r="0" g="0" b="255"/>
+        </EntryColor>
+      </DictionaryColor>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="ROUND_0">
+        <LineDesc lineEnd="ROUND" lineWidth="0.0"/>
+        </EntryLineDesc>
+      </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER">
+      <EntryFillDesc id="SOLID_FILL">
+        <FillDesc fillProperty="FILL"/>
+        </EntryFillDesc>
+      <EntryFillDesc id="HOLLOW">
+        <FillDesc fillProperty="HOLLOW"/>
+        </EntryFillDesc>
+      </DictionaryFillDesc>
+    <DictionaryStandard units="MILLIMETER">
+      </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER">
+      </DictionaryUser>
+    </Content>
+  <LogisticHeader>
+    <Role id="Manager" roleFunction="SENDER"/>
+    <Enterprise id="CDNS" name="Cadence Design systems" code="Morse" address1="270 Billerica Road" city="Chelmsford" stateProvince="MA" postalCode="01824" phone="978 262 6000" fax="978 262 6777" email="eba@cadence.com" url="http:\\www.cadence.com"/>
+    <Person name="Ed Acheson" enterpriseRef="CDNS" fax="978 262 6777" mailstop="1.1.347" phone="978 262 6465" roleRef="Manager" title="Principle Product Engineer" email="eba@cadence.com"/>
+    </LogisticHeader>
+  <HistoryRecord number="1.0" origination="2021-08-02T15:23:52" software="allegro_17.4S019(7/14/2021)" lastChange="2021-08-02T15:23:21" externalConfigurationEntryPoint="unknown">
+    <FileRevision fileRevisionId="2581 rev B" comment="first pass at Rev b" label="2581-rev-B-0.1">
+      <SoftwarePackage name="Allegro" revision="allegro_17.4S019(7/14/2021)" vendor="Cadence">
+        <Certification certificationStatus="CERTIFIED"/>
+        </SoftwarePackage>
+      </FileRevision>
+    </HistoryRecord>
+  <Ecad name="Design">
+    <CadHeader units="MILLIMETER">
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_1">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_TOP">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_WPLATING"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_3">
+        <General type="MATERIAL">
+          <Property text="------FILL------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_GND2">
+        <General type="MATERIAL">
+          <Property text="CU_2.0_COPPER"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="PLANE"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0035"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_IS_SHIELD">
+          <Property text="true"/>
+          </General>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_5">
+        <General type="MATERIAL">
+          <Property text="------CORE------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_L10">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_COPPERINT"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_7">
+        <General type="MATERIAL">
+          <Property text="------FILL------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_L9">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_COPPERINT"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_9">
+        <General type="MATERIAL">
+          <Property text="------CORE------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_VCC2">
+        <General type="MATERIAL">
+          <Property text="CU_1.0_COPPER"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="PLANE"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0035"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_IS_SHIELD">
+          <Property text="true"/>
+          </General>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_11">
+        <General type="MATERIAL">
+          <Property text="------FILL------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_L7">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_COPPERINT"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_13">
+        <General type="MATERIAL">
+          <Property text="------CORE------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_DRILLPADS">
+        <General type="MATERIAL">
+          <Property text="FNC_0_COPPER"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0035"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_15">
+        <General type="MATERIAL">
+          <Property text="FNC_0.00_FR4"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.5000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0035"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_L6">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_COPPERINT"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_17">
+        <General type="MATERIAL">
+          <Property text="------FILL------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_VCC">
+        <General type="MATERIAL">
+          <Property text="CU_1.0_COPPER"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="PLANE"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0035"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_IS_SHIELD">
+          <Property text="true"/>
+          </General>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_19">
+        <General type="MATERIAL">
+          <Property text="------CORE------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_L4">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_COPPERINT"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_21">
+        <General type="MATERIAL">
+          <Property text="------FILL------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_L3">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_COPPERINT"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_23">
+        <General type="MATERIAL">
+          <Property text="------CORE------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_GND">
+        <General type="MATERIAL">
+          <Property text="CU_2.0_COPPER"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="PLANE"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0035"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_IS_SHIELD">
+          <Property text="true"/>
+          </General>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_25">
+        <General type="MATERIAL">
+          <Property text="------FILL------"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.3000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      <Spec name="SPEC_LAYER_BOTTOM">
+        <General type="MATERIAL">
+          <Property text="CU_0.5_WPLATING"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="CONDUCTOR"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="595900.0000" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+          <Property text="NOT_EMBEDDED"/>
+          </General>
+        </Spec>
+      <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_27">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          </General>
+        <General type="OTHER" comment="LAYER_TYPE">
+          <Property text="DIELECTRIC"/>
+          </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property value="0.0" unit="MHO/CM"/>
+          </Conductor>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="1.0000"/>
+          </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.0"/>
+          </Dielectric>
+        </Spec>
+      </CadHeader>
+    <CadData>
+      <Layer name="DIELECTRIC_INDEX_1" layerFunction="DIELPREG" side="TOP" polarity="POSITIVE">
+        </Layer>
+      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_3" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="GND2" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_5" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="L10" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_7" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="L9" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_9" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="VCC2" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_11" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="L7" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_13" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DRILLPADS" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_15" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="L6" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_17" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="VCC" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_19" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="L4" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_21" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="L3" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_23" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="GND" layerFunction="PLANE" side="INTERNAL" polarity="NEGATIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_25" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE">
+        </Layer>
+      <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE">
+        </Layer>
+      <Layer name="DIELECTRIC_INDEX_27" layerFunction="DIELPREG" side="BOTTOM" polarity="POSITIVE">
+        </Layer>
+      <Stackup name="PRIMARY" overallThickness="1.5802" tolPlus="0.0" tolMinus="0.0" whereMeasured="METAL">
+        <StackupGroup name="GROUP_PRIMARY" thickness="1.5802" tolPlus="0.0" tolMinus="0.0">
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_1" thickness="0.0127" tolPlus="0.0" tolMinus="0.0" sequence="1">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_1"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="TOP" thickness="0.0457" tolPlus="0.0" tolMinus="0.0" sequence="2">
+            <SpecRef id="SPEC_LAYER_TOP"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_3" thickness="0.1956" tolPlus="0.0" tolMinus="0.0" sequence="3">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_3"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="GND2" thickness="0.0636" tolPlus="0.0" tolMinus="0.0" sequence="4">
+            <SpecRef id="SPEC_LAYER_GND2"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_5" thickness="0.0889" tolPlus="0.0" tolMinus="0.0" sequence="5">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_5"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="L10" thickness="0.0152" tolPlus="0.0" tolMinus="0.0" sequence="6">
+            <SpecRef id="SPEC_LAYER_L10"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_7" thickness="0.0813" tolPlus="0.0" tolMinus="0.0" sequence="7">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_7"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="L9" thickness="0.0152" tolPlus="0.0" tolMinus="0.0" sequence="8">
+            <SpecRef id="SPEC_LAYER_L9"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_9" thickness="0.0889" tolPlus="0.0" tolMinus="0.0" sequence="9">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_9"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="VCC2" thickness="0.0305" tolPlus="0.0" tolMinus="0.0" sequence="10">
+            <SpecRef id="SPEC_LAYER_VCC2"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_11" thickness="0.0864" tolPlus="0.0" tolMinus="0.0" sequence="11">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_11"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="L7" thickness="0.0152" tolPlus="0.0" tolMinus="0.0" sequence="12">
+            <SpecRef id="SPEC_LAYER_L7"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_13" thickness="0.1016" tolPlus="0.0" tolMinus="0.0" sequence="13">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_13"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DRILLPADS" thickness="0.0001" tolPlus="0.0" tolMinus="0.0" sequence="14">
+            <SpecRef id="SPEC_LAYER_DRILLPADS"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_15" thickness="0.0001" tolPlus="0.0" tolMinus="0.0" sequence="15">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_15"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="L6" thickness="0.0152" tolPlus="0.0" tolMinus="0.0" sequence="16">
+            <SpecRef id="SPEC_LAYER_L6"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_17" thickness="0.0864" tolPlus="0.0" tolMinus="0.0" sequence="17">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_17"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="VCC" thickness="0.0305" tolPlus="0.0" tolMinus="0.0" sequence="18">
+            <SpecRef id="SPEC_LAYER_VCC"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_19" thickness="0.0889" tolPlus="0.0" tolMinus="0.0" sequence="19">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_19"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="L4" thickness="0.0152" tolPlus="0.0" tolMinus="0.0" sequence="20">
+            <SpecRef id="SPEC_LAYER_L4"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_21" thickness="0.0813" tolPlus="0.0" tolMinus="0.0" sequence="21">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_21"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="L3" thickness="0.0152" tolPlus="0.0" tolMinus="0.0" sequence="22">
+            <SpecRef id="SPEC_LAYER_L3"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_23" thickness="0.0889" tolPlus="0.0" tolMinus="0.0" sequence="23">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_23"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="GND" thickness="0.0636" tolPlus="0.0" tolMinus="0.0" sequence="24">
+            <SpecRef id="SPEC_LAYER_GND"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_25" thickness="0.1956" tolPlus="0.0" tolMinus="0.0" sequence="25">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_25"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="BOTTOM" thickness="0.0457" tolPlus="0.0" tolMinus="0.0" sequence="26">
+            <SpecRef id="SPEC_LAYER_BOTTOM"/>
+            </StackupLayer>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_27" thickness="0.0127" tolPlus="0.0" tolMinus="0.0" sequence="27">
+            <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_27"/>
+            </StackupLayer>
+          </StackupGroup>
+        </Stackup>
+      <Step name="testcase5-174">
+        <Datum x="0.0" y="0.0"/>
+        </Step>
+      </CadData>
+    </Ecad>
+  </IPC-2581>

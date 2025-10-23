@@ -1,0 +1,148 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Content roleRef="Manager">
+    <FunctionMode mode="STENCIL"/>
+    <StepRef name="testcase6-v174-RevC"/>
+    <DictionaryColor>
+      </DictionaryColor>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="ROUND_0">
+        <LineDesc lineEnd="ROUND" lineWidth="0.0"/>
+        </EntryLineDesc>
+      </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER">
+      <EntryFillDesc id="SOLID_FILL">
+        <FillDesc fillProperty="FILL"/>
+        </EntryFillDesc>
+      <EntryFillDesc id="HOLLOW">
+        <FillDesc fillProperty="HOLLOW"/>
+        </EntryFillDesc>
+      </DictionaryFillDesc>
+    <DictionaryStandard units="MILLIMETER">
+      </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER">
+      </DictionaryUser>
+    </Content>
+  <LogisticHeader>
+    <Role id="Manager" roleFunction="SENDER"/>
+    <Enterprise id="CDNS" name="Cadence Design systems" code="semaphore" address1="270 Billerica Road" city="Chelmsford" stateProvince="MA" postalCode="01824" phone="978 262 6000" fax="978 262 6777" email="eba@cadence.com" url="http:\\www.cadence.com"/>
+    <Person name="Ed Acheson" enterpriseRef="CDNS" fax="978 262 6777" mailstop="1.1.347" phone="978 262 6465" roleRef="Manager" title="Principle Product Engineer" email="eba@cadence.com"/>
+    </LogisticHeader>
+  <HistoryRecord number="1.0" origination="2021-08-02T15:01:02" software="allegro_17.4S019(7/14/2021)" lastChange="2021-08-02T15:00:39" externalConfigurationEntryPoint="unknown">
+    <FileRevision fileRevisionId="2581 rev B" comment="first pass at Rev b" label="2581-rev-B-0.1">
+      <SoftwarePackage name="Allegro" revision="allegro_17.4S019(7/14/2021)" vendor="Cadence">
+        <Certification certificationStatus="CERTIFIED"/>
+        </SoftwarePackage>
+      </FileRevision>
+    </HistoryRecord>
+  <Ecad name="Design">
+    <CadHeader units="MILLIMETER">
+      </CadHeader>
+    <CadData>
+      <Step name="testcase6-v174-RevC">
+        <Datum x="0.0" y="0.0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="117.4200" y="157.4000"/>
+            <PolyStepCurve x="118.2200" y="158.2000" centerX="117.420000" centerY="158.200000" clockwise="false"/>
+            <PolyStepSegment x="118.2200" y="161.7000"/>
+            <PolyStepSegment x="136.7200" y="161.7000"/>
+            <PolyStepSegment x="136.7200" y="157.0000"/>
+            <PolyStepCurve x="137.5200" y="156.2000" centerX="137.520000" centerY="157.000000" clockwise="false"/>
+            <PolyStepSegment x="140.7200" y="156.2000"/>
+            <PolyStepCurve x="141.5200" y="157.0000" centerX="140.720000" centerY="157.000000" clockwise="false"/>
+            <PolyStepSegment x="141.5200" y="161.7000"/>
+            <PolyStepSegment x="163.1200" y="161.7000"/>
+            <PolyStepSegment x="163.1200" y="-3.7000"/>
+            <PolyStepSegment x="141.5200" y="-3.7000"/>
+            <PolyStepSegment x="141.5200" y="1.0000"/>
+            <PolyStepCurve x="140.7200" y="1.8000" centerX="140.720000" centerY="1.000000" clockwise="false"/>
+            <PolyStepSegment x="137.5200" y="1.8000"/>
+            <PolyStepCurve x="136.7200" y="1.0000" centerX="137.520000" centerY="1.000000" clockwise="false"/>
+            <PolyStepSegment x="136.7200" y="-3.7000"/>
+            <PolyStepSegment x="118.2200" y="-3.7000"/>
+            <PolyStepSegment x="118.2200" y="-0.2000"/>
+            <PolyStepCurve x="117.4200" y="0.6000" centerX="117.420000" centerY="-0.200000" clockwise="false"/>
+            <PolyStepSegment x="115.8200" y="0.6000"/>
+            <PolyStepCurve x="115.0200" y="-0.2000" centerX="115.820000" centerY="-0.200000" clockwise="false"/>
+            <PolyStepSegment x="115.0200" y="-3.7000"/>
+            <PolyStepSegment x="68.7200" y="-3.7000"/>
+            <PolyStepSegment x="68.7200" y="-0.2000"/>
+            <PolyStepCurve x="67.9200" y="0.6000" centerX="67.920000" centerY="-0.200000" clockwise="false"/>
+            <PolyStepSegment x="66.3200" y="0.6000"/>
+            <PolyStepCurve x="65.5200" y="-0.2000" centerX="66.320000" centerY="-0.200000" clockwise="false"/>
+            <PolyStepSegment x="65.5200" y="-3.7000"/>
+            <PolyStepSegment x="-7.8800" y="-3.7000"/>
+            <PolyStepSegment x="-7.8800" y="3.7000"/>
+            <PolyStepCurve x="-8.6800" y="4.5000" centerX="-8.680000" centerY="3.700000" clockwise="false"/>
+            <PolyStepSegment x="-13.0800" y="4.5000"/>
+            <PolyStepCurve x="-13.8800" y="3.7000" centerX="-13.080000" centerY="3.700000" clockwise="false"/>
+            <PolyStepSegment x="-13.8800" y="0.5000"/>
+            <PolyStepSegment x="-53.8800" y="0.5000"/>
+            <PolyStepSegment x="-55.8800" y="2.5000"/>
+            <PolyStepSegment x="-55.8800" y="155.5000"/>
+            <PolyStepSegment x="-53.8800" y="157.5000"/>
+            <PolyStepSegment x="-13.8800" y="157.5000"/>
+            <PolyStepSegment x="-13.8800" y="154.3000"/>
+            <PolyStepCurve x="-13.0800" y="153.5000" centerX="-13.080000" centerY="154.300000" clockwise="false"/>
+            <PolyStepSegment x="-8.6800" y="153.5000"/>
+            <PolyStepCurve x="-7.8800" y="154.3000" centerX="-8.680000" centerY="154.300000" clockwise="false"/>
+            <PolyStepSegment x="-7.8800" y="161.7000"/>
+            <PolyStepSegment x="65.5200" y="161.7000"/>
+            <PolyStepSegment x="65.5200" y="158.2000"/>
+            <PolyStepCurve x="66.3200" y="157.4000" centerX="66.320000" centerY="158.200000" clockwise="false"/>
+            <PolyStepSegment x="67.9200" y="157.4000"/>
+            <PolyStepCurve x="68.7200" y="158.2000" centerX="67.920000" centerY="158.200000" clockwise="false"/>
+            <PolyStepSegment x="68.7200" y="161.7000"/>
+            <PolyStepSegment x="115.0200" y="161.7000"/>
+            <PolyStepSegment x="115.0200" y="158.2000"/>
+            <PolyStepCurve x="115.8200" y="157.4000" centerX="115.820000" centerY="158.200000" clockwise="false"/>
+            <PolyStepSegment x="117.4200" y="157.4000"/>
+            </Polygon>
+          <Cutout>
+            <PolyBegin x="143.0200" y="136.0000"/>
+            <PolyStepCurve x="145.8200" y="136.0000" centerX="144.420000" centerY="136.000000" clockwise="true"/>
+            <PolyStepSegment x="145.8200" y="134.0000"/>
+            <PolyStepCurve x="143.0200" y="134.0000" centerX="144.420000" centerY="134.000000" clockwise="true"/>
+            <PolyStepSegment x="143.0200" y="136.0000"/>
+            </Cutout>
+          <Cutout>
+            <PolyBegin x="143.0200" y="86.0000"/>
+            <PolyStepCurve x="145.8200" y="86.0000" centerX="144.420000" centerY="86.000000" clockwise="true"/>
+            <PolyStepSegment x="145.8200" y="84.0000"/>
+            <PolyStepCurve x="143.0200" y="84.0000" centerX="144.420000" centerY="84.000000" clockwise="true"/>
+            <PolyStepSegment x="143.0200" y="86.0000"/>
+            </Cutout>
+          <Cutout>
+            <PolyBegin x="143.0200" y="36.0000"/>
+            <PolyStepCurve x="145.8200" y="36.0000" centerX="144.420000" centerY="36.000000" clockwise="true"/>
+            <PolyStepSegment x="145.8200" y="34.0000"/>
+            <PolyStepCurve x="143.0200" y="34.0000" centerX="144.420000" centerY="34.000000" clockwise="true"/>
+            <PolyStepSegment x="143.0200" y="36.0000"/>
+            </Cutout>
+          <Cutout>
+            <PolyBegin x="143.0200" y="134.0000"/>
+            <PolyStepCurve x="145.8200" y="134.0000" centerX="144.420000" centerY="134.000000" clockwise="false"/>
+            <PolyStepSegment x="145.8200" y="136.0000"/>
+            <PolyStepCurve x="143.0200" y="136.0000" centerX="144.420000" centerY="136.000000" clockwise="false"/>
+            <PolyStepSegment x="143.0200" y="134.0000"/>
+            </Cutout>
+          <Cutout>
+            <PolyBegin x="143.0200" y="84.0000"/>
+            <PolyStepCurve x="145.8200" y="84.0000" centerX="144.420000" centerY="84.000000" clockwise="false"/>
+            <PolyStepSegment x="145.8200" y="86.0000"/>
+            <PolyStepCurve x="143.0200" y="86.0000" centerX="144.420000" centerY="86.000000" clockwise="false"/>
+            <PolyStepSegment x="143.0200" y="84.0000"/>
+            </Cutout>
+          <Cutout>
+            <PolyBegin x="143.0200" y="34.0000"/>
+            <PolyStepCurve x="145.8200" y="34.0000" centerX="144.420000" centerY="34.000000" clockwise="false"/>
+            <PolyStepSegment x="145.8200" y="36.0000"/>
+            <PolyStepCurve x="143.0200" y="36.0000" centerX="144.420000" centerY="36.000000" clockwise="false"/>
+            <PolyStepSegment x="143.0200" y="34.0000"/>
+            </Cutout>
+          </Profile>
+        </Step>
+      </CadData>
+    </Ecad>
+  </IPC-2581>

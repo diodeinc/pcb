@@ -1,0 +1,1962 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Content roleRef="Owner">
+    <FunctionMode mode="STENCIL"/>
+    <StepRef name="test9"/>
+    <LayerRef name="PASTEMASK_TOP"/>
+    <LayerRef name="PASTEMASK_BOTTOM"/>
+    <DictionaryColor>
+      <EntryColor id="COLOR_PASTEMASK_TOP">
+        <Color r="99" g="139" b="58"/>
+        </EntryColor>
+      <EntryColor id="COLOR_PASTEMASK_BOTTOM">
+        <Color r="99" g="139" b="58"/>
+        </EntryColor>
+      </DictionaryColor>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="ROUND_0">
+        <LineDesc lineEnd="ROUND" lineWidth="0.0"/>
+        </EntryLineDesc>
+      </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER">
+      <EntryFillDesc id="SOLID_FILL">
+        <FillDesc fillProperty="FILL"/>
+        </EntryFillDesc>
+      <EntryFillDesc id="HOLLOW">
+        <FillDesc fillProperty="HOLLOW"/>
+        </EntryFillDesc>
+      </DictionaryFillDesc>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="OVAL_1">
+        <Oval width="1.2700" height="0.6350">
+          <FillDescRef id="SOLID_FILL"/>
+          </Oval>
+        </EntryStandard>
+      <EntryStandard id="RECTCENTER_1">
+        <RectCenter width="1.6256" height="2.5400">
+          <FillDescRef id="SOLID_FILL"/>
+          </RectCenter>
+        </EntryStandard>
+      <EntryStandard id="RECTCENTER_2">
+        <RectCenter width="1.2700" height="1.2700">
+          <FillDescRef id="SOLID_FILL"/>
+          </RectCenter>
+        </EntryStandard>
+      <EntryStandard id="RECTCENTER_3">
+        <RectCenter width="1.5240" height="1.5240">
+          <FillDescRef id="SOLID_FILL"/>
+          </RectCenter>
+        </EntryStandard>
+      <EntryStandard id="RECTCENTER_4">
+        <RectCenter width="1.5750" height="1.5750">
+          <FillDescRef id="SOLID_FILL"/>
+          </RectCenter>
+        </EntryStandard>
+      <EntryStandard id="OVAL_2">
+        <Oval width="2.6000" height="0.3000">
+          <FillDescRef id="SOLID_FILL"/>
+          </Oval>
+        </EntryStandard>
+      <EntryStandard id="OVAL_3">
+        <Oval width="2.0000" height="0.4000">
+          <FillDescRef id="SOLID_FILL"/>
+          </Oval>
+        </EntryStandard>
+      <EntryStandard id="OVAL_4">
+        <Oval width="3.0000" height="1.3000">
+          <FillDescRef id="SOLID_FILL"/>
+          </Oval>
+        </EntryStandard>
+      <EntryStandard id="RECTCENTER_5">
+        <RectCenter width="2.0320" height="3.0480">
+          <FillDescRef id="SOLID_FILL"/>
+          </RectCenter>
+        </EntryStandard>
+      <EntryStandard id="RECTCENTER_6">
+        <RectCenter width="2.5908" height="3.7084">
+          <FillDescRef id="SOLID_FILL"/>
+          </RectCenter>
+        </EntryStandard>
+      </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER">
+      </DictionaryUser>
+    </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="UNKNOWN"/>
+    <Person name="eba" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+    </LogisticHeader>
+  <HistoryRecord number="1" origination="2021-08-02T14:52:05" software="allegro_17.4S019(7/14/2021)" lastChange="2021-08-02T14:51:35">
+    <FileRevision fileRevisionId="1" comment="">
+      <SoftwarePackage name="Allegro" revision="allegro_17.4S019(7/14/2021)" vendor="Cadence">
+        <Certification certificationStatus="CERTIFIED"/>
+        </SoftwarePackage>
+      </FileRevision>
+    </HistoryRecord>
+  <Ecad name="Design">
+    <CadHeader units="MILLIMETER">
+      </CadHeader>
+    <CadData>
+      <Layer name="PASTEMASK_TOP" layerFunction="PASTEMASK" side="TOP" polarity="POSITIVE">
+        </Layer>
+      <Layer name="PASTEMASK_BOTTOM" layerFunction="PASTEMASK" side="BOTTOM" polarity="POSITIVE">
+        </Layer>
+      <Step name="test9">
+        <Datum x="0.0" y="0.0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="-15.8750" y="-15.2407"/>
+            <PolyStepSegment x="22.2250" y="-15.2407"/>
+            <PolyStepSegment x="22.2250" y="-15.2400"/>
+            <PolyStepSegment x="48.2600" y="-15.2400"/>
+            <PolyStepSegment x="48.2600" y="48.2600"/>
+            <PolyStepSegment x="-15.8750" y="48.2600"/>
+            <PolyStepSegment x="-15.8750" y="-15.2407"/>
+            </Polygon>
+          <Cutout>
+            <PolyBegin x="1.9196" y="-13.9700"/>
+            <PolyStepSegment x="17.7946" y="-13.9700"/>
+            <PolyStepCurve x="17.7946" y="-12.7000" centerX="17.794604" centerY="-13.335000" clockwise="false"/>
+            <PolyStepSegment x="1.9196" y="-12.7000"/>
+            <PolyStepCurve x="1.9196" y="-13.9700" centerX="1.919604" centerY="-13.335000" clockwise="false"/>
+            </Cutout>
+          </Profile>
+        <LayerFeature layerRef="PASTEMASK_TOP">
+          <Set>
+            <ColorRef id="COLOR_PASTEMASK_TOP"/>
+            </Set>
+          <Set net="PSP6" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8246" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="15" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="-5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0946" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="16" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="PSP5" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="2.5546" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="14" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="PSP3" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.0146" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="12" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="PSP4" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.2846" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="13" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="PSP2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.2554" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="11" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="PSP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.7954" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="9" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="PSP1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-2.5254" y="3.8735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="10" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="-5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0946" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="SP02" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8246" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="SP01" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="2.5546" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="SP03" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.2846" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="SP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.0146" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="-5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.2554" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-2.5254" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.7954" y="8.8265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U9"/>
+              </Pad>
+            </Set>
+          <Set net="C" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8246" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="15" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0946" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="16" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC488" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="2.5546" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="14" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="IN01" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.0146" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="12" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="T1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.2846" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="13" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.2554" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="11" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="SP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.7954" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="9" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="T2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-2.5254" y="-5.0165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="10" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="B" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0946" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="A" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8246" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="PST-" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="2.5546" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="PST+" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.2846" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="SP03" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.0146" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="SP02" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.2554" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="SP01" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-2.5254" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.7954" y="-0.0635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U8"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC6F8" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.1896" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="13" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="4.4596" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="14" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC690" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.9196" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="12" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC5C0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-0.6204" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="10" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC628" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.6496" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="11" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC558" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.8904" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="9" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC4F0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.1604" y="21.0185"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="N005" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="4.4596" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="CLK1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.1896" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="N001" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.9196" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="N001" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.6496" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="N001" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-0.6204" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="IN01" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.8904" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.1604" y="25.9715"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC420" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.1896" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="13" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="4.4596" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="14" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="N011" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.9196" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="12" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="N005" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-0.6204" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="10" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="N011" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.6496" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="11" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.8904" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="9" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.1604" y="12.1285"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC2E8" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="4.4596" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="N009" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.1896" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="N013" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.9196" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="-5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.6496" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="N012" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-0.6204" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC350" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.8904" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC3B8" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.1604" y="17.0815"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U3"/>
+              </Pad>
+            </Set>
+          <Set net="SET2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-0.6204" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.6496" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="SET2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.8904" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="N101" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.1604" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.6496" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-0.6204" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="T1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.8904" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-3.1604" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U7"/>
+              </Pad>
+            </Set>
+          <Set net="SET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0800" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="6.3500" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="SET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8100" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="N100" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="2.5400" y="29.2735"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="6.3500" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0800" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="T2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8100" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="2.5400" y="34.2265"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U6"/>
+              </Pad>
+            </Set>
+          <Set net="N003" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.0146" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.2846" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="N002" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.2554" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC760" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-2.5254" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="1.2846" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="N002" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="0.0146" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="CLK1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-1.2554" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="-2.5254" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U5"/>
+              </Pad>
+            </Set>
+          <Set net="N014" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="6.3646" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="7" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="+15V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="7.6346" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="8" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="N016" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0946" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="6" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8246" y="38.1635"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="5" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="N017" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="7.6346" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="1" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="N018" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="6.3646" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="2" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="5.0946" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="3" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="-15V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SMD50_25">
+              <Xform rotation="270.000"/>
+              <Location x="3.8246" y="43.1165"/>
+              <StandardPrimitiveRef id="OVAL_1"/>
+              <PinRef pin="4" componentRef="U2"/>
+              </Pad>
+            </Set>
+          <Set net="N008A" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="26.0600" y="9.5250"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="6" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP6" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="26.0600" y="6.9850"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="7" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP5" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="26.0600" y="4.4450"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="8" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP4" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="26.0600" y="1.9050"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="9" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="26.0600" y="-0.6350"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="10" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="45.0600" y="9.5250"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="5" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP3" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="45.0600" y="6.9850"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="4" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="45.0600" y="4.4450"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="3" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="45.0600" y="1.9050"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="2" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="DSP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="45.0600" y="-0.6350"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="1" componentRef="LED2"/>
+              </Pad>
+            </Set>
+          <Set net="N008" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="34.8742"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="6" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP6" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="32.3342"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="7" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP5" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="29.7942"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="8" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP4" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="27.2542"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="9" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="24.7142"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="10" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="34.8742"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="5" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP3" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="32.3342"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="4" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="29.7942"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="3" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="27.2542"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="2" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="DSP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="24.7142"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="1" componentRef="LED1"/>
+              </Pad>
+            </Set>
+          <Set net="N008B" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="22.1996"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="6" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP6" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="19.6596"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="7" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP5" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="17.1196"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="8" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP4" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="14.5796"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="9" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="25.8968" y="12.0396"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="10" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="22.1996"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="5" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP3" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="19.6596"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="4" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="17.1196"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="3" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="14.5796"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="2" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          <Set net="DSP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_7X3_4MM">
+              <Xform rotation="180.000"/>
+              <Location x="44.8968" y="12.0396"/>
+              <StandardPrimitiveRef id="OVAL_4"/>
+              <PinRef pin="1" componentRef="LED3"/>
+              </Pad>
+            </Set>
+          </LayerFeature>
+        <LayerFeature layerRef="PASTEMASK_BOTTOM">
+          <Set>
+            <ColorRef id="COLOR_PASTEMASK_BOTTOM"/>
+            </Set>
+          <Set net="N013" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD6">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="9.2856" y="15.8750"/>
+              <StandardPrimitiveRef id="RECTCENTER_1"/>
+              <PinRef pin="2" componentRef="C1"/>
+              </Pad>
+            </Set>
+          <Set net="N011" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD6">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="12.7146" y="15.8750"/>
+              <StandardPrimitiveRef id="RECTCENTER_1"/>
+              <PinRef pin="1" componentRef="C1"/>
+              </Pad>
+            </Set>
+          <Set net="N007A" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="20.3200" y="28.1686"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R31"/>
+              </Pad>
+            </Set>
+          <Set net="A" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="20.3200" y="26.0350"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R31"/>
+              </Pad>
+            </Set>
+          <Set net="N007" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="20.9550" y="16.1036"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R30"/>
+              </Pad>
+            </Set>
+          <Set net="B" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="20.9550" y="13.9700"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R30"/>
+              </Pad>
+            </Set>
+          <Set net="N006" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="17.3736" y="34.2900"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R29"/>
+              </Pad>
+            </Set>
+          <Set net="C" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="15.2400" y="34.2900"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R29"/>
+              </Pad>
+            </Set>
+          <Set net="DSP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="36.4236" y="-0.6350"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R28"/>
+              </Pad>
+            </Set>
+          <Set net="PSP0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="34.2900" y="-0.6350"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R28"/>
+              </Pad>
+            </Set>
+          <Set net="DSP1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="36.4236" y="1.9050"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R27"/>
+              </Pad>
+            </Set>
+          <Set net="PSP1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="34.2900" y="1.9050"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R27"/>
+              </Pad>
+            </Set>
+          <Set net="DSP2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="36.4236" y="4.4450"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R26"/>
+              </Pad>
+            </Set>
+          <Set net="PSP2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="34.2900" y="4.4450"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R26"/>
+              </Pad>
+            </Set>
+          <Set net="DSP4" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="25.6286" y="1.9050"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R25"/>
+              </Pad>
+            </Set>
+          <Set net="PSP3" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="23.4950" y="1.9050"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R25"/>
+              </Pad>
+            </Set>
+          <Set net="DSP5" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="25.6286" y="4.4450"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R24"/>
+              </Pad>
+            </Set>
+          <Set net="PSP4" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="23.4950" y="4.4450"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R24"/>
+              </Pad>
+            </Set>
+          <Set net="DSP6" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="25.6286" y="6.9850"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R23"/>
+              </Pad>
+            </Set>
+          <Set net="PSP5" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="23.4950" y="6.9850"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R23"/>
+              </Pad>
+            </Set>
+          <Set net="DSP3" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="36.4236" y="6.9850"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="R22"/>
+              </Pad>
+            </Set>
+          <Set net="PSP6" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD88">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="34.2900" y="6.9850"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="R22"/>
+              </Pad>
+            </Set>
+          <Set net="N010" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="5.0800" y="0.3817"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R14"/>
+              </Pad>
+            </Set>
+          <Set net="N009" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="5.0800" y="3.6837"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R14"/>
+              </Pad>
+            </Set>
+          <Set net="N015" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-8.7630" y="10.1600"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R9"/>
+              </Pad>
+            </Set>
+          <Set net="N014" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-12.0650" y="10.1600"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R9"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBA7B0" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="23.3680" y="46.2287"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R11"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="26.6700" y="46.2287"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R11"/>
+              </Pad>
+            </Set>
+          <Set net="N017" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="26.2890" y="40.0057"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R6"/>
+              </Pad>
+            </Set>
+          <Set net="N018" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="26.2890" y="43.3077"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R6"/>
+              </Pad>
+            </Set>
+          <Set net="N019" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="-10.2870" y="17.1450"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R5"/>
+              </Pad>
+            </Set>
+          <Set net="N018" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="-6.9850" y="17.1450"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R5"/>
+              </Pad>
+            </Set>
+          <Set net="N018" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="23.6220" y="43.3077"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R3"/>
+              </Pad>
+            </Set>
+          <Set net="PRB2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="23.6220" y="40.0057"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R3"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-6.8580" y="13.9700"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R18"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-10.1600" y="13.9700"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R18"/>
+              </Pad>
+            </Set>
+          <Set net="N002" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="33.7820" y="43.4347"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R17"/>
+              </Pad>
+            </Set>
+          <Set net="N004" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="30.4800" y="43.4347"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R17"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="-1.8904" y="21.0820"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R21"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="-1.8904" y="17.7800"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R21"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="8.8900" y="31.6237"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R13"/>
+              </Pad>
+            </Set>
+          <Set net="N009" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="12.1920" y="31.6237"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R13"/>
+              </Pad>
+            </Set>
+          <Set net="N005" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="9.5396" y="40.5130"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R12"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="360.000" mirror="true"/>
+              <Location x="9.5396" y="43.8150"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R12"/>
+              </Pad>
+            </Set>
+          <Set net="N016" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="30.4800" y="40.5137"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R7"/>
+              </Pad>
+            </Set>
+          <Set net="N017" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="33.7820" y="40.5137"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R7"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD10_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-1.5240" y="28.8297"/>
+              <StandardPrimitiveRef id="RECTCENTER_3"/>
+              <PinRef pin="2" componentRef="R2"/>
+              </Pad>
+            </Set>
+          <Set net="SNSR1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD9_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-4.8260" y="28.8297"/>
+              <StandardPrimitiveRef id="RECTCENTER_4"/>
+              <PinRef pin="1" componentRef="R2"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="9.5396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="4" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="8.0396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="5" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="6.5396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="6" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set net="+15V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="5.0396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="7" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="11.0396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="3" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set net="-5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="12.5396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="2" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set net="-15V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="0_8X2_4MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="14.0396" y="-4.4450"/>
+              <StandardPrimitiveRef id="OVAL_2"/>
+              <PinRef pin="1" componentRef="J2"/>
+              </Pad>
+            </Set>
+          <Set testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_8X3_3MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="2.4276" y="-9.0330"/>
+              <StandardPrimitiveRef id="OVAL_3"/>
+              </Pad>
+            </Set>
+          <Set testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="1_8X3_3MM">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="16.7116" y="-9.0330"/>
+              <StandardPrimitiveRef id="OVAL_3"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="4.4196" y="27.5597"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C7"/>
+              </Pad>
+            </Set>
+          <Set net="N101" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="2.2860" y="27.5597"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C7"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="6.1214" y="12.0650"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C9"/>
+              </Pad>
+            </Set>
+          <Set net="SET2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="8.2550" y="12.0650"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C9"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="9.9460" y="34.2900"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C6"/>
+              </Pad>
+            </Set>
+          <Set net="SET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="12.0796" y="34.2900"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C6"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="30.3784" y="46.2287"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C3"/>
+              </Pad>
+            </Set>
+          <Set net="N002" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="32.5120" y="46.2287"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C3"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="0.8782" y="40.6400"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C5"/>
+              </Pad>
+            </Set>
+          <Set net="CLK1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-1.2554" y="40.6400"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C5"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="2.1844" y="24.3847"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C10"/>
+              </Pad>
+            </Set>
+          <Set net="N100" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="4.3180" y="24.3847"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C10"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="-1.1430" y="35.9163"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C8"/>
+              </Pad>
+            </Set>
+          <Set net="T2" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="-1.1430" y="33.7827"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C8"/>
+              </Pad>
+            </Set>
+          <Set net="GND" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-9.2964" y="23.4950"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="2" componentRef="C4"/>
+              </Pad>
+            </Set>
+          <Set net="Unused_0000020181FBC280" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LIB_PAD5">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-11.4300" y="23.4950"/>
+              <StandardPrimitiveRef id="RECTCENTER_2"/>
+              <PinRef pin="1" componentRef="C4"/>
+              </Pad>
+            </Set>
+          <Set net="PST-" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD2">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="-1.0160" y="4.1917"/>
+              <StandardPrimitiveRef id="RECTCENTER_5"/>
+              <PinRef pin="2" componentRef="C11"/>
+              </Pad>
+            </Set>
+          <Set net="PST+" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD2">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="-1.0160" y="-0.3803"/>
+              <StandardPrimitiveRef id="RECTCENTER_5"/>
+              <PinRef pin="1" componentRef="C11"/>
+              </Pad>
+            </Set>
+          <Set net="N012" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD2">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="-5.5734" y="6.3500"/>
+              <StandardPrimitiveRef id="RECTCENTER_5"/>
+              <PinRef pin="2" componentRef="C2"/>
+              </Pad>
+            </Set>
+          <Set net="N013" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD2">
+              <Xform rotation="180.000" mirror="true"/>
+              <Location x="-10.1454" y="6.3500"/>
+              <StandardPrimitiveRef id="RECTCENTER_5"/>
+              <PinRef pin="1" componentRef="C2"/>
+              </Pad>
+            </Set>
+          <Set net="PRESET1" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD77">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="-7.6054" y="-0.5080"/>
+              <StandardPrimitiveRef id="RECTCENTER_6"/>
+              <PinRef pin="2" componentRef="D2"/>
+              </Pad>
+            </Set>
+          <Set net="+5V" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD76_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-7.6054" y="-7.6200"/>
+              <StandardPrimitiveRef id="RECTCENTER_6"/>
+              <PinRef pin="1" componentRef="D2"/>
+              </Pad>
+            </Set>
+          <Set net="N003" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD77">
+              <Xform rotation="90.000" mirror="true"/>
+              <Location x="-7.6054" y="38.8620"/>
+              <StandardPrimitiveRef id="RECTCENTER_6"/>
+              <PinRef pin="2" componentRef="D1"/>
+              </Pad>
+            </Set>
+          <Set net="N002" testPoint="false" padUsage="TERMINATION">
+            <NonstandardAttribute name="PADSTACK_USAGE" value="Surface_pin" type="STRING"/>
+            <Pad padstackDefRef="SM_LLB_PAD76_1">
+              <Xform rotation="270.000" mirror="true"/>
+              <Location x="-7.6054" y="31.7500"/>
+              <StandardPrimitiveRef id="RECTCENTER_6"/>
+              <PinRef pin="1" componentRef="D1"/>
+              </Pad>
+            </Set>
+          </LayerFeature>
+        </Step>
+      </CadData>
+    </Ecad>
+  </IPC-2581>

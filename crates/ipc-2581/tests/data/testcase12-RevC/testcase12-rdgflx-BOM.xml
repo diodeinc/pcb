@@ -1,0 +1,415 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Content roleRef="Owner">
+    <FunctionMode mode="BOM"/>
+    <StepRef name="testcase12-rdgflx"/>
+    <BomRef name="BOM_testcase12-rdgflx"/>
+    <DictionaryColor>
+      </DictionaryColor>
+    <DictionaryLineDesc units="INCH">
+      <EntryLineDesc id="ROUND_0">
+        <LineDesc lineEnd="ROUND" lineWidth="0.0"/>
+        </EntryLineDesc>
+      </DictionaryLineDesc>
+    <DictionaryFillDesc units="INCH">
+      <EntryFillDesc id="SOLID_FILL">
+        <FillDesc fillProperty="FILL"/>
+        </EntryFillDesc>
+      <EntryFillDesc id="HOLLOW">
+        <FillDesc fillProperty="HOLLOW"/>
+        </EntryFillDesc>
+      </DictionaryFillDesc>
+    <DictionaryStandard units="INCH">
+      </DictionaryStandard>
+    <DictionaryUser units="INCH">
+      </DictionaryUser>
+    </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="UNKNOWN"/>
+    <Person name="eba" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+    </LogisticHeader>
+  <HistoryRecord number="1" origination="2021-08-02T14:15:31" software="allegro_17.4S019(7/14/2021)" lastChange="2021-08-02T14:15:14">
+    <FileRevision fileRevisionId="1" comment="">
+      <SoftwarePackage name="Allegro" revision="allegro_17.4S019(7/14/2021)" vendor="Cadence">
+        <Certification certificationStatus="CERTIFIED"/>
+        </SoftwarePackage>
+      </FileRevision>
+    </HistoryRecord>
+  <Bom name="BOM_testcase12-rdgflx">
+    <BomHeader assembly="testcase12-rdgflx" revision="1.0">
+      <StepRef name="testcase12-rdgflx"/>
+      </BomHeader>
+    <BomItem OEMDesignNumberRef="1000PF" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C1" packageRef="SMC1210" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="1000PF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES1K" quantity="3" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R31" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R30" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R29" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES1K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES220" quantity="7" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R28" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R27" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R26" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R25" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R24" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R23" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R22" packageRef="SMR0805" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES220"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES510K" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R14" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES510K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES180K" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R9" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES180K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES100K" quantity="4" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R11" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R6" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R5" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R3" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES100K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES20K" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R18" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES20K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES15K" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R17" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES15K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="RES10K" quantity="5" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R21" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R13" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R12" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R7" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="R2" packageRef="SMR1206" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="RES10K"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="10K-VC" quantity="1" pinCount="5" category="ELECTRICAL">
+      <RefDes name="R19" packageRef="RK09L" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="10K-VC"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="1K-VC" quantity="1" pinCount="5" category="ELECTRICAL">
+      <RefDes name="R20" packageRef="RK09L" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="1K-VC"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="MDPC2A" quantity="1" pinCount="4" category="ELECTRICAL">
+      <RefDes name="J1" packageRef="MDPC2A" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="MDPC2A"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IO"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="7PINMLX" quantity="1" pinCount="9" category="ELECTRICAL">
+      <RefDes name="J2" packageRef="MLX1_5MM7P" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="7PINMLX"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="3K-POT" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R16" packageRef="3314G-" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="3K-POT"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="50K-POT" quantity="2" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R15" packageRef="3314G-" populate="true" layerRef="TOP"/>
+      <RefDes name="R10" packageRef="3314G-" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="50K-POT"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="1M-POT" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R8" packageRef="3314G-" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="1M-POT"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="10K-POT" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R4" packageRef="3314G-" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="10K-POT"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="IK-POT" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="3314G-" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="IK-POT"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="LED-DISP" quantity="3" pinCount="10" category="ELECTRICAL">
+      <RefDes name="LED2" packageRef="LED-DISPLAY" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="LED1" packageRef="LED-DISPLAY" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="LED3" packageRef="LED-DISPLAY" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="LED-DISP"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="1UF" quantity="3" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C9" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C6" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C3" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="1UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="01UF" quantity="5" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C5" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C10" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C8" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C7" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="C4" packageRef="SMC0805" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="01UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="001UF" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C11" packageRef="SMC1812" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="001UF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="100PF" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="C2" packageRef="SMC1812" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="100PF"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="MC14543" quantity="1" pinCount="16" category="ELECTRICAL">
+      <RefDes name="U9" packageRef="SOIC16" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="MC14543"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="3D-BCD" quantity="1" pinCount="16" category="ELECTRICAL">
+      <RefDes name="U8" packageRef="SOIC16" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="3D-BCD"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="NAND00" quantity="1" pinCount="14" category="ELECTRICAL">
+      <RefDes name="U4" packageRef="SOIC14" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="NAND00"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="TVC-9400" quantity="1" pinCount="14" category="ELECTRICAL">
+      <RefDes name="U3" packageRef="SOIC14" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="TVC-9400"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="555" quantity="3" pinCount="8" category="ELECTRICAL">
+      <RefDes name="U7" packageRef="SOIC8" populate="true" layerRef="TOP"/>
+      <RefDes name="U6" packageRef="SOIC8" populate="true" layerRef="TOP"/>
+      <RefDes name="U5" packageRef="SOIC8" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="555"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="OPAMP" quantity="1" pinCount="8" category="ELECTRICAL">
+      <RefDes name="U2" packageRef="SOIC8" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="OPAMP"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="2N1305" quantity="3" pinCount="3" category="ELECTRICAL">
+      <RefDes name="Q3" packageRef="SOT23" populate="true" layerRef="TOP"/>
+      <RefDes name="Q2" packageRef="SOT23" populate="true" layerRef="TOP"/>
+      <RefDes name="Q1" packageRef="SOT23" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="2N1305"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="IC"/>
+        </Characteristics>
+      </BomItem>
+    <BomItem OEMDesignNumberRef="1N914" quantity="2" pinCount="2" category="ELECTRICAL">
+      <RefDes name="D2" packageRef="SMDO214AB12" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="D1" packageRef="SMDO214AB12" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="DEVICE_TYPE" textualCharacteristicValue="1N914"/>
+        <Textual definitionSource="ALLEGRO" textualCharacteristicName="COMP_CLASS" textualCharacteristicValue="DISCRETE"/>
+        </Characteristics>
+      </BomItem>
+    </Bom>
+  <Ecad name="Design">
+    <CadHeader units="INCH">
+      </CadHeader>
+    <CadData>
+      <Step name="testcase12-rdgflx">
+        <Datum x="0.0" y="0.0"/>
+        <BendArea name="BEND_1" sequenceNumber="1">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="3.473007" y="1.418942"/>
+              <PolyStepSegment x="2.981578" y="1.853394"/>
+              <PolyStepSegment x="3.053463" y="1.853548"/>
+              <PolyStepCurve x="3.450000" y="2.250000" centerX="3.05001557" centerY="2.25353317" clockwise="false"/>
+              <PolyStepSegment x="3.450064" y="2.257236"/>
+              <PolyStepSegment x="3.898420" y="1.860863"/>
+              <PolyStepCurve x="3.473007" y="1.418942" centerX="3.00000079" centerY="2.30000035" clockwise="true"/>
+              </Polygon>
+            <LineDescRef id="ROUND_0"/>
+            </Outline>
+          <CircularBend innerAngle="180.000000" innerRadius="0.195000" innerSide="TOP">
+            <BendLine startX="3.120000" startY="2.140027" endX="3.810000" endY="1.530027">
+              <LineDescRef id="ROUND_0"/>
+              </BendLine>
+            </CircularBend>
+          </BendArea>
+        <StackupZone name="ZONE_1" stackupRef="PRIMARY">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="-0.200000" y="2.300000"/>
+              <PolyStepSegment x="1.300000" y="2.300000"/>
+              <PolyStepSegment x="1.299785" y="1.949785"/>
+              <PolyStepCurve x="1.300000" y="1.943443" centerX="1.39978498" centerY="1.95000045" clockwise="false"/>
+              <PolyStepSegment x="1.300000" y="-0.200000"/>
+              <PolyStepSegment x="-0.200000" y="-0.200000"/>
+              <PolyStepSegment x="-0.200000" y="2.300000"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX_ZONE_1" comment="Tue Nov 15 15:05:46 2016:  1. No Stiffener required 2. Maintain edge clearance" stackupRef="FLEX-2-LAYER">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="1.300000" y="0.200000"/>
+              <PolyStepSegment x="1.300000" y="1.100000"/>
+              <PolyStepSegment x="1.300446" y="0.900444"/>
+              <PolyStepCurve x="1.400000" y="0.800000" centerX="1.40044530" centerY="0.89999929" clockwise="false"/>
+              <PolyStepSegment x="2.505924" y="0.795069"/>
+              <PolyStepCurve x="3.500000" y="-0.100000" centerX="2.60000060" centerY="-0.10000000" clockwise="true"/>
+              <PolyStepSegment x="3.500000" y="-0.900000"/>
+              <PolyStepCurve x="3.600000" y="-1.000000" centerX="3.60000000" centerY="-0.90000000" clockwise="false"/>
+              <PolyStepSegment x="2.900000" y="-1.000000"/>
+              <PolyStepCurve x="3.000000" y="-0.900000" centerX="2.90000000" centerY="-0.90000000" clockwise="false"/>
+              <PolyStepSegment x="3.000000" y="-0.200000"/>
+              <PolyStepCurve x="2.500000" y="0.300000" centerX="2.50000000" centerY="-0.20000000" clockwise="false"/>
+              <PolyStepSegment x="1.400000" y="0.300000"/>
+              <PolyStepCurve x="1.300000" y="0.200000" centerX="1.40000000" centerY="0.20000000" clockwise="false"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="DISPLAY_4L" stackupRef="RIGID-4-LAYER">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="4.220574" y="-0.999989"/>
+              <PolyStepCurve x="4.220601" y="-0.999989" centerX="4.22058750" centerY="-1.04996163" clockwise="true"/>
+              <PolyStepCurve x="4.270574" y="-1.049961" centerX="4.22060137" centerY="-1.04996163" clockwise="true"/>
+              <PolyStepSegment x="4.270574" y="-1.949972"/>
+              <PolyStepCurve x="4.220574" y="-1.999972" centerX="4.22057400" centerY="-1.94997200" clockwise="true"/>
+              <PolyStepSegment x="4.150576" y="-1.999972"/>
+              <PolyStepSegment x="4.150302" y="-1.999698"/>
+              <PolyStepSegment x="4.150000" y="-2.000000"/>
+              <PolyStepSegment x="2.350575" y="-2.000000"/>
+              <PolyStepCurve x="2.300575" y="-1.950000" centerX="2.35057500" centerY="-1.95000000" clockwise="true"/>
+              <PolyStepSegment x="2.300575" y="-1.050000"/>
+              <PolyStepCurve x="2.350575" y="-1.000000" centerX="2.35057500" centerY="-1.05000000" clockwise="true"/>
+              <PolyStepSegment x="4.200000" y="-1.000000"/>
+              <PolyStepSegment x="4.220574" y="-0.999989"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="PROBE_PANEL_4L" stackupRef="RIGID-4-LAYER">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.360829" y="2.637528"/>
+              <PolyStepCurve x="3.747959" y="4.148742" centerX="3.72657388" centerY="3.34902742" clockwise="true"/>
+              <PolyStepCurve x="4.092317" y="2.637528" centerX="3.72657512" centerY="3.34902812" clockwise="true"/>
+              <PolyStepSegment x="3.360829" y="2.637528"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX-W_STIFFENER" stackupRef="FLEX_W_STIFFENER">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.360829" y="2.637528"/>
+              <PolyStepSegment x="4.092317" y="2.637528"/>
+              <PolyStepCurve x="4.083138" y="2.632884" centerX="3.72657752" centerY="3.34902936" clockwise="true"/>
+              <PolyStepCurve x="4.000000" y="2.500000" centerX="4.14999339" centerY="2.49860699" clockwise="false"/>
+              <PolyStepSegment x="3.998629" y="2.352335"/>
+              <PolyStepCurve x="3.998648" y="2.248028" centerX="3.00000000" centerY="2.29999959" clockwise="true"/>
+              <PolyStepSegment x="3.449978" y="2.248028"/>
+              <PolyStepCurve x="3.450000" y="2.250000" centerX="3.05001498" centerY="2.25347618" clockwise="false"/>
+              <PolyStepSegment x="3.452211" y="2.500299"/>
+              <PolyStepCurve x="3.369220" y="2.633277" centerX="3.30221605" centerY="2.49907396" clockwise="false"/>
+              <PolyStepCurve x="3.360829" y="2.637528" centerX="3.72656052" centerY="3.34903429" clockwise="true"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        <StackupZone name="FLEX_ZONE_3" stackupRef="FLEX-2-LAYER">
+          <Profile>
+            <Polygon>
+              <PolyBegin x="3.053463" y="1.853548"/>
+              <PolyStepCurve x="3.450000" y="2.250000" centerX="3.05001557" centerY="2.25353317" clockwise="false"/>
+              <PolyStepCurve x="3.449978" y="2.248028" centerX="3.05001498" centerY="2.25347618" clockwise="true"/>
+              <PolyStepSegment x="3.998648" y="2.248028"/>
+              <PolyStepCurve x="3.998696" y="2.248963" centerX="2.99998783" centerY="2.29976485" clockwise="false"/>
+              <PolyStepCurve x="3.000000" y="1.300000" centerX="3.00000000" centerY="2.29999920" clockwise="true"/>
+              <PolyStepSegment x="1.400000" y="1.300000"/>
+              <PolyStepCurve x="1.300000" y="1.200000" centerX="1.40000000" centerY="1.20000000" clockwise="false"/>
+              <PolyStepSegment x="1.300000" y="1.943443"/>
+              <PolyStepCurve x="1.400000" y="1.850000" centerX="1.39978501" centerY="1.94999998" clockwise="false"/>
+              <PolyStepSegment x="3.053463" y="1.853548"/>
+              </Polygon>
+            </Profile>
+          </StackupZone>
+        </Step>
+      </CadData>
+    </Ecad>
+  </IPC-2581>
