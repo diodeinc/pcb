@@ -2164,6 +2164,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipc-2581"
+version = "0.2.16"
+
+[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
