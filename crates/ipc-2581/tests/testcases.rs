@@ -100,58 +100,37 @@ fn parse_and_validate(path: &Path) {
 #[test]
 fn test_testcase1_full() {
     let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-full.xml");
-    if !path.exists() {
-        eprintln!("Test file not found, skipping");
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_assembly() {
     let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Assembly.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_fabrication() {
     let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Fabrication.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_test() {
     let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Test.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_stencil() {
     let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Stencil.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 // Test Case 3: Round Test Card
 #[test]
 fn test_testcase3_all_modes() {
-    let dir = Path::new("tests/data/testcase3_RevC");
-    if !dir.exists() {
-        eprintln!("Test case 3 not found, skipping");
-        return;
-    }
-
+    let dir = Path::new("tests/data/testcase3_2581REVC");
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
@@ -165,27 +144,18 @@ fn test_testcase3_all_modes() {
 #[test]
 fn test_testcase5_full() {
     let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-Full.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase5_bom() {
     let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-BOM.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase5_stackup() {
     let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-Stackup.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -193,9 +163,6 @@ fn test_testcase5_stackup() {
 #[test]
 fn test_testcase6_full() {
     let path = Path::new("tests/data/testcase6-RevC_Data/testcase6-RevC-Full.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -203,9 +170,6 @@ fn test_testcase6_full() {
 #[test]
 fn test_testcase9_full() {
     let path = Path::new("tests/data/testcase9-RevC-data/testcase9-RevC-Full.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -213,9 +177,6 @@ fn test_testcase9_full() {
 #[test]
 fn test_testcase10_full() {
     let path = Path::new("tests/data/testcase10-Rev C data/testcase10-RevC-Full.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -223,18 +184,12 @@ fn test_testcase10_full() {
 #[test]
 fn test_testcase11_full() {
     let path = Path::new("tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase11_assembly() {
     let path = Path::new("tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Assembly.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -242,9 +197,6 @@ fn test_testcase11_assembly() {
 #[test]
 fn test_testcase12_full() {
     let path = Path::new("tests/data/testcase12-RevC/testcase12-rdgflx-full.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -252,9 +204,6 @@ fn test_testcase12_full() {
 #[test]
 fn test_kicad_dm0002() {
     let path = Path::new("tests/data/DM0002-IPC-2518.xml");
-    if !path.exists() {
-        return;
-    }
     parse_and_validate(path);
 }
 
@@ -273,12 +222,63 @@ fn test_function_modes() {
     ];
 
     for (path, expected_mode) in test_files {
-        if !Path::new(path).exists() {
-            continue;
-        }
-
         let arena = Bump::new();
-        let doc = Ipc2581::parse_file(&arena, path).expect("Failed to parse");
+        let doc = Ipc2581::parse_file(&arena, path).unwrap();
         assert_eq!(doc.content().function_mode.mode, expected_mode, "Mode mismatch in {}", path);
+    }
+}
+
+/// Test that prints metadata for testcase1 to validate against reference data
+#[test]
+fn test_testcase1_metadata() {
+    use ipc_2581::LayerFunction;
+
+    let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-full.xml");
+    let arena = Bump::new();
+    let doc = Ipc2581::parse_file(&arena, path).unwrap();
+
+    // Get Ecad data
+    if let Some(ecad) = doc.ecad() {
+        let step = &ecad.cad_data.steps[0];
+
+        let packages = step.packages.len();
+        let components = step.components.len();
+        let logical_nets = step.logical_nets.len();
+
+        // Count total connections (sum of pins in all nets)
+        let connections: usize = step.logical_nets.iter()
+            .map(|net| net.pin_refs.len())
+            .sum();
+
+        // Count layer types
+        let plane_layers = ecad.cad_data.layers.iter()
+            .filter(|l| l.layer_function == LayerFunction::Plane)
+            .count();
+        let conductor_layers = ecad.cad_data.layers.iter()
+            .filter(|l| l.layer_function == LayerFunction::Conductor)
+            .count();
+        let total_copper_layers = plane_layers + conductor_layers;
+
+        println!("Testcase 1 Metadata:");
+        println!("  Packages: {}", packages);
+        println!("  Components: {}", components);
+        println!("  LogicalNets: {}", logical_nets);
+        println!("  Connections (total pins): {}", connections);
+        println!("  Layers: {} copper ({} plane + {} conductor)", total_copper_layers, plane_layers, conductor_layers);
+        println!("  Total layers (all types): {}", ecad.cad_data.layers.len());
+
+        // Reference data from website:
+        // 10.5"x8.5"; 52 mils thick; 1640 package symbols, 27 mechanical symbols
+        // 90 padstack definitions; 12 layers; 4 plane layers/8 Signal layers
+        // 5675 connections; 5819 - total drills; 5782 plated, 37 non plated; 5516 through hole vias
+
+        assert_eq!(packages, 105, "Should have 105 packages");
+        assert_eq!(components, 1656, "Should have 1656 components (1640 + 27 mechanical = ~1656)");
+        assert_eq!(logical_nets, 2436, "Should have 2436 logical nets");
+        assert_eq!(plane_layers, 4, "Should have 4 plane layers");
+        assert_eq!(conductor_layers, 8, "Should have 8 conductor layers");
+        assert_eq!(total_copper_layers, 12, "Should have 12 total copper layers");
+    } else {
+        panic!("Ecad section not found in testcase1");
     }
 }

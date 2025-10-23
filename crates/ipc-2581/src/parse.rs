@@ -38,107 +38,69 @@ impl<'arena> Parser<'arena> {
             })?;
         let revision = self.interner.intern(revision);
 
-        // Parse Content (required)
-        let content_node = root
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "Content")
-            .ok_or(Ipc2581Error::MissingElement("Content"))?;
-        let content = self.parse_content(&content_node)?;
+        // Single pass through children
+        let mut content_node = None;
+        let mut logistic_header = None;
+        let mut history_record = None;
+        let mut ecad = None;
 
-        // Parse optional sections
-        let logistic_header = root
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "LogisticHeader")
-            .map(|n| self.parse_logistic_header(&n))
-            .transpose()?;
+        for child in root.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "Content" => content_node = Some(child),
+                "LogisticHeader" => logistic_header = Some(self.parse_logistic_header(&child)?),
+                "HistoryRecord" => history_record = Some(self.parse_history_record(&child)?),
+                "Ecad" => ecad = Some(self.parse_ecad(&child)?),
+                _ => {}
+            }
+        }
 
-        let history_record = root
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "HistoryRecord")
-            .map(|n| self.parse_history_record(&n))
-            .transpose()?;
+        let content = self.parse_content(
+            &content_node.ok_or(Ipc2581Error::MissingElement("Content"))?
+        )?;
 
         Ok(ParsedIpc2581 {
             revision,
             content,
             logistic_header,
             history_record,
+            ecad,
         })
     }
 
     fn parse_content(&mut self, node: &Node) -> Result<Content> {
         let role_ref = self.required_attr(node, "roleRef", "Content")?;
 
-        // Parse FunctionMode
-        let function_mode_node = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "FunctionMode")
-            .ok_or(Ipc2581Error::MissingElement("FunctionMode"))?;
-        let function_mode = self.parse_function_mode(&function_mode_node)?;
+        // Single pass through children
+        let mut function_mode_node = None;
+        let mut step_refs = Vec::new();
+        let mut layer_refs = Vec::new();
+        let mut bom_refs = Vec::new();
+        let mut avl_refs = Vec::new();
+        let mut dictionary_color = None;
+        let mut dictionary_line_desc = None;
+        let mut dictionary_fill_desc = None;
+        let mut dictionary_standard = None;
+        let mut dictionary_user = None;
 
-        // Parse StepRef elements
-        let step_refs = node
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "StepRef")
-            .map(|n| self.required_attr(&n, "name", "StepRef"))
-            .collect::<Result<Vec<_>>>()?;
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "FunctionMode" => function_mode_node = Some(child),
+                "StepRef" => step_refs.push(self.required_attr(&child, "name", "StepRef")?),
+                "LayerRef" => layer_refs.push(self.required_attr(&child, "name", "LayerRef")?),
+                "BomRef" => bom_refs.push(self.required_attr(&child, "name", "BomRef")?),
+                "AvlRef" => avl_refs.push(self.required_attr(&child, "name", "AvlRef")?),
+                "DictionaryColor" => dictionary_color = Some(self.parse_dictionary_color(&child)?),
+                "DictionaryLineDesc" => dictionary_line_desc = Some(self.parse_dictionary_line_desc(&child)?),
+                "DictionaryFillDesc" => dictionary_fill_desc = Some(self.parse_dictionary_fill_desc(&child)?),
+                "DictionaryStandard" => dictionary_standard = Some(self.parse_dictionary_standard(&child)?),
+                "DictionaryUser" => dictionary_user = Some(self.parse_dictionary_user(&child)?),
+                _ => {}
+            }
+        }
 
-        // Parse LayerRef elements
-        let layer_refs = node
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "LayerRef")
-            .map(|n| self.required_attr(&n, "name", "LayerRef"))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Parse BomRef elements
-        let bom_refs = node
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "BomRef")
-            .map(|n| self.required_attr(&n, "name", "BomRef"))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Parse AvlRef elements
-        let avl_refs = node
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "AvlRef")
-            .map(|n| self.required_attr(&n, "name", "AvlRef"))
-            .collect::<Result<Vec<_>>>()?;
-
-        // Parse dictionaries
-        let dictionary_color = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "DictionaryColor")
-            .map(|n| self.parse_dictionary_color(&n))
-            .transpose()?
-            .unwrap_or_default();
-
-        let dictionary_line_desc = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "DictionaryLineDesc")
-            .map(|n| self.parse_dictionary_line_desc(&n))
-            .transpose()?
-            .unwrap_or_default();
-
-        let dictionary_fill_desc = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "DictionaryFillDesc")
-            .map(|n| self.parse_dictionary_fill_desc(&n))
-            .transpose()?
-            .unwrap_or_default();
-
-        let dictionary_standard = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "DictionaryStandard")
-            .map(|n| self.parse_dictionary_standard(&n))
-            .transpose()?
-            .unwrap_or_default();
-
-        let dictionary_user = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "DictionaryUser")
-            .map(|n| self.parse_dictionary_user(&n))
-            .transpose()?
-            .unwrap_or_default();
+        let function_mode = self.parse_function_mode(
+            &function_mode_node.ok_or(Ipc2581Error::MissingElement("FunctionMode"))?
+        )?;
 
         Ok(Content {
             role_ref,
@@ -147,11 +109,11 @@ impl<'arena> Parser<'arena> {
             layer_refs,
             bom_refs,
             avl_refs,
-            dictionary_color,
-            dictionary_line_desc,
-            dictionary_fill_desc,
-            dictionary_standard,
-            dictionary_user,
+            dictionary_color: dictionary_color.unwrap_or_default(),
+            dictionary_line_desc: dictionary_line_desc.unwrap_or_default(),
+            dictionary_fill_desc: dictionary_fill_desc.unwrap_or_default(),
+            dictionary_standard: dictionary_standard.unwrap_or_default(),
+            dictionary_user: dictionary_user.unwrap_or_default(),
         })
     }
 
@@ -537,6 +499,199 @@ impl<'arena> Parser<'arena> {
             }),
         }
     }
+
+    fn parse_ecad(&mut self, node: &Node) -> Result<Ecad> {
+        let cad_data_node = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "CadData")
+            .ok_or(Ipc2581Error::MissingElement("CadData"))?;
+        let cad_data = self.parse_cad_data(&cad_data_node)?;
+
+        Ok(Ecad { cad_data })
+    }
+
+    fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
+        let mut steps = Vec::new();
+        let mut layers = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "Step" => steps.push(self.parse_step(&child)?),
+                "Layer" => layers.push(self.parse_layer(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok(CadData { steps, layers })
+    }
+
+    fn parse_step(&mut self, node: &Node) -> Result<Step> {
+        let name = self.required_attr(node, "name", "Step")?;
+
+        // Single pass through children
+        let mut datum = None;
+        let mut profile = None;
+        let mut packages = Vec::new();
+        let mut components = Vec::new();
+        let mut logical_nets = Vec::new();
+        let mut phy_net_groups = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "Datum" => datum = Some(self.parse_datum(&child)?),
+                "Profile" => profile = Some(self.parse_profile(&child)?),
+                "Package" => packages.push(self.parse_package(&child)?),
+                "Component" => components.push(self.parse_component(&child)?),
+                "LogicalNet" => logical_nets.push(self.parse_logical_net(&child)?),
+                "PhyNetGroup" => phy_net_groups.push(self.parse_phy_net_group(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok(Step {
+            name,
+            datum,
+            profile,
+            packages,
+            components,
+            logical_nets,
+            phy_net_groups,
+        })
+    }
+
+    fn parse_datum(&mut self, node: &Node) -> Result<Datum> {
+        let x = self.parse_f64_attr(node, "x", "Datum")?;
+        let y = self.parse_f64_attr(node, "y", "Datum")?;
+        Ok(Datum { x, y })
+    }
+
+    fn parse_profile(&mut self, node: &Node) -> Result<Profile> {
+        let polygon_node = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "Polygon")
+            .ok_or(Ipc2581Error::MissingElement("Polygon in Profile"))?;
+        let polygon = self.parse_polygon(&polygon_node)?;
+        Ok(Profile { polygon })
+    }
+
+    fn parse_package(&mut self, node: &Node) -> Result<Package> {
+        let name = self.required_attr(node, "name", "Package")?;
+        let package_type = self.required_attr(node, "type", "Package")?;
+        let pin_one = node.attribute("pinOne").map(|s| self.interner.intern(s));
+        let height = node.attribute("height").and_then(|s| s.parse().ok());
+
+        Ok(Package {
+            name,
+            package_type,
+            pin_one,
+            height,
+        })
+    }
+
+    fn parse_component(&mut self, node: &Node) -> Result<Component> {
+        let ref_des = self.required_attr(node, "refDes", "Component")?;
+        let package_ref = self.required_attr(node, "packageRef", "Component")?;
+        let layer_ref = self.required_attr(node, "layerRef", "Component")?;
+
+        let mount_type = node.attribute("mountType").map(|s| match s {
+            "SMT" => MountType::Smt,
+            "THT" => MountType::Tht,
+            _ => MountType::Other,
+        });
+
+        let part = node.attribute("part").map(|s| self.interner.intern(s));
+
+        Ok(Component {
+            ref_des,
+            package_ref,
+            layer_ref,
+            mount_type,
+            part,
+        })
+    }
+
+    fn parse_logical_net(&mut self, node: &Node) -> Result<LogicalNet> {
+        let name = self.required_attr(node, "name", "LogicalNet")?;
+
+        let pin_refs = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "PinRef")
+            .map(|n| self.parse_pin_ref(&n))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(LogicalNet { name, pin_refs })
+    }
+
+    fn parse_pin_ref(&mut self, node: &Node) -> Result<PinRef> {
+        let component_ref = self.required_attr(node, "componentRef", "PinRef")?;
+        let pin = self.required_attr(node, "pin", "PinRef")?;
+        Ok(PinRef { component_ref, pin })
+    }
+
+    fn parse_phy_net_group(&mut self, node: &Node) -> Result<PhyNetGroup> {
+        let name = self.required_attr(node, "name", "PhyNetGroup")?;
+        Ok(PhyNetGroup { name })
+    }
+
+    fn parse_layer(&mut self, node: &Node) -> Result<Layer> {
+        let name = self.required_attr(node, "name", "Layer")?;
+        let layer_function_str = self.required_attr(node, "layerFunction", "Layer")?;
+        let layer_function = self.parse_layer_function(self.interner.resolve(layer_function_str))?;
+
+        let side = node.attribute("side").map(|s| self.parse_side(s)).transpose()?;
+        let polarity = node.attribute("polarity").map(|s| self.parse_polarity(s)).transpose()?;
+
+        Ok(Layer {
+            name,
+            layer_function,
+            side,
+            polarity,
+        })
+    }
+
+    fn parse_layer_function(&self, s: &str) -> Result<LayerFunction> {
+        match s {
+            "CONDUCTOR" => Ok(LayerFunction::Conductor),
+            "CONDFILM" => Ok(LayerFunction::CondFilm),
+            "CONDFOIL" => Ok(LayerFunction::CondFoil),
+            "PLANE" => Ok(LayerFunction::Plane),
+            "SIGNAL" => Ok(LayerFunction::Signal),
+            "MIXED" => Ok(LayerFunction::Mixed),
+            "SOLDERMASK" => Ok(LayerFunction::Soldermask),
+            "SOLDERPASTE" => Ok(LayerFunction::Solderpaste),
+            "SILKSCREEN" => Ok(LayerFunction::Silkscreen),
+            "LEGEND" => Ok(LayerFunction::Legend),
+            "DRILL" => Ok(LayerFunction::Drill),
+            "ROUT" => Ok(LayerFunction::Rout),
+            "V_CUT" => Ok(LayerFunction::VCut),
+            "DIELBASE" => Ok(LayerFunction::DielBase),
+            "DIELCORE" => Ok(LayerFunction::DielCore),
+            "DIELPREG" => Ok(LayerFunction::DielPreg),
+            "DOCUMENT" => Ok(LayerFunction::Document),
+            "GRAPHIC" => Ok(LayerFunction::Graphic),
+            _ => Ok(LayerFunction::Other),
+        }
+    }
+
+    fn parse_side(&self, s: &str) -> Result<Side> {
+        match s {
+            "TOP" => Ok(Side::Top),
+            "BOTTOM" => Ok(Side::Bottom),
+            "BOTH" => Ok(Side::Both),
+            "INTERNAL" => Ok(Side::Internal),
+            "ALL" => Ok(Side::All),
+            "NONE" => Ok(Side::None),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!("Invalid side: {}", s))),
+        }
+    }
+
+    fn parse_polarity(&self, s: &str) -> Result<Polarity> {
+        match s {
+            "POSITIVE" => Ok(Polarity::Positive),
+            "NEGATIVE" => Ok(Polarity::Negative),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!("Invalid polarity: {}", s))),
+        }
+    }
 }
 
 /// Parsed IPC-2581 document (before transferring to user arena)
@@ -546,4 +701,5 @@ pub struct ParsedIpc2581 {
     pub content: Content,
     pub logistic_header: Option<LogisticHeader>,
     pub history_record: Option<HistoryRecord>,
+    pub ecad: Option<Ecad>,
 }

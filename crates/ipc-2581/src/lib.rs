@@ -55,6 +55,7 @@ pub struct Ipc2581<'arena> {
     content: Content,
     logistic_header: Option<LogisticHeader>,
     history_record: Option<HistoryRecord>,
+    ecad: Option<Ecad>,
 }
 
 impl<'arena> Ipc2581<'arena> {
@@ -77,6 +78,7 @@ impl<'arena> Ipc2581<'arena> {
             content: parsed.content,
             logistic_header: parsed.logistic_header,
             history_record: parsed.history_record,
+            ecad: parsed.ecad,
         })
     }
 
@@ -104,6 +106,11 @@ impl<'arena> Ipc2581<'arena> {
     /// Get the history record if present
     pub fn history_record(&self) -> Option<&HistoryRecord> {
         self.history_record.as_ref()
+    }
+
+    /// Get the Ecad section if present
+    pub fn ecad(&self) -> Option<&Ecad> {
+        self.ecad.as_ref()
     }
 
     /// Resolve a symbol to its string value
