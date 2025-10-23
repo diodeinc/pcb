@@ -9,7 +9,14 @@ expression: result
 		(size 1 1)
 		(layers "F.Cu")
 	)
-
+	(embedded_files
+		(file
+			(name test.step)
+			(type model)
+			(data |KLUv/QBYcQAAU1RFUCBEQVRBIEhFUkU=|)
+			(checksum "368eafac8da1ec359463c2e25c4a62db836ca6633c73e039aa84ebe38b28c3bb")
+		)
+	)
 	(model "kicad-embed://test.step"
 		(offset
 			(xyz 0 0 0)
@@ -19,14 +26,6 @@ expression: result
 		)
 		(rotate
 			(xyz 0 0 0)
-		)
-	)
-	(embedded_files
-		(file
-			(name test.step)
-			(type model)
-			(data |KLUv/QBYcQAAU1RFUCBEQVRBIEhFUkU=|)
-			(checksum "368eafac8da1ec359463c2e25c4a62db836ca6633c73e039aa84ebe38b28c3bb")
 		)
 	)
 )

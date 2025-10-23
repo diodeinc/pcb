@@ -305,7 +305,7 @@ fn embed_step_in_footprint(
     );
 
     let model_block = format!(
-        "\n{indent}(model \"kicad-embed://{filename}\"\n\
+        "{indent}(model \"kicad-embed://{filename}\"\n\
          {indent}{indent}(offset\n\
          {indent}{indent}{indent}(xyz 0 0 0)\n\
          {indent}{indent})\n\
@@ -324,17 +324,17 @@ fn embed_step_in_footprint(
     let (new_text, num_replaced) = replace_model_path(&text, &format!("kicad-embed://{filename}"));
     text = new_text;
 
-    // If no model block was found, add a new one with default transforms
-    if num_replaced == 0 {
-        if let Some(pos) = text.rfind(')') {
-            text.insert_str(pos, &model_block);
-        }
-    }
-
-    // Add embedded_files block if not already present
+    // Add embedded_files block if not already present (insert first so it appears before model)
     if !text.contains("(embedded_files") {
         if let Some(pos) = text.rfind(')') {
             text.insert_str(pos, &embed_block);
+        }
+    }
+
+    // If no model block was found, add a new one with default transforms (insert second so it appears after embedded_files)
+    if num_replaced == 0 {
+        if let Some(pos) = text.rfind(')') {
+            text.insert_str(pos, &model_block);
         }
     }
 
