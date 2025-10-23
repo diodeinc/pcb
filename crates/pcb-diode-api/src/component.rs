@@ -5,6 +5,7 @@ use deunicode::deunicode;
 use indicatif::ProgressBar;
 use inquire::Select;
 use minijinja::Environment;
+use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -250,6 +251,57 @@ fn replace_model_path(text: &str, new_path: &str) -> (String, usize) {
     (result.to_string(), count)
 }
 
+/// Find and extract an S-expression block starting with a given pattern.
+/// Returns Some((extracted_text, remaining_text)) or None if not found.
+///
+/// This function:
+/// 1. Finds the pattern in the text
+/// 2. Captures leading whitespace from the start of the line
+/// 3. Matches balanced parentheses to find the complete block
+/// 4. Includes trailing newline if present
+/// 5. Returns both the extracted block and the text with the block removed
+fn extract_sexp_block(text: &str, pattern: &str) -> Option<(String, String)> {
+    // Use regex to find the pattern at the start of a line (with optional leading whitespace)
+    let pattern_regex = Regex::new(&format!(r"(?m)^(\s*)({})", regex::escape(pattern))).unwrap();
+    let captures = pattern_regex.captures(text)?;
+    let line_start = captures.get(1)?.start();
+    let block_start = captures.get(2)?.start();
+
+    // Count parentheses to find the matching closing paren
+    let mut depth = 0;
+    let mut end_pos = block_start;
+
+    for (i, ch) in text[block_start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end_pos = block_start + i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if end_pos <= block_start || depth != 0 {
+        return None;
+    }
+
+    // Include trailing newline if present
+    let extract_end = if text[end_pos..].starts_with('\n') {
+        end_pos + 1
+    } else {
+        end_pos
+    };
+
+    let extracted = text[line_start..extract_end].to_string();
+    let remaining = text[..line_start].to_string() + &text[extract_end..];
+
+    Some((extracted, remaining))
+}
+
 /// Embed a STEP file into a KiCad footprint using the KiCad 8/9 embedded files format.
 ///
 /// This function:
@@ -324,15 +376,32 @@ fn embed_step_in_footprint(
     let (new_text, num_replaced) = replace_model_path(&text, &format!("kicad-embed://{filename}"));
     text = new_text;
 
-    // Add embedded_files block if not already present (insert first so it appears before model)
+    // If a model block exists, we need to extract it and reinsert it at the end
+    // (after embedded_files) to maintain the correct order: embedded_files → model
+    let extracted_model = if num_replaced > 0 {
+        extract_sexp_block(&text, "(model ").map(|(model_text, remaining_text)| {
+            text = remaining_text;
+            model_text
+        })
+    } else {
+        None
+    };
+
+    // Add embedded_files block if not already present
     if !text.contains("(embedded_files") {
         if let Some(pos) = text.rfind(')') {
             text.insert_str(pos, &embed_block);
         }
     }
 
-    // If no model block was found, add a new one with default transforms (insert second so it appears after embedded_files)
-    if num_replaced == 0 {
+    // Add or re-insert model block at the end (after embedded_files)
+    if let Some(existing_model) = extracted_model {
+        // Re-insert the extracted model block
+        if let Some(pos) = text.rfind(')') {
+            text.insert_str(pos, &existing_model);
+        }
+    } else if num_replaced == 0 {
+        // No existing model block, add a new one with default transforms
         if let Some(pos) = text.rfind(')') {
             text.insert_str(pos, &model_block);
         }
