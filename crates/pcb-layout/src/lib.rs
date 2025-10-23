@@ -75,18 +75,28 @@ pub fn process_layout(
     schematic: &Schematic,
     source_path: &Path,
     sync_board_config: bool,
+    use_temp_dir: bool,
 ) -> Result<LayoutResult, LayoutError> {
-    // Extract layout path from schematic
-    let layout_path = utils::extract_layout_path(schematic).ok_or(LayoutError::NoLayoutPath)?;
-
     // Convert relative path to absolute based on source file location
-    let layout_dir = if layout_path.is_relative() {
-        source_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(&layout_path)
+    let layout_dir = if use_temp_dir {
+        // Create a temporary directory and keep it (prevent cleanup on drop)
+        let temp = tempfile::Builder::new()
+            .prefix("pcb-layout-")
+            .tempdir()
+            .context("Failed to create temporary directory")?;
+        temp.keep()
     } else {
-        layout_path
+        // Extract layout path from schematic (only required when not using temp)
+        let layout_path = utils::extract_layout_path(schematic).ok_or(LayoutError::NoLayoutPath)?;
+
+        if layout_path.is_relative() {
+            source_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&layout_path)
+        } else {
+            layout_path
+        }
     };
 
     // Get all the file paths

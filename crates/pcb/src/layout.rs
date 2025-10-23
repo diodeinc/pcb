@@ -40,6 +40,10 @@ pub struct LayoutArgs {
         default_missing_value = "true"
     )]
     pub sync_board_config: bool,
+
+    /// Generate layout in a temporary directory (fresh layout, opens KiCad)
+    #[arg(long = "temp")]
+    pub temp: bool,
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
@@ -73,7 +77,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         let spinner = Spinner::builder(format!("{file_name}: Generating layout")).start();
 
         // Check if the schematic has a layout
-        match process_layout(&schematic, &zen_path, args.sync_board_config) {
+        match process_layout(&schematic, &zen_path, args.sync_board_config, args.temp) {
             Ok(layout_result) => {
                 spinner.finish();
                 // Print success with the layout path relative to the star file
@@ -122,8 +126,8 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Open the selected layout if not disabled
-    if !args.no_open && !generated_layouts.is_empty() {
+    // Open the selected layout if not disabled (or if using temp)
+    if (!args.no_open || args.temp) && !generated_layouts.is_empty() {
         let layout_to_open = if generated_layouts.len() == 1 && !args.select {
             // Only one layout and not forcing selection - open it directly
             &generated_layouts[0].1
