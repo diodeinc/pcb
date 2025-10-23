@@ -209,6 +209,8 @@ fn upgrade_symbol(symbol_path: &Path) -> Result<()> {
     pcb_kicad::KiCadCliBuilder::new()
         .command("sym")
         .subcommand("upgrade")
+        .arg("--output")
+        .arg(symbol_path.to_string_lossy().as_ref())
         .arg(symbol_path.to_string_lossy().as_ref())
         .run()
 }
@@ -223,6 +225,8 @@ fn upgrade_footprint(footprint_path: &Path) -> Result<()> {
     pcb_kicad::KiCadCliBuilder::new()
         .command("fp")
         .subcommand("upgrade")
+        .arg("--output")
+        .arg(lib_dir.to_string_lossy().as_ref())
         .arg(lib_dir.to_string_lossy().as_ref())
         .run()
 }
