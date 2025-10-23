@@ -56,6 +56,7 @@ pub struct Ipc2581<'arena> {
     logistic_header: Option<LogisticHeader>,
     history_record: Option<HistoryRecord>,
     ecad: Option<Ecad>,
+    bom: Option<Bom>,
 }
 
 impl<'arena> Ipc2581<'arena> {
@@ -79,6 +80,7 @@ impl<'arena> Ipc2581<'arena> {
             logistic_header: parsed.logistic_header,
             history_record: parsed.history_record,
             ecad: parsed.ecad,
+            bom: parsed.bom,
         })
     }
 
@@ -111,6 +113,11 @@ impl<'arena> Ipc2581<'arena> {
     /// Get the Ecad section if present
     pub fn ecad(&self) -> Option<&Ecad> {
         self.ecad.as_ref()
+    }
+
+    /// Get the BOM section if present
+    pub fn bom(&self) -> Option<&Bom> {
+        self.bom.as_ref()
     }
 
     /// Resolve a symbol to its string value

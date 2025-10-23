@@ -43,6 +43,7 @@ impl<'arena> Parser<'arena> {
         let mut logistic_header = None;
         let mut history_record = None;
         let mut ecad = None;
+        let mut bom = None;
 
         for child in root.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
@@ -50,13 +51,13 @@ impl<'arena> Parser<'arena> {
                 "LogisticHeader" => logistic_header = Some(self.parse_logistic_header(&child)?),
                 "HistoryRecord" => history_record = Some(self.parse_history_record(&child)?),
                 "Ecad" => ecad = Some(self.parse_ecad(&child)?),
+                "Bom" => bom = Some(self.parse_bom(&child)?),
                 _ => {}
             }
         }
 
-        let content = self.parse_content(
-            &content_node.ok_or(Ipc2581Error::MissingElement("Content"))?
-        )?;
+        let content =
+            self.parse_content(&content_node.ok_or(Ipc2581Error::MissingElement("Content"))?)?;
 
         Ok(ParsedIpc2581 {
             revision,
@@ -64,6 +65,7 @@ impl<'arena> Parser<'arena> {
             logistic_header,
             history_record,
             ecad,
+            bom,
         })
     }
 
@@ -90,16 +92,22 @@ impl<'arena> Parser<'arena> {
                 "BomRef" => bom_refs.push(self.required_attr(&child, "name", "BomRef")?),
                 "AvlRef" => avl_refs.push(self.required_attr(&child, "name", "AvlRef")?),
                 "DictionaryColor" => dictionary_color = Some(self.parse_dictionary_color(&child)?),
-                "DictionaryLineDesc" => dictionary_line_desc = Some(self.parse_dictionary_line_desc(&child)?),
-                "DictionaryFillDesc" => dictionary_fill_desc = Some(self.parse_dictionary_fill_desc(&child)?),
-                "DictionaryStandard" => dictionary_standard = Some(self.parse_dictionary_standard(&child)?),
+                "DictionaryLineDesc" => {
+                    dictionary_line_desc = Some(self.parse_dictionary_line_desc(&child)?)
+                }
+                "DictionaryFillDesc" => {
+                    dictionary_fill_desc = Some(self.parse_dictionary_fill_desc(&child)?)
+                }
+                "DictionaryStandard" => {
+                    dictionary_standard = Some(self.parse_dictionary_standard(&child)?)
+                }
                 "DictionaryUser" => dictionary_user = Some(self.parse_dictionary_user(&child)?),
                 _ => {}
             }
         }
 
         let function_mode = self.parse_function_mode(
-            &function_mode_node.ok_or(Ipc2581Error::MissingElement("FunctionMode"))?
+            &function_mode_node.ok_or(Ipc2581Error::MissingElement("FunctionMode"))?,
         )?;
 
         Ok(Content {
@@ -513,16 +521,34 @@ impl<'arena> Parser<'arena> {
     fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
         let mut steps = Vec::new();
         let mut layers = Vec::new();
+        let mut stackup = None;
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "Step" => steps.push(self.parse_step(&child)?),
                 "Layer" => layers.push(self.parse_layer(&child)?),
+                "Stackup" => stackup = Some(self.parse_stackup(&child)?),
                 _ => {}
             }
         }
 
-        Ok(CadData { steps, layers })
+        Ok(CadData {
+            steps,
+            layers,
+            stackup,
+        })
+    }
+
+    fn parse_stackup(&mut self, node: &Node) -> Result<Stackup> {
+        let name = self.required_attr(node, "name", "Stackup")?;
+        let overall_thickness = node
+            .attribute("overallThickness")
+            .and_then(|s| s.parse().ok());
+
+        Ok(Stackup {
+            name,
+            overall_thickness,
+        })
     }
 
     fn parse_step(&mut self, node: &Node) -> Result<Step> {
@@ -531,19 +557,23 @@ impl<'arena> Parser<'arena> {
         // Single pass through children
         let mut datum = None;
         let mut profile = None;
+        let mut padstack_defs = Vec::new();
         let mut packages = Vec::new();
         let mut components = Vec::new();
         let mut logical_nets = Vec::new();
         let mut phy_net_groups = Vec::new();
+        let mut layer_features = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "Datum" => datum = Some(self.parse_datum(&child)?),
                 "Profile" => profile = Some(self.parse_profile(&child)?),
+                "PadStackDef" => padstack_defs.push(self.parse_padstack_def(&child)?),
                 "Package" => packages.push(self.parse_package(&child)?),
                 "Component" => components.push(self.parse_component(&child)?),
                 "LogicalNet" => logical_nets.push(self.parse_logical_net(&child)?),
                 "PhyNetGroup" => phy_net_groups.push(self.parse_phy_net_group(&child)?),
+                "LayerFeature" => layer_features.push(self.parse_layer_feature(&child)?),
                 _ => {}
             }
         }
@@ -552,10 +582,12 @@ impl<'arena> Parser<'arena> {
             name,
             datum,
             profile,
+            padstack_defs,
             packages,
             components,
             logical_nets,
             phy_net_groups,
+            layer_features,
         })
     }
 
@@ -636,16 +668,63 @@ impl<'arena> Parser<'arena> {
     fn parse_layer(&mut self, node: &Node) -> Result<Layer> {
         let name = self.required_attr(node, "name", "Layer")?;
         let layer_function_str = self.required_attr(node, "layerFunction", "Layer")?;
-        let layer_function = self.parse_layer_function(self.interner.resolve(layer_function_str))?;
+        let layer_function =
+            self.parse_layer_function(self.interner.resolve(layer_function_str))?;
 
-        let side = node.attribute("side").map(|s| self.parse_side(s)).transpose()?;
-        let polarity = node.attribute("polarity").map(|s| self.parse_polarity(s)).transpose()?;
+        let side = node
+            .attribute("side")
+            .map(|s| self.parse_side(s))
+            .transpose()?;
+        let polarity = node
+            .attribute("polarity")
+            .map(|s| self.parse_polarity(s))
+            .transpose()?;
 
         Ok(Layer {
             name,
             layer_function,
             side,
             polarity,
+        })
+    }
+
+    fn parse_layer_feature(&mut self, node: &Node) -> Result<LayerFeature> {
+        let layer_ref = self.required_attr(node, "layerRef", "LayerFeature")?;
+
+        let sets = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "Set")
+            .map(|n| self.parse_feature_set(&n))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(LayerFeature { layer_ref, sets })
+    }
+
+    fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
+        let holes = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "Hole")
+            .map(|n| self.parse_hole(&n))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(FeatureSet { holes })
+    }
+
+    fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
+        let name = node.attribute("name").map(|s| self.interner.intern(s));
+        let diameter = self.parse_f64_attr(node, "diameter", "Hole")?;
+        let plating_status_str = self.required_attr(node, "platingStatus", "Hole")?;
+        let plating_status =
+            self.parse_plating_status(self.interner.resolve(plating_status_str))?;
+        let x = self.parse_f64_attr(node, "x", "Hole")?;
+        let y = self.parse_f64_attr(node, "y", "Hole")?;
+
+        Ok(Hole {
+            name,
+            diameter,
+            plating_status,
+            x,
+            y,
         })
     }
 
@@ -681,7 +760,10 @@ impl<'arena> Parser<'arena> {
             "INTERNAL" => Ok(Side::Internal),
             "ALL" => Ok(Side::All),
             "NONE" => Ok(Side::None),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!("Invalid side: {}", s))),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid side: {}",
+                s
+            ))),
         }
     }
 
@@ -689,8 +771,143 @@ impl<'arena> Parser<'arena> {
         match s {
             "POSITIVE" => Ok(Polarity::Positive),
             "NEGATIVE" => Ok(Polarity::Negative),
-            _ => Err(Ipc2581Error::InvalidAttribute(format!("Invalid polarity: {}", s))),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid polarity: {}",
+                s
+            ))),
         }
+    }
+
+    fn parse_padstack_def(&mut self, node: &Node) -> Result<PadStackDef> {
+        let name = self.required_attr(node, "name", "PadStackDef")?;
+
+        let mut hole_def = None;
+        let mut pad_defs = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "PadstackHoleDef" => hole_def = Some(self.parse_padstack_hole_def(&child)?),
+                "PadstackPadDef" => pad_defs.push(self.parse_padstack_pad_def(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok(PadStackDef {
+            name,
+            hole_def,
+            pad_defs,
+        })
+    }
+
+    fn parse_padstack_hole_def(&mut self, node: &Node) -> Result<PadstackHoleDef> {
+        let name = self.required_attr(node, "name", "PadstackHoleDef")?;
+        let diameter = self.parse_f64_attr(node, "diameter", "PadstackHoleDef")?;
+        let plating_status_str = self.required_attr(node, "platingStatus", "PadstackHoleDef")?;
+        let plating_status =
+            self.parse_plating_status(self.interner.resolve(plating_status_str))?;
+        let plus_tol = self.parse_f64_attr(node, "plusTol", "PadstackHoleDef")?;
+        let minus_tol = self.parse_f64_attr(node, "minusTol", "PadstackHoleDef")?;
+        let x = self.parse_f64_attr(node, "x", "PadstackHoleDef")?;
+        let y = self.parse_f64_attr(node, "y", "PadstackHoleDef")?;
+
+        Ok(PadstackHoleDef {
+            name,
+            diameter,
+            plating_status,
+            plus_tol,
+            minus_tol,
+            x,
+            y,
+        })
+    }
+
+    fn parse_padstack_pad_def(&mut self, node: &Node) -> Result<PadstackPadDef> {
+        let layer_ref = self.required_attr(node, "layerRef", "PadstackPadDef")?;
+        let pad_use_str = self.required_attr(node, "padUse", "PadstackPadDef")?;
+        let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
+
+        Ok(PadstackPadDef { layer_ref, pad_use })
+    }
+
+    fn parse_plating_status(&self, s: &str) -> Result<PlatingStatus> {
+        match s {
+            "PLATED" => Ok(PlatingStatus::Plated),
+            "NONPLATED" => Ok(PlatingStatus::NonPlated),
+            "VIA" => Ok(PlatingStatus::Via),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid plating status: {}",
+                s
+            ))),
+        }
+    }
+
+    fn parse_pad_use(&self, s: &str) -> Result<PadUse> {
+        match s {
+            "REGULAR" => Ok(PadUse::Regular),
+            "ANTIPAD" => Ok(PadUse::Antipad),
+            "THERMAL" => Ok(PadUse::Thermal),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid pad use: {}",
+                s
+            ))),
+        }
+    }
+
+    fn parse_bom(&mut self, node: &Node) -> Result<Bom> {
+        let name = self.required_attr(node, "name", "Bom")?;
+
+        let items = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "BomItem")
+            .map(|n| self.parse_bom_item(&n))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Bom { name, items })
+    }
+
+    fn parse_bom_item(&mut self, node: &Node) -> Result<BomItem> {
+        let oem_design_number_ref = self.required_attr(node, "OEMDesignNumberRef", "BomItem")?;
+
+        let quantity = node.attribute("quantity").and_then(|s| s.parse().ok());
+        let pin_count = node.attribute("pinCount").and_then(|s| s.parse().ok());
+
+        let category = node.attribute("category").map(|s| match s {
+            "ELECTRICAL" => BomCategory::Electrical,
+            "MECHANICAL" => BomCategory::Mechanical,
+            _ => BomCategory::Electrical, // Default
+        });
+
+        let ref_des_list = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "RefDes")
+            .map(|n| self.parse_bom_ref_des(&n))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(BomItem {
+            oem_design_number_ref,
+            quantity,
+            pin_count,
+            category,
+            ref_des_list,
+        })
+    }
+
+    fn parse_bom_ref_des(&mut self, node: &Node) -> Result<BomRefDes> {
+        let name = self.required_attr(node, "name", "RefDes")?;
+        let package_ref = self.required_attr(node, "packageRef", "RefDes")?;
+        let layer_ref = self.required_attr(node, "layerRef", "RefDes")?;
+
+        let populate = node
+            .attribute("populate")
+            .map(|s| s == "true")
+            .unwrap_or(true);
+
+        Ok(BomRefDes {
+            name,
+            package_ref,
+            populate,
+            layer_ref,
+        })
     }
 }
 
@@ -702,4 +919,5 @@ pub struct ParsedIpc2581 {
     pub logistic_header: Option<LogisticHeader>,
     pub history_record: Option<HistoryRecord>,
     pub ecad: Option<Ecad>,
+    pub bom: Option<Bom>,
 }

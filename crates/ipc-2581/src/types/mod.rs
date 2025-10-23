@@ -1,3 +1,4 @@
+pub mod bom;
 pub mod content;
 pub mod dictionary;
 pub mod ecad;
@@ -5,6 +6,7 @@ pub mod metadata;
 pub mod primitives;
 pub mod transform;
 
+pub use bom::*;
 pub use content::*;
 pub use dictionary::*;
 pub use ecad::*;
