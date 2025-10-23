@@ -323,7 +323,9 @@ fn embed_step_in_footprint(
     let indent = "\t";
 
     // Compress, encode, and checksum
-    let mut encoder = zstd::Encoder::new(Vec::new(), 3)?;
+    let mut encoder = zstd::Encoder::new(Vec::new(), 15)?;
+    encoder.include_contentsize(true)?;
+    encoder.set_pledged_src_size(Some(step_bytes.len() as u64))?;
     encoder.write_all(&step_bytes)?;
     let compressed = encoder.finish()?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
