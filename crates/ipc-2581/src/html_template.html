@@ -59,6 +59,12 @@ h3 {
     width: 400px;
 }
 
+.summary-wide {
+    width: fit-content;
+    min-width: 480px;
+    max-width: 800px;
+}
+
 .summary-item {
     display: grid;
     grid-template-columns: 160px 1fr;
@@ -409,7 +415,7 @@ td {
     {% endif %}
 
     {% if downloads %}
-    <div class="summary">
+    <div class="summary summary-wide">
         <div class="summary-item">
             <span class="summary-label">IPC-2581:</span>
             <span class="summary-value">

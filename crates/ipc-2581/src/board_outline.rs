@@ -7,6 +7,7 @@ pub struct BoardOutlineData<'a> {
     pub outline: &'a Polygon,
     pub cutouts: &'a [Polygon],
     pub slots: &'a [(Polygon, f64, f64)], // (outline, x_offset, y_offset)
+    pub npths: &'a [(f64, f64, f64)], // (x, y, diameter)
 }
 
 // Helper to create kurbo Arc from IPC-2581 curve data
@@ -206,10 +207,30 @@ pub fn render_board_outline_svg(data: BoardOutlineData) -> String {
         let slot_path_data = add_polygon(Data::new(), slot_outline, *x_offset, *y_offset, true);
         let slot_path = Path::new()
             .set("fill", "#999")
-            .set("stroke", "#666")
-            .set("stroke-width", 1)
+            .set("stroke", "#333")
+            .set("stroke-width", 2)
+            .set("stroke-linejoin", "round")
+            .set("stroke-linecap", "round")
+            .set("shape-rendering", "geometricPrecision")
             .set("d", slot_path_data);
         document = document.add(slot_path);
+    }
+
+    // Render NPTHs (non-plated through holes) as circles with same style as slots
+    for (x, y, diameter) in data.npths {
+        let cx = (x - min_x) * scale;
+        let cy = (y - min_y) * scale;
+        let radius = (diameter / 2.0) * scale;
+
+        let circle = svg::node::element::Circle::new()
+            .set("cx", cx)
+            .set("cy", cy)
+            .set("r", radius)
+            .set("fill", "#999")
+            .set("stroke", "#333")
+            .set("stroke-width", 2)
+            .set("shape-rendering", "geometricPrecision");
+        document = document.add(circle);
     }
 
     let mut svg_buffer = Vec::new();

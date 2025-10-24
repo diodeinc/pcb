@@ -1,5 +1,5 @@
 use crate::types::Units;
-use crate::{board_outline::render_board_outline_svg, Ipc2581, LayerFunction, Side};
+use crate::{board_outline::render_board_outline_svg, Ipc2581, LayerFunction, PlatingStatus, Side};
 use base64::Engine;
 use minijinja::{context, Environment};
 use serde::Serialize;
@@ -339,12 +339,36 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
     let step = &ecad.cad_data.steps[0];
     let profile = step.profile.as_ref()?;
 
+    // Get drill layers
+    let drill_layers: Vec<_> = ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|l| matches!(l.layer_function, LayerFunction::Drill))
+        .map(|l| doc.resolve(l.name))
+        .collect();
+
     // Collect slots from layer features (mechanical features like mounting slots)
     let mut slots = Vec::new();
+    // Collect NPTHs (non-plated through holes)
+    let mut npths = Vec::new();
+
     for layer_feature in &step.layer_features {
+        let layer_name = doc.resolve(layer_feature.layer_ref);
+        let is_drill_layer = drill_layers.contains(&layer_name);
+
         for feature_set in &layer_feature.sets {
             for slot in &feature_set.slots {
                 slots.push((slot.outline.clone(), slot.x, slot.y));
+            }
+
+            // Collect NPTHs from drill layers
+            if is_drill_layer {
+                for hole in &feature_set.holes {
+                    if hole.plating_status == PlatingStatus::NonPlated {
+                        npths.push((hole.x, hole.y, hole.diameter));
+                    }
+                }
             }
         }
     }
@@ -353,6 +377,7 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
         outline: &profile.polygon,
         cutouts: &profile.cutouts,
         slots: &slots,
+        npths: &npths,
     };
 
     Some(render_board_outline_svg(board_data))
@@ -857,8 +882,10 @@ fn extract_bom(doc: &Ipc2581) -> Option<Bom> {
                             } else if name_lower == "value" {
                                 value = val.clone();
                             } else if value == "—" {
-                                // Fallback: use Capacitance or Resistance if Value not set
-                                if name_lower == "capacitance" || name_lower == "resistance" {
+                                // Fallback: use Capacitance, Resistance, or DEVICE_TYPE if Value not set
+                                if name_lower == "capacitance"
+                                    || name_lower == "resistance"
+                                    || name_lower == "device_type" {
                                     value = val.clone();
                                 }
                             }
