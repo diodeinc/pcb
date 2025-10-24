@@ -1,0 +1,14 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+Root module path: []
+Root path length: 0
+Is root: True
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[]

@@ -303,6 +303,16 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     moved_directives: SmallMap<String, (String, bool)>,
     /// Local values (components, electrical checks, testbenches). Child modules are in module_tree.
     children: Vec<V>,
+    /// Component modifier functions registered via builtin.add_component_modifier().
+    /// These are called in order on every component created in THIS module only (not children).
+    /// Applied BEFORE parent modifiers to maintain bottom-up execution order:
+    /// child's own → parent's → grandparent's, etc.
+    component_modifiers: Vec<V>,
+    /// Component modifier functions inherited from parent and ancestor modules.
+    /// Collected during module instantiation by combining parent.component_modifiers() +
+    /// parent.parent_component_modifiers(), creating the full ancestor chain.
+    /// Applied AFTER the module's own modifiers.
+    parent_component_modifiers: Vec<V>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -408,6 +418,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             positions,
             moved_directives: SmallMap::new(),
             children: Vec::new(),
+            component_modifiers: Vec::new(),
+            parent_component_modifiers: Vec::new(),
         }
     }
 
@@ -430,6 +442,39 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Return a reference to the custom property map attached to this Module.
     pub fn properties(&self) -> &SmallMap<String, V> {
         &self.properties
+    }
+
+    /// Get the component modifiers registered for this module.
+    pub fn component_modifiers(&self) -> &Vec<V> {
+        &self.component_modifiers
+    }
+
+    /// Add a component modifier function to this module.
+    pub fn add_component_modifier(&mut self, modifier_fn: V) {
+        self.component_modifiers.push(modifier_fn);
+    }
+
+    /// Get the component modifiers inherited from parent modules.
+    pub fn parent_component_modifiers(&self) -> &Vec<V> {
+        &self.parent_component_modifiers
+    }
+
+    /// Set the component modifiers inherited from parent modules.
+    pub fn set_parent_component_modifiers(&mut self, modifiers: Vec<V>) {
+        self.parent_component_modifiers = modifiers;
+    }
+
+    /// Collect all component modifiers (own + inherited) as unfrozen Values.
+    /// This is used when passing modifiers to child modules via PendingChild.
+    pub fn collect_all_component_modifiers_as_values(&self) -> Vec<Value<'v>> {
+        let mut result = Vec::new();
+        for modifier in self.component_modifiers.iter() {
+            result.push(modifier.to_value());
+        }
+        for modifier in self.parent_component_modifiers.iter() {
+            result.push(modifier.to_value());
+        }
+        result
     }
 
     /// Add a parameter to the module's signature with full metadata.
@@ -798,11 +843,15 @@ where
 
         let provided_names: Vec<String> = provided_names.into_iter().collect();
 
+        // Collect parent modifiers (parent's own + parent's ancestors)
+        let combined_modifiers = context.module().collect_all_component_modifiers_as_values();
+
         context.enqueue_child(PendingChild {
             loader: self.clone(),
             final_name,
             inputs: parent_values,
             properties: properties_override,
+            component_modifiers: combined_modifiers,
             provided_names,
             call_site_path,
             call_site_span,
@@ -1280,17 +1329,19 @@ where
         // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
         let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
 
-        for (comp_path, component) in components.iter() {
-            for (pin_name, net_val) in component.connections().iter() {
-                if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
-                    let port_tuple = heap.alloc((
-                        heap.alloc_str(comp_path.to_string().as_str()),
-                        heap.alloc_str(pin_name),
-                    ));
-                    net_to_ports
-                        .entry(net.name().to_string())
-                        .or_default()
-                        .push(port_tuple.to_value());
+        for (comp_path, component_val) in components.iter() {
+            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
+                        let port_tuple = heap.alloc((
+                            heap.alloc_str(comp_path.to_string().as_str()),
+                            heap.alloc_str(pin_name),
+                        ));
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_tuple.to_value());
+                    }
                 }
             }
         }
@@ -1363,10 +1414,7 @@ where
                 .iter()
                 .map(|(path, comp_val)| {
                     let key = path.to_rel_string(base_path).unwrap_or_default();
-                    (
-                        heap.alloc_str(&key).to_value(),
-                        heap.alloc_complex((*comp_val).clone()).to_value(),
-                    )
+                    (heap.alloc_str(&key).to_value(), comp_val.to_value())
                 })
                 .collect::<Vec<_>>(),
         )))
@@ -1408,21 +1456,23 @@ where
         let mut net_to_ports: HashMap<String, Vec<PortPath>> = HashMap::new();
         let mut component_pins: HashMap<ModulePath, Vec<String>> = HashMap::new();
 
-        for (comp_path, component) in components.iter() {
-            let mut pins = Vec::new();
-            for (pin_name, net_val) in component.connections().iter() {
-                if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
-                    let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
-                    pins.push(pin_name.clone());
+        for (comp_path, component_val) in components.iter() {
+            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
+                let mut pins = Vec::new();
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
+                        let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
+                        pins.push(pin_name.clone());
 
-                    net_to_ports
-                        .entry(net.name().to_string())
-                        .or_default()
-                        .push(port_path);
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_path);
+                    }
                 }
-            }
-            if !pins.is_empty() {
-                component_pins.insert(comp_path.clone(), pins);
+                if !pins.is_empty() {
+                    component_pins.insert(comp_path.clone(), pins);
+                }
             }
         }
 
