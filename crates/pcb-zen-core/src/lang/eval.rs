@@ -1337,7 +1337,6 @@ impl EvalContext {
     }
 
     /// Process a pending child after the parent module has been frozen
-    /// Returns the child's FrozenModule to keep its heap alive
     fn process_pending_child(
         mut self,
         pending: FrozenPendingChild,
