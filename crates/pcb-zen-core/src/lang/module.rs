@@ -306,6 +306,9 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     /// Component modifier functions registered via builtin.add_component_modifier().
     /// These are called in order on every component created in this module.
     component_modifiers: Vec<V>,
+    /// Component modifier functions inherited from parent modules.
+    /// These are applied after the module's own modifiers to maintain bottom-up order.
+    parent_component_modifiers: Vec<V>,
 }
 
 starlark_complex_value!(pub ModuleValue);
@@ -412,6 +415,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             moved_directives: SmallMap::new(),
             children: Vec::new(),
             component_modifiers: Vec::new(),
+            parent_component_modifiers: Vec::new(),
         }
     }
 
@@ -444,6 +448,16 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Add a component modifier function to this module.
     pub fn add_component_modifier(&mut self, modifier_fn: V) {
         self.component_modifiers.push(modifier_fn);
+    }
+
+    /// Get the component modifiers inherited from parent modules.
+    pub fn parent_component_modifiers(&self) -> &Vec<V> {
+        &self.parent_component_modifiers
+    }
+
+    /// Set the component modifiers inherited from parent modules.
+    pub fn set_parent_component_modifiers(&mut self, modifiers: Vec<V>) {
+        self.parent_component_modifiers = modifiers;
     }
 
     /// Add a parameter to the module's signature with full metadata.
@@ -812,11 +826,22 @@ where
 
         let provided_names: Vec<String> = provided_names.into_iter().collect();
 
+        // Collect parent modifiers (parent's own + parent's ancestors)
+        let parent_module = context.module();
+        let mut combined_modifiers = Vec::new();
+        for modifier in parent_module.component_modifiers() {
+            combined_modifiers.push(modifier.to_value());
+        }
+        for modifier in parent_module.parent_component_modifiers() {
+            combined_modifiers.push(modifier.to_value());
+        }
+
         context.enqueue_child(PendingChild {
             loader: self.clone(),
             final_name,
             inputs: parent_values,
             properties: properties_override,
+            component_modifiers: combined_modifiers,
             provided_names,
             call_site_path,
             call_site_span,
