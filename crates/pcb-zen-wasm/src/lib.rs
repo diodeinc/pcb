@@ -482,8 +482,7 @@ impl Module {
 
         // Create evaluation context using the stored providers
         let main_path = PathBuf::from(&self.main_file);
-        let mut ctx = EvalContext::new(self.load_resolver.clone())
-            .set_source_path(main_path);
+        let mut ctx = EvalContext::new(self.load_resolver.clone()).set_source_path(main_path);
 
         // Convert JSON inputs directly to heap values (no serialization!)
         if !inputs.is_empty() {

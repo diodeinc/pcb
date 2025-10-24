@@ -32,29 +32,15 @@ pub(crate) struct PendingChild<'v> {
     pub(crate) call_stack: CallStack,
 }
 
-impl PendingChild<'_> {
-    /// Freeze the inputs and properties to convert to 'static lifetime
-    pub(crate) fn freeze_inputs(self, freezer: &Freezer) -> FreezeResult<FrozenPendingChild> {
-        let mut frozen_inputs: SmallMap<String, FrozenValue> = SmallMap::new();
-        for (name, value) in self.inputs.into_iter() {
-            frozen_inputs.insert(name, freezer.freeze(value)?);
-        }
+impl<'v> Freeze for PendingChild<'v> {
+    type Frozen = FrozenPendingChild;
 
-        let frozen_properties = if let Some(props) = self.properties {
-            let mut map = SmallMap::new();
-            for (name, value) in props.into_iter() {
-                map.insert(name, freezer.freeze(value)?);
-            }
-            Some(map)
-        } else {
-            None
-        };
-
+    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
         Ok(FrozenPendingChild {
             loader: self.loader,
             final_name: self.final_name,
-            inputs: frozen_inputs,
-            properties: frozen_properties,
+            inputs: self.inputs.freeze(freezer)?,
+            properties: self.properties.map(|m| m.freeze(freezer)).transpose()?,
             provided_names: self.provided_names,
             call_site_path: self.call_site_path,
             call_site_span: self.call_site_span,
@@ -114,19 +100,11 @@ impl Freeze for ContextValue<'_> {
     type Frozen = FrozenContextValue;
 
     fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
-        // Convert pending children to frozen by freezing their values
-        let pending_children: Vec<FrozenPendingChild> = self
-            .pending_children
-            .into_inner()
-            .into_iter()
-            .map(|pending| pending.freeze_inputs(freezer))
-            .collect::<FreezeResult<Vec<_>>>()?;
-
         Ok(FrozenContextValue {
             module: self.module.freeze(freezer)?,
             strict_io_config: self.strict_io_config,
             diagnostics: self.diagnostics.into_inner(),
-            pending_children,
+            pending_children: self.pending_children.into_inner().freeze(freezer)?,
         })
     }
 }
