@@ -1091,6 +1091,34 @@ ChildBoard(name="Board1")
 - Modifiers are inherited through the entire module hierarchy
 - Common uses: vendor policies, DNP rules, property validation, debug tagging
 
+### builtin.current_module_path()
+
+**Built-in function** that returns the current module's path as a list of strings.
+
+**Returns:** List of strings representing the module hierarchy
+- Root module: `[]` (empty list)
+- Child module: `["child_name"]`
+- Nested module: `["parent_name", "child_name"]`
+
+This function enables conditional logic based on module depth or position in the hierarchy. Common use case: applying different policies at the root module versus child modules.
+
+**Example - Conditional BOM Modifiers at Root:**
+```python
+# Apply BOM modifiers only at the root module
+def bom_modifier(component):
+    component.bom_notes = "Production-ready"
+
+if len(builtin.current_module_path()) == 0:
+    builtin.add_component_modifier(bom_modifier)
+```
+
+**Example - Check Module Depth:**
+```python
+path = builtin.current_module_path()
+if len(path) > 2:
+    print("Warning: deeply nested module")
+```
+
 ## Board Configuration Types
 
 The board configuration record types are provided by `@stdlib/board_config.zen` and offer comprehensive control over PCB manufacturing specifications.

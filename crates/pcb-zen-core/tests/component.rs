@@ -613,3 +613,134 @@ snapshot_eval!(component_modifier_execution_order, {
         child = Child(name = "ChildInstance")
     "#
 });
+
+snapshot_eval!(current_module_path_root, {
+    "test.zen" => r#"
+        path = builtin.current_module_path()
+        print("Root module path:", path)
+        print("Root path length:", len(path))
+        print("Is root:", len(path) == 0)
+    "#
+});
+
+snapshot_eval!(current_module_path_visible, {
+    "Child.zen" => r#"
+        # Store the module path in component properties so it's visible in snapshot
+        path = builtin.current_module_path()
+
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {
+                "module_path": str(path),
+                "module_depth": len(path),
+                "is_root": len(path) == 0,
+            },
+        )
+    "#,
+    "test.zen" => r#"
+        path = builtin.current_module_path()
+        print("Root module path:", path)
+        print("Root is_root:", len(path) == 0)
+
+        Child = Module("Child.zen")
+        child = Child(name = "ChildInstance")
+
+        # Create component in root too
+        comp = Component(
+            name = "R2",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {
+                "module_path": str(path),
+                "module_depth": len(path),
+                "is_root": len(path) == 0,
+            },
+        )
+    "#
+});
+
+snapshot_eval!(current_module_path_nested_visible, {
+    "GrandChild.zen" => r#"
+        path = builtin.current_module_path()
+
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {
+                "module_path": str(path),
+                "module_depth": len(path),
+            },
+        )
+    "#,
+    "Child.zen" => r#"
+        path = builtin.current_module_path()
+
+        comp = Component(
+            name = "R2",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {
+                "module_path": str(path),
+                "module_depth": len(path),
+            },
+        )
+
+        GrandChild = Module("GrandChild.zen")
+        gc = GrandChild(name = "GrandChildInstance")
+    "#,
+    "test.zen" => r#"
+        path = builtin.current_module_path()
+        print("Root module depth:", len(path))
+
+        Child = Module("Child.zen")
+        child = Child(name = "ChildInstance")
+    "#
+});
+
+snapshot_eval!(current_module_path_conditional_modifier, {
+    "Child.zen" => r#"
+        def child_modifier(component):
+            component.modified_in_child = True
+
+        # This should NOT run in child (not root)
+        if len(builtin.current_module_path()) == 0:
+            builtin.add_component_modifier(child_modifier)
+
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+        )
+
+        print("Child component modified:", hasattr(comp, "modified_in_child"))
+    "#,
+    "test.zen" => r#"
+        def root_modifier(component):
+            component.modified_in_root = True
+
+        # This SHOULD run in root
+        if len(builtin.current_module_path()) == 0:
+            builtin.add_component_modifier(root_modifier)
+
+        Child = Module("Child.zen")
+        child = Child(name = "ChildInstance")
+
+        # Create a component in root to verify modifier runs
+        comp = Component(
+            name = "R2",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+        )
+
+        print("Root component modified:", hasattr(comp, "modified_in_root"))
+    "#
+});
