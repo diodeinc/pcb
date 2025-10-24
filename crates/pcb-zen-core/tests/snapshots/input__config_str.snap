@@ -2,46 +2,48 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "test_comp",
-                footprint: "test_footprint",
-                prefix: "U",
-                connections: {
-                    "in": FrozenValue(
-                        Net {
-                            name: "1",
-                            id: "<ID>",
-                        },
-                    ),
-                    "out": FrozenValue(
-                        Net {
-                            name: "2",
-                            id: "<ID>",
-                        },
-                    ),
-                },
-                properties: {
-                    "value": FrozenValue(
-                        "",
-                    ),
-                },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "in",
-                            "2": "out",
-                        },
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "test_comp",
+                    footprint: "test_footprint",
+                    prefix: "U",
+                    connections: {
+                        "in": FrozenValue(
+                            Net {
+                                name: "1",
+                                id: "<ID>",
+                            },
+                        ),
+                        "out": FrozenValue(
+                            Net {
+                                name: "2",
+                                id: "<ID>",
+                            },
+                        ),
                     },
-                ),
-            },
-        ),
-    ],
+                    properties: {
+                        "value": FrozenValue(
+                            "",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "in",
+                                "2": "out",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
 }
 [
     ParameterInfo {

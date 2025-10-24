@@ -2,9 +2,11 @@
 source: crates/pcb-zen-core/tests/spice_model.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 [
     ParameterInfo {

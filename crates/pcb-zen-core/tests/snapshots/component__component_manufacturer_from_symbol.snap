@@ -2,55 +2,57 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "test_comp",
-                manufacturer: "ACME Corp",
-                footprint: "test_footprint",
-                prefix: "U",
-                connections: {
-                    "GND": FrozenValue(
-                        Net {
-                            name: "GND",
-                            id: "<ID>",
-                        },
-                    ),
-                    "VCC": FrozenValue(
-                        Net {
-                            name: "VCC",
-                            id: "<ID>",
-                        },
-                    ),
-                },
-                properties: {
-                    "symbol_name": FrozenValue(
-                        "TestSymbol",
-                    ),
-                    "symbol_path": FrozenValue(
-                        "/test_symbol.kicad_sym",
-                    ),
-                },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: Some(
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "test_comp",
+                    manufacturer: "ACME Corp",
+                    footprint: "test_footprint",
+                    prefix: "U",
+                    connections: {
+                        "GND": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                        "VCC": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "symbol_name": FrozenValue(
                             "TestSymbol",
                         ),
-                        pins: {
-                            "1": "VCC",
-                            "2": "GND",
-                        },
-                        properties: {
-                            "Manufacturer_Name": "ACME Corp",
-                            "Reference": "U",
-                        },
+                        "symbol_path": FrozenValue(
+                            "/test_symbol.kicad_sym",
+                        ),
                     },
-                ),
-            },
-        ),
-    ],
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: Some(
+                                "TestSymbol",
+                            ),
+                            pins: {
+                                "1": "VCC",
+                                "2": "GND",
+                            },
+                            properties: {
+                                "Manufacturer_Name": "ACME Corp",
+                                "Reference": "U",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
 }
 []

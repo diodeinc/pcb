@@ -1,8 +1,7 @@
 use crate::lang::interface::FrozenInterfaceValue;
-use crate::lang::module::find_moved_span;
+use crate::lang::module::{find_moved_span, ModulePath};
 use crate::lang::physical::PhysicalValue;
 use crate::lang::symbol::SymbolValue;
-use crate::lang::test_bench::FrozenTestBenchValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
@@ -16,10 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
-use starlark::values::FrozenValue;
-use starlark::values::{dict::DictRef, Value, ValueLike};
-use std::collections::HashMap;
+use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
@@ -32,6 +30,8 @@ pub(crate) struct ModuleConverter {
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
     // Mapping <module instance ref> -> <module value> for position processing
     module_instances: Vec<(InstanceRef, FrozenModuleValue)>,
+    // Module tree for looking up children
+    module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
 }
 
 /// Module signature information to be serialized as JSON
@@ -147,27 +147,49 @@ impl ModuleConverter {
             net_to_properties: HashMap::new(),
             comp_models: Vec::new(),
             module_instances: Vec::new(),
+            module_tree: BTreeMap::new(),
         }
     }
 
-    pub(crate) fn build(mut self, module: &FrozenModuleValue) -> crate::WithDiagnostics<Schematic> {
+    pub(crate) fn build(
+        mut self,
+        module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
+    ) -> crate::WithDiagnostics<Schematic> {
+        let root_module = module_tree.get(&ModulePath::root()).unwrap();
         let root_instance_ref = InstanceRef::new(
-            ModuleRef::new(module.source_path(), module.name()),
+            ModuleRef::new(root_module.source_path(), "<root>"),
             Vec::new(),
         );
-
-        if let Err(err) = self.add_module_at(module, &root_instance_ref) {
-            let mut diagnostics = Diagnostics::default();
-            diagnostics.push(err.into());
-            return WithDiagnostics {
-                output: None,
-                diagnostics,
-            };
-        }
         self.schematic.set_root_ref(root_instance_ref);
 
+        for (path, module) in module_tree.iter() {
+            let instance_ref = InstanceRef::new(
+                ModuleRef::new(root_module.source_path(), root_module.path().name()),
+                path.segments.clone(),
+            );
+            if let Err(err) = self.add_module_at(module, &instance_ref) {
+                let mut diagnostics = Diagnostics::default();
+                diagnostics.push(err.into());
+                return WithDiagnostics {
+                    output: None,
+                    diagnostics,
+                };
+            }
+
+            // Link child to parent module
+            if let Some(parent_path) = path.parent() {
+                let parent_ref = InstanceRef::new(
+                    ModuleRef::new(root_module.source_path(), root_module.path().name()),
+                    parent_path.segments.clone(),
+                );
+                if let Some(parent_inst) = self.schematic.instances.get_mut(&parent_ref) {
+                    parent_inst.add_child(module.path().name(), instance_ref.clone());
+                }
+            }
+        }
+
         // Propagate impedance from DiffPair interfaces to P/N nets (before creating Net objects)
-        propagate_diffpair_impedance(module, &mut self.net_to_properties);
+        propagate_diffpair_impedance(&mut self.net_to_properties, &self.module_tree);
 
         // Create Net objects directly using the names recorded per-module.
         // Ensure global uniqueness and stable creation order by sorting names.
@@ -193,7 +215,7 @@ impl ModuleConverter {
                     diagnostics.push(Diagnostic::new(
                         format!("Duplicate net name: {name}"),
                         EvalSeverity::Error,
-                        Path::new(module.source_path()),
+                        Path::new(root_module.source_path()),
                     ));
                     return WithDiagnostics {
                         output: None,
@@ -270,45 +292,6 @@ impl ModuleConverter {
         WithDiagnostics {
             output: Some(self.schematic),
             diagnostics,
-        }
-    }
-
-    fn add_instance_at(
-        &mut self,
-        instance_ref: &InstanceRef,
-        value: FrozenValue,
-    ) -> anyhow::Result<()> {
-        if let Some(module_value) = value.downcast_ref::<FrozenModuleValue>() {
-            self.add_module_at(module_value, instance_ref)
-        } else if let Some(component_value) = value.downcast_ref::<FrozenComponentValue>() {
-            self.add_component_at(component_value, instance_ref)
-        } else if value.downcast_ref::<FrozenTestBenchValue>().is_some() {
-            // Skip TestBench values - they're not part of the schematic
-            Ok(())
-        } else if value
-            .downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
-            .is_some()
-        {
-            // Skip ElectricalCheck values - they're not part of the schematic
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Unexpected value in module: {}", value))
-        }
-    }
-
-    fn value_name(&self, value: &FrozenValue) -> anyhow::Result<String> {
-        if let Some(module_value) = value.downcast_ref::<FrozenModuleValue>() {
-            Ok(module_value.name().to_string())
-        } else if let Some(component_value) = value.downcast_ref::<FrozenComponentValue>() {
-            Ok(component_value.name().to_string())
-        } else if let Some(testbench) = value.downcast_ref::<FrozenTestBenchValue>() {
-            Ok(testbench.name().to_string())
-        } else if let Some(check) =
-            value.downcast_ref::<crate::lang::electrical_check::FrozenElectricalCheck>()
-        {
-            Ok(check.name.clone())
-        } else {
-            Err(anyhow::anyhow!("Unexpected value in module: {}", value))
         }
     }
 
@@ -417,13 +400,11 @@ impl ModuleConverter {
             self.net_to_name.insert(*net_id, final_name);
         }
 
-        // Recurse into children, but don't pass any properties down.
-        // Each module/component should only have its own properties.
-        for child in module.children().iter() {
-            let child_name = self.value_name(child)?;
-            let child_inst_ref = instance_ref.append(child_name.clone());
-            self.add_instance_at(&child_inst_ref, *child)?;
-            inst.add_child(child_name.clone(), child_inst_ref.clone());
+        // Add direct child components
+        for component in module.components() {
+            let child_ref = instance_ref.append(component.name().to_string());
+            self.add_component_at(component, &child_ref)?;
+            inst.add_child(component.name().to_string(), child_ref.clone());
         }
 
         // Add instance to schematic.
@@ -824,20 +805,14 @@ impl ModuleConverter {
 
 /// Propagate impedance from DiffPair interfaces to P/N nets
 fn propagate_diffpair_impedance(
-    module: &FrozenModuleValue,
     net_props: &mut HashMap<NetId, HashMap<String, AttributeValue>>,
+    tree: &BTreeMap<ModulePath, FrozenModuleValue>,
 ) {
-    // Check signature for interfaces
-    for param in module.signature().iter().filter(|p| !p.is_config) {
-        if let Some(val) = param.actual_value {
-            propagate_from_value(val.to_value(), net_props);
-        }
-    }
-
-    // Recurse into children
-    for child in module.children().iter() {
-        if let Some(m) = child.downcast_ref::<FrozenModuleValue>() {
-            propagate_diffpair_impedance(m, net_props);
+    for module in tree.values() {
+        for param in module.signature().iter().filter(|p| !p.is_config) {
+            if let Some(val) = param.actual_value {
+                propagate_from_value(val.to_value(), net_props);
+            }
         }
     }
 }
@@ -884,11 +859,6 @@ fn propagate_from_value(
     }
 }
 
-pub trait ToSchematic {
-    fn to_schematic(&self) -> anyhow::Result<Schematic>;
-    fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic>;
-}
-
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
     // Handle scalars first
     if let Some(s) = v.downcast_frozen_str() {
@@ -922,20 +892,4 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
 
     // Any other type – fall back to string representation
     Ok(AttributeValue::String(v.to_string()))
-}
-
-impl ToSchematic for FrozenModuleValue {
-    fn to_schematic(&self) -> anyhow::Result<Schematic> {
-        let result = self.to_schematic_with_diagnostics();
-        match result.output {
-            Some(schematic) if !result.diagnostics.has_errors() => Ok(schematic),
-            Some(_) => Err(anyhow::anyhow!("Schematic conversion had errors")),
-            None => Err(anyhow::anyhow!("Schematic conversion failed")),
-        }
-    }
-
-    fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<Schematic> {
-        let converter = ModuleConverter::new();
-        converter.build(self)
-    }
 }

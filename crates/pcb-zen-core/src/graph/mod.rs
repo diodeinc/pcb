@@ -8,47 +8,17 @@ use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
-/// Component path wrapper type
-#[derive(Debug, Clone, PartialEq, Eq, Hash, allocative::Allocative)]
-pub struct ComponentPath(pub String);
-
-impl ComponentPath {
-    pub fn new(path: impl Into<String>) -> Self {
-        Self(path.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for ComponentPath {
-    fn from(s: String) -> Self {
-        Self::new(s)
-    }
-}
-
-impl From<&str> for ComponentPath {
-    fn from(s: &str) -> Self {
-        Self::new(s)
-    }
-}
-
-impl std::fmt::Display for ComponentPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+use crate::lang::module::ModulePath;
 
 /// Port path wrapper type (component path + pin name)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, allocative::Allocative)]
 pub struct PortPath {
-    pub component: ComponentPath,
+    pub component: ModulePath,
     pub pin: String,
 }
 
 impl PortPath {
-    pub fn new(component: impl Into<ComponentPath>, pin: impl Into<String>) -> Self {
+    pub fn new(component: impl Into<ModulePath>, pin: impl Into<String>) -> Self {
         Self {
             component: component.into(),
             pin: pin.into(),
@@ -334,7 +304,7 @@ impl CircuitGraph {
     /// Create a CircuitGraph from components data using new wrapper types
     pub fn new(
         net_to_ports: HashMap<String, Vec<PortPath>>,
-        component_pins: HashMap<ComponentPath, Vec<String>>,
+        component_pins: HashMap<ModulePath, Vec<String>>,
         public_nets: HashSet<String>,
     ) -> Result<Self, GraphError> {
         let mut port_by_path = HashMap::new();
@@ -438,7 +408,7 @@ impl CircuitGraph {
                 (Some(f0), Some(f1)) => {
                     port_factors[port_id.0 as usize] = [f0, f1];
                 }
-                (Some(f0), None) if port_path.component.as_str() == "<external>" => {
+                (Some(f0), None) if port_path.component.to_string() == "<external>" => {
                     // External ports only have 1 factor, duplicate it for consistency
                     port_factors[port_id.0 as usize] = [f0, f0];
                 }

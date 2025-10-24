@@ -2,57 +2,51 @@
 source: crates/pcb-zen-core/tests/test.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "top.zen",
-    children: [
-        FrozenValue(
-            Module {
-                name: "Test",
-                source: "/test.zen",
-                children: [
-                    FrozenValue(
-                        Module {
-                            name: "MyComponent",
-                            source: "/MyComponent.zen",
-                            children: [
-                                FrozenValue(
-                                    Component {
-                                        name: "capacitor",
-                                        type: "capacitor",
-                                        footprint: "SMD:0805",
-                                        prefix: "U",
-                                        connections: {
-                                            "P1": FrozenValue(
-                                                Net {
-                                                    name: "INTERFACE_p1",
-                                                    id: "<ID>",
-                                                },
-                                            ),
-                                            "P2": FrozenValue(
-                                                Net {
-                                                    name: "INTERFACE_p2",
-                                                    id: "<ID>",
-                                                },
-                                            ),
-                                        },
-                                        symbol: FrozenValue(
-                                            Symbol {
-                                                name: None,
-                                                pins: {
-                                                    "1": "P1",
-                                                    "2": "P2",
-                                                },
-                                            },
-                                        ),
-                                    },
-                                ),
-                            ],
+{
+    <root>: Module {
+        path: <root>,
+        source: "top.zen",
+    },
+    Test: Module {
+        path: Test,
+        source: "/test.zen",
+    },
+    Test.MyComponent: Module {
+        path: Test.MyComponent,
+        source: "/MyComponent.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "capacitor",
+                    type: "capacitor",
+                    footprint: "SMD:0805",
+                    prefix: "U",
+                    connections: {
+                        "P1": FrozenValue(
+                            Net {
+                                name: "INTERFACE_p1",
+                                id: "<ID>",
+                            },
+                        ),
+                        "P2": FrozenValue(
+                            Net {
+                                name: "INTERFACE_p2",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "P1",
+                                "2": "P2",
+                            },
                         },
                     ),
-                ],
-            },
-        ),
-    ],
+                },
+            ),
+        ],
+    },
 }
 []

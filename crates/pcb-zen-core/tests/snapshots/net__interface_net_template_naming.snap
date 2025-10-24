@@ -4,8 +4,10 @@ expression: output
 ---
 regular net: VCC
 interface net: POWER_VCC
-Module {
-    name: "<root>",
-    source: "test.zen",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
 }
 []

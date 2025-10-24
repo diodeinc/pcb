@@ -2,35 +2,37 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "test",
-                type: "test_component",
-                footprint: "TEST:FP",
-                prefix: "U",
-                connections: {
-                    "1": FrozenValue(
-                        Net {
-                            name: "TEST",
-                            id: "<ID>",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "test",
+                    type: "test_component",
+                    footprint: "TEST:FP",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "TEST",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                            },
                         },
                     ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "1",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 [
     ParameterInfo {

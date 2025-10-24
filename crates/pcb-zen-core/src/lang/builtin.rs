@@ -234,7 +234,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         let call_span = call_site.map(|cs| cs.resolve_span());
 
         let check = ElectricalCheckGen::<Value> {
-            name,
+            name: name.clone(),
             inputs,
             check_func: check_fn,
             severity,
@@ -243,7 +243,8 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         };
 
         if let Some(ctx) = eval.context_value() {
-            ctx.add_child(eval.heap().alloc(check));
+            let check_value = eval.heap().alloc_complex(check);
+            ctx.module_mut().add_child(check_value);
         }
 
         Ok(NoneType)

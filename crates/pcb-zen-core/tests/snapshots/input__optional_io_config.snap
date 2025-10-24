@@ -2,41 +2,39 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "top.zen",
-    children: [
-        FrozenValue(
-            Module {
-                name: "U1",
-                source: "/Module.zen",
-                children: [
-                    FrozenValue(
-                        Component {
-                            name: "comp0",
-                            footprint: "TEST:0402",
-                            prefix: "U",
-                            connections: {
-                                "V": FrozenValue(
-                                    Net {
-                                        name: "N4",
-                                        id: "<ID>",
-                                    },
-                                ),
+{
+    <root>: Module {
+        path: <root>,
+        source: "top.zen",
+    },
+    U1: Module {
+        path: U1,
+        source: "/Module.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "comp0",
+                    footprint: "TEST:0402",
+                    prefix: "U",
+                    connections: {
+                        "V": FrozenValue(
+                            Net {
+                                name: "N4",
+                                id: "<ID>",
                             },
-                            symbol: FrozenValue(
-                                Symbol {
-                                    name: None,
-                                    pins: {
-                                        "1": "V",
-                                    },
-                                },
-                            ),
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "V",
+                            },
                         },
                     ),
-                ],
-            },
-        ),
-    ],
+                },
+            ),
+        ],
+    },
 }
 []

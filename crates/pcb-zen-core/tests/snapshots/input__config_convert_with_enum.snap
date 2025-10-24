@@ -2,19 +2,17 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "top.zen",
-    children: [
-        FrozenValue(
-            Module {
-                name: "test",
-                source: "/Module.zen",
-                properties: {
-                    "heading_is_north": "FrozenValue(StarlarkBool(true))",
-                },
-            },
-        ),
-    ],
+{
+    <root>: Module {
+        path: <root>,
+        source: "top.zen",
+    },
+    test: Module {
+        path: test,
+        source: "/Module.zen",
+        properties: {
+            "heading_is_north": "FrozenValue(StarlarkBool(true))",
+        },
+    },
 }
 []

@@ -9,7 +9,6 @@ use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
 use pcb_sch::{generate_bom_with_fallback, Bom};
 use pcb_ui::prelude::*;
-use pcb_zen_core::convert::ToSchematic;
 use starlark_syntax::slice_vec_ext::SliceExt;
 
 #[derive(ValueEnum, Debug, Clone, Default)]
@@ -62,7 +61,6 @@ pub fn execute(args: BomArgs) -> Result<()> {
     // Generate BOM entries with KiCad fallback
     spinner.set_message(format!("{file_name}: Generating BOM"));
     let schematic = eval_output
-        .sch_module
         .to_schematic()
         .context("Failed to convert to schematic")?;
     let mut bom = generate_bom_with_fallback(schematic.bom(), layout_path.as_deref())

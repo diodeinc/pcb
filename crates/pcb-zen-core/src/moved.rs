@@ -112,9 +112,7 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         let temp_path = std::env::temp_dir().join("test_moved.zen");
         std::fs::write(&temp_path, test_content).unwrap();
 
-        let result = eval_context(temp_path.clone())
-            .set_module_name("test_moved".to_string())
-            .eval();
+        let result = eval_context(temp_path.clone()).eval();
 
         // Clean up the temp file
         std::fs::remove_file(&temp_path).ok();
@@ -158,9 +156,7 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         std::fs::write(&temp_path, test_content).unwrap();
 
         // Evaluate it
-        let result = eval_context(temp_path.clone())
-            .set_module_name("test_moved_empty".to_string())
-            .eval();
+        let result = eval_context(temp_path.clone()).eval();
 
         // Clean up the temp file
         std::fs::remove_file(&temp_path).ok();
@@ -294,8 +290,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
 
     #[test]
     fn test_schematic_moved_paths_integration() {
-        use crate::convert::ToSchematic;
-
         let test_content = r#"
 moved("old.component", "new.component")
 moved("POW.PS1", "PS1")
@@ -315,7 +309,7 @@ moved("POW.PS1", "PS1")
 
         if let Some(output) = result.output {
             // Convert to schematic using the diagnostics-aware method
-            let schematic_result = output.sch_module.to_schematic_with_diagnostics();
+            let schematic_result = output.to_schematic_with_diagnostics();
             let schematic = schematic_result.output.unwrap();
 
             // Should get warnings about new paths not existing, and directives should be filtered out

@@ -2,62 +2,64 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "IC1",
-                type: "asic",
-                footprint: "QFN:48",
-                prefix: "U",
-                connections: {
-                    "EN": FrozenValue(
-                        Net {
-                            name: "CHIP_control_EN",
-                            id: "<ID>",
-                        },
-                    ),
-                    "RST": FrozenValue(
-                        Net {
-                            name: "CHIP_control_RST",
-                            id: "<ID>",
-                        },
-                    ),
-                    "SIG": FrozenValue(
-                        Net {
-                            name: "CHIP_signal",
-                            id: "<ID>",
-                        },
-                    ),
-                    "VDD": FrozenValue(
-                        Net {
-                            name: "CHIP_VDD",
-                            id: "<ID>",
-                        },
-                    ),
-                    "VSS": FrozenValue(
-                        Net {
-                            name: "CHIP_VSS",
-                            id: "<ID>",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "IC1",
+                    type: "asic",
+                    footprint: "QFN:48",
+                    prefix: "U",
+                    connections: {
+                        "EN": FrozenValue(
+                            Net {
+                                name: "CHIP_control_EN",
+                                id: "<ID>",
+                            },
+                        ),
+                        "RST": FrozenValue(
+                            Net {
+                                name: "CHIP_control_RST",
+                                id: "<ID>",
+                            },
+                        ),
+                        "SIG": FrozenValue(
+                            Net {
+                                name: "CHIP_signal",
+                                id: "<ID>",
+                            },
+                        ),
+                        "VDD": FrozenValue(
+                            Net {
+                                name: "CHIP_VDD",
+                                id: "<ID>",
+                            },
+                        ),
+                        "VSS": FrozenValue(
+                            Net {
+                                name: "CHIP_VSS",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "VDD",
+                                "2": "VSS",
+                                "3": "SIG",
+                                "4": "EN",
+                                "5": "RST",
+                            },
                         },
                     ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "VDD",
-                            "2": "VSS",
-                            "3": "SIG",
-                            "4": "EN",
-                            "5": "RST",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []

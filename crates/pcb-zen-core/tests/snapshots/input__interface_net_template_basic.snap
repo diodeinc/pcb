@@ -2,41 +2,43 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "Module.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "R1",
-                type: "resistor",
-                footprint: "SMD:0805",
-                prefix: "U",
-                connections: {
-                    "1": FrozenValue(
-                        Net {
-                            name: "PREFIX_MYTEST",
-                            id: "<ID>",
-                        },
-                    ),
-                    "2": FrozenValue(
-                        Net {
-                            name: "GND",
-                            id: "<ID>",
+{
+    <root>: Module {
+        path: <root>,
+        source: "Module.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    type: "resistor",
+                    footprint: "SMD:0805",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "PREFIX_MYTEST",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
                         },
                     ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "1",
-                            "2": "2",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []

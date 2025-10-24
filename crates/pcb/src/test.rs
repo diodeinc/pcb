@@ -3,6 +3,7 @@ use clap::{Args, ValueEnum};
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Color, Table};
 use log::debug;
 use pcb_ui::prelude::*;
+use pcb_zen_core::ModulePath;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -87,10 +88,7 @@ pub fn test(
 
     // Execute deferred TestBench checks if evaluation succeeded
     if let Some(eval_output) = eval_result.output {
-        let root_module = &eval_output.sch_module;
-
-        // Collect all TestBenches from the module tree
-        let testbenches = root_module.collect_testbenches();
+        let testbenches = eval_output.collect_testbenches();
 
         if !testbenches.is_empty() {
             debug!(
@@ -100,7 +98,7 @@ pub fn test(
 
             // Execute checks for each TestBench
             for testbench in testbenches {
-                let check_diagnostics = execute_testbench_checks(testbench, root_module);
+                let check_diagnostics = execute_testbench_checks(testbench, &eval_output);
                 diagnostics.diagnostics.extend(check_diagnostics);
             }
         }
@@ -129,8 +127,9 @@ pub fn test(
 /// Execute all deferred checks for a TestBench
 fn execute_testbench_checks(
     testbench: &pcb_zen_core::lang::test_bench::FrozenTestBenchValue,
-    root_module: &pcb_zen_core::FrozenModuleValue,
+    eval_output: &pcb_zen_core::lang::eval::EvalOutput,
 ) -> Vec<pcb_zen_core::Diagnostic> {
+    use pcb_zen_core::lang::eval::EvalContext;
     use pcb_zen_core::lang::test_bench::execute_deferred_check;
     use starlark::environment::Module;
     use starlark::eval::Evaluator;
@@ -140,16 +139,24 @@ fn execute_testbench_checks(
     let mut total_checks = 0;
     let mut passed_checks = 0;
 
-    // Create a new heap and evaluator for running the checks
+    // Create a minimal EvalContext with the module tree
+    let eval_ctx = EvalContext::new(eval_output.load_resolver.clone())
+        .set_source_path(std::path::PathBuf::from(testbench.source_path()));
+
+    // Share the module tree
+    *eval_ctx.module_tree.lock().unwrap() = eval_output.module_tree.clone();
+
+    // Create a ContextValue and attach it to the module
     let heap = Heap::new();
     let module = Module::new();
+    let ctx_value = pcb_zen_core::lang::context::ContextValue::from_context(&eval_ctx);
+    module.set_extra_value(heap.alloc_complex(ctx_value));
     let mut eval = Evaluator::new(&module);
 
     for deferred_case in testbench.deferred_cases().iter() {
-        // Look up evaluated module from root_module children by name using find_at_path
-        let case_module = root_module
-            .find_at_path(&deferred_case.case_final_name)
-            .ok();
+        // Look up evaluated module from tree by full path
+        let module_path = ModulePath::from(deferred_case.case_final_name.clone());
+        let case_module = eval_output.module_tree.get(&module_path).cloned();
 
         if let Some(module_value) = case_module {
             // Reconstruct inputs dict from deferred case params
@@ -173,8 +180,11 @@ fn execute_testbench_checks(
 
             for check in &deferred_case.checks {
                 total_checks += 1;
+                // module_value is FrozenModuleValue (ModuleValueGen<FrozenValue>)
+                // Allocate it to heap to get a Value
+                let module_as_value = heap.alloc_complex(module_value.clone());
                 let (passed, mut diagnostics) =
-                    execute_deferred_check(&mut eval, check, module_value, inputs_dict, &ctx);
+                    execute_deferred_check(&mut eval, check, module_as_value, inputs_dict, &ctx);
 
                 if passed {
                     passed_checks += 1;

@@ -222,8 +222,7 @@ macro_rules! snapshot_eval {
 
 
             let ctx = EvalContext::new(load_resolver)
-                .set_source_path(std::path::PathBuf::from(&main_file))
-                .set_module_name("<root>");
+                .set_source_path(std::path::PathBuf::from(&main_file));
 
             let result = ctx.eval();
 
@@ -239,7 +238,7 @@ macro_rules! snapshot_eval {
                         }
                     }
 
-                    output_parts.push(format!("{:#?}", eval_output.sch_module));
+                    output_parts.push(format!("{:#?}", eval_output.module_tree));
                     output_parts.push(format!("{:#?}", eval_output.signature));
 
                     output_parts.join("\n") + "\n"

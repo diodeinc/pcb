@@ -2,103 +2,105 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test_props.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "U1",
-                footprint: "SMD:0805",
-                prefix: "U",
-                connections: {
-                    "GND": FrozenValue(
-                        Net {
-                            name: "GND",
-                            id: "<ID>",
-                        },
-                    ),
-                    "ICLK": FrozenValue(
-                        Net {
-                            name: "ICLK",
-                            id: "<ID>",
-                        },
-                    ),
-                    "OE": FrozenValue(
-                        Net {
-                            name: "OE",
-                            id: "<ID>",
-                        },
-                    ),
-                    "Q1": FrozenValue(
-                        Net {
-                            name: "Q1",
-                            id: "<ID>",
-                        },
-                    ),
-                    "Q2": FrozenValue(
-                        Net {
-                            name: "Q2",
-                            id: "<ID>",
-                        },
-                    ),
-                    "Q3": FrozenValue(
-                        Net {
-                            name: "Q3",
-                            id: "<ID>",
-                        },
-                    ),
-                    "Q4": FrozenValue(
-                        Net {
-                            name: "Q4",
-                            id: "<ID>",
-                        },
-                    ),
-                    "VDD": FrozenValue(
-                        Net {
-                            name: "VDD",
-                            id: "<ID>",
-                        },
-                    ),
-                },
-                properties: {
-                    "CustomProp": FrozenValue(
-                        "Value123",
-                    ),
-                    "symbol_name": FrozenValue(
-                        "NB3N551DG",
-                    ),
-                    "symbol_path": FrozenValue(
-                        "/C146731.kicad_sym",
-                    ),
-                },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: Some(
+{
+    <root>: Module {
+        path: <root>,
+        source: "test_props.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "U1",
+                    footprint: "SMD:0805",
+                    prefix: "U",
+                    connections: {
+                        "GND": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                        "ICLK": FrozenValue(
+                            Net {
+                                name: "ICLK",
+                                id: "<ID>",
+                            },
+                        ),
+                        "OE": FrozenValue(
+                            Net {
+                                name: "OE",
+                                id: "<ID>",
+                            },
+                        ),
+                        "Q1": FrozenValue(
+                            Net {
+                                name: "Q1",
+                                id: "<ID>",
+                            },
+                        ),
+                        "Q2": FrozenValue(
+                            Net {
+                                name: "Q2",
+                                id: "<ID>",
+                            },
+                        ),
+                        "Q3": FrozenValue(
+                            Net {
+                                name: "Q3",
+                                id: "<ID>",
+                            },
+                        ),
+                        "Q4": FrozenValue(
+                            Net {
+                                name: "Q4",
+                                id: "<ID>",
+                            },
+                        ),
+                        "VDD": FrozenValue(
+                            Net {
+                                name: "VDD",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "CustomProp": FrozenValue(
+                            "Value123",
+                        ),
+                        "symbol_name": FrozenValue(
                             "NB3N551DG",
                         ),
-                        pins: {
-                            "1": "ICLK",
-                            "2": "Q1",
-                            "3": "Q2",
-                            "4": "Q3",
-                            "5": "Q4",
-                            "6": "GND",
-                            "7": "VDD",
-                            "8": "OE",
-                        },
-                        properties: {
-                            "Datasheet": "https://lcsc.com/product-detail/Logic-ICs_ON_NB3N551DG_NB3N551DG_C146731.html",
-                            "Description": "",
-                            "Footprint": "C146731:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL",
-                            "LCSC Part": "C146731",
-                            "Reference": "U",
-                            "Value": "NB3N551DG",
-                        },
+                        "symbol_path": FrozenValue(
+                            "/C146731.kicad_sym",
+                        ),
                     },
-                ),
-            },
-        ),
-    ],
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: Some(
+                                "NB3N551DG",
+                            ),
+                            pins: {
+                                "1": "ICLK",
+                                "2": "Q1",
+                                "3": "Q2",
+                                "4": "Q3",
+                                "5": "Q4",
+                                "6": "GND",
+                                "7": "VDD",
+                                "8": "OE",
+                            },
+                            properties: {
+                                "Datasheet": "https://lcsc.com/product-detail/Logic-ICs_ON_NB3N551DG_NB3N551DG_C146731.html",
+                                "Description": "",
+                                "Footprint": "C146731:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL",
+                                "LCSC Part": "C146731",
+                                "Reference": "U",
+                                "Value": "NB3N551DG",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
 }
 []

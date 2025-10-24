@@ -2,16 +2,14 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "top.zen",
-    children: [
-        FrozenValue(
-            Module {
-                name: "U1",
-                source: "/Module.zen",
-            },
-        ),
-    ],
+{
+    <root>: Module {
+        path: <root>,
+        source: "top.zen",
+    },
+    U1: Module {
+        path: U1,
+        source: "/Module.zen",
+    },
 }
 []

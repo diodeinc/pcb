@@ -2,48 +2,46 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "top.zen",
-    children: [
-        FrozenValue(
-            Module {
-                name: "U1",
-                source: "/Module.zen",
-                children: [
-                    FrozenValue(
-                        Component {
-                            name: "test",
-                            footprint: "TEST:0402",
-                            prefix: "U",
-                            connections: {
-                                "GND": FrozenValue(
-                                    Net {
-                                        name: "GND",
-                                        id: "<ID>",
-                                    },
-                                ),
-                                "PWR": FrozenValue(
-                                    Net {
-                                        name: "VCC",
-                                        id: "<ID>",
-                                    },
-                                ),
+{
+    <root>: Module {
+        path: <root>,
+        source: "top.zen",
+    },
+    U1: Module {
+        path: U1,
+        source: "/Module.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "test",
+                    footprint: "TEST:0402",
+                    prefix: "U",
+                    connections: {
+                        "GND": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
                             },
-                            symbol: FrozenValue(
-                                Symbol {
-                                    name: None,
-                                    pins: {
-                                        "1": "PWR",
-                                        "2": "GND",
-                                    },
-                                },
-                            ),
+                        ),
+                        "PWR": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "PWR",
+                                "2": "GND",
+                            },
                         },
                     ),
-                ],
-            },
-        ),
-    ],
+                },
+            ),
+        ],
+    },
 }
 []

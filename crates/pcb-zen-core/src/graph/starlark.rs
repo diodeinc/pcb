@@ -1,4 +1,5 @@
 use crate::graph::CircuitGraph;
+use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::{downcast_frozen_module, lang::module::FrozenModuleValue};
 use allocative::Allocative;
 use starlark::{
@@ -198,8 +199,7 @@ where
 
         // Convert paths to PathValue objects
         let module_ref = downcast_frozen_module!(self.module);
-
-        let components = module_ref.collect_components("");
+        let components = eval.collect_components(module_ref.path());
         let path_objects: Vec<Value> = paths_with_factors
             .into_iter()
             .map(|(port_path, factors)| {

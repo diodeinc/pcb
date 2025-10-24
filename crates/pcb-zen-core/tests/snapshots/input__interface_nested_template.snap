@@ -2,55 +2,57 @@
 source: crates/pcb-zen-core/tests/input.rs
 expression: output
 ---
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "J1",
-                type: "usb_connector",
-                footprint: "USB:TYPE-C",
-                prefix: "U",
-                connections: {
-                    "D+": FrozenValue(
-                        Net {
-                            name: "PORT1_D+",
-                            id: "<ID>",
-                        },
-                    ),
-                    "D-": FrozenValue(
-                        Net {
-                            name: "PORT1_D-",
-                            id: "<ID>",
-                        },
-                    ),
-                    "GND": FrozenValue(
-                        Net {
-                            name: "PORT1_power_GND",
-                            id: "<ID>",
-                        },
-                    ),
-                    "VBUS": FrozenValue(
-                        Net {
-                            name: "PORT1_power_VCC",
-                            id: "<ID>",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "J1",
+                    type: "usb_connector",
+                    footprint: "USB:TYPE-C",
+                    prefix: "U",
+                    connections: {
+                        "D+": FrozenValue(
+                            Net {
+                                name: "PORT1_D+",
+                                id: "<ID>",
+                            },
+                        ),
+                        "D-": FrozenValue(
+                            Net {
+                                name: "PORT1_D-",
+                                id: "<ID>",
+                            },
+                        ),
+                        "GND": FrozenValue(
+                            Net {
+                                name: "PORT1_power_GND",
+                                id: "<ID>",
+                            },
+                        ),
+                        "VBUS": FrozenValue(
+                            Net {
+                                name: "PORT1_power_VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "VBUS",
+                                "2": "D+",
+                                "3": "D-",
+                                "4": "GND",
+                            },
                         },
                     ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "VBUS",
-                            "2": "D+",
-                            "3": "D-",
-                            "4": "GND",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []
