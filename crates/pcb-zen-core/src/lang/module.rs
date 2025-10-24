@@ -304,10 +304,14 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     /// Local values (components, electrical checks, testbenches). Child modules are in module_tree.
     children: Vec<V>,
     /// Component modifier functions registered via builtin.add_component_modifier().
-    /// These are called in order on every component created in this module.
+    /// These are called in order on every component created in THIS module only (not children).
+    /// Applied BEFORE parent modifiers to maintain bottom-up execution order:
+    /// child's own → parent's → grandparent's, etc.
     component_modifiers: Vec<V>,
-    /// Component modifier functions inherited from parent modules.
-    /// These are applied after the module's own modifiers to maintain bottom-up order.
+    /// Component modifier functions inherited from parent and ancestor modules.
+    /// Collected during module instantiation by combining parent.component_modifiers() +
+    /// parent.parent_component_modifiers(), creating the full ancestor chain.
+    /// Applied AFTER the module's own modifiers.
     parent_component_modifiers: Vec<V>,
 }
 
@@ -458,6 +462,19 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Set the component modifiers inherited from parent modules.
     pub fn set_parent_component_modifiers(&mut self, modifiers: Vec<V>) {
         self.parent_component_modifiers = modifiers;
+    }
+
+    /// Collect all component modifiers (own + inherited) as unfrozen Values.
+    /// This is used when passing modifiers to child modules via PendingChild.
+    pub fn collect_all_component_modifiers_as_values(&self) -> Vec<Value<'v>> {
+        let mut result = Vec::new();
+        for modifier in self.component_modifiers.iter() {
+            result.push(modifier.to_value());
+        }
+        for modifier in self.parent_component_modifiers.iter() {
+            result.push(modifier.to_value());
+        }
+        result
     }
 
     /// Add a parameter to the module's signature with full metadata.
@@ -828,13 +845,7 @@ where
 
         // Collect parent modifiers (parent's own + parent's ancestors)
         let parent_module = context.module();
-        let mut combined_modifiers = Vec::new();
-        for modifier in parent_module.component_modifiers() {
-            combined_modifiers.push(modifier.to_value());
-        }
-        for modifier in parent_module.parent_component_modifiers() {
-            combined_modifiers.push(modifier.to_value());
-        }
+        let combined_modifiers = parent_module.collect_all_component_modifiers_as_values();
 
         context.enqueue_child(PendingChild {
             loader: self.clone(),

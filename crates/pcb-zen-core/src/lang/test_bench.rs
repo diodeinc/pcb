@@ -179,13 +179,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
 
         // Collect parent modifiers for test case modules
         let parent_module = ctx.module();
-        let mut combined_modifiers = Vec::new();
-        for modifier in parent_module.component_modifiers() {
-            combined_modifiers.push(modifier.to_value());
-        }
-        for modifier in parent_module.parent_component_modifiers() {
-            combined_modifiers.push(modifier.to_value());
-        }
+        let combined_modifiers = parent_module.collect_all_component_modifiers_as_values();
 
         // Process each test case - enqueue for freeze-time evaluation
         for (case_name, case_value) in test_cases_dict.iter() {
