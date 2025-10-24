@@ -4,41 +4,43 @@ expression: output
 ---
 Manufacturer before: None
 Manufacturer after: Yageo
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "R1",
-                manufacturer: "Yageo",
-                footprint: "0603",
-                prefix: "U",
-                connections: {
-                    "1": FrozenValue(
-                        Net {
-                            name: "A",
-                            id: "<ID>",
-                        },
-                    ),
-                    "2": FrozenValue(
-                        Net {
-                            name: "B",
-                            id: "<ID>",
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    manufacturer: "Yageo",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
                         },
                     ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "1",
-                            "2": "2",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []

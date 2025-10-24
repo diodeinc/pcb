@@ -6,7 +6,7 @@ use std::{
 
 use starlark::{
     eval::Evaluator,
-    values::{Value, ValueLike},
+    values::{FrozenValue, Value, ValueLike},
 };
 
 use crate::{
@@ -51,11 +51,8 @@ pub(crate) trait EvaluatorExt<'v> {
     fn module_tree(&self) -> Option<Arc<Mutex<BTreeMap<ModulePath, FrozenModuleValue>>>>;
 
     /// Recursively collect components from a module and all its submodules
-    /// Returns a map of component_path -> component_value
-    fn collect_components(
-        &self,
-        module_path: &ModulePath,
-    ) -> HashMap<ModulePath, FrozenComponentValue>;
+    /// Returns a map of component_path -> component_value (as FrozenValue)
+    fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, FrozenValue>;
 }
 
 impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
@@ -109,10 +106,7 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
         self.eval_context().map(|ctx| ctx.module_tree.clone())
     }
 
-    fn collect_components(
-        &self,
-        module_path: &ModulePath,
-    ) -> HashMap<ModulePath, FrozenComponentValue> {
+    fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, FrozenValue> {
         let Some(tree) = self.module_tree() else {
             return HashMap::new();
         };
@@ -120,16 +114,19 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
 
         let mut result = HashMap::new();
 
-        // Iterate through all modules in the tree (no downcasting needed!)
+        // Iterate through all modules in the tree
         for (child_module_path, module) in tree.iter() {
             // Check if this module is a descendant of (or is) the target module_path
             if is_descendant_path(module_path, child_module_path) {
-                // Add all components from this module with their full paths (cloned since they're frozen)
-                for component in module.components() {
-                    // Build component path: module_path.component_name
-                    let mut component_path = child_module_path.clone();
-                    component_path.push(component.name());
-                    result.insert(component_path, component.clone());
+                // Iterate over children and filter for components
+                for child in module.children() {
+                    if let Some(component) = child.downcast_ref::<FrozenComponentValue>() {
+                        // Build component path: module_path.component_name
+                        let mut component_path = child_module_path.clone();
+                        component_path.push(component.name());
+                        // Store the FrozenValue wrapper, not the unwrapped component
+                        result.insert(component_path, *child);
+                    }
                 }
             }
         }

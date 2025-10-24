@@ -5,60 +5,62 @@ expression: output
 Resistance before: 10k
 Resistance after: 10k
 New property voltage_rating: 50V
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "R1",
-                footprint: "0603",
-                prefix: "U",
-                connections: {
-                    "1": FrozenValue(
-                        Net {
-                            name: "A",
-                            id: "<ID>",
-                        },
-                    ),
-                    "2": FrozenValue(
-                        Net {
-                            name: "B",
-                            id: "<ID>",
-                        },
-                    ),
-                },
-                properties: {
-                    "__resistance__": FrozenValue(
-                        PhysicalValue {
-                            value: 10000,
-                            tolerance: 0,
-                            unit: PhysicalUnitDims {
-                                current: -1,
-                                time: 0,
-                                voltage: 1,
-                                temp: 0,
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "__resistance__": FrozenValue(
+                            PhysicalValue {
+                                value: 10000,
+                                tolerance: 0,
+                                unit: PhysicalUnitDims {
+                                    current: -1,
+                                    time: 0,
+                                    voltage: 1,
+                                    temp: 0,
+                                },
+                            },
+                        ),
+                        "resistance": FrozenValue(
+                            "100k",
+                        ),
+                        "voltage_rating": FrozenValue(
+                            "50V",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
                             },
                         },
                     ),
-                    "resistance": FrozenValue(
-                        "100k",
-                    ),
-                    "voltage_rating": FrozenValue(
-                        "50V",
-                    ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "1",
-                            "2": "2",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []

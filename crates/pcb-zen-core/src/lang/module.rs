@@ -1294,17 +1294,19 @@ where
         // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
         let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
 
-        for (comp_path, component) in components.iter() {
-            for (pin_name, net_val) in component.connections().iter() {
-                if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
-                    let port_tuple = heap.alloc((
-                        heap.alloc_str(comp_path.to_string().as_str()),
-                        heap.alloc_str(pin_name),
-                    ));
-                    net_to_ports
-                        .entry(net.name().to_string())
-                        .or_default()
-                        .push(port_tuple.to_value());
+        for (comp_path, component_val) in components.iter() {
+            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
+                        let port_tuple = heap.alloc((
+                            heap.alloc_str(comp_path.to_string().as_str()),
+                            heap.alloc_str(pin_name),
+                        ));
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_tuple.to_value());
+                    }
                 }
             }
         }
@@ -1377,10 +1379,7 @@ where
                 .iter()
                 .map(|(path, comp_val)| {
                     let key = path.to_rel_string(base_path).unwrap_or_default();
-                    (
-                        heap.alloc_str(&key).to_value(),
-                        heap.alloc_complex((*comp_val).clone()).to_value(),
-                    )
+                    (heap.alloc_str(&key).to_value(), comp_val.to_value())
                 })
                 .collect::<Vec<_>>(),
         )))
@@ -1422,21 +1421,23 @@ where
         let mut net_to_ports: HashMap<String, Vec<PortPath>> = HashMap::new();
         let mut component_pins: HashMap<ModulePath, Vec<String>> = HashMap::new();
 
-        for (comp_path, component) in components.iter() {
-            let mut pins = Vec::new();
-            for (pin_name, net_val) in component.connections().iter() {
-                if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
-                    let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
-                    pins.push(pin_name.clone());
+        for (comp_path, component_val) in components.iter() {
+            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
+                let mut pins = Vec::new();
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
+                        let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
+                        pins.push(pin_name.clone());
 
-                    net_to_ports
-                        .entry(net.name().to_string())
-                        .or_default()
-                        .push(port_path);
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_path);
+                    }
                 }
-            }
-            if !pins.is_empty() {
-                component_pins.insert(comp_path.clone(), pins);
+                if !pins.is_empty() {
+                    component_pins.insert(comp_path.clone(), pins);
+                }
             }
         }
 
