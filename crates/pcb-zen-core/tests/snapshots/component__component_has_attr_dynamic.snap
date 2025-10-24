@@ -6,60 +6,62 @@ Has resistance: True
 Has voltage_rating (before): False
 Has voltage_rating (after): True
 Has nonexistent_prop: False
-Module {
-    name: "<root>",
-    source: "test.zen",
-    children: [
-        FrozenValue(
-            Component {
-                name: "R1",
-                footprint: "0603",
-                prefix: "U",
-                connections: {
-                    "1": FrozenValue(
-                        Net {
-                            name: "A",
-                            id: "<ID>",
-                        },
-                    ),
-                    "2": FrozenValue(
-                        Net {
-                            name: "B",
-                            id: "<ID>",
-                        },
-                    ),
-                },
-                properties: {
-                    "__resistance__": FrozenValue(
-                        PhysicalValue {
-                            value: 10000,
-                            tolerance: 0,
-                            unit: PhysicalUnitDims {
-                                current: -1,
-                                time: 0,
-                                voltage: 1,
-                                temp: 0,
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "__resistance__": FrozenValue(
+                            PhysicalValue {
+                                value: 10000,
+                                tolerance: 0,
+                                unit: PhysicalUnitDims {
+                                    current: -1,
+                                    time: 0,
+                                    voltage: 1,
+                                    temp: 0,
+                                },
+                            },
+                        ),
+                        "resistance": FrozenValue(
+                            "10k",
+                        ),
+                        "voltage_rating": FrozenValue(
+                            "50V",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
                             },
                         },
                     ),
-                    "resistance": FrozenValue(
-                        "10k",
-                    ),
-                    "voltage_rating": FrozenValue(
-                        "50V",
-                    ),
                 },
-                symbol: FrozenValue(
-                    Symbol {
-                        name: None,
-                        pins: {
-                            "1": "1",
-                            "2": "2",
-                        },
-                    },
-                ),
-            },
-        ),
-    ],
+            ),
+        ],
+    },
 }
 []
