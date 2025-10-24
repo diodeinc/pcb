@@ -1035,6 +1035,74 @@ builtin.add_electrical_check(
 - Checks can access the entire module structure, including components, nets, interfaces, and properties
 - Multiple checks with the same name are allowed (they execute independently)
 
+### builtin.add_component_modifier(modifier_fn)
+
+**Built-in function** for registering component modifier functions that automatically run on every component created in the current module and all descendant modules.
+
+**Parameters:**
+- `modifier_fn`: Function that accepts a component and modifies it (required)
+
+Component modifiers enable organization-wide policies by allowing parent modules to automatically modify components created in child modules. Modifiers execute in **bottom-up order**: child's own modifiers first, then parent's, then grandparent's. This allows parent policies to override child choices.
+
+**Modifier Function Signature:**
+```python
+def modifier_function(component):
+    # Modify component properties
+    # No return value required
+    pass
+```
+
+**Example - Assign Manufacturer and MPN:**
+```python
+def assign_resistor_parts(component):
+    """Assign specific part numbers for generic resistors"""
+    if hasattr(component, "resistance"):
+        resistance = str(component.resistance)
+        if resistance == "10k":
+            component.manufacturer = "Yageo"
+            component.mpn = "RC0603FR-0710KL"
+        elif resistance == "100k":
+            component.manufacturer = "Yageo"
+            component.mpn = "RC0603FR-07100KL"
+
+builtin.add_component_modifier(assign_resistor_parts)
+
+# Child modules create generic resistors, parent assigns real parts
+Child = Module("Child.zen")
+Child(name="Board1")
+```
+
+**Example - Assign Capacitor Parts:**
+```python
+def assign_capacitor_parts(component):
+    """Assign ceramic capacitors from approved vendor"""
+    if hasattr(component, "capacitance"):
+        cap = str(component.capacitance)
+        voltage = str(component.voltage_rating) if hasattr(component, "voltage_rating") else "50V"
+
+        if cap == "10uF" and voltage == "16V":
+            component.manufacturer = "Samsung"
+            component.mpn = "CL21A106KAYNNNE"
+
+builtin.add_component_modifier(assign_capacitor_parts)
+```
+
+**Execution Model:**
+
+1. Modifiers are registered during module evaluation via `builtin.add_component_modifier()`
+2. When a child module is instantiated, it inherits all ancestor modifiers
+3. Each component creation triggers modifiers in bottom-up order:
+   - Module's own modifiers execute first
+   - Parent's modifiers execute next
+   - Grandparent's and further ancestors follow
+4. Modifiers can read and write any component property (mpn, manufacturer, dnp, custom properties)
+
+**Notes:**
+- Modifiers only apply to components created AFTER registration
+- Parent modifiers run AFTER child modifiers (can override child choices)
+- Modifiers are inherited through the entire module hierarchy
+- Common uses: vendor policies, DNP rules, property validation, debug tagging
+
 ## Board Configuration Types
 
 The board configuration record types are provided by `@stdlib/board_config.zen` and offer comprehensive control over PCB manufacturing specifications.
