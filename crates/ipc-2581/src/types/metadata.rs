@@ -40,4 +40,12 @@ pub struct HistoryRecord {
 pub struct FileRevision {
     pub file_revision: Symbol,
     pub comment: Option<Symbol>,
+    pub software_package: Option<SoftwarePackage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SoftwarePackage {
+    pub name: Symbol,
+    pub revision: Option<Symbol>,
+    pub vendor: Option<Symbol>,
 }

@@ -15,6 +15,7 @@ pub struct BomItem {
     pub pin_count: Option<u32>,
     pub category: Option<BomCategory>,
     pub ref_des_list: Vec<BomRefDes>,
+    pub characteristics: Option<Characteristics>,
 }
 
 /// RefDes reference in BOM
@@ -30,4 +31,19 @@ pub struct BomRefDes {
 pub enum BomCategory {
     Electrical,
     Mechanical,
+}
+
+/// Characteristics for a BOM item
+#[derive(Debug, Clone)]
+pub struct Characteristics {
+    pub category: Option<BomCategory>,
+    pub textuals: Vec<TextualCharacteristic>,
+}
+
+/// Textual characteristic with name/value pairs
+#[derive(Debug, Clone)]
+pub struct TextualCharacteristic {
+    pub definition_source: Option<String>,
+    pub name: Option<String>,
+    pub value: Option<String>,
 }

@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPC-2581 Viewer</title>
+    <style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+    background: #fafafa;
+    color: #1a1a1a;
+}
+
+h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: -0.02em;
+}
+
+h2 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 24px 0 8px 0;
+    color: #4a4a4a;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 16px 0 8px 0;
+    color: #4a4a4a;
+}
+
+.summary {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    margin-bottom: 16px;
+    border: 1px solid #d0d0d0;
+    background: #fff;
+    width: 480px;
+}
+
+.summary-narrow {
+    width: 400px;
+}
+
+.summary-item {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    padding: 3px 10px;
+    border-bottom: 1px solid #e8e8e8;
+    align-items: center;
+}
+
+.summary-item:last-child {
+    border-bottom: none;
+}
+
+.summary-label {
+    font-weight: 500;
+    color: #666;
+}
+
+.summary-value {
+    font-weight: 400;
+    color: #1a1a1a;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+}
+
+.color-swatch {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 1px solid #666;
+    border-radius: 2px;
+}
+
+.value-right {
+    justify-content: flex-end;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 24px;
+    font-size: 11px;
+    background: #fff;
+    border: 1px solid #d0d0d0;
+}
+
+th {
+    background: #e8e8e8;
+    color: #000;
+    font-weight: 900;
+    text-align: left;
+    padding: 4px 8px;
+    border: 1px solid #d0d0d0;
+    white-space: nowrap;
+}
+
+td {
+    padding: 4px 8px;
+    border: 1px solid #e0e0e0;
+}
+
+.text-center {
+    text-align: center;
+}
+
+.text-right {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.col-number {
+    text-align: center;
+    width: 28px;
+}
+
+.col-thickness {
+    width: 80px;
+}
+
+.col-material {
+    width: 180px;
+}
+
+.col-dk {
+    width: 50px;
+}
+
+.col-value {
+    width: 120px;
+}
+
+.col-manufacturer {
+    width: 180px;
+}
+
+.col-mpn {
+    width: 200px;
+}
+
+.col-quantity {
+    width: 80px;
+}
+
+.col-dnp {
+    width: 60px;
+}
+
+.dnp-row {
+    background-color: #fff3cd;
+}
+
+.row-copper {
+    background: #fef3cd;
+}
+
+.row-dielectric {
+    background: #e3f2fd;
+}
+
+.row-drill-via {
+    background: #cfe2ff;
+}
+
+.row-drill-plated {
+    background: #d4edda;
+}
+
+.row-drill-nonplated {
+    background: #e2e3e5;
+}
+
+.board-outline-container {
+    margin-bottom: 24px;
+    border: 1px solid #d0d0d0;
+    background: #f8f9fa;
+    padding: 32px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 4px;
+}
+
+.board-outline-container svg {
+    display: block;
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.15));
+    shape-rendering: geometricPrecision;
+}
+
+.drill-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin: 16px 0;
+}
+
+.drill-stat-card {
+    background: #f8f9fa;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    padding: 12px;
+}
+
+.drill-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #2c3e50;
+}
+
+.drill-stat-label {
+    font-size: 13px;
+    color: #666;
+    margin-top: 4px;
+}
+
+.histogram {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 300px;
+    padding: 24px 16px 16px 16px;
+    background: #f8f9fa;
+    border: 1px solid #d0d0d0;
+    border-radius: 4px;
+    margin: 16px 0;
+    overflow-x: auto;
+}
+
+.histogram-bar {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    min-width: 35px;
+}
+
+.histogram-bar-fill {
+    width: 100%;
+    border-radius: 2px 2px 0 0;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+.histogram-bar-fill:hover {
+    opacity: 0.8;
+}
+
+.histogram-bar-fill.via {
+    background: #0d6efd;
+}
+
+.histogram-bar-fill.plated {
+    background: #4CAF50;
+}
+
+.histogram-bar-fill.nonplated {
+    background: #6c757d;
+}
+
+.histogram-count {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    font-weight: 600;
+    color: #333;
+    white-space: nowrap;
+}
+
+.histogram-label {
+    font-size: 10px;
+    color: #666;
+    text-align: center;
+}
+
+.histogram-separator {
+    width: 1px;
+    height: 100%;
+    background: #999;
+    margin: 0 8px;
+    flex-shrink: 0;
+}
+
+.download-link {
+    color: #1a1a1a;
+    text-decoration: underline;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+
+.download-link:hover {
+    color: #4a4a4a;
+}
+
+.download-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.file-size {
+    color: #999;
+}
+
+.ref-designators {
+    max-height: 4em;
+    overflow-y: auto;
+    line-height: 1.3;
+}
+
+.file-info {
+    margin-top: 48px;
+    font-size: 11px;
+    color: #666;
+    line-height: 1.6;
+}
+
+.table-compact {
+    width: fit-content;
+    max-width: 600px;
+}
+
+@media print {
+    body {
+        background: #fff;
+        padding: 12px;
+    }
+}
+    </style>
+</head>
+<body>
+    <h1>IPC-2581 PCB Data Viewer</h1>
+
+    {% if board_summary %}
+    <h2>Board Summary</h2>
+    <div class="summary">
+        <div class="summary-item">
+            <span class="summary-label">Design Name:</span>
+            <span class="summary-value">{{ board_summary.design_name }}</span>
+        </div>
+        {% if board_summary.board_dimensions %}
+        <div class="summary-item">
+            <span class="summary-label">Board Dimensions:</span>
+            <span class="summary-value">
+                {{ board_summary.board_dimensions.width_in|round(2) }}" ×
+                {{ board_summary.board_dimensions.height_in|round(2) }}"
+                ({{ board_summary.board_dimensions.width_mm|round(0) }} ×
+                {{ board_summary.board_dimensions.height_mm|round(0) }} mm)
+            </span>
+        </div>
+        {% endif %}
+        <div class="summary-item">
+            <span class="summary-label">Copper Layers:</span>
+            <span class="summary-value">{{ board_summary.copper_layers }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Components:</span>
+            <span class="summary-value">
+                {{ board_summary.components.total }} total
+                ({{ board_summary.components.smt }} SMT, {{ board_summary.components.tht }} THT
+                {% if board_summary.components.other > 0 %}, {{ board_summary.components.other }} other{% endif %})
+            </span>
+        </div>
+        {% if board_summary.board_thickness %}
+        <div class="summary-item">
+            <span class="summary-label">Board Thickness:</span>
+            <span class="summary-value">
+                {{ board_summary.board_thickness.mils|round(1) }} mils
+                ({{ board_summary.board_thickness.mm|round(2) }} mm)
+            </span>
+        </div>
+        {% endif %}
+        {% if board_summary.drill_info %}
+        <div class="summary-item">
+            <span class="summary-label">Total Holes:</span>
+            <span class="summary-value">{{ board_summary.drill_info.total_holes }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Unique Drill Sizes:</span>
+            <span class="summary-value">{{ board_summary.drill_info.unique_sizes }}</span>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if downloads %}
+    <div class="summary">
+        <div class="summary-item">
+            <span class="summary-label">IPC-2581:</span>
+            <span class="summary-value">
+                <div class="download-list">
+                    <div>
+                        <a href="#" class="download-link" onclick="downloadXML(); return false;">{{ downloads.filename }}</a>
+                        <span class="file-size">({{ downloads.xml_size_mb|round(2) }} MB)</span>
+                    </div>
+                    <div>
+                        <a href="#" class="download-link" onclick="downloadCompressed(); return false;">{{ downloads.filename }}.zst</a>
+                        <span class="file-size">({{ downloads.compressed_size_mb|round(2) }} MB)</span>
+                    </div>
+                </div>
+            </span>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if board_outline_svg %}
+    <h2>Board Outline</h2>
+    <div class="board-outline-container">
+        {{ board_outline_svg|safe }}
+    </div>
+    {% endif %}
+
+    {% if stackup %}
+    <h2>Physical Stackup</h2>
+    {% if stackup.overall_thickness_mils or board_finishes %}
+    <div class="summary summary-narrow">
+        {% if stackup.overall_thickness_mils %}
+        <div class="summary-item">
+            <span class="summary-label">Total Thickness:</span>
+            <span class="summary-value">{{ stackup.overall_thickness_mm|round(2) }} mm ({{ stackup.overall_thickness_mils|round(0) }} mil){% if stackup.where_measured %} @ {{ stackup.where_measured }}{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if board_finishes %}
+            {% if board_finishes.top_soldermask or board_finishes.bottom_soldermask %}
+            <div class="summary-item">
+                <span class="summary-label">Soldermask:</span>
+                <span class="summary-value">
+                    {% set mask_info = board_finishes.top_soldermask if board_finishes.top_soldermask else board_finishes.bottom_soldermask if board_finishes.bottom_soldermask else none %}
+                    {% if mask_info and mask_info.color %}
+                        {% if mask_info.color_hex %}
+                        <span class="color-swatch" style="background: {{ mask_info.color_hex }};"></span>
+                        {% endif %}
+                        <span>{{ mask_info.color }}</span>
+                    {% else %}
+                        <span>—</span>
+                    {% endif %}
+                </span>
+            </div>
+            {% endif %}
+            {% if board_finishes.top_silkscreen or board_finishes.bottom_silkscreen %}
+            <div class="summary-item">
+                <span class="summary-label">Silkscreen:</span>
+                <span class="summary-value">
+                    {% set silk_info = board_finishes.top_silkscreen if board_finishes.top_silkscreen else board_finishes.bottom_silkscreen if board_finishes.bottom_silkscreen else none %}
+                    {% if silk_info and silk_info.color %}
+                        {% if silk_info.color_hex %}
+                        <span class="color-swatch" style="background: {{ silk_info.color_hex }};"></span>
+                        {% endif %}
+                        <span>{{ silk_info.color }}</span>
+                    {% else %}
+                        <span>—</span>
+                    {% endif %}
+                </span>
+            </div>
+            {% endif %}
+        {% endif %}
+    </div>
+    {% endif %}
+    <table>
+        <thead>
+            <tr>
+                <th class="col-number">#</th>
+                <th>Layer Name</th>
+                <th>Type</th>
+                <th class="text-right col-thickness">Thickness (mils)</th>
+                <th class="col-material">Material</th>
+                <th class="text-right col-dk">Dk</th>
+                <th class="text-right col-dk">Loss Tan</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for layer in stackup.layers %}
+            <tr class="{% if layer.is_copper %}row-copper{% elif layer.is_dielectric %}row-dielectric{% endif %}">
+                <td class="text-center">{{ layer.number }}</td>
+                <td>{% if layer.is_copper %}<strong>{{ layer.name }}</strong>{% else %}{{ layer.name }}{% endif %}</td>
+                <td>{{ layer.layer_type }}</td>
+                <td class="text-right">{% if layer.thickness_mils %}{{ layer.thickness_mils|round(1) }}{% else %}—{% endif %}</td>
+                <td>{{ layer.material }}</td>
+                <td class="text-right">{% if layer.dk %}{{ layer.dk|round(2) }}{% else %}—{% endif %}</td>
+                <td class="text-right">{% if layer.loss_tangent %}{{ layer.loss_tangent|round(4) }}{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if component_info %}
+    <h2>Components</h2>
+    <div class="summary summary-narrow">
+        <div class="summary-item">
+            <span class="summary-label">Padstack Definitions:</span>
+            <span class="summary-value value-right">{{ component_info.padstack_defs }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Package Definitions:</span>
+            <span class="summary-value value-right">{{ component_info.package_defs }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Component Instances:</span>
+            <span class="summary-value value-right">{{ component_info.component_instances }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if connectivity_info %}
+    <h2>Connectivity</h2>
+    <div class="summary summary-narrow">
+        <div class="summary-item">
+            <span class="summary-label">Logical Nets:</span>
+            <span class="summary-value value-right">{{ connectivity_info.logical_nets }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Total Pin Refs:</span>
+            <span class="summary-value value-right">{{ connectivity_info.total_pins }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if drill %}
+    <h2>Drill Information</h2>
+    <div class="drill-stats">
+        <div class="drill-stat-card">
+            <div class="drill-stat-value">{{ drill.stats.total_holes }}</div>
+            <div class="drill-stat-label">Total Holes</div>
+        </div>
+        <div class="drill-stat-card">
+            <div class="drill-stat-value">{{ drill.stats.via_count }}</div>
+            <div class="drill-stat-label">Vias ({{ drill.stats.via_pct }}%)</div>
+        </div>
+        <div class="drill-stat-card">
+            <div class="drill-stat-value">{{ drill.stats.pth_count }}</div>
+            <div class="drill-stat-label">PTH ({{ drill.stats.pth_pct }}%)</div>
+        </div>
+        <div class="drill-stat-card">
+            <div class="drill-stat-value">{{ drill.stats.npth_count }}</div>
+            <div class="drill-stat-label">NPTH ({{ drill.stats.npth_pct }}%)</div>
+        </div>
+        <div class="drill-stat-card">
+            <div class="drill-stat-value">{{ drill.stats.unique_sizes }}</div>
+            <div class="drill-stat-label">Unique Drill Sizes</div>
+        </div>
+        <div class="drill-stat-card">
+            <div class="drill-stat-value">{{ drill.stats.range_mils }}</div>
+            <div class="drill-stat-label">Diameter Range (mils)</div>
+        </div>
+    </div>
+
+    {% if drill.histogram %}
+    <h3>Drill Size Distribution</h3>
+    <div class="histogram">
+        {% for size in drill.histogram.via_sizes %}
+        {% set height_pct = size.count / drill.histogram.max_count * 100 %}
+        <div class="histogram-bar" style="width: {{ drill.histogram.bar_width|round(1) }}px;">
+            <div class="histogram-bar-fill via"
+                 style="height: {{ [1, height_pct]|max|round(1) }}%;"
+                 title="{{ size.diameter_mils|round(1) }} mils (Via) - {{ size.count }} holes">
+                <span class="histogram-count">{{ size.count }}</span>
+            </div>
+            <div class="histogram-label">{{ size.diameter_mils|round(1) }}<br>Via</div>
+        </div>
+        {% endfor %}
+        {% if drill.histogram.via_sizes and drill.histogram.pth_sizes %}<div class="histogram-separator"></div>{% endif %}
+        {% for size in drill.histogram.pth_sizes %}
+        {% set height_pct = size.count / drill.histogram.max_count * 100 %}
+        <div class="histogram-bar" style="width: {{ drill.histogram.bar_width|round(1) }}px;">
+            <div class="histogram-bar-fill plated"
+                 style="height: {{ [1, height_pct]|max|round(1) }}%;"
+                 title="{{ size.diameter_mils|round(1) }} mils (PTH) - {{ size.count }} holes">
+                <span class="histogram-count">{{ size.count }}</span>
+            </div>
+            <div class="histogram-label">{{ size.diameter_mils|round(1) }}<br>PTH</div>
+        </div>
+        {% endfor %}
+        {% if (drill.histogram.via_sizes or drill.histogram.pth_sizes) and drill.histogram.npth_sizes %}<div class="histogram-separator"></div>{% endif %}
+        {% for size in drill.histogram.npth_sizes %}
+        {% set height_pct = size.count / drill.histogram.max_count * 100 %}
+        <div class="histogram-bar" style="width: {{ drill.histogram.bar_width|round(1) }}px;">
+            <div class="histogram-bar-fill nonplated"
+                 style="height: {{ [1, height_pct]|max|round(1) }}%;"
+                 title="{{ size.diameter_mils|round(1) }} mils (NPTH) - {{ size.count }} holes">
+                <span class="histogram-count">{{ size.count }}</span>
+            </div>
+            <div class="histogram-label">{{ size.diameter_mils|round(1) }}<br>NPTH</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <h3>Drill Details</h3>
+    <table class="table-compact">
+        <thead>
+            <tr>
+                <th class="col-number">#</th>
+                <th class="text-right">Diameter (mils)</th>
+                <th>Type</th>
+                <th class="text-right">Count</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for detail in drill.details %}
+            <tr class="row-drill-{% if detail.drill_type == "Via" %}via{% elif detail.drill_type == "PTH" %}plated{% else %}nonplated{% endif %}">
+                <td class="text-center">{{ loop.index }}</td>
+                <td class="text-right">{{ detail.diameter_mils|round(1) }}</td>
+                <td>{{ detail.drill_type }}</td>
+                <td class="text-right">{{ detail.count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if bom %}
+    <h2>Bill of Materials</h2>
+    <div class="summary summary-narrow">
+        <div class="summary-item">
+            <span class="summary-label">BOM Items:</span>
+            <span class="summary-value value-right">{{ bom.total_items }}</span>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th class="col-number">#</th>
+                <th class="col-value">Value</th>
+                <th class="col-manufacturer">Manufacturer</th>
+                <th class="col-mpn">MPN</th>
+                <th class="text-right col-quantity">Quantity</th>
+                <th class="text-center col-dnp">DNP</th>
+                <th>Reference Designators</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in bom.items %}
+            <tr{% if item.dnp %} class="dnp-row"{% endif %}>
+                <td class="text-center">{{ item.number }}</td>
+                <td>{{ item.value }}</td>
+                <td>{{ item.manufacturer }}</td>
+                <td>{{ item.mpn }}</td>
+                <td class="text-right">{{ item.quantity }}</td>
+                <td class="text-center">{% if item.dnp %}DNP{% endif %}</td>
+                <td><div class="ref-designators">{{ item.ref_designators }}</div></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <div class="file-info">
+        Revision: {{ file_info.revision }}<br>
+        Mode: {{ file_info.mode }}
+        {% if file_info.source_units %}<br>Source Units: {{ file_info.source_units }}{% endif %}
+        {% if file_info.created %}<br>Created: {{ file_info.created }}{% endif %}
+        {% if file_info.last_modified %}<br>Last Modified: {{ file_info.last_modified }}{% endif %}
+        {% if file_info.software %}<br>Software: {{ file_info.software }}{% endif %}
+        {% if file_info.author %}<br>Author: {{ file_info.author }}{% endif %}
+        {% if file_info.enterprise %}<br>Enterprise: {{ file_info.enterprise }}{% endif %}
+    </div>
+
+    <script>
+// fzstd v0.1.1 - https://github.com/101arrowz/fzstd
+{{ fzstd_js }}
+    </script>
+
+    <script>
+const COMPRESSED_XML = "{{ compressed_xml }}";
+const FILENAME = "{{ downloads.filename }}";
+
+function downloadXML() {
+    try {
+        const compressedBytes = Uint8Array.from(atob(COMPRESSED_XML), c => c.charCodeAt(0));
+        const decompressed = fzstd.decompress(compressedBytes);
+        const xmlString = new TextDecoder().decode(decompressed);
+        const blob = new Blob([xmlString], { type: 'application/xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = FILENAME;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        alert('Error downloading file: ' + err.message);
+    }
+}
+
+function downloadCompressed() {
+    try {
+        const compressedBytes = Uint8Array.from(atob(COMPRESSED_XML), c => c.charCodeAt(0));
+        const blob = new Blob([compressedBytes], { type: 'application/zstd' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = FILENAME + '.zst';
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        alert('Error downloading file: ' + err.message);
+    }
+}
+    </script>
+</body>
+</html>

@@ -389,8 +389,8 @@ fn test_testcase1_metadata() {
 
         let total_plated = via_drills + plated_drills;
 
-        // Calculate board dimensions from profile
-        let (board_width, board_height) = if let Some(profile) = &step.profile {
+        // Calculate board dimensions from profile (values are in mm, convert to inches)
+        let (board_width_mm, board_height_mm) = if let Some(profile) = &step.profile {
             let polygon = &profile.polygon;
 
             let mut min_x = polygon.begin.x;
@@ -414,13 +414,18 @@ fn test_testcase1_metadata() {
             (0.0, 0.0)
         };
 
-        // Get board thickness from stackup
-        let board_thickness = ecad
+        // Convert dimensions from mm to inches for reporting
+        let board_width = board_width_mm / 25.4;
+        let board_height = board_height_mm / 25.4;
+
+        // Get board thickness from stackup (in mm, convert to inches)
+        let board_thickness_mm = ecad
             .cad_data
             .stackup
             .as_ref()
             .and_then(|s| s.overall_thickness)
             .unwrap_or(0.0);
+        let board_thickness = board_thickness_mm / 25.4;
 
         // Check BOM if available
         let (
@@ -515,8 +520,18 @@ macro_rules! testcase_metadata_test {
             let arena = Bump::new();
             let path = Path::new($path);
             let doc = Ipc2581::parse_file(&arena, path).unwrap();
-            let (padstack_defs, packages, components, logical_nets, _, total_copper_layers, _, _, total_drills, ..) =
-                print_testcase_metadata(&doc, $testcase_name);
+            let (
+                padstack_defs,
+                packages,
+                components,
+                logical_nets,
+                _,
+                total_copper_layers,
+                _,
+                _,
+                total_drills,
+                ..,
+            ) = print_testcase_metadata(&doc, $testcase_name);
 
             assert!(padstack_defs > 0);
             assert!(packages > 0);
@@ -528,7 +543,11 @@ macro_rules! testcase_metadata_test {
     };
 }
 
-testcase_metadata_test!(test_testcase3_metadata, "tests/data/testcase3_2581REVC/testcase3-RevC-full.xml", "Testcase 3");
+testcase_metadata_test!(
+    test_testcase3_metadata,
+    "tests/data/testcase3_2581REVC/testcase3-RevC-full.xml",
+    "Testcase 3"
+);
 
 // Helper function to extract and print testcase metadata
 fn print_testcase_metadata(
@@ -675,12 +694,36 @@ fn print_testcase_metadata(
     }
 }
 
-testcase_metadata_test!(test_testcase5_metadata, "tests/data/testcase5-revC-Data/testcase5-RevC-full.xml", "Testcase 5");
-testcase_metadata_test!(test_testcase6_metadata, "tests/data/testcase6-RevC_Data/testcase6-RevC-full.xml", "Testcase 6");
-testcase_metadata_test!(test_testcase9_metadata, "tests/data/testcase9-RevC-data/testcase9-RevC-full.xml", "Testcase 9");
-testcase_metadata_test!(test_testcase10_metadata, "tests/data/testcase10-Rev C data/testcase10-RevC-full.xml", "Testcase 10");
-testcase_metadata_test!(test_testcase11_metadata, "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml", "Testcase 11");
-testcase_metadata_test!(test_testcase12_metadata, "tests/data/testcase12-RevC/testcase12-rdgflx-full.xml", "Testcase 12");
+testcase_metadata_test!(
+    test_testcase5_metadata,
+    "tests/data/testcase5-revC-Data/testcase5-RevC-full.xml",
+    "Testcase 5"
+);
+testcase_metadata_test!(
+    test_testcase6_metadata,
+    "tests/data/testcase6-RevC_Data/testcase6-RevC-full.xml",
+    "Testcase 6"
+);
+testcase_metadata_test!(
+    test_testcase9_metadata,
+    "tests/data/testcase9-RevC-data/testcase9-RevC-full.xml",
+    "Testcase 9"
+);
+testcase_metadata_test!(
+    test_testcase10_metadata,
+    "tests/data/testcase10-Rev C data/testcase10-RevC-full.xml",
+    "Testcase 10"
+);
+testcase_metadata_test!(
+    test_testcase11_metadata,
+    "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml",
+    "Testcase 11"
+);
+testcase_metadata_test!(
+    test_testcase12_metadata,
+    "tests/data/testcase12-RevC/testcase12-rdgflx-full.xml",
+    "Testcase 12"
+);
 
 #[test]
 fn test_testcase1_cross_file_consistency() {

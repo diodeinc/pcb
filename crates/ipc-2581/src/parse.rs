@@ -3,11 +3,15 @@ use crate::{Interner, Ipc2581Error, Result, Symbol};
 use bumpalo::Bump;
 use roxmltree::{Document, Node};
 
-/// Parser context holding the arena and string interner
+/// Parser context holding the arena, string interner, and unit context
 pub struct Parser<'arena> {
     #[allow(dead_code)]
     pub arena: &'arena Bump,
     pub interner: Interner,
+    /// Current ECAD units for converting dimensions (set when parsing CadHeader)
+    ecad_units: Option<Units>,
+    /// Specs from CadHeader (set when parsing CadHeader, used by StackupLayer parsing)
+    specs: std::collections::HashMap<Symbol, ecad::Spec>,
 }
 
 impl<'arena> Parser<'arena> {
@@ -15,6 +19,8 @@ impl<'arena> Parser<'arena> {
         Self {
             arena,
             interner: Interner::new(),
+            ecad_units: None,
+            specs: std::collections::HashMap::new(),
         }
     }
 
@@ -199,16 +205,19 @@ impl<'arena> Parser<'arena> {
             .map(|s| self.parse_units(s))
             .transpose()?;
 
+        // Use MILLIMETER as default if not specified
+        let dict_units = units.unwrap_or(Units::Millimeter);
+
         let entries = node
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "EntryLineDesc")
-            .map(|n| self.parse_entry_line_desc(&n))
+            .map(|n| self.parse_entry_line_desc(&n, dict_units))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(DictionaryLineDesc { units, entries })
     }
 
-    fn parse_entry_line_desc(&mut self, node: &Node) -> Result<EntryLineDesc> {
+    fn parse_entry_line_desc(&mut self, node: &Node, units: Units) -> Result<EntryLineDesc> {
         let id = self.required_attr(node, "id", "EntryLineDesc")?;
 
         let line_desc_node = node
@@ -216,13 +225,13 @@ impl<'arena> Parser<'arena> {
             .find(|n| n.is_element() && n.tag_name().name() == "LineDesc")
             .ok_or(Ipc2581Error::MissingElement("LineDesc"))?;
 
-        let line_desc = self.parse_line_desc(&line_desc_node)?;
+        let line_desc = self.parse_line_desc(&line_desc_node, units)?;
 
         Ok(EntryLineDesc { id, line_desc })
     }
 
-    fn parse_line_desc(&mut self, node: &Node) -> Result<LineDesc> {
-        let line_width = self.parse_f64_attr(node, "lineWidth", "LineDesc")?;
+    fn parse_line_desc(&mut self, node: &Node, units: Units) -> Result<LineDesc> {
+        let line_width = self.parse_f64_attr_with_units(node, "lineWidth", "LineDesc", units)?;
         let line_end_str = self.required_attr(node, "lineEnd", "LineDesc")?;
         let line_end = self.parse_line_end(self.interner.resolve(line_end_str))?;
 
@@ -273,16 +282,19 @@ impl<'arena> Parser<'arena> {
             .map(|s| self.parse_units(s))
             .transpose()?;
 
+        // Use MILLIMETER as default if not specified
+        let dict_units = units.unwrap_or(Units::Millimeter);
+
         let entries = node
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "EntryStandard")
-            .map(|n| self.parse_entry_standard(&n))
+            .map(|n| self.parse_entry_standard(&n, dict_units))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(DictionaryStandard { units, entries })
     }
 
-    fn parse_entry_standard(&mut self, node: &Node) -> Result<EntryStandard> {
+    fn parse_entry_standard(&mut self, node: &Node, units: Units) -> Result<EntryStandard> {
         let id = self.required_attr(node, "id", "EntryStandard")?;
 
         // Find the primitive child element
@@ -291,26 +303,26 @@ impl<'arena> Parser<'arena> {
             .find(|n| n.is_element())
             .ok_or(Ipc2581Error::MissingElement("StandardPrimitive"))?;
 
-        let primitive = self.parse_standard_primitive(&primitive_node)?;
+        let primitive = self.parse_standard_primitive(&primitive_node, units)?;
 
         Ok(EntryStandard { id, primitive })
     }
 
-    fn parse_standard_primitive(&mut self, node: &Node) -> Result<StandardPrimitive> {
+    fn parse_standard_primitive(&mut self, node: &Node, units: Units) -> Result<StandardPrimitive> {
         match node.tag_name().name() {
             "Circle" => {
-                let diameter = self.parse_f64_attr(node, "diameter", "Circle")?;
+                let diameter = self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?;
                 Ok(StandardPrimitive::Circle(Circle { diameter }))
             }
             "RectCenter" => {
-                let width = self.parse_f64_attr(node, "width", "RectCenter")?;
-                let height = self.parse_f64_attr(node, "height", "RectCenter")?;
+                let width = self.parse_f64_attr_with_units(node, "width", "RectCenter", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "RectCenter", units)?;
                 Ok(StandardPrimitive::RectCenter(RectCenter { width, height }))
             }
             "RectRound" => {
-                let width = self.parse_f64_attr(node, "width", "RectRound")?;
-                let height = self.parse_f64_attr(node, "height", "RectRound")?;
-                let radius = self.parse_f64_attr(node, "radius", "RectRound")?;
+                let width = self.parse_f64_attr_with_units(node, "width", "RectRound", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "RectRound", units)?;
+                let radius = self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?;
                 let upper_right = self.parse_bool_attr(node, "upperRight").unwrap_or(false);
                 let upper_left = self.parse_bool_attr(node, "upperLeft").unwrap_or(false);
                 let lower_right = self.parse_bool_attr(node, "lowerRight").unwrap_or(false);
@@ -327,8 +339,8 @@ impl<'arena> Parser<'arena> {
                 }))
             }
             "Oval" => {
-                let width = self.parse_f64_attr(node, "width", "Oval")?;
-                let height = self.parse_f64_attr(node, "height", "Oval")?;
+                let width = self.parse_f64_attr_with_units(node, "width", "Oval", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "Oval", units)?;
                 Ok(StandardPrimitive::Oval(Oval { width, height }))
             }
             "Contour" => {
@@ -338,12 +350,12 @@ impl<'arena> Parser<'arena> {
                     .find(|n| n.is_element() && n.tag_name().name() == "Polygon")
                     .ok_or(Ipc2581Error::MissingElement("Polygon"))?;
 
-                let polygon = self.parse_polygon(&polygon_node)?;
+                let polygon = self.parse_polygon(&polygon_node, units)?;
 
                 let cutouts = node
                     .children()
                     .filter(|n| n.is_element() && n.tag_name().name() == "Cutout")
-                    .map(|n| self.parse_polygon(&n))
+                    .map(|n| self.parse_polygon(&n, units))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(StandardPrimitive::Contour(Contour { polygon, cutouts }))
@@ -355,27 +367,31 @@ impl<'arena> Parser<'arena> {
         }
     }
 
-    fn parse_polygon(&mut self, node: &Node) -> Result<Polygon> {
+    fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
         let mut begin: Option<PolyBegin> = None;
         let mut steps = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "PolyBegin" => {
-                    let x = self.parse_f64_attr(&child, "x", "PolyBegin")?;
-                    let y = self.parse_f64_attr(&child, "y", "PolyBegin")?;
+                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?;
+                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?;
                     begin = Some(PolyBegin { x, y });
                 }
                 "PolyStepSegment" => {
-                    let x = self.parse_f64_attr(&child, "x", "PolyStepSegment")?;
-                    let y = self.parse_f64_attr(&child, "y", "PolyStepSegment")?;
+                    let x =
+                        self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)?;
+                    let y =
+                        self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)?;
                     steps.push(PolyStep::Segment(PolyStepSegment { x, y }));
                 }
                 "PolyStepCurve" => {
-                    let x = self.parse_f64_attr(&child, "x", "PolyStepCurve")?;
-                    let y = self.parse_f64_attr(&child, "y", "PolyStepCurve")?;
-                    let center_x = self.parse_f64_attr(&child, "centerX", "PolyStepCurve")?;
-                    let center_y = self.parse_f64_attr(&child, "centerY", "PolyStepCurve")?;
+                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)?;
+                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)?;
+                    let center_x =
+                        self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units)?;
+                    let center_y =
+                        self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units)?;
                     let clockwise = self.parse_bool_attr(&child, "clockwise")?;
                     steps.push(PolyStep::Curve(PolyStepCurve {
                         x,
@@ -432,12 +448,53 @@ impl<'arena> Parser<'arena> {
         let software = self.optional_attr(node, "software");
         let last_change = self.required_attr(node, "lastChange", "HistoryRecord")?;
 
+        // Parse FileRevision child element
+        let mut file_revision = None;
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "FileRevision" {
+                file_revision = Some(self.parse_file_revision(&child)?);
+                break;
+            }
+        }
+
         Ok(HistoryRecord {
             number,
             origination,
             software,
             last_change,
-            file_revision: None,
+            file_revision,
+        })
+    }
+
+    fn parse_file_revision(&mut self, node: &Node) -> Result<metadata::FileRevision> {
+        let file_revision = self.required_attr(node, "fileRevisionId", "FileRevision")?;
+        let comment = self.optional_attr(node, "comment");
+
+        // Parse SoftwarePackage child element
+        let mut software_package = None;
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "SoftwarePackage" {
+                software_package = Some(self.parse_software_package(&child)?);
+                break;
+            }
+        }
+
+        Ok(metadata::FileRevision {
+            file_revision,
+            comment,
+            software_package,
+        })
+    }
+
+    fn parse_software_package(&mut self, node: &Node) -> Result<metadata::SoftwarePackage> {
+        let name = self.required_attr(node, "name", "SoftwarePackage")?;
+        let revision = self.optional_attr(node, "revision");
+        let vendor = self.optional_attr(node, "vendor");
+
+        Ok(metadata::SoftwarePackage {
+            name,
+            revision,
+            vendor,
         })
     }
 
@@ -484,6 +541,21 @@ impl<'arena> Parser<'arena> {
             .map_err(|_| Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr)))
     }
 
+    /// Parse an f64 attribute and convert it to millimeters (canonical unit)
+    ///
+    /// This function takes the source units and converts the value to mm.
+    /// All dimensional values in the parsed document are stored in mm.
+    fn parse_f64_attr_with_units(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        element: &'static str,
+        units: Units,
+    ) -> Result<f64> {
+        let value = self.parse_f64_attr(node, attr, element)?;
+        Ok(crate::units::to_mm(value, units))
+    }
+
     fn parse_u8_attr(&self, node: &Node, attr: &'static str, element: &'static str) -> Result<u8> {
         let attr_val = node
             .attribute(attr)
@@ -509,13 +581,111 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_ecad(&mut self, node: &Node) -> Result<Ecad> {
+        // Parse CadHeader first to establish units for the ECAD section
+        let cad_header_node = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "CadHeader")
+            .ok_or(Ipc2581Error::MissingElement("CadHeader"))?;
+        let cad_header = self.parse_cad_header(&cad_header_node)?;
+
+        // Store ECAD units and specs for use when parsing dimensions and stackup layers
+        self.ecad_units = Some(cad_header.units);
+        self.specs = cad_header.specs.clone();
+
         let cad_data_node = node
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "CadData")
             .ok_or(Ipc2581Error::MissingElement("CadData"))?;
         let cad_data = self.parse_cad_data(&cad_data_node)?;
 
-        Ok(Ecad { cad_data })
+        Ok(Ecad {
+            cad_header,
+            cad_data,
+        })
+    }
+
+    fn parse_cad_header(&mut self, node: &Node) -> Result<CadHeader> {
+        let units = node
+            .attribute("units")
+            .ok_or(Ipc2581Error::MissingAttribute {
+                element: "CadHeader",
+                attr: "units",
+            })?;
+        let units = self.parse_units(units)?;
+
+        // Parse Spec elements
+        let mut specs = std::collections::HashMap::new();
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "Spec" {
+                let spec = self.parse_spec(&child)?;
+                specs.insert(spec.name, spec);
+            }
+        }
+
+        Ok(CadHeader { units, specs })
+    }
+
+    fn parse_spec(&mut self, node: &Node) -> Result<ecad::Spec> {
+        let name = self.required_attr(node, "name", "Spec")?;
+
+        let mut material = None;
+        let mut dielectric_constant = None;
+        let mut loss_tangent = None;
+        let mut properties = Vec::new();
+
+        // Parse child elements for material and dielectric properties
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "General" => {
+                    // Extract material from General type="MATERIAL"
+                    if child.attribute("type") == Some("MATERIAL") {
+                        // Look for Property with text attribute
+                        for prop in child.children().filter(|n| n.is_element()) {
+                            if prop.tag_name().name() == "Property" {
+                                if let Some(text) = prop.attribute("text") {
+                                    if !text.is_empty() {
+                                        // Store all property texts
+                                        properties.push(text.to_string());
+                                        // Take the first non-empty material text we find
+                                        if material.is_none() {
+                                            material = Some(text.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "Dielectric" => {
+                    let dielectric_type = child.attribute("type");
+                    // Look for Property with value attribute
+                    for prop in child.children().filter(|n| n.is_element()) {
+                        if prop.tag_name().name() == "Property" {
+                            if let Some(value_str) = prop.attribute("value") {
+                                if let Ok(value) = value_str.parse::<f64>() {
+                                    match dielectric_type {
+                                        Some("DIELECTRIC_CONSTANT") => {
+                                            dielectric_constant = Some(value)
+                                        }
+                                        Some("LOSS_TANGENT") => loss_tangent = Some(value),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ecad::Spec {
+            name,
+            material,
+            dielectric_constant,
+            loss_tangent,
+            properties,
+        })
     }
 
     fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
@@ -540,47 +710,125 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_stackup(&mut self, node: &Node) -> Result<Stackup> {
+        // Stackup is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
         let name = self.required_attr(node, "name", "Stackup")?;
+
+        // Convert overall thickness if present
         let overall_thickness = node
             .attribute("overallThickness")
-            .and_then(|s| s.parse().ok());
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| crate::units::to_mm(v, units));
+
+        // Parse whereMeasured attribute
+        let where_measured = node
+            .attribute("whereMeasured")
+            .and_then(|s| self.parse_where_measured(s).ok());
+
+        // Parse tolerances
+        let tol_plus = node
+            .attribute("tolPlus")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| crate::units::to_mm(v, units));
+
+        let tol_minus = node
+            .attribute("tolMinus")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| crate::units::to_mm(v, units));
 
         let mut layers = Vec::new();
         for child in node.children().filter(|n| n.is_element()) {
-            match child.tag_name().name() {
-                "StackupGroup" => {
-                    // StackupGroup contains StackupLayer elements
-                    for layer_node in child.children().filter(|n| n.is_element()) {
-                        if layer_node.tag_name().name() == "StackupLayer" {
-                            layers.push(self.parse_stackup_layer(&layer_node)?);
-                        }
+            if child.tag_name().name() == "StackupGroup" {
+                // StackupGroup contains StackupLayer elements
+                for layer_node in child.children().filter(|n| n.is_element()) {
+                    if layer_node.tag_name().name() == "StackupLayer" {
+                        layers.push(self.parse_stackup_layer(&layer_node)?);
                     }
                 }
-                _ => {}
             }
         }
 
         Ok(Stackup {
             name,
             overall_thickness,
+            where_measured,
+            tol_plus,
+            tol_minus,
             layers,
         })
     }
 
     fn parse_stackup_layer(&mut self, node: &Node) -> Result<StackupLayer> {
+        // StackupLayer is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
         let layer_ref = self.required_attr(node, "layerOrGroupRef", "StackupLayer")?;
-        let thickness = node.attribute("thickness").and_then(|s| s.parse().ok());
-        let material = node.attribute("material").map(|s| self.interner.intern(s));
-        let dielectric_constant = node
-            .attribute("dielectricConstant")
-            .and_then(|s| s.parse().ok());
+
+        // Convert thickness if present
+        let thickness = node
+            .attribute("thickness")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| crate::units::to_mm(v, units));
+
         let layer_number = node.attribute("sequence").and_then(|s| s.parse().ok());
+
+        // Look up material and dielectric properties from Spec via SpecRef
+        let mut material = None;
+        let mut spec_ref = None;
+        let mut dielectric_constant = None;
+        let mut loss_tangent = None;
+
+        // Parse SpecRef child element
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "SpecRef" {
+                if let Some(spec_id) = child.attribute("id") {
+                    // Try multiple strategies to find the matching Spec:
+                    // 1. Exact match (standard IPC-2581)
+                    let spec_symbol = self.interner.intern(spec_id);
+                    if let Some(spec) = self.specs.get(&spec_symbol) {
+                        spec_ref = Some(spec_symbol);
+                        material = spec.material.as_ref().map(|m| self.interner.intern(m));
+                        dielectric_constant = spec.dielectric_constant;
+                        loss_tangent = spec.loss_tangent;
+                    } else {
+                        // 2. Try with "SPEC_" prefix removed (KiCad compatibility)
+                        let base_id = spec_id.strip_prefix("SPEC_").unwrap_or(spec_id);
+
+                        let alt_symbol = self.interner.intern(base_id);
+                        if let Some(spec) = self.specs.get(&alt_symbol) {
+                            spec_ref = Some(alt_symbol);
+                            material = spec.material.as_ref().map(|m| self.interner.intern(m));
+                            dielectric_constant = spec.dielectric_constant;
+                            loss_tangent = spec.loss_tangent;
+                        } else {
+                            // 3. Try fuzzy match: find spec name starting with base_id + "_"
+                            // (KiCad uses SPEC_DIELECTRIC_1 -> DIELECTRIC_1_1 pattern)
+                            let prefix = format!("{}_", base_id);
+                            for (spec_name, spec) in &self.specs {
+                                let spec_name_str = self.interner.resolve(*spec_name);
+                                if spec_name_str.starts_with(&prefix) {
+                                    spec_ref = Some(*spec_name);
+                                    material =
+                                        spec.material.as_ref().map(|m| self.interner.intern(m));
+                                    dielectric_constant = spec.dielectric_constant;
+                                    loss_tangent = spec.loss_tangent;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(StackupLayer {
             layer_ref,
             thickness,
             material,
+            spec_ref,
             dielectric_constant,
+            loss_tangent,
             layer_number,
         })
     }
@@ -626,8 +874,10 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_datum(&mut self, node: &Node) -> Result<Datum> {
-        let x = self.parse_f64_attr(node, "x", "Datum")?;
-        let y = self.parse_f64_attr(node, "y", "Datum")?;
+        // Datum is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let x = self.parse_f64_attr_with_units(node, "x", "Datum", units)?;
+        let y = self.parse_f64_attr_with_units(node, "y", "Datum", units)?;
         Ok(Datum { x, y })
     }
 
@@ -636,7 +886,10 @@ impl<'arena> Parser<'arena> {
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "Polygon")
             .ok_or(Ipc2581Error::MissingElement("Polygon in Profile"))?;
-        let polygon = self.parse_polygon(&polygon_node)?;
+
+        // Profile is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let polygon = self.parse_polygon(&polygon_node, units)?;
         Ok(Profile { polygon })
     }
 
@@ -756,13 +1009,16 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
+        // Hole is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
         let name = node.attribute("name").map(|s| self.interner.intern(s));
-        let diameter = self.parse_f64_attr(node, "diameter", "Hole")?;
+        let diameter = self.parse_f64_attr_with_units(node, "diameter", "Hole", units)?;
         let plating_status_str = self.required_attr(node, "platingStatus", "Hole")?;
         let plating_status =
             self.parse_plating_status(self.interner.resolve(plating_status_str))?;
-        let x = self.parse_f64_attr(node, "x", "Hole")?;
-        let y = self.parse_f64_attr(node, "y", "Hole")?;
+        let x = self.parse_f64_attr_with_units(node, "x", "Hole", units)?;
+        let y = self.parse_f64_attr_with_units(node, "y", "Hole", units)?;
 
         Ok(Hole {
             name,
@@ -774,11 +1030,24 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_pad(&mut self, node: &Node) -> Result<Pad> {
+        // Pad is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
         let padstack_def_ref = node
             .attribute("padstackDefRef")
             .map(|s| self.interner.intern(s));
-        let x = node.attribute("x").and_then(|s| s.parse().ok());
-        let y = node.attribute("y").and_then(|s| s.parse().ok());
+
+        // Convert coordinates if present
+        let x = node
+            .attribute("x")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| crate::units::to_mm(v, units));
+        let y = node
+            .attribute("y")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| crate::units::to_mm(v, units));
+
+        // Rotation is in degrees, no conversion needed
         let rotation = node.attribute("rotation").and_then(|s| s.parse().ok());
 
         Ok(Pad {
@@ -790,15 +1059,20 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_trace(&mut self, node: &Node) -> Result<Trace> {
+        // Trace is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
         let line_desc_ref = node
             .attribute("lineDescRef")
             .map(|s| self.interner.intern(s));
 
         let mut points = Vec::new();
         for child in node.children().filter(|n| n.is_element()) {
-            if child.tag_name().name() == "PolyBegin" || child.tag_name().name() == "PolyStepSegment" {
-                let x = self.parse_f64_attr(&child, "x", "TracePoint")?;
-                let y = self.parse_f64_attr(&child, "y", "TracePoint")?;
+            if child.tag_name().name() == "PolyBegin"
+                || child.tag_name().name() == "PolyStepSegment"
+            {
+                let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
+                let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
                 points.push(TracePoint { x, y });
             }
         }
@@ -859,6 +1133,19 @@ impl<'arena> Parser<'arena> {
         }
     }
 
+    fn parse_where_measured(&self, s: &str) -> Result<WhereMeasured> {
+        match s {
+            "METAL" => Ok(WhereMeasured::Metal),
+            "MASK" => Ok(WhereMeasured::Mask),
+            "LAMINATE" => Ok(WhereMeasured::Laminate),
+            "OTHER" => Ok(WhereMeasured::Other),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid whereMeasured: {}",
+                s
+            ))),
+        }
+    }
+
     fn parse_padstack_def(&mut self, node: &Node) -> Result<PadStackDef> {
         let name = self.required_attr(node, "name", "PadStackDef")?;
 
@@ -881,15 +1168,20 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_padstack_hole_def(&mut self, node: &Node) -> Result<PadstackHoleDef> {
+        // PadstackHoleDef is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
         let name = self.required_attr(node, "name", "PadstackHoleDef")?;
-        let diameter = self.parse_f64_attr(node, "diameter", "PadstackHoleDef")?;
+        let diameter =
+            self.parse_f64_attr_with_units(node, "diameter", "PadstackHoleDef", units)?;
         let plating_status_str = self.required_attr(node, "platingStatus", "PadstackHoleDef")?;
         let plating_status =
             self.parse_plating_status(self.interner.resolve(plating_status_str))?;
-        let plus_tol = self.parse_f64_attr(node, "plusTol", "PadstackHoleDef")?;
-        let minus_tol = self.parse_f64_attr(node, "minusTol", "PadstackHoleDef")?;
-        let x = self.parse_f64_attr(node, "x", "PadstackHoleDef")?;
-        let y = self.parse_f64_attr(node, "y", "PadstackHoleDef")?;
+        let plus_tol = self.parse_f64_attr_with_units(node, "plusTol", "PadstackHoleDef", units)?;
+        let minus_tol =
+            self.parse_f64_attr_with_units(node, "minusTol", "PadstackHoleDef", units)?;
+        let x = self.parse_f64_attr_with_units(node, "x", "PadstackHoleDef", units)?;
+        let y = self.parse_f64_attr_with_units(node, "y", "PadstackHoleDef", units)?;
 
         Ok(PadstackHoleDef {
             name,
@@ -958,11 +1250,16 @@ impl<'arena> Parser<'arena> {
             _ => BomCategory::Electrical, // Default
         });
 
-        let ref_des_list = node
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "RefDes")
-            .map(|n| self.parse_bom_ref_des(&n))
-            .collect::<Result<Vec<_>>>()?;
+        let mut ref_des_list = Vec::new();
+        let mut characteristics = None;
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "RefDes" => ref_des_list.push(self.parse_bom_ref_des(&child)?),
+                "Characteristics" => characteristics = Some(self.parse_characteristics(&child)?),
+                _ => {}
+            }
+        }
 
         Ok(BomItem {
             oem_design_number_ref,
@@ -970,6 +1267,7 @@ impl<'arena> Parser<'arena> {
             pin_count,
             category,
             ref_des_list,
+            characteristics,
         })
     }
 
@@ -988,6 +1286,38 @@ impl<'arena> Parser<'arena> {
             package_ref,
             populate,
             layer_ref,
+        })
+    }
+
+    fn parse_characteristics(&mut self, node: &Node) -> Result<Characteristics> {
+        let category = node.attribute("category").map(|s| match s {
+            "ELECTRICAL" => BomCategory::Electrical,
+            "MECHANICAL" => BomCategory::Mechanical,
+            _ => BomCategory::Electrical,
+        });
+
+        let textuals = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "Textual")
+            .map(|n| self.parse_textual_characteristic(&n))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Characteristics { category, textuals })
+    }
+
+    fn parse_textual_characteristic(&mut self, node: &Node) -> Result<TextualCharacteristic> {
+        let definition_source = node.attribute("definitionSource").map(|s| s.to_string());
+        let name = node
+            .attribute("textualCharacteristicName")
+            .map(|s| s.to_string());
+        let value = node
+            .attribute("textualCharacteristicValue")
+            .map(|s| s.to_string());
+
+        Ok(TextualCharacteristic {
+            definition_source,
+            name,
+            value,
         })
     }
 }

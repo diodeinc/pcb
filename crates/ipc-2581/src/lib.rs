@@ -1,7 +1,10 @@
+pub mod board_outline;
 mod checksum;
+pub mod html_generator;
 mod intern;
 mod parse;
 pub mod types;
+mod units;
 
 pub use intern::{Interner, Symbol};
 pub use types::*;

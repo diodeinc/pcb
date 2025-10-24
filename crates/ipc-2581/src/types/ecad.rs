@@ -1,8 +1,36 @@
+use super::Units;
 use crate::Symbol;
+use std::collections::HashMap;
 
-/// Ecad section containing CadData
+/// CadHeader defines units and specifications for the ECAD section
+///
+/// All dimensional values in the ECAD section (coordinates, sizes, etc.)
+/// are defined in the units specified here. After parsing, all values
+/// are converted to millimeters for internal consistency.
+#[derive(Debug, Clone)]
+pub struct CadHeader {
+    pub units: Units,
+    pub specs: HashMap<Symbol, Spec>,
+}
+
+/// Spec defines material, dielectric, and other properties
+///
+/// Specs are referenced by StackupLayers, Components, and other elements
+/// via SpecRef to provide detailed material and electrical characteristics.
+#[derive(Debug, Clone)]
+pub struct Spec {
+    pub name: Symbol,
+    pub material: Option<String>,
+    pub dielectric_constant: Option<f64>,
+    pub loss_tangent: Option<f64>,
+    /// All Property text values from General type="MATERIAL" elements
+    pub properties: Vec<String>,
+}
+
+/// Ecad section containing CadHeader and CadData
 #[derive(Debug, Clone)]
 pub struct Ecad {
+    pub cad_header: CadHeader,
     pub cad_data: CadData,
 }
 
@@ -19,6 +47,9 @@ pub struct CadData {
 pub struct Stackup {
     pub name: Symbol,
     pub overall_thickness: Option<f64>,
+    pub where_measured: Option<WhereMeasured>,
+    pub tol_plus: Option<f64>,
+    pub tol_minus: Option<f64>,
     pub layers: Vec<StackupLayer>,
 }
 
@@ -28,7 +59,9 @@ pub struct StackupLayer {
     pub layer_ref: Symbol,
     pub thickness: Option<f64>,
     pub material: Option<Symbol>,
+    pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
     pub dielectric_constant: Option<f64>,
+    pub loss_tangent: Option<f64>,
     pub layer_number: Option<u32>,
 }
 
@@ -240,4 +273,13 @@ pub enum Side {
 pub enum Polarity {
     Positive,
     Negative,
+}
+
+/// WhereMeasured indicates where overall thickness is measured
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhereMeasured {
+    Metal,
+    Mask,
+    Laminate,
+    Other,
 }

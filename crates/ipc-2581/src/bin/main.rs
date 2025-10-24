@@ -1,7 +1,9 @@
 use bumpalo::Bump;
 use clap::{Parser, Subcommand};
+use ipc_2581::html_generator::generate_html;
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
+use std::fs;
 use std::path::PathBuf;
 use std::process;
 
@@ -23,6 +25,19 @@ enum Commands {
         /// Show detailed information
         #[arg(short, long)]
         verbose: bool,
+    },
+    /// Export IPC-2581 file to various formats
+    Export {
+        /// Path to IPC-2581 XML file
+        file: PathBuf,
+
+        /// Output file path
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Export format (currently only html)
+        #[arg(short, long, default_value = "html")]
+        format: String,
     },
 }
 
@@ -61,12 +76,36 @@ fn main() {
 
             if files.len() > 1 {
                 println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                println!("Checked {} file(s): {} passed, {} failed",
-                    files.len(), total_checked, total_errors);
+                println!(
+                    "Checked {} file(s): {} passed, {} failed",
+                    files.len(),
+                    total_checked,
+                    total_errors
+                );
             }
 
             if total_errors > 0 {
                 process::exit(1);
+            }
+        }
+        Commands::Export {
+            file,
+            output,
+            format,
+        } => {
+            if format != "html" {
+                eprintln!("Error: Only 'html' format is currently supported");
+                process::exit(1);
+            }
+
+            match export_html(&file, &output) {
+                Ok(_) => {
+                    println!("✓ Exported to {}", output.display());
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
             }
         }
     }
@@ -126,14 +165,20 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
             if !package_names.contains(pkg_name) {
                 invalid_pkg_refs += 1;
                 if verbose {
-                    eprintln!("  ⚠ Component {} references non-existent package {}",
-                        doc.resolve(comp.ref_des), pkg_name);
+                    eprintln!(
+                        "  ⚠ Component {} references non-existent package {}",
+                        doc.resolve(comp.ref_des),
+                        pkg_name
+                    );
                 }
             }
         }
 
         if invalid_pkg_refs > 0 {
-            println!("  ✗ {} components reference invalid packages", invalid_pkg_refs);
+            println!(
+                "  ✗ {} components reference invalid packages",
+                invalid_pkg_refs
+            );
             errors += invalid_pkg_refs;
         } else {
             println!("  ✓ All component package references valid");
@@ -144,9 +189,7 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
         println!("Connectivity:");
         println!("  {} logical nets", step.logical_nets.len());
 
-        let total_pin_refs: usize = step.logical_nets.iter()
-            .map(|net| net.pin_refs.len())
-            .sum();
+        let total_pin_refs: usize = step.logical_nets.iter().map(|net| net.pin_refs.len()).sum();
         println!("  {} total pin references", total_pin_refs);
 
         // Build component RefDes set
@@ -163,15 +206,21 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
                 if !component_refdes.contains(comp_name) {
                     invalid_pin_refs += 1;
                     if verbose && invalid_pin_refs <= 5 {
-                        eprintln!("  ⚠ Net {} references non-existent component {}",
-                            doc.resolve(net.name), comp_name);
+                        eprintln!(
+                            "  ⚠ Net {} references non-existent component {}",
+                            doc.resolve(net.name),
+                            comp_name
+                        );
                     }
                 }
             }
         }
 
         if invalid_pin_refs > 0 {
-            println!("  ✗ {} pin references to non-existent components", invalid_pin_refs);
+            println!(
+                "  ✗ {} pin references to non-existent components",
+                invalid_pin_refs
+            );
             errors += invalid_pin_refs;
         } else {
             println!("  ✓ All pin references valid");
@@ -182,18 +231,31 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
         println!("Layers:");
         println!("  {} total layers", ecad.cad_data.layers.len());
 
-        let plane_layers = ecad.cad_data.layers.iter()
+        let plane_layers = ecad
+            .cad_data
+            .layers
+            .iter()
             .filter(|l| l.layer_function == LayerFunction::Plane)
             .count();
-        let conductor_layers = ecad.cad_data.layers.iter()
+        let conductor_layers = ecad
+            .cad_data
+            .layers
+            .iter()
             .filter(|l| l.layer_function == LayerFunction::Conductor)
             .count();
-        let drill_layers = ecad.cad_data.layers.iter()
+        let drill_layers = ecad
+            .cad_data
+            .layers
+            .iter()
             .filter(|l| l.layer_function == LayerFunction::Drill)
             .count();
 
-        println!("  {} copper layers ({} plane + {} conductor)",
-            plane_layers + conductor_layers, plane_layers, conductor_layers);
+        println!(
+            "  {} copper layers ({} plane + {} conductor)",
+            plane_layers + conductor_layers,
+            plane_layers,
+            conductor_layers
+        );
         println!("  {} drill layers", drill_layers);
 
         // Build layer name set
@@ -209,8 +271,11 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
             if !layer_names.contains(layer_name) {
                 invalid_layer_refs += 1;
                 if verbose {
-                    eprintln!("  ⚠ Component {} references layer {} (not in this file)",
-                        doc.resolve(comp.ref_des), layer_name);
+                    eprintln!(
+                        "  ⚠ Component {} references layer {} (not in this file)",
+                        doc.resolve(comp.ref_des),
+                        layer_name
+                    );
                 }
             }
         }
@@ -220,7 +285,10 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
                 println!("  ⚠ {} components reference layers not in this file (expected for specialized views)", invalid_layer_refs);
                 warnings += 1;
             } else {
-                println!("  ✗ {} components reference invalid layers", invalid_layer_refs);
+                println!(
+                    "  ✗ {} components reference invalid layers",
+                    invalid_layer_refs
+                );
                 errors += invalid_layer_refs;
             }
         } else {
@@ -237,9 +305,9 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
 
         for feature in &step.layer_features {
             let layer_name = doc.resolve(feature.layer_ref);
-            let is_drill_layer = ecad.cad_data.layers.iter()
-                .any(|l| doc.resolve(l.name) == layer_name
-                      && l.layer_function == LayerFunction::Drill);
+            let is_drill_layer = ecad.cad_data.layers.iter().any(|l| {
+                doc.resolve(l.name) == layer_name && l.layer_function == LayerFunction::Drill
+            });
 
             if is_drill_layer {
                 for set in &feature.sets {
@@ -257,7 +325,10 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
 
         let total_plated = via_drills + plated_drills;
         println!("  {} total drills", total_drills);
-        println!("  {} plated ({} via + {} tht)", total_plated, via_drills, plated_drills);
+        println!(
+            "  {} plated ({} via + {} tht)",
+            total_plated, via_drills, plated_drills
+        );
         println!("  {} non-plated", nonplated_drills);
 
         if total_drills == 0 {
@@ -291,8 +362,11 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
             println!("Stackup:");
             println!("  Name: {}", doc.resolve(stackup.name));
             if let Some(thickness) = stackup.overall_thickness {
-                println!("  Overall thickness: {:.4}\" ({:.1} mils)",
-                    thickness, thickness * 1000.0);
+                println!(
+                    "  Overall thickness: {:.4}\" ({:.1} mils)",
+                    thickness,
+                    thickness * 1000.0
+                );
             }
             if !stackup.layers.is_empty() {
                 println!("  {} stackup layers defined", stackup.layers.len());
@@ -368,7 +442,10 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
         }
 
         println!("  {} electrical components", electrical_qty);
-        println!("  {} mechanical components ({} types)", mechanical_qty, mechanical_types);
+        println!(
+            "  {} mechanical components ({} types)",
+            mechanical_qty, mechanical_types
+        );
         println!("  ✓ BOM data present");
         println!();
     }
@@ -389,6 +466,25 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
     if errors > 0 {
         process::exit(1);
     }
+
+    Ok(())
+}
+
+fn export_html(path: &PathBuf, output: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let arena = Bump::new();
+    let doc = Ipc2581::parse_file(&arena, path)?;
+
+    // Read the original XML file
+    let xml_content = fs::read_to_string(path)?;
+
+    // Get filename for download
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("design.xml");
+
+    let html = generate_html(&doc, &xml_content, filename);
+    fs::write(output, html)?;
 
     Ok(())
 }
