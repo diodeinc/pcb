@@ -19,6 +19,17 @@ pub struct CadData {
 pub struct Stackup {
     pub name: Symbol,
     pub overall_thickness: Option<f64>,
+    pub layers: Vec<StackupLayer>,
+}
+
+/// StackupLayer defines a single layer in the stackup
+#[derive(Debug, Clone)]
+pub struct StackupLayer {
+    pub layer_ref: Symbol,
+    pub thickness: Option<f64>,
+    pub material: Option<Symbol>,
+    pub dielectric_constant: Option<f64>,
+    pub layer_number: Option<u32>,
 }
 
 /// Step represents a design (board, panel, etc.)
@@ -155,6 +166,8 @@ pub struct LayerFeature {
 #[derive(Debug, Clone)]
 pub struct FeatureSet {
     pub holes: Vec<Hole>,
+    pub pads: Vec<Pad>,
+    pub traces: Vec<Trace>,
 }
 
 /// Hole represents a drilled hole instance
@@ -163,6 +176,29 @@ pub struct Hole {
     pub name: Option<Symbol>,
     pub diameter: f64,
     pub plating_status: PlatingStatus,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Pad represents a pad instance on a layer
+#[derive(Debug, Clone)]
+pub struct Pad {
+    pub padstack_def_ref: Option<Symbol>,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub rotation: Option<f64>,
+}
+
+/// Trace represents a copper trace or line on a layer
+#[derive(Debug, Clone)]
+pub struct Trace {
+    pub line_desc_ref: Option<Symbol>,
+    pub points: Vec<TracePoint>,
+}
+
+/// Point in a trace
+#[derive(Debug, Clone)]
+pub struct TracePoint {
     pub x: f64,
     pub y: f64,
 }

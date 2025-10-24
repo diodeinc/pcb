@@ -29,9 +29,11 @@ for entry in &doc.content().dictionary_color.entries {
 - Zero-copy XML parsing with roxmltree
 - MD5 checksum validation
 - Data-oriented design
+- CLI tool with validation and integrity checks
 
 ## Implemented
 
+### Core Parsing
 - Content section (function mode, refs, dictionaries)
 - DictionaryColor, DictionaryLineDesc, DictionaryStandard
 - Geometric primitives: Circle, RectCenter, RectRound, Oval, Contour
@@ -39,11 +41,42 @@ for entry in &doc.content().dictionary_color.entries {
 - LogisticHeader, HistoryRecord
 - All 8 function modes
 
-## TODO
+### ECAD Data
+- Layers with 17 layer functions (CONDUCTOR, PLANE, DRILL, etc.)
+- Components, Packages, PadStack definitions
+- LogicalNets with pin connectivity
+- LayerFeatures: Holes, Pads, Traces
+- Detailed Stackup with layer materials, thickness, dielectric constants
+- Board profile and dimensions
 
-- Remaining primitives (Diamond, Donut, Thermal, Hexagon, Octagon, etc.)
-- DictionaryUser, BOM, Ecad, AVL sections
-- Write support
+### BOM Data
+- Bill of Materials with electrical/mechanical categorization
+- Component quantities and reference designators
+
+## CLI Tool
+
+Validate and analyze IPC-2581 files:
+
+```bash
+# Build the CLI
+cargo build --release --bin ipc2581
+
+# Check a single file
+./target/release/ipc2581 check design.xml
+
+# Check multiple files
+./target/release/ipc2581 check file1.xml file2.xml file3.xml
+
+# Verbose output with detailed stackup info
+./target/release/ipc2581 check design.xml --verbose
+```
+
+The CLI performs comprehensive data integrity checks:
+- Component package and layer references
+- Pin connectivity validation (all pins reference existing components)
+- Drill counts and plating status
+- Board dimensions and stackup
+- BOM consistency
 
 ## Testing
 

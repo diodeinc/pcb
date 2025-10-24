@@ -545,9 +545,43 @@ impl<'arena> Parser<'arena> {
             .attribute("overallThickness")
             .and_then(|s| s.parse().ok());
 
+        let mut layers = Vec::new();
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "StackupGroup" => {
+                    // StackupGroup contains StackupLayer elements
+                    for layer_node in child.children().filter(|n| n.is_element()) {
+                        if layer_node.tag_name().name() == "StackupLayer" {
+                            layers.push(self.parse_stackup_layer(&layer_node)?);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         Ok(Stackup {
             name,
             overall_thickness,
+            layers,
+        })
+    }
+
+    fn parse_stackup_layer(&mut self, node: &Node) -> Result<StackupLayer> {
+        let layer_ref = self.required_attr(node, "layerOrGroupRef", "StackupLayer")?;
+        let thickness = node.attribute("thickness").and_then(|s| s.parse().ok());
+        let material = node.attribute("material").map(|s| self.interner.intern(s));
+        let dielectric_constant = node
+            .attribute("dielectricConstant")
+            .and_then(|s| s.parse().ok());
+        let layer_number = node.attribute("sequence").and_then(|s| s.parse().ok());
+
+        Ok(StackupLayer {
+            layer_ref,
+            thickness,
+            material,
+            dielectric_constant,
+            layer_number,
         })
     }
 
@@ -701,13 +735,24 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
-        let holes = node
-            .children()
-            .filter(|n| n.is_element() && n.tag_name().name() == "Hole")
-            .map(|n| self.parse_hole(&n))
-            .collect::<Result<Vec<_>>>()?;
+        let mut holes = Vec::new();
+        let mut pads = Vec::new();
+        let mut traces = Vec::new();
 
-        Ok(FeatureSet { holes })
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "Hole" => holes.push(self.parse_hole(&child)?),
+                "Pad" => pads.push(self.parse_pad(&child)?),
+                "Polyline" => traces.push(self.parse_trace(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok(FeatureSet {
+            holes,
+            pads,
+            traces,
+        })
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
@@ -725,6 +770,42 @@ impl<'arena> Parser<'arena> {
             plating_status,
             x,
             y,
+        })
+    }
+
+    fn parse_pad(&mut self, node: &Node) -> Result<Pad> {
+        let padstack_def_ref = node
+            .attribute("padstackDefRef")
+            .map(|s| self.interner.intern(s));
+        let x = node.attribute("x").and_then(|s| s.parse().ok());
+        let y = node.attribute("y").and_then(|s| s.parse().ok());
+        let rotation = node.attribute("rotation").and_then(|s| s.parse().ok());
+
+        Ok(Pad {
+            padstack_def_ref,
+            x,
+            y,
+            rotation,
+        })
+    }
+
+    fn parse_trace(&mut self, node: &Node) -> Result<Trace> {
+        let line_desc_ref = node
+            .attribute("lineDescRef")
+            .map(|s| self.interner.intern(s));
+
+        let mut points = Vec::new();
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "PolyBegin" || child.tag_name().name() == "PolyStepSegment" {
+                let x = self.parse_f64_attr(&child, "x", "TracePoint")?;
+                let y = self.parse_f64_attr(&child, "y", "TracePoint")?;
+                points.push(TracePoint { x, y });
+            }
+        }
+
+        Ok(Trace {
+            line_desc_ref,
+            points,
         })
     }
 

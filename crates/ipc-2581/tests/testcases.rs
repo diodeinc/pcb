@@ -507,139 +507,28 @@ fn test_testcase1_metadata() {
     }
 }
 
-#[test]
-fn test_testcase3_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase3_2581REVC/testcase3-RevC-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
+// Macro to generate simple metadata validation tests
+macro_rules! testcase_metadata_test {
+    ($name:ident, $path:expr, $testcase_name:expr) => {
+        #[test]
+        fn $name() {
+            let arena = Bump::new();
+            let path = Path::new($path);
+            let doc = Ipc2581::parse_file(&arena, path).unwrap();
+            let (padstack_defs, packages, components, logical_nets, _, total_copper_layers, _, _, total_drills, ..) =
+                print_testcase_metadata(&doc, $testcase_name);
 
-    if let Some(ecad) = doc.ecad() {
-        let step = &ecad.cad_data.steps[0];
-
-        // Count padstack definitions
-        let padstack_defs = step.padstack_defs.len();
-
-        // Count packages
-        let packages = step.packages.len();
-
-        // Count components
-        let components = step.components.len();
-
-        // Count logical nets and connections
-        let logical_nets = step.logical_nets.len();
-        let connections: usize = step.logical_nets.iter().map(|net| net.pin_refs.len()).sum();
-
-        // Count layers by type
-        let plane_layers = ecad
-            .cad_data
-            .layers
-            .iter()
-            .filter(|l| l.layer_function == ipc_2581::LayerFunction::Plane)
-            .count();
-        let conductor_layers = ecad
-            .cad_data
-            .layers
-            .iter()
-            .filter(|l| l.layer_function == ipc_2581::LayerFunction::Conductor)
-            .count();
-        let total_copper_layers = plane_layers + conductor_layers;
-
-        // Count drills from layer features
-        let mut total_drills = 0;
-        let mut via_drills = 0;
-        let mut plated_drills = 0;
-        let mut nonplated_drills = 0;
-
-        for feature in &step.layer_features {
-            let layer_name = doc.resolve(feature.layer_ref);
-            let is_drill_layer = ecad.cad_data.layers.iter().any(|l| {
-                doc.resolve(l.name) == layer_name
-                    && l.layer_function == ipc_2581::LayerFunction::Drill
-            });
-
-            if is_drill_layer {
-                for set in &feature.sets {
-                    for hole in &set.holes {
-                        total_drills += 1;
-                        match hole.plating_status {
-                            ipc_2581::PlatingStatus::Via => via_drills += 1,
-                            ipc_2581::PlatingStatus::Plated => plated_drills += 1,
-                            ipc_2581::PlatingStatus::NonPlated => nonplated_drills += 1,
-                        }
-                    }
-                }
-            }
+            assert!(padstack_defs > 0);
+            assert!(packages > 0);
+            assert!(components > 0);
+            assert!(logical_nets > 0);
+            assert!(total_copper_layers > 0);
+            assert!(total_drills > 0);
         }
-
-        let total_plated = via_drills + plated_drills;
-
-        // Calculate board dimensions from profile
-        let (board_width, board_height) = if let Some(profile) = &step.profile {
-            let polygon = &profile.polygon;
-
-            let mut min_x = polygon.begin.x;
-            let mut max_x = polygon.begin.x;
-            let mut min_y = polygon.begin.y;
-            let mut max_y = polygon.begin.y;
-
-            for step in &polygon.steps {
-                let (x, y) = match step {
-                    ipc_2581::PolyStep::Segment(s) => (s.x, s.y),
-                    ipc_2581::PolyStep::Curve(c) => (c.x, c.y),
-                };
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-            }
-
-            (max_x - min_x, max_y - min_y)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // Get board thickness from stackup
-        let board_thickness = ecad
-            .cad_data
-            .stackup
-            .as_ref()
-            .and_then(|s| s.overall_thickness)
-            .unwrap_or(0.0);
-
-        println!("Testcase 3 Metadata:");
-        println!(
-            "  Board dimensions: {:.4}\" x {:.4}\" x {:.4}\" ({:.1} mils thick)",
-            board_width,
-            board_height,
-            board_thickness,
-            board_thickness * 1000.0
-        );
-        println!("  Padstack definitions: {}", padstack_defs);
-        println!("  Packages: {}", packages);
-        println!("  Components: {}", components);
-        println!("  LogicalNets: {}", logical_nets);
-        println!("  Connections (total pins): {}", connections);
-        println!(
-            "  Layers: {} copper ({} plane + {} conductor)",
-            total_copper_layers, plane_layers, conductor_layers
-        );
-        println!("  Total layers (all types): {}", ecad.cad_data.layers.len());
-        println!(
-            "  Drills: {} total ({} plated = {} via + {} tht, {} non-plated)",
-            total_drills, total_plated, via_drills, plated_drills, nonplated_drills
-        );
-
-        // Basic sanity checks (no reference data available)
-        assert!(padstack_defs > 0, "Should have padstack definitions");
-        assert!(packages > 0, "Should have package definitions");
-        assert!(components > 0, "Should have component instances");
-        assert!(logical_nets > 0, "Should have logical nets");
-        assert!(total_copper_layers > 0, "Should have copper layers");
-        assert!(total_drills > 0, "Should have drills");
-    } else {
-        panic!("Ecad section not found in testcase3");
-    }
+    };
 }
+
+testcase_metadata_test!(test_testcase3_metadata, "tests/data/testcase3_2581REVC/testcase3-RevC-full.xml", "Testcase 3");
 
 // Helper function to extract and print testcase metadata
 fn print_testcase_metadata(
@@ -786,186 +675,12 @@ fn print_testcase_metadata(
     }
 }
 
-#[test]
-fn test_testcase5_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
-    let (
-        padstack_defs,
-        packages,
-        components,
-        logical_nets,
-        _,
-        total_copper_layers,
-        _,
-        _,
-        total_drills,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = print_testcase_metadata(&doc, "Testcase 5");
-
-    // Basic sanity checks
-    assert!(padstack_defs > 0);
-    assert!(packages > 0);
-    assert!(components > 0);
-    assert!(logical_nets > 0);
-    assert!(total_copper_layers > 0);
-    assert!(total_drills > 0);
-}
-
-#[test]
-fn test_testcase6_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase6-RevC_Data/testcase6-RevC-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
-    let (
-        padstack_defs,
-        packages,
-        components,
-        logical_nets,
-        _,
-        total_copper_layers,
-        _,
-        _,
-        total_drills,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = print_testcase_metadata(&doc, "Testcase 6");
-
-    assert!(padstack_defs > 0);
-    assert!(packages > 0);
-    assert!(components > 0);
-    assert!(logical_nets > 0);
-    assert!(total_copper_layers > 0);
-    assert!(total_drills > 0);
-}
-
-#[test]
-fn test_testcase9_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase9-RevC-data/testcase9-RevC-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
-    let (
-        padstack_defs,
-        packages,
-        components,
-        logical_nets,
-        _,
-        total_copper_layers,
-        _,
-        _,
-        total_drills,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = print_testcase_metadata(&doc, "Testcase 9");
-
-    assert!(padstack_defs > 0);
-    assert!(packages > 0);
-    assert!(components > 0);
-    assert!(logical_nets > 0);
-    assert!(total_copper_layers > 0);
-    assert!(total_drills > 0);
-}
-
-#[test]
-fn test_testcase10_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase10-Rev C data/testcase10-RevC-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
-    let (
-        padstack_defs,
-        packages,
-        components,
-        logical_nets,
-        _,
-        total_copper_layers,
-        _,
-        _,
-        total_drills,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = print_testcase_metadata(&doc, "Testcase 10");
-
-    assert!(padstack_defs > 0);
-    assert!(packages > 0);
-    assert!(components > 0);
-    assert!(logical_nets > 0);
-    assert!(total_copper_layers > 0);
-    assert!(total_drills > 0);
-}
-
-#[test]
-fn test_testcase11_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
-    let (
-        padstack_defs,
-        packages,
-        components,
-        logical_nets,
-        _,
-        total_copper_layers,
-        _,
-        _,
-        total_drills,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = print_testcase_metadata(&doc, "Testcase 11");
-
-    assert!(padstack_defs > 0);
-    assert!(packages > 0);
-    assert!(components > 0);
-    assert!(logical_nets > 0);
-    assert!(total_copper_layers > 0);
-    assert!(total_drills > 0);
-}
-
-#[test]
-fn test_testcase12_metadata() {
-    let arena = Bump::new();
-    let path = Path::new("tests/data/testcase12-RevC/testcase12-rdgflx-full.xml");
-    let doc = Ipc2581::parse_file(&arena, path).unwrap();
-    let (
-        padstack_defs,
-        packages,
-        components,
-        logical_nets,
-        _,
-        total_copper_layers,
-        _,
-        _,
-        total_drills,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = print_testcase_metadata(&doc, "Testcase 12");
-
-    assert!(padstack_defs > 0);
-    assert!(packages > 0);
-    assert!(components > 0);
-    assert!(logical_nets > 0);
-    assert!(total_copper_layers > 0);
-    assert!(total_drills > 0);
-}
+testcase_metadata_test!(test_testcase5_metadata, "tests/data/testcase5-revC-Data/testcase5-RevC-full.xml", "Testcase 5");
+testcase_metadata_test!(test_testcase6_metadata, "tests/data/testcase6-RevC_Data/testcase6-RevC-full.xml", "Testcase 6");
+testcase_metadata_test!(test_testcase9_metadata, "tests/data/testcase9-RevC-data/testcase9-RevC-full.xml", "Testcase 9");
+testcase_metadata_test!(test_testcase10_metadata, "tests/data/testcase10-Rev C data/testcase10-RevC-full.xml", "Testcase 10");
+testcase_metadata_test!(test_testcase11_metadata, "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml", "Testcase 11");
+testcase_metadata_test!(test_testcase12_metadata, "tests/data/testcase12-RevC/testcase12-rdgflx-full.xml", "Testcase 12");
 
 #[test]
 fn test_testcase1_cross_file_consistency() {
