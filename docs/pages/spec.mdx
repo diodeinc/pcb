@@ -1052,39 +1052,27 @@ def modifier_function(component):
     pass
 ```
 
-**Example - Assign Manufacturer and MPN:**
+**Example - Assign Part Numbers for Generic Components:**
 ```python
-def assign_resistor_parts(component):
-    """Assign specific part numbers for generic resistors"""
+def assign_parts(component):
+    """Convert generic components to specific part numbers"""
+    # Resistors
     if hasattr(component, "resistance"):
-        resistance = str(component.resistance)
-        if resistance == "10k":
+        if component.resistance == "10k":
             component.manufacturer = "Yageo"
             component.mpn = "RC0603FR-0710KL"
-        elif resistance == "100k":
-            component.manufacturer = "Yageo"
-            component.mpn = "RC0603FR-07100KL"
 
-builtin.add_component_modifier(assign_resistor_parts)
-
-# Child modules create generic resistors, parent assigns real parts
-Child = Module("Child.zen")
-Child(name="Board1")
-```
-
-**Example - Assign Capacitor Parts:**
-```python
-def assign_capacitor_parts(component):
-    """Assign ceramic capacitors from approved vendor"""
+    # Capacitors
     if hasattr(component, "capacitance"):
-        cap = str(component.capacitance)
-        voltage = str(component.voltage_rating) if hasattr(component, "voltage_rating") else "50V"
-
-        if cap == "10uF" and voltage == "16V":
+        if component.capacitance == "10uF":
             component.manufacturer = "Samsung"
             component.mpn = "CL21A106KAYNNNE"
 
-builtin.add_component_modifier(assign_capacitor_parts)
+builtin.add_component_modifier(assign_parts)
+
+# Child modules use generic components, parent assigns real parts
+ChildBoard = Module("Child.zen")
+ChildBoard(name="Board1")
 ```
 
 **Execution Model:**
