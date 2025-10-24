@@ -90,6 +90,7 @@ pub struct Datum {
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub polygon: super::Polygon,
+    pub cutouts: Vec<super::Polygon>,
 }
 
 /// PadStackDef defines a padstack (pad/hole combination)
@@ -199,6 +200,7 @@ pub struct LayerFeature {
 #[derive(Debug, Clone)]
 pub struct FeatureSet {
     pub holes: Vec<Hole>,
+    pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
     pub traces: Vec<Trace>,
 }
@@ -208,6 +210,16 @@ pub struct FeatureSet {
 pub struct Hole {
     pub name: Option<Symbol>,
     pub diameter: f64,
+    pub plating_status: PlatingStatus,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Slot represents a slotted hole or cavity
+#[derive(Debug, Clone)]
+pub struct Slot {
+    pub name: Option<Symbol>,
+    pub outline: super::Polygon,
     pub plating_status: PlatingStatus,
     pub x: f64,
     pub y: f64,

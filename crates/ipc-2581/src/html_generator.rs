@@ -333,10 +333,29 @@ fn extract_board_summary(doc: &Ipc2581) -> Option<BoardSummary> {
 }
 
 fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
+    use crate::board_outline::BoardOutlineData;
+
     let ecad = doc.ecad()?;
     let step = &ecad.cad_data.steps[0];
     let profile = step.profile.as_ref()?;
-    Some(render_board_outline_svg(&profile.polygon))
+
+    // Collect slots from layer features (mechanical features like mounting slots)
+    let mut slots = Vec::new();
+    for layer_feature in &step.layer_features {
+        for feature_set in &layer_feature.sets {
+            for slot in &feature_set.slots {
+                slots.push((slot.outline.clone(), slot.x, slot.y));
+            }
+        }
+    }
+
+    let board_data = BoardOutlineData {
+        outline: &profile.polygon,
+        cutouts: &profile.cutouts,
+        slots: &slots,
+    };
+
+    Some(render_board_outline_svg(board_data))
 }
 
 fn extract_stackup(doc: &Ipc2581) -> Option<StackupInfo> {

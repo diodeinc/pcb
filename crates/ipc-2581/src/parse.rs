@@ -890,7 +890,22 @@ impl<'arena> Parser<'arena> {
         // Profile is in ECAD section, use ECAD units
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
         let polygon = self.parse_polygon(&polygon_node, units)?;
-        Ok(Profile { polygon })
+
+        // Parse cutouts (voids within the board outline)
+        let mut cutouts = Vec::new();
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "Cutout" {
+                // Cutout contains a Polygon child
+                if let Some(cutout_polygon_node) = child
+                    .children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "Polygon")
+                {
+                    cutouts.push(self.parse_polygon(&cutout_polygon_node, units)?);
+                }
+            }
+        }
+
+        Ok(Profile { polygon, cutouts })
     }
 
     fn parse_package(&mut self, node: &Node) -> Result<Package> {
@@ -989,12 +1004,14 @@ impl<'arena> Parser<'arena> {
 
     fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
         let mut holes = Vec::new();
+        let mut slots = Vec::new();
         let mut pads = Vec::new();
         let mut traces = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "Hole" => holes.push(self.parse_hole(&child)?),
+                "SlotCavity" => slots.push(self.parse_slot_cavity(&child)?),
                 "Pad" => pads.push(self.parse_pad(&child)?),
                 "Polyline" => traces.push(self.parse_trace(&child)?),
                 _ => {}
@@ -1003,6 +1020,7 @@ impl<'arena> Parser<'arena> {
 
         Ok(FeatureSet {
             holes,
+            slots,
             pads,
             traces,
         })
@@ -1023,6 +1041,55 @@ impl<'arena> Parser<'arena> {
         Ok(Hole {
             name,
             diameter,
+            plating_status,
+            x,
+            y,
+        })
+    }
+
+    fn parse_slot_cavity(&mut self, node: &Node) -> Result<Slot> {
+        // SlotCavity is in ECAD section, use ECAD units
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
+        let name = node.attribute("name").map(|s| self.interner.intern(s));
+        let plating_status_str = self.required_attr(node, "platingStatus", "SlotCavity")?;
+        let plating_status =
+            self.parse_plating_status(self.interner.resolve(plating_status_str))?;
+
+        // Parse Location child element
+        let (x, y) = if let Some(location_node) = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "Location")
+        {
+            let x = self.parse_f64_attr_with_units(&location_node, "x", "Location", units)?;
+            let y = self.parse_f64_attr_with_units(&location_node, "y", "Location", units)?;
+            (x, y)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Parse Outline child element containing Polygon
+        let outline = if let Some(outline_node) = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "Outline")
+        {
+            if let Some(polygon_node) = outline_node
+                .children()
+                .find(|n| n.is_element() && n.tag_name().name() == "Polygon")
+            {
+                self.parse_polygon(&polygon_node, units)?
+            } else {
+                return Err(Ipc2581Error::MissingElement(
+                    "Polygon in SlotCavity Outline",
+                ));
+            }
+        } else {
+            return Err(Ipc2581Error::MissingElement("Outline in SlotCavity"));
+        };
+
+        Ok(Slot {
+            name,
+            outline,
             plating_status,
             x,
             y,
