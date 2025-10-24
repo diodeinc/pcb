@@ -578,6 +578,27 @@ impl EvalContext {
         }
     }
 
+    /// Set parent component modifiers from already frozen parent values.
+    pub fn set_parent_component_modifiers_from_frozen_values(
+        &mut self,
+        parent_modifiers: Vec<FrozenValue>,
+    ) {
+        let eval = Evaluator::new(&self.module);
+        if self.module.extra_value().is_none() {
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
+        }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
+
+        let mut module = ctx_value.module_mut();
+        let unfrozen_modifiers: Vec<_> = parent_modifiers
+            .into_iter()
+            .map(|fv| fv.to_value())
+            .collect();
+        module.set_parent_component_modifiers(unfrozen_modifiers);
+    }
+
     /// Convert JSON inputs directly to heap values and set them (for external APIs)
     pub fn set_json_inputs(&mut self, json_inputs: SmallMap<String, serde_json::Value>) {
         let eval = Evaluator::new(&self.module);
@@ -1350,6 +1371,7 @@ impl EvalContext {
             self.set_properties_from_frozen_values(props);
         }
         self.set_inputs_from_frozen_values(pending.inputs);
+        self.set_parent_component_modifiers_from_frozen_values(pending.component_modifiers);
 
         let child_result = self.eval();
 

@@ -469,3 +469,147 @@ snapshot_eval!(component_has_attr_dynamic, {
         print("Has nonexistent_prop:", hasattr(comp, "nonexistent_prop"))
     "#
 });
+
+snapshot_eval!(component_modifier_parent, {
+    "Child.zen" => r#"
+        # Child module creates a component
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+
+        # Print from child to verify modifier was applied
+        print("From Child - Has parent_modified:", hasattr(comp, "parent_modified"))
+        print("From Child - Parent modified:", comp.parent_modified if hasattr(comp, "parent_modified") else "not set")
+        print("From Child - Manufacturer:", comp.manufacturer if hasattr(comp, "manufacturer") else "not set")
+    "#,
+    "test.zen" => r#"
+        # Parent module registers a modifier
+        def parent_modifier(component):
+            if hasattr(component, "resistance"):
+                component.parent_modified = "yes"
+                component.manufacturer = "ParentVendor"
+
+        builtin.add_component_modifier(parent_modifier)
+
+        # Instantiate child - components in child should get parent modifier
+        Child = Module("Child.zen")
+        Child(name = "ChildInstance")
+    "#
+});
+
+snapshot_eval!(component_modifier_child_overrides_parent, {
+    "Child.zen" => r#"
+        # Child modifier runs first and sets manufacturer
+        def child_modifier(component):
+            if hasattr(component, "resistance"):
+                component.manufacturer = "ChildVendor"
+
+        builtin.add_component_modifier(child_modifier)
+
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+
+        # Check that parent modifier ran AFTER child modifier
+        # So final value should be ParentVendor (parent overwrites child)
+        print("Manufacturer:", comp.manufacturer if hasattr(comp, "manufacturer") else "not set")
+    "#,
+    "test.zen" => r#"
+        # Parent modifier sets manufacturer
+        def parent_modifier(component):
+            if hasattr(component, "resistance"):
+                component.manufacturer = "ParentVendor"
+
+        builtin.add_component_modifier(parent_modifier)
+
+        Child = Module("Child.zen")
+        Child(name = "ChildInstance")
+    "#
+});
+
+snapshot_eval!(component_modifier_grandparent, {
+    "Child.zen" => r#"
+        def child_modifier(component):
+            if hasattr(component, "resistance"):
+                component.child_modified = "yes"
+
+        builtin.add_component_modifier(child_modifier)
+
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+
+        # All modifiers should have run (bottom-up: child, parent, grandparent)
+        print("Child modified:", comp.child_modified if hasattr(comp, "child_modified") else "not set")
+        print("Parent modified:", comp.parent_modified if hasattr(comp, "parent_modified") else "not set")
+        print("Grandparent modified:", comp.gp_modified if hasattr(comp, "gp_modified") else "not set")
+    "#,
+    "Parent.zen" => r#"
+        def parent_modifier(component):
+            if hasattr(component, "resistance"):
+                component.parent_modified = "yes"
+
+        builtin.add_component_modifier(parent_modifier)
+
+        Child = Module("Child.zen")
+        child = Child(name = "ChildInstance")
+    "#,
+    "test.zen" => r#"
+        def grandparent_modifier(component):
+            if hasattr(component, "resistance"):
+                component.gp_modified = "yes"
+
+        builtin.add_component_modifier(grandparent_modifier)
+
+        # Create hierarchy: Grandparent -> Parent -> Child
+        Parent = Module("Parent.zen")
+        parent = Parent(name = "ParentInstance")
+    "#
+});
+
+snapshot_eval!(component_modifier_execution_order, {
+    "Child.zen" => r#"
+        def child_modifier(component):
+            if hasattr(component, "order"):
+                component.order = component.order + " -> child"
+            else:
+                component.order = "child"
+
+        builtin.add_component_modifier(child_modifier)
+
+        comp = Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+
+        # Execution order should be: child first, then parent
+        print("Execution order:", comp.order if hasattr(comp, "order") else "not set")
+    "#,
+    "test.zen" => r#"
+        def parent_modifier(component):
+            if hasattr(component, "order"):
+                component.order = component.order + " -> parent"
+            else:
+                component.order = "parent"
+
+        builtin.add_component_modifier(parent_modifier)
+
+        Child = Module("Child.zen")
+        child = Child(name = "ChildInstance")
+    "#
+});

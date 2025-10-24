@@ -1031,13 +1031,24 @@ where
 
         // Run component modifiers before adding to module
         // Extract modifiers first to avoid holding a borrow during eval_function
-        let modifiers = eval
+        // Apply bottom-up: module's own modifiers first, then parent modifiers
+        let (own_modifiers, parent_modifiers) = eval
             .module_value()
-            .map(|module| module.component_modifiers().clone())
+            .map(|module| {
+                (
+                    module.component_modifiers().clone(),
+                    module.parent_component_modifiers().clone(),
+                )
+            })
             .unwrap_or_default();
 
-        for modifier_fn in modifiers {
-            // Invoke the modifier with the component as the only argument
+        // Apply module's own modifiers first
+        for modifier_fn in own_modifiers {
+            eval.eval_function(modifier_fn, &[component_val], &[])?;
+        }
+
+        // Then apply parent modifiers (bottom-up order: parent, grandparent, etc.)
+        for modifier_fn in parent_modifiers {
             eval.eval_function(modifier_fn, &[component_val], &[])?;
         }
 
