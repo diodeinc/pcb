@@ -844,8 +844,7 @@ where
         let provided_names: Vec<String> = provided_names.into_iter().collect();
 
         // Collect parent modifiers (parent's own + parent's ancestors)
-        let parent_module = context.module();
-        let combined_modifiers = parent_module.collect_all_component_modifiers_as_values();
+        let combined_modifiers = context.module().collect_all_component_modifiers_as_values();
 
         context.enqueue_child(PendingChild {
             loader: self.clone(),
