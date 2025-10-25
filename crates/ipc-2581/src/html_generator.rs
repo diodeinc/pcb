@@ -1,7 +1,8 @@
 use crate::types::Units;
 use crate::{
     board_outline::{render_board_outline_svg, PadShape},
-    Ipc2581, LayerFunction, PlatingStatus, Side, StandardPrimitive, UserPrimitive, UserShapeType,
+    geometry, Ipc2581, LayerFunction, PlatingStatus, Side, StandardPrimitive, UserPrimitive,
+    UserShapeType,
 };
 use base64::Engine;
 use minijinja::{context, Environment};
@@ -106,8 +107,16 @@ fn get_color_hex(color_name: &str) -> Option<String> {
     if trimmed.starts_with('#') && trimmed.len() == 7 {
         return Some(trimmed.to_string());
     }
+    // Handle RGBA hex codes (8 characters: # + 6 hex + 2 alpha)
+    if trimmed.starts_with('#') && trimmed.len() == 9 {
+        return Some(trimmed[0..7].to_string());
+    }
     if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
         return Some(format!("#{}", trimmed));
+    }
+    // Handle RGBA without # (8 hex characters)
+    if trimmed.len() == 8 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some(format!("#{}", &trimmed[0..6]));
     }
 
     // Map common color names to hex
@@ -124,9 +133,9 @@ fn get_color_hex(color_name: &str) -> Option<String> {
 
 #[derive(Serialize)]
 struct ComponentInfo {
-    padstack_defs: usize,
     package_defs: usize,
     component_instances: usize,
+    dnp_count: usize,
 }
 
 #[derive(Serialize)]
@@ -151,6 +160,7 @@ struct DrillStats {
 #[derive(Serialize)]
 struct DrillSize {
     diameter_mils: f64,
+    diameter_mm: f64,
     count: usize,
     drill_type: String,
 }
@@ -284,8 +294,14 @@ fn extract_board_summary(doc: &Ipc2581) -> Option<BoardSummary> {
     let step = &ecad.cad_data.steps[0];
 
     let board_dimensions = step.profile.as_ref().map(|profile| {
-        let (width_mm, height_mm) = calculate_board_dimensions(&profile.polygon);
-        // Note: polygon coordinates are in mm after parsing, convert to inches
+        // Use the same slot collection and arc-aware bounding box calculation as the SVG rendering
+        let slots = collect_slots(step);
+        let (width_mm, height_mm) = geometry::calculate_board_outline_dimensions(
+            &profile.polygon,
+            &profile.cutouts,
+            &slots,
+        );
+
         BoardDimensions {
             width_in: crate::units::from_mm(width_mm, Units::Inch),
             height_in: crate::units::from_mm(height_mm, Units::Inch),
@@ -374,9 +390,7 @@ fn extract_user_pad_shape(user_prim: &UserPrimitive) -> Option<PadShape> {
                 width: o.width,
                 height: o.height,
             },
-            UserShapeType::Polygon(p) => PadShape::Polygon {
-                polygon: p.clone(),
-            },
+            UserShapeType::Polygon(p) => PadShape::Polygon { polygon: p.clone() },
         })
         .collect();
 
@@ -386,6 +400,19 @@ fn extract_user_pad_shape(user_prim: &UserPrimitive) -> Option<PadShape> {
         1 => shapes.into_iter().next(),
         _ => Some(PadShape::Composite { shapes }),
     }
+}
+
+/// Helper to collect slots from layer features
+fn collect_slots(step: &crate::Step) -> Vec<(crate::Polygon, f64, f64)> {
+    let mut slots = Vec::new();
+    for layer_feature in &step.layer_features {
+        for feature_set in &layer_feature.sets {
+            for slot in &feature_set.slots {
+                slots.push((slot.outline.clone(), slot.x, slot.y));
+            }
+        }
+    }
+    slots
 }
 
 fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
@@ -449,7 +476,7 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
         .collect();
 
     // Collect slots from layer features (mechanical features like mounting slots)
-    let mut slots = Vec::new();
+    let slots = collect_slots(step);
     // Collect NPTHs (non-plated through holes)
     let mut npths = Vec::new();
     // Collect PTHs (plated through holes) with pad geometry
@@ -460,9 +487,7 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
         let is_drill_layer = drill_layers.contains(&layer_name);
 
         for feature_set in &layer_feature.sets {
-            for slot in &feature_set.slots {
-                slots.push((slot.outline.clone(), slot.x, slot.y));
-            }
+            // Slots already collected above
 
             // Collect NPTHs and PTHs from drill layers
             if is_drill_layer {
@@ -777,10 +802,21 @@ fn extract_component_info(doc: &Ipc2581) -> Option<ComponentInfo> {
     let ecad = doc.ecad()?;
     let step = &ecad.cad_data.steps[0];
 
+    // Count total DNP components from BOM (sum of quantities for DNP entries)
+    let mut dnp_count: usize = 0;
+    if let Some(bom) = doc.bom() {
+        for item in &bom.items {
+            // Check if any RefDes has populate=false (DNP)
+            if item.ref_des_list.iter().any(|rd| !rd.populate) {
+                dnp_count += item.quantity.unwrap_or(0) as usize;
+            }
+        }
+    }
+
     Some(ComponentInfo {
-        padstack_defs: step.padstack_defs.len(),
         package_defs: step.packages.len(),
         component_instances: step.components.len(),
+        dnp_count,
     })
 }
 
@@ -925,6 +961,7 @@ fn extract_drill_info(doc: &Ipc2581) -> Option<DrillInfo> {
         // Note: d is in inches (from the key parsing above)
         let to_drill_size = |d: f64, c: usize, drill_type: &str| DrillSize {
             diameter_mils: d * 1000.0,
+            diameter_mm: d * 25.4,
             count: c,
             drill_type: drill_type.to_string(),
         };
@@ -952,6 +989,7 @@ fn extract_drill_info(doc: &Ipc2581) -> Option<DrillInfo> {
     // Note: d is in inches (from the key parsing above)
     let to_drill_size = |d: f64, c: usize, drill_type: &str| DrillSize {
         diameter_mils: d * 1000.0,
+        diameter_mm: d * 25.4,
         count: c,
         drill_type: drill_type.to_string(),
     };
@@ -1068,26 +1106,6 @@ fn compress_xml(xml: &str) -> String {
 }
 
 // Helper functions
-
-fn calculate_board_dimensions(polygon: &crate::Polygon) -> (f64, f64) {
-    let mut min_x = polygon.begin.x;
-    let mut max_x = polygon.begin.x;
-    let mut min_y = polygon.begin.y;
-    let mut max_y = polygon.begin.y;
-
-    for poly_step in &polygon.steps {
-        let (x, y) = match poly_step {
-            crate::PolyStep::Segment(s) => (s.x, s.y),
-            crate::PolyStep::Curve(c) => (c.x, c.y),
-        };
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-        min_y = min_y.min(y);
-        max_y = max_y.max(y);
-    }
-
-    (max_x - min_x, max_y - min_y)
-}
 
 fn count_layer_types(layers: &[crate::Layer]) -> (usize, usize, usize) {
     let plane = layers

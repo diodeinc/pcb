@@ -34,7 +34,6 @@ h2 {
     font-weight: 600;
     margin: 24px 0 8px 0;
     color: #4a4a4a;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
 }
 
@@ -375,8 +374,8 @@ td {
             <span class="summary-value">
                 {{ board_summary.board_dimensions.width_in|round(2) }}" ×
                 {{ board_summary.board_dimensions.height_in|round(2) }}"
-                ({{ board_summary.board_dimensions.width_mm|round(0) }} ×
-                {{ board_summary.board_dimensions.height_mm|round(0) }} mm)
+                ({{ board_summary.board_dimensions.width_mm|round(1) }} ×
+                {{ board_summary.board_dimensions.height_mm|round(1) }} mm)
             </span>
         </div>
         {% endif %}
@@ -435,7 +434,7 @@ td {
     {% endif %}
 
     {% if board_outline_svg %}
-    <h2>Board Outline</h2>
+    <h2>Board Geometry</h2>
     <div class="board-outline-container">
         {{ board_outline_svg|safe }}
     </div>
@@ -515,38 +514,6 @@ td {
     </table>
     {% endif %}
 
-    {% if component_info %}
-    <h2>Components</h2>
-    <div class="summary summary-narrow">
-        <div class="summary-item">
-            <span class="summary-label">Padstack Definitions:</span>
-            <span class="summary-value value-right">{{ component_info.padstack_defs }}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Package Definitions:</span>
-            <span class="summary-value value-right">{{ component_info.package_defs }}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Component Instances:</span>
-            <span class="summary-value value-right">{{ component_info.component_instances }}</span>
-        </div>
-    </div>
-    {% endif %}
-
-    {% if connectivity_info %}
-    <h2>Connectivity</h2>
-    <div class="summary summary-narrow">
-        <div class="summary-item">
-            <span class="summary-label">Logical Nets:</span>
-            <span class="summary-value value-right">{{ connectivity_info.logical_nets }}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Total Pin Refs:</span>
-            <span class="summary-value value-right">{{ connectivity_info.total_pins }}</span>
-        </div>
-    </div>
-    {% endif %}
-
     {% if drill %}
     <h2>Drill Information</h2>
     <div class="drill-stats">
@@ -623,6 +590,7 @@ td {
             <tr>
                 <th class="col-number">#</th>
                 <th class="text-right">Diameter (mils)</th>
+                <th class="text-right">Diameter (mm)</th>
                 <th>Type</th>
                 <th class="text-right">Count</th>
             </tr>
@@ -632,6 +600,7 @@ td {
             <tr class="row-drill-{% if detail.drill_type == "Via" %}via{% elif detail.drill_type == "PTH" %}plated{% else %}nonplated{% endif %}">
                 <td class="text-center">{{ loop.index }}</td>
                 <td class="text-right">{{ detail.diameter_mils|round(1) }}</td>
+                <td class="text-right">{{ detail.diameter_mm|round(3) }}</td>
                 <td>{{ detail.drill_type }}</td>
                 <td class="text-right">{{ detail.count }}</td>
             </tr>
@@ -643,10 +612,26 @@ td {
     {% if bom %}
     <h2>Bill of Materials</h2>
     <div class="summary summary-narrow">
+        {% if component_info %}
         <div class="summary-item">
-            <span class="summary-label">BOM Items:</span>
+            <span class="summary-label">Unique Packages:</span>
+            <span class="summary-value value-right">{{ component_info.package_defs }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Unique Parts:</span>
             <span class="summary-value value-right">{{ bom.total_items }}</span>
         </div>
+        <div class="summary-item">
+            <span class="summary-label">Placed Components:</span>
+            <span class="summary-value value-right">{{ component_info.component_instances }}</span>
+        </div>
+        {% if component_info.dnp_count > 0 %}
+        <div class="summary-item">
+            <span class="summary-label">DNP Components:</span>
+            <span class="summary-value value-right">{{ component_info.dnp_count }}</span>
+        </div>
+        {% endif %}
+        {% endif %}
     </div>
 
     <table>
@@ -675,6 +660,20 @@ td {
             {% endfor %}
         </tbody>
     </table>
+    {% endif %}
+
+    {% if connectivity_info %}
+    <h2>Connectivity</h2>
+    <div class="summary summary-narrow">
+        <div class="summary-item">
+            <span class="summary-label">Logical Nets:</span>
+            <span class="summary-value value-right">{{ connectivity_info.logical_nets }}</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Total Pin Refs:</span>
+            <span class="summary-value value-right">{{ connectivity_info.total_pins }}</span>
+        </div>
+    </div>
     {% endif %}
 
     <div class="file-info">
