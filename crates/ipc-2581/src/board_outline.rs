@@ -9,6 +9,8 @@ pub enum PadShape {
     Circle { diameter: f64 },
     Rect { width: f64, height: f64 },
     Oval { width: f64, height: f64 },
+    Polygon { polygon: Polygon },
+    Composite { shapes: Vec<PadShape> },
 }
 
 pub struct BoardOutlineData<'a> {
@@ -247,41 +249,73 @@ pub fn render_board_outline_svg(data: BoardOutlineData) -> String {
         let cx = (x - min_x) * scale;
         let cy = (y - min_y) * scale;
 
-        // Render outer pad shape (copper) with gold color
-        match pad_shape {
-            PadShape::Circle { diameter } => {
-                let circle = svg::node::element::Circle::new()
-                    .set("cx", cx)
-                    .set("cy", cy)
-                    .set("r", (diameter / 2.0) * scale)
-                    .set("fill", "#DAA520")
-                    .set("stroke", "none")
-                    .set("shape-rendering", "geometricPrecision");
-                document = document.add(circle);
+        // Flatten composite shapes into a list of simple shapes
+        let mut shapes_to_render = Vec::new();
+        let mut stack = vec![pad_shape];
+        while let Some(shape) = stack.pop() {
+            match shape {
+                PadShape::Composite { shapes } => {
+                    // Push all shapes from composite onto stack
+                    for s in shapes.iter().rev() {
+                        stack.push(s);
+                    }
+                }
+                _ => shapes_to_render.push(shape),
             }
-            PadShape::Rect { width, height } => {
-                let w = width * scale;
-                let h = height * scale;
-                let rect = svg::node::element::Rectangle::new()
-                    .set("x", cx - w / 2.0)
-                    .set("y", cy - h / 2.0)
-                    .set("width", w)
-                    .set("height", h)
-                    .set("fill", "#DAA520")
-                    .set("stroke", "none")
-                    .set("shape-rendering", "geometricPrecision");
-                document = document.add(rect);
-            }
-            PadShape::Oval { width, height } => {
-                let ellipse = svg::node::element::Ellipse::new()
-                    .set("cx", cx)
-                    .set("cy", cy)
-                    .set("rx", (width / 2.0) * scale)
-                    .set("ry", (height / 2.0) * scale)
-                    .set("fill", "#DAA520")
-                    .set("stroke", "none")
-                    .set("shape-rendering", "geometricPrecision");
-                document = document.add(ellipse);
+        }
+
+        // Render each shape
+        for shape in shapes_to_render {
+            match shape {
+                PadShape::Circle { diameter } => {
+                    let circle = svg::node::element::Circle::new()
+                        .set("cx", cx)
+                        .set("cy", cy)
+                        .set("r", (diameter / 2.0) * scale)
+                        .set("fill", "#DAA520")
+                        .set("stroke", "none")
+                        .set("shape-rendering", "geometricPrecision");
+                    document = document.add(circle);
+                }
+                PadShape::Rect { width, height } => {
+                    let w = width * scale;
+                    let h = height * scale;
+                    let rect = svg::node::element::Rectangle::new()
+                        .set("x", cx - w / 2.0)
+                        .set("y", cy - h / 2.0)
+                        .set("width", w)
+                        .set("height", h)
+                        .set("fill", "#DAA520")
+                        .set("stroke", "none")
+                        .set("shape-rendering", "geometricPrecision");
+                    document = document.add(rect);
+                }
+                PadShape::Oval { width, height } => {
+                    let ellipse = svg::node::element::Ellipse::new()
+                        .set("cx", cx)
+                        .set("cy", cy)
+                        .set("rx", (width / 2.0) * scale)
+                        .set("ry", (height / 2.0) * scale)
+                        .set("fill", "#DAA520")
+                        .set("stroke", "none")
+                        .set("shape-rendering", "geometricPrecision");
+                    document = document.add(ellipse);
+                }
+                PadShape::Polygon { polygon } => {
+                    // Render polygon pad shape, offset by (x, y) position
+                    let poly_path_data = add_polygon(Data::new(), polygon, *x, *y, true);
+                    let poly_path = Path::new()
+                        .set("fill", "#DAA520")
+                        .set("fill-rule", "evenodd")
+                        .set("stroke", "none")
+                        .set("shape-rendering", "geometricPrecision")
+                        .set("d", poly_path_data);
+                    document = document.add(poly_path);
+                }
+                PadShape::Composite { .. } => {
+                    // Should already be flattened
+                    unreachable!()
+                }
             }
         }
 

@@ -357,20 +357,35 @@ fn extract_pad_shape(prim: &StandardPrimitive) -> Option<PadShape> {
 /// Extract pad shape from a UserPrimitive for accurate rendering
 fn extract_user_pad_shape(user_prim: &UserPrimitive) -> Option<PadShape> {
     let UserPrimitive::UserSpecial(special) = user_prim;
-    special.shapes.iter().find_map(|shape| match &shape.shape {
-        UserShapeType::Circle(c) => Some(PadShape::Circle {
-            diameter: c.diameter,
-        }),
-        UserShapeType::RectCenter(r) => Some(PadShape::Rect {
-            width: r.width,
-            height: r.height,
-        }),
-        UserShapeType::Oval(o) => Some(PadShape::Oval {
-            width: o.width,
-            height: o.height,
-        }),
-        _ => None,
-    })
+
+    // Collect all shapes from the UserPrimitive
+    let shapes: Vec<PadShape> = special
+        .shapes
+        .iter()
+        .map(|shape| match &shape.shape {
+            UserShapeType::Circle(c) => PadShape::Circle {
+                diameter: c.diameter,
+            },
+            UserShapeType::RectCenter(r) => PadShape::Rect {
+                width: r.width,
+                height: r.height,
+            },
+            UserShapeType::Oval(o) => PadShape::Oval {
+                width: o.width,
+                height: o.height,
+            },
+            UserShapeType::Polygon(p) => PadShape::Polygon {
+                polygon: p.clone(),
+            },
+        })
+        .collect();
+
+    // Return composite if multiple shapes, single shape if one, or None if empty
+    match shapes.len() {
+        0 => None,
+        1 => shapes.into_iter().next(),
+        _ => Some(PadShape::Composite { shapes }),
+    }
 }
 
 fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
