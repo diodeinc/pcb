@@ -1,4 +1,4 @@
-use super::primitives::{Color, FillDesc, LineDesc, StandardPrimitive};
+use super::primitives::{Color, FillDesc, LineDesc, StandardPrimitive, UserPrimitive};
 use crate::Symbol;
 
 /// Dictionary of colors
@@ -62,14 +62,7 @@ pub struct DictionaryUser {
 #[derive(Debug, Clone)]
 pub struct EntryUser {
     pub id: Symbol,
-    pub shape: UserShape,
-}
-
-/// User-defined shape (combination of primitives)
-#[derive(Debug, Clone)]
-pub enum UserShape {
-    Special(Vec<StandardPrimitive>),
-    // More variants as needed
+    pub primitive: UserPrimitive,
 }
 
 /// Units of measurement

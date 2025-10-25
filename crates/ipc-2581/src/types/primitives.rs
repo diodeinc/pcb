@@ -292,3 +292,34 @@ pub struct Color {
 pub struct DictRef {
     pub id: Symbol,
 }
+
+/// User-defined geometric primitives (from DictionaryUser)
+#[derive(Debug, Clone, PartialEq)]
+pub enum UserPrimitive {
+    UserSpecial(UserSpecial),
+    // Other user primitives can be added here (e.g., Text)
+}
+
+/// UserSpecial - combination of shapes with line/fill descriptions
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserSpecial {
+    pub shapes: Vec<UserShape>,
+}
+
+/// A shape within a UserSpecial, with optional line and fill descriptions
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserShape {
+    pub shape: UserShapeType,
+    pub line_desc: Option<LineDesc>,
+    pub fill_desc: Option<FillDesc>,
+}
+
+/// Types of shapes that can appear in UserSpecial
+#[derive(Debug, Clone, PartialEq)]
+pub enum UserShapeType {
+    Circle(Circle),
+    RectCenter(RectCenter),
+    Oval(Oval),
+    Polygon(Polygon),
+    // Other standard shapes as needed (e.g., Polyline)
+}

@@ -3,11 +3,20 @@ use kurbo::{Arc as KurboArc, Point, Rect, Shape, Vec2};
 use svg::node::element::{path::Data, Path};
 use svg::Document;
 
+/// Pad shape for rendering PTHs
+#[derive(Debug, Clone)]
+pub enum PadShape {
+    Circle { diameter: f64 },
+    Rect { width: f64, height: f64 },
+    Oval { width: f64, height: f64 },
+}
+
 pub struct BoardOutlineData<'a> {
     pub outline: &'a Polygon,
     pub cutouts: &'a [Polygon],
     pub slots: &'a [(Polygon, f64, f64)], // (outline, x_offset, y_offset)
-    pub npths: &'a [(f64, f64, f64)], // (x, y, diameter)
+    pub npths: &'a [(f64, f64, f64)],     // (x, y, diameter)
+    pub pths: &'a [(f64, f64, f64, PadShape)], // (x, y, hole_diameter, pad_shape)
 }
 
 // Helper to create kurbo Arc from IPC-2581 curve data
@@ -206,9 +215,9 @@ pub fn render_board_outline_svg(data: BoardOutlineData) -> String {
     for (slot_outline, x_offset, y_offset) in data.slots {
         let slot_path_data = add_polygon(Data::new(), slot_outline, *x_offset, *y_offset, true);
         let slot_path = Path::new()
-            .set("fill", "#999")
+            .set("fill", "#e9ecef")
             .set("stroke", "#333")
-            .set("stroke-width", 2)
+            .set("stroke-width", 1)
             .set("stroke-linejoin", "round")
             .set("stroke-linecap", "round")
             .set("shape-rendering", "geometricPrecision")
@@ -226,11 +235,66 @@ pub fn render_board_outline_svg(data: BoardOutlineData) -> String {
             .set("cx", cx)
             .set("cy", cy)
             .set("r", radius)
-            .set("fill", "#999")
+            .set("fill", "#e9ecef")
             .set("stroke", "#333")
-            .set("stroke-width", 2)
+            .set("stroke-width", 1)
             .set("shape-rendering", "geometricPrecision");
         document = document.add(circle);
+    }
+
+    // Render PTHs (plated through holes) with accurate pad shapes
+    for (x, y, hole_diameter, pad_shape) in data.pths {
+        let cx = (x - min_x) * scale;
+        let cy = (y - min_y) * scale;
+
+        // Render outer pad shape (copper) with gold color
+        match pad_shape {
+            PadShape::Circle { diameter } => {
+                let circle = svg::node::element::Circle::new()
+                    .set("cx", cx)
+                    .set("cy", cy)
+                    .set("r", (diameter / 2.0) * scale)
+                    .set("fill", "#DAA520")
+                    .set("stroke", "none")
+                    .set("shape-rendering", "geometricPrecision");
+                document = document.add(circle);
+            }
+            PadShape::Rect { width, height } => {
+                let w = width * scale;
+                let h = height * scale;
+                let rect = svg::node::element::Rectangle::new()
+                    .set("x", cx - w / 2.0)
+                    .set("y", cy - h / 2.0)
+                    .set("width", w)
+                    .set("height", h)
+                    .set("fill", "#DAA520")
+                    .set("stroke", "none")
+                    .set("shape-rendering", "geometricPrecision");
+                document = document.add(rect);
+            }
+            PadShape::Oval { width, height } => {
+                let ellipse = svg::node::element::Ellipse::new()
+                    .set("cx", cx)
+                    .set("cy", cy)
+                    .set("rx", (width / 2.0) * scale)
+                    .set("ry", (height / 2.0) * scale)
+                    .set("fill", "#DAA520")
+                    .set("stroke", "none")
+                    .set("shape-rendering", "geometricPrecision");
+                document = document.add(ellipse);
+            }
+        }
+
+        // Render hole (always circular) with darker gold stroke
+        let hole = svg::node::element::Circle::new()
+            .set("cx", cx)
+            .set("cy", cy)
+            .set("r", (hole_diameter / 2.0) * scale)
+            .set("fill", "#e9ecef")
+            .set("stroke", "#8B7500")
+            .set("stroke-width", 1)
+            .set("shape-rendering", "geometricPrecision");
+        document = document.add(hole);
     }
 
     let mut svg_buffer = Vec::new();

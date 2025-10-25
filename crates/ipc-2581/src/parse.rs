@@ -276,6 +276,43 @@ impl<'arena> Parser<'arena> {
         Ok(DictionaryFillDesc::default())
     }
 
+    fn parse_fill_desc(&mut self, node: &Node) -> Result<FillDesc> {
+        let fill_property_str = self.required_attr(node, "fillProperty", "FillDesc")?;
+        let fill_property = self.parse_fill_property(self.interner.resolve(fill_property_str))?;
+
+        let angle1 = node
+            .attribute("angle1")
+            .map(|s| s.parse::<f64>())
+            .transpose()
+            .map_err(|_| Ipc2581Error::InvalidAttribute("angle1".to_string()))?;
+
+        let angle2 = node
+            .attribute("angle2")
+            .map(|s| s.parse::<f64>())
+            .transpose()
+            .map_err(|_| Ipc2581Error::InvalidAttribute("angle2".to_string()))?;
+
+        Ok(FillDesc {
+            fill_property,
+            angle1,
+            angle2,
+        })
+    }
+
+    fn parse_fill_property(&self, s: &str) -> Result<FillProperty> {
+        match s {
+            "FILL" => Ok(FillProperty::Fill),
+            "HOLLOW" => Ok(FillProperty::Hollow),
+            "VOID" => Ok(FillProperty::Void),
+            "HATCH" => Ok(FillProperty::Hatch),
+            "MESH" => Ok(FillProperty::Mesh),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Unknown fillProperty: {}",
+                s
+            ))),
+        }
+    }
+
     fn parse_dictionary_standard(&mut self, node: &Node) -> Result<DictionaryStandard> {
         let units = node
             .attribute("units")
@@ -409,9 +446,98 @@ impl<'arena> Parser<'arena> {
         Ok(Polygon { begin, steps })
     }
 
-    fn parse_dictionary_user(&mut self, _node: &Node) -> Result<DictionaryUser> {
-        // Simplified for now
-        Ok(DictionaryUser::default())
+    fn parse_dictionary_user(&mut self, node: &Node) -> Result<DictionaryUser> {
+        let units = node
+            .attribute("units")
+            .map(|s| self.parse_units(s))
+            .transpose()?;
+
+        // Use MILLIMETER as default if not specified
+        let dict_units = units.unwrap_or(Units::Millimeter);
+
+        let entries = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "EntryUser")
+            .map(|n| self.parse_entry_user(&n, dict_units))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(DictionaryUser { units, entries })
+    }
+
+    fn parse_entry_user(&mut self, node: &Node, units: Units) -> Result<EntryUser> {
+        let id = self.required_attr(node, "id", "EntryUser")?;
+
+        // Find the primitive child element (currently only supporting UserSpecial)
+        let primitive_node = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "UserSpecial")
+            .ok_or(Ipc2581Error::MissingElement("UserPrimitive"))?;
+
+        let primitive = self.parse_user_special(&primitive_node, units)?;
+
+        Ok(EntryUser { id, primitive })
+    }
+
+    fn parse_user_special(&mut self, node: &Node, units: Units) -> Result<UserPrimitive> {
+        let mut shapes = Vec::new();
+
+        for child in node.children() {
+            if !child.is_element() {
+                continue;
+            }
+
+            let tag_name = child.tag_name().name();
+
+            // Parse shape based on tag name
+            let shape_type = match tag_name {
+                "Circle" => {
+                    let diameter =
+                        self.parse_f64_attr_with_units(&child, "diameter", "Circle", units)?;
+                    Some(UserShapeType::Circle(Circle { diameter }))
+                }
+                "RectCenter" => {
+                    let width =
+                        self.parse_f64_attr_with_units(&child, "width", "RectCenter", units)?;
+                    let height =
+                        self.parse_f64_attr_with_units(&child, "height", "RectCenter", units)?;
+                    Some(UserShapeType::RectCenter(RectCenter { width, height }))
+                }
+                "Oval" => {
+                    let width = self.parse_f64_attr_with_units(&child, "width", "Oval", units)?;
+                    let height = self.parse_f64_attr_with_units(&child, "height", "Oval", units)?;
+                    Some(UserShapeType::Oval(Oval { width, height }))
+                }
+                "Polygon" => {
+                    let polygon = self.parse_polygon(&child, units)?;
+                    Some(UserShapeType::Polygon(polygon))
+                }
+                // TODO: Add Polyline parsing when needed
+                _ => None, // Skip unknown shape types
+            };
+
+            if let Some(shape_type) = shape_type {
+                // Parse optional LineDesc and FillDesc children
+                let line_desc = child
+                    .children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "LineDesc")
+                    .map(|n| self.parse_line_desc(&n, units))
+                    .transpose()?;
+
+                let fill_desc = child
+                    .children()
+                    .find(|n| n.is_element() && n.tag_name().name() == "FillDesc")
+                    .map(|n| self.parse_fill_desc(&n))
+                    .transpose()?;
+
+                shapes.push(UserShape {
+                    shape: shape_type,
+                    line_desc,
+                    fill_desc,
+                });
+            }
+        }
+
+        Ok(UserPrimitive::UserSpecial(UserSpecial { shapes }))
     }
 
     fn parse_logistic_header(&mut self, _node: &Node) -> Result<LogisticHeader> {
@@ -1003,6 +1129,8 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
+        let geometry = node.attribute("geometry").map(|s| self.interner.intern(s));
+
         let mut holes = Vec::new();
         let mut slots = Vec::new();
         let mut pads = Vec::new();
@@ -1019,6 +1147,7 @@ impl<'arena> Parser<'arena> {
         }
 
         Ok(FeatureSet {
+            geometry,
             holes,
             slots,
             pads,
@@ -1266,7 +1395,26 @@ impl<'arena> Parser<'arena> {
         let pad_use_str = self.required_attr(node, "padUse", "PadstackPadDef")?;
         let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
 
-        Ok(PadstackPadDef { layer_ref, pad_use })
+        // Parse StandardPrimitiveRef if present
+        let standard_primitive_ref = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "StandardPrimitiveRef")
+            .and_then(|n| n.attribute("id"))
+            .map(|id| self.interner.intern(id));
+
+        // Parse UserPrimitiveRef if present
+        let user_primitive_ref = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "UserPrimitiveRef")
+            .and_then(|n| n.attribute("id"))
+            .map(|id| self.interner.intern(id));
+
+        Ok(PadstackPadDef {
+            layer_ref,
+            pad_use,
+            standard_primitive_ref,
+            user_primitive_ref,
+        })
     }
 
     fn parse_plating_status(&self, s: &str) -> Result<PlatingStatus> {

@@ -1,5 +1,8 @@
 use crate::types::Units;
-use crate::{board_outline::render_board_outline_svg, Ipc2581, LayerFunction, PlatingStatus, Side};
+use crate::{
+    board_outline::{render_board_outline_svg, PadShape},
+    Ipc2581, LayerFunction, PlatingStatus, Side, StandardPrimitive, UserPrimitive, UserShapeType,
+};
 use base64::Engine;
 use minijinja::{context, Environment};
 use serde::Serialize;
@@ -332,12 +335,94 @@ fn extract_board_summary(doc: &Ipc2581) -> Option<BoardSummary> {
     })
 }
 
+/// Extract pad shape from a StandardPrimitive for accurate rendering
+fn extract_pad_shape(prim: &StandardPrimitive) -> Option<PadShape> {
+    use crate::types::primitives::*;
+    match prim {
+        StandardPrimitive::Circle(c) => Some(PadShape::Circle {
+            diameter: c.diameter,
+        }),
+        StandardPrimitive::RectCenter(r) => Some(PadShape::Rect {
+            width: r.width,
+            height: r.height,
+        }),
+        StandardPrimitive::Oval(o) => Some(PadShape::Oval {
+            width: o.width,
+            height: o.height,
+        }),
+        _ => None,
+    }
+}
+
+/// Extract pad shape from a UserPrimitive for accurate rendering
+fn extract_user_pad_shape(user_prim: &UserPrimitive) -> Option<PadShape> {
+    let UserPrimitive::UserSpecial(special) = user_prim;
+    special.shapes.iter().find_map(|shape| match &shape.shape {
+        UserShapeType::Circle(c) => Some(PadShape::Circle {
+            diameter: c.diameter,
+        }),
+        UserShapeType::RectCenter(r) => Some(PadShape::Rect {
+            width: r.width,
+            height: r.height,
+        }),
+        UserShapeType::Oval(o) => Some(PadShape::Oval {
+            width: o.width,
+            height: o.height,
+        }),
+        _ => None,
+    })
+}
+
 fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
     use crate::board_outline::BoardOutlineData;
+    use crate::PadUse;
+    use std::collections::HashMap;
 
     let ecad = doc.ecad()?;
     let step = &ecad.cad_data.steps[0];
     let profile = step.profile.as_ref()?;
+
+    // Build a map of standard primitives for quick lookup
+    let standard_primitives: HashMap<_, _> = doc
+        .content()
+        .dictionary_standard
+        .entries
+        .iter()
+        .map(|entry| (entry.id, &entry.primitive))
+        .collect();
+
+    // Build a map of user primitives for quick lookup
+    let user_primitives: HashMap<_, _> = doc
+        .content()
+        .dictionary_user
+        .entries
+        .iter()
+        .map(|entry| (entry.id, &entry.primitive))
+        .collect();
+
+    // Build a map of padstack definitions for quick lookup
+    let padstack_defs: HashMap<_, _> = step
+        .padstack_defs
+        .iter()
+        .map(|def| (def.name, def))
+        .collect();
+
+    // Get TOP conductor layer name for pad lookups
+    let top_layer_name = ecad
+        .cad_data
+        .layers
+        .iter()
+        .find(|l| {
+            l.side == Some(Side::Top)
+                && matches!(
+                    l.layer_function,
+                    LayerFunction::Conductor
+                        | LayerFunction::Signal
+                        | LayerFunction::Plane
+                        | LayerFunction::Mixed
+                )
+        })
+        .map(|l| l.name)?;
 
     // Get drill layers
     let drill_layers: Vec<_> = ecad
@@ -352,6 +437,8 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
     let mut slots = Vec::new();
     // Collect NPTHs (non-plated through holes)
     let mut npths = Vec::new();
+    // Collect PTHs (plated through holes) with pad geometry
+    let mut pths = Vec::new();
 
     for layer_feature in &step.layer_features {
         let layer_name = doc.resolve(layer_feature.layer_ref);
@@ -362,11 +449,47 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
                 slots.push((slot.outline.clone(), slot.x, slot.y));
             }
 
-            // Collect NPTHs from drill layers
+            // Collect NPTHs and PTHs from drill layers
             if is_drill_layer {
+                // Get the geometry (padstack) reference for this feature set
+                let padstack_def = feature_set
+                    .geometry
+                    .and_then(|geom_ref| padstack_defs.get(&geom_ref));
+
                 for hole in &feature_set.holes {
                     if hole.plating_status == PlatingStatus::NonPlated {
                         npths.push((hole.x, hole.y, hole.diameter));
+                    } else if hole.plating_status == PlatingStatus::Plated {
+                        // For PTHs, look up the pad diameter from the padstack definition
+                        if let Some(padstack_def) = padstack_def {
+                            // Find the TOP layer pad with REGULAR use
+                            let pad_def_option = padstack_def.pad_defs.iter().find(|pad| {
+                                pad.layer_ref == top_layer_name && pad.pad_use == PadUse::Regular
+                            });
+
+                            // Extract pad shape from either StandardPrimitive or UserPrimitive
+                            let pad_shape = pad_def_option.and_then(|pad| {
+                                // Try StandardPrimitiveRef first
+                                if let Some(prim_ref) = pad.standard_primitive_ref {
+                                    if let Some(prim) = standard_primitives.get(&prim_ref) {
+                                        return extract_pad_shape(prim);
+                                    }
+                                }
+
+                                // Fall back to UserPrimitiveRef
+                                if let Some(user_prim_ref) = pad.user_primitive_ref {
+                                    if let Some(user_prim) = user_primitives.get(&user_prim_ref) {
+                                        return extract_user_pad_shape(user_prim);
+                                    }
+                                }
+
+                                None
+                            });
+
+                            if let Some(shape) = pad_shape {
+                                pths.push((hole.x, hole.y, hole.diameter, shape));
+                            }
+                        }
                     }
                 }
             }
@@ -378,6 +501,7 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
         cutouts: &profile.cutouts,
         slots: &slots,
         npths: &npths,
+        pths: &pths,
     };
 
     Some(render_board_outline_svg(board_data))
@@ -885,7 +1009,8 @@ fn extract_bom(doc: &Ipc2581) -> Option<Bom> {
                                 // Fallback: use Capacitance, Resistance, or DEVICE_TYPE if Value not set
                                 if name_lower == "capacitance"
                                     || name_lower == "resistance"
-                                    || name_lower == "device_type" {
+                                    || name_lower == "device_type"
+                                {
                                     value = val.clone();
                                 }
                             }

@@ -118,6 +118,8 @@ pub struct PadstackHoleDef {
 pub struct PadstackPadDef {
     pub layer_ref: Symbol,
     pub pad_use: PadUse,
+    pub standard_primitive_ref: Option<Symbol>,
+    pub user_primitive_ref: Option<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +201,7 @@ pub struct LayerFeature {
 /// FeatureSet groups features with common properties
 #[derive(Debug, Clone)]
 pub struct FeatureSet {
+    pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
