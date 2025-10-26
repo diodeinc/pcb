@@ -25,6 +25,14 @@ pub struct Spec {
     pub loss_tangent: Option<f64>,
     /// All Property text values from General type="MATERIAL" elements
     pub properties: Vec<String>,
+    /// Surface finish specification (ENIG, OSP, etc.)
+    pub surface_finish: Option<SurfaceFinish>,
+    /// Copper weight in oz/ft² from Conductor type="WEIGHT"
+    pub copper_weight_oz: Option<f64>,
+    /// Color specified via ColorTerm element (e.g., "GREEN", "WHITE", "BLACK")
+    pub color_term: Option<String>,
+    /// RGB color specified via Color element (r, g, b values 0-255)
+    pub color_rgb: Option<(u8, u8, u8)>,
 }
 
 /// Ecad section containing CadHeader and CadData
@@ -34,12 +42,12 @@ pub struct Ecad {
     pub cad_data: CadData,
 }
 
-/// CadData contains Steps, Layers, and Stackup with design data
+/// CadData contains Steps, Layers, and Stackups with design data
 #[derive(Debug, Clone)]
 pub struct CadData {
     pub steps: Vec<Step>,
     pub layers: Vec<Layer>,
-    pub stackup: Option<Stackup>,
+    pub stackups: Vec<Stackup>,
 }
 
 /// Stackup defines the layer stack with overall thickness
@@ -58,6 +66,9 @@ pub struct Stackup {
 pub struct StackupLayer {
     pub layer_ref: Symbol,
     pub thickness: Option<f64>,
+    pub tol_plus: Option<f64>,
+    pub tol_minus: Option<f64>,
+    pub tol_percent: bool, // True if tolerances are percentages (default: false)
     pub material: Option<Symbol>,
     pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
     pub dielectric_constant: Option<f64>,
@@ -253,24 +264,74 @@ pub struct TracePoint {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerFunction {
+    // Conductive layers
     Conductor,
     CondFilm,
     CondFoil,
     Plane,
     Signal,
     Mixed,
+
+    // Coating layers (surface finishes)
+    CoatingCond,    // Conductive coating (ENIG, immersion silver, etc.)
+    CoatingNonCond, // Non-conductive coating (OSP)
+
+    // Soldermask and paste
     Soldermask,
     Solderpaste,
+    Pastemask, // Paste mask (can be different from solderpaste)
+
+    // Silkscreen/Legend
     Silkscreen,
     Legend,
+
+    // Drilling and routing
     Drill,
     Rout,
     VCut,
+    Score,
+    EdgeChamfer,
+    EdgePlating,
+
+    // Dielectric layers
     DielBase,
     DielCore,
     DielPreg,
+    DielAdhv,     // Dielectric adhesive high voltage
+    DielBondPly,  // Dielectric bond ply
+    DielCoverlay, // Dielectric coverlay (flex circuits)
+
+    // Component layers
+    ComponentTop,
+    ComponentBottom,
+    ComponentEmbedded,
+    ComponentFormed, // Formed components (thin-film, resistors, etc.)
+    Assembly,
+
+    // Specialized material layers
+    ConductiveAdhesive,
+    Glue,
+    HoleFill,
+    SolderBump,
+    Stiffener,
+    Capacitive, // Capacitive material layer
+    Resistive,  // Resistive material layer
+
+    // Documentation and tooling
     Document,
     Graphic,
+    BoardOutline,
+    BoardFab,
+    Rework,
+    Fixture,
+    Probe,
+    Courtyard,
+    LandPattern,
+    ThievingKeepInout, // Copper thieving constraints
+
+    // Composite
+    StackupComposite,
+
     Other,
 }
 
@@ -297,4 +358,72 @@ pub enum WhereMeasured {
     Mask,
     Laminate,
     Other,
+}
+
+/// Surface finish material type according to IPC-6012
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishType {
+    // Solder leveling
+    S, // Solder (Hot Air Solder Leveling - HASL)
+
+    // Tin-lead
+    T,   // Tin-lead
+    X,   // Tin-lead unfused
+    TLU, // Tin-lead unfused
+
+    // Immersion/electroless finishes
+    EnigN,   // Electroless Nickel Immersion Gold (normal)
+    EnigG,   // Electroless Nickel Immersion Gold (high current)
+    EnepigN, // Electroless Nickel Electroless Palladium Immersion Gold (normal)
+    EnepigG, // Electroless Nickel Electroless Palladium Immersion Gold (high current)
+    EnepigP, // Electroless Nickel Electroless Palladium Immersion Gold (probe)
+    Dig,     // Direct Immersion Gold
+    IAg,     // Immersion Silver
+    ISn,     // Immersion Tin
+
+    // Organic finishes
+    Osp,   // Organic Solderability Preservative
+    HtOsp, // High Temperature OSP
+
+    // Bare copper
+    N,  // Bare copper (none)
+    NB, // Bare copper no bondability requirement
+
+    // Carbon contact
+    C, // Carbon contact
+
+    // Gold wire bond finishes
+    G,       // Gold (wire bond)
+    GS,      // Gold over electroless nickel (soft)
+    GwbOneG, // Gold wire bond Type 1, Grade G (IPC-4556)
+    GwbOneN, // Gold wire bond Type 1, Grade N (IPC-4556)
+    GwbTwoG, // Gold wire bond Type 2, Grade G (IPC-4556)
+    GwbTwoN, // Gold wire bond Type 2, Grade N (IPC-4556)
+
+    Other,
+}
+
+/// Product criteria for surface finish product selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductCriteria {
+    Allowed,
+    Suggested,
+    Preferred,
+    Required,
+    Chosen,
+}
+
+/// Product specification for a surface finish
+#[derive(Debug, Clone)]
+pub struct FinishProduct {
+    pub name: String,
+    pub criteria: Option<ProductCriteria>,
+}
+
+/// Surface finish specification
+#[derive(Debug, Clone)]
+pub struct SurfaceFinish {
+    pub finish_type: FinishType,
+    pub comment: Option<String>,
+    pub products: Vec<FinishProduct>,
 }

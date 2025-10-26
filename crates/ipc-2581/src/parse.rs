@@ -758,6 +758,10 @@ impl<'arena> Parser<'arena> {
         let mut dielectric_constant = None;
         let mut loss_tangent = None;
         let mut properties = Vec::new();
+        let mut surface_finish = None;
+        let mut copper_weight_oz = None;
+        let mut color_term = None;
+        let mut color_rgb = None;
 
         // Parse child elements for material and dielectric properties
         for child in node.children().filter(|n| n.is_element()) {
@@ -765,19 +769,44 @@ impl<'arena> Parser<'arena> {
                 "General" => {
                     // Extract material from General type="MATERIAL"
                     if child.attribute("type") == Some("MATERIAL") {
-                        // Look for Property with text attribute
+                        // Look for Property, ColorTerm, and Color elements
                         for prop in child.children().filter(|n| n.is_element()) {
-                            if prop.tag_name().name() == "Property" {
-                                if let Some(text) = prop.attribute("text") {
-                                    if !text.is_empty() {
-                                        // Store all property texts
-                                        properties.push(text.to_string());
-                                        // Take the first non-empty material text we find
-                                        if material.is_none() {
-                                            material = Some(text.to_string());
+                            match prop.tag_name().name() {
+                                "Property" => {
+                                    if let Some(text) = prop.attribute("text") {
+                                        if !text.is_empty() {
+                                            // Store all property texts
+                                            properties.push(text.to_string());
+                                            // Take the first non-empty material text we find
+                                            if material.is_none() {
+                                                material = Some(text.to_string());
+                                            }
                                         }
                                     }
                                 }
+                                "ColorTerm" => {
+                                    // Parse ColorTerm name attribute (e.g., "GREEN", "WHITE", "BLACK")
+                                    if let Some(color_name) = prop.attribute("name") {
+                                        color_term = Some(color_name.to_string());
+                                    }
+                                }
+                                "Color" => {
+                                    // Parse Color r, g, b attributes (0-255)
+                                    if let (Some(r_str), Some(g_str), Some(b_str)) = (
+                                        prop.attribute("r"),
+                                        prop.attribute("g"),
+                                        prop.attribute("b"),
+                                    ) {
+                                        if let (Ok(r), Ok(g), Ok(b)) = (
+                                            r_str.parse::<u8>(),
+                                            g_str.parse::<u8>(),
+                                            b_str.parse::<u8>(),
+                                        ) {
+                                            color_rgb = Some((r, g, b));
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -801,6 +830,27 @@ impl<'arena> Parser<'arena> {
                         }
                     }
                 }
+                "Conductor" => {
+                    // Parse copper weight from Conductor type="WEIGHT"
+                    if child.attribute("type") == Some("WEIGHT") {
+                        for prop in child.children().filter(|n| n.is_element()) {
+                            if prop.tag_name().name() == "Property" {
+                                if let Some(value_str) = prop.attribute("value") {
+                                    if let Ok(value) = value_str.parse::<f64>() {
+                                        // Check unit - should be OZ
+                                        let unit = prop.attribute("unit").unwrap_or("OZ");
+                                        if unit.to_uppercase() == "OZ" {
+                                            copper_weight_oz = Some(value);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "SurfaceFinish" => {
+                    surface_finish = self.parse_surface_finish(&child).ok();
+                }
                 _ => {}
             }
         }
@@ -811,19 +861,102 @@ impl<'arena> Parser<'arena> {
             dielectric_constant,
             loss_tangent,
             properties,
+            surface_finish,
+            copper_weight_oz,
+            color_term,
+            color_rgb,
         })
+    }
+
+    fn parse_surface_finish(&mut self, node: &Node) -> Result<ecad::SurfaceFinish> {
+        // Parse Finish element
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "Finish" {
+                let finish_type_str = child.attribute("type").unwrap_or("OTHER");
+                let finish_type = self.parse_finish_type(finish_type_str)?;
+                let comment = child.attribute("comment").map(|s| s.to_string());
+
+                let mut products = Vec::new();
+                for product_node in child.children().filter(|n| n.is_element()) {
+                    if product_node.tag_name().name() == "Product" {
+                        if let Some(product_name) = product_node.attribute("name") {
+                            let criteria = product_node
+                                .attribute("criteria")
+                                .and_then(|s| self.parse_product_criteria(s).ok());
+
+                            products.push(ecad::FinishProduct {
+                                name: product_name.to_string(),
+                                criteria,
+                            });
+                        }
+                    }
+                }
+
+                return Ok(ecad::SurfaceFinish {
+                    finish_type,
+                    comment,
+                    products,
+                });
+            }
+        }
+
+        // No Finish element found
+        Err(Ipc2581Error::MissingElement("Finish in SurfaceFinish"))
+    }
+
+    fn parse_finish_type(&self, s: &str) -> Result<ecad::FinishType> {
+        match s {
+            "S" => Ok(ecad::FinishType::S),
+            "T" => Ok(ecad::FinishType::T),
+            "X" => Ok(ecad::FinishType::X),
+            "TLU" => Ok(ecad::FinishType::TLU),
+            "ENIG-N" => Ok(ecad::FinishType::EnigN),
+            "ENIG-G" => Ok(ecad::FinishType::EnigG),
+            "ENEPIG-N" => Ok(ecad::FinishType::EnepigN),
+            "ENEPIG-G" => Ok(ecad::FinishType::EnepigG),
+            "ENEPIG-P" => Ok(ecad::FinishType::EnepigP),
+            "DIG" => Ok(ecad::FinishType::Dig),
+            "IAg" => Ok(ecad::FinishType::IAg),
+            "ISn" => Ok(ecad::FinishType::ISn),
+            "OSP" => Ok(ecad::FinishType::Osp),
+            "HT_OSP" => Ok(ecad::FinishType::HtOsp),
+            "N" => Ok(ecad::FinishType::N),
+            "NB" => Ok(ecad::FinishType::NB),
+            "C" => Ok(ecad::FinishType::C),
+            "G" => Ok(ecad::FinishType::G),
+            "GS" => Ok(ecad::FinishType::GS),
+            "GWB-1-G" => Ok(ecad::FinishType::GwbOneG),
+            "GWB-1-N" => Ok(ecad::FinishType::GwbOneN),
+            "GWB-2-G" => Ok(ecad::FinishType::GwbTwoG),
+            "GWB-2-N" => Ok(ecad::FinishType::GwbTwoN),
+            _ => Ok(ecad::FinishType::Other),
+        }
+    }
+
+    fn parse_product_criteria(&self, s: &str) -> Result<ecad::ProductCriteria> {
+        match s {
+            "ALLOWED" => Ok(ecad::ProductCriteria::Allowed),
+            "SUGGESTED" => Ok(ecad::ProductCriteria::Suggested),
+            "PREFERRED" => Ok(ecad::ProductCriteria::Preferred),
+            "REQUIRED" => Ok(ecad::ProductCriteria::Required),
+            "CHOSEN" => Ok(ecad::ProductCriteria::Chosen),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid product criteria: {}",
+                s
+            ))),
+        }
     }
 
     fn parse_cad_data(&mut self, node: &Node) -> Result<CadData> {
         let mut steps = Vec::new();
         let mut layers = Vec::new();
-        let mut stackup = None;
+        let mut stackups = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "Step" => steps.push(self.parse_step(&child)?),
                 "Layer" => layers.push(self.parse_layer(&child)?),
-                "Stackup" => stackup = Some(self.parse_stackup(&child)?),
+                "Stackup" => stackups.push(self.parse_stackup(&child)?),
                 _ => {}
             }
         }
@@ -831,7 +964,7 @@ impl<'arena> Parser<'arena> {
         Ok(CadData {
             steps,
             layers,
-            stackup,
+            stackups,
         })
     }
 
@@ -897,6 +1030,37 @@ impl<'arena> Parser<'arena> {
             .and_then(|s| s.parse::<f64>().ok())
             .map(|v| crate::units::to_mm(v, units));
 
+        // Parse tolPercent (default: false = absolute values)
+        let tol_percent = node
+            .attribute("tolPercent")
+            .and_then(|s| s.parse::<bool>().ok())
+            .unwrap_or(false);
+
+        // Convert tolerances if present
+        // If tolPercent is true, these are percentages and should NOT be converted to mm
+        // If tolPercent is false (default), these are absolute values in the same units as thickness
+        let tol_plus = node
+            .attribute("tolPlus")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| {
+                if tol_percent {
+                    v
+                } else {
+                    crate::units::to_mm(v, units)
+                }
+            });
+
+        let tol_minus = node
+            .attribute("tolMinus")
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|v| {
+                if tol_percent {
+                    v
+                } else {
+                    crate::units::to_mm(v, units)
+                }
+            });
+
         let layer_number = node.attribute("sequence").and_then(|s| s.parse().ok());
 
         // Look up material and dielectric properties from Spec via SpecRef
@@ -951,6 +1115,9 @@ impl<'arena> Parser<'arena> {
         Ok(StackupLayer {
             layer_ref,
             thickness,
+            tol_plus,
+            tol_minus,
+            tol_percent,
             material,
             spec_ref,
             dielectric_constant,
@@ -1281,24 +1448,74 @@ impl<'arena> Parser<'arena> {
 
     fn parse_layer_function(&self, s: &str) -> Result<LayerFunction> {
         match s {
+            // Conductive layers
             "CONDUCTOR" => Ok(LayerFunction::Conductor),
             "CONDFILM" => Ok(LayerFunction::CondFilm),
             "CONDFOIL" => Ok(LayerFunction::CondFoil),
             "PLANE" => Ok(LayerFunction::Plane),
             "SIGNAL" => Ok(LayerFunction::Signal),
             "MIXED" => Ok(LayerFunction::Mixed),
+
+            // Coating layers (surface finishes)
+            "COATINGCOND" => Ok(LayerFunction::CoatingCond),
+            "COATINGNONCOND" => Ok(LayerFunction::CoatingNonCond),
+
+            // Soldermask and paste
             "SOLDERMASK" => Ok(LayerFunction::Soldermask),
             "SOLDERPASTE" => Ok(LayerFunction::Solderpaste),
+            "PASTEMASK" => Ok(LayerFunction::Pastemask),
+
+            // Silkscreen/Legend
             "SILKSCREEN" => Ok(LayerFunction::Silkscreen),
             "LEGEND" => Ok(LayerFunction::Legend),
+
+            // Drilling and routing
             "DRILL" => Ok(LayerFunction::Drill),
-            "ROUT" => Ok(LayerFunction::Rout),
+            "ROUT" | "ROUTE" => Ok(LayerFunction::Rout),
             "V_CUT" => Ok(LayerFunction::VCut),
+            "SCORE" => Ok(LayerFunction::Score),
+            "EDGE_CHAMFER" => Ok(LayerFunction::EdgeChamfer),
+            "EDGE_PLATING" => Ok(LayerFunction::EdgePlating),
+
+            // Dielectric layers
             "DIELBASE" => Ok(LayerFunction::DielBase),
             "DIELCORE" => Ok(LayerFunction::DielCore),
             "DIELPREG" => Ok(LayerFunction::DielPreg),
+            "DIELADHV" => Ok(LayerFunction::DielAdhv),
+            "DIELBONDPLY" => Ok(LayerFunction::DielBondPly),
+            "DIELCOVERLAY" => Ok(LayerFunction::DielCoverlay),
+
+            // Component layers
+            "COMPONENT_TOP" => Ok(LayerFunction::ComponentTop),
+            "COMPONENT_BOTTOM" => Ok(LayerFunction::ComponentBottom),
+            "COMPONENT_EMBEDDED" => Ok(LayerFunction::ComponentEmbedded),
+            "COMPONENT_FORMED" => Ok(LayerFunction::ComponentFormed),
+            "ASSEMBLY" => Ok(LayerFunction::Assembly),
+
+            // Specialized material layers
+            "CONDUCTIVE_ADHESIVE" => Ok(LayerFunction::ConductiveAdhesive),
+            "GLUE" => Ok(LayerFunction::Glue),
+            "HOLEFILL" => Ok(LayerFunction::HoleFill),
+            "SOLDERBUMP" => Ok(LayerFunction::SolderBump),
+            "STIFFENER" => Ok(LayerFunction::Stiffener),
+            "CAPACITIVE" => Ok(LayerFunction::Capacitive),
+            "RESISTIVE" => Ok(LayerFunction::Resistive),
+
+            // Documentation and tooling
             "DOCUMENT" => Ok(LayerFunction::Document),
             "GRAPHIC" => Ok(LayerFunction::Graphic),
+            "BOARD_OUTLINE" => Ok(LayerFunction::BoardOutline),
+            "BOARD_FAB" => Ok(LayerFunction::BoardFab),
+            "REWORK" => Ok(LayerFunction::Rework),
+            "FIXTURE" => Ok(LayerFunction::Fixture),
+            "PROBE" => Ok(LayerFunction::Probe),
+            "COURTYARD" => Ok(LayerFunction::Courtyard),
+            "LANDPATTERN" => Ok(LayerFunction::LandPattern),
+            "THIEVING_KEEP_INOUT" => Ok(LayerFunction::ThievingKeepInout),
+
+            // Composite
+            "STACKUP_COMPOSITE" => Ok(LayerFunction::StackupComposite),
+
             _ => Ok(LayerFunction::Other),
         }
     }

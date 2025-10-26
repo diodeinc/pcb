@@ -142,7 +142,18 @@ td {
 }
 
 .col-thickness {
-    width: 80px;
+    width: 70px;
+}
+
+.col-cu-weight {
+    width: 60px;
+}
+
+.col-visual {
+    width: 240px;
+    min-width: 120px;
+    background: #fff !important;
+    border: none !important;
 }
 
 .col-material {
@@ -178,11 +189,198 @@ td {
 }
 
 .row-copper {
-    background: #fef3cd;
+    background: transparent;
 }
 
 .row-dielectric {
-    background: #e3f2fd;
+    background: transparent;
+}
+
+.thickness-visual {
+    text-align: center;
+    vertical-align: middle;
+    padding: 0 8px;
+    background: #fff !important;
+    border: none !important;
+}
+
+.thickness-bar {
+    display: block;
+    width: 100%;
+    border-radius: 0;
+    min-height: 2px;
+    transition: opacity 0.2s ease;
+    margin: 0;
+}
+
+.thickness-bar-copper {
+    background: #d4661f;
+    border-left: 1px solid #a84d15;
+    border-right: 1px solid #a84d15;
+}
+
+.thickness-bar-dielectric {
+    background: #d4c5a0;
+    border-left: 1px solid #b8a87d;
+    border-right: 1px solid #b8a87d;
+}
+
+.thickness-bar-coating, .thickness-bar-coating-cond, .thickness-bar-coating-non-cond {
+    background: #d4af37;
+    border-left: 1px solid #b8941f;
+    border-right: 1px solid #b8941f;
+}
+
+.thickness-bar-soldermask {
+    background: #4a7c4e;
+    border-left: 1px solid #3d6640;
+    border-right: 1px solid #3d6640;
+}
+
+.thickness-bar-silkscreen, .thickness-bar-legend {
+    background: #e8e8e8;
+    border-left: 1px solid #bbb;
+    border-right: 1px solid #bbb;
+}
+
+.thickness-bar-paste, .thickness-bar-solderpaste, .thickness-bar-paste-mask {
+    background: #c0c0c0;
+    border-left: 1px solid #999;
+    border-right: 1px solid #999;
+}
+
+.thickness-bar-core {
+    background: #d4c5a0;
+    border-left: 1px solid #b8a87d;
+    border-right: 1px solid #b8a87d;
+}
+
+.thickness-bar-prepreg {
+    background: repeating-linear-gradient(
+        45deg,
+        #dccfb0,
+        #dccfb0 2px,
+        #e8dfc5 2px,
+        #e8dfc5 4px
+    );
+    border-left: 1px solid #b8a87d;
+    border-right: 1px solid #b8a87d;
+}
+
+.thickness-bar-bond-ply, .thickness-bar-coverlay {
+    background: #d4c5a0;
+    border-left: 1px solid #b8a87d;
+    border-right: 1px solid #b8a87d;
+}
+
+.thickness-bar-diel-base {
+    background: rgba(218, 165, 32, 0.6);  /* Goldenrod with transparency */
+    border-left: 1px solid #b8941f;
+    border-right: 1px solid #b8941f;
+}
+
+.thickness-bar-adhesive, .thickness-bar-conductive-adhesive, .thickness-bar-glue {
+    background: #ffb3d9;
+    border-left: 1px solid #ff8cc8;
+    border-right: 1px solid #ff8cc8;
+}
+
+.thickness-bar-plane, .thickness-bar-conductor, .thickness-bar-signal,
+.thickness-bar-cu-film, .thickness-bar-cu-foil, .thickness-bar-mixed {
+    background: #d4661f;
+    border-left: 1px solid #a84d15;
+    border-right: 1px solid #a84d15;
+}
+
+.thickness-bar:hover {
+    opacity: 0.75;
+}
+
+.stackup-table tbody tr td {
+    border-top: none;
+    border-bottom: none;
+    padding: 1px 8px;
+}
+
+.stackup-table thead tr th {
+    border-bottom: 1px solid #d0d0d0;
+}
+
+.col-thickness {
+    text-align: left;
+}
+
+.stackup-table .row-copper td {
+    font-weight: 600;
+    color: #000;
+}
+
+.stackup-table .row-dielectric td {
+    font-weight: 300;
+    color: #888;
+}
+
+.stackup-table .row-coating td {
+    font-weight: 300;
+    color: #999;
+    font-style: italic;
+}
+
+.stackup-table .row-other td {
+    font-weight: 300;
+    color: #888;
+}
+
+.tolerance {
+    font-size: 0.85em;
+    color: #888;
+    font-weight: 300;
+}
+
+.bar-light-color {
+    border: 2px solid #333 !important;
+    border-left: 3px solid #333 !important;
+    border-right: 3px solid #333 !important;
+    box-sizing: border-box;
+    background: #f8f8f8 !important;  /* Very light gray instead of pure white */
+}
+
+.stackup-table-container {
+    position: relative;
+}
+
+.via-overlay {
+    position: absolute;
+    left: 60px;  /* Visual column is 240px wide and leftmost; via at 25% from left of column = 60px from left */
+    width: 16px;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.via-hole {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    height: 100%;
+    background: #fff;  /* White background for the drill hole */
+    z-index: 1;
+}
+
+.via-barrel-left, .via-barrel-right {
+    position: absolute;
+    width: 4px;
+    height: 100%;
+    background: #8b7355;  /* Metallic brown/copper */
+    border: 1px solid #5d4a37;
+    z-index: 2;
+}
+
+.via-barrel-left {
+    left: 0;
+}
+
+.via-barrel-right {
+    right: 0;
 }
 
 .row-drill-via {
@@ -440,78 +638,150 @@ td {
     </div>
     {% endif %}
 
-    {% if stackup %}
-    <h2>Physical Stackup</h2>
-    {% if stackup.overall_thickness_mils or board_finishes %}
+    {% if stackups %}
+    <h2>Board Stackup</h2>
+    {% for stackup in stackups %}
     <div class="summary summary-narrow">
+        <div class="summary-item">
+            <span class="summary-label">Stackup Name:</span>
+            <span class="summary-value">{{ stackup.name }}</span>
+        </div>
         {% if stackup.overall_thickness_mils %}
         <div class="summary-item">
             <span class="summary-label">Total Thickness:</span>
             <span class="summary-value">{{ stackup.overall_thickness_mm|round(2) }} mm ({{ stackup.overall_thickness_mils|round(0) }} mil){% if stackup.where_measured %} @ {{ stackup.where_measured }}{% endif %}</span>
         </div>
         {% endif %}
-        {% if board_finishes %}
-            {% if board_finishes.top_soldermask or board_finishes.bottom_soldermask %}
-            <div class="summary-item">
-                <span class="summary-label">Soldermask:</span>
-                <span class="summary-value">
-                    {% set mask_info = board_finishes.top_soldermask if board_finishes.top_soldermask else board_finishes.bottom_soldermask if board_finishes.bottom_soldermask else none %}
-                    {% if mask_info and mask_info.color %}
-                        {% if mask_info.color_hex %}
-                        <span class="color-swatch" style="background: {{ mask_info.color_hex }};"></span>
-                        {% endif %}
-                        <span>{{ mask_info.color }}</span>
-                    {% else %}
-                        <span>—</span>
-                    {% endif %}
-                </span>
-            </div>
-            {% endif %}
-            {% if board_finishes.top_silkscreen or board_finishes.bottom_silkscreen %}
-            <div class="summary-item">
-                <span class="summary-label">Silkscreen:</span>
-                <span class="summary-value">
-                    {% set silk_info = board_finishes.top_silkscreen if board_finishes.top_silkscreen else board_finishes.bottom_silkscreen if board_finishes.bottom_silkscreen else none %}
-                    {% if silk_info and silk_info.color %}
-                        {% if silk_info.color_hex %}
-                        <span class="color-swatch" style="background: {{ silk_info.color_hex }};"></span>
-                        {% endif %}
-                        <span>{{ silk_info.color }}</span>
-                    {% else %}
-                        <span>—</span>
-                    {% endif %}
-                </span>
-            </div>
-            {% endif %}
+        <div class="summary-item">
+            <span class="summary-label">Copper Layers:</span>
+            <span class="summary-value">{{ stackup.copper_layer_count }}</span>
+        </div>
+        {% if stackup.adhesive_layer_count > 0 %}
+        <div class="summary-item">
+            <span class="summary-label">Adhesive Layers:</span>
+            <span class="summary-value">{{ stackup.adhesive_layer_count }}</span>
+        </div>
+        {% endif %}
+        {% if stackup.soldermask_color %}
+        <div class="summary-item">
+            <span class="summary-label">Soldermask:</span>
+            <span class="summary-value">
+                {% if stackup.soldermask_color_hex %}
+                <span class="color-swatch" style="background-color: {{ stackup.soldermask_color_hex }};"></span>
+                {% endif %}
+                {{ stackup.soldermask_color }}
+            </span>
+        </div>
+        {% endif %}
+        {% if stackup.silkscreen_color %}
+        <div class="summary-item">
+            <span class="summary-label">Silkscreen:</span>
+            <span class="summary-value">
+                {% if stackup.silkscreen_color_hex %}
+                <span class="color-swatch" style="background-color: {{ stackup.silkscreen_color_hex }};"></span>
+                {% endif %}
+                {{ stackup.silkscreen_color }}
+            </span>
+        </div>
         {% endif %}
     </div>
-    {% endif %}
-    <table>
-        <thead>
-            <tr>
-                <th class="col-number">#</th>
-                <th>Layer Name</th>
-                <th>Type</th>
-                <th class="text-right col-thickness">Thickness (mils)</th>
-                <th class="col-material">Material</th>
-                <th class="text-right col-dk">Dk</th>
-                <th class="text-right col-dk">Loss Tan</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for layer in stackup.layers %}
-            <tr class="{% if layer.is_copper %}row-copper{% elif layer.is_dielectric %}row-dielectric{% endif %}">
-                <td class="text-center">{{ layer.number }}</td>
-                <td>{% if layer.is_copper %}<strong>{{ layer.name }}</strong>{% else %}{{ layer.name }}{% endif %}</td>
-                <td>{{ layer.layer_type }}</td>
-                <td class="text-right">{% if layer.thickness_mils %}{{ layer.thickness_mils|round(1) }}{% else %}—{% endif %}</td>
+    <div class="stackup-table-container">
+        <table class="stackup-table">
+            <thead>
+                <tr>
+                    <th class="col-visual"></th>
+                    <th class="col-number">#</th>
+                    <th>Layer Name</th>
+                    <th>Type</th>
+                    <th class="col-thickness">Thickness (mm)</th>
+                    <th class="col-thickness">Thickness (mils)</th>
+                    {% if stackup.has_copper_weight %}
+                    <th class="text-right col-cu-weight">Cu (oz)</th>
+                    {% endif %}
+                    <th class="col-material">Material</th>
+                    {% if stackup.has_finish %}
+                    <th class="col-finish">Finish</th>
+                    {% endif %}
+                    <th class="text-right col-dk">Dk</th>
+                    <th class="text-right col-dk">Loss Tan</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for layer in stackup.layers %}
+                <tr class="{% if layer.is_copper %}row-copper{% elif layer.is_coating %}row-coating{% elif layer.is_dielectric %}row-dielectric{% else %}row-other{% endif %}">
+                    <td class="thickness-visual">
+                        {% if layer.visual_thickness_mils %}
+                        <div class="thickness-bar thickness-bar-{{ layer.layer_function|lower|replace(' ', '-')|replace('(', '')|replace(')', '') }} {% if layer.color and (layer.color|lower == 'white' or layer.color|lower == 'natural') %}bar-light-color{% endif %}"
+                             style="height: {{ (layer.visual_thickness_mils / 10.0 * 16)|round(1) }}px;{% if layer.color_hex %} background: {{ layer.color_hex }};{% endif %}"
+                             title="{{ layer.layer_type }}: {{ layer.thickness_mils|round(2) if layer.thickness_mils else '0.00' }} mil{% if layer.color %} ({{ layer.color }}){% endif %}"></div>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">{{ layer.number }}</td>
+                    <td>{{ layer.name }}</td>
+                    <td>{{ layer.layer_type }}</td>
+                    <td>
+                        {% if layer.thickness_mm %}
+                        {{ layer.thickness_mm|round(4) }}
+                        {% if layer.tol_plus_mm and layer.tol_minus_mm %}
+                            {% if layer.tol_percent %}
+                                {% if layer.tol_plus_mm == layer.tol_minus_mm and layer.tol_plus_mm != 0.0 %}
+                                    <span class="tolerance"> ±{{ layer.tol_plus_mm|round(1) }}%</span>
+                                {% elif layer.tol_plus_mm != 0.0 or layer.tol_minus_mm != 0.0 %}
+                                    <span class="tolerance"> +{{ layer.tol_plus_mm|round(1) }}%/-{{ layer.tol_minus_mm|round(1) }}%</span>
+                                {% endif %}
+                            {% else %}
+                                {% if layer.tol_plus_mm == layer.tol_minus_mm and layer.tol_plus_mm != 0.0 %}
+                                    <span class="tolerance"> ±{{ layer.tol_plus_mm|round(4) }}</span>
+                                {% elif layer.tol_plus_mm != 0.0 or layer.tol_minus_mm != 0.0 %}
+                                    <span class="tolerance"> +{{ layer.tol_plus_mm|round(4) }}/-{{ layer.tol_minus_mm|round(4) }}</span>
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if layer.thickness_mils %}
+                        {{ layer.thickness_mils|round(2) }}
+                        {% if layer.tol_plus_mils and layer.tol_minus_mils %}
+                            {% if layer.tol_percent %}
+                                {% if layer.tol_plus_mils == layer.tol_minus_mils and layer.tol_plus_mils != 0.0 %}
+                                    <span class="tolerance"> ±{{ layer.tol_plus_mils|round(1) }}%</span>
+                                {% elif layer.tol_plus_mils != 0.0 or layer.tol_minus_mils != 0.0 %}
+                                    <span class="tolerance"> +{{ layer.tol_plus_mils|round(1) }}%/-{{ layer.tol_minus_mils|round(1) }}%</span>
+                                {% endif %}
+                            {% else %}
+                                {% if layer.tol_plus_mils == layer.tol_minus_mils and layer.tol_plus_mils != 0.0 %}
+                                    <span class="tolerance"> ±{{ layer.tol_plus_mils|round(2) }}</span>
+                                {% elif layer.tol_plus_mils != 0.0 or layer.tol_minus_mils != 0.0 %}
+                                    <span class="tolerance"> +{{ layer.tol_plus_mils|round(2) }}/-{{ layer.tol_minus_mils|round(2) }}</span>
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+                    {% endif %}
+                </td>
+                {% if stackup.has_copper_weight %}
+                <td class="text-right">{% if layer.copper_weight_oz %}{{ layer.copper_weight_oz|round(2) }}{% endif %}</td>
+                {% endif %}
                 <td>{{ layer.material }}</td>
-                <td class="text-right">{% if layer.dk %}{{ layer.dk|round(2) }}{% else %}—{% endif %}</td>
-                <td class="text-right">{% if layer.loss_tangent %}{{ layer.loss_tangent|round(4) }}{% else %}—{% endif %}</td>
+                {% if stackup.has_finish %}
+                <td>{% if layer.surface_finish %}{{ layer.surface_finish }}{% endif %}</td>
+                {% endif %}
+                <td class="text-right">{% if layer.dk %}{{ layer.dk|round(2) }}{% endif %}</td>
+                <td class="text-right">{% if layer.loss_tangent %}{{ layer.loss_tangent|round(4) }}{% endif %}</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    {% if stackup.via and stackups|length == 1 %}
+    <!-- Via offset: thead height = th padding (4+4) + text (11px * 1.5 line-height = 16.5) + border (1) = 25.5 ≈ 26px -->
+    <div class="via-overlay" style="top: calc({{ stackup.via.start_offset_px }}px + 26px); height: {{ stackup.via.height_px }}px;">
+        <div class="via-hole"></div>
+        <div class="via-barrel-left"></div>
+        <div class="via-barrel-right"></div>
+    </div>
+    {% endif %}
+    </div>
+    {% endfor %}
     {% endif %}
 
     {% if drill %}

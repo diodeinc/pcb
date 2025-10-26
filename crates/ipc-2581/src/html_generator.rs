@@ -1,8 +1,8 @@
 use crate::types::Units;
 use crate::{
     board_outline::{render_board_outline_svg, PadShape},
-    geometry, Ipc2581, LayerFunction, PlatingStatus, Side, StandardPrimitive, UserPrimitive,
-    UserShapeType,
+    geometry, FinishType, Ipc2581, LayerFunction, PlatingStatus, Side, StandardPrimitive,
+    UserPrimitive, UserShapeType,
 };
 use base64::Engine;
 use minijinja::{context, Environment};
@@ -70,20 +70,55 @@ struct StackupLayer {
     number: usize,
     name: String,
     layer_type: String,
-    thickness_mils: Option<f64>,
+    thickness_mils: Option<f64>,        // Actual thickness from spec
+    thickness_mm: Option<f64>,          // Actual thickness from spec
+    visual_thickness_mils: Option<f64>, // For visualization (may have default for paste)
+    tol_plus_mm: Option<f64>,           // Tolerance in mm
+    tol_minus_mm: Option<f64>,          // Tolerance in mm
+    tol_plus_mils: Option<f64>,         // Tolerance in mils
+    tol_minus_mils: Option<f64>,        // Tolerance in mils
+    tol_percent: bool,                  // True if tolerances are percentages
+    copper_weight_oz: Option<f64>,      // Only from spec, not calculated
     material: String,
     dk: Option<f64>,
     loss_tangent: Option<f64>,
+    surface_finish: Option<String>, // Surface finish type (ENIG-G, OSP, etc.)
+    color: Option<String>,          // Layer color (for soldermask, silkscreen, etc.)
+    color_hex: Option<String>,      // Hex color code for visualization
+    layer_function: String,         // Store layer function for visual coding
     is_copper: bool,
     is_dielectric: bool,
+    is_coating: bool,
+}
+
+#[derive(Serialize)]
+struct ViaVisualization {
+    start_offset_px: f64, // Distance from top of visual column to via start (center of first copper)
+    height_px: f64,       // Total height of via from center of first copper to center of last copper
 }
 
 #[derive(Serialize)]
 struct StackupInfo {
+    name: String,
     layers: Vec<StackupLayer>,
     where_measured: Option<String>,
     overall_thickness_mils: Option<f64>,
     overall_thickness_mm: Option<f64>,
+    copper_layer_count: usize,
+    diel_base_count: usize,
+    core_count: usize,
+    prepreg_count: usize,
+    bond_ply_count: usize,
+    coverlay_count: usize,
+    total_dielectric_count: usize,
+    adhesive_layer_count: usize, // All types of adhesive (DielAdhv, ConductiveAdhesive, Glue)
+    has_copper_weight: bool, // True if any layer has copper weight data
+    has_finish: bool,        // True if any layer has finish data
+    silkscreen_color: Option<String>, // Silkscreen color name (assumes same for top/bottom)
+    silkscreen_color_hex: Option<String>, // Silkscreen color hex code
+    soldermask_color: Option<String>, // Soldermask color name (assumes same for top/bottom)
+    soldermask_color_hex: Option<String>, // Soldermask color hex code
+    via: Option<ViaVisualization>, // Via visualization from first to last copper layer
 }
 
 #[derive(Serialize)]
@@ -119,7 +154,7 @@ fn get_color_hex(color_name: &str) -> Option<String> {
         return Some(format!("#{}", &trimmed[0..6]));
     }
 
-    // Map common color names to hex
+    // Map common color names to hex (matching IPC-2581 ColorTerm enumeration)
     match color_name.to_lowercase().as_str() {
         "black" => Some("#000000".to_string()),
         "white" => Some("#FFFFFF".to_string()),
@@ -127,8 +162,53 @@ fn get_color_hex(color_name: &str) -> Option<String> {
         "red" => Some("#8B0000".to_string()),
         "blue" => Some("#00008B".to_string()),
         "yellow" => Some("#FFD700".to_string()),
+        "brown" => Some("#8B4513".to_string()),
+        "orange" => Some("#FF8C00".to_string()),
+        "pink" => Some("#FFC0CB".to_string()),
+        "purple" => Some("#800080".to_string()),
+        "gray" | "grey" => Some("#808080".to_string()),
         _ => None, // Unknown color
     }
+}
+
+/// Extract color name and hex from a Spec, trying multiple methods per IPC-2581 spec:
+/// 1. ColorTerm element (e.g., <ColorTerm name="GREEN"/>)
+/// 2. Color element (e.g., <Color r="0" g="255" b="0"/>)
+/// 3. Property text (e.g., <Property text="Color : Green"/>)
+fn extract_color_from_spec(spec: &crate::Spec) -> (Option<String>, Option<String>) {
+    // Priority 1: ColorTerm element
+    if let Some(color_term) = &spec.color_term {
+        let color_hex = get_color_hex(color_term);
+        return (Some(color_term.clone()), color_hex);
+    }
+
+    // Priority 2: Color RGB element
+    if let Some((r, g, b)) = spec.color_rgb {
+        let color_hex = Some(format!("#{:02X}{:02X}{:02X}", r, g, b));
+        // Try to find a matching color name
+        let color_name = match (r, g, b) {
+            (0, 0, 0) => "Black",
+            (255, 255, 255) => "White",
+            _ => "RGB", // Generic name for custom RGB colors
+        };
+        return (Some(color_name.to_string()), color_hex);
+    }
+
+    // Priority 3: Property text with "Color :" or "Color:"
+    let color = spec.properties.iter().find_map(|prop| {
+        if prop.starts_with("Color :") || prop.starts_with("Color:") {
+            Some(prop.split(':').nth(1)?.trim().to_string())
+        } else {
+            None
+        }
+    });
+
+    if let Some(color_name) = color {
+        let color_hex = get_color_hex(&color_name);
+        return (Some(color_name), color_hex);
+    }
+
+    (None, None)
 }
 
 #[derive(Serialize)]
@@ -212,7 +292,7 @@ pub fn generate_html(doc: &Ipc2581, xml: &str, filename: &str) -> String {
     let compressed_size = (compressed_xml_b64.len() as f64 * 0.75) as usize;
 
     let board_outline_svg = extract_board_outline(doc);
-    let stackup = extract_stackup(doc);
+    let stackups = extract_stackup(doc);
     let board_finishes = extract_board_finishes(doc);
     let drill = extract_drill_info(doc);
     let bom = extract_bom(doc);
@@ -227,7 +307,7 @@ pub fn generate_html(doc: &Ipc2581, xml: &str, filename: &str) -> String {
                 compressed_size_mb: compressed_size as f64 / 1_000_000.0,
             },
             board_outline_svg,
-            stackup,
+            stackups,
             board_finishes,
             component_info => extract_component_info(doc),
             connectivity_info => extract_connectivity_info(doc),
@@ -321,7 +401,7 @@ fn extract_board_summary(doc: &Ipc2581) -> Option<BoardSummary> {
         other,
     };
 
-    let board_thickness = ecad.cad_data.stackup.as_ref().and_then(|stackup| {
+    let board_thickness = ecad.cad_data.stackups.first().and_then(|stackup| {
         stackup.overall_thickness.map(|thickness_mm| {
             // Note: thickness is in mm after parsing, convert to mils
             BoardThickness {
@@ -547,12 +627,13 @@ fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
     Some(render_board_outline_svg(board_data))
 }
 
-fn extract_stackup(doc: &Ipc2581) -> Option<StackupInfo> {
-    let ecad = doc.ecad()?;
-    let stackup = ecad.cad_data.stackup.as_ref()?;
+fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
+    let Some(ecad) = doc.ecad() else {
+        return Vec::new();
+    };
 
-    if stackup.layers.is_empty() {
-        return None;
+    if ecad.cad_data.stackups.is_empty() {
+        return Vec::new();
     }
 
     let mut layer_map = std::collections::HashMap::new();
@@ -560,83 +641,334 @@ fn extract_stackup(doc: &Ipc2581) -> Option<StackupInfo> {
         layer_map.insert(doc.resolve(layer.name), layer);
     }
 
-    // Filter to only show conductor and dielectric layers (normalized view)
-    let layers: Vec<StackupLayer> = stackup
-        .layers
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, stackup_layer)| {
-            let layer_ref = doc.resolve(stackup_layer.layer_ref);
-            let layer_def = layer_map.get(layer_ref)?;
+    let mut stackup_infos = Vec::new();
 
-            // Only include conductor and dielectric layers in the stackup table
-            let is_copper = is_copper_layer(layer_def.layer_function);
-            let is_dielectric = is_dielectric_layer(layer_def.layer_function);
+    // Create separate StackupInfo for each stackup
+    for stackup in &ecad.cad_data.stackups {
+        let mut copper_layer_count = 0;
+        let mut diel_base_count = 0;
+        let mut core_count = 0;
+        let mut prepreg_count = 0;
+        let mut bond_ply_count = 0;
+        let mut coverlay_count = 0;
+        let mut adhesive_layer_count = 0;
+        let mut has_copper_weight = false;
+        let mut has_finish = false;
 
-            if !is_copper && !is_dielectric {
-                return None;
+        let layers: Vec<StackupLayer> = stackup
+            .layers
+            .iter()
+            .filter_map(|stackup_layer| {
+                let layer_ref = doc.resolve(stackup_layer.layer_ref);
+                let layer_def = layer_map.get(layer_ref)?;
+
+                // Filter out DOCUMENT, SILKSCREEN, and LEGEND layers - these are not physical stackup layers
+                // Silkscreen will be shown in the summary table instead
+                if matches!(
+                    layer_def.layer_function,
+                    LayerFunction::Document | LayerFunction::Silkscreen | LayerFunction::Legend
+                ) {
+                    return None;
+                }
+
+                let is_copper = is_copper_layer(layer_def.layer_function);
+                let is_dielectric = is_dielectric_layer(layer_def.layer_function);
+                let is_coating = is_coating_layer(layer_def.layer_function);
+
+                // Count layer types
+                if is_copper {
+                    copper_layer_count += 1;
+                }
+
+                // Count all dielectric types (excluding adhesives - they get their own category)
+                match layer_def.layer_function {
+                    LayerFunction::DielBase => diel_base_count += 1,
+                    LayerFunction::DielCore => core_count += 1,
+                    LayerFunction::DielPreg => prepreg_count += 1,
+                    LayerFunction::DielBondPly => bond_ply_count += 1,
+                    LayerFunction::DielCoverlay => coverlay_count += 1,
+                    _ => {}
+                }
+
+                // Count all adhesive types separately
+                match layer_def.layer_function {
+                    LayerFunction::DielAdhv
+                    | LayerFunction::ConductiveAdhesive
+                    | LayerFunction::Glue => {
+                        adhesive_layer_count += 1;
+                    }
+                    _ => {}
+                }
+
+                let thickness_mm = stackup_layer.thickness;
+                let thickness_mils =
+                    thickness_mm.map(|t_mm| crate::units::from_mm(t_mm, Units::Mils));
+
+                // Filter out paste layers with no thickness
+                if matches!(
+                    layer_def.layer_function,
+                    LayerFunction::Solderpaste | LayerFunction::Pastemask
+                ) && thickness_mils.unwrap_or(0.0) == 0.0
+                {
+                    return None;
+                }
+
+                let visual_thickness_mils = thickness_mils;
+
+                // Parse tolerances - handle both absolute and percentage
+                let (tol_plus_mm, tol_minus_mm, tol_plus_mils, tol_minus_mils) = if stackup_layer
+                    .tol_percent
+                {
+                    // Percentage - keep as-is for both
+                    (
+                        stackup_layer.tol_plus,
+                        stackup_layer.tol_minus,
+                        stackup_layer.tol_plus,
+                        stackup_layer.tol_minus,
+                    )
+                } else {
+                    // Absolute values - tol_plus/minus are already in mm from parser
+                    let tol_mm_plus = stackup_layer.tol_plus;
+                    let tol_mm_minus = stackup_layer.tol_minus;
+                    let tol_mils_plus = tol_mm_plus.map(|t| crate::units::from_mm(t, Units::Mils));
+                    let tol_mils_minus =
+                        tol_mm_minus.map(|t| crate::units::from_mm(t, Units::Mils));
+                    (tol_mm_plus, tol_mm_minus, tol_mils_plus, tol_mils_minus)
+                };
+
+                // Get spec for this layer to extract copper weight, surface finish, and color
+                let spec = stackup_layer
+                    .spec_ref
+                    .as_ref()
+                    .and_then(|spec_ref| ecad.cad_header.specs.get(spec_ref));
+
+                // Copper weight: ONLY from spec, don't calculate
+                let copper_weight_oz = if is_copper {
+                    spec.and_then(|s| s.copper_weight_oz)
+                } else {
+                    None
+                };
+
+                if copper_weight_oz.is_some() {
+                    has_copper_weight = true;
+                }
+
+                // Extract surface finish from Spec
+                let surface_finish = spec
+                    .and_then(|s| s.surface_finish.as_ref())
+                    .map(|sf| format_finish_type(sf.finish_type));
+
+                if surface_finish.is_some() {
+                    has_finish = true;
+                }
+
+                // Extract color from Spec (ColorTerm, Color RGB, or Property text)
+                let (color, color_hex) = spec.map(extract_color_from_spec).unwrap_or((None, None));
+
+                // Use sequence number from XML if available, otherwise use index
+                let layer_num = stackup_layer.layer_number.unwrap_or(0) as usize;
+
+                Some(StackupLayer {
+                    number: layer_num,
+                    name: layer_ref.to_string(),
+                    layer_type: format_layer_function(layer_def.layer_function).to_string(),
+                    thickness_mils,
+                    thickness_mm,
+                    visual_thickness_mils,
+                    tol_plus_mm,
+                    tol_minus_mm,
+                    tol_plus_mils,
+                    tol_minus_mils,
+                    tol_percent: stackup_layer.tol_percent,
+                    copper_weight_oz,
+                    material: stackup_layer
+                        .material
+                        .map(|m| doc.resolve(m).to_string())
+                        .unwrap_or_else(|| "—".to_string()),
+                    // Only include Dk and loss tangent for dielectric layers
+                    dk: if is_dielectric {
+                        stackup_layer.dielectric_constant
+                    } else {
+                        None
+                    },
+                    loss_tangent: if is_dielectric {
+                        stackup_layer.loss_tangent
+                    } else {
+                        None
+                    },
+                    surface_finish,
+                    color,
+                    color_hex,
+                    layer_function: format_layer_function(layer_def.layer_function).to_string(),
+                    is_copper,
+                    is_dielectric,
+                    is_coating,
+                })
+            })
+            .collect();
+
+        if layers.is_empty() {
+            continue;
+        }
+
+        let where_measured = stackup.where_measured.map(|wm| {
+            use crate::WhereMeasured;
+            match wm {
+                WhereMeasured::Metal => "Metal".to_string(),
+                WhereMeasured::Mask => "Mask".to_string(),
+                WhereMeasured::Laminate => "Laminate".to_string(),
+                WhereMeasured::Other => "Other".to_string(),
+            }
+        });
+
+        let overall_thickness_mils = stackup
+            .overall_thickness
+            .map(|t_mm| crate::units::from_mm(t_mm, Units::Mils));
+
+        let overall_thickness_mm = stackup.overall_thickness;
+
+        let total_dielectric_count =
+            diel_base_count + core_count + prepreg_count + bond_ply_count + coverlay_count;
+
+        // Extract silkscreen color from stackup layers (assume same color for top/bottom)
+        let (silkscreen_color, silkscreen_color_hex) = stackup
+            .layers
+            .iter()
+            .find_map(|stackup_layer| {
+                let layer_ref = doc.resolve(stackup_layer.layer_ref);
+                let layer_def = layer_map.get(layer_ref)?;
+
+                // Check if this is a silkscreen or legend layer
+                if !matches!(
+                    layer_def.layer_function,
+                    LayerFunction::Silkscreen | LayerFunction::Legend
+                ) {
+                    return None;
+                }
+
+                // Extract color from spec if available
+                let spec = stackup_layer
+                    .spec_ref
+                    .as_ref()
+                    .and_then(|spec_ref| ecad.cad_header.specs.get(spec_ref));
+
+                let (color, color_hex) = spec.map(extract_color_from_spec).unwrap_or((None, None));
+
+                color.as_ref()?;
+                Some((color, color_hex))
+            })
+            .unwrap_or((None, None));
+
+        // Extract soldermask color from stackup layers (assume same color for top/bottom)
+        let (soldermask_color, soldermask_color_hex) = stackup
+            .layers
+            .iter()
+            .find_map(|stackup_layer| {
+                let layer_ref = doc.resolve(stackup_layer.layer_ref);
+                let layer_def = layer_map.get(layer_ref)?;
+
+                // Check if this is a soldermask layer
+                if layer_def.layer_function != LayerFunction::Soldermask {
+                    return None;
+                }
+
+                // Extract color from spec if available
+                let spec = stackup_layer
+                    .spec_ref
+                    .as_ref()
+                    .and_then(|spec_ref| ecad.cad_header.specs.get(spec_ref));
+
+                let (color, color_hex) = spec.map(extract_color_from_spec).unwrap_or((None, None));
+
+                color.as_ref()?;
+                Some((color, color_hex))
+            })
+            .unwrap_or((None, None));
+
+        // Calculate via visualization (from first copper to last copper layer)
+        let via = if copper_layer_count >= 2 {
+            let mut cumulative_height = 0.0;
+            let mut first_copper_row_center: Option<f64> = None;
+            let mut last_copper_row_center: Option<f64> = None;
+
+            for layer in &layers {
+                // Calculate bar height from thickness
+                let bar_height_px = if let Some(thickness_mils) = layer.visual_thickness_mils {
+                    (thickness_mils / 10.0) * 16.0
+                } else {
+                    0.0  // No bar, but row still exists
+                };
+
+                // Cell padding (1px top + 1px bottom)
+                let cell_padding = 2.0;
+
+                // Minimum row height is determined by text content in cells
+                // Font size 11px (table font-size) * line-height 1.5 = 16.5px
+                // Plus cell padding = ~18.5px minimum
+                let min_text_height = 16.5 + cell_padding;
+
+                // Actual row height is the maximum of:
+                // 1. Minimum text height (ensures rows don't collapse when bars are small)
+                // 2. Bar height + padding (for thick layers that exceed text height)
+                let row_height_px = f64::max(min_text_height, bar_height_px + cell_padding);
+
+                // Calculate center of this row
+                let row_center = cumulative_height + (row_height_px / 2.0);
+
+                if layer.is_copper {
+                    if first_copper_row_center.is_none() {
+                        first_copper_row_center = Some(row_center);
+                    }
+                    last_copper_row_center = Some(row_center);
+                }
+
+                cumulative_height += row_height_px;
             }
 
-            Some(StackupLayer {
-                number: idx + 1,
-                name: layer_ref.to_string(),
-                layer_type: format_layer_function(layer_def.layer_function).to_string(),
-                // Note: thickness is in mm after parsing, convert to mils
-                thickness_mils: stackup_layer
-                    .thickness
-                    .map(|t_mm| crate::units::from_mm(t_mm, Units::Mils)),
-                material: stackup_layer
-                    .material
-                    .map(|m| doc.resolve(m).to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-                // Only include Dk and loss tangent for dielectric layers
-                dk: if is_dielectric {
-                    stackup_layer.dielectric_constant
-                } else {
-                    None
-                },
-                loss_tangent: if is_dielectric {
-                    stackup_layer.loss_tangent
-                } else {
-                    None
-                },
-                is_copper,
-                is_dielectric,
-            })
-        })
-        .collect();
+            if let (Some(first_center), Some(last_center)) = (first_copper_row_center, last_copper_row_center) {
+                // Via spans from center of first copper row to center of last copper row
+                // Extend by 2px up and 2px down to account for copper thickness
+                Some(ViaVisualization {
+                    start_offset_px: first_center - 2.0,
+                    height_px: (last_center - first_center) + 4.0,  // +2px on top, +2px on bottom
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-    if layers.is_empty() {
-        return None;
+        stackup_infos.push(StackupInfo {
+            name: doc.resolve(stackup.name).to_string(),
+            layers,
+            where_measured,
+            overall_thickness_mils,
+            overall_thickness_mm,
+            copper_layer_count,
+            diel_base_count,
+            core_count,
+            prepreg_count,
+            bond_ply_count,
+            coverlay_count,
+            total_dielectric_count,
+            adhesive_layer_count,
+            has_copper_weight,
+            has_finish,
+            silkscreen_color,
+            silkscreen_color_hex,
+            soldermask_color,
+            soldermask_color_hex,
+            via,
+        });
     }
 
-    let where_measured = stackup.where_measured.map(|wm| {
-        use crate::WhereMeasured;
-        match wm {
-            WhereMeasured::Metal => "Metal".to_string(),
-            WhereMeasured::Mask => "Mask".to_string(),
-            WhereMeasured::Laminate => "Laminate".to_string(),
-            WhereMeasured::Other => "Other".to_string(),
-        }
-    });
-
-    let overall_thickness_mils = stackup
-        .overall_thickness
-        .map(|t_mm| crate::units::from_mm(t_mm, Units::Mils));
-
-    let overall_thickness_mm = stackup.overall_thickness;
-
-    Some(StackupInfo {
-        layers,
-        where_measured,
-        overall_thickness_mils,
-        overall_thickness_mm,
-    })
+    stackup_infos
 }
 
 fn extract_board_finishes(doc: &Ipc2581) -> Option<BoardFinishes> {
     let ecad = doc.ecad()?;
-    let stackup = ecad.cad_data.stackup.as_ref();
+    let stackup = ecad.cad_data.stackups.first();
 
     // Build layer map
     let mut layer_map = std::collections::HashMap::new();
@@ -658,49 +990,38 @@ fn extract_board_finishes(doc: &Ipc2581) -> Option<BoardFinishes> {
                     .thickness
                     .map(|t_mm| crate::units::from_mm(t_mm, Units::Mils));
 
-                // Extract color from spec if available
-                let color = stackup_layer.spec_ref.and_then(|spec_name| {
-                    ecad.cad_header.specs.get(&spec_name).and_then(|spec| {
-                        // Look for "Color : X" in properties
-                        spec.properties.iter().find_map(|prop| {
-                            if prop.starts_with("Color :") || prop.starts_with("Color:") {
-                                Some(prop.split(':').nth(1)?.trim().to_string())
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                });
+                // Extract color from spec if available (ColorTerm, Color RGB, or Property text)
+                let (color, color_hex) = stackup_layer
+                    .spec_ref
+                    .and_then(|spec_name| ecad.cad_header.specs.get(&spec_name))
+                    .map(extract_color_from_spec)
+                    .unwrap_or((None, None));
 
                 match layer_def.layer_function {
                     LayerFunction::Soldermask if layer_def.side == Some(Side::Top) => {
-                        let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                         top_soldermask = Some(FinishInfo {
                             color: color.clone(),
-                            color_hex,
+                            color_hex: color_hex.clone(),
                             thickness_mils,
                         });
                     }
                     LayerFunction::Soldermask if layer_def.side == Some(Side::Bottom) => {
-                        let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                         bottom_soldermask = Some(FinishInfo {
                             color: color.clone(),
-                            color_hex,
+                            color_hex: color_hex.clone(),
                             thickness_mils,
                         });
                     }
                     LayerFunction::Silkscreen if layer_def.side == Some(Side::Top) => {
-                        let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                         top_silkscreen = Some(FinishInfo {
                             color: color.clone(),
-                            color_hex,
+                            color_hex: color_hex.clone(),
                             thickness_mils,
                         });
                     }
                     LayerFunction::Silkscreen if layer_def.side == Some(Side::Bottom) => {
-                        let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                         bottom_silkscreen = Some(FinishInfo {
-                            color: color.clone(),
+                            color,
                             color_hex,
                             thickness_mils,
                         });
@@ -715,62 +1036,56 @@ fn extract_board_finishes(doc: &Ipc2581) -> Option<BoardFinishes> {
     for layer in &ecad.cad_data.layers {
         let layer_name = doc.resolve(layer.name);
 
-        // Extract color from spec properties
-        let color = layer_name.split('.').next().and_then(|_base_name| {
-            // Try to find spec with this layer name
-            for spec in ecad.cad_header.specs.values() {
-                let spec_name = doc.resolve(spec.name);
-                if spec_name.contains(layer_name) || layer_name.contains(spec_name) {
-                    // Look for "Color : X" in properties
-                    if let Some(color_val) = spec.properties.iter().find_map(|prop| {
-                        if prop.starts_with("Color :") || prop.starts_with("Color:") {
-                            Some(prop.split(':').nth(1)?.trim().to_string())
-                        } else {
-                            None
+        // Extract color from spec (try to find spec with this layer name)
+        let (color, color_hex) = layer_name
+            .split('.')
+            .next()
+            .and_then(|_base_name| {
+                // Try to find spec with this layer name
+                for spec in ecad.cad_header.specs.values() {
+                    let spec_name = doc.resolve(spec.name);
+                    if spec_name.contains(layer_name) || layer_name.contains(spec_name) {
+                        let (c, ch) = extract_color_from_spec(spec);
+                        if c.is_some() {
+                            return Some((c, ch));
                         }
-                    }) {
-                        return Some(color_val);
                     }
                 }
-            }
-            None
-        });
+                None
+            })
+            .unwrap_or((None, None));
 
         match layer.layer_function {
             LayerFunction::Soldermask
                 if layer.side == Some(Side::Top) && top_soldermask.is_none() =>
             {
-                let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                 top_soldermask = Some(FinishInfo {
-                    color,
-                    color_hex,
+                    color: color.clone(),
+                    color_hex: color_hex.clone(),
                     thickness_mils: None,
                 });
             }
             LayerFunction::Soldermask
                 if layer.side == Some(Side::Bottom) && bottom_soldermask.is_none() =>
             {
-                let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                 bottom_soldermask = Some(FinishInfo {
-                    color,
-                    color_hex,
+                    color: color.clone(),
+                    color_hex: color_hex.clone(),
                     thickness_mils: None,
                 });
             }
             LayerFunction::Silkscreen
                 if layer.side == Some(Side::Top) && top_silkscreen.is_none() =>
             {
-                let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                 top_silkscreen = Some(FinishInfo {
-                    color,
-                    color_hex,
+                    color: color.clone(),
+                    color_hex: color_hex.clone(),
                     thickness_mils: None,
                 });
             }
             LayerFunction::Silkscreen
                 if layer.side == Some(Side::Bottom) && bottom_silkscreen.is_none() =>
             {
-                let color_hex = color.as_ref().and_then(|c| get_color_hex(c));
                 bottom_silkscreen = Some(FinishInfo {
                     color,
                     color_hex,
@@ -1178,24 +1493,75 @@ fn count_drill_info(doc: &Ipc2581, layers: &[crate::Layer], step: &crate::Step) 
 
 fn format_layer_function(func: LayerFunction) -> &'static str {
     match func {
+        // Copper layers
         LayerFunction::Plane => "Plane",
         LayerFunction::Conductor => "Conductor",
         LayerFunction::Signal => "Signal",
         LayerFunction::CondFilm => "Cu Film",
         LayerFunction::CondFoil => "Cu Foil",
+        LayerFunction::Mixed => "Mixed",
+
+        // Coating layers (surface finishes)
+        LayerFunction::CoatingCond => "Coating (Cond)",
+        LayerFunction::CoatingNonCond => "Coating (Non-Cond)",
+
+        // Dielectric layers
         LayerFunction::DielBase => "Diel Base",
         LayerFunction::DielCore => "Core",
         LayerFunction::DielPreg => "Prepreg",
+        LayerFunction::DielAdhv => "Adhesive",
+        LayerFunction::DielBondPly => "Bond Ply",
+        LayerFunction::DielCoverlay => "Coverlay",
+
+        // Soldermask and paste
         LayerFunction::Soldermask => "Soldermask",
         LayerFunction::Solderpaste => "Paste",
+        LayerFunction::Pastemask => "Paste Mask",
+
+        // Silkscreen/Legend
         LayerFunction::Silkscreen => "Silkscreen",
         LayerFunction::Legend => "Legend",
+
+        // Drilling and routing
         LayerFunction::Drill => "Drill",
         LayerFunction::Rout => "Route",
         LayerFunction::VCut => "V-Cut",
+        LayerFunction::Score => "Score",
+        LayerFunction::EdgeChamfer => "Edge Chamfer",
+        LayerFunction::EdgePlating => "Edge Plating",
+
+        // Component layers
+        LayerFunction::ComponentTop => "Component (Top)",
+        LayerFunction::ComponentBottom => "Component (Bottom)",
+        LayerFunction::ComponentEmbedded => "Component (Embedded)",
+        LayerFunction::ComponentFormed => "Component (Formed)",
+        LayerFunction::Assembly => "Assembly",
+
+        // Specialized material layers
+        LayerFunction::ConductiveAdhesive => "Conductive Adhesive",
+        LayerFunction::Glue => "Glue",
+        LayerFunction::HoleFill => "Hole Fill",
+        LayerFunction::SolderBump => "Solder Bump",
+        LayerFunction::Stiffener => "Stiffener",
+        LayerFunction::Capacitive => "Capacitive",
+        LayerFunction::Resistive => "Resistive",
+
+        // Documentation and tooling
         LayerFunction::Document => "Document",
         LayerFunction::Graphic => "Graphic",
-        _ => "Other",
+        LayerFunction::BoardOutline => "Board Outline",
+        LayerFunction::BoardFab => "Board Fab",
+        LayerFunction::Rework => "Rework",
+        LayerFunction::Fixture => "Fixture",
+        LayerFunction::Probe => "Probe",
+        LayerFunction::Courtyard => "Courtyard",
+        LayerFunction::LandPattern => "Land Pattern",
+        LayerFunction::ThievingKeepInout => "Thieving",
+
+        // Composite
+        LayerFunction::StackupComposite => "Stackup Composite",
+
+        LayerFunction::Other => "Other",
     }
 }
 
@@ -1207,12 +1573,55 @@ fn is_copper_layer(func: LayerFunction) -> bool {
             | LayerFunction::Signal
             | LayerFunction::CondFilm
             | LayerFunction::CondFoil
+            | LayerFunction::Mixed
     )
 }
 
 fn is_dielectric_layer(func: LayerFunction) -> bool {
     matches!(
         func,
-        LayerFunction::DielBase | LayerFunction::DielCore | LayerFunction::DielPreg
+        LayerFunction::DielBase
+            | LayerFunction::DielCore
+            | LayerFunction::DielPreg
+            | LayerFunction::DielAdhv
+            | LayerFunction::DielBondPly
+            | LayerFunction::DielCoverlay
     )
+}
+
+fn is_coating_layer(func: LayerFunction) -> bool {
+    matches!(
+        func,
+        LayerFunction::CoatingCond | LayerFunction::CoatingNonCond
+    )
+}
+
+fn format_finish_type(finish_type: FinishType) -> String {
+    use FinishType::*;
+    match finish_type {
+        S => "HASL".to_string(),
+        T => "Tin-Lead".to_string(),
+        X => "Tin-Lead (Unfused)".to_string(),
+        TLU => "Tin-Lead (Unfused)".to_string(),
+        EnigN => "ENIG-N".to_string(),
+        EnigG => "ENIG-G".to_string(),
+        EnepigN => "ENEPIG-N".to_string(),
+        EnepigG => "ENEPIG-G".to_string(),
+        EnepigP => "ENEPIG-P".to_string(),
+        Dig => "DIG".to_string(),
+        IAg => "Immersion Silver".to_string(),
+        ISn => "Immersion Tin".to_string(),
+        Osp => "OSP".to_string(),
+        HtOsp => "HT-OSP".to_string(),
+        N => "None (Bare Copper)".to_string(),
+        NB => "Bare Copper".to_string(),
+        C => "Carbon Contact".to_string(),
+        G => "Gold (Wire Bond)".to_string(),
+        GS => "Gold/Nickel (Soft)".to_string(),
+        GwbOneG => "GWB-1-G".to_string(),
+        GwbOneN => "GWB-1-N".to_string(),
+        GwbTwoG => "GWB-2-G".to_string(),
+        GwbTwoN => "GWB-2-N".to_string(),
+        Other => "Other".to_string(),
+    }
 }

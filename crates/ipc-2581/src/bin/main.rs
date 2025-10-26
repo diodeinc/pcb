@@ -358,7 +358,7 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
         }
 
         // === STACKUP VALIDATION ===
-        if let Some(stackup) = &ecad.cad_data.stackup {
+        if let Some(stackup) = ecad.cad_data.stackups.first() {
             println!("Stackup:");
             println!("  Name: {}", doc.resolve(stackup.name));
             if let Some(thickness) = stackup.overall_thickness {
