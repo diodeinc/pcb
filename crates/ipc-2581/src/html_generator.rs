@@ -1764,6 +1764,21 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
                         _ => copper_layer::LayerSide::Inner,
                     };
                     
+                    // Use layer-specific profile if it exists (rigid-flex), otherwise use step profile
+                    let (outline, cutouts) = if let Some(layer_profile) = &layer.profile {
+                        (&layer_profile.polygon, layer_profile.cutouts.as_slice())
+                    } else {
+                        (board_geom.outline, board_geom.cutouts)
+                    };
+                    
+                    let layer_board_geom = copper_layer::BoardGeometry {
+                        outline,
+                        cutouts,
+                        slots: &slots,
+                        npths: &npths,
+                        pths: &pths,
+                    };
+                    
                     if let Some(svg_doc) = copper_layer::render_copper_layer_svg(
                         layer_feature,
                         layer.layer_function,
@@ -1773,7 +1788,7 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
                         &padstack_map,
                         &standard_primitives,
                         &line_descs,
-                        &board_geom,
+                        &layer_board_geom,
                     ) {
                         result.push(CopperLayerInfo {
                             name: layer_name.to_string(),

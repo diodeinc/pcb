@@ -15,13 +15,32 @@ pub fn create_arc(
     let end_angle = (end_y - center_y).atan2(end_x - center_x);
     let radius = ((start_x - center_x).powi(2) + (start_y - center_y).powi(2)).sqrt();
 
-    let mut sweep_angle = end_angle - start_angle;
-    if clockwise {
-        if sweep_angle > 0.0 {
-            sweep_angle -= 2.0 * std::f64::consts::PI;
-        }
-    } else if sweep_angle < 0.0 {
-        sweep_angle += 2.0 * std::f64::consts::PI;
+    // Compute sweep angle respecting IPC-2581 semantics:
+    // - clockwise flag determines direction
+    // - sweep magnitude can be >180° (long arcs are valid)
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let delta = end_angle - start_angle;
+    
+    // Helper to normalize angle to [0, 2π)
+    let mod_2pi = |mut a: f64| -> f64 {
+        a = a % two_pi;
+        if a < 0.0 { a += two_pi; }
+        a
+    };
+    
+    let mut sweep_angle = if clockwise {
+        // CW sweep is negative in (-2π, 0]
+        let d_ccw = mod_2pi(delta);
+        if d_ccw == 0.0 { 0.0 } else { d_ccw - two_pi }
+    } else {
+        // CCW sweep is positive in [0, 2π)
+        mod_2pi(delta)
+    };
+    
+    // Snap very small angles to zero to avoid spurious tiny arcs
+    let eps = 1e-12;
+    if sweep_angle.abs() < eps {
+        sweep_angle = 0.0;
     }
 
     KurboArc::new(

@@ -200,6 +200,7 @@ pub struct Layer {
     pub layer_function: LayerFunction,
     pub side: Option<Side>,
     pub polarity: Option<Polarity>,
+    pub profile: Option<Profile>, // Layer-specific outline (for rigid-flex)
 }
 
 /// LayerFeature contains features on a layer

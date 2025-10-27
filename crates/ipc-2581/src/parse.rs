@@ -1275,11 +1275,21 @@ impl<'arena> Parser<'arena> {
             .map(|s| self.parse_polarity(s))
             .transpose()?;
 
+        // Parse layer-specific Profile (for rigid-flex)
+        let mut profile = None;
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "Profile" {
+                profile = Some(self.parse_profile(&child)?);
+                break;
+            }
+        }
+
         Ok(Layer {
             name,
             layer_function,
             side,
             polarity,
+            profile,
         })
     }
 
@@ -1346,6 +1356,23 @@ impl<'arena> Parser<'arena> {
         let mut lines = Vec::new();
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
         
+        // Check for Location offset (applies to all geometry in Features)
+        let mut offset_x = 0.0;
+        let mut offset_y = 0.0;
+        for child in features_node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "Location" {
+                offset_x = child.attribute("x")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units))
+                    .unwrap_or(0.0);
+                offset_y = child.attribute("y")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units))
+                    .unwrap_or(0.0);
+                break;
+            }
+        }
+        
         for child in features_node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "Polygon" => {
@@ -1355,7 +1382,7 @@ impl<'arena> Parser<'arena> {
                 }
                 "Polyline" => {
                     // Polyline traces in Features
-                    lines.extend(self.parse_polyline_to_lines(&child, units));
+                    lines.extend(self.parse_polyline_to_lines(&child, units, offset_x, offset_y));
                 }
                 "UserSpecial" => {
                     // UserSpecial contains Contour > Polygon OR Line
@@ -1423,10 +1450,10 @@ impl<'arena> Parser<'arena> {
         })
     }
 
-    fn parse_polyline_to_lines(&mut self, node: &Node, units: Units) -> Vec<ecad::Line> {
+    fn parse_polyline_to_lines(&mut self, node: &Node, units: Units, offset_x: f64, offset_y: f64) -> Vec<ecad::Line> {
         let mut out = Vec::new();
-        let mut current_x = 0.0;
-        let mut current_y = 0.0;
+        let mut current_x = offset_x;
+        let mut current_y = offset_y;
         let mut line_width = 0.25;
         let mut line_end = None;
         
@@ -1434,12 +1461,12 @@ impl<'arena> Parser<'arena> {
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "PolyBegin" => {
-                    current_x = self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units).unwrap_or(0.0);
-                    current_y = self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units).unwrap_or(0.0);
+                    current_x = self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units).unwrap_or(0.0) + offset_x;
+                    current_y = self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units).unwrap_or(0.0) + offset_y;
                 }
                 "PolyStepSegment" => {
-                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units).unwrap_or(0.0);
-                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units).unwrap_or(0.0);
+                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units).unwrap_or(0.0) + offset_x;
+                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units).unwrap_or(0.0) + offset_y;
                     
                     out.push(ecad::Line {
                         start_x: current_x,
@@ -1455,11 +1482,11 @@ impl<'arena> Parser<'arena> {
                 }
                 "PolyStepCurve" => {
                     // Tessellate arc into line segments using kurbo
-                    let end_x = self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units).unwrap_or(0.0);
-                    let end_y = self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units).unwrap_or(0.0);
-                    let center_x = self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units).unwrap_or(0.0);
-                    let center_y = self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units).unwrap_or(0.0);
-                    let clockwise = child.attribute("clockwise").map(|s| s == "true").unwrap_or(true);
+                    let end_x = self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units).unwrap_or(0.0) + offset_x;
+                    let end_y = self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units).unwrap_or(0.0) + offset_y;
+                    let center_x = self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units).unwrap_or(0.0) + offset_x;
+                    let center_y = self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units).unwrap_or(0.0) + offset_y;
+                    let clockwise = self.parse_bool_attr(&child, "clockwise").unwrap_or(true);
                     
                     let arc = crate::geometry::create_arc(current_x, current_y, end_x, end_y, center_x, center_y, clockwise);
                     
@@ -1467,14 +1494,18 @@ impl<'arena> Parser<'arena> {
                     // Use high quality tessellation for accurate curved traces
                     let mut arc_points = vec![(current_x, current_y)];
                     arc.to_cubic_beziers(0.01, |p1, p2, p3| {
+                        // Get the fixed start point (P0) for this bezier segment
+                        let p0x = arc_points.last().unwrap().0;
+                        let p0y = arc_points.last().unwrap().1;
+                        
                         // Sample bezier into 32 segments for smooth, accurate rendering
                         for i in 1..=32 {
                             let t = i as f64 / 32.0;
-                            // Cubic bezier formula: B(t) = (1-t)³P0 + 3(1-t)²t·P1 + 3(1-t)t²·P2 + t³·P3
-                            let prev = arc_points.last().unwrap();
                             let t1 = 1.0 - t;
-                            let px = t1*t1*t1*prev.0 + 3.0*t1*t1*t*p1.x + 3.0*t1*t*t*p2.x + t*t*t*p3.x;
-                            let py = t1*t1*t1*prev.1 + 3.0*t1*t1*t*p1.y + 3.0*t1*t*t*p2.y + t*t*t*p3.y;
+                            // Cubic bezier formula: B(t) = (1-t)³P0 + 3(1-t)²t·P1 + 3(1-t)t²·P2 + t³·P3
+                            // Use fixed P0 for the entire bezier, not the last sampled point
+                            let px = t1*t1*t1*p0x + 3.0*t1*t1*t*p1.x + 3.0*t1*t*t*p2.x + t*t*t*p3.x;
+                            let py = t1*t1*t1*p0y + 3.0*t1*t1*t*p1.y + 3.0*t1*t*t*p2.y + t*t*t*p3.y;
                             arc_points.push((px, py));
                         }
                     });

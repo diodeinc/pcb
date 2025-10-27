@@ -10,6 +10,8 @@ use geo::{Polygon as GeoPolygon, LineString, Coord, BooleanOps, MultiPolygon};
 use std::collections::HashMap;
 use svg::node::element::{path::Data, Path, Circle, Group, Mask, Rectangle, Definitions};
 use svg::Document;
+use lyon_path::{Path as LyonPath, math::Point as LyonPoint};
+use lyon_tessellation::{StrokeOptions, StrokeTessellator, BuffersBuilder, VertexBuffers, StrokeVertex, LineCap, LineJoin};
 
 pub struct BoardGeometry<'a> {
     pub outline: &'a Polygon,
@@ -94,8 +96,8 @@ pub fn render_copper_layer_svg(
 
     let (min_x, min_y, _, _) = geometry::polygon_bounding_box(board_geom.outline, 0.0, 0.0);
 
-    // Scale to 400px display (matching board_outline.rs)
-    let scale = 800.0 / width.max(height);
+    // Scale to 800px display (2x for better debugging)
+    let scale = 1600.0 / width.max(height);
     let padding = 20.0; // Minimal padding for copper layers
     let svg_width = (width * scale).round() + padding * 2.0;
     let svg_height = (height * scale).round() + padding * 2.0;
@@ -357,24 +359,200 @@ fn extract_set_geometry(
     }
 
     // Extract traces from Features > UserSpecial > Line
-    for line in &set.lines {
-        // Create rectangle for line segment
-        let poly = create_line_polygon(
-            line.start_x,
-            line.start_y,
-            line.end_x,
-            line.end_y,
-            line.line_width,
-        );
-        positive_polygons.push(poly);
-        
-        // Add round caps at endpoints (radius = line_width/2)
-        let radius = line.line_width / 2.0;
-        positive_polygons.push(create_circle_polygon(line.start_x, line.start_y, radius, 16));
-        positive_polygons.push(create_circle_polygon(line.end_x, line.end_y, radius, 16));
+    // Use lyon stroke tessellation for manufacturing-grade accuracy
+    if !set.lines.is_empty() {
+        if let Some(line_polys) = stroke_lines_with_lyon(&set.lines) {
+            positive_polygons.extend(line_polys);
+        }
     }
 
     (positive_polygons, negative_polygons)
+}
+
+/// Stroke line segments using lyon for manufacturing-grade accuracy
+/// Groups consecutive connected lines into continuous paths for proper stroking
+fn stroke_lines_with_lyon(lines: &[crate::ecad::Line]) -> Option<Vec<GeoPolygon<f64>>> {
+    if lines.is_empty() {
+        return None;
+    }
+    
+    // Group consecutive lines into continuous paths
+    let paths = group_lines_into_paths(lines);
+    
+    let mut polygons = Vec::new();
+    
+    // Process each continuous path with lyon stroke
+    for (path_lines, line_width) in paths {
+        if path_lines.is_empty() {
+            continue;
+        }
+        
+        let mut builder = LyonPath::builder();
+        
+        // Start path at first line's start point
+        builder.begin(LyonPoint::new(
+            path_lines[0].start_x as f32,
+            path_lines[0].start_y as f32,
+        ));
+        
+        // Add all line endpoints to create continuous path
+        for line in &path_lines {
+            builder.line_to(LyonPoint::new(line.end_x as f32, line.end_y as f32));
+        }
+        
+        builder.end(false);
+        let path = builder.build();
+        
+        // Tessellate the stroke
+        let mut geometry: VertexBuffers<LyonPoint, u16> = VertexBuffers::new();
+        let mut tessellator = StrokeTessellator::new();
+        
+        let stroke_options = StrokeOptions::default()
+            .with_line_width(line_width as f32)
+            .with_line_cap(LineCap::Round)
+            .with_line_join(LineJoin::Round)
+            .with_tolerance(0.001); // 1 micron tolerance
+        
+        tessellator
+            .tessellate_path(
+                &path,
+                &stroke_options,
+                &mut BuffersBuilder::new(&mut geometry, |vertex: StrokeVertex| {
+                    vertex.position()
+                }),
+            )
+            .ok()?;
+        
+        // Convert triangle mesh to polygon outline
+        if let Some(poly) = extract_outline_from_mesh(&geometry) {
+            polygons.push(poly);
+        }
+    }
+    
+    Some(polygons)
+}
+
+/// Group consecutive connected lines into continuous paths
+/// Lines are grouped if they share endpoints and have the same line_width
+fn group_lines_into_paths(lines: &[crate::ecad::Line]) -> Vec<(Vec<crate::ecad::Line>, f64)> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    
+    let mut paths = Vec::new();
+    let mut current_path = vec![lines[0].clone()];
+    let mut current_width = lines[0].line_width;
+    
+    for line in lines.iter().skip(1) {
+        // Check if this line continues from the previous one
+        let last = current_path.last().unwrap();
+        let epsilon = 1e-6;
+        let continues = (last.end_x - line.start_x).abs() < epsilon
+            && (last.end_y - line.start_y).abs() < epsilon
+            && (current_width - line.line_width).abs() < epsilon;
+        
+        if continues {
+            // Add to current path
+            current_path.push(line.clone());
+        } else {
+            // Start new path
+            paths.push((current_path, current_width));
+            current_path = vec![line.clone()];
+            current_width = line.line_width;
+        }
+    }
+    
+    // Don't forget the last path
+    if !current_path.is_empty() {
+        paths.push((current_path, current_width));
+    }
+    
+    paths
+}
+
+/// Extract polygon outline from triangle mesh
+fn extract_outline_from_mesh(buffers: &VertexBuffers<LyonPoint, u16>) -> Option<GeoPolygon<f64>> {
+    if buffers.vertices.is_empty() {
+        return None;
+    }
+    
+    // Build edge map to find boundary edges
+    let mut edges: HashMap<(u64, u64), usize> = HashMap::new();
+    
+    for triangle in buffers.indices.chunks(3) {
+        let i0 = triangle[0] as usize;
+        let i1 = triangle[1] as usize;
+        let i2 = triangle[2] as usize;
+        
+        // Add each edge (sorted vertices as key)
+        for &(a, b) in &[(i0, i1), (i1, i2), (i2, i0)] {
+            let key = if a < b { (a as u64, b as u64) } else { (b as u64, a as u64) };
+            *edges.entry(key).or_insert(0) += 1;
+        }
+    }
+    
+    // Boundary edges appear exactly once
+    let boundary_edges: Vec<(usize, usize)> = edges
+        .iter()
+        .filter(|(_, &count)| count == 1)
+        .map(|((a, b), _)| (*a as usize, *b as usize))
+        .collect();
+    
+    if boundary_edges.is_empty() {
+        return None;
+    }
+    
+    // Build ordered boundary loop
+    let mut coords = Vec::new();
+    let mut visited = vec![false; boundary_edges.len()];
+    visited[0] = true;
+    
+    let (current_v, mut next_v) = boundary_edges[0];
+    coords.push(Coord {
+        x: buffers.vertices[current_v].x as f64,
+        y: buffers.vertices[current_v].y as f64,
+    });
+    
+    // Follow the boundary
+    for _ in 0..boundary_edges.len() {
+        coords.push(Coord {
+            x: buffers.vertices[next_v].x as f64,
+            y: buffers.vertices[next_v].y as f64,
+        });
+        
+        // Find next edge
+        let mut found = false;
+        for (i, &(a, b)) in boundary_edges.iter().enumerate() {
+            if !visited[i] {
+                if a == next_v {
+                    next_v = b;
+                    visited[i] = true;
+                    found = true;
+                    break;
+                } else if b == next_v {
+                    next_v = a;
+                    visited[i] = true;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        
+        if !found {
+            break;
+        }
+    }
+    
+    // Close polygon
+    if !coords.is_empty() && coords[0] != *coords.last().unwrap() {
+        coords.push(coords[0]);
+    }
+    
+    if coords.len() >= 4 {
+        Some(GeoPolygon::new(LineString::from(coords), vec![]))
+    } else {
+        None
+    }
 }
 
 /// Convert trace polylines to filled polygons by stroking with line_width
@@ -528,21 +706,14 @@ fn ipc_polygon_to_geo_polygon(
     let mut coords = Vec::new();
     coords.push(Coord { x: polygon.begin.x + offset_x, y: polygon.begin.y + offset_y });
     
-    let mut current_x = polygon.begin.x;
-    let mut current_y = polygon.begin.y;
-    
     for step in &polygon.steps {
         match step {
             PolyStep::Segment(seg) => {
-                current_x = seg.x;
-                current_y = seg.y;
-                coords.push(Coord { x: current_x + offset_x, y: current_y + offset_y });
+                coords.push(Coord { x: seg.x + offset_x, y: seg.y + offset_y });
             }
             PolyStep::Curve(curve) => {
                 // TODO: Tessellate arc properly
-                current_x = curve.x;
-                current_y = curve.y;
-                coords.push(Coord { x: current_x + offset_x, y: current_y + offset_y });
+                coords.push(Coord { x: curve.x + offset_x, y: curve.y + offset_y });
             }
         }
     }
@@ -638,29 +809,6 @@ fn create_circle_polygon(cx: f64, cy: f64, radius: f64, segments: usize) -> GeoP
     GeoPolygon::new(LineString::from(coords), vec![])
 }
 
-fn create_line_polygon(start_x: f64, start_y: f64, end_x: f64, end_y: f64, width: f64) -> GeoPolygon<f64> {
-    let dx = end_x - start_x;
-    let dy = end_y - start_y;
-    let len = (dx * dx + dy * dy).sqrt();
-    
-    if len < 1e-9 {
-        return create_circle_polygon(start_x, start_y, width / 2.0, 16);
-    }
-    
-    let nx = -dy / len * (width / 2.0);
-    let ny = dx / len * (width / 2.0);
-    
-    let coords = vec![
-        Coord { x: start_x + nx, y: start_y + ny },
-        Coord { x: end_x + nx, y: end_y + ny },
-        Coord { x: end_x - nx, y: end_y - ny },
-        Coord { x: start_x - nx, y: start_y - ny },
-        Coord { x: start_x + nx, y: start_y + ny },
-    ];
-    
-    GeoPolygon::new(LineString::from(coords), vec![])
-}
-
 fn create_rectangle_polygon(cx: f64, cy: f64, width: f64, height: f64, rotation: f64) -> GeoPolygon<f64> {
     let half_w = width / 2.0;
     let half_h = height / 2.0;
@@ -717,7 +865,7 @@ fn create_oval_polygon(cx: f64, cy: f64, width: f64, height: f64, rotation: f64)
     GeoPolygon::new(LineString::from(coords), vec![])
 }
 
-fn create_rounded_rect_polygon(cx: f64, cy: f64, width: f64, height: f64, corner_radius: f64, rotation: f64) -> GeoPolygon<f64> {
+fn create_rounded_rect_polygon(cx: f64, cy: f64, width: f64, height: f64, _corner_radius: f64, rotation: f64) -> GeoPolygon<f64> {
     // Simplified - just use rectangle for now
     create_rectangle_polygon(cx, cy, width, height, rotation)
 }

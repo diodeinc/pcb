@@ -27,8 +27,7 @@ lyon_path = "1.0"
 lyon_algorithms = "1.0"
 minijinja = "2.6"
 serde = { version = "1.0", features = ["derive"] }
-geo = "0.28"
-geo-booleanop = "0.3"
+geo = "0.31"
 
 [dev-dependencies]
 walkdir = "2.5"
