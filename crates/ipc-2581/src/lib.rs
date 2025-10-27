@@ -1,5 +1,6 @@
 pub mod board_outline;
 mod checksum;
+pub mod copper_layer;
 pub mod geometry;
 pub mod html_generator;
 mod intern;

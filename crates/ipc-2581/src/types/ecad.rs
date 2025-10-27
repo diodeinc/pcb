@@ -213,10 +213,24 @@ pub struct LayerFeature {
 #[derive(Debug, Clone)]
 pub struct FeatureSet {
     pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
+    pub polarity: Option<Polarity>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
     pub traces: Vec<Trace>,
+    pub polygons: Vec<super::Polygon>, // Copper pours from Features
+    pub lines: Vec<Line>, // Trace lines from Features > UserSpecial > Line
+}
+
+/// Line represents a straight trace segment
+#[derive(Debug, Clone)]
+pub struct Line {
+    pub start_x: f64,
+    pub start_y: f64,
+    pub end_x: f64,
+    pub end_y: f64,
+    pub line_width: f64,
+    pub line_end: Option<super::LineEnd>,
 }
 
 /// Hole represents a drilled hole instance

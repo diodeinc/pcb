@@ -638,6 +638,14 @@ td {
     </div>
     {% endif %}
 
+    {% if copper_layers %}
+    <h2>Copper Layers</h2>
+    {% for layer in copper_layers %}
+    <h3>{{ layer.name }} ({{ layer.layer_function }})</h3>
+    {{ layer.svg_document|safe }}
+    {% endfor %}
+    {% endif %}
+
     {% if stackups %}
     <h2>Board Stackup</h2>
     {% for stackup in stackups %}

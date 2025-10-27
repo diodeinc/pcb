@@ -1,8 +1,9 @@
 use crate::types::Units;
 use crate::{
     board_outline::{render_board_outline_svg, PadShape},
-    geometry, FinishType, Ipc2581, LayerFunction, PlatingStatus, Side, StandardPrimitive,
-    UserPrimitive, UserShapeType,
+    copper_layer,
+    geometry, FinishType, Ipc2581, LayerFunction, PadUse, PlatingStatus, Side, StandardPrimitive,
+    Symbol, UserPrimitive, UserShapeType,
 };
 use base64::Engine;
 use minijinja::{context, Environment};
@@ -94,7 +95,7 @@ struct StackupLayer {
 #[derive(Serialize)]
 struct ViaVisualization {
     start_offset_px: f64, // Distance from top of visual column to via start (center of first copper)
-    height_px: f64,       // Total height of via from center of first copper to center of last copper
+    height_px: f64, // Total height of via from center of first copper to center of last copper
 }
 
 #[derive(Serialize)]
@@ -112,8 +113,8 @@ struct StackupInfo {
     coverlay_count: usize,
     total_dielectric_count: usize,
     adhesive_layer_count: usize, // All types of adhesive (DielAdhv, ConductiveAdhesive, Glue)
-    has_copper_weight: bool, // True if any layer has copper weight data
-    has_finish: bool,        // True if any layer has finish data
+    has_copper_weight: bool,     // True if any layer has copper weight data
+    has_finish: bool,            // True if any layer has finish data
     silkscreen_color: Option<String>, // Silkscreen color name (assumes same for top/bottom)
     silkscreen_color_hex: Option<String>, // Silkscreen color hex code
     soldermask_color: Option<String>, // Soldermask color name (assumes same for top/bottom)
@@ -134,6 +135,13 @@ struct FinishInfo {
     color: Option<String>,
     color_hex: Option<String>, // Hex code for swatch
     thickness_mils: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct CopperLayerInfo {
+    name: String,
+    svg_document: String,
+    layer_function: String,
 }
 
 fn get_color_hex(color_name: &str) -> Option<String> {
@@ -296,6 +304,7 @@ pub fn generate_html(doc: &Ipc2581, xml: &str, filename: &str) -> String {
     let board_finishes = extract_board_finishes(doc);
     let drill = extract_drill_info(doc);
     let bom = extract_bom(doc);
+    let copper_layers = extract_copper_layers(doc);
 
     template
         .render(context! {
@@ -313,6 +322,7 @@ pub fn generate_html(doc: &Ipc2581, xml: &str, filename: &str) -> String {
             connectivity_info => extract_connectivity_info(doc),
             drill,
             bom,
+            copper_layers,
             compressed_xml => compressed_xml_b64,
             fzstd_js => include_str!("fzstd.min.js"),
         })
@@ -896,7 +906,7 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
                 let bar_height_px = if let Some(thickness_mils) = layer.visual_thickness_mils {
                     (thickness_mils / 10.0) * 16.0
                 } else {
-                    0.0  // No bar, but row still exists
+                    0.0 // No bar, but row still exists
                 };
 
                 // Cell padding (1px top + 1px bottom)
@@ -925,12 +935,14 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
                 cumulative_height += row_height_px;
             }
 
-            if let (Some(first_center), Some(last_center)) = (first_copper_row_center, last_copper_row_center) {
+            if let (Some(first_center), Some(last_center)) =
+                (first_copper_row_center, last_copper_row_center)
+            {
                 // Via spans from center of first copper row to center of last copper row
                 // Extend by 2px up and 2px down to account for copper thickness
                 Some(ViaVisualization {
                     start_offset_px: first_center - 2.0,
-                    height_px: (last_center - first_center) + 4.0,  // +2px on top, +2px on bottom
+                    height_px: (last_center - first_center) + 4.0, // +2px on top, +2px on bottom
                 })
             } else {
                 None
@@ -1624,4 +1636,177 @@ fn format_finish_type(finish_type: FinishType) -> String {
         GwbTwoN => "GWB-2-N".to_string(),
         Other => "Other".to_string(),
     }
+}
+
+fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
+    let Some(ecad) = doc.ecad() else {
+        return Vec::new();
+    };
+
+    let mut result = Vec::new();
+
+    // Build layer lookup map
+    let mut layer_map = std::collections::HashMap::new();
+    for layer in &ecad.cad_data.layers {
+        layer_map.insert(doc.resolve(layer.name), layer);
+    }
+
+    // Build line descriptions dictionary
+    let content = doc.content();
+    let mut line_descs = std::collections::HashMap::new();
+    for entry in &content.dictionary_line_desc.entries {
+        line_descs.insert(entry.id, entry.line_desc);
+    }
+
+    // Build standard and user primitives (needed for PTH pad lookup)
+    let standard_primitives = extract_standard_primitives(doc);
+    let user_primitives = extract_user_primitives(doc);
+
+    // Find top layer for PTH pad lookup
+    let top_layer_name = ecad.cad_data.layers.iter()
+        .find(|l| matches!(l.side, Some(Side::Top)))
+        .map(|l| l.name);
+
+    // Get drill layers
+    let drill_layers: Vec<_> = ecad.cad_data.layers.iter()
+        .filter(|l| matches!(l.layer_function, LayerFunction::Drill))
+        .map(|l| doc.resolve(l.name))
+        .collect();
+
+    // Process all steps
+    for step in &ecad.cad_data.steps {
+        // Get board geometry for rendering
+        let (profile, slots, npths, pths) = if let Some(prof) = &step.profile {
+            let mut slots_vec = Vec::new();
+            let mut npths_vec = Vec::new();
+            let mut pths_vec = Vec::new();
+            
+            // Build padstack lookup
+            let mut padstack_lookup = std::collections::HashMap::new();
+            for ps in &step.padstack_defs {
+                padstack_lookup.insert(ps.name, ps);
+            }
+            
+            // Extract slots, NPTHs, and PTHs from layer features
+            for lf in &step.layer_features {
+                let layer_name = doc.resolve(lf.layer_ref);
+                let is_drill_layer = drill_layers.contains(&layer_name);
+
+                for set in &lf.sets {
+                    for slot in &set.slots {
+                        slots_vec.push((slot.outline.clone(), slot.x, slot.y));
+                    }
+                    
+                    if is_drill_layer {
+                        let padstack_def = set.geometry.and_then(|g| padstack_lookup.get(&g));
+                        
+                        for hole in &set.holes {
+                            if hole.plating_status == PlatingStatus::NonPlated {
+                                npths_vec.push((hole.x, hole.y, hole.diameter));
+                            } else if hole.plating_status == PlatingStatus::Plated {
+                                if let (Some(padstack), Some(top_layer)) = (padstack_def, top_layer_name) {
+                                    let pad_def = padstack.pad_defs.iter().find(|pd| {
+                                        pd.layer_ref == top_layer && pd.pad_use == PadUse::Regular
+                                    });
+                                    
+                                    let pad_shape = pad_def.and_then(|pd| {
+                                        if let Some(prim_ref) = pd.standard_primitive_ref {
+                                            standard_primitives.get(&prim_ref).and_then(extract_pad_shape)
+                                        } else {
+                                            pd.user_primitive_ref.and_then(|upr| {
+                                                user_primitives.get(&upr).and_then(extract_user_pad_shape)
+                                            })
+                                        }
+                                    });
+                                    
+                                    if let Some(shape) = pad_shape {
+                                        pths_vec.push((hole.x, hole.y, hole.diameter, shape));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            (prof, slots_vec, npths_vec, pths_vec)
+        } else {
+            continue;
+        };
+
+        let board_geom = copper_layer::BoardGeometry {
+            outline: &profile.polygon,
+            cutouts: &profile.cutouts,
+            slots: &slots,
+            npths: &npths,
+            pths: &pths,
+        };
+
+        // Build padstack dictionary
+        let mut padstack_map = std::collections::HashMap::new();
+        for padstack in &step.padstack_defs {
+            padstack_map.insert(padstack.name, padstack.clone());
+        }
+
+        // Process layer features for copper layers
+        for layer_feature in &step.layer_features {
+            let layer_name = doc.resolve(layer_feature.layer_ref);
+            
+            if let Some(layer) = layer_map.get(layer_name) {
+                // Only process copper/conductor layers
+                if matches!(
+                    layer.layer_function,
+                    LayerFunction::Conductor | LayerFunction::Signal | LayerFunction::Mixed | LayerFunction::Plane
+                ) {
+                    let layer_side = match layer.side {
+                        Some(Side::Top) => copper_layer::LayerSide::Top,
+                        Some(Side::Bottom) => copper_layer::LayerSide::Bottom,
+                        _ => copper_layer::LayerSide::Inner,
+                    };
+                    
+                    if let Some(svg_doc) = copper_layer::render_copper_layer_svg(
+                        layer_feature,
+                        layer.layer_function,
+                        layer.polarity,
+                        layer.name,
+                        layer_side,
+                        &padstack_map,
+                        &standard_primitives,
+                        &line_descs,
+                        &board_geom,
+                    ) {
+                        result.push(CopperLayerInfo {
+                            name: layer_name.to_string(),
+                            svg_document: svg_doc,
+                            layer_function: format!("{:?}", layer.layer_function),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn extract_standard_primitives(doc: &Ipc2581) -> std::collections::HashMap<Symbol, StandardPrimitive> {
+    let mut primitives = std::collections::HashMap::new();
+    
+    let content = doc.content();
+    for entry in &content.dictionary_standard.entries {
+        primitives.insert(entry.id, entry.primitive.clone());
+    }
+    
+    primitives
+}
+
+fn extract_user_primitives(doc: &Ipc2581) -> std::collections::HashMap<Symbol, UserPrimitive> {
+    let mut primitives = std::collections::HashMap::new();
+    
+    let content = doc.content();
+    for entry in &content.dictionary_user.entries {
+        primitives.insert(entry.id, entry.primitive.clone());
+    }
+    
+    primitives
 }

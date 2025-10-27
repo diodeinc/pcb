@@ -1297,11 +1297,21 @@ impl<'arena> Parser<'arena> {
 
     fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
         let geometry = node.attribute("geometry").map(|s| self.interner.intern(s));
+        
+        // Parse polarity attribute
+        let polarity = node.attribute("polarity")
+            .and_then(|s| match s {
+                "POSITIVE" => Some(Polarity::Positive),
+                "NEGATIVE" => Some(Polarity::Negative),
+                _ => None,
+            });
 
         let mut holes = Vec::new();
         let mut slots = Vec::new();
         let mut pads = Vec::new();
         let mut traces = Vec::new();
+        let mut polygons = Vec::new();
+        let mut lines = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
@@ -1309,17 +1319,198 @@ impl<'arena> Parser<'arena> {
                 "SlotCavity" => slots.push(self.parse_slot_cavity(&child)?),
                 "Pad" => pads.push(self.parse_pad(&child)?),
                 "Polyline" => traces.push(self.parse_trace(&child)?),
+                "Features" => {
+                    // Parse polygons and lines from Features
+                    let (feat_polygons, feat_lines) = self.parse_features(&child);
+                    polygons.extend(feat_polygons);
+                    lines.extend(feat_lines);
+                }
                 _ => {}
             }
         }
 
         Ok(FeatureSet {
             geometry,
+            polarity,
             holes,
             slots,
             pads,
             traces,
+            polygons,
+            lines,
         })
+    }
+
+    fn parse_features(&mut self, features_node: &Node) -> (Vec<Polygon>, Vec<ecad::Line>) {
+        let mut polygons = Vec::new();
+        let mut lines = Vec::new();
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        
+        for child in features_node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "Polygon" => {
+                    if let Ok(poly) = self.parse_polygon(&child, units) {
+                        polygons.push(poly);
+                    }
+                }
+                "Polyline" => {
+                    // Polyline traces in Features
+                    lines.extend(self.parse_polyline_to_lines(&child, units));
+                }
+                "UserSpecial" => {
+                    // UserSpecial contains Contour > Polygon OR Line
+                    for inner in child.children().filter(|n| n.is_element()) {
+                        match inner.tag_name().name() {
+                            "Contour" => {
+                                for poly_node in inner.children().filter(|n| n.is_element()) {
+                                    if poly_node.tag_name().name() == "Polygon" {
+                                        if let Ok(poly) = self.parse_polygon(&poly_node, units) {
+                                            polygons.push(poly);
+                                        }
+                                    }
+                                }
+                            }
+                            "Line" => {
+                                if let Ok(line) = self.parse_line(&inner, units) {
+                                    lines.push(line);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        (polygons, lines)
+    }
+
+    fn parse_line(&mut self, node: &Node, units: Units) -> Result<ecad::Line> {
+        let start_x = self.parse_f64_attr_with_units(node, "startX", "Line", units)?;
+        let start_y = self.parse_f64_attr_with_units(node, "startY", "Line", units)?;
+        let end_x = self.parse_f64_attr_with_units(node, "endX", "Line", units)?;
+        let end_y = self.parse_f64_attr_with_units(node, "endY", "Line", units)?;
+        
+        let mut line_width = 0.25;
+        let mut line_end = None;
+        
+        // Look for LineDesc child
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "LineDesc" {
+                line_width = child.attribute("lineWidth")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units))
+                    .unwrap_or(0.25);
+                
+                line_end = child.attribute("lineEnd").and_then(|s| match s {
+                    "ROUND" => Some(LineEnd::Round),
+                    "SQUARE" => Some(LineEnd::Square),
+                    "FLAT" => Some(LineEnd::Flat),
+                    _ => None,
+                });
+                break;
+            }
+        }
+        
+        Ok(ecad::Line {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            line_width,
+            line_end,
+        })
+    }
+
+    fn parse_polyline_to_lines(&mut self, node: &Node, units: Units) -> Vec<ecad::Line> {
+        let mut out = Vec::new();
+        let mut current_x = 0.0;
+        let mut current_y = 0.0;
+        let mut line_width = 0.25;
+        let mut line_end = None;
+        
+        // Parse points and LineDesc, tessellating curves
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "PolyBegin" => {
+                    current_x = self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units).unwrap_or(0.0);
+                    current_y = self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units).unwrap_or(0.0);
+                }
+                "PolyStepSegment" => {
+                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units).unwrap_or(0.0);
+                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units).unwrap_or(0.0);
+                    
+                    out.push(ecad::Line {
+                        start_x: current_x,
+                        start_y: current_y,
+                        end_x: x,
+                        end_y: y,
+                        line_width,
+                        line_end,
+                    });
+                    
+                    current_x = x;
+                    current_y = y;
+                }
+                "PolyStepCurve" => {
+                    // Tessellate arc into line segments using kurbo
+                    let end_x = self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units).unwrap_or(0.0);
+                    let end_y = self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units).unwrap_or(0.0);
+                    let center_x = self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units).unwrap_or(0.0);
+                    let center_y = self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units).unwrap_or(0.0);
+                    let clockwise = child.attribute("clockwise").map(|s| s == "true").unwrap_or(true);
+                    
+                    let arc = crate::geometry::create_arc(current_x, current_y, end_x, end_y, center_x, center_y, clockwise);
+                    
+                    // Convert to beziers and sample each bezier into line segments
+                    // Use high quality tessellation for accurate curved traces
+                    let mut arc_points = vec![(current_x, current_y)];
+                    arc.to_cubic_beziers(0.01, |p1, p2, p3| {
+                        // Sample bezier into 32 segments for smooth, accurate rendering
+                        for i in 1..=32 {
+                            let t = i as f64 / 32.0;
+                            // Cubic bezier formula: B(t) = (1-t)³P0 + 3(1-t)²t·P1 + 3(1-t)t²·P2 + t³·P3
+                            let prev = arc_points.last().unwrap();
+                            let t1 = 1.0 - t;
+                            let px = t1*t1*t1*prev.0 + 3.0*t1*t1*t*p1.x + 3.0*t1*t*t*p2.x + t*t*t*p3.x;
+                            let py = t1*t1*t1*prev.1 + 3.0*t1*t1*t*p1.y + 3.0*t1*t*t*p2.y + t*t*t*p3.y;
+                            arc_points.push((px, py));
+                        }
+                    });
+                    
+                    // Convert arc points to line segments
+                    for window in arc_points.windows(2) {
+                        out.push(ecad::Line {
+                            start_x: window[0].0,
+                            start_y: window[0].1,
+                            end_x: window[1].0,
+                            end_y: window[1].1,
+                            line_width,
+                            line_end,
+                        });
+                    }
+                    
+                    current_x = end_x;
+                    current_y = end_y;
+                }
+                "LineDesc" => {
+                    line_width = child.attribute("lineWidth")
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .map(|v| crate::units::to_mm(v, units))
+                        .unwrap_or(0.25);
+                    line_end = child.attribute("lineEnd").and_then(|s| match s {
+                        "ROUND" => Some(LineEnd::Round),
+                        "SQUARE" => Some(LineEnd::Square),
+                        "FLAT" => Some(LineEnd::Flat),
+                        _ => None,
+                    });
+                }
+                _ => {}
+            }
+        }
+        
+        out
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {
@@ -1400,18 +1591,43 @@ impl<'arena> Parser<'arena> {
             .attribute("padstackDefRef")
             .map(|s| self.interner.intern(s));
 
-        // Convert coordinates if present
-        let x = node
+        // Check for x, y as attributes first (legacy format)
+        let mut x = node
             .attribute("x")
             .and_then(|s| s.parse::<f64>().ok())
             .map(|v| crate::units::to_mm(v, units));
-        let y = node
+        let mut y = node
             .attribute("y")
             .and_then(|s| s.parse::<f64>().ok())
             .map(|v| crate::units::to_mm(v, units));
 
-        // Rotation is in degrees, no conversion needed
-        let rotation = node.attribute("rotation").and_then(|s| s.parse().ok());
+        // Look for Location child element (standard format)
+        for child in node.children() {
+            if child.tag_name().name() == "Location" {
+                x = child
+                    .attribute("x")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units));
+                y = child
+                    .attribute("y")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units));
+                break;
+            }
+        }
+
+        // Rotation can be in Xform child element or as attribute
+        let mut rotation = node.attribute("rotation").and_then(|s| s.parse().ok());
+        
+        // Check Xform child for rotation
+        for child in node.children() {
+            if child.tag_name().name() == "Xform" {
+                if let Some(rot_str) = child.attribute("rotation") {
+                    rotation = rot_str.parse().ok();
+                }
+                break;
+            }
+        }
 
         Ok(Pad {
             padstack_def_ref,
