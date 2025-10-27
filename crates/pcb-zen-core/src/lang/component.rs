@@ -1057,7 +1057,7 @@ where
             module.add_child(component_val);
         }
 
-        Ok(component_val)
+        Ok(Value::new_none())
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {

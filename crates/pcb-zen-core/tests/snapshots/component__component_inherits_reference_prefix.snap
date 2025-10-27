@@ -2,8 +2,6 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-Component prefix: IC
-Component with explicit prefix: U
 {
     <root>: Module {
         path: <root>,

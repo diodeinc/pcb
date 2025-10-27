@@ -2,9 +2,6 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-R1 (10k) - MPN: 10K_PART Manufacturer: Vendor_10K
-R2 (100k) - MPN: 100K_PART Manufacturer: Vendor_100K
-R3 (1k) - MPN: None Manufacturer: None
 {
     <root>: Module {
         path: <root>,

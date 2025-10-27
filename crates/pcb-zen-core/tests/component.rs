@@ -192,7 +192,7 @@ snapshot_eval!(component_inherits_reference_prefix, {
     "test.zen" => r#"
         # Test that component inherits reference prefix "IC" from symbol
         # when no explicit prefix is provided
-        comp1 = Component(
+        Component(
             name = "MyComponent1",
             footprint = "SOIC-8",
             symbol = Symbol(library = "ic_symbol.kicad_sym"),
@@ -201,12 +201,9 @@ snapshot_eval!(component_inherits_reference_prefix, {
                 "OUT": Net("out_signal"),
             }
         )
-        
-        # Verify the prefix was inherited
-        print("Component prefix:", comp1.prefix)
-        
+
         # Test that explicit prefix still overrides symbol reference
-        comp2 = Component(
+        Component(
             name = "MyComponent2",
             footprint = "SOIC-8",
             symbol = Symbol(library = "ic_symbol.kicad_sym"),
@@ -216,111 +213,16 @@ snapshot_eval!(component_inherits_reference_prefix, {
                 "OUT": Net("out2"),
             }
         )
-        
-        print("Component with explicit prefix:", comp2.prefix)
+
+        # The component prefix will be visible in the module snapshot
     "#
 });
 
 // ============================================================================
 // Component Mutation Tests
 // ============================================================================
-
-snapshot_eval!(component_mutation_mpn, {
-    "test.zen" => r#"
-        # Test MPN mutation
-        comp = Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-        )
-        
-        print("MPN before:", comp.mpn)
-        comp.mpn = "RC0603FR-0710KL"
-        print("MPN after:", comp.mpn)
-    "#
-});
-
-snapshot_eval!(component_mutation_manufacturer, {
-    "test.zen" => r#"
-        # Test manufacturer mutation
-        comp = Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-        )
-        
-        print("Manufacturer before:", comp.manufacturer)
-        comp.manufacturer = "Yageo"
-        print("Manufacturer after:", comp.manufacturer)
-    "#
-});
-
-snapshot_eval!(component_mutation_dnp, {
-    "test.zen" => r#"
-        # Test DNP mutation
-        comp = Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-        )
-        
-        print("DNP before:", comp.dnp)
-        comp.dnp = True
-        print("DNP after:", comp.dnp)
-        comp.dnp = False
-        print("DNP reset:", comp.dnp)
-    "#
-});
-
-snapshot_eval!(component_mutation_properties, {
-    "test.zen" => r#"
-        # Test property mutation
-        comp = Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-        
-        print("Resistance before:", comp.resistance)
-        comp.resistance = "100k"
-        print("Resistance after:", comp.resistance)
-        
-        # Test adding new property
-        comp.voltage_rating = "50V"
-        print("New property voltage_rating:", comp.voltage_rating)
-    "#
-});
-
-snapshot_eval!(component_mutation_multiple, {
-    "test.zen" => r#"
-        # Test multiple mutations together
-        comp = Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-        
-        # Mutate multiple fields
-        comp.mpn = "RC0603FR-07100KL"
-        comp.manufacturer = "Yageo"
-        comp.dnp = True
-        comp.resistance = "100k"
-        comp.tolerance = "1%"
-        
-        print("MPN:", comp.mpn)
-        print("Manufacturer:", comp.manufacturer)
-        print("DNP:", comp.dnp)
-        print("Resistance:", comp.resistance)
-        print("Tolerance:", comp.tolerance)
-    "#
-});
+// Note: Component() now returns None (like Module()), so direct mutation
+// outside of modifiers is not allowed. Mutation must happen in modifier functions.
 
 snapshot_eval!(component_modifier_basic, {
     "test.zen" => r#"
@@ -329,19 +231,19 @@ snapshot_eval!(component_modifier_basic, {
             if hasattr(component, "resistance"):
                 component.mpn = "ASSIGNED_MPN"
                 component.manufacturer = "ACME"
-        
+
         builtin.add_component_modifier(assign_part)
-        
-        comp = Component(
+
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("A"), "2": Net("B")},
             properties = {"resistance": "10k"},
         )
-        
-        print("After modifier - MPN:", comp.mpn)
-        print("After modifier - Manufacturer:", comp.manufacturer)
+
+        # Component will have mpn and manufacturer set by modifier
+        # This is verified by the module snapshot
     "#
 });
 
@@ -357,36 +259,35 @@ snapshot_eval!(component_modifier_conditional, {
                 elif resistance == "100k":
                     component.mpn = "100K_PART"
                     component.manufacturer = "Vendor_100K"
-        
+
         builtin.add_component_modifier(assign_preferred_resistor)
-        
-        r1 = Component(
+
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("A"), "2": Net("B")},
             properties = {"resistance": "10k"},
         )
-        
-        r2 = Component(
+
+        Component(
             name = "R2",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("C"), "2": Net("D")},
             properties = {"resistance": "100k"},
         )
-        
-        r3 = Component(
+
+        Component(
             name = "R3",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("E"), "2": Net("F")},
             properties = {"resistance": "1k"},  # No modifier for this
         )
-        
-        print("R1 (10k) - MPN:", r1.mpn, "Manufacturer:", r1.manufacturer)
-        print("R2 (100k) - MPN:", r2.mpn, "Manufacturer:", r2.manufacturer)
-        print("R3 (1k) - MPN:", r3.mpn, "Manufacturer:", r3.manufacturer)
+
+        # R1 should have 10K_PART, R2 should have 100K_PART, R3 should have no MPN
+        # This is verified by the module snapshot
     "#
 });
 
@@ -397,27 +298,27 @@ snapshot_eval!(component_modifier_dnp, {
             if hasattr(component, "type"):
                 if str(component.type) == "test_point":
                     component.dnp = True
-        
+
         builtin.add_component_modifier(mark_dnp_for_test_points)
-        
-        tp1 = Component(
+
+        Component(
             name = "TP1",
             footprint = "test_point",
             type = "test_point",
             pin_defs = {"1": "1"},
             pins = {"1": Net("SIGNAL")},
         )
-        
-        r1 = Component(
+
+        Component(
             name = "R1",
             footprint = "0603",
             type = "resistor",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("A"), "2": Net("B")},
         )
-        
-        print("Test point DNP:", tp1.dnp)
-        print("Resistor DNP:", r1.dnp)
+
+        # Test point should have dnp=True, resistor should not
+        # This is verified by the module snapshot
     "#
 });
 
@@ -427,53 +328,32 @@ snapshot_eval!(component_modifier_multiple, {
         def modifier1(component):
             if hasattr(component, "resistance"):
                 component.mod1_applied = "yes"
-        
+
         def modifier2(component):
             if hasattr(component, "resistance"):
                 component.mod2_applied = "yes"
                 component.mpn = "FINAL_MPN"
-        
+
         builtin.add_component_modifier(modifier1)
         builtin.add_component_modifier(modifier2)
-        
-        comp = Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-        
-        print("Modifier 1 applied:", comp.mod1_applied)
-        print("Modifier 2 applied:", comp.mod2_applied)
-        print("Final MPN:", comp.mpn)
-    "#
-});
 
-snapshot_eval!(component_has_attr_dynamic, {
-    "test.zen" => r#"
-        # Test has_attr with dynamically added properties
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("A"), "2": Net("B")},
             properties = {"resistance": "10k"},
         )
-        
-        print("Has resistance:", hasattr(comp, "resistance"))
-        print("Has voltage_rating (before):", hasattr(comp, "voltage_rating"))
-        
-        comp.voltage_rating = "50V"
-        print("Has voltage_rating (after):", hasattr(comp, "voltage_rating"))
-        print("Has nonexistent_prop:", hasattr(comp, "nonexistent_prop"))
+
+        # Both modifiers should have run, setting mod1_applied, mod2_applied, and mpn
+        # This is verified by the module snapshot
     "#
 });
 
 snapshot_eval!(component_modifier_parent, {
     "Child.zen" => r#"
         # Child module creates a component
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -481,10 +361,8 @@ snapshot_eval!(component_modifier_parent, {
             properties = {"resistance": "10k"},
         )
 
-        # Print from child to verify modifier was applied
-        print("From Child - Has parent_modified:", hasattr(comp, "parent_modified"))
-        print("From Child - Parent modified:", comp.parent_modified if hasattr(comp, "parent_modified") else "not set")
-        print("From Child - Manufacturer:", comp.manufacturer if hasattr(comp, "manufacturer") else "not set")
+        # Component should have parent_modified and manufacturer set by parent modifier
+        # This is verified by the module snapshot
     "#,
     "test.zen" => r#"
         # Parent module registers a modifier
@@ -510,7 +388,7 @@ snapshot_eval!(component_modifier_child_overrides_parent, {
 
         builtin.add_component_modifier(child_modifier)
 
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -518,9 +396,9 @@ snapshot_eval!(component_modifier_child_overrides_parent, {
             properties = {"resistance": "10k"},
         )
 
-        # Check that parent modifier ran AFTER child modifier
+        # Parent modifier ran AFTER child modifier
         # So final value should be ParentVendor (parent overwrites child)
-        print("Manufacturer:", comp.manufacturer if hasattr(comp, "manufacturer") else "not set")
+        # This is verified by the module snapshot
     "#,
     "test.zen" => r#"
         # Parent modifier sets manufacturer
@@ -543,7 +421,7 @@ snapshot_eval!(component_modifier_grandparent, {
 
         builtin.add_component_modifier(child_modifier)
 
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -552,9 +430,7 @@ snapshot_eval!(component_modifier_grandparent, {
         )
 
         # All modifiers should have run (bottom-up: child, parent, grandparent)
-        print("Child modified:", comp.child_modified if hasattr(comp, "child_modified") else "not set")
-        print("Parent modified:", comp.parent_modified if hasattr(comp, "parent_modified") else "not set")
-        print("Grandparent modified:", comp.gp_modified if hasattr(comp, "gp_modified") else "not set")
+        # This is verified by the module snapshot
     "#,
     "Parent.zen" => r#"
         def parent_modifier(component):
@@ -564,7 +440,7 @@ snapshot_eval!(component_modifier_grandparent, {
         builtin.add_component_modifier(parent_modifier)
 
         Child = Module("Child.zen")
-        child = Child(name = "ChildInstance")
+        Child(name = "ChildInstance")
     "#,
     "test.zen" => r#"
         def grandparent_modifier(component):
@@ -575,7 +451,7 @@ snapshot_eval!(component_modifier_grandparent, {
 
         # Create hierarchy: Grandparent -> Parent -> Child
         Parent = Module("Parent.zen")
-        parent = Parent(name = "ParentInstance")
+        Parent(name = "ParentInstance")
     "#
 });
 
@@ -589,7 +465,7 @@ snapshot_eval!(component_modifier_execution_order, {
 
         builtin.add_component_modifier(child_modifier)
 
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -598,7 +474,8 @@ snapshot_eval!(component_modifier_execution_order, {
         )
 
         # Execution order should be: child first, then parent
-        print("Execution order:", comp.order if hasattr(comp, "order") else "not set")
+        # Component should have order = "child -> parent"
+        # This is verified by the module snapshot
     "#,
     "test.zen" => r#"
         def parent_modifier(component):
@@ -610,7 +487,7 @@ snapshot_eval!(component_modifier_execution_order, {
         builtin.add_component_modifier(parent_modifier)
 
         Child = Module("Child.zen")
-        child = Child(name = "ChildInstance")
+        Child(name = "ChildInstance")
     "#
 });
 
@@ -628,7 +505,7 @@ snapshot_eval!(current_module_path_visible, {
         # Store the module path in component properties so it's visible in snapshot
         path = builtin.current_module_path()
 
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -646,10 +523,10 @@ snapshot_eval!(current_module_path_visible, {
         print("Root is_root:", len(path) == 0)
 
         Child = Module("Child.zen")
-        child = Child(name = "ChildInstance")
+        Child(name = "ChildInstance")
 
         # Create component in root too
-        comp = Component(
+        Component(
             name = "R2",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -667,7 +544,7 @@ snapshot_eval!(current_module_path_nested_visible, {
     "GrandChild.zen" => r#"
         path = builtin.current_module_path()
 
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -681,7 +558,7 @@ snapshot_eval!(current_module_path_nested_visible, {
     "Child.zen" => r#"
         path = builtin.current_module_path()
 
-        comp = Component(
+        Component(
             name = "R2",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
@@ -693,14 +570,14 @@ snapshot_eval!(current_module_path_nested_visible, {
         )
 
         GrandChild = Module("GrandChild.zen")
-        gc = GrandChild(name = "GrandChildInstance")
+        GrandChild(name = "GrandChildInstance")
     "#,
     "test.zen" => r#"
         path = builtin.current_module_path()
         print("Root module depth:", len(path))
 
         Child = Module("Child.zen")
-        child = Child(name = "ChildInstance")
+        Child(name = "ChildInstance")
     "#
 });
 
@@ -713,14 +590,15 @@ snapshot_eval!(current_module_path_conditional_modifier, {
         if len(builtin.current_module_path()) == 0:
             builtin.add_component_modifier(child_modifier)
 
-        comp = Component(
+        Component(
             name = "R1",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("A"), "2": Net("B")},
         )
 
-        print("Child component modified:", hasattr(comp, "modified_in_child"))
+        # Child component should NOT have modified_in_child
+        # (because modifier is only added at root)
     "#,
     "test.zen" => r#"
         def root_modifier(component):
@@ -731,16 +609,17 @@ snapshot_eval!(current_module_path_conditional_modifier, {
             builtin.add_component_modifier(root_modifier)
 
         Child = Module("Child.zen")
-        child = Child(name = "ChildInstance")
+        Child(name = "ChildInstance")
 
         # Create a component in root to verify modifier runs
-        comp = Component(
+        Component(
             name = "R2",
             footprint = "0603",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": Net("A"), "2": Net("B")},
         )
 
-        print("Root component modified:", hasattr(comp, "modified_in_root"))
+        # Root component should have modified_in_root=True
+        # This is verified by the module snapshot
     "#
 });

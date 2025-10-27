@@ -2,8 +2,6 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
-After modifier - MPN: ASSIGNED_MPN
-After modifier - Manufacturer: ACME
 {
     <root>: Module {
         path: <root>,
