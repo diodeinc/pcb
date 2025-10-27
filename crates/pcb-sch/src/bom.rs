@@ -19,11 +19,17 @@ struct GroupedBomEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Alternative {
+    pub mpn: String,
+    pub manufacturer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     mpn: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    alternatives: Vec<String>,
+    alternatives: Vec<Alternative>,
     #[serde(skip_serializing_if = "Option::is_none")]
     manufacturer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +56,7 @@ impl BomEntry {
         }
 
         // Check alternatives
-        self.alternatives.iter().any(|alt| alt == mpn)
+        self.alternatives.iter().any(|alt| alt.mpn == mpn)
     }
 
     pub fn matches_generic(&self, key: &GenericMatchingKey) -> bool {
@@ -266,7 +272,7 @@ impl Bom {
                     description: instance.description(),
                     package: instance.package(),
                     value: instance.value(),
-                    alternatives: instance.string_list_attr(&["__alternatives__"]),
+                    alternatives: instance.alternatives_attr(&["__alternatives__"]),
                     generic_data: detect_generic_component(instance),
                     offers: Vec::new(),
                     dnp: instance.dnp(),
