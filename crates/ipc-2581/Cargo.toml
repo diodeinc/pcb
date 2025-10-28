@@ -27,6 +27,7 @@ lyon_path = "1.0"
 lyon_algorithms = "1.0"
 minijinja = "2.6"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 geo = "0.31"
 
 [dev-dependencies]

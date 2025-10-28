@@ -1,6 +1,9 @@
 use bumpalo::Bump;
 use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
+use ipc_2581::svg_export::{
+    build_board_context, resolve_features, FeatureBucket, PipelineTiming, ResolvedFeature,
+};
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
 use std::fs;
@@ -38,6 +41,27 @@ enum Commands {
         /// Export format (currently only html)
         #[arg(short, long, default_value = "html")]
         format: String,
+    },
+    /// Export copper layers to SVG (staged pipeline)
+    ExportSvg {
+        /// Path to IPC-2581 XML file
+        file: PathBuf,
+
+        /// Output SVG file path
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Comma-separated list of layers to export (e.g., "TOP,BOTTOM")
+        #[arg(short, long)]
+        layers: Option<String>,
+
+        /// Dump Stage 1 debug JSON to file
+        #[arg(long)]
+        dump_stage1: Option<PathBuf>,
+
+        /// Show timing information
+        #[arg(long)]
+        timings: bool,
     },
 }
 
@@ -102,6 +126,27 @@ fn main() {
                 Ok(_) => {
                     println!("✓ Exported to {}", output.display());
                 }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            }
+        }
+        Commands::ExportSvg {
+            file,
+            output,
+            layers,
+            dump_stage1,
+            timings,
+        } => {
+            match export_svg(
+                &file,
+                output.as_ref(),
+                layers.as_ref(),
+                dump_stage1.as_ref(),
+                timings,
+            ) {
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     process::exit(1);
@@ -485,6 +530,178 @@ fn export_html(path: &PathBuf, output: &PathBuf) -> Result<(), Box<dyn std::erro
 
     let html = generate_html(&doc, &xml_content, filename);
     fs::write(output, html)?;
+
+    Ok(())
+}
+
+fn export_svg(
+    input_path: &PathBuf,
+    _output_path: Option<&PathBuf>,
+    layers: Option<&String>,
+    dump_stage1_path: Option<&PathBuf>,
+    show_timings: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("━━━ SVG Export Pipeline ━━━");
+    println!("Input: {}", input_path.display());
+
+    let mut timing = PipelineTiming::new();
+
+    // Parse layer filter if provided
+    let layer_filter: Option<Vec<String>> =
+        layers.map(|s| s.split(',').map(|l| l.trim().to_string()).collect());
+
+    if let Some(ref layers) = layer_filter {
+        println!("Layers: {}", layers.join(", "));
+    } else {
+        println!("Layers: ALL");
+    }
+    println!();
+
+    // Stage 0: Input Readiness
+    println!("Stage 0: Input Readiness");
+    let stage0_timer = std::time::Instant::now();
+
+    let arena = Bump::new();
+    let doc = Ipc2581::parse_file(&arena, input_path)?;
+    let context = build_board_context(&doc)?;
+
+    timing.stage0_input = Some(stage0_timer.elapsed());
+
+    println!("  ✓ Parsed IPC-2581 file");
+    println!("  Board: {}", context.board_name);
+    println!(
+        "  Units: {} → mm (factor: {:.4})",
+        context.original_units, context.to_mm_factor
+    );
+    context.stats.print_summary();
+
+    // Debug: Show line descriptors
+    if !context.line_descriptors.is_empty() {
+        println!("\n  Line Descriptors (first 5):");
+        for (sym, line_desc) in context.line_descriptors.iter().take(5) {
+            println!(
+                "    {}: width={:.6} mm",
+                doc.resolve(*sym),
+                line_desc.line_width
+            );
+        }
+    }
+
+    println!();
+
+    // Stage 1: Transform Resolution
+    println!("Stage 1: Transform Resolution");
+    let stage1_timer = std::time::Instant::now();
+
+    let layer_resolutions =
+        resolve_features(&doc, &context, layer_filter.as_deref())?;
+
+    timing.stage1_transforms = Some(stage1_timer.elapsed());
+
+    println!("  ✓ Resolved {} layers", layer_resolutions.len());
+
+    for (layer_name, resolution) in &layer_resolutions {
+        println!("  Layer: {}", layer_name);
+        println!("    Features:  {}", resolution.features.len());
+        println!("      SMD:     {}", resolution.stats.smd_count);
+        println!("      PTH:     {}", resolution.stats.pth_count);
+        println!("      Via:     {}", resolution.stats.via_count);
+        println!("      Trace:   {}", resolution.stats.trace_count);
+        println!("      Fill:    {}", resolution.stats.fill_count);
+        println!("      Cutout:  {}", resolution.stats.cutout_count);
+        println!(
+            "    BBox: ({:.3}, {:.3}) to ({:.3}, {:.3}) mm",
+            resolution.bbox.min_x,
+            resolution.bbox.min_y,
+            resolution.bbox.max_x,
+            resolution.bbox.max_y
+        );
+        println!(
+            "    Size: {:.3} × {:.3} mm",
+            resolution.bbox.width(),
+            resolution.bbox.height()
+        );
+
+        // Show sample net names
+        let mut nets_seen = std::collections::HashSet::new();
+        for feature in &resolution.features {
+            if let Some(net_sym) = feature.net {
+                nets_seen.insert(doc.resolve(net_sym));
+            }
+        }
+        if !nets_seen.is_empty() {
+            let nets: Vec<&str> = nets_seen.iter().take(5).copied().collect();
+            println!(
+                "    Sample nets: {}{}",
+                nets.join(", "),
+                if nets_seen.len() > 5 {
+                    format!(" (+{} more)", nets_seen.len() - 5)
+                } else {
+                    "".to_string()
+                }
+            );
+        }
+    }
+    println!();
+
+    // Dump Stage 1 debug info if requested
+    if let Some(dump_path) = dump_stage1_path {
+        println!("Writing Stage 1 debug info to {}", dump_path.display());
+        let mut output = String::new();
+        for (layer_name, resolution) in &layer_resolutions {
+            output.push_str(&format!("Layer: {}\n", layer_name));
+            output.push_str(&format!("  Features: {}\n\n", resolution.features.len()));
+
+            // Group by bucket for clearer output
+            let mut by_bucket: std::collections::HashMap<FeatureBucket, Vec<&ResolvedFeature>> =
+                std::collections::HashMap::new();
+            for feature in &resolution.features {
+                by_bucket.entry(feature.bucket).or_default().push(feature);
+            }
+
+            for (bucket, features) in &by_bucket {
+                output.push_str(&format!("  {:?} ({} features):\n", bucket, features.len()));
+                for feature in features.iter().take(10) {
+                    let net_str = feature.net.map(|s| doc.resolve(s)).unwrap_or("<no net>");
+                    output.push_str(&format!("    [{:?}] net={}\n", bucket, net_str));
+                    output.push_str(&format!("        {:?}\n", feature.geometry));
+                    output.push_str(&format!(
+                        "        bbox: ({:.3}, {:.3}) to ({:.3}, {:.3})\n",
+                        feature.bbox.min_x,
+                        feature.bbox.min_y,
+                        feature.bbox.max_x,
+                        feature.bbox.max_y
+                    ));
+                }
+                if features.len() > 10 {
+                    output.push_str(&format!("    ... and {} more\n", features.len() - 10));
+                }
+                output.push('\n');
+            }
+        }
+        let output_len = output.len();
+        fs::write(dump_path, output)?;
+        println!("  ✓ Debug info written ({} bytes)", output_len);
+        println!();
+    }
+
+    // Print timing summary
+    if show_timings {
+        timing.print_summary();
+        println!();
+    }
+
+    // Stage 2+ not yet implemented
+    println!("━━━ Status ━━━");
+    println!("✓ Stage 0 & Stage 1 complete");
+    println!("⚠ Stages 2-6 not yet implemented");
+    println!();
+    println!("To continue development, next implement:");
+    println!("  - Stage 2: Padstack expansion (resolve padstack refs to actual shapes)");
+    println!("  - Stage 3: Primitive conversion (convert to lyon paths)");
+    println!("  - Stage 4: Boolean operations (union/difference per bucket)");
+    println!("  - Stage 5: Styling (colors per bucket)");
+    println!("  - Stage 6: SVG emission (write final document)");
 
     Ok(())
 }

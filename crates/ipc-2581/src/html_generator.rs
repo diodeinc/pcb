@@ -1,9 +1,8 @@
 use crate::types::Units;
 use crate::{
     board_outline::{render_board_outline_svg, PadShape},
-    copper_layer,
-    geometry, FinishType, Ipc2581, LayerFunction, PadUse, PlatingStatus, Side, StandardPrimitive,
-    Symbol, UserPrimitive, UserShapeType,
+    copper_layer, geometry, FinishType, Ipc2581, LayerFunction, PadUse, PlatingStatus, Side,
+    StandardPrimitive, Symbol, UserPrimitive, UserShapeType,
 };
 use base64::Engine;
 use minijinja::{context, Environment};
@@ -1663,12 +1662,18 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
     let user_primitives = extract_user_primitives(doc);
 
     // Find top layer for PTH pad lookup
-    let top_layer_name = ecad.cad_data.layers.iter()
+    let top_layer_name = ecad
+        .cad_data
+        .layers
+        .iter()
         .find(|l| matches!(l.side, Some(Side::Top)))
         .map(|l| l.name);
 
     // Get drill layers
-    let drill_layers: Vec<_> = ecad.cad_data.layers.iter()
+    let drill_layers: Vec<_> = ecad
+        .cad_data
+        .layers
+        .iter()
         .filter(|l| matches!(l.layer_function, LayerFunction::Drill))
         .map(|l| doc.resolve(l.name))
         .collect();
@@ -1680,13 +1685,13 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
             let mut slots_vec = Vec::new();
             let mut npths_vec = Vec::new();
             let mut pths_vec = Vec::new();
-            
+
             // Build padstack lookup
             let mut padstack_lookup = std::collections::HashMap::new();
             for ps in &step.padstack_defs {
                 padstack_lookup.insert(ps.name, ps);
             }
-            
+
             // Extract slots, NPTHs, and PTHs from layer features
             for lf in &step.layer_features {
                 let layer_name = doc.resolve(lf.layer_ref);
@@ -1696,29 +1701,35 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
                     for slot in &set.slots {
                         slots_vec.push((slot.outline.clone(), slot.x, slot.y));
                     }
-                    
+
                     if is_drill_layer {
                         let padstack_def = set.geometry.and_then(|g| padstack_lookup.get(&g));
-                        
+
                         for hole in &set.holes {
                             if hole.plating_status == PlatingStatus::NonPlated {
                                 npths_vec.push((hole.x, hole.y, hole.diameter));
                             } else if hole.plating_status == PlatingStatus::Plated {
-                                if let (Some(padstack), Some(top_layer)) = (padstack_def, top_layer_name) {
+                                if let (Some(padstack), Some(top_layer)) =
+                                    (padstack_def, top_layer_name)
+                                {
                                     let pad_def = padstack.pad_defs.iter().find(|pd| {
                                         pd.layer_ref == top_layer && pd.pad_use == PadUse::Regular
                                     });
-                                    
+
                                     let pad_shape = pad_def.and_then(|pd| {
                                         if let Some(prim_ref) = pd.standard_primitive_ref {
-                                            standard_primitives.get(&prim_ref).and_then(extract_pad_shape)
+                                            standard_primitives
+                                                .get(&prim_ref)
+                                                .and_then(extract_pad_shape)
                                         } else {
                                             pd.user_primitive_ref.and_then(|upr| {
-                                                user_primitives.get(&upr).and_then(extract_user_pad_shape)
+                                                user_primitives
+                                                    .get(&upr)
+                                                    .and_then(extract_user_pad_shape)
                                             })
                                         }
                                     });
-                                    
+
                                     if let Some(shape) = pad_shape {
                                         pths_vec.push((hole.x, hole.y, hole.diameter, shape));
                                     }
@@ -1728,7 +1739,7 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
                     }
                 }
             }
-            
+
             (prof, slots_vec, npths_vec, pths_vec)
         } else {
             continue;
@@ -1751,26 +1762,29 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
         // Process layer features for copper layers
         for layer_feature in &step.layer_features {
             let layer_name = doc.resolve(layer_feature.layer_ref);
-            
+
             if let Some(layer) = layer_map.get(layer_name) {
                 // Only process copper/conductor layers
                 if matches!(
                     layer.layer_function,
-                    LayerFunction::Conductor | LayerFunction::Signal | LayerFunction::Mixed | LayerFunction::Plane
+                    LayerFunction::Conductor
+                        | LayerFunction::Signal
+                        | LayerFunction::Mixed
+                        | LayerFunction::Plane
                 ) {
                     let layer_side = match layer.side {
                         Some(Side::Top) => copper_layer::LayerSide::Top,
                         Some(Side::Bottom) => copper_layer::LayerSide::Bottom,
                         _ => copper_layer::LayerSide::Inner,
                     };
-                    
+
                     // Use layer-specific profile if it exists (rigid-flex), otherwise use step profile
                     let (outline, cutouts) = if let Some(layer_profile) = &layer.profile {
                         (&layer_profile.polygon, layer_profile.cutouts.as_slice())
                     } else {
                         (board_geom.outline, board_geom.cutouts)
                     };
-                    
+
                     let layer_board_geom = copper_layer::BoardGeometry {
                         outline,
                         cutouts,
@@ -1778,7 +1792,7 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
                         npths: &npths,
                         pths: &pths,
                     };
-                    
+
                     if let Some(svg_doc) = copper_layer::render_copper_layer_svg(
                         layer_feature,
                         layer.layer_function,
@@ -1804,24 +1818,26 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
     result
 }
 
-fn extract_standard_primitives(doc: &Ipc2581) -> std::collections::HashMap<Symbol, StandardPrimitive> {
+fn extract_standard_primitives(
+    doc: &Ipc2581,
+) -> std::collections::HashMap<Symbol, StandardPrimitive> {
     let mut primitives = std::collections::HashMap::new();
-    
+
     let content = doc.content();
     for entry in &content.dictionary_standard.entries {
         primitives.insert(entry.id, entry.primitive.clone());
     }
-    
+
     primitives
 }
 
 fn extract_user_primitives(doc: &Ipc2581) -> std::collections::HashMap<Symbol, UserPrimitive> {
     let mut primitives = std::collections::HashMap::new();
-    
+
     let content = doc.content();
     for entry in &content.dictionary_user.entries {
         primitives.insert(entry.id, entry.primitive.clone());
     }
-    
+
     primitives
 }

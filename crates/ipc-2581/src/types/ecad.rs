@@ -213,6 +213,7 @@ pub struct LayerFeature {
 /// FeatureSet groups features with common properties
 #[derive(Debug, Clone)]
 pub struct FeatureSet {
+    pub net: Option<Symbol>,      // Net name from Set element
     pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
     pub polarity: Option<Polarity>,
     pub holes: Vec<Hole>,
@@ -220,7 +221,7 @@ pub struct FeatureSet {
     pub pads: Vec<Pad>,
     pub traces: Vec<Trace>,
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
-    pub lines: Vec<Line>, // Trace lines from Features > UserSpecial > Line
+    pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
 }
 
 /// Line represents a straight trace segment
@@ -260,7 +261,7 @@ pub struct Pad {
     pub padstack_def_ref: Option<Symbol>,
     pub x: Option<f64>,
     pub y: Option<f64>,
-    pub rotation: Option<f64>,
+    pub xform: Option<super::Xform>,
 }
 
 /// Trace represents a copper trace or line on a layer
@@ -360,7 +361,7 @@ pub enum Side {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Polarity {
     Positive,
     Negative,

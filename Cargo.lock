@@ -2317,6 +2317,7 @@ dependencies = [
  "roxmltree",
  "rustc-hash",
  "serde",
+ "serde_json",
  "svg",
  "thiserror 2.0.12",
  "walkdir",
