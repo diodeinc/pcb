@@ -2,8 +2,8 @@ use bumpalo::Bump;
 use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
 use ipc_2581::svg_export::{
-    build_board_context, expand_padstacks, resolve_features, FeatureBucket, PipelineTiming,
-    ResolvedFeature, ResolvedGeometry,
+    build_board_context, convert_to_paths, expand_padstacks, resolve_features, FeatureBucket,
+    PipelineTiming, ResolvedFeature, ResolvedGeometry,
 };
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
@@ -765,19 +765,47 @@ fn export_svg(
     }
     println!();
 
+    // Stage 3: Path Conversion
+    println!("Stage 3: Path Conversion");
+    let stage3_timer = std::time::Instant::now();
+
+    let layer_paths = convert_to_paths(layer_resolutions)?;
+
+    timing.stage3_primitives = Some(stage3_timer.elapsed());
+
+    println!("  ✓ Converted geometries to Skia paths");
+
+    // Show path statistics
+    for (layer_name, paths) in &layer_paths {
+        let total_paths = paths.features.len();
+        if total_paths > 0 {
+            println!("  Layer: {}", layer_name);
+            println!("    Total paths:    {}", total_paths);
+            println!(
+                "    BBox: ({:.3}, {:.3}) to ({:.3}, {:.3}) mm",
+                paths.bbox.min_x, paths.bbox.min_y, paths.bbox.max_x, paths.bbox.max_y
+            );
+            println!(
+                "    Size: {:.3} × {:.3} mm",
+                paths.bbox.width(),
+                paths.bbox.height()
+            );
+        }
+    }
+    println!();
+
     // Print timing summary
     if show_timings {
         timing.print_summary();
         println!();
     }
 
-    // Stage 3+ not yet implemented
+    // Stage 4+ not yet implemented
     println!("━━━ Status ━━━");
-    println!("✓ Stage 0, 1, 2 complete");
-    println!("⚠ Stages 3-6 not yet implemented");
+    println!("✓ Stage 0, 1, 2, 3 complete");
+    println!("⚠ Stages 4-6 not yet implemented");
     println!();
     println!("To continue development, next implement:");
-    println!("  - Stage 3: Primitive conversion (convert to Skia paths)");
     println!("  - Stage 4: Boolean operations (union/difference per bucket)");
     println!("  - Stage 5: Styling (colors per bucket)");
     println!("  - Stage 6: SVG emission (write final document)");

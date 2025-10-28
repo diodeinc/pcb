@@ -157,7 +157,12 @@ fn resolve_pad(
             FeatureBucket::Smd // No hole = SMD
         }
     } else {
-        FeatureBucket::Smd // Padstack not found - shouldn't happen
+        // Padstack not found - this is a data integrity error
+        eprintln!(
+            "WARNING: Pad references non-existent padstack '{}' at ({:.3}, {:.3}) - skipping",
+            padstack_name, center.x, center.y
+        );
+        return None;
     };
 
     let geometry = ResolvedGeometry::PadstackRef {
@@ -194,7 +199,7 @@ fn resolve_pad(
 
 /// Resolve a trace (Polyline) with transformations
 fn resolve_trace(
-    _doc: &Ipc2581,
+    doc: &Ipc2581,
     context: &BoardContext,
     trace: &Trace,
     net: Option<Symbol>,
@@ -214,8 +219,24 @@ fn resolve_trace(
     }
 
     // Get line width and line end from LineDescRef - REQUIRED for manufacturing accuracy
-    let line_desc_sym = trace.line_desc_ref?;
-    let line_desc = context.line_descriptors.get(&line_desc_sym)?;
+    let line_desc_sym = match trace.line_desc_ref {
+        Some(sym) => sym,
+        None => {
+            eprintln!("WARNING: Trace missing LineDescRef (required for line width) - skipping");
+            return None;
+        }
+    };
+
+    let line_desc = match context.line_descriptors.get(&line_desc_sym) {
+        Some(desc) => desc,
+        None => {
+            eprintln!(
+                "WARNING: Trace references non-existent LineDesc '{}' - skipping",
+                doc.resolve(line_desc_sym)
+            );
+            return None;
+        }
+    };
     // NOTE: line_width is ALREADY in mm (parser converted it)
     let line_width = line_desc.line_width;
     let line_end = match line_desc.line_end {

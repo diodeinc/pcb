@@ -18,6 +18,7 @@ mod resolved_feature;
 mod stage0;
 mod stage1;
 mod stage2;
+mod stage3;
 mod timing;
 
 pub use board_context::BoardContext;
@@ -25,6 +26,7 @@ pub use resolved_feature::{FeatureBucket, ResolvedFeature, ResolvedGeometry};
 pub use stage0::build_board_context;
 pub use stage1::resolve_features;
 pub use stage2::expand_padstacks;
+pub use stage3::{convert_to_paths, LayerPaths, PathFeature};
 pub use timing::PipelineTiming;
 
 use crate::Ipc2581Error;

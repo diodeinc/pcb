@@ -71,7 +71,7 @@ pub fn expand_padstacks(
                     mirror: *mirror,
                     scale: *scale,
                 };
-                if let Ok(expanded) = expand_padstack_ref(
+                let expanded = expand_padstack_ref(
                     doc,
                     context,
                     padstack_name,
@@ -80,11 +80,9 @@ pub fn expand_padstacks(
                     xform,
                     inline_standard_primitive.as_deref(),
                     inline_user_primitive.as_deref(),
-                ) {
-                    feature.geometry = expanded;
-                    feature.bbox = calculate_geometry_bbox(&feature.geometry);
-                }
-                // If expansion fails, leave as PadstackRef (will be caught in validation)
+                )?;
+                feature.geometry = expanded;
+                feature.bbox = calculate_geometry_bbox(&feature.geometry);
             }
         }
 
@@ -138,11 +136,20 @@ fn expand_padstack_ref(
         .get(layer_name)
         .ok_or(Ipc2581Error::MissingElement("Layer name not in interner"))?;
 
+    // Try to find REGULAR pad first, fall back to THERMAL if not found (plane layers)
     let pad_def = padstack_def
         .pad_defs
         .iter()
         .find(|pd| pd.layer_ref == layer_sym && pd.pad_use == PadUse::Regular)
-        .ok_or(Ipc2581Error::MissingElement("No PadDef for layer"))?;
+        .or_else(|| {
+            padstack_def
+                .pad_defs
+                .iter()
+                .find(|pd| pd.layer_ref == layer_sym && pd.pad_use == PadUse::Thermal)
+        })
+        .ok_or(Ipc2581Error::MissingElement(
+            "No PadDef for layer (tried REGULAR and THERMAL)",
+        ))?;
 
     // 5. Expand primitive from pad definition
     if let Some(std_prim_ref) = pad_def.standard_primitive_ref {
@@ -231,22 +238,38 @@ fn expand_primitive(
         StandardPrimitive::RectCenter(r) => {
             expand_rectangle_with_rotation(center, r.width, r.height, rotation, mirror, scale)
         }
-        StandardPrimitive::RectRound(r) => ResolvedGeometry::RoundedRectangle {
-            center,
-            width: r.width * scale,
-            height: r.height * scale,
-            radius: r.radius * scale,
-            corners: [r.upper_right, r.upper_left, r.lower_right, r.lower_left],
-            rotation: orient_rotation(rotation, mirror),
-        },
-        StandardPrimitive::RectCham(r) => ResolvedGeometry::ChamferedRectangle {
-            center,
-            width: r.width * scale,
-            height: r.height * scale,
-            chamfer: r.chamfer * scale,
-            corners: [r.upper_right, r.upper_left, r.lower_right, r.lower_left],
-            rotation: orient_rotation(rotation, mirror),
-        },
+        StandardPrimitive::RectRound(r) => {
+            // When mirrored, left and right corners swap
+            let corners = if mirror {
+                [r.upper_left, r.upper_right, r.lower_left, r.lower_right]
+            } else {
+                [r.upper_right, r.upper_left, r.lower_right, r.lower_left]
+            };
+            ResolvedGeometry::RoundedRectangle {
+                center,
+                width: r.width * scale,
+                height: r.height * scale,
+                radius: r.radius * scale,
+                corners,
+                rotation: orient_rotation(rotation, mirror),
+            }
+        }
+        StandardPrimitive::RectCham(r) => {
+            // When mirrored, left and right corners swap
+            let corners = if mirror {
+                [r.upper_left, r.upper_right, r.lower_left, r.lower_right]
+            } else {
+                [r.upper_right, r.upper_left, r.lower_right, r.lower_left]
+            };
+            ResolvedGeometry::ChamferedRectangle {
+                center,
+                width: r.width * scale,
+                height: r.height * scale,
+                chamfer: r.chamfer * scale,
+                corners,
+                rotation: orient_rotation(rotation, mirror),
+            }
+        }
         StandardPrimitive::Oval(o) => ResolvedGeometry::Ellipse {
             center,
             width: o.width * scale,
