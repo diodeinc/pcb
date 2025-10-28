@@ -684,6 +684,15 @@ check(voltage > 0, "Voltage must be positive")
 check(len(pins) == 8, "Expected 8 pins")
 ```
 
+### warn(msg)
+
+Emits a warning diagnostic with the given message and continues execution. Unlike `error()`, this does not stop evaluation.
+
+```python
+warn("Component value is outside typical range")
+warn("This configuration may have performance implications")
+```
+
 ### add_property(name, value)
 
 Adds a property to the current module instance.
