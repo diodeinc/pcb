@@ -8,6 +8,7 @@ pub struct PipelineTiming {
     pub stage2_padstacks: Option<Duration>,
     pub stage3_primitives: Option<Duration>,
     pub stage4_booleans: Option<Duration>,
+    pub stage4_5_drills: Option<Duration>,
     pub stage5_composite: Option<Duration>,
     pub stage6_emission: Option<Duration>,
 }
@@ -20,6 +21,7 @@ impl PipelineTiming {
             stage2_padstacks: None,
             stage3_primitives: None,
             stage4_booleans: None,
+            stage4_5_drills: None,
             stage5_composite: None,
             stage6_emission: None,
         }
@@ -32,6 +34,7 @@ impl PipelineTiming {
             self.stage2_padstacks,
             self.stage3_primitives,
             self.stage4_booleans,
+            self.stage4_5_drills,
             self.stage5_composite,
             self.stage6_emission,
         ]
@@ -69,6 +72,12 @@ impl PipelineTiming {
         if let Some(d) = self.stage4_booleans {
             println!(
                 "  Stage 4 (Booleans):    {:>8.2}ms",
+                d.as_secs_f64() * 1000.0
+            );
+        }
+        if let Some(d) = self.stage4_5_drills {
+            println!(
+                "  Stage 4.5 (Drills):    {:>8.2}ms",
                 d.as_secs_f64() * 1000.0
             );
         }

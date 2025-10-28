@@ -71,8 +71,9 @@ pub fn export_layer_paths_svg(
 
         for feature in &features {
             let path_data = path_to_svg_data(&feature.path);
-            svg.push_str(&format!(r#"    <path d="{}"/>
-"#, path_data));
+            let fill_rule = get_fill_rule(&feature.path);
+            svg.push_str(&format!(r#"    <path d="{}" fill-rule="{}"/>
+"#, path_data, fill_rule));
         }
 
         svg.push_str("  </g>\n");
@@ -95,8 +96,18 @@ pub fn export_layer_paths_svg(
 }
 
 /// Export Stage 4 flattened paths to SVG for visual inspection
+/// with optional drill mask visualization
 pub fn export_flattened_svg(
     flattened: &FlattenedLayer,
+    output_path: &str,
+) -> std::io::Result<()> {
+    export_flattened_svg_with_drill_mask(flattened, None, output_path)
+}
+
+/// Export Stage 4.5 flattened paths with drill mask
+pub fn export_flattened_svg_with_drill_mask(
+    flattened: &FlattenedLayer,
+    drill_mask: Option<&Path>,
     output_path: &str,
 ) -> std::io::Result<()> {
     let bounds = &flattened.bbox;
@@ -113,10 +124,15 @@ pub fn export_flattened_svg(
     ));
 
     // Add title
+    let title = if drill_mask.is_some() {
+        format!("{} - Stage 4.5 (with drill holes)", flattened.layer_name)
+    } else {
+        format!("{} - Stage 4 Flattened", flattened.layer_name)
+    };
     svg.push_str(&format!(
-        r#"  <title>{} - Stage 4 Flattened</title>
+        r#"  <title>{}</title>
 "#,
-        flattened.layer_name
+        title
     ));
 
     // Add background
@@ -138,12 +154,13 @@ pub fn export_flattened_svg(
         if let Some(path) = flattened.buckets.get(&bucket) {
             let (color, opacity) = bucket_color(bucket);
             let path_data = path_to_svg_data(path);
+            let fill_rule = get_fill_rule(path);
 
             svg.push_str(&format!(
                 r#"  <g id="{:?}">
-    <path d="{}" fill="{}" fill-opacity="{}" stroke="none"/>
+    <path d="{}" fill="{}" fill-opacity="{}" fill-rule="{}" stroke="none"/>
 "#,
-                bucket, path_data, color, opacity
+                bucket, path_data, color, opacity, fill_rule
             ));
 
             if let Some(stats) = flattened.stats.get(&bucket) {
@@ -157,6 +174,19 @@ pub fn export_flattened_svg(
         }
     }
 
+    // Add drill mask layer if provided (for Stage 4.5 visualization)
+    if let Some(mask) = drill_mask {
+        svg.push_str("  <!-- Drill mask (holes and slots) -->\n");
+        svg.push_str("  <g id=\"DrillMask\">\n");
+        let path_data = path_to_svg_data(mask);
+        svg.push_str(&format!(
+            "    <path d=\"{}\" fill=\"#808080\" fill-opacity=\"0.7\" fill-rule=\"evenodd\" stroke=\"none\"/>\n",
+            path_data
+        ));
+        svg.push_str("    <!-- Grey fill shows where copper was removed by drilling -->\n");
+        svg.push_str("  </g>\n");
+    }
+
     svg.push_str("</svg>\n");
 
     let mut file = File::create(output_path)?;
@@ -164,10 +194,15 @@ pub fn export_flattened_svg(
 
     println!("✓ Exported flattened SVG to {}", output_path);
     println!(
-        "  {} buckets, {:.2}×{:.2}mm",
+        "  {} buckets, {:.2}×{:.2}mm{}",
         flattened.buckets.len(),
         width,
-        height
+        height,
+        if drill_mask.is_some() {
+            " (with drill mask)"
+        } else {
+            ""
+        }
     );
 
     Ok(())
@@ -220,6 +255,14 @@ fn path_to_svg_data(path: &Path) -> String {
     }
 
     data
+}
+
+/// Get fill rule for SVG based on Skia fill type
+fn get_fill_rule(path: &Path) -> &'static str {
+    match path.fill_type() {
+        skia_safe::path::FillType::EvenOdd => "evenodd",
+        _ => "nonzero",
+    }
 }
 
 /// Get color and opacity for a feature bucket
@@ -281,10 +324,11 @@ pub fn export_bucket_svg(
 
     for feature in features {
         let path_data = path_to_svg_data(&feature.path);
+        let fill_rule = get_fill_rule(&feature.path);
         svg.push_str(&format!(
-            r#"  <path d="{}" fill="{}" fill-opacity="{}" stroke="none"/>
+            r#"  <path d="{}" fill="{}" fill-opacity="{}" fill-rule="{}" stroke="none"/>
 "#,
-            path_data, color, opacity
+            path_data, color, opacity, fill_rule
         ));
     }
 

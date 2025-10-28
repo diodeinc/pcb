@@ -14,12 +14,14 @@
 /// - **Stage 5**: Composite & Styling - Apply colors and prepare rendering
 /// - **Stage 6**: SVG Emission - Generate final SVG document
 mod board_context;
+mod primitives;
 mod resolved_feature;
 mod stage0;
 mod stage1;
 mod stage2;
 mod stage3;
 mod stage4;
+mod stage4_5;
 mod timing;
 
 pub mod debug;
@@ -31,6 +33,7 @@ pub use stage1::resolve_features;
 pub use stage2::expand_padstacks;
 pub use stage3::{convert_to_paths, LayerPaths, PathFeature};
 pub use stage4::{flatten_layers, BucketStats, FlattenedLayer};
+pub use stage4_5::{subtract_drill_mask, LayerDrillMask};
 pub use timing::PipelineTiming;
 
 use crate::Ipc2581Error;

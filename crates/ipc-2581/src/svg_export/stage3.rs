@@ -1,3 +1,6 @@
+use super::primitives::{
+    add_circle_as_cubics, add_corner_arc_for_rounded_rect, add_ellipse_as_cubics, RectCorner,
+};
 use super::resolved_feature::*;
 use super::Result;
 use crate::{Polarity, Symbol};
@@ -265,12 +268,14 @@ fn convert_circle(center: Point, diameter: f64, filled: bool, line_width: Option
 
         path.set_fill_type(skia_safe::path::FillType::EvenOdd);
         let center_pt = to_skia_point(center);
-        path.add_circle(center_pt, outer_radius, None);
-        path.add_circle(center_pt, inner_radius, None);
+
+        // Use cubic beziers instead of add_circle for better boolean op quality
+        add_circle_as_cubics(&mut path, center_pt, outer_radius);
+        add_circle_as_cubics(&mut path, center_pt, inner_radius);
     } else {
-        // Filled circle
+        // Filled circle using cubic beziers for better quality through boolean ops
         let radius = (diameter / 2.0) as f32;
-        path.add_circle(to_skia_point(center), radius, None);
+        add_circle_as_cubics(&mut path, to_skia_point(center), radius);
     }
 
     path
@@ -338,7 +343,7 @@ fn convert_rounded_rectangle(
 ) -> Path {
     let mut path = Path::new();
 
-    // Build rounded rectangle with per-corner radii
+    // Build rounded rectangle with cubic bezier corners
     // corners: [upper_right, upper_left, lower_right, lower_left]
     let half_w = (width / 2.0) as f32;
     let half_h = (height / 2.0) as f32;
@@ -346,49 +351,54 @@ fn convert_rounded_rectangle(
 
     // Start at top-left corner (after rounding)
     let start_x = -half_w + if corners[1] { r } else { 0.0 };
-    let start_y = -half_h;
-    path.move_to((start_x, start_y));
+    path.move_to((start_x, -half_h));
 
-    // Top edge to upper-right corner
-    let top_right_x = half_w - if corners[0] { r } else { 0.0 };
-    path.line_to((top_right_x, -half_h));
-
-    // Upper-right corner arc if rounded
+    // Top edge to where upper-right corner starts
     if corners[0] {
-        path.arc_to_tangent((half_w, -half_h), (half_w, -half_h + r), r);
+        path.line_to((half_w - r, -half_h));
     } else {
         path.line_to((half_w, -half_h));
     }
 
-    // Right edge to lower-right corner
-    let lower_right_y = half_h - if corners[2] { r } else { 0.0 };
-    path.line_to((half_w, lower_right_y));
+    // Upper-right corner arc (if rounded)
+    if corners[0] {
+        add_corner_arc_for_rounded_rect(&mut path, RectCorner::UpperRight, (half_w - r, -half_h + r), r);
+    }
 
-    // Lower-right corner arc if rounded
+    // Right edge to where lower-right corner starts
     if corners[2] {
-        path.arc_to_tangent((half_w, half_h), (half_w - r, half_h), r);
+        path.line_to((half_w, half_h - r));
     } else {
         path.line_to((half_w, half_h));
     }
 
-    // Bottom edge to lower-left corner
-    let lower_left_x = -half_w + if corners[3] { r } else { 0.0 };
-    path.line_to((lower_left_x, half_h));
+    // Lower-right corner arc (if rounded)
+    if corners[2] {
+        add_corner_arc_for_rounded_rect(&mut path, RectCorner::LowerRight, (half_w - r, half_h - r), r);
+    }
 
-    // Lower-left corner arc if rounded
+    // Bottom edge to where lower-left corner starts
     if corners[3] {
-        path.arc_to_tangent((-half_w, half_h), (-half_w, half_h - r), r);
+        path.line_to((-half_w + r, half_h));
     } else {
         path.line_to((-half_w, half_h));
     }
 
-    // Left edge back to top-left corner
-    let top_left_y = -half_h + if corners[1] { r } else { 0.0 };
-    path.line_to((-half_w, top_left_y));
+    // Lower-left corner arc (if rounded)
+    if corners[3] {
+        add_corner_arc_for_rounded_rect(&mut path, RectCorner::LowerLeft, (-half_w + r, half_h - r), r);
+    }
 
-    // Upper-left corner arc if rounded
+    // Left edge back to where upper-left corner starts
     if corners[1] {
-        path.arc_to_tangent((-half_w, -half_h), (start_x, -half_h), r);
+        path.line_to((-half_w, -half_h + r));
+    } else {
+        path.line_to((-half_w, -half_h));
+    }
+
+    // Upper-left corner arc (if rounded)
+    if corners[1] {
+        add_corner_arc_for_rounded_rect(&mut path, RectCorner::UpperLeft, (-half_w + r, -half_h + r), r);
     }
 
     path.close();
@@ -466,11 +476,10 @@ fn convert_chamfered_rectangle(
 fn convert_ellipse(center: Point, width: f64, height: f64, rotation: f64) -> Path {
     let mut path = Path::new();
 
-    // Create ellipse as oval centered at origin
+    // Create ellipse as oval using cubic beziers (kappa approximation)
     let half_w = (width / 2.0) as f32;
     let half_h = (height / 2.0) as f32;
-    let oval = skia_safe::Rect::from_xywh(-half_w, -half_h, width as f32, height as f32);
-    path.add_oval(oval, None);
+    add_ellipse_as_cubics(&mut path, (0.0, 0.0), half_w, half_h);
 
     apply_transform(&mut path, center, rotation);
     path
@@ -484,8 +493,9 @@ fn convert_donut(center: Point, outer_diameter: f64, inner_diameter: f64) -> Pat
     let outer_radius = (outer_diameter / 2.0) as f32;
     let inner_radius = (inner_diameter / 2.0) as f32;
 
-    path.add_circle(center_pt, outer_radius, None);
-    path.add_circle(center_pt, inner_radius, None);
+    // Use cubic beziers for better quality through boolean ops
+    add_circle_as_cubics(&mut path, center_pt, outer_radius);
+    add_circle_as_cubics(&mut path, center_pt, inner_radius);
     path
 }
 
@@ -504,9 +514,18 @@ fn convert_thermal(
     let inner_radius = (inner_diameter / 2.0) as f32;
     let half_gap = (gap / 2.0) as f32;
 
-    // Add annular ring (outer circle - inner circle)
-    path.add_circle((0.0, 0.0), outer_radius, None);
-    path.add_circle((0.0, 0.0), inner_radius, None);
+    // Guard against divide-by-zero
+    if spokes == 0 {
+        // No spokes = just a donut
+        add_circle_as_cubics(&mut path, (0.0, 0.0), outer_radius);
+        add_circle_as_cubics(&mut path, (0.0, 0.0), inner_radius);
+        apply_transform(&mut path, center, rotation);
+        return path;
+    }
+
+    // Add annular ring using cubic beziers
+    add_circle_as_cubics(&mut path, (0.0, 0.0), outer_radius);
+    add_circle_as_cubics(&mut path, (0.0, 0.0), inner_radius);
 
     // Add spoke gaps as rectangles
     let angle_step = 360.0 / spokes as f32;

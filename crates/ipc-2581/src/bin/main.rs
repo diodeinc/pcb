@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
 use ipc_2581::svg_export::{
     build_board_context, convert_to_paths, expand_padstacks, flatten_layers, resolve_features,
-    FeatureBucket, PipelineTiming, ResolvedFeature, ResolvedGeometry,
+    subtract_drill_mask, FeatureBucket, LayerDrillMask, PipelineTiming, ResolvedFeature,
+    ResolvedGeometry,
 };
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
@@ -869,7 +870,7 @@ fn export_svg(
     println!("Stage 4: Boolean Flattening");
     let stage4_timer = std::time::Instant::now();
 
-    let flattened_layers = flatten_layers(layer_paths)?;
+    let mut flattened_layers = flatten_layers(layer_paths)?;
 
     timing.stage4_booleans = Some(stage4_timer.elapsed());
 
@@ -905,9 +906,16 @@ fn export_svg(
     }
     println!();
 
-    // Export Stage 4 debug SVG if requested
+    // Stage 4.5: Drill Mask Subtraction
+    let stage4_5_timer = std::time::Instant::now();
+
+    let drill_masks = subtract_drill_mask(&doc, &mut flattened_layers)?;
+
+    timing.stage4_5_drills = Some(stage4_5_timer.elapsed());
+
+    // Export Stage 4 debug SVG if requested (with drill masks)
     if let Some(debug_path) = debug_stage4_path {
-        println!("Exporting Stage 4 debug SVG...");
+        println!("Exporting Stage 4 debug SVG (with drill masks)...");
         for (layer_name, flattened) in &flattened_layers {
             let output_path = if flattened_layers.len() > 1 {
                 // Multiple layers - create one file per layer
@@ -918,8 +926,13 @@ fn export_svg(
                 debug_path.clone()
             };
 
-            use ipc_2581::svg_export::debug::export_flattened_svg;
-            export_flattened_svg(flattened, output_path.to_str().unwrap())?;
+            use ipc_2581::svg_export::debug::export_flattened_svg_with_drill_mask;
+            let drill_mask = drill_masks.get(layer_name).map(|m| &m.mask);
+            export_flattened_svg_with_drill_mask(
+                flattened,
+                drill_mask,
+                output_path.to_str().unwrap(),
+            )?;
         }
         println!();
     }

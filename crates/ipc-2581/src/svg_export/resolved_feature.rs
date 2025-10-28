@@ -275,6 +275,15 @@ impl BoundingBox {
         self.max_y = self.max_y.max(p.y);
     }
 
+    /// Check if this bounding box intersects with another
+    pub fn intersects(&self, other: &Self) -> bool {
+        // No overlap if one is completely to the left/right/above/below the other
+        !(self.max_x < other.min_x
+            || self.min_x > other.max_x
+            || self.max_y < other.min_y
+            || self.min_y > other.max_y)
+    }
+
     pub fn width(&self) -> f64 {
         self.max_x - self.min_x
     }
