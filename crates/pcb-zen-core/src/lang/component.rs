@@ -256,8 +256,6 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 data.mpn
                     .as_ref()
                     .map(|mpn| heap.alloc_str(mpn).to_value())
-                    .or_else(|| data.properties.get("mpn").map(|t| t.to_value()))
-                    .or_else(|| data.properties.get("Mpn").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "manufacturer" => Some(
@@ -407,8 +405,6 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .mpn
                     .as_ref()
                     .map(|mpn| heap.alloc_str(mpn).to_value())
-                    .or_else(|| self.data.properties.get("mpn").map(|t| t.to_value()))
-                    .or_else(|| self.data.properties.get("Mpn").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "manufacturer" => Some(
@@ -949,9 +945,34 @@ where
                 }
             }
 
-            // If manufacturer is not explicitly provided, try to get it from the symbol's properties
+            // If mpn is not explicitly provided, try to get it from properties, then symbol properties
+            let final_mpn = mpn
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("mpn")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    properties_map
+                        .get("Mpn")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Manufacturer_Part_Number")
+                        .map(|s| s.to_owned())
+                });
+
+            // If manufacturer is not explicitly provided, try to get it from properties, then symbol properties
             let final_manufacturer = manufacturer
                 .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("manufacturer")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
                 .or_else(|| {
                     final_symbol
                         .properties()
@@ -993,7 +1014,10 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            // Remove datasheet and description from properties map since we're storing them as typed fields
+            // Remove mpn, manufacturer, datasheet, and description from properties map since we're storing them as typed fields
+            properties_map.shift_remove("mpn");
+            properties_map.shift_remove("Mpn");
+            properties_map.shift_remove("manufacturer");
             properties_map.shift_remove("datasheet");
             properties_map.shift_remove("description");
 
@@ -1014,7 +1038,7 @@ where
                 prefix: final_prefix,
                 connections,
                 data: RefCell::new(ComponentData {
-                    mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                    mpn: final_mpn,
                     manufacturer: final_manufacturer,
                     dnp: dnp_val.and_then(|v| v.unpack_bool()),
                     properties: properties_map,
