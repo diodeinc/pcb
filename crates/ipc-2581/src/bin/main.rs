@@ -702,18 +702,37 @@ fn export_svg(
         let mut rectangles = 0;
         let mut polygons = 0;
         let mut polylines = 0;
+        let mut ellipses = 0;
+        let mut donuts = 0;
+        let mut thermals = 0;
+        let mut groups = 0;
 
         for feature in &resolution.features {
             match &feature.geometry {
                 ResolvedGeometry::PadstackRef { .. } => padstack_refs += 1,
                 ResolvedGeometry::Circle { .. } => circles += 1,
                 ResolvedGeometry::Rectangle { .. } => rectangles += 1,
+                ResolvedGeometry::RoundedRectangle { .. } => rectangles += 1,
+                ResolvedGeometry::ChamferedRectangle { .. } => rectangles += 1,
                 ResolvedGeometry::Polygon { .. } => polygons += 1,
                 ResolvedGeometry::Polyline { .. } => polylines += 1,
+                ResolvedGeometry::Ellipse { .. } => ellipses += 1,
+                ResolvedGeometry::Donut { .. } => donuts += 1,
+                ResolvedGeometry::Thermal { .. } => thermals += 1,
+                ResolvedGeometry::Group { .. } => groups += 1,
             }
         }
 
-        if padstack_refs + circles + rectangles + polygons + polylines > 0 {
+        let total = padstack_refs
+            + circles
+            + rectangles
+            + polygons
+            + polylines
+            + ellipses
+            + donuts
+            + thermals
+            + groups;
+        if total > 0 {
             println!("  Layer: {}", layer_name);
             if circles > 0 {
                 println!("    Circles:        {}", circles);
@@ -721,11 +740,23 @@ fn export_svg(
             if rectangles > 0 {
                 println!("    Rectangles:     {}", rectangles);
             }
+            if ellipses > 0 {
+                println!("    Ellipses:       {}", ellipses);
+            }
             if polygons > 0 {
                 println!("    Polygons:       {}", polygons);
             }
             if polylines > 0 {
                 println!("    Polylines:      {}", polylines);
+            }
+            if donuts > 0 {
+                println!("    Donuts:         {}", donuts);
+            }
+            if thermals > 0 {
+                println!("    Thermals:       {}", thermals);
+            }
+            if groups > 0 {
+                println!("    Groups:         {}", groups);
             }
             if padstack_refs > 0 {
                 println!("    PadstackRefs:   {} (unexpanded)", padstack_refs);
@@ -746,7 +777,7 @@ fn export_svg(
     println!("⚠ Stages 3-6 not yet implemented");
     println!();
     println!("To continue development, next implement:");
-    println!("  - Stage 3: Primitive conversion (convert to lyon paths)");
+    println!("  - Stage 3: Primitive conversion (convert to Skia paths)");
     println!("  - Stage 4: Boolean operations (union/difference per bucket)");
     println!("  - Stage 5: Styling (colors per bucket)");
     println!("  - Stage 6: SVG emission (write final document)");

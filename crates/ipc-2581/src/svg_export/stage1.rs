@@ -40,6 +40,15 @@ pub fn resolve_features(
             }
         }
 
+        // Look up layer definition to get default polarity
+        let layer_default_polarity = ecad
+            .cad_data
+            .layers
+            .iter()
+            .find(|l| l.name == layer_feature.layer_ref)
+            .and_then(|l| l.polarity)
+            .unwrap_or(Polarity::Positive);
+
         let mut features = Vec::new();
         let mut bbox = BoundingBox::empty();
         let mut stats = LayerStats::new();
@@ -48,8 +57,8 @@ pub fn resolve_features(
         for set in &layer_feature.sets {
             let net_sym = set.net; // Net is already a Symbol (or None)
 
-            // Get set-level polarity (defaults to POSITIVE)
-            let set_polarity = set.polarity.unwrap_or(Polarity::Positive);
+            // Get set-level polarity (defaults to layer polarity)
+            let set_polarity = set.polarity.unwrap_or(layer_default_polarity);
 
             // Resolve pads
             for pad in &set.pads {
@@ -118,20 +127,16 @@ fn resolve_pad(
     let xform = pad.xform.unwrap_or_default();
 
     // NOTE: x, y are ALREADY in mm (parser converted them)
-    let mut center = Point::new(x, y);
+    // Transform the offset vector by scale → mirror → rotate before adding to position
+    // (IPC-2581 spec: transforms apply to local coordinates, including offset)
+    let transformed_offset = Point::new(xform.x_offset, xform.y_offset)
+        .scale(xform.scale)
+        .mirror_if(xform.mirror)
+        .rotate(xform.rotation);
 
-    // Apply Xform offset to position
-    center = center.translate(xform.x_offset, xform.y_offset);
+    let center = Point::new(x, y).translate(transformed_offset.x, transformed_offset.y);
 
-    // 2. Apply rotation (rotation is applied to the PAD SHAPE, not the position)
-    // Position stays at center, but we store rotation for Shape 2
-
-    // 3. Mirror (also affects shape, not position)
-
-    // 4. Scale (affects shape, not position)
-
-    // The rotation/mirror/scale will be applied to the pad geometry in Stage 2
-    let rotation = xform.rotation;
+    // The rotation/mirror/scale transformations are applied to the pad geometry in Stage 2
 
     // Get padstack reference - if missing, skip this pad
     let padstack_ref = pad.padstack_def_ref?;
@@ -158,7 +163,9 @@ fn resolve_pad(
     let geometry = ResolvedGeometry::PadstackRef {
         padstack_name,
         center,
-        rotation,
+        rotation: xform.rotation,
+        mirror: xform.mirror,
+        scale: xform.scale,
         layer: layer_name.to_string(),
         inline_standard_primitive: pad
             .standard_primitive_ref
@@ -206,11 +213,16 @@ fn resolve_trace(
         bbox.expand_to_point(*p);
     }
 
-    // Get line width from LineDescRef - REQUIRED for manufacturing accuracy
+    // Get line width and line end from LineDescRef - REQUIRED for manufacturing accuracy
     let line_desc_sym = trace.line_desc_ref?;
     let line_desc = context.line_descriptors.get(&line_desc_sym)?;
     // NOTE: line_width is ALREADY in mm (parser converted it)
     let line_width = line_desc.line_width;
+    let line_end = match line_desc.line_end {
+        crate::LineEnd::Round => LineEndStyle::Round,
+        crate::LineEnd::Square => LineEndStyle::Square,
+        crate::LineEnd::Flat => LineEndStyle::None,
+    };
 
     // Expand bbox by line width
     let half_width = line_width / 2.0;
@@ -224,7 +236,7 @@ fn resolve_trace(
     let geometry = ResolvedGeometry::Polyline {
         points,
         line_width,
-        line_end: LineEndStyle::Round,
+        line_end,
     };
 
     Some(ResolvedFeature {
@@ -242,19 +254,23 @@ fn resolve_polygon(
     net: Option<Symbol>,
     polarity: Polarity,
 ) -> ResolvedFeature {
-    // Convert polygon points
+    // Convert polygon points and preserve arc data
     let mut points = vec![Point::new(polygon.begin.x, polygon.begin.y)];
-    let mut has_curves = false;
+    let mut arc_segments = vec![None]; // First point has no arc (starting point)
 
     for step in &polygon.steps {
         match step {
             crate::PolyStep::Segment(seg) => {
                 points.push(Point::new(seg.x, seg.y));
+                arc_segments.push(None); // Straight line
             }
             crate::PolyStep::Curve(curve) => {
-                has_curves = true;
-                // For now, just add endpoint (will tessellate in Stage 3)
+                // Preserve arc data for Stage 3 rendering with Skia
                 points.push(Point::new(curve.x, curve.y));
+                arc_segments.push(Some(super::resolved_feature::ArcSegment {
+                    center: Point::new(curve.center_x, curve.center_y),
+                    clockwise: curve.clockwise,
+                }));
             }
         }
     }
@@ -265,7 +281,12 @@ fn resolve_polygon(
         bbox.expand_to_point(*p);
     }
 
-    let geometry = ResolvedGeometry::Polygon { points, has_curves };
+    let geometry = ResolvedGeometry::Polygon {
+        points,
+        arc_segments,
+        cutouts: vec![],
+        cutout_arcs: vec![],
+    };
 
     ResolvedFeature {
         bucket: FeatureBucket::Fill,

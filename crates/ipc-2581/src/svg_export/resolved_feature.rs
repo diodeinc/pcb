@@ -44,6 +44,16 @@ pub enum FeatureBucket {
     Antipad,
 }
 
+/// Arc segment data for curved polygon edges
+/// Represents an arc from the previous point to the current point
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ArcSegment {
+    /// Arc center point
+    pub center: Point,
+    /// Arc direction (true = clockwise, false = counter-clockwise)
+    pub clockwise: bool,
+}
+
 /// Resolved geometry after transformation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResolvedGeometry {
@@ -54,10 +64,15 @@ pub enum ResolvedGeometry {
         line_end: LineEndStyle,
     },
 
-    /// Filled polygon
+    /// Filled polygon (with optional cutouts/holes and arc data)
     Polygon {
         points: Vec<Point>,
-        has_curves: bool,
+        /// Arc data for each edge (None = straight line, Some = arc to this point)
+        /// Index i contains arc data for edge from points[i-1] to points[i]
+        arc_segments: Vec<Option<ArcSegment>>,
+        cutouts: Vec<Vec<Point>>,
+        /// Arc data for cutout edges (one Vec<Option<ArcSegment>> per cutout)
+        cutout_arcs: Vec<Vec<Option<ArcSegment>>>,
     },
 
     /// Circle (pad or via)
@@ -75,17 +90,76 @@ pub enum ResolvedGeometry {
         filled: bool,
     },
 
+    /// Rounded rectangle (preserves corner radii for accurate rendering)
+    RoundedRectangle {
+        center: Point,
+        width: f64,
+        height: f64,
+        radius: f64,
+        /// Per-corner rounding flags
+        /// Order: [upper_right, upper_left, lower_right, lower_left]
+        /// Matches IPC-2581 RectRound field ordering
+        /// true = corner is rounded, false = corner is square
+        corners: [bool; 4],
+        rotation: f64,
+    },
+
+    /// Chamfered rectangle (preserves chamfer size for accurate rendering)
+    ChamferedRectangle {
+        center: Point,
+        width: f64,
+        height: f64,
+        chamfer: f64,
+        /// Per-corner chamfer flags
+        /// Order: [upper_right, upper_left, lower_right, lower_left]
+        /// Matches IPC-2581 RectCham field ordering
+        /// true = corner is chamfered, false = corner is square
+        corners: [bool; 4],
+        rotation: f64,
+    },
+
+    /// Ellipse (preserves parametric form for accurate rendering)
+    Ellipse {
+        center: Point,
+        width: f64,
+        height: f64,
+        rotation: f64,
+    },
+
+    /// Donut / Annular ring (preserves inner hole for accurate rendering)
+    Donut {
+        center: Point,
+        outer_diameter: f64,
+        inner_diameter: f64,
+    },
+
+    /// Thermal relief (preserves spoke structure for accurate rendering)
+    Thermal {
+        center: Point,
+        outer_diameter: f64,
+        inner_diameter: f64,
+        gap: f64,
+        spokes: u8,
+        rotation: f64,
+    },
+
     /// Padstack reference (to be expanded in Stage 2)
     PadstackRef {
         padstack_name: String,
         center: Point,
         rotation: f64,
+        mirror: bool,
+        scale: f64,
         layer: String,
         /// Inline primitive override (takes precedence over padstack)
         inline_standard_primitive: Option<String>,
         /// Inline user primitive override (takes precedence over padstack)
         inline_user_primitive: Option<String>,
     },
+
+    /// Group of multiple geometries (from UserSpecial with multiple shapes)
+    /// Will be unioned together in Stage 4
+    Group { geometries: Vec<ResolvedGeometry> },
 }
 
 /// Point in 2D space (millimeters)
@@ -116,6 +190,15 @@ impl Point {
         Self {
             x: -self.x,
             y: self.y,
+        }
+    }
+
+    /// Conditionally apply mirror
+    pub fn mirror_if(&self, should_mirror: bool) -> Self {
+        if should_mirror {
+            self.mirror()
+        } else {
+            *self
         }
     }
 
