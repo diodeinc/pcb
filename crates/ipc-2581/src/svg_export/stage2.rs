@@ -1,6 +1,8 @@
 use super::resolved_feature::*;
 use super::{BoardContext, Result};
-use crate::{Ipc2581, Ipc2581Error, PadUse, StandardPrimitive, UserPrimitive, UserShapeType};
+use crate::{
+    FillProperty, Ipc2581, Ipc2581Error, PadUse, StandardPrimitive, UserPrimitive, UserShapeType,
+};
 use std::collections::HashMap;
 
 /// Transform parameters (rotation, mirror, scale)
@@ -157,7 +159,7 @@ fn expand_padstack_ref(
             .standard_primitives
             .get(&std_prim_ref)
             .ok_or(Ipc2581Error::MissingElement("StandardPrimitive not found"))?;
-        return Ok(expand_primitive(prim, center, xform));
+        return Ok(expand_primitive(context, prim, center, xform));
     }
 
     if let Some(user_prim_ref) = pad_def.user_primitive_ref {
@@ -165,7 +167,7 @@ fn expand_padstack_ref(
             .user_primitives
             .get(&user_prim_ref)
             .ok_or(Ipc2581Error::MissingElement("UserPrimitive not found"))?;
-        return Ok(expand_user_primitive(prim, center, xform));
+        return Ok(expand_user_primitive(context, prim, center, xform));
     }
 
     Err(Ipc2581Error::MissingElement(
@@ -193,7 +195,7 @@ fn lookup_and_expand_standard_primitive(
         .get(&symbol)
         .ok_or(Ipc2581Error::MissingElement("StandardPrimitive not found"))?;
 
-    Ok(expand_primitive(primitive, center, xform))
+    Ok(expand_primitive(context, primitive, center, xform))
 }
 
 /// Look up and expand a user primitive by name
@@ -216,11 +218,12 @@ fn lookup_and_expand_user_primitive(
         .get(&symbol)
         .ok_or(Ipc2581Error::MissingElement("UserPrimitive not found"))?;
 
-    Ok(expand_user_primitive(primitive, center, xform))
+    Ok(expand_user_primitive(context, primitive, center, xform))
 }
 
 /// Convert a StandardPrimitive to ResolvedGeometry with transforms applied
 fn expand_primitive(
+    context: &BoardContext,
     primitive: &StandardPrimitive,
     center: Point,
     xform: Transform,
@@ -229,14 +232,75 @@ fn expand_primitive(
     let mirror = xform.mirror;
     let scale = xform.scale;
     match primitive {
-        StandardPrimitive::Circle(c) => ResolvedGeometry::Circle {
-            center,
-            diameter: c.diameter * scale,
-            filled: true,
-        },
+        StandardPrimitive::Circle(c) => {
+            let filled = c.fill_property != Some(FillProperty::Hollow);
+            let line_width = if !filled {
+                // HOLLOW shape - get LineDesc width
+                c.line_desc_ref
+                    .and_then(|sym| context.line_descriptors.get(&sym))
+                    .map(|desc| desc.line_width * scale)
+            } else {
+                None
+            };
+
+            ResolvedGeometry::Circle {
+                center,
+                diameter: c.diameter * scale,
+                filled,
+                line_width,
+            }
+        }
 
         StandardPrimitive::RectCenter(r) => {
-            expand_rectangle_with_rotation(center, r.width, r.height, rotation, mirror, scale)
+            let filled = r.fill_property != Some(FillProperty::Hollow);
+            let line_width = if !filled {
+                // HOLLOW shape - get LineDesc width
+                r.line_desc_ref
+                    .and_then(|sym| context.line_descriptors.get(&sym))
+                    .map(|desc| desc.line_width * scale)
+            } else {
+                None
+            };
+
+            let scaled_width = r.width * scale;
+            let scaled_height = r.height * scale;
+
+            if rotation.abs() < 0.01 && !mirror {
+                ResolvedGeometry::Rectangle {
+                    center,
+                    width: scaled_width,
+                    height: scaled_height,
+                    filled,
+                    line_width,
+                }
+            } else {
+                // Convert to polygon when rotation or mirror is needed
+                let hw = r.width / 2.0;
+                let hh = r.height / 2.0;
+                let corners = [
+                    Point::new(-hw, -hh),
+                    Point::new(hw, -hh),
+                    Point::new(hw, hh),
+                    Point::new(-hw, hh),
+                ];
+
+                let transformed_corners: Vec<Point> = corners
+                    .iter()
+                    .map(|p| {
+                        p.scale(scale)
+                            .mirror_if(mirror)
+                            .rotate(rotation)
+                            .translate(center.x, center.y)
+                    })
+                    .collect();
+
+                ResolvedGeometry::Polygon {
+                    points: transformed_corners,
+                    arc_segments: vec![None; 4],
+                    cutouts: vec![],
+                    cutout_arcs: vec![],
+                }
+            }
         }
         StandardPrimitive::RectRound(r) => {
             // When mirrored, left and right corners swap
@@ -377,11 +441,13 @@ fn expand_primitive(
             center,
             diameter: b.size * scale,
             filled: true,
+            line_width: None,
         },
         StandardPrimitive::Moire(m) => ResolvedGeometry::Circle {
             center,
             diameter: m.diameter * scale,
             filled: true,
+            line_width: None,
         },
 
         StandardPrimitive::Contour(contour) => {
@@ -464,6 +530,7 @@ fn expand_primitive(
 
 /// Convert a UserPrimitive to ResolvedGeometry
 fn expand_user_primitive(
+    context: &BoardContext,
     user_prim: &UserPrimitive,
     center: Point,
     xform: Transform,
@@ -475,6 +542,7 @@ fn expand_user_primitive(
                     center,
                     diameter: 1.0 * xform.scale,
                     filled: true,
+                    line_width: None,
                 };
             }
 
@@ -482,7 +550,7 @@ fn expand_user_primitive(
             let geometries: Vec<ResolvedGeometry> = special
                 .shapes
                 .iter()
-                .map(|user_shape| expand_user_shape(user_shape, center, xform))
+                .map(|user_shape| expand_user_shape(context, user_shape, center, xform))
                 .collect();
 
             if geometries.len() == 1 {
@@ -498,6 +566,7 @@ fn expand_user_primitive(
 
 /// Convert a single UserShape to ResolvedGeometry
 fn expand_user_shape(
+    context: &BoardContext,
     user_shape: &crate::UserShape,
     center: Point,
     xform: Transform,
@@ -506,13 +575,72 @@ fn expand_user_shape(
     let mirror = xform.mirror;
     let scale = xform.scale;
     match &user_shape.shape {
-        UserShapeType::Circle(c) => ResolvedGeometry::Circle {
-            center,
-            diameter: c.diameter * scale,
-            filled: true,
-        },
+        UserShapeType::Circle(c) => {
+            let filled = c.fill_property != Some(FillProperty::Hollow);
+            let line_width = if !filled {
+                c.line_desc_ref
+                    .and_then(|sym| context.line_descriptors.get(&sym))
+                    .map(|desc| desc.line_width * scale)
+            } else {
+                None
+            };
+
+            ResolvedGeometry::Circle {
+                center,
+                diameter: c.diameter * scale,
+                filled,
+                line_width,
+            }
+        }
         UserShapeType::RectCenter(r) => {
-            expand_rectangle_with_rotation(center, r.width, r.height, rotation, mirror, scale)
+            let filled = r.fill_property != Some(FillProperty::Hollow);
+            let line_width = if !filled {
+                r.line_desc_ref
+                    .and_then(|sym| context.line_descriptors.get(&sym))
+                    .map(|desc| desc.line_width * scale)
+            } else {
+                None
+            };
+
+            let scaled_width = r.width * scale;
+            let scaled_height = r.height * scale;
+
+            if rotation.abs() < 0.01 && !mirror {
+                ResolvedGeometry::Rectangle {
+                    center,
+                    width: scaled_width,
+                    height: scaled_height,
+                    filled,
+                    line_width,
+                }
+            } else {
+                // Convert to polygon when rotation or mirror is needed
+                let hw = r.width / 2.0;
+                let hh = r.height / 2.0;
+                let corners = [
+                    Point::new(-hw, -hh),
+                    Point::new(hw, -hh),
+                    Point::new(hw, hh),
+                    Point::new(-hw, hh),
+                ];
+
+                let transformed_corners: Vec<Point> = corners
+                    .iter()
+                    .map(|p| {
+                        p.scale(scale)
+                            .mirror_if(mirror)
+                            .rotate(rotation)
+                            .translate(center.x, center.y)
+                    })
+                    .collect();
+
+                ResolvedGeometry::Polygon {
+                    points: transformed_corners,
+                    arc_segments: vec![None; 4],
+                    cutouts: vec![],
+                    cutout_arcs: vec![],
+                }
+            }
         }
         UserShapeType::Oval(o) => ResolvedGeometry::Ellipse {
             center,
@@ -576,6 +704,7 @@ fn expand_rectangle_with_rotation(
             width: scaled_width,
             height: scaled_height,
             filled: true,
+            line_width: None,
         }
     } else {
         let hw = width / 2.0;

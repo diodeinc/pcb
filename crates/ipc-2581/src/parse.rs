@@ -313,6 +313,32 @@ impl<'arena> Parser<'arena> {
         }
     }
 
+    /// Parse optional FillDesc and LineDesc children from a primitive node
+    fn parse_fill_and_line_desc(
+        &mut self,
+        node: &Node,
+    ) -> Result<(Option<FillProperty>, Option<Symbol>)> {
+        let mut fill_property = None;
+        let mut line_desc_ref = None;
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "FillDesc" => {
+                    let fill_desc = self.parse_fill_desc(&child)?;
+                    fill_property = Some(fill_desc.fill_property);
+                }
+                "LineDescRef" => {
+                    if let Some(id) = child.attribute("id") {
+                        line_desc_ref = Some(self.interner.intern(id));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok((fill_property, line_desc_ref))
+    }
+
     fn parse_dictionary_standard(&mut self, node: &Node) -> Result<DictionaryStandard> {
         let units = node
             .attribute("units")
@@ -349,12 +375,29 @@ impl<'arena> Parser<'arena> {
         match node.tag_name().name() {
             "Circle" => {
                 let diameter = self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?;
-                Ok(StandardPrimitive::Circle(Circle { diameter }))
+
+                // Parse optional FillDesc child
+                let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(node)?;
+
+                Ok(StandardPrimitive::Circle(Circle {
+                    diameter,
+                    fill_property,
+                    line_desc_ref,
+                }))
             }
             "RectCenter" => {
                 let width = self.parse_f64_attr_with_units(node, "width", "RectCenter", units)?;
                 let height = self.parse_f64_attr_with_units(node, "height", "RectCenter", units)?;
-                Ok(StandardPrimitive::RectCenter(RectCenter { width, height }))
+
+                // Parse optional FillDesc child
+                let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(node)?;
+
+                Ok(StandardPrimitive::RectCenter(RectCenter {
+                    width,
+                    height,
+                    fill_property,
+                    line_desc_ref,
+                }))
             }
             "RectRound" => {
                 let width = self.parse_f64_attr_with_units(node, "width", "RectRound", units)?;
@@ -493,14 +536,25 @@ impl<'arena> Parser<'arena> {
                 "Circle" => {
                     let diameter =
                         self.parse_f64_attr_with_units(&child, "diameter", "Circle", units)?;
-                    Some(UserShapeType::Circle(Circle { diameter }))
+                    let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(&child)?;
+                    Some(UserShapeType::Circle(Circle {
+                        diameter,
+                        fill_property,
+                        line_desc_ref,
+                    }))
                 }
                 "RectCenter" => {
                     let width =
                         self.parse_f64_attr_with_units(&child, "width", "RectCenter", units)?;
                     let height =
                         self.parse_f64_attr_with_units(&child, "height", "RectCenter", units)?;
-                    Some(UserShapeType::RectCenter(RectCenter { width, height }))
+                    let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(&child)?;
+                    Some(UserShapeType::RectCenter(RectCenter {
+                        width,
+                        height,
+                        fill_property,
+                        line_desc_ref,
+                    }))
                 }
                 "Oval" => {
                     let width = self.parse_f64_attr_with_units(&child, "width", "Oval", units)?;

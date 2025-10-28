@@ -80,6 +80,8 @@ pub enum ResolvedGeometry {
         center: Point,
         diameter: f64,
         filled: bool,
+        /// Stroke width for HOLLOW circles (from LineDesc)
+        line_width: Option<f64>,
     },
 
     /// Rectangle
@@ -88,6 +90,8 @@ pub enum ResolvedGeometry {
         width: f64,
         height: f64,
         filled: bool,
+        /// Stroke width for HOLLOW rectangles (from LineDesc)
+        line_width: Option<f64>,
     },
 
     /// Rounded rectangle (preserves corner radii for accurate rendering)

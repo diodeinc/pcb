@@ -53,15 +53,7 @@ pub fn convert_to_paths(
             let path_features = convert_geometry(&resolved_feature.geometry)?;
 
             for path in path_features {
-                // Calculate accurate bbox from path
-                let path_bounds = path.bounds();
-                let feature_bbox = BoundingBox {
-                    min_x: path_bounds.left as f64,
-                    min_y: path_bounds.top as f64,
-                    max_x: path_bounds.right as f64,
-                    max_y: path_bounds.bottom as f64,
-                };
-
+                let feature_bbox = path_to_bbox(&path);
                 bbox = bbox.union(&feature_bbox);
 
                 features.push(PathFeature {
@@ -98,14 +90,27 @@ fn convert_geometry(geometry: &ResolvedGeometry) -> Result<Vec<Path>> {
             center,
             diameter,
             filled,
-        } => Ok(vec![convert_circle(*center, *diameter, *filled)]),
+            line_width,
+        } => Ok(vec![convert_circle(
+            *center,
+            *diameter,
+            *filled,
+            *line_width,
+        )]),
 
         ResolvedGeometry::Rectangle {
             center,
             width,
             height,
             filled,
-        } => Ok(vec![convert_rectangle(*center, *width, *height, *filled)]),
+            line_width,
+        } => Ok(vec![convert_rectangle(
+            *center,
+            *width,
+            *height,
+            *filled,
+            *line_width,
+        )]),
 
         ResolvedGeometry::RoundedRectangle {
             center,
@@ -189,8 +194,17 @@ fn convert_geometry(geometry: &ResolvedGeometry) -> Result<Vec<Path>> {
             Ok(paths)
         }
 
-        ResolvedGeometry::PadstackRef { .. } => {
+        ResolvedGeometry::PadstackRef {
+            padstack_name,
+            center,
+            layer,
+            ..
+        } => {
             // This should never happen - Stage 2 should have expanded all padstacks
+            eprintln!(
+                "ERROR: Unexpanded PadstackRef '{}' at ({:.3}, {:.3}) on layer {} - Stage 2 expansion failed",
+                padstack_name, center.x, center.y, layer
+            );
             Err(crate::Ipc2581Error::MissingElement(
                 "Unexpanded PadstackRef in Stage 3",
             ))
@@ -202,55 +216,80 @@ fn convert_geometry(geometry: &ResolvedGeometry) -> Result<Vec<Path>> {
 // Geometry Conversion Functions
 // ============================================================================
 
-fn convert_circle(center: Point, diameter: f64, filled: bool) -> Path {
-    let mut path = Path::new();
-    let radius = diameter / 2.0;
+// Constants for geometry conversion
+const ROTATION_EPSILON: f64 = 1e-6; // Rotation threshold
+const ARC_TOLERANCE_RATIO: f64 = 0.001; // 0.1% tolerance for arc validation
 
-    if filled {
-        // Filled circle
-        path.add_circle((center.x as f32, center.y as f32), radius as f32, None);
-    } else {
-        // Hollow circle - render as annular ring (donut)
-        // Use even-odd fill rule: outer circle - inner circle
-        // Estimate stroke width as 10% of diameter (reasonable default for hollow shapes)
-        let stroke_width = (diameter * 0.1).max(0.1); // At least 0.1mm
-        let inner_radius = (radius - stroke_width / 2.0).max(0.0);
-        let outer_radius = radius + stroke_width / 2.0;
+/// Convert Point to Skia coordinate tuple
+#[inline]
+fn to_skia_point(p: Point) -> (f32, f32) {
+    (p.x as f32, p.y as f32)
+}
+
+/// Convert Skia path bounds to BoundingBox
+#[inline]
+fn path_to_bbox(path: &Path) -> BoundingBox {
+    let bounds = path.bounds();
+    BoundingBox {
+        min_x: bounds.left as f64,
+        min_y: bounds.top as f64,
+        max_x: bounds.right as f64,
+        max_y: bounds.bottom as f64,
+    }
+}
+
+/// Apply rotation and translation transform to a path
+///
+/// Rotates path around origin (if rotation is significant), then translates to center position.
+fn apply_transform(path: &mut Path, center: Point, rotation: f64) {
+    // Apply rotation around origin if needed
+    if rotation.abs() > ROTATION_EPSILON {
+        let matrix = skia_safe::Matrix::rotate_deg(rotation as f32);
+        path.transform(&matrix);
+    }
+
+    // Translate to center position
+    let translate = skia_safe::Matrix::translate(to_skia_point(center));
+    path.transform(&translate);
+}
+
+fn convert_circle(center: Point, diameter: f64, filled: bool, line_width: Option<f64>) -> Path {
+    let mut path = Path::new();
+
+    if !filled {
+        // HOLLOW circle - render as annular ring with LineDesc width
+        let stroke_width = line_width.expect("HOLLOW circle missing line_width from LineDesc");
+        let radius = diameter / 2.0;
+        let inner_radius = ((radius - stroke_width / 2.0).max(0.0)) as f32;
+        let outer_radius = (radius + stroke_width / 2.0) as f32;
 
         path.set_fill_type(skia_safe::path::FillType::EvenOdd);
-        path.add_circle(
-            (center.x as f32, center.y as f32),
-            outer_radius as f32,
-            None,
-        );
-        path.add_circle(
-            (center.x as f32, center.y as f32),
-            inner_radius as f32,
-            None,
-        );
+        let center_pt = to_skia_point(center);
+        path.add_circle(center_pt, outer_radius, None);
+        path.add_circle(center_pt, inner_radius, None);
+    } else {
+        // Filled circle
+        let radius = (diameter / 2.0) as f32;
+        path.add_circle(to_skia_point(center), radius, None);
     }
 
     path
 }
 
-fn convert_rectangle(center: Point, width: f64, height: f64, filled: bool) -> Path {
+fn convert_rectangle(
+    center: Point,
+    width: f64,
+    height: f64,
+    filled: bool,
+    line_width: Option<f64>,
+) -> Path {
     let mut path = Path::new();
-    let half_w = width / 2.0;
-    let half_h = height / 2.0;
 
-    if filled {
-        // Filled rectangle
-        let rect = skia_safe::Rect::from_xywh(
-            (center.x - half_w) as f32,
-            (center.y - half_h) as f32,
-            width as f32,
-            height as f32,
-        );
-        path.add_rect(rect, None);
-    } else {
-        // Hollow rectangle - render as two rectangles with even-odd fill
-        // Estimate stroke width as 10% of minimum dimension
-        let stroke_width = (width.min(height) * 0.1).max(0.1); // At least 0.1mm
+    if !filled {
+        // HOLLOW rectangle - render as two rectangles with LineDesc width
+        let stroke_width = line_width.expect("HOLLOW rectangle missing line_width from LineDesc");
+        let half_w = width / 2.0;
+        let half_h = height / 2.0;
 
         // Outer rectangle
         let outer_rect = skia_safe::Rect::from_xywh(
@@ -261,18 +300,29 @@ fn convert_rectangle(center: Point, width: f64, height: f64, filled: bool) -> Pa
         );
 
         // Inner rectangle (inset by stroke width)
-        let inner_half_w = (half_w - stroke_width).max(0.0);
-        let inner_half_h = (half_h - stroke_width).max(0.0);
+        let inner_half_w = ((half_w - stroke_width).max(0.0)) as f32;
+        let inner_half_h = ((half_h - stroke_width).max(0.0)) as f32;
         let inner_rect = skia_safe::Rect::from_xywh(
-            (center.x - inner_half_w) as f32,
-            (center.y - inner_half_h) as f32,
-            (inner_half_w * 2.0) as f32,
-            (inner_half_h * 2.0) as f32,
+            (center.x as f64 - inner_half_w as f64) as f32,
+            (center.y as f64 - inner_half_h as f64) as f32,
+            inner_half_w * 2.0,
+            inner_half_h * 2.0,
         );
 
         path.set_fill_type(skia_safe::path::FillType::EvenOdd);
         path.add_rect(outer_rect, None);
         path.add_rect(inner_rect, None);
+    } else {
+        // Filled rectangle
+        let half_w = width / 2.0;
+        let half_h = height / 2.0;
+        let rect = skia_safe::Rect::from_xywh(
+            (center.x - half_w) as f32,
+            (center.y - half_h) as f32,
+            width as f32,
+            height as f32,
+        );
+        path.add_rect(rect, None);
     }
 
     path
@@ -342,17 +392,7 @@ fn convert_rounded_rectangle(
     }
 
     path.close();
-
-    // Apply rotation around origin if needed
-    if rotation.abs() > 1e-6 {
-        let matrix = skia_safe::Matrix::rotate_deg(rotation as f32);
-        path.transform(&matrix);
-    }
-
-    // Translate to center position
-    let translate = skia_safe::Matrix::translate((center.x as f32, center.y as f32));
-    path.transform(&translate);
-
+    apply_transform(&mut path, center, rotation);
     path
 }
 
@@ -419,17 +459,7 @@ fn convert_chamfered_rectangle(
     }
 
     path.close();
-
-    // Apply rotation around origin if needed
-    if rotation.abs() > 1e-6 {
-        let matrix = skia_safe::Matrix::rotate_deg(rotation as f32);
-        path.transform(&matrix);
-    }
-
-    // Translate to center position
-    let translate = skia_safe::Matrix::translate((center.x as f32, center.y as f32));
-    path.transform(&translate);
-
+    apply_transform(&mut path, center, rotation);
     path
 }
 
@@ -442,35 +472,20 @@ fn convert_ellipse(center: Point, width: f64, height: f64, rotation: f64) -> Pat
     let oval = skia_safe::Rect::from_xywh(-half_w, -half_h, width as f32, height as f32);
     path.add_oval(oval, None);
 
-    // Apply rotation around origin if needed
-    if rotation.abs() > 1e-6 {
-        let matrix = skia_safe::Matrix::rotate_deg(rotation as f32);
-        path.transform(&matrix);
-    }
-
-    // Translate to center position
-    let translate = skia_safe::Matrix::translate((center.x as f32, center.y as f32));
-    path.transform(&translate);
-
+    apply_transform(&mut path, center, rotation);
     path
 }
 
 fn convert_donut(center: Point, outer_diameter: f64, inner_diameter: f64) -> Path {
     let mut path = Path::new();
-
-    // Donut (annular ring) = outer circle with inner hole
-    // Use even-odd fill rule so inner circle creates a hole
     path.set_fill_type(skia_safe::path::FillType::EvenOdd);
 
+    let center_pt = to_skia_point(center);
     let outer_radius = (outer_diameter / 2.0) as f32;
     let inner_radius = (inner_diameter / 2.0) as f32;
 
-    // Add outer circle
-    path.add_circle((center.x as f32, center.y as f32), outer_radius, None);
-
-    // Add inner circle (creates hole with even-odd fill)
-    path.add_circle((center.x as f32, center.y as f32), inner_radius, None);
-
+    path.add_circle(center_pt, outer_radius, None);
+    path.add_circle(center_pt, inner_radius, None);
     path
 }
 
@@ -483,8 +498,6 @@ fn convert_thermal(
     rotation: f64,
 ) -> Path {
     let mut path = Path::new();
-
-    // Thermal relief = annular ring with spoke gaps cut out
     path.set_fill_type(skia_safe::path::FillType::EvenOdd);
 
     let outer_radius = (outer_diameter / 2.0) as f32;
@@ -498,18 +511,12 @@ fn convert_thermal(
     // Add spoke gaps as rectangles
     let angle_step = 360.0 / spokes as f32;
     for i in 0..spokes {
-        let spoke_angle = i as f32 * angle_step + rotation as f32;
+        let spoke_angle = i as f32 * angle_step;
 
         // Create gap rectangle from center to outer edge
-        // Gap width should span from -gap/2 to +gap/2 (total width = gap)
         let mut gap_rect = Path::new();
         gap_rect.add_rect(
-            skia_safe::Rect::from_xywh(
-                -half_gap,
-                -outer_radius,
-                gap as f32, // Gap width (not gap * 2.0)
-                outer_radius * 2.0,
-            ),
+            skia_safe::Rect::from_xywh(-half_gap, -outer_radius, gap as f32, outer_radius * 2.0),
             None,
         );
 
@@ -517,14 +524,10 @@ fn convert_thermal(
         let matrix = skia_safe::Matrix::rotate_deg(spoke_angle);
         gap_rect.transform(&matrix);
 
-        // Add to path (even-odd fill will subtract it)
         path.add_path(&gap_rect, (0.0, 0.0), None);
     }
 
-    // Translate to center position
-    let translate = skia_safe::Matrix::translate((center.x as f32, center.y as f32));
-    path.transform(&translate);
-
+    apply_transform(&mut path, center, rotation);
     path
 }
 
@@ -563,7 +566,7 @@ fn add_polygon_contour(path: &mut Path, points: &[Point], arc_segments: &[Option
     }
 
     // Move to first point
-    path.move_to((points[0].x as f32, points[0].y as f32));
+    path.move_to(to_skia_point(points[0]));
 
     // Draw edges to subsequent points
     for i in 1..points.len() {
@@ -572,7 +575,7 @@ fn add_polygon_contour(path: &mut Path, points: &[Point], arc_segments: &[Option
             add_arc_segment(path, points[i - 1], points[i], arc.center, arc.clockwise);
         } else {
             // Straight line
-            path.line_to((points[i].x as f32, points[i].y as f32));
+            path.line_to(to_skia_point(points[i]));
         }
     }
 
@@ -591,9 +594,8 @@ fn add_arc_segment(path: &mut Path, start: Point, end: Point, center: Point, clo
     let end_radius = (end_x * end_x + end_y * end_y).sqrt();
 
     // Validate that start and end points are equidistant from center
-    // (within 0.1% tolerance for floating point errors)
     let radius_diff = (start_radius - end_radius).abs();
-    let tolerance = start_radius * 0.001;
+    let tolerance = start_radius * ARC_TOLERANCE_RATIO as f32;
     if radius_diff > tolerance {
         eprintln!(
             "WARNING: Arc endpoints not equidistant from center - start_r={:.6}, end_r={:.6}, diff={:.6}",
@@ -637,18 +639,15 @@ fn add_arc_segment(path: &mut Path, start: Point, end: Point, center: Point, clo
 }
 
 fn convert_polyline(points: &[Point], line_width: f64, line_end: LineEndStyle) -> Path {
-    // For polylines (traces), we need to create a stroked path
-    // Skia can convert a stroked path to a filled outline
-
     if points.is_empty() {
         return Path::new();
     }
 
     // Create centerline path
     let mut centerline = Path::new();
-    centerline.move_to((points[0].x as f32, points[0].y as f32));
+    centerline.move_to(to_skia_point(points[0]));
     for point in &points[1..] {
-        centerline.line_to((point.x as f32, point.y as f32));
+        centerline.line_to(to_skia_point(*point));
     }
 
     // Create paint with stroke properties

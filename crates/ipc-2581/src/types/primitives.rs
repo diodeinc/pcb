@@ -25,6 +25,8 @@ pub enum StandardPrimitive {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Circle {
     pub diameter: f64,
+    pub fill_property: Option<FillProperty>,
+    pub line_desc_ref: Option<Symbol>,
 }
 
 /// Rectangle centered at origin
@@ -32,6 +34,8 @@ pub struct Circle {
 pub struct RectCenter {
     pub width: f64,
     pub height: f64,
+    pub fill_property: Option<FillProperty>,
+    pub line_desc_ref: Option<Symbol>,
 }
 
 /// Rectangle with rounded corners
