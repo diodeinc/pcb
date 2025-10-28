@@ -102,3 +102,64 @@ pub enum RectCorner {
     LowerLeft,
     UpperLeft,
 }
+
+/// Add an arc segment to a path
+///
+/// Adds an arc from the current position to `end_point`, centered at `center`.
+/// The arc direction is determined by `clockwise`.
+///
+/// This is used for polygon curves and other arc segments in IPC-2581 geometries.
+pub fn add_arc_segment(
+    path: &mut Path,
+    start: (f64, f64),
+    end: (f64, f64),
+    center: (f64, f64),
+    clockwise: bool,
+) {
+    let (start_x, start_y) = start;
+    let (end_x, end_y) = end;
+    let (center_x, center_y) = center;
+
+    // Calculate arc parameters
+    let sx = (start_x - center_x) as f32;
+    let sy = (start_y - center_y) as f32;
+    let ex = (end_x - center_x) as f32;
+    let ey = (end_y - center_y) as f32;
+
+    let start_radius = (sx * sx + sy * sy).sqrt();
+    let end_radius = (ex * ex + ey * ey).sqrt();
+
+    // Use average radius (handles minor floating point errors)
+    let radius = (start_radius + end_radius) / 2.0;
+
+    // Calculate start and end angles (in degrees)
+    let start_angle = sy.atan2(sx).to_degrees();
+    let end_angle = ey.atan2(ex).to_degrees();
+
+    // Calculate sweep angle (accounting for direction)
+    let mut sweep_angle = end_angle - start_angle;
+
+    // Normalize sweep angle based on direction
+    if clockwise {
+        // For clockwise, we want negative sweep
+        if sweep_angle > 0.0 {
+            sweep_angle -= 360.0;
+        }
+    } else {
+        // For counter-clockwise, we want positive sweep
+        if sweep_angle < 0.0 {
+            sweep_angle += 360.0;
+        }
+    }
+
+    // Create oval (bounding box for the arc)
+    let oval = skia_safe::Rect::from_xywh(
+        center_x as f32 - radius,
+        center_y as f32 - radius,
+        radius * 2.0,
+        radius * 2.0,
+    );
+
+    // Add arc to path
+    path.arc_to(oval, start_angle, sweep_angle, false);
+}

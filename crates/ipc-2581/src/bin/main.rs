@@ -3,8 +3,7 @@ use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
 use ipc_2581::svg_export::{
     build_board_context, convert_to_paths, expand_padstacks, flatten_layers, resolve_features,
-    subtract_drill_mask, FeatureBucket, LayerDrillMask, PipelineTiming, ResolvedFeature,
-    ResolvedGeometry,
+    subtract_drill_mask, FeatureBucket, PipelineTiming, ResolvedFeature, ResolvedGeometry,
 };
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
@@ -725,6 +724,7 @@ fn export_svg(
         let mut polygons = 0;
         let mut polylines = 0;
         let mut ellipses = 0;
+        let mut ovals = 0;
         let mut donuts = 0;
         let mut thermals = 0;
         let mut groups = 0;
@@ -739,6 +739,7 @@ fn export_svg(
                 ResolvedGeometry::Polygon { .. } => polygons += 1,
                 ResolvedGeometry::Polyline { .. } => polylines += 1,
                 ResolvedGeometry::Ellipse { .. } => ellipses += 1,
+                ResolvedGeometry::Oval { .. } => ovals += 1,
                 ResolvedGeometry::Donut { .. } => donuts += 1,
                 ResolvedGeometry::Thermal { .. } => thermals += 1,
                 ResolvedGeometry::Group { .. } => groups += 1,
@@ -751,6 +752,7 @@ fn export_svg(
             + polygons
             + polylines
             + ellipses
+            + ovals
             + donuts
             + thermals
             + groups;
@@ -764,6 +766,9 @@ fn export_svg(
             }
             if ellipses > 0 {
                 println!("    Ellipses:       {}", ellipses);
+            }
+            if ovals > 0 {
+                println!("    Ovals:          {}", ovals);
             }
             if polygons > 0 {
                 println!("    Polygons:       {}", polygons);

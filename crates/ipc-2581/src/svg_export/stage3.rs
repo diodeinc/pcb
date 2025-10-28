@@ -1,5 +1,6 @@
 use super::primitives::{
-    add_circle_as_cubics, add_corner_arc_for_rounded_rect, add_ellipse_as_cubics, RectCorner,
+    add_arc_segment, add_circle_as_cubics, add_corner_arc_for_rounded_rect, add_ellipse_as_cubics,
+    RectCorner,
 };
 use super::resolved_feature::*;
 use super::Result;
@@ -144,6 +145,13 @@ fn convert_geometry(geometry: &ResolvedGeometry) -> Result<Vec<Path>> {
             rotation,
         } => Ok(vec![convert_ellipse(*center, *width, *height, *rotation)]),
 
+        ResolvedGeometry::Oval {
+            center,
+            width,
+            height,
+            rotation,
+        } => Ok(vec![convert_oval(*center, *width, *height, *rotation)]),
+
         ResolvedGeometry::Donut {
             center,
             outer_diameter,
@@ -221,7 +229,6 @@ fn convert_geometry(geometry: &ResolvedGeometry) -> Result<Vec<Path>> {
 
 // Constants for geometry conversion
 const ROTATION_EPSILON: f64 = 1e-6; // Rotation threshold
-const ARC_TOLERANCE_RATIO: f64 = 0.001; // 0.1% tolerance for arc validation
 
 /// Convert Point to Skia coordinate tuple
 #[inline]
@@ -476,11 +483,85 @@ fn convert_chamfered_rectangle(
 fn convert_ellipse(center: Point, width: f64, height: f64, rotation: f64) -> Path {
     let mut path = Path::new();
 
-    // Create ellipse as oval using cubic beziers (kappa approximation)
+    // Create ellipse using cubic beziers (kappa approximation)
     let half_w = (width / 2.0) as f32;
     let half_h = (height / 2.0) as f32;
     add_ellipse_as_cubics(&mut path, (0.0, 0.0), half_w, half_h);
 
+    apply_transform(&mut path, center, rotation);
+    path
+}
+
+fn convert_oval(center: Point, width: f64, height: f64, rotation: f64) -> Path {
+    let mut path = Path::new();
+
+    // Oval = stadium shape (line segment with semicircular caps)
+    // Per IPC-2581: "rectangle with complete radius (180° arc) at each end"
+    // radius = min(width, height) / 2
+    // segment_length = |width - height|
+
+    let (radius, half_segment, is_vertical) = if height > width {
+        // Vertical orientation (taller than wide)
+        let r = width / 2.0;
+        let seg = (height - width) / 2.0;
+        (r, seg, true)
+    } else {
+        // Horizontal orientation (wider than tall)
+        let r = height / 2.0;
+        let seg = (width - height) / 2.0;
+        (r, seg, false)
+    };
+
+    let r = radius as f32;
+    let hs = half_segment as f32;
+
+    if is_vertical {
+        // Vertical stadium: line segment along y-axis with caps at top/bottom
+        // Start at bottom-right, go counter-clockwise
+
+        // Bottom-right corner
+        path.move_to((r, -hs));
+
+        // Right side (straight line up)
+        path.line_to((r, hs));
+
+        // Top semicircular cap (right to left, going up and around)
+        // Center: (0, hs), start angle: 0°, sweep: 180° CCW
+        let cap_top = skia_safe::Rect::from_xywh(-r, hs - r, r * 2.0, r * 2.0);
+        path.arc_to(cap_top, 0.0, 180.0, false);
+
+        // Left side (straight line down)
+        path.line_to((-r, -hs));
+
+        // Bottom semicircular cap (left to right, going down and around)
+        // Center: (0, -hs), start angle: 180°, sweep: 180° CCW
+        let cap_bottom = skia_safe::Rect::from_xywh(-r, -hs - r, r * 2.0, r * 2.0);
+        path.arc_to(cap_bottom, 180.0, 180.0, false);
+    } else {
+        // Horizontal stadium: line segment along x-axis with caps at left/right
+        // Start at left-bottom, go counter-clockwise
+
+        // Left-bottom corner
+        path.move_to((-hs, -r));
+
+        // Left semicircular cap (bottom to top, going left and around)
+        // Center: (-hs, 0), start angle: 270°, sweep: 180° CCW
+        let cap_left = skia_safe::Rect::from_xywh(-hs - r, -r, r * 2.0, r * 2.0);
+        path.arc_to(cap_left, 270.0, 180.0, false);
+
+        // Top side (straight line right)
+        path.line_to((hs, r));
+
+        // Right semicircular cap (top to bottom, going right and around)
+        // Center: (hs, 0), start angle: 90°, sweep: 180° CCW
+        let cap_right = skia_safe::Rect::from_xywh(hs - r, -r, r * 2.0, r * 2.0);
+        path.arc_to(cap_right, 90.0, 180.0, false);
+
+        // Bottom side (straight line left)
+        path.line_to((-hs, -r));
+    }
+
+    path.close();
     apply_transform(&mut path, center, rotation);
     path
 }
@@ -591,7 +672,13 @@ fn add_polygon_contour(path: &mut Path, points: &[Point], arc_segments: &[Option
     for i in 1..points.len() {
         if let Some(Some(arc)) = arc_segments.get(i) {
             // Arc from points[i-1] to points[i] with center and direction
-            add_arc_segment(path, points[i - 1], points[i], arc.center, arc.clockwise);
+            add_arc_segment(
+                path,
+                (points[i - 1].x, points[i - 1].y),
+                (points[i].x, points[i].y),
+                (arc.center.x, arc.center.y),
+                arc.clockwise,
+            );
         } else {
             // Straight line
             path.line_to(to_skia_point(points[i]));
@@ -601,61 +688,6 @@ fn add_polygon_contour(path: &mut Path, points: &[Point], arc_segments: &[Option
     path.close();
 }
 
-/// Add an arc segment from start to end, passing through an arc with given center
-fn add_arc_segment(path: &mut Path, start: Point, end: Point, center: Point, clockwise: bool) {
-    // Calculate arc parameters
-    let start_x = (start.x - center.x) as f32;
-    let start_y = (start.y - center.y) as f32;
-    let end_x = (end.x - center.x) as f32;
-    let end_y = (end.y - center.y) as f32;
-
-    let start_radius = (start_x * start_x + start_y * start_y).sqrt();
-    let end_radius = (end_x * end_x + end_y * end_y).sqrt();
-
-    // Validate that start and end points are equidistant from center
-    let radius_diff = (start_radius - end_radius).abs();
-    let tolerance = start_radius * ARC_TOLERANCE_RATIO as f32;
-    if radius_diff > tolerance {
-        eprintln!(
-            "WARNING: Arc endpoints not equidistant from center - start_r={:.6}, end_r={:.6}, diff={:.6}",
-            start_radius, end_radius, radius_diff
-        );
-    }
-
-    // Use average radius to minimize error if endpoints differ
-    let radius = (start_radius + end_radius) / 2.0;
-
-    // Calculate start and end angles (in degrees)
-    let start_angle = start_y.atan2(start_x).to_degrees();
-    let end_angle = end_y.atan2(end_x).to_degrees();
-
-    // Calculate sweep angle (accounting for direction)
-    let mut sweep_angle = end_angle - start_angle;
-
-    // Normalize sweep angle based on direction
-    if clockwise {
-        // For clockwise, we want negative sweep
-        if sweep_angle > 0.0 {
-            sweep_angle -= 360.0;
-        }
-    } else {
-        // For counter-clockwise, we want positive sweep
-        if sweep_angle < 0.0 {
-            sweep_angle += 360.0;
-        }
-    }
-
-    // Create oval (bounding box for the arc)
-    let oval = skia_safe::Rect::from_xywh(
-        center.x as f32 - radius,
-        center.y as f32 - radius,
-        radius * 2.0,
-        radius * 2.0,
-    );
-
-    // Add arc to path
-    path.arc_to(oval, start_angle, sweep_angle, false);
-}
 
 fn convert_polyline(points: &[Point], line_width: f64, line_end: LineEndStyle) -> Path {
     if points.is_empty() {

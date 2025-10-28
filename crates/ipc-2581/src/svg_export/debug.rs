@@ -3,7 +3,7 @@
 /// Provides quick visual validation of Stage 3/4 output without needing
 /// the full Stage 5/6 pipeline. Exports raw paths with color-coded buckets.
 
-use super::resolved_feature::{BoundingBox, FeatureBucket};
+use super::resolved_feature::FeatureBucket;
 use super::stage3::{LayerPaths, PathFeature};
 use super::stage4::FlattenedLayer;
 use skia_safe::{Path, path::Verb};

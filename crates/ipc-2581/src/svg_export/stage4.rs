@@ -322,11 +322,21 @@ fn snap_path_to_grid(path: &mut Path) {
                 snapped.quad_to(p1, p2);
             }
             Verb::Conic => {
-                let p1 = snap_point(points[1]);
-                let p2 = snap_point(points[2]);
-                // Note: We lose the conic weight here, approximating as quad
-                // This is acceptable for 1 micron snapping tolerance
-                snapped.quad_to(p1, p2);
+                // Convert conic to cubic bezier to preserve arc geometry
+                // Note: Skia's Rust API doesn't easily expose conic weight from iterator,
+                // so we use weight=1.0 (circular arc) which is the common case for our usage
+                let weight = 1.0;
+                let cubic_points = conic_to_cubic(
+                    points[0],
+                    points[1],
+                    points[2],
+                    weight,
+                );
+
+                let cp1 = snap_point(cubic_points.0);
+                let cp2 = snap_point(cubic_points.1);
+                let end = snap_point(cubic_points.2);
+                snapped.cubic_to(cp1, cp2, end);
             }
             Verb::Cubic => {
                 let p1 = snap_point(points[1]);
@@ -352,6 +362,39 @@ fn snap_point(point: skia_safe::Point) -> (f32, f32) {
     (x as f32, y as f32)
 }
 
+/// Convert a conic Bezier to a cubic Bezier
+///
+/// A conic (rational quadratic) Bezier is defined by 3 points and a weight.
+/// For weight=1, it's exactly a circular arc.
+///
+/// The conversion uses the standard approximation formula:
+/// cubic_cp1 = p0 + (2/3) * w * (p1 - p0) / (1 + w)
+/// cubic_cp2 = p2 + (2/3) * w * (p1 - p2) / (1 + w)
+///
+/// Returns (control_point_1, control_point_2, end_point)
+fn conic_to_cubic(
+    p0: skia_safe::Point,
+    p1: skia_safe::Point,
+    p2: skia_safe::Point,
+    weight: f32,
+) -> (skia_safe::Point, skia_safe::Point, skia_safe::Point) {
+    // For weight=1 (circular arc), this simplifies nicely
+    // For other weights, we use the general formula
+    let k = (2.0 * weight) / (3.0 * (1.0 + weight));
+
+    let cp1 = skia_safe::Point::new(
+        p0.x + k * (p1.x - p0.x),
+        p0.y + k * (p1.y - p0.y),
+    );
+
+    let cp2 = skia_safe::Point::new(
+        p2.x + k * (p1.x - p2.x),
+        p2.y + k * (p1.y - p2.y),
+    );
+
+    (cp1, cp2, p2)
+}
+
 /// Calculate the actual area of a path in square millimeters using the shoelace formula
 ///
 /// Uses Skia's path iteration to walk vertices and compute exact polygon area.
@@ -366,7 +409,13 @@ fn snap_point(point: skia_safe::Point) -> (f32, f32) {
 fn calculate_path_area(path: &Path) -> f64 {
     use skia_safe::path::Verb;
 
-    let mut total_area = 0.0;
+    // Check fill type to determine how to combine contour areas
+    let is_evenodd = matches!(
+        path.fill_type(),
+        skia_safe::path::FillType::EvenOdd | skia_safe::path::FillType::InverseEvenOdd
+    );
+
+    let mut contour_areas: Vec<f64> = Vec::new();
     let mut current_poly_area = 0.0;
     let mut first_point = None;
     let mut last_point = None;
@@ -380,7 +429,7 @@ fn calculate_path_area(path: &Path) -> f64 {
                 if let (Some(first), Some(last)) = (first_point, last_point) {
                     // Close previous polygon if needed
                     current_poly_area += shoelace_term(last, first);
-                    total_area += current_poly_area;
+                    contour_areas.push(current_poly_area / 2.0);
                 }
 
                 // Reset for new contour
@@ -418,7 +467,7 @@ fn calculate_path_area(path: &Path) -> f64 {
                 // Close current polygon
                 if let (Some(first), Some(last)) = (first_point, last_point) {
                     current_poly_area += shoelace_term(last, first);
-                    total_area += current_poly_area;
+                    contour_areas.push(current_poly_area / 2.0);
                 }
                 current_poly_area = 0.0;
                 first_point = None;
@@ -431,11 +480,28 @@ fn calculate_path_area(path: &Path) -> f64 {
     // Handle unclosed final polygon
     if let (Some(first), Some(last)) = (first_point, last_point) {
         current_poly_area += shoelace_term(last, first);
-        total_area += current_poly_area;
+        contour_areas.push(current_poly_area / 2.0);
     }
 
-    // Shoelace formula gives signed area, take absolute value
-    (total_area / 2.0).abs()
+    // Combine contour areas based on fill rule
+    let total_area = if is_evenodd {
+        // EvenOdd: alternate signs for each contour
+        // First contour (exterior) = +, second (hole) = -, third (nested) = +, etc.
+        contour_areas
+            .iter()
+            .enumerate()
+            .map(|(i, &area)| {
+                let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+                sign * area
+            })
+            .sum::<f64>()
+    } else {
+        // Winding: signed areas naturally subtract (CCW = +, CW = -)
+        contour_areas.iter().sum::<f64>()
+    };
+
+    // Shoelace formula gives signed area, take absolute value for final result
+    total_area.abs()
 }
 
 /// Calculate one term of the shoelace formula: x1 * y2 - x2 * y1

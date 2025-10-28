@@ -9,7 +9,7 @@
 use super::resolved_feature::Point;
 use super::stage4::FlattenedLayer;
 use super::Result;
-use crate::{Ipc2581, LayerFunction, PlatingStatus};
+use crate::{Ipc2581, LayerFunction};
 use skia_safe::{Path, PathOp};
 use std::collections::HashMap;
 
@@ -176,25 +176,7 @@ fn extract_drill_features(
 
             // Process slotted holes (can be on ANY layer)
             for slot in &set.slots {
-                // DEBUG: Print slot geometry
-                println!("  DEBUG SLOT:");
-                println!("    Position: ({}, {})", slot.x, slot.y);
-                println!("    Plating: {:?}", slot.plating_status);
-                println!("    Outline: begin=({}, {})", slot.outline.begin.x, slot.outline.begin.y);
-                for (i, step) in slot.outline.steps.iter().enumerate() {
-                    match step {
-                        crate::PolyStep::Segment(s) => println!("      [{}] Line to ({}, {})", i, s.x, s.y),
-                        crate::PolyStep::Curve(c) => println!("      [{}] Curve to ({}, {})", i, c.x, c.y),
-                    }
-                }
-
-                // Slots have an outline polygon - convert to path
                 let path = polygon_to_path(&slot.outline);
-                let bbox = path.bounds();
-                println!("    Path bbox: ({}, {}) to ({}, {}) => size {}×{}",
-                    bbox.left, bbox.top, bbox.right, bbox.bottom,
-                    bbox.width(), bbox.height());
-
                 let center = Point::new(slot.x, slot.y);
                 features.push(DrillFeature {
                     center,
@@ -211,14 +193,14 @@ fn extract_drill_features(
 }
 
 /// Parse drill layer span from layer name (e.g., "DRILL_1-12" → ("TOP", "BOTTOM"))
-fn parse_drill_layer_span(layer_name: &str) -> (String, String) {
+fn parse_drill_layer_span(_layer_name: &str) -> (String, String) {
     // For through-hole drills, assume they span all layers
     // TODO: Parse actual layer range from name if needed
     ("TOP".to_string(), "BOTTOM".to_string())
 }
 
 /// Check if a drill feature spans a given copper layer
-fn drill_spans_layer(drill: &DrillFeature, layer_name: &str, all_layers: &[String]) -> bool {
+fn drill_spans_layer(_drill: &DrillFeature, _layer_name: &str, _all_layers: &[String]) -> bool {
     // For now, assume all drills span all layers (through-holes)
     // TODO: Implement proper layer range checking for blind/buried vias
 
@@ -263,18 +245,29 @@ fn polygon_to_path(polygon: &crate::Polygon) -> Path {
     let mut path = Path::new();
 
     // Move to start point
-    path.move_to((polygon.begin.x as f32, polygon.begin.y as f32));
+    let mut current_x = polygon.begin.x;
+    let mut current_y = polygon.begin.y;
+    path.move_to((current_x as f32, current_y as f32));
 
     // Add segments
     for step in &polygon.steps {
         match step {
             crate::PolyStep::Segment(seg) => {
                 path.line_to((seg.x as f32, seg.y as f32));
+                current_x = seg.x;
+                current_y = seg.y;
             }
             crate::PolyStep::Curve(curve) => {
-                // For slots, curves are typically arcs
-                // Approximate with arc_to or line segments
-                path.line_to((curve.x as f32, curve.y as f32));
+                // Arc from current position to curve endpoint
+                super::primitives::add_arc_segment(
+                    &mut path,
+                    (current_x, current_y),
+                    (curve.x, curve.y),
+                    (curve.center_x, curve.center_y),
+                    curve.clockwise,
+                );
+                current_x = curve.x;
+                current_y = curve.y;
             }
         }
     }

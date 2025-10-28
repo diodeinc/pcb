@@ -130,6 +130,16 @@ pub enum ResolvedGeometry {
         rotation: f64,
     },
 
+    /// Oval / Stadium shape (line segment with semicircular caps)
+    /// Per IPC-2581 spec: "rectangle with complete radius (180° arc) at each end"
+    /// Different from Ellipse - has flat sides parallel to longer axis
+    Oval {
+        center: Point,
+        width: f64,
+        height: f64,
+        rotation: f64,
+    },
+
     /// Donut / Annular ring (preserves inner hole for accurate rendering)
     Donut {
         center: Point,

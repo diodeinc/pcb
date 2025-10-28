@@ -334,7 +334,7 @@ fn expand_primitive(
                 rotation: orient_rotation(rotation, mirror),
             }
         }
-        StandardPrimitive::Oval(o) => ResolvedGeometry::Ellipse {
+        StandardPrimitive::Oval(o) => ResolvedGeometry::Oval {
             center,
             width: o.width * scale,
             height: o.height * scale,
@@ -642,7 +642,7 @@ fn expand_user_shape(
                 }
             }
         }
-        UserShapeType::Oval(o) => ResolvedGeometry::Ellipse {
+        UserShapeType::Oval(o) => ResolvedGeometry::Oval {
             center,
             width: o.width * scale,
             height: o.height * scale,
@@ -682,45 +682,6 @@ fn expand_user_shape(
                 cutouts: vec![],
                 cutout_arcs: vec![],
             }
-        }
-    }
-}
-
-/// Expand a rectangle with transforms applied
-fn expand_rectangle_with_rotation(
-    center: Point,
-    width: f64,
-    height: f64,
-    rotation: f64,
-    mirror: bool,
-    scale: f64,
-) -> ResolvedGeometry {
-    let scaled_width = width * scale;
-    let scaled_height = height * scale;
-
-    if rotation.abs() < 0.01 && !mirror {
-        ResolvedGeometry::Rectangle {
-            center,
-            width: scaled_width,
-            height: scaled_height,
-            filled: true,
-            line_width: None,
-        }
-    } else {
-        let hw = width / 2.0;
-        let hh = height / 2.0;
-        let corners = [
-            Point::new(-hw, -hh),
-            Point::new(hw, -hh),
-            Point::new(hw, hh),
-            Point::new(-hw, hh),
-        ];
-        let transformed_points = transform_points(&corners, center, rotation, mirror, scale);
-        ResolvedGeometry::Polygon {
-            points: transformed_points.clone(),
-            arc_segments: vec![None; transformed_points.len()],
-            cutouts: vec![],
-            cutout_arcs: vec![],
         }
     }
 }
@@ -784,6 +745,18 @@ fn calculate_geometry_bbox(geometry: &ResolvedGeometry) -> BoundingBox {
             ..
         }
         | ResolvedGeometry::ChamferedRectangle {
+            center,
+            width,
+            height,
+            ..
+        }
+        | ResolvedGeometry::Ellipse {
+            center,
+            width,
+            height,
+            ..
+        }
+        | ResolvedGeometry::Oval {
             center,
             width,
             height,
