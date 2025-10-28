@@ -2,8 +2,8 @@ use bumpalo::Bump;
 use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
 use ipc_2581::svg_export::{
-    build_board_context, convert_to_paths, expand_padstacks, resolve_features, FeatureBucket,
-    PipelineTiming, ResolvedFeature, ResolvedGeometry,
+    build_board_context, convert_to_paths, expand_padstacks, flatten_layers, resolve_features,
+    FeatureBucket, PipelineTiming, ResolvedFeature, ResolvedGeometry,
 };
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
@@ -59,6 +59,18 @@ enum Commands {
         /// Dump Stage 1 debug JSON to file
         #[arg(long)]
         dump_stage1: Option<PathBuf>,
+
+        /// Export Stage 3 debug SVG (paths before boolean ops)
+        #[arg(long)]
+        debug_stage3: Option<PathBuf>,
+
+        /// Export Stage 4 debug SVG (paths after boolean ops)
+        #[arg(long)]
+        debug_stage4: Option<PathBuf>,
+
+        /// Export only specific bucket (Smd, Pth, Via, Trace, Fill)
+        #[arg(long)]
+        debug_bucket: Option<String>,
 
         /// Show timing information
         #[arg(long)]
@@ -138,6 +150,9 @@ fn main() {
             output,
             layers,
             dump_stage1,
+            debug_stage3,
+            debug_stage4,
+            debug_bucket,
             timings,
         } => {
             match export_svg(
@@ -145,6 +160,9 @@ fn main() {
                 output.as_ref(),
                 layers.as_ref(),
                 dump_stage1.as_ref(),
+                debug_stage3.as_ref(),
+                debug_stage4.as_ref(),
+                debug_bucket.as_ref(),
                 timings,
             ) {
                 Ok(_) => {}
@@ -540,6 +558,9 @@ fn export_svg(
     _output_path: Option<&PathBuf>,
     layers: Option<&String>,
     dump_stage1_path: Option<&PathBuf>,
+    debug_stage3_path: Option<&PathBuf>,
+    debug_stage4_path: Option<&PathBuf>,
+    debug_bucket: Option<&String>,
     show_timings: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("━━━ SVG Export Pipeline ━━━");
@@ -794,19 +815,127 @@ fn export_svg(
     }
     println!();
 
+    // Export Stage 3 debug SVG if requested
+    if let Some(debug_path) = debug_stage3_path {
+        println!("Exporting Stage 3 debug SVG...");
+        for (layer_name, paths) in &layer_paths {
+            let output_path = if layer_paths.len() > 1 {
+                // Multiple layers - create one file per layer
+                let base = debug_path.file_stem().unwrap().to_str().unwrap();
+                let ext = debug_path.extension().and_then(|e| e.to_str()).unwrap_or("svg");
+                debug_path.with_file_name(format!("{}_{}.{}", base, layer_name, ext))
+            } else {
+                debug_path.clone()
+            };
+
+            use ipc_2581::svg_export::debug::export_layer_paths_svg;
+            export_layer_paths_svg(paths, output_path.to_str().unwrap())?;
+        }
+        println!();
+    }
+
+    // Export individual bucket if requested
+    if let Some(bucket_name) = debug_bucket {
+        use ipc_2581::svg_export::debug::export_bucket_svg;
+
+        let bucket = match bucket_name.to_lowercase().as_str() {
+            "smd" => FeatureBucket::Smd,
+            "pth" => FeatureBucket::Pth,
+            "via" => FeatureBucket::Via,
+            "trace" => FeatureBucket::Trace,
+            "fill" => FeatureBucket::Fill,
+            "thermal" => FeatureBucket::Thermal,
+            "antipad" => FeatureBucket::Antipad,
+            "cutout" => FeatureBucket::Cutout,
+            _ => {
+                eprintln!("Unknown bucket: {}", bucket_name);
+                eprintln!("Valid buckets: Smd, Pth, Via, Trace, Fill, Thermal, Antipad, Cutout");
+                process::exit(1);
+            }
+        };
+
+        println!("Exporting {:?} bucket...", bucket);
+        for (layer_name, paths) in &layer_paths {
+            let output_path = format!("debug_{}_{:?}.svg", layer_name, bucket);
+            match export_bucket_svg(paths, bucket, &output_path) {
+                Ok(_) => {}
+                Err(e) => eprintln!("  Warning: {} - {}", layer_name, e),
+            }
+        }
+        println!();
+    }
+
+    // Stage 4: Boolean Flattening
+    println!("Stage 4: Boolean Flattening");
+    let stage4_timer = std::time::Instant::now();
+
+    let flattened_layers = flatten_layers(layer_paths)?;
+
+    timing.stage4_booleans = Some(stage4_timer.elapsed());
+
+    println!("  ✓ Applied boolean operations per bucket");
+
+    // Show flattened layer statistics
+    for (layer_name, flattened) in &flattened_layers {
+        println!("  Layer: {}", layer_name);
+        println!("    Buckets: {}", flattened.buckets.len());
+        for (bucket, _path) in &flattened.buckets {
+            if let Some(stats) = flattened.stats.get(bucket) {
+                println!(
+                    "      {:?}: {} vertices, {:.2} mm², {} pos + {} neg (union: {}ms, diff: {}ms)",
+                    bucket,
+                    stats.vertex_count,
+                    stats.area_mm2,
+                    stats.positive_count,
+                    stats.negative_count,
+                    stats.union_time_ms,
+                    stats.difference_time_ms
+                );
+            }
+        }
+        println!(
+            "    BBox: ({:.3}, {:.3}) to ({:.3}, {:.3}) mm",
+            flattened.bbox.min_x, flattened.bbox.min_y, flattened.bbox.max_x, flattened.bbox.max_y
+        );
+        println!(
+            "    Size: {:.3} × {:.3} mm",
+            flattened.bbox.width(),
+            flattened.bbox.height()
+        );
+    }
+    println!();
+
+    // Export Stage 4 debug SVG if requested
+    if let Some(debug_path) = debug_stage4_path {
+        println!("Exporting Stage 4 debug SVG...");
+        for (layer_name, flattened) in &flattened_layers {
+            let output_path = if flattened_layers.len() > 1 {
+                // Multiple layers - create one file per layer
+                let base = debug_path.file_stem().unwrap().to_str().unwrap();
+                let ext = debug_path.extension().and_then(|e| e.to_str()).unwrap_or("svg");
+                debug_path.with_file_name(format!("{}_{}.{}", base, layer_name, ext))
+            } else {
+                debug_path.clone()
+            };
+
+            use ipc_2581::svg_export::debug::export_flattened_svg;
+            export_flattened_svg(flattened, output_path.to_str().unwrap())?;
+        }
+        println!();
+    }
+
     // Print timing summary
     if show_timings {
         timing.print_summary();
         println!();
     }
 
-    // Stage 4+ not yet implemented
+    // Stage 5-6 not yet implemented
     println!("━━━ Status ━━━");
-    println!("✓ Stage 0, 1, 2, 3 complete");
-    println!("⚠ Stages 4-6 not yet implemented");
+    println!("✓ Stage 0, 1, 2, 3, 4 complete");
+    println!("⚠ Stages 5-6 not yet implemented");
     println!();
     println!("To continue development, next implement:");
-    println!("  - Stage 4: Boolean operations (union/difference per bucket)");
     println!("  - Stage 5: Styling (colors per bucket)");
     println!("  - Stage 6: SVG emission (write final document)");
 

@@ -421,8 +421,8 @@ fn test_testcase1_metadata() {
         // Get board thickness from stackup (in mm, convert to inches)
         let board_thickness_mm = ecad
             .cad_data
-            .stackup
-            .as_ref()
+            .stackups
+            .first()
             .and_then(|s| s.overall_thickness)
             .unwrap_or(0.0);
         let board_thickness = board_thickness_mm / 25.4;
@@ -645,8 +645,8 @@ fn print_testcase_metadata(
 
         let board_thickness = ecad
             .cad_data
-            .stackup
-            .as_ref()
+            .stackups
+            .first()
             .and_then(|s| s.overall_thickness)
             .unwrap_or(0.0);
 
