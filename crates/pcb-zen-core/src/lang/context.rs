@@ -209,6 +209,11 @@ impl<'v> ContextValue<'v> {
         self.pending_children.borrow_mut().push(child);
     }
 
+    /// Borrow the pending children mutably to update them before freezing
+    pub(crate) fn pending_children_mut(&self) -> std::cell::RefMut<'_, Vec<PendingChild<'v>>> {
+        self.pending_children.borrow_mut()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn diagnostics(&self) -> std::cell::Ref<'_, Vec<crate::Diagnostic>> {
         self.diagnostics.borrow()

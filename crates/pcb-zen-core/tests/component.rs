@@ -623,3 +623,49 @@ snapshot_eval!(current_module_path_conditional_modifier, {
         # This is verified by the module snapshot
     "#
 });
+
+snapshot_eval!(component_modifier_order_independent, {
+    "test.zen" => r#"
+        # Test that modifiers apply to all components regardless of registration order
+        # Components created BEFORE modifier registration should also be modified
+
+        Component(
+            name = "R1",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("A"), "2": Net("B")},
+            properties = {"resistance": "10k"},
+        )
+
+        Component(
+            name = "R2",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("C"), "2": Net("D")},
+            properties = {"resistance": "100k"},
+        )
+
+        # Register modifier AFTER components are created
+        def assign_manufacturer(component):
+            if hasattr(component, "resistance"):
+                component.manufacturer = "PostRegistrationVendor"
+                component.modified = "yes"
+
+        builtin.add_component_modifier(assign_manufacturer)
+
+        # Create more components AFTER modifier registration
+        Component(
+            name = "R3",
+            footprint = "0603",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": Net("E"), "2": Net("F")},
+            properties = {"resistance": "1k"},
+        )
+
+        # ALL three components should have manufacturer and modified set
+        # R1 and R2 were created before modifier registration
+        # R3 was created after modifier registration
+        # All should be modified because modifiers now apply at end of evaluation
+        # This is verified by the module snapshot
+    "#
+});
