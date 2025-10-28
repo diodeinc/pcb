@@ -81,6 +81,10 @@ pub enum ResolvedGeometry {
         center: Point,
         rotation: f64,
         layer: String,
+        /// Inline primitive override (takes precedence over padstack)
+        inline_standard_primitive: Option<String>,
+        /// Inline user primitive override (takes precedence over padstack)
+        inline_user_primitive: Option<String>,
     },
 }
 

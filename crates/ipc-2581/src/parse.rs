@@ -1699,11 +1699,27 @@ impl<'arena> Parser<'arena> {
             }
         }
 
+        // Parse inline StandardPrimitiveRef if present
+        let standard_primitive_ref = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "StandardPrimitiveRef")
+            .and_then(|n| n.attribute("id"))
+            .map(|id| self.interner.intern(id));
+
+        // Parse inline UserPrimitiveRef if present
+        let user_primitive_ref = node
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "UserPrimitiveRef")
+            .and_then(|n| n.attribute("id"))
+            .map(|id| self.interner.intern(id));
+
         Ok(Pad {
             padstack_def_ref,
             x,
             y,
             xform,
+            standard_primitive_ref,
+            user_primitive_ref,
         })
     }
 

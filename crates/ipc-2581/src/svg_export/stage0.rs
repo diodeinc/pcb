@@ -57,6 +57,12 @@ pub fn build_board_context(doc: &Ipc2581) -> Result<BoardContext> {
         standard_primitives.insert(entry.id, entry.primitive.clone());
     }
 
+    // Build user primitive dictionary
+    let mut user_primitives = HashMap::new();
+    for entry in &content.dictionary_user.entries {
+        user_primitives.insert(entry.id, entry.primitive.clone());
+    }
+
     // Gather statistics
     let mut stats = BoardStats::new();
     stats.layer_count = ecad.cad_data.layers.len();
@@ -64,6 +70,7 @@ pub fn build_board_context(doc: &Ipc2581) -> Result<BoardContext> {
     stats.line_desc_count = line_descriptors.len();
     stats.fill_desc_count = fill_descriptors.len();
     stats.standard_primitive_count = standard_primitives.len();
+    stats.user_primitive_count = user_primitives.len();
 
     // Count copper layers
     stats.copper_layer_count = ecad
@@ -105,6 +112,7 @@ pub fn build_board_context(doc: &Ipc2581) -> Result<BoardContext> {
         line_descriptors,
         fill_descriptors,
         standard_primitives,
+        user_primitives,
         stats,
     })
 }

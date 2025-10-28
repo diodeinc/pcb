@@ -262,6 +262,10 @@ pub struct Pad {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub xform: Option<super::Xform>,
+    /// Inline primitive override (takes precedence over padstack definition)
+    pub standard_primitive_ref: Option<Symbol>,
+    /// Inline user primitive override (takes precedence over padstack definition)
+    pub user_primitive_ref: Option<Symbol>,
 }
 
 /// Trace represents a copper trace or line on a layer

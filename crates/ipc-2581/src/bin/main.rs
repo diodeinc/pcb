@@ -2,7 +2,8 @@ use bumpalo::Bump;
 use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
 use ipc_2581::svg_export::{
-    build_board_context, resolve_features, FeatureBucket, PipelineTiming, ResolvedFeature,
+    build_board_context, expand_padstacks, resolve_features, FeatureBucket, PipelineTiming,
+    ResolvedFeature, ResolvedGeometry,
 };
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
@@ -593,8 +594,7 @@ fn export_svg(
     println!("Stage 1: Transform Resolution");
     let stage1_timer = std::time::Instant::now();
 
-    let layer_resolutions =
-        resolve_features(&doc, &context, layer_filter.as_deref())?;
+    let layer_resolutions = resolve_features(&doc, &context, layer_filter.as_deref())?;
 
     timing.stage1_transforms = Some(stage1_timer.elapsed());
 
@@ -685,19 +685,67 @@ fn export_svg(
         println!();
     }
 
+    // Stage 2: Padstack Expansion
+    println!("Stage 2: Padstack Expansion");
+    let stage2_timer = std::time::Instant::now();
+
+    let layer_resolutions = expand_padstacks(&doc, &context, layer_resolutions)?;
+
+    timing.stage2_padstacks = Some(stage2_timer.elapsed());
+
+    println!("  ✓ Expanded padstack references to concrete geometries");
+
+    // Show expanded pad statistics
+    for (layer_name, resolution) in &layer_resolutions {
+        let mut padstack_refs = 0;
+        let mut circles = 0;
+        let mut rectangles = 0;
+        let mut polygons = 0;
+        let mut polylines = 0;
+
+        for feature in &resolution.features {
+            match &feature.geometry {
+                ResolvedGeometry::PadstackRef { .. } => padstack_refs += 1,
+                ResolvedGeometry::Circle { .. } => circles += 1,
+                ResolvedGeometry::Rectangle { .. } => rectangles += 1,
+                ResolvedGeometry::Polygon { .. } => polygons += 1,
+                ResolvedGeometry::Polyline { .. } => polylines += 1,
+            }
+        }
+
+        if padstack_refs + circles + rectangles + polygons + polylines > 0 {
+            println!("  Layer: {}", layer_name);
+            if circles > 0 {
+                println!("    Circles:        {}", circles);
+            }
+            if rectangles > 0 {
+                println!("    Rectangles:     {}", rectangles);
+            }
+            if polygons > 0 {
+                println!("    Polygons:       {}", polygons);
+            }
+            if polylines > 0 {
+                println!("    Polylines:      {}", polylines);
+            }
+            if padstack_refs > 0 {
+                println!("    PadstackRefs:   {} (unexpanded)", padstack_refs);
+            }
+        }
+    }
+    println!();
+
     // Print timing summary
     if show_timings {
         timing.print_summary();
         println!();
     }
 
-    // Stage 2+ not yet implemented
+    // Stage 3+ not yet implemented
     println!("━━━ Status ━━━");
-    println!("✓ Stage 0 & Stage 1 complete");
-    println!("⚠ Stages 2-6 not yet implemented");
+    println!("✓ Stage 0, 1, 2 complete");
+    println!("⚠ Stages 3-6 not yet implemented");
     println!();
     println!("To continue development, next implement:");
-    println!("  - Stage 2: Padstack expansion (resolve padstack refs to actual shapes)");
     println!("  - Stage 3: Primitive conversion (convert to lyon paths)");
     println!("  - Stage 4: Boolean operations (union/difference per bucket)");
     println!("  - Stage 5: Styling (colors per bucket)");

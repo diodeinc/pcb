@@ -160,6 +160,10 @@ fn resolve_pad(
         center,
         rotation,
         layer: layer_name.to_string(),
+        inline_standard_primitive: pad
+            .standard_primitive_ref
+            .map(|s| doc.resolve(s).to_string()),
+        inline_user_primitive: pad.user_primitive_ref.map(|s| doc.resolve(s).to_string()),
     };
 
     // Placeholder bbox (will be replaced in Stage 2 with actual pad shape bbox)

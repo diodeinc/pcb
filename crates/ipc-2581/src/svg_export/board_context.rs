@@ -1,4 +1,4 @@
-use crate::{FillDesc, LineDesc, PadStackDef, StandardPrimitive, Symbol};
+use crate::{FillDesc, LineDesc, PadStackDef, StandardPrimitive, Symbol, UserPrimitive};
 use std::collections::HashMap;
 
 /// BoardContext holds parsed and normalized data for the export pipeline
@@ -31,6 +31,9 @@ pub struct BoardContext {
     /// Standard primitive dictionary (for pad shapes)
     pub standard_primitives: HashMap<Symbol, StandardPrimitive>,
 
+    /// User primitive dictionary (for custom pad shapes)
+    pub user_primitives: HashMap<Symbol, UserPrimitive>,
+
     /// Validation statistics
     pub stats: BoardStats,
 }
@@ -45,6 +48,7 @@ pub struct BoardStats {
     pub line_desc_count: usize,
     pub fill_desc_count: usize,
     pub standard_primitive_count: usize,
+    pub user_primitive_count: usize,
     pub feature_set_count: usize,
     pub pad_count: usize,
     pub trace_count: usize,
@@ -62,6 +66,7 @@ impl BoardStats {
             line_desc_count: 0,
             fill_desc_count: 0,
             standard_primitive_count: 0,
+            user_primitive_count: 0,
             feature_set_count: 0,
             pad_count: 0,
             trace_count: 0,
@@ -80,6 +85,9 @@ impl BoardStats {
         println!("    Line Descriptors:  {}", self.line_desc_count);
         println!("    Fill Descriptors:  {}", self.fill_desc_count);
         println!("    Std Primitives:    {}", self.standard_primitive_count);
+        if self.user_primitive_count > 0 {
+            println!("    User Primitives:   {}", self.user_primitive_count);
+        }
         println!("  Features:");
         println!("    Sets:              {}", self.feature_set_count);
         println!("    Pads:              {}", self.pad_count);
