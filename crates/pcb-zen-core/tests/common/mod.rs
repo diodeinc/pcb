@@ -238,6 +238,14 @@ macro_rules! snapshot_eval {
                         }
                     }
 
+                    // Include warnings if there were any
+                    let warnings = result.diagnostics.warnings();
+                    if !warnings.is_empty() {
+                        for warning in warnings {
+                            output_parts.push(warning.to_string());
+                        }
+                    }
+
                     output_parts.push(format!("{:#?}", eval_output.module_tree));
                     output_parts.push(format!("{:#?}", eval_output.signature));
 

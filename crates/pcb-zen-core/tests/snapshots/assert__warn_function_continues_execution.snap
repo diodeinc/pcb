@@ -1,0 +1,12 @@
+---
+source: crates/pcb-zen-core/tests/assert.rs
+expression: output
+---
+Warning: test.zen:2:1-24 warning message
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[]
