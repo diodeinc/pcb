@@ -497,11 +497,125 @@ fn collect_slots(step: &crate::Step) -> Vec<(crate::Polygon, f64, f64)> {
     for layer_feature in &step.layer_features {
         for feature_set in &layer_feature.sets {
             for slot in &feature_set.slots {
-                slots.push((slot.outline.clone(), slot.x, slot.y));
+                match &slot.shape {
+                    crate::SlotShape::Outline(polygon) => {
+                        slots.push((polygon.clone(), slot.x, slot.y));
+                    }
+                    crate::SlotShape::Primitive(primitive) => {
+                        // Convert primitive to approximate polygon for HTML export
+                        if let Some(poly) = primitive_to_polygon_for_slot(primitive) {
+                            slots.push((poly, slot.x, slot.y));
+                        }
+                    }
+                }
             }
         }
     }
     slots
+}
+
+/// Convert a StandardPrimitive to an approximate polygon for slot representation
+/// This is used for HTML export which uses the geo crate and approximates shapes
+fn primitive_to_polygon_for_slot(primitive: &crate::StandardPrimitive) -> Option<crate::Polygon> {
+    use crate::{PolyStep, Polygon, PolyStepSegment, StandardPrimitive};
+
+    match primitive {
+        StandardPrimitive::Circle(c) => {
+            // Approximate circle as 32-sided polygon
+            let radius = c.diameter / 2.0;
+            let segments = 32;
+            let mut steps = Vec::new();
+
+            for i in 1..segments {
+                let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
+                steps.push(PolyStep::Segment(PolyStepSegment {
+                    x: radius * angle.cos(),
+                    y: radius * angle.sin(),
+                }));
+            }
+
+            Some(Polygon {
+                begin: crate::PolyBegin {
+                    x: radius,
+                    y: 0.0,
+                },
+                steps,
+            })
+        }
+        StandardPrimitive::Oval(o) => {
+            // Approximate stadium as polygon (simplified)
+            // For HTML export, close enough approximation
+            let segments = 32;
+            let mut steps = Vec::new();
+
+            let (radius, half_len, is_vertical) = if o.height > o.width {
+                (o.width / 2.0, (o.height - o.width) / 2.0, true)
+            } else {
+                (o.height / 2.0, (o.width - o.height) / 2.0, false)
+            };
+
+            // Build stadium outline with line segments
+            if is_vertical {
+                // Right side up
+                steps.push(PolyStep::Segment(PolyStepSegment {
+                    x: radius,
+                    y: half_len,
+                }));
+
+                // Top cap (semicircle)
+                for i in 1..=segments / 2 {
+                    let angle = (i as f64) * std::f64::consts::PI / (segments as f64 / 2.0);
+                    steps.push(PolyStep::Segment(PolyStepSegment {
+                        x: radius * angle.cos(),
+                        y: half_len + radius * angle.sin(),
+                    }));
+                }
+
+                // Left side down
+                steps.push(PolyStep::Segment(PolyStepSegment {
+                    x: -radius,
+                    y: -half_len,
+                }));
+
+                // Bottom cap (semicircle)
+                for i in 1..=segments / 2 {
+                    let angle =
+                        std::f64::consts::PI + (i as f64) * std::f64::consts::PI / (segments as f64 / 2.0);
+                    steps.push(PolyStep::Segment(PolyStepSegment {
+                        x: radius * angle.cos(),
+                        y: -half_len + radius * angle.sin(),
+                    }));
+                }
+            } else {
+                // Similar logic for horizontal, but simpler to just use vertical approximation
+                // For HTML export this is good enough
+                for i in 1..segments {
+                    let angle = 2.0 * std::f64::consts::PI * (i as f64) / (segments as f64);
+                    let (x, y) = if o.width > o.height {
+                        let r = o.height / 2.0;
+                        let hl = (o.width - o.height) / 2.0;
+                        if !(std::f64::consts::PI / 2.0..=3.0 * std::f64::consts::PI / 2.0).contains(&angle) {
+                            (hl + r * angle.cos(), r * angle.sin())
+                        } else {
+                            (-hl + r * angle.cos(), r * angle.sin())
+                        }
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    steps.push(PolyStep::Segment(PolyStepSegment { x, y }));
+                }
+            }
+
+            Some(Polygon {
+                begin: crate::PolyBegin {
+                    x: radius,
+                    y: -half_len,
+                },
+                steps,
+            })
+        }
+        _ => None, // Other primitives not commonly used for slots
+    }
 }
 
 fn extract_board_outline(doc: &Ipc2581) -> Option<String> {
@@ -1699,7 +1813,16 @@ fn extract_copper_layers(doc: &Ipc2581) -> Vec<CopperLayerInfo> {
 
                 for set in &lf.sets {
                     for slot in &set.slots {
-                        slots_vec.push((slot.outline.clone(), slot.x, slot.y));
+                        match &slot.shape {
+                            crate::SlotShape::Outline(polygon) => {
+                                slots_vec.push((polygon.clone(), slot.x, slot.y));
+                            }
+                            crate::SlotShape::Primitive(primitive) => {
+                                if let Some(poly) = primitive_to_polygon_for_slot(primitive) {
+                                    slots_vec.push((poly, slot.x, slot.y));
+                                }
+                            }
+                        }
                     }
 
                     if is_drill_layer {

@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use ipc_2581::html_generator::generate_html;
 use ipc_2581::svg_export::{
     build_board_context, convert_to_paths, expand_padstacks, flatten_layers, resolve_features,
-    subtract_drill_mask, FeatureBucket, PipelineTiming, ResolvedFeature, ResolvedGeometry,
+    FeatureBucket, PipelineTiming, ResolvedFeature, ResolvedGeometry,
 };
 use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
@@ -871,11 +871,11 @@ fn export_svg(
         println!();
     }
 
-    // Stage 4: Boolean Flattening
-    println!("Stage 4: Boolean Flattening");
+    // Stage 4: Layer Flattening (copper + drills)
+    println!("Stage 4: Layer Flattening");
     let stage4_timer = std::time::Instant::now();
 
-    let mut flattened_layers = flatten_layers(layer_paths)?;
+    let flattened_layers = flatten_layers(&doc, layer_paths)?;
 
     timing.stage4_booleans = Some(stage4_timer.elapsed());
 
@@ -885,7 +885,7 @@ fn export_svg(
     for (layer_name, flattened) in &flattened_layers {
         println!("  Layer: {}", layer_name);
         println!("    Buckets: {}", flattened.buckets.len());
-        for (bucket, _path) in &flattened.buckets {
+        for bucket in flattened.buckets.keys() {
             if let Some(stats) = flattened.stats.get(bucket) {
                 println!(
                     "      {:?}: {} vertices, {:.2} mm², {} pos + {} neg (union: {}ms, diff: {}ms)",
@@ -911,16 +911,9 @@ fn export_svg(
     }
     println!();
 
-    // Stage 4.5: Drill Mask Subtraction
-    let stage4_5_timer = std::time::Instant::now();
-
-    let drill_masks = subtract_drill_mask(&doc, &mut flattened_layers)?;
-
-    timing.stage4_5_drills = Some(stage4_5_timer.elapsed());
-
-    // Export Stage 4 debug SVG if requested (with drill masks)
+    // Export Stage 4 debug SVG if requested (with drill layer composited on top)
     if let Some(debug_path) = debug_stage4_path {
-        println!("Exporting Stage 4 debug SVG (with drill masks)...");
+        println!("Exporting Stage 4 debug SVG (with drill layer)...");
         for (layer_name, flattened) in &flattened_layers {
             let output_path = if flattened_layers.len() > 1 {
                 // Multiple layers - create one file per layer
@@ -932,7 +925,12 @@ fn export_svg(
             };
 
             use ipc_2581::svg_export::debug::export_flattened_svg_with_drill_mask;
-            let drill_mask = drill_masks.get(layer_name).map(|m| &m.mask);
+
+            // Get drill layer mask if available
+            let drill_mask = flattened_layers
+                .get("DRILLS")
+                .and_then(|dl| dl.buckets.get(&FeatureBucket::Cutout));
+
             export_flattened_svg_with_drill_mask(
                 flattened,
                 drill_mask,

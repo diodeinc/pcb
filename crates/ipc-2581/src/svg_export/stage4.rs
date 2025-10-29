@@ -1,7 +1,7 @@
-use super::resolved_feature::{BoundingBox, FeatureBucket, LayerStats};
+use super::resolved_feature::{BoundingBox, FeatureBucket, LayerStats, Point};
 use super::stage3::{LayerPaths, PathFeature};
 use super::Result;
-use crate::Polarity;
+use crate::{Ipc2581, Polarity};
 use skia_safe::{Path, PathOp};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -11,9 +11,6 @@ use std::time::Instant;
 /// Converts bucketed paths into final flattened copper geometry by applying
 /// boolean operations (union, difference) to resolve overlaps and subtract
 /// negative features.
-
-/// Coordinate snapping grid size (1 micron)
-const SNAP_GRID_MM: f64 = 0.001;
 
 /// Flattened layer after boolean operations (Stage 4 output)
 #[derive(Debug, Clone)]
@@ -38,16 +35,26 @@ pub struct BucketStats {
 }
 
 /// Flatten layers by applying boolean operations per bucket
+///
+/// Also collects drill features into a "DRILLS" layer for compositional rendering.
 pub fn flatten_layers(
+    doc: &Ipc2581,
     layers: HashMap<String, LayerPaths>,
 ) -> Result<HashMap<String, FlattenedLayer>> {
-    layers
+    let mut result: HashMap<String, FlattenedLayer> = layers
         .into_iter()
         .map(|(layer_name, layer_paths)| {
             println!("Flattening layer: {}", layer_name);
             flatten_layer(&layer_name, layer_paths).map(|flattened| (layer_name, flattened))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+
+    // Add drill layer
+    println!("Flattening layer: DRILLS");
+    let drill_layer = flatten_drill_layer(doc)?;
+    result.insert("DRILLS".to_string(), drill_layer);
+
+    Ok(result)
 }
 
 /// Flatten a single layer by processing each bucket
@@ -254,16 +261,11 @@ fn union_paths(mut paths: Vec<Path>) -> Result<Path> {
         return Ok(Path::new());
     }
 
-    // Normalize ALL paths (even single paths) to ensure consistent fill types,
-    // remove self-intersections, and snap coordinates to grid
-    // Note: We intentionally do NOT call path.simplify() here because it degrades
-    // visual quality by approximating curves with low-poly lines. Skia's boolean
-    // ops handle curved paths fine, and we want to preserve visual fidelity.
-    for path in &mut paths {
-        snap_path_to_grid(path);
-    }
+    // Note: We intentionally do NOT call path.simplify() or grid snapping here
+    // because they degrade visual quality by approximating curves. Skia's boolean
+    // ops handle floating point coordinates and curved paths fine.
 
-    // Single path case: return normalized path
+    // Single path case: return as-is
     if paths.len() == 1 {
         return Ok(paths.pop().unwrap());
     }
@@ -289,110 +291,6 @@ fn subtract_paths(minuend: &Path, subtrahend: &Path) -> Result<Path> {
         eprintln!("WARNING: Difference operation failed, keeping minuend");
         // This error is recoverable - we return the minuend in the outer handler
     }).or_else(|_| Ok(minuend.clone()))
-}
-
-/// Snap path coordinates to grid to prevent floating point artifacts
-///
-/// Prevents sliver artifacts from floating point errors during boolean operations.
-/// Uses a 1 micron (0.001mm) grid which is well below manufacturing tolerance.
-///
-/// The previous implementation just scaled up/down without rounding. This version
-/// rebuilds the path with properly rounded coordinates.
-fn snap_path_to_grid(path: &mut Path) {
-    use skia_safe::path::Verb;
-
-    let mut snapped = Path::new();
-    snapped.set_fill_type(path.fill_type());
-
-    let iter = skia_safe::path::Iter::new(path, false);
-
-    for (verb, points) in iter {
-        match verb {
-            Verb::Move => {
-                let p = snap_point(points[0]);
-                snapped.move_to(p);
-            }
-            Verb::Line => {
-                let p = snap_point(points[1]);
-                snapped.line_to(p);
-            }
-            Verb::Quad => {
-                let p1 = snap_point(points[1]);
-                let p2 = snap_point(points[2]);
-                snapped.quad_to(p1, p2);
-            }
-            Verb::Conic => {
-                // Convert conic to cubic bezier to preserve arc geometry
-                // Note: Skia's Rust API doesn't easily expose conic weight from iterator,
-                // so we use weight=1.0 (circular arc) which is the common case for our usage
-                let weight = 1.0;
-                let cubic_points = conic_to_cubic(
-                    points[0],
-                    points[1],
-                    points[2],
-                    weight,
-                );
-
-                let cp1 = snap_point(cubic_points.0);
-                let cp2 = snap_point(cubic_points.1);
-                let end = snap_point(cubic_points.2);
-                snapped.cubic_to(cp1, cp2, end);
-            }
-            Verb::Cubic => {
-                let p1 = snap_point(points[1]);
-                let p2 = snap_point(points[2]);
-                let p3 = snap_point(points[3]);
-                snapped.cubic_to(p1, p2, p3);
-            }
-            Verb::Close => {
-                snapped.close();
-            }
-            _ => {}
-        }
-    }
-
-    *path = snapped;
-}
-
-/// Snap a single point to the grid
-#[inline]
-fn snap_point(point: skia_safe::Point) -> (f32, f32) {
-    let x = (point.x as f64 / SNAP_GRID_MM).round() * SNAP_GRID_MM;
-    let y = (point.y as f64 / SNAP_GRID_MM).round() * SNAP_GRID_MM;
-    (x as f32, y as f32)
-}
-
-/// Convert a conic Bezier to a cubic Bezier
-///
-/// A conic (rational quadratic) Bezier is defined by 3 points and a weight.
-/// For weight=1, it's exactly a circular arc.
-///
-/// The conversion uses the standard approximation formula:
-/// cubic_cp1 = p0 + (2/3) * w * (p1 - p0) / (1 + w)
-/// cubic_cp2 = p2 + (2/3) * w * (p1 - p2) / (1 + w)
-///
-/// Returns (control_point_1, control_point_2, end_point)
-fn conic_to_cubic(
-    p0: skia_safe::Point,
-    p1: skia_safe::Point,
-    p2: skia_safe::Point,
-    weight: f32,
-) -> (skia_safe::Point, skia_safe::Point, skia_safe::Point) {
-    // For weight=1 (circular arc), this simplifies nicely
-    // For other weights, we use the general formula
-    let k = (2.0 * weight) / (3.0 * (1.0 + weight));
-
-    let cp1 = skia_safe::Point::new(
-        p0.x + k * (p1.x - p0.x),
-        p0.y + k * (p1.y - p0.y),
-    );
-
-    let cp2 = skia_safe::Point::new(
-        p2.x + k * (p1.x - p2.x),
-        p2.y + k * (p1.y - p2.y),
-    );
-
-    (cp1, cp2, p2)
 }
 
 /// Calculate the actual area of a path in square millimeters using the shoelace formula
@@ -534,4 +432,259 @@ fn interpolate_cubic(
         t2 * t2 * t2 * p0.x + 3.0 * t2 * t2 * t * p1.x + 3.0 * t2 * t * t * p2.x + t * t * t * p3.x,
         t2 * t2 * t2 * p0.y + 3.0 * t2 * t2 * t * p1.y + 3.0 * t2 * t * t * p2.y + t * t * t * p3.y,
     )
+}
+
+// ============================================================================
+// Drill Layer Collection
+// ============================================================================
+
+/// Drill hole or slot
+#[derive(Debug, Clone)]
+struct DrillFeature {
+    path: Path,
+    is_circular: bool, // true = hole, false = slot
+}
+
+/// Flatten drill layer by collecting all drill features
+fn flatten_drill_layer(doc: &Ipc2581) -> Result<FlattenedLayer> {
+    let ecad = doc
+        .ecad()
+        .ok_or(crate::Ipc2581Error::MissingElement("Ecad"))?;
+    let step = ecad
+        .cad_data
+        .steps
+        .first()
+        .ok_or(crate::Ipc2581Error::MissingElement("Step"))?;
+
+    // Extract drill features from DRILL layers
+    let drill_features = extract_drill_features(doc, step)?;
+
+    if drill_features.is_empty() {
+        return Ok(FlattenedLayer {
+            layer_name: "DRILLS".to_string(),
+            buckets: HashMap::new(),
+            bbox: BoundingBox::empty(),
+            stats: HashMap::new(),
+            layer_stats: LayerStats::default(),
+        });
+    }
+
+    let hole_count = drill_features.iter().filter(|d| d.is_circular).count();
+    let slot_count = drill_features.len() - hole_count;
+
+    println!(
+        "    Drill layer: {} features ({} holes, {} slots)",
+        drill_features.len(),
+        hole_count,
+        slot_count
+    );
+
+    // Union all drill features into a single path
+    let drill_mask = union_drill_features(&drill_features.iter().collect::<Vec<_>>())?;
+
+    // Calculate bbox and stats
+    let bounds = drill_mask.bounds();
+    let bbox = BoundingBox {
+        min_x: bounds.left as f64,
+        min_y: bounds.top as f64,
+        max_x: bounds.right as f64,
+        max_y: bounds.bottom as f64,
+    };
+
+    let area_mm2 = calculate_path_area(&drill_mask);
+    let vertex_count = drill_mask.count_points();
+
+    let mut buckets = HashMap::new();
+    buckets.insert(FeatureBucket::Cutout, drill_mask); // Use Cutout bucket for drills
+
+    let mut bucket_stats = HashMap::new();
+    bucket_stats.insert(
+        FeatureBucket::Cutout,
+        BucketStats {
+            positive_count: drill_features.len(),
+            negative_count: 0,
+            area_mm2,
+            vertex_count,
+            union_time_ms: 0,
+            difference_time_ms: 0,
+        },
+    );
+
+    Ok(FlattenedLayer {
+        layer_name: "DRILLS".to_string(),
+        buckets,
+        bbox,
+        stats: bucket_stats,
+        layer_stats: LayerStats {
+            smd_count: 0,
+            pth_count: hole_count,
+            via_count: 0,
+            trace_count: 0,
+            fill_count: 0,
+            cutout_count: slot_count,
+        },
+    })
+}
+
+/// Extract all drill features (holes and slots) from DRILL layers
+fn extract_drill_features(
+    doc: &Ipc2581,
+    step: &crate::Step,
+) -> Result<Vec<DrillFeature>> {
+    use crate::LayerFunction;
+
+    let mut features = Vec::new();
+
+    for layer_feature in &step.layer_features {
+        let layer_name = doc.resolve(layer_feature.layer_ref);
+
+        // Check if this is a DRILL layer
+        let ecad = doc.ecad().unwrap();
+        let is_drill_layer = ecad
+            .cad_data
+            .layers
+            .iter()
+            .any(|l| doc.resolve(l.name) == layer_name && l.layer_function == LayerFunction::Drill);
+
+        // Extract holes and slots from ALL layers (slots can be on non-DRILL layers too)
+        for set in &layer_feature.sets {
+            // Process circular holes (only from DRILL layers)
+            if is_drill_layer {
+                for hole in &set.holes {
+                    let path = create_circle_path(Point::new(hole.x, hole.y), hole.diameter);
+                    features.push(DrillFeature {
+                        path,
+                        is_circular: true,
+                    });
+                }
+            }
+
+            // Process slotted holes (can be on ANY layer)
+            for slot in &set.slots {
+                // SlotCavity can have Outline (polygon) OR StandardPrimitive (Oval, Circle, etc.)
+                let path = match &slot.shape {
+                    crate::SlotShape::Outline(polygon) => polygon_to_path(polygon),
+                    crate::SlotShape::Primitive(primitive) => {
+                        convert_primitive_to_path(primitive, slot.x, slot.y)
+                    }
+                };
+
+                features.push(DrillFeature {
+                    path,
+                    is_circular: false,
+                });
+            }
+        }
+    }
+
+    Ok(features)
+}
+
+/// Union multiple drill features into a single path
+fn union_drill_features(drills: &[&DrillFeature]) -> Result<Path> {
+    if drills.is_empty() {
+        return Ok(Path::new());
+    }
+
+    if drills.len() == 1 {
+        return Ok(drills[0].path.clone());
+    }
+
+    // Union all drill paths
+    let mut result = drills[0].path.clone();
+    for drill in &drills[1..] {
+        match result.op(&drill.path, PathOp::Union) {
+            Some(unioned) => result = unioned,
+            None => {
+                eprintln!("WARNING: Drill union failed, continuing with partial mask");
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Create a circular path for a drill hole using cubic beziers
+fn create_circle_path(center: Point, diameter: f64) -> Path {
+    let mut path = Path::new();
+    let radius = (diameter / 2.0) as f32;
+    super::primitives::add_circle_as_cubics(&mut path, (center.x as f32, center.y as f32), radius);
+    path
+}
+
+/// Convert a polygon to a Skia path
+fn polygon_to_path(polygon: &crate::Polygon) -> Path {
+    let mut path = Path::new();
+
+    // Move to start point
+    let mut current_x = polygon.begin.x;
+    let mut current_y = polygon.begin.y;
+    path.move_to((current_x as f32, current_y as f32));
+
+    // Add segments
+    for step in &polygon.steps {
+        match step {
+            crate::PolyStep::Segment(seg) => {
+                path.line_to((seg.x as f32, seg.y as f32));
+                current_x = seg.x;
+                current_y = seg.y;
+            }
+            crate::PolyStep::Curve(curve) => {
+                // Arc from current position to curve endpoint
+                super::primitives::add_arc_segment(
+                    &mut path,
+                    (current_x, current_y),
+                    (curve.x, curve.y),
+                    (curve.center_x, curve.center_y),
+                    curve.clockwise,
+                );
+                current_x = curve.x;
+                current_y = curve.y;
+            }
+        }
+    }
+
+    path.close();
+    path
+}
+
+/// Convert a StandardPrimitive to a Skia path for drill slot
+fn convert_primitive_to_path(primitive: &crate::StandardPrimitive, x: f64, y: f64) -> Path {
+    use crate::StandardPrimitive;
+
+    let mut path = Path::new();
+
+    match primitive {
+        StandardPrimitive::Circle(c) => {
+            let radius = (c.diameter / 2.0) as f32;
+            super::primitives::add_circle_as_cubics(&mut path, (x as f32, y as f32), radius);
+        }
+        StandardPrimitive::Oval(o) => {
+            super::primitives::add_oval_as_stadium(
+                &mut path,
+                (x as f32, y as f32),
+                o.width,
+                o.height,
+            );
+        }
+        StandardPrimitive::RectCenter(r) => {
+            let hw = (r.width / 2.0) as f32;
+            let hh = (r.height / 2.0) as f32;
+            let cx = x as f32;
+            let cy = y as f32;
+            let rect = skia_safe::Rect::from_xywh(cx - hw, cy - hh, r.width as f32, r.height as f32);
+            path.add_rect(rect, None);
+        }
+        StandardPrimitive::Ellipse(e) => {
+            let rx = (e.width / 2.0) as f32;
+            let ry = (e.height / 2.0) as f32;
+            super::primitives::add_ellipse_as_cubics(&mut path, (x as f32, y as f32), rx, ry);
+        }
+        _ => {
+            // Fallback: treat as circle with 0.5mm radius
+            super::primitives::add_circle_as_cubics(&mut path, (x as f32, y as f32), 0.5);
+        }
+    }
+
+    path
 }

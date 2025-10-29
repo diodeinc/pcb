@@ -3,7 +3,6 @@
 /// All primitives use cubic Bezier curves for maximum quality through
 /// boolean operations. The kappa constant (0.5522847498) provides
 /// mathematically optimal circle approximation with 0.027% error.
-
 use skia_safe::Path;
 
 /// Kappa constant for optimal cubic Bezier circle approximation
@@ -11,7 +10,7 @@ use skia_safe::Path;
 /// Derived from: k = 4 × (√2 - 1) / 3
 /// Error: 0.027% of radius (~0.27 microns for 1mm circle)
 /// Source: PostScript (1982), used in PDF, SVG
-pub const KAPPA: f32 = 0.5522847498;
+pub const KAPPA: f32 = 0.552_284_8;
 
 /// Create a circle as 4 cubic Bezier curves
 ///
@@ -162,4 +161,67 @@ pub fn add_arc_segment(
 
     // Add arc to path
     path.arc_to(oval, start_angle, sweep_angle, false);
+}
+
+/// Create an oval/stadium shape (line segment with semicircular caps)
+///
+/// Per IPC-2581 spec: "rectangle with complete radius (180° arc) at each end"
+/// This is different from an ellipse - it has flat sides parallel to the longer axis.
+///
+/// For a 1.0mm × 2.1mm vertical oval:
+/// - radius = 0.5mm (width / 2)
+/// - segment = 1.1mm (height - width)
+/// - Shape: vertical line with 0.5mm radius semicircular caps at top/bottom
+pub fn add_oval_as_stadium(path: &mut Path, center: (f32, f32), width: f64, height: f64) {
+    let (cx, cy) = center;
+
+    // Determine orientation and calculate geometry
+    let (radius, half_segment, is_vertical) = if height > width {
+        (width / 2.0, (height - width) / 2.0, true)
+    } else {
+        (height / 2.0, (width - height) / 2.0, false)
+    };
+
+    let r = radius as f32;
+    let hs = half_segment as f32;
+    let k = r * KAPPA; // Kappa for semicircle (same as full circle)
+
+    if is_vertical {
+        // Vertical stadium: line segment along y-axis with cubic bezier caps
+        path.move_to((cx + r, cy - hs));
+        path.line_to((cx + r, cy + hs));
+
+        // Top semicircular cap (right to left via cubic beziers)
+        // Start at (cx+r, cy+hs), go CCW to (cx-r, cy+hs)
+        let cap_cy = cy + hs; // Cap center Y coordinate
+        path.cubic_to((cx + r, cap_cy + k), (cx + k, cap_cy + r), (cx, cap_cy + r));
+        path.cubic_to((cx - k, cap_cy + r), (cx - r, cap_cy + k), (cx - r, cap_cy));
+
+        path.line_to((cx - r, cy - hs));
+
+        // Bottom semicircular cap (left to right via cubic beziers)
+        // Start at (cx-r, cy-hs), go CCW to (cx+r, cy-hs)
+        let cap_cy = cy - hs; // Cap center Y coordinate
+        path.cubic_to((cx - r, cap_cy - k), (cx - k, cap_cy - r), (cx, cap_cy - r));
+        path.cubic_to((cx + k, cap_cy - r), (cx + r, cap_cy - k), (cx + r, cap_cy));
+    } else {
+        // Horizontal stadium: line segment along x-axis with cubic bezier caps
+        path.move_to((cx - hs, cy - r));
+
+        // Left semicircular cap (bottom to top via cubic beziers)
+        // Start at (cx-hs, cy-r), go CCW to (cx-hs, cy+r)
+        let cap_cx = cx - hs; // Cap center X coordinate
+        path.cubic_to((cap_cx - k, cy - r), (cap_cx - r, cy - k), (cap_cx - r, cy));
+        path.cubic_to((cap_cx - r, cy + k), (cap_cx - k, cy + r), (cap_cx, cy + r));
+
+        path.line_to((cx + hs, cy + r));
+
+        // Right semicircular cap (top to bottom via cubic beziers)
+        // Start at (cx+hs, cy+r), go CCW to (cx+hs, cy-r)
+        let cap_cx = cx + hs; // Cap center X coordinate
+        path.cubic_to((cap_cx + k, cy + r), (cap_cx + r, cy + k), (cap_cx + r, cy));
+        path.cubic_to((cap_cx + r, cy - k), (cap_cx + k, cy - r), (cap_cx, cy - r));
+    }
+
+    path.close();
 }

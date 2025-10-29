@@ -1,6 +1,6 @@
 use super::primitives::{
     add_arc_segment, add_circle_as_cubics, add_corner_arc_for_rounded_rect, add_ellipse_as_cubics,
-    RectCorner,
+    add_oval_as_stadium, RectCorner,
 };
 use super::resolved_feature::*;
 use super::Result;
@@ -266,6 +266,8 @@ fn apply_transform(path: &mut Path, center: Point, rotation: f64) {
 fn convert_circle(center: Point, diameter: f64, filled: bool, line_width: Option<f64>) -> Path {
     let mut path = Path::new();
 
+    let center_pt = to_skia_point(center);
+
     if !filled {
         // HOLLOW circle - render as annular ring with LineDesc width
         let stroke_width = line_width.expect("HOLLOW circle missing line_width from LineDesc");
@@ -274,15 +276,14 @@ fn convert_circle(center: Point, diameter: f64, filled: bool, line_width: Option
         let outer_radius = (radius + stroke_width / 2.0) as f32;
 
         path.set_fill_type(skia_safe::path::FillType::EvenOdd);
-        let center_pt = to_skia_point(center);
 
-        // Use cubic beziers instead of add_circle for better boolean op quality
+        // Use cubic beziers for smooth circles
         add_circle_as_cubics(&mut path, center_pt, outer_radius);
         add_circle_as_cubics(&mut path, center_pt, inner_radius);
     } else {
-        // Filled circle using cubic beziers for better quality through boolean ops
+        // Filled circle using cubic beziers for smooth quality
         let radius = (diameter / 2.0) as f32;
-        add_circle_as_cubics(&mut path, to_skia_point(center), radius);
+        add_circle_as_cubics(&mut path, center_pt, radius);
     }
 
     path
@@ -315,8 +316,8 @@ fn convert_rectangle(
         let inner_half_w = ((half_w - stroke_width).max(0.0)) as f32;
         let inner_half_h = ((half_h - stroke_width).max(0.0)) as f32;
         let inner_rect = skia_safe::Rect::from_xywh(
-            (center.x as f64 - inner_half_w as f64) as f32,
-            (center.y as f64 - inner_half_h as f64) as f32,
+            (center.x - inner_half_w as f64) as f32,
+            (center.y - inner_half_h as f64) as f32,
             inner_half_w * 2.0,
             inner_half_h * 2.0,
         );
@@ -495,73 +496,9 @@ fn convert_ellipse(center: Point, width: f64, height: f64, rotation: f64) -> Pat
 fn convert_oval(center: Point, width: f64, height: f64, rotation: f64) -> Path {
     let mut path = Path::new();
 
-    // Oval = stadium shape (line segment with semicircular caps)
-    // Per IPC-2581: "rectangle with complete radius (180° arc) at each end"
-    // radius = min(width, height) / 2
-    // segment_length = |width - height|
+    // Create stadium shape at origin, then transform
+    add_oval_as_stadium(&mut path, (0.0, 0.0), width, height);
 
-    let (radius, half_segment, is_vertical) = if height > width {
-        // Vertical orientation (taller than wide)
-        let r = width / 2.0;
-        let seg = (height - width) / 2.0;
-        (r, seg, true)
-    } else {
-        // Horizontal orientation (wider than tall)
-        let r = height / 2.0;
-        let seg = (width - height) / 2.0;
-        (r, seg, false)
-    };
-
-    let r = radius as f32;
-    let hs = half_segment as f32;
-
-    if is_vertical {
-        // Vertical stadium: line segment along y-axis with caps at top/bottom
-        // Start at bottom-right, go counter-clockwise
-
-        // Bottom-right corner
-        path.move_to((r, -hs));
-
-        // Right side (straight line up)
-        path.line_to((r, hs));
-
-        // Top semicircular cap (right to left, going up and around)
-        // Center: (0, hs), start angle: 0°, sweep: 180° CCW
-        let cap_top = skia_safe::Rect::from_xywh(-r, hs - r, r * 2.0, r * 2.0);
-        path.arc_to(cap_top, 0.0, 180.0, false);
-
-        // Left side (straight line down)
-        path.line_to((-r, -hs));
-
-        // Bottom semicircular cap (left to right, going down and around)
-        // Center: (0, -hs), start angle: 180°, sweep: 180° CCW
-        let cap_bottom = skia_safe::Rect::from_xywh(-r, -hs - r, r * 2.0, r * 2.0);
-        path.arc_to(cap_bottom, 180.0, 180.0, false);
-    } else {
-        // Horizontal stadium: line segment along x-axis with caps at left/right
-        // Start at left-bottom, go counter-clockwise
-
-        // Left-bottom corner
-        path.move_to((-hs, -r));
-
-        // Left semicircular cap (bottom to top, going left and around)
-        // Center: (-hs, 0), start angle: 270°, sweep: 180° CCW
-        let cap_left = skia_safe::Rect::from_xywh(-hs - r, -r, r * 2.0, r * 2.0);
-        path.arc_to(cap_left, 270.0, 180.0, false);
-
-        // Top side (straight line right)
-        path.line_to((hs, r));
-
-        // Right semicircular cap (top to bottom, going right and around)
-        // Center: (hs, 0), start angle: 90°, sweep: 180° CCW
-        let cap_right = skia_safe::Rect::from_xywh(hs - r, -r, r * 2.0, r * 2.0);
-        path.arc_to(cap_right, 90.0, 180.0, false);
-
-        // Bottom side (straight line left)
-        path.line_to((-hs, -r));
-    }
-
-    path.close();
     apply_transform(&mut path, center, rotation);
     path
 }

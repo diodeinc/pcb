@@ -826,24 +826,6 @@ fn calculate_geometry_bbox(geometry: &ResolvedGeometry) -> BoundingBox {
             }
         }
 
-        ResolvedGeometry::Ellipse {
-            center,
-            width,
-            height,
-            ..
-        } => {
-            // Conservative bbox (doesn't account for rotation, but safe approximation)
-            let hw = width / 2.0;
-            let hh = height / 2.0;
-            let radius = hw.max(hh);
-            BoundingBox {
-                min_x: center.x - radius,
-                min_y: center.y - radius,
-                max_x: center.x + radius,
-                max_y: center.y + radius,
-            }
-        }
-
         ResolvedGeometry::Donut {
             center,
             outer_diameter,

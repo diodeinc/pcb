@@ -245,11 +245,24 @@ pub struct Hole {
     pub y: f64,
 }
 
+/// Shape definition for a SlotCavity
+///
+/// Per IPC-2581 spec section 8.2.3.10.6:
+/// "The shape is defined by the substitution group Feature, which can be
+/// either a user defined shape or a standard primitive shape."
+#[derive(Debug, Clone)]
+pub enum SlotShape {
+    /// Outline defined as a polygon
+    Outline(super::Polygon),
+    /// Standard primitive shape (Oval, Circle, RectCenter, etc.)
+    Primitive(super::StandardPrimitive),
+}
+
 /// Slot represents a slotted hole or cavity
 #[derive(Debug, Clone)]
 pub struct Slot {
     pub name: Option<Symbol>,
-    pub outline: super::Polygon,
+    pub shape: SlotShape,
     pub plating_status: PlatingStatus,
     pub x: f64,
     pub y: f64,

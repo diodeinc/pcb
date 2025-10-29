@@ -1683,28 +1683,48 @@ impl<'arena> Parser<'arena> {
             (0.0, 0.0)
         };
 
-        // Parse Outline child element containing Polygon
-        let outline = if let Some(outline_node) = node
+        // Parse shape - can be Outline OR StandardPrimitive
+        // Per IPC-2581 spec 8.2.3.10.6: "The shape is defined by the substitution
+        // group Feature, which can be either a user defined shape or a standard
+        // primitive shape."
+        let shape = if let Some(outline_node) = node
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "Outline")
         {
+            // Outline path with polygon
             if let Some(polygon_node) = outline_node
                 .children()
                 .find(|n| n.is_element() && n.tag_name().name() == "Polygon")
             {
-                self.parse_polygon(&polygon_node, units)?
+                SlotShape::Outline(self.parse_polygon(&polygon_node, units)?)
             } else {
                 return Err(Ipc2581Error::MissingElement(
                     "Polygon in SlotCavity Outline",
                 ));
             }
         } else {
-            return Err(Ipc2581Error::MissingElement("Outline in SlotCavity"));
+            // Try to parse as StandardPrimitive (Circle, Oval, RectCenter, etc.)
+            // Find first child that is a StandardPrimitive
+            let primitive_node = node
+                .children()
+                .find(|n| {
+                    n.is_element()
+                        && matches!(
+                            n.tag_name().name(),
+                            "Circle" | "Oval" | "RectCenter" | "RectRound" | "Ellipse"
+                                | "Diamond" | "Hexagon" | "Octagon" | "Triangle"
+                        )
+                })
+                .ok_or(Ipc2581Error::MissingElement(
+                    "Shape (Outline or StandardPrimitive) in SlotCavity",
+                ))?;
+
+            SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
         Ok(Slot {
             name,
-            outline,
+            shape,
             plating_status,
             x,
             y,
