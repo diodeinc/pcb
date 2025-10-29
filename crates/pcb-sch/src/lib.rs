@@ -143,7 +143,6 @@ impl std::str::FromStr for InstanceRef {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        panic!("lksjdf");
         // Parse format: "path/to/file.zen:module_name.instance.path"
         let (module_part, instance_path_str) = s
             .split_once(':')
