@@ -414,7 +414,7 @@ pub struct Instance {
     pub attributes: HashMap<Symbol, AttributeValue>,
     pub children: HashMap<Symbol, InstanceRef>,
     pub reference_designator: Option<String>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub symbol_positions: HashMap<String, Position>,
 }
 
