@@ -1,0 +1,68 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "TP1",
+                    type: "test_point",
+                    footprint: "test_point",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "SIGNAL",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                            },
+                        },
+                    ),
+                },
+            ),
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    type: "resistor",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

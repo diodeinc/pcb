@@ -1035,6 +1035,90 @@ builtin.add_electrical_check(
 - Checks can access the entire module structure, including components, nets, interfaces, and properties
 - Multiple checks with the same name are allowed (they execute independently)
 
+### builtin.add_component_modifier(modifier_fn)
+
+**Built-in function** for registering component modifier functions that automatically run on every component created in the current module and all descendant modules.
+
+**Parameters:**
+- `modifier_fn`: Function that accepts a component and modifies it (required)
+
+Component modifiers enable organization-wide policies by allowing parent modules to automatically modify components created in child modules. Modifiers execute in **bottom-up order**: child's own modifiers first, then parent's, then grandparent's. This allows parent policies to override child choices.
+
+**Modifier Function Signature:**
+```python
+def modifier_function(component):
+    # Modify component properties
+    # No return value required
+    pass
+```
+
+**Example - Assign Part Numbers for Generic Components:**
+```python
+def assign_parts(component):
+    """Convert generic components to specific part numbers"""
+    # Resistors
+    if hasattr(component, "resistance"):
+        if component.resistance == "10k":
+            component.manufacturer = "Yageo"
+            component.mpn = "RC0603FR-0710KL"
+
+    # Capacitors
+    if hasattr(component, "capacitance"):
+        if component.capacitance == "10uF":
+            component.manufacturer = "Samsung"
+            component.mpn = "CL21A106KAYNNNE"
+
+builtin.add_component_modifier(assign_parts)
+
+# Child modules use generic components, parent assigns real parts
+ChildBoard = Module("Child.zen")
+ChildBoard(name="Board1")
+```
+
+**Execution Model:**
+
+1. Modifiers are registered during module evaluation via `builtin.add_component_modifier()`
+2. When a child module is instantiated, it inherits all ancestor modifiers
+3. Each component creation triggers modifiers in bottom-up order:
+   - Module's own modifiers execute first
+   - Parent's modifiers execute next
+   - Grandparent's and further ancestors follow
+4. Modifiers can read and write any component property (mpn, manufacturer, dnp, custom properties)
+
+**Notes:**
+- Modifiers only apply to components created AFTER registration
+- Parent modifiers run AFTER child modifiers (can override child choices)
+- Modifiers are inherited through the entire module hierarchy
+- Common uses: vendor policies, DNP rules, property validation, debug tagging
+
+### builtin.current_module_path()
+
+**Built-in function** that returns the current module's path as a list of strings.
+
+**Returns:** List of strings representing the module hierarchy
+- Root module: `[]` (empty list)
+- Child module: `["child_name"]`
+- Nested module: `["parent_name", "child_name"]`
+
+This function enables conditional logic based on module depth or position in the hierarchy. Common use case: applying different policies at the root module versus child modules.
+
+**Example - Conditional BOM Modifiers at Root:**
+```python
+# Apply BOM modifiers only at the root module
+def bom_modifier(component):
+    component.bom_notes = "Production-ready"
+
+if len(builtin.current_module_path()) == 0:
+    builtin.add_component_modifier(bom_modifier)
+```
+
+**Example - Check Module Depth:**
+```python
+path = builtin.current_module_path()
+if len(path) > 2:
+    print("Warning: deeply nested module")
+```
+
 ## Board Configuration Types
 
 The board configuration record types are provided by `@stdlib/board_config.zen` and offer comprehensive control over PCB manufacturing specifications.

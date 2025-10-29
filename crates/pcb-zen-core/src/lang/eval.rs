@@ -29,6 +29,7 @@ use crate::lang::{
 };
 use crate::lang::{
     electrical_check::FrozenElectricalCheck,
+    evaluator_ext::EvaluatorExt,
     file::file_globals,
     module::{FrozenModuleValue, ModulePath},
 };
@@ -578,6 +579,57 @@ impl EvalContext {
         }
     }
 
+    /// Set parent component modifiers from already frozen parent values.
+    pub fn set_parent_component_modifiers_from_frozen_values(
+        &mut self,
+        parent_modifiers: Vec<FrozenValue>,
+    ) {
+        let eval = Evaluator::new(&self.module);
+        if self.module.extra_value().is_none() {
+            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
+            self.module.set_extra_value(ctx_value);
+        }
+        let extra_value = self.module.extra_value().unwrap();
+        let ctx_value = extra_value.downcast_ref::<ContextValue>().unwrap();
+
+        let mut module = ctx_value.module_mut();
+        let unfrozen_modifiers: Vec<_> = parent_modifiers
+            .into_iter()
+            .map(|fv| fv.to_value())
+            .collect();
+        module.set_parent_component_modifiers(unfrozen_modifiers);
+    }
+
+    /// Apply component modifiers to all children after module evaluation but before freezing.
+    /// This ensures modifiers apply to all components regardless of declaration order.
+    fn apply_component_modifiers(eval: &mut Evaluator) -> starlark::Result<()> {
+        let Some(module) = eval.module_value() else {
+            return Ok(());
+        };
+
+        let children = module.children().clone();
+        let own_modifiers = module.component_modifiers().clone();
+        let parent_modifiers = module.parent_component_modifiers().clone();
+        let all_modifiers = module.collect_all_component_modifiers_as_values();
+        drop(module);
+
+        // Apply modifiers to direct children (bottom-up: own then parent)
+        for child in &children {
+            for modifier in own_modifiers.iter().chain(&parent_modifiers) {
+                eval.eval_function(*modifier, &[*child], &[])?;
+            }
+        }
+
+        // Update pending child modules with final modifier list
+        if let Some(context) = eval.context_value() {
+            for pending in context.pending_children_mut().iter_mut() {
+                pending.component_modifiers = all_modifiers.clone();
+            }
+        }
+
+        Ok(())
+    }
+
     /// Convert JSON inputs directly to heap values and set them (for external APIs)
     pub fn set_json_inputs(&mut self, json_inputs: SmallMap<String, serde_json::Value>) {
         let eval = Evaluator::new(&self.module);
@@ -663,7 +715,8 @@ impl EvalContext {
 
             // We are only interested in whether evaluation succeeded, not in the
             // value of the final expression, so map the result to `()`.
-            eval.eval_module(ast.clone(), &globals).map(|_| ())
+            eval.eval_module(ast.clone(), &globals)
+                .and_then(|_| Self::apply_component_modifiers(&mut eval))
         };
 
         // Collect print output after evaluation
@@ -1350,6 +1403,7 @@ impl EvalContext {
             self.set_properties_from_frozen_values(props);
         }
         self.set_inputs_from_frozen_values(pending.inputs);
+        self.set_parent_component_modifiers_from_frozen_values(pending.component_modifiers);
 
         let child_result = self.eval();
 

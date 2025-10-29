@@ -1,0 +1,158 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    mpn: "10K_PART",
+                    manufacturer: "Vendor_10K",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "A",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "B",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "__resistance__": FrozenValue(
+                            PhysicalValue {
+                                value: 10000,
+                                tolerance: 0,
+                                unit: PhysicalUnitDims {
+                                    current: -1,
+                                    time: 0,
+                                    voltage: 1,
+                                    temp: 0,
+                                },
+                            },
+                        ),
+                        "resistance": FrozenValue(
+                            "10k",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+            FrozenValue(
+                Component {
+                    name: "R2",
+                    mpn: "100K_PART",
+                    manufacturer: "Vendor_100K",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "C",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "D",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "__resistance__": FrozenValue(
+                            PhysicalValue {
+                                value: 100000,
+                                tolerance: 0,
+                                unit: PhysicalUnitDims {
+                                    current: -1,
+                                    time: 0,
+                                    voltage: 1,
+                                    temp: 0,
+                                },
+                            },
+                        ),
+                        "resistance": FrozenValue(
+                            "100k",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+            FrozenValue(
+                Component {
+                    name: "R3",
+                    footprint: "0603",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "E",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "F",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "__resistance__": FrozenValue(
+                            PhysicalValue {
+                                value: 1000,
+                                tolerance: 0,
+                                unit: PhysicalUnitDims {
+                                    current: -1,
+                                    time: 0,
+                                    voltage: 1,
+                                    temp: 0,
+                                },
+                            },
+                        ),
+                        "resistance": FrozenValue(
+                            "1k",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

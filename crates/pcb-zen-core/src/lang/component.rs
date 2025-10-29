@@ -6,12 +6,14 @@ use starlark::{
     collections::SmallMap,
     environment::GlobalsBuilder,
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
-    starlark_complex_value, starlark_module, starlark_simple_value,
+    starlark_module, starlark_simple_value,
     values::{
         dict::{AllocDict, DictRef},
-        starlark_value, Coerce, Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
+        starlark_value, Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace,
+        Value, ValueLike,
     },
 };
+use std::cell::RefCell;
 
 use crate::{
     lang::{evaluator_ext::EvaluatorExt, physical::PhysicalValue, spice_model::SpiceModelValue},
@@ -62,34 +64,99 @@ impl From<ComponentError> for starlark::Error {
     }
 }
 
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+// Mutable data stored in ComponentValue (wrapped in RefCell)
+#[derive(Clone, Debug, Trace, ProvidesStaticType, Allocative)]
+pub struct ComponentData<'v> {
+    pub(crate) mpn: Option<String>,
+    pub(crate) manufacturer: Option<String>,
+    pub(crate) dnp: Option<bool>,
+    pub(crate) properties: SmallMap<String, Value<'v>>,
+}
+
+// Frozen data stored in FrozenComponentValue (no RefCell needed)
+#[derive(Clone, Debug, ProvidesStaticType, Allocative)]
+pub struct FrozenComponentData {
+    pub(crate) mpn: Option<String>,
+    pub(crate) manufacturer: Option<String>,
+    pub(crate) dnp: Option<bool>,
+    pub(crate) properties: SmallMap<String, FrozenValue>,
+}
+
+unsafe impl<'v> Coerce<ComponentData<'v>> for FrozenComponentData {}
+
+// Generic component wrapper - T is either RefCell<ComponentData<'v>> or FrozenComponentData
+#[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative)]
 #[repr(C)]
-pub struct ComponentValueGen<V> {
+pub struct ComponentGen<V, T> {
     name: String,
-    mpn: Option<String>,
-    manufacturer: Option<String>,
     ctype: Option<String>,
     footprint: String,
     prefix: String,
     connections: SmallMap<String, V>,
-    properties: SmallMap<String, V>,
+    data: T,
     source_path: String,
     symbol: V,
     spice_model: Option<V>,
-    dnp: Option<bool>,
     datasheet: Option<String>,
     description: Option<String>,
 }
 
-impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
+// Type aliases for mutable and frozen versions
+pub type ComponentValue<'v> = ComponentGen<Value<'v>, RefCell<ComponentData<'v>>>;
+pub type FrozenComponentValue = ComponentGen<FrozenValue, FrozenComponentData>;
+
+// Implement Coerce for ComponentGen
+unsafe impl<'v> Coerce<ComponentValue<'v>> for FrozenComponentValue {}
+
+// Freeze implementation
+impl<'v> Freeze for ComponentValue<'v> {
+    type Frozen = FrozenComponentValue;
+
+    fn freeze(
+        self,
+        freezer: &starlark::values::Freezer,
+    ) -> starlark::values::FreezeResult<Self::Frozen> {
+        let data = self.data.into_inner();
+        Ok(FrozenComponentValue {
+            name: self.name,
+            ctype: self.ctype,
+            footprint: self.footprint,
+            prefix: self.prefix,
+            connections: self.connections.freeze(freezer)?,
+            data: FrozenComponentData {
+                mpn: data.mpn,
+                manufacturer: data.manufacturer,
+                dnp: data.dnp,
+                properties: {
+                    let mut frozen_props = SmallMap::new();
+                    for (k, v) in data.properties.into_iter() {
+                        frozen_props.insert(k, v.freeze(freezer)?);
+                    }
+                    frozen_props
+                },
+            },
+            source_path: self.source_path,
+            symbol: self.symbol.freeze(freezer)?,
+            spice_model: match self.spice_model {
+                Some(s) => Some(s.freeze(freezer)?),
+                None => None,
+            },
+            datasheet: self.datasheet,
+            description: self.description,
+        })
+    }
+}
+
+impl std::fmt::Debug for ComponentValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Component");
         debug.field("name", &self.name);
 
-        if let Some(mpn) = &self.mpn {
+        let data = self.data.borrow();
+        if let Some(mpn) = &data.mpn {
             debug.field("mpn", mpn);
         }
-        if let Some(manufacturer) = &self.manufacturer {
+        if let Some(manufacturer) = &data.manufacturer {
             debug.field("manufacturer", manufacturer);
         }
         if let Some(ctype) = &self.ctype {
@@ -109,8 +176,8 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
         }
 
         // Sort properties for deterministic output
-        if !self.properties.is_empty() {
-            let mut props: Vec<_> = self.properties.iter().collect();
+        if !data.properties.is_empty() {
+            let mut props: Vec<_> = data.properties.iter().collect();
             props.sort_by_key(|(k, _)| k.as_str());
             let props_map: std::collections::BTreeMap<_, _> =
                 props.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
@@ -129,29 +196,85 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ComponentValueGen<V> {
     }
 }
 
-starlark_complex_value!(pub ComponentValue);
+impl std::fmt::Debug for FrozenComponentValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("Component");
+        debug.field("name", &self.name);
 
+        if let Some(mpn) = &self.data.mpn {
+            debug.field("mpn", mpn);
+        }
+        if let Some(manufacturer) = &self.data.manufacturer {
+            debug.field("manufacturer", manufacturer);
+        }
+        if let Some(ctype) = &self.ctype {
+            debug.field("type", ctype);
+        }
+
+        debug.field("footprint", &self.footprint);
+        debug.field("prefix", &self.prefix);
+
+        // Sort connections for deterministic output
+        if !self.connections.is_empty() {
+            let mut conns: Vec<_> = self.connections.iter().collect();
+            conns.sort_by_key(|(k, _)| k.as_str());
+            let conns_map: std::collections::BTreeMap<_, _> =
+                conns.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
+            debug.field("connections", &conns_map);
+        }
+
+        // Sort properties for deterministic output
+        if !self.data.properties.is_empty() {
+            let mut props: Vec<_> = self.data.properties.iter().collect();
+            props.sort_by_key(|(k, _)| k.as_str());
+            let props_map: std::collections::BTreeMap<_, _> =
+                props.into_iter().map(|(k, v)| (k.as_str(), v)).collect();
+            debug.field("properties", &props_map);
+        }
+
+        // Show symbol field
+        debug.field("symbol", &self.symbol);
+
+        // Show spice_model if present
+        if let Some(spice_model) = &self.spice_model {
+            debug.field("spice_model", spice_model);
+        }
+
+        debug.finish()
+    }
+}
+
+// StarlarkValue implementation for mutable ComponentValue
 #[starlark_value(type = "Component")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
     fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        let data = self.data.borrow();
         match attr {
             "name" => Some(heap.alloc_str(&self.name).to_value()),
             "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
             "mpn" => Some(
-                self.mpn()
+                data.mpn
+                    .as_ref()
                     .map(|mpn| heap.alloc_str(mpn).to_value())
-                    .or_else(|| self.properties().get("mpn").map(|t| t.to_value()))
-                    .or_else(|| self.properties().get("Mpn").map(|t| t.to_value()))
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "manufacturer" => Some(
+                data.manufacturer
+                    .as_ref()
+                    .map(|m| heap.alloc_str(m).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "dnp" => Some(
+                data.dnp
+                    .map(|b| heap.alloc(b).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "type" => Some(
-                self.ctype()
+                self.ctype
+                    .as_ref()
                     .map(|ctype| heap.alloc_str(ctype).to_value())
-                    .or_else(|| self.properties().get("type").map(|t| t.to_value()))
-                    .or_else(|| self.properties().get("Type").map(|t| t.to_value()))
+                    .or_else(|| data.properties.get("type").map(|t| t.to_value()))
+                    .or_else(|| data.properties.get("Type").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "properties" => {
@@ -159,7 +282,7 @@ where
                 let mut component_attrs = std::collections::HashMap::new();
 
                 // Add component properties (excluding internal ones)
-                for (key, value) in &self.properties {
+                for (key, value) in data.properties.iter() {
                     if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
                         || key.starts_with("__")
                     {
@@ -186,13 +309,166 @@ where
                 Some(heap.alloc(AllocDict(connections_vec)))
             }
             "capacitance" => Some(
-                self.properties
+                data.properties
                     .get("__capacitance__")
                     .map(|v| v.to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "resistance" => Some(
-                self.properties
+                data.properties
+                    .get("__resistance__")
+                    .map(|v| v.to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            // Fallback: check properties map
+            _ => data.properties.get(attr).map(|v| v.to_value()),
+        }
+    }
+
+    fn set_attr(&self, attr: &str, value: Value<'v>) -> starlark::Result<()> {
+        let mut data = self.data.borrow_mut();
+        match attr {
+            "mpn" => {
+                data.mpn = value.unpack_str().map(|s| s.to_owned());
+                Ok(())
+            }
+            "manufacturer" => {
+                data.manufacturer = value.unpack_str().map(|s| s.to_owned());
+                Ok(())
+            }
+            "dnp" => {
+                data.dnp = value.unpack_bool();
+                Ok(())
+            }
+            // Fallback: set in properties map (always allowed)
+            _ => {
+                data.properties.insert(attr.to_string(), value);
+                Ok(())
+            }
+        }
+    }
+
+    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+        if matches!(
+            attr,
+            "name"
+                | "prefix"
+                | "mpn"
+                | "manufacturer"
+                | "dnp"
+                | "type"
+                | "properties"
+                | "pins"
+                | "capacitance"
+                | "resistance"
+        ) {
+            return true;
+        }
+        let data = self.data.borrow();
+        data.properties.contains_key(attr)
+    }
+
+    fn dir_attr(&self) -> Vec<String> {
+        let mut attrs = vec![
+            "name".to_string(),
+            "prefix".to_string(),
+            "mpn".to_string(),
+            "manufacturer".to_string(),
+            "dnp".to_string(),
+            "type".to_string(),
+            "properties".to_string(),
+            "pins".to_string(),
+            "capacitance".to_string(),
+            "resistance".to_string(),
+        ];
+        let data = self.data.borrow();
+        for key in data.properties.keys() {
+            if !key.starts_with("__") {
+                attrs.push(key.clone());
+            }
+        }
+        attrs
+    }
+}
+
+// StarlarkValue implementation for frozen FrozenComponentValue
+#[starlark_value(type = "Component")]
+impl<'v> StarlarkValue<'v> for FrozenComponentValue {
+    type Canonical = FrozenComponentValue;
+
+    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+        match attr {
+            "name" => Some(heap.alloc_str(&self.name).to_value()),
+            "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
+            "mpn" => Some(
+                self.data
+                    .mpn
+                    .as_ref()
+                    .map(|mpn| heap.alloc_str(mpn).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "manufacturer" => Some(
+                self.data
+                    .manufacturer
+                    .as_ref()
+                    .map(|m| heap.alloc_str(m).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "dnp" => Some(
+                self.data
+                    .dnp
+                    .map(|b| heap.alloc(b).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "type" => Some(
+                self.ctype
+                    .as_ref()
+                    .map(|ctype| heap.alloc_str(ctype).to_value())
+                    .or_else(|| self.data.properties.get("type").map(|t| t.to_value()))
+                    .or_else(|| self.data.properties.get("Type").map(|t| t.to_value()))
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "properties" => {
+                // Build the same properties dictionary as in the testbench components dict
+                let mut component_attrs = std::collections::HashMap::new();
+
+                // Add component properties (excluding internal ones)
+                for (key, value) in self.data.properties.iter() {
+                    if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
+                        || key.starts_with("__")
+                    {
+                        continue;
+                    }
+                    component_attrs.insert(key.clone(), value.to_value());
+                }
+
+                // Convert HashMap to Starlark dictionary
+                let attrs_vec: Vec<(Value<'v>, Value<'v>)> = component_attrs
+                    .into_iter()
+                    .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
+                    .collect();
+
+                Some(heap.alloc(AllocDict(attrs_vec)))
+            }
+            "pins" => {
+                // Convert connections SmallMap to Starlark dictionary
+                let connections_vec: Vec<(Value<'v>, Value<'v>)> = self
+                    .connections
+                    .iter()
+                    .map(|(pin, net)| (heap.alloc_str(pin).to_value(), net.to_value()))
+                    .collect();
+                Some(heap.alloc(AllocDict(connections_vec)))
+            }
+            "capacitance" => Some(
+                self.data
+                    .properties
+                    .get("__capacitance__")
+                    .map(|v| v.to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "resistance" => Some(
+                self.data
+                    .properties
                     .get("__resistance__")
                     .map(|v| v.to_value())
                     .unwrap_or_else(Value::new_none),
@@ -202,43 +478,56 @@ where
     }
 
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
-        matches!(
+        if matches!(
             attr,
             "name"
                 | "prefix"
                 | "mpn"
+                | "manufacturer"
                 | "type"
                 | "properties"
                 | "pins"
                 | "capacitance"
                 | "resistance"
-        )
+        ) {
+            return true;
+        }
+        self.data.properties.contains_key(attr)
     }
 
     fn dir_attr(&self) -> Vec<String> {
-        vec![
+        let mut attrs = vec![
             "name".to_string(),
             "prefix".to_string(),
             "mpn".to_string(),
+            "manufacturer".to_string(),
+            "dnp".to_string(),
             "type".to_string(),
             "properties".to_string(),
             "pins".to_string(),
             "capacitance".to_string(),
             "resistance".to_string(),
-        ]
+        ];
+        for key in self.data.properties.keys() {
+            if !key.starts_with("__") {
+                attrs.push(key.clone());
+            }
+        }
+        attrs
     }
 }
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
+impl std::fmt::Display for ComponentValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = self
+        let data = self.data.borrow();
+        let name = data
             .mpn
             .as_deref()
             .unwrap_or(self.ctype.as_deref().unwrap_or("<unknown>"));
         writeln!(f, "Component({name})")?;
 
-        if !self.properties.is_empty() {
-            let mut props: Vec<_> = self.properties.iter().collect();
+        if !data.properties.is_empty() {
+            let mut props: Vec<_> = data.properties.iter().collect();
             props.sort_by(|(a, _), (b, _)| a.cmp(b));
             writeln!(f, "Properties:")?;
             for (key, value) in props {
@@ -249,13 +538,35 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for ComponentValueGen<V> {
     }
 }
 
-impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
-    pub fn mpn(&self) -> Option<&str> {
-        self.mpn.as_deref()
+impl std::fmt::Display for FrozenComponentValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self
+            .data
+            .mpn
+            .as_deref()
+            .unwrap_or(self.ctype.as_deref().unwrap_or("<unknown>"));
+        writeln!(f, "Component({name})")?;
+
+        if !self.data.properties.is_empty() {
+            let mut props: Vec<_> = self.data.properties.iter().collect();
+            props.sort_by(|(a, _), (b, _)| a.cmp(b));
+            writeln!(f, "Properties:")?;
+            for (key, value) in props {
+                writeln!(f, "  {key}: {value:?}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+// Accessor methods for ComponentValue
+impl<'v> ComponentValue<'v> {
+    pub fn mpn(&self) -> Option<String> {
+        self.data.borrow().mpn.clone()
     }
 
-    pub fn manufacturer(&self) -> Option<&str> {
-        self.manufacturer.as_deref()
+    pub fn manufacturer(&self) -> Option<String> {
+        self.data.borrow().manufacturer.clone()
     }
 
     pub fn prefix(&self) -> &str {
@@ -270,7 +581,7 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
     }
 
     pub fn dnp(&self) -> Option<bool> {
-        self.dnp
+        self.data.borrow().dnp
     }
 
     pub fn datasheet(&self) -> Option<&str> {
@@ -285,11 +596,11 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         &self.footprint
     }
 
-    pub fn properties(&self) -> &SmallMap<String, V> {
-        &self.properties
+    pub fn properties(&self) -> SmallMap<String, Value<'v>> {
+        self.data.borrow().properties.clone()
     }
 
-    pub fn connections(&self) -> &SmallMap<String, V> {
+    pub fn connections(&self) -> &SmallMap<String, Value<'v>> {
         &self.connections
     }
 
@@ -301,11 +612,73 @@ impl<'v, V: ValueLike<'v>> ComponentValueGen<V> {
         &self.source_path
     }
 
-    pub fn symbol(&self) -> &V {
+    pub fn symbol(&self) -> &Value<'v> {
         &self.symbol
     }
 
-    pub fn spice_model(&self) -> Option<&V> {
+    pub fn spice_model(&self) -> Option<&Value<'v>> {
+        self.spice_model.as_ref()
+    }
+}
+
+// Accessor methods for FrozenComponentValue
+impl FrozenComponentValue {
+    pub fn mpn(&self) -> Option<&str> {
+        self.data.mpn.as_deref()
+    }
+
+    pub fn manufacturer(&self) -> Option<&str> {
+        self.data.manufacturer.as_deref()
+    }
+
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Optional component *type* as declared via the `type = "..."` field when
+    /// the factory was defined.  Used by schematic viewers to pick an
+    /// appropriate symbol when the MPN is not available.
+    pub fn ctype(&self) -> Option<&str> {
+        self.ctype.as_deref()
+    }
+
+    pub fn dnp(&self) -> Option<bool> {
+        self.data.dnp
+    }
+
+    pub fn datasheet(&self) -> Option<&str> {
+        self.datasheet.as_deref()
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub fn footprint(&self) -> &str {
+        &self.footprint
+    }
+
+    pub fn properties(&self) -> &SmallMap<String, FrozenValue> {
+        &self.data.properties
+    }
+
+    pub fn connections(&self) -> &SmallMap<String, FrozenValue> {
+        &self.connections
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn source_path(&self) -> &str {
+        &self.source_path
+    }
+
+    pub fn symbol(&self) -> &FrozenValue {
+        &self.symbol
+    }
+
+    pub fn spice_model(&self) -> Option<&FrozenValue> {
         self.spice_model.as_ref()
     }
 }
@@ -572,9 +945,34 @@ where
                 }
             }
 
-            // If manufacturer is not explicitly provided, try to get it from the symbol's properties
+            // If mpn is not explicitly provided, try to get it from properties, then symbol properties
+            let final_mpn = mpn
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("mpn")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    properties_map
+                        .get("Mpn")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Manufacturer_Part_Number")
+                        .map(|s| s.to_owned())
+                });
+
+            // If manufacturer is not explicitly provided, try to get it from properties, then symbol properties
             let final_manufacturer = manufacturer
                 .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("manufacturer")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
                 .or_else(|| {
                     final_symbol
                         .properties()
@@ -616,7 +1014,10 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            // Remove datasheet and description from properties map since we're storing them as typed fields
+            // Remove mpn, manufacturer, datasheet, and description from properties map since we're storing them as typed fields
+            properties_map.shift_remove("mpn");
+            properties_map.shift_remove("Mpn");
+            properties_map.shift_remove("manufacturer");
             properties_map.shift_remove("datasheet");
             properties_map.shift_remove("description");
 
@@ -632,17 +1033,19 @@ where
 
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
-                mpn: mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
-                manufacturer: final_manufacturer,
                 ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
                 footprint,
                 prefix: final_prefix,
                 connections,
-                properties: properties_map,
+                data: RefCell::new(ComponentData {
+                    mpn: final_mpn,
+                    manufacturer: final_manufacturer,
+                    dnp: dnp_val.and_then(|v| v.unpack_bool()),
+                    properties: properties_map,
+                }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
                 spice_model: spice_model_val,
-                dnp: dnp_val.and_then(|v| v.unpack_bool()),
                 datasheet: final_datasheet,
                 description: final_description,
             });
@@ -651,11 +1054,12 @@ where
         })?;
 
         // Add to current module context if available
+        // Note: Component modifiers are applied later, after module evaluation but before freezing
         if let Some(mut module) = eval.module_value_mut() {
             module.add_child(component_val);
         }
 
-        Ok(component_val)
+        Ok(Value::new_none())
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {

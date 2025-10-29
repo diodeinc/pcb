@@ -2,92 +2,93 @@
 source: crates/pcb-zen-core/tests/component.rs
 expression: output
 ---
+Root module depth: 0
 {
     <root>: Module {
         path: <root>,
         source: "test.zen",
+    },
+    ChildInstance: Module {
+        path: ChildInstance,
+        source: "/Child.zen",
         children: [
             FrozenValue(
                 Component {
-                    name: "MyComponent1",
-                    footprint: "SOIC-8",
-                    prefix: "IC",
+                    name: "R2",
+                    footprint: "0603",
+                    prefix: "U",
                     connections: {
-                        "IN": FrozenValue(
+                        "1": FrozenValue(
                             Net {
-                                name: "in_signal",
+                                name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "OUT": FrozenValue(
+                        "2": FrozenValue(
                             Net {
-                                name: "out_signal",
+                                name: "B",
                                 id: "<ID>",
                             },
                         ),
                     },
                     properties: {
-                        "symbol_name": FrozenValue(
-                            "MyIC",
+                        "module_depth": FrozenValue(
+                            1,
                         ),
-                        "symbol_path": FrozenValue(
-                            "/ic_symbol.kicad_sym",
+                        "module_path": FrozenValue(
+                            "[\"ChildInstance\"]",
                         ),
                     },
                     symbol: FrozenValue(
                         Symbol {
-                            name: Some(
-                                "MyIC",
-                            ),
+                            name: None,
                             pins: {
-                                "1": "IN",
-                                "2": "OUT",
-                            },
-                            properties: {
-                                "Reference": "IC",
+                                "1": "1",
+                                "2": "2",
                             },
                         },
                     ),
                 },
             ),
+        ],
+    },
+    ChildInstance.GrandChildInstance: Module {
+        path: ChildInstance.GrandChildInstance,
+        source: "/GrandChild.zen",
+        children: [
             FrozenValue(
                 Component {
-                    name: "MyComponent2",
-                    footprint: "SOIC-8",
+                    name: "R1",
+                    footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "IN": FrozenValue(
+                        "1": FrozenValue(
                             Net {
-                                name: "in2",
+                                name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "OUT": FrozenValue(
+                        "2": FrozenValue(
                             Net {
-                                name: "out2",
+                                name: "B",
                                 id: "<ID>",
                             },
                         ),
                     },
                     properties: {
-                        "symbol_name": FrozenValue(
-                            "MyIC",
+                        "module_depth": FrozenValue(
+                            2,
                         ),
-                        "symbol_path": FrozenValue(
-                            "/ic_symbol.kicad_sym",
+                        "module_path": FrozenValue(
+                            "[\"ChildInstance\", \"GrandChildInstance\"]",
                         ),
                     },
                     symbol: FrozenValue(
                         Symbol {
-                            name: Some(
-                                "MyIC",
-                            ),
+                            name: None,
                             pins: {
-                                "1": "IN",
-                                "2": "OUT",
-                            },
-                            properties: {
-                                "Reference": "IC",
+                                "1": "1",
+                                "2": "2",
                             },
                         },
                     ),

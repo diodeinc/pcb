@@ -249,4 +249,49 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
         Ok(NoneType)
     }
+
+    fn add_component_modifier<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        modifier_fn: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        // Verify modifier_fn is callable
+        if modifier_fn.get_type() != "function" {
+            return Err(Error::new_other(anyhow::anyhow!(
+                "Component modifier must be a function, got {}",
+                modifier_fn.get_type()
+            )));
+        }
+
+        // Add the modifier to the current module
+        if let Some(ctx) = eval.context_value() {
+            ctx.module_mut().add_component_modifier(modifier_fn);
+        }
+
+        Ok(NoneType)
+    }
+
+    fn current_module_path<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = eval.heap();
+
+        if let Some(ctx) = eval.context_value() {
+            let module = ctx.module();
+            let path = module.path();
+
+            // Convert Vec<String> segments to Vec<Value> and then allocate as list
+            let segments: Vec<Value> = path
+                .segments
+                .iter()
+                .map(|s| heap.alloc(s.as_str()))
+                .collect();
+
+            Ok(heap.alloc(segments))
+        } else {
+            // No module context, return empty list
+            Ok(heap.alloc(Vec::<Value>::new()))
+        }
+    }
 }

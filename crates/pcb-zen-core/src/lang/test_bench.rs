@@ -177,6 +177,9 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             .context_value()
             .ok_or_else(|| anyhow::anyhow!("TestBench requires a ContextValue"))?;
 
+        // Collect parent modifiers for test case modules
+        let combined_modifiers = ctx.module().collect_all_component_modifiers_as_values();
+
         // Process each test case - enqueue for freeze-time evaluation
         for (case_name, case_value) in test_cases_dict.iter() {
             let case_name_str = case_name.unpack_str().ok_or_else(|| {
@@ -199,6 +202,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                 final_name: case_final_name.clone(),
                 inputs,
                 properties: None,
+                component_modifiers: combined_modifiers.clone(),
                 provided_names: Vec::new(),
                 call_site_path: source_path.clone(),
                 call_site_span: call_span.unwrap_or_default(),
