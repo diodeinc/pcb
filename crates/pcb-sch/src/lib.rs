@@ -424,49 +424,48 @@ impl Instance {
             .unwrap_or_default()
     }
 
-    pub fn alternatives_attr(&self, keys: &[&str]) -> Vec<crate::bom::Alternative> {
+    pub fn alternatives_attr(&self) -> Vec<crate::bom::Alternative> {
         use crate::bom::Alternative;
 
+        let keys = ["alternatives", "__alternatives__"];
         keys.iter()
-            .find_map(|&key| {
-                let attr = self.attributes.get(key)?;
-                match attr {
-                    AttributeValue::Array(arr) => {
-                        let alternatives: Vec<Alternative> = arr
-                            .iter()
-                            .filter_map(|av| {
-                                // Try to parse as JSON object
-                                if let AttributeValue::Json(json_val) = av {
-                                    let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                                    let manufacturer =
-                                        json_val.get("manufacturer")?.as_str()?.to_string();
-                                    return Some(Alternative { mpn, manufacturer });
-                                }
-                                // Try to parse JSON string (from Starlark dict serialization)
-                                if let AttributeValue::String(s) = av {
-                                    if let Ok(json_val) =
-                                        serde_json::from_str::<serde_json::Value>(s)
-                                    {
-                                        let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                                        let manufacturer =
-                                            json_val.get("manufacturer")?.as_str()?.to_string();
-                                        return Some(Alternative { mpn, manufacturer });
-                                    }
-                                }
-                                None
-                            })
-                            .collect();
-                        Some(alternatives)
-                    }
-                    _ => None,
-                }
+            .filter_map(|&key| self.attributes.get(key))
+            .filter_map(|val| match val {
+                AttributeValue::Array(arr) => Some(arr),
+                _ => None,
             })
+            .map(|arr| {
+                let alternatives: Vec<Alternative> = arr
+                    .iter()
+                    .filter_map(|av| {
+                        // Try to parse as JSON object
+                        if let AttributeValue::Json(json_val) = av {
+                            let mpn = json_val.get("mpn")?.as_str()?.to_string();
+                            let manufacturer = json_val.get("manufacturer")?.as_str()?.to_string();
+                            return Some(Alternative { mpn, manufacturer });
+                        }
+                        // Try to parse JSON string (from Starlark dict serialization)
+                        if let AttributeValue::String(s) = av {
+                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(s) {
+                                let mpn = json_val.get("mpn")?.as_str()?.to_string();
+                                let manufacturer =
+                                    json_val.get("manufacturer")?.as_str()?.to_string();
+                                return Some(Alternative { mpn, manufacturer });
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+                alternatives
+            })
+            .next()
             .unwrap_or_default()
     }
 
     pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
         keys.iter()
-            .find_map(|&key| self.attributes.get(key).and_then(|attr| attr.physical()))
+            .filter_map(|&key| self.attributes.get(key))
+            .find_map(|attr| attr.physical())
     }
 
     pub fn component_type(&self) -> Option<String> {

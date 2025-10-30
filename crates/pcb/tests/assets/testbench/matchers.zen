@@ -11,8 +11,7 @@ def is_resistor(expected_value=None):
         component = path.components[cursor]
         check(component.type == "resistor", component.name + " is not a resistor (type: " + str(component.type) + ")")
         if expected_value != None:
-            resistance_str = component.resistance.__str__(component.resistance)
-            check(resistance_str == expected_value, component.name + " value " + resistance_str + " != " + expected_value)
+            check(component.resistance == expected_value, component.name + " value " + str(component.resistance) + " != " + expected_value)
         return 1
     return _matcher
 
@@ -23,8 +22,7 @@ def is_capacitor(expected_value=None):
         component = path.components[cursor]
         check(component.type == "capacitor", component.name + " is not a capacitor (type: " + str(component.type) + ")")
         if expected_value != None:
-            capacitance_str = component.capacitance.__str__(component.capacitance)
-            check(capacitance_str == expected_value, component.name + " value " + capacitance_str + " != " + expected_value)
+            check(component.capacitance == expected_value, component.name + " value " + str(component.capacitance) + " != " + expected_value)
         return 1
     return _matcher
 
@@ -187,11 +185,11 @@ def has_value_contains(substring):
         # Get value string from component
         value_str = ""
         if hasattr(component, 'resistance') and component.resistance:
-            value_str = component.resistance.__str__(component.resistance)
+            value_str = str(component.resistance)
         elif hasattr(component, 'capacitance') and component.capacitance:
-            value_str = component.capacitance.__str__(component.capacitance)
+            value_str = str(component.capacitance)
         elif hasattr(component, 'inductance') and component.inductance:
-            value_str = component.inductance.__str__(component.inductance)
+            value_str = str(component.inductance)
         
         if substring not in value_str:
             error(component.name + " value '" + value_str + "' does not contain '" + substring + "'")

@@ -17,9 +17,9 @@ def print_info(module: Module, inputs):
         if comp.type:
             print("    Type:", comp.type)
         if comp.type == "capacitor":
-            print("    Capacitance:", comp.capacitance.__str__(comp.capacitance))
+            print("    Capacitance:", str(comp.capacitance))
         elif comp.type == "resistor":
-            print("    Resistance:", comp.resistance.__str__(comp.resistance))
+            print("    Resistance:", str(comp.resistance))
         print("    Properties:", comp.properties)
         pins = {}
         for (pin, net) in comp.pins.items():
@@ -48,7 +48,7 @@ def analyze_power_paths(module: Module, inputs):
         if path.matches(is_capacitor(), suppress_errors=True):
             decoupling_paths.append(path)
             cap = path.components[0]
-            cap_value = cap.capacitance.__str__(cap.capacitance)
+            cap_value = str(cap.capacitance)
             print("    ✓ Decoupling capacitor: " + cap.name + " (" + cap_value + ")")
             
             # Validate package size based on capacitance  
@@ -84,13 +84,13 @@ def analyze_signal_paths(module: Module, inputs):
         for path in scl_pullup_paths:
             if path.matches(is_resistor(), suppress_errors=True):
                 pullup = path.components[0]
-                resistance = pullup.resistance.__str__(pullup.resistance)
+                resistance = str(pullup.resistance)
                 print("      ✓ SCL pull-up resistor: " + pullup.name + " (" + resistance + ")")
         
         for path in sda_pullup_paths:
             if path.matches(is_resistor(), suppress_errors=True):
                 pullup = path.components[0]
-                resistance = pullup.resistance.__str__(pullup.resistance)
+                resistance = str(pullup.resistance)
                 print("      ✓ SDA pull-up resistor: " + pullup.name + " (" + resistance + ")")
     
     elif "io_spi" in inputs:
@@ -156,7 +156,7 @@ def check_power_decoupling():
             if path.matches(is_capacitor(), suppress_errors=True):
                 decoupling_paths.append(path)
                 cap = path.components[0]
-                cap_value = cap.capacitance.__str__(cap.capacitance)
+                cap_value = str(cap.capacitance)
                 
                 # Categorize by capacitance value for proper decoupling analysis
                 if "nF" in cap_value or ("pF" in cap_value):
@@ -268,14 +268,14 @@ def check_bmi270_interface_specific_paths(module, inputs):
             if path.matches(is_resistor(), suppress_errors=True):
                 scl_pullup_found = True
                 resistor = path.components[0]
-                resistance = resistor.resistance.__str__(resistor.resistance)
+                resistance = str(resistor.resistance)
                 print("    ✓ SCL pull-up validated: " + resistor.name + " (" + resistance + ")")
         
         for path in sda_pullup_paths:
             if path.matches(is_resistor(), suppress_errors=True):
                 sda_pullup_found = True
                 resistor = path.components[0]
-                resistance = resistor.resistance.__str__(resistor.resistance)
+                resistance = str(resistor.resistance)
                 print("    ✓ SDA pull-up validated: " + resistor.name + " (" + resistance + ")")
         
         if not (scl_pullup_found and sda_pullup_found):
@@ -328,14 +328,14 @@ def check_advanced_power_filtering():
             if path.matches(is_capacitor(), suppress_errors=True):
                 single_cap_paths.append(path)
                 cap = path.components[0]
-                cap_value = cap.capacitance.__str__(cap.capacitance)
+                cap_value = str(cap.capacitance)
                 print("  ✓ Single capacitor path: " + cap.name + " (" + cap_value + ")")
                 
             # Test for dual capacitor filtering paths  
             elif path.matches(is_capacitor(), is_capacitor(), suppress_errors=True):
                 dual_cap_paths.append(path)
                 caps = [c for c in path.components if c.type == "capacitor"]
-                cap_values = [c.capacitance.__str__(c.capacitance) for c in caps]
+                cap_values = [str(c.capacitance) for c in caps]
                 print("  ✓ Dual-capacitor filtering: " + str(cap_values))
         
         check(len(single_cap_paths) >= 2, "Expected at least 2 single capacitor decoupling paths")
@@ -381,14 +381,14 @@ def check_bmi270_power_domain_isolation(module, inputs):
     for path in vdd_decoupling:
         if path.matches(is_capacitor(), suppress_errors=True):
             cap = path.components[0]
-            cap_value = cap.capacitance.__str__(cap.capacitance)
+            cap_value = str(cap.capacitance)
             vdd_caps.append(cap)
             print("    ✓ VDD decoupling: " + cap.name + " (" + cap_value + ")")
     
     for path in vddio_decoupling:
         if path.matches(is_capacitor(), suppress_errors=True):
             cap = path.components[0]
-            cap_value = cap.capacitance.__str__(cap.capacitance)
+            cap_value = str(cap.capacitance)
             vddio_caps.append(cap)
             print("    ✓ VDDIO decoupling: " + cap.name + " (" + cap_value + ")")
     

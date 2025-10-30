@@ -272,7 +272,7 @@ impl Bom {
                     description: instance.description(),
                     package: instance.package(),
                     value: instance.value(),
-                    alternatives: instance.alternatives_attr(&["__alternatives__"]),
+                    alternatives: instance.alternatives_attr(),
                     generic_data: detect_generic_component(instance),
                     offers: Vec::new(),
                     dnp: instance.dnp(),
@@ -436,8 +436,8 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
 fn detect_generic_component(instance: &crate::Instance) -> Option<GenericComponent> {
     match instance.component_type()?.as_str() {
         "resistor" => {
-            if let Some(resistance) = instance.physical_attr(&["__resistance__"]) {
-                let voltage = instance.physical_attr(&["__voltage__"]);
+            if let Some(resistance) = instance.physical_attr(&["Resistance", "resistance"]) {
+                let voltage = instance.physical_attr(&["Voltage", "voltage"]);
                 return Some(GenericComponent::Resistor(Resistor {
                     resistance,
                     voltage,
@@ -445,13 +445,13 @@ fn detect_generic_component(instance: &crate::Instance) -> Option<GenericCompone
             }
         }
         "capacitor" => {
-            if let Some(capacitance) = instance.physical_attr(&["__capacitance__"]) {
+            if let Some(capacitance) = instance.physical_attr(&["Capacitance", "capacitance"]) {
                 let dielectric = instance
                     .string_attr(&["Dielectric", "dielectric"])
                     .and_then(|d| d.parse().ok());
 
-                let esr = instance.physical_attr(&["__esr__"]);
-                let voltage = instance.physical_attr(&["__voltage__"]);
+                let esr = instance.physical_attr(&["ESR", "esr", "Esr"]);
+                let voltage = instance.physical_attr(&["Voltage", "voltage"]);
 
                 return Some(GenericComponent::Capacitor(Capacitor {
                     capacitance,

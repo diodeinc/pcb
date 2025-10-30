@@ -114,7 +114,7 @@ def test_all_actual_paths(module, inputs):
         # Test that all single-component paths are capacitors (decoupling)
         if len(components) == 1:
             path.matches(is_capacitor())
-            cap_value = components[0].capacitance.__str__(components[0].capacitance)
+            cap_value = str(components[0].capacitance)
             print("    ✓ Decoupling capacitor: " + cap_value)
             
             # Test package sizes make sense for capacitor values
@@ -146,12 +146,12 @@ def test_component_properties(module, inputs):
         if comp.type == "resistor":
             resistor_count += 1
             # Test resistor properties
-            resistance = comp.resistance.__str__(comp.resistance)
+            resistance = str(comp.resistance)
             print("    Resistor " + comp.name + ": " + resistance + ", package: " + comp.properties.get("Package", "unknown"))
         elif comp.type == "capacitor":
             capacitor_count += 1
             # Test capacitor properties  
-            capacitance = comp.capacitance.__str__(comp.capacitance)
+            capacitance = str(comp.capacitance)
             print("    Capacitor " + comp.name + ": " + capacitance + ", package: " + comp.properties.get("Package", "unknown"))
     
     print("    ✓ Found " + str(resistor_count) + " resistors, " + str(capacitor_count) + " capacitors")
@@ -416,7 +416,7 @@ def test_path_validation_vs_identification(module, inputs):
             
             # Test value validation
             comp = path.components[0]
-            cap_value = comp.capacitance.__str__(comp.capacitance)
+            cap_value = str(comp.capacitance)
             if "10uF" in cap_value:
                 path.matches(is_capacitor("10uF"))
                 print("    ✓ 10uF capacitor path validated")

@@ -17,8 +17,7 @@ def create_resistor_checker():
         check(len(resistors) >= 1, "Expected at least 1 resistor")
         
         for resistor in resistors:
-            resistance_str = resistor.resistance.__str__(resistor.resistance)
-            print("Resistor " + resistor.name + " has resistance: " + resistance_str)
+            print("Resistor " + resistor.name + " has resistance: " + str(resistor.resistance))
     
     return _check
 
@@ -31,7 +30,7 @@ def create_capacitor_checker(min_capacitance="1nF"):
         check(len(capacitors) >= 1, "Expected at least 1 capacitor")
         
         for capacitor in capacitors:
-            cap_str = capacitor.capacitance.__str__(capacitor.capacitance)
+            cap_str = str(capacitor.capacitance)
             check("F" in cap_str, "Capacitance should contain 'F'")
     
     return _check

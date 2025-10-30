@@ -8,7 +8,7 @@ and power decoupling per Texas Instruments datasheet requirements.
 load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
 load("matchers.zen", "is_capacitor", "is_resistor")
 
-LM5163Q1 = Module("@github/diodeinc/registry:v0.1.0/reference/LM5163Q1/LM5163Q1.zen")
+LM5163Q1 = Module("@github/diodeinc/registry:v0.3.8/reference/LM5163Q1/LM5163Q1.zen")
 
 
 
@@ -36,11 +36,11 @@ def print_info(module: Module, inputs):
         print("    Name:", comp.name)
         print("    Type:", comp.type)
         if comp.type == "capacitor":
-            print("    Capacitance:", comp.capacitance.__str__(comp.capacitance))
+            print("    Capacitance:", str(comp.capacitance))
         elif comp.type == "resistor":
-            print("    Resistance:", comp.resistance.__str__(comp.resistance))
+            print("    Resistance:", str(comp.resistance))
         elif comp.type == "inductor":
-            print("    Inductance:", comp.inductance.__str__(comp.inductance))
+            print("    Inductance:", str(comp.inductance))
         pins = {}
         for (pin, net) in comp.pins.items():
             pins[pin] = net.name
@@ -161,7 +161,7 @@ def check_output_filtering(module: Module, inputs):
     capacitor_paths = [p for p in vout_gnd_paths if p.matches(C_OUT, suppress_errors=True)]
     
     for i, path in enumerate(capacitor_paths):
-        cap_value = path.components[0].capacitance.__str__(path.components[0].capacitance)
+        cap_value = str(path.components[0].capacitance)
         print("  VOUT→GND path " + str(i+1) + ": 1 components")
         print("    ✓ Output capacitor validated: " + cap_value)
     
