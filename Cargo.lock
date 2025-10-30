@@ -3069,7 +3069,6 @@ dependencies = [
  "log",
  "natord",
  "pathdiff",
- "pcb-kicad",
  "pcb-sexpr",
  "rust_decimal",
  "scan_fmt",

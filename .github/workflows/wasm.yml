@@ -1,0 +1,60 @@
+name: WASM Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wasm_build:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Only save cache from main branch to prevent cache proliferation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build WASM
+        run: cargo build --package pcb-zen-wasm --target wasm32-unknown-unknown --release
+
+      - name: Check WASM artifact size
+        run: |
+          WASM_FILE="target/wasm32-unknown-unknown/release/pcb_zen_wasm.wasm"
+          
+          if [ ! -f "$WASM_FILE" ]; then
+            echo "Error: WASM artifact not found"
+            exit 1
+          fi
+          
+          # Get file size in bytes
+          SIZE=$(stat -c%s "$WASM_FILE" 2>/dev/null || stat -f%z "$WASM_FILE")
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          
+          echo "WASM bundle size: ${SIZE_MB}MB"
+          ls -lh "$WASM_FILE"
+          
+          # Fail if size exceeds 30MB
+          if [ $SIZE -gt 31457280 ]; then
+            echo "Error: WASM bundle is too large (${SIZE_MB}MB > 30MB)"
+            exit 1
+          fi
+          
+          echo "WASM build successful! Size is within limits."

@@ -20,7 +20,6 @@ pcb-sexpr = { workspace = true }
 rust_decimal = { workspace = true }
 scan_fmt = { workspace = true }
 natord = { workspace = true }
-pcb-kicad = { workspace = true }
 csv = { workspace = true }
 
 [dev-dependencies]

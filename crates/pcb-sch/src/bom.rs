@@ -372,56 +372,8 @@ pub enum KiCadBomError {
     IoError(#[from] std::io::Error),
 }
 
-/// Generate BOM with KiCad fallback if design BOM is empty
-pub fn generate_bom_with_fallback(
-    design_bom: Bom,
-    layout_path: Option<&std::path::Path>,
-) -> Result<Bom, KiCadBomError> {
-    if design_bom.is_empty() {
-        if let Some(layout_dir) = layout_path {
-            let kicad_sch_path = layout_dir.join("layout.kicad_sch");
-
-            if kicad_sch_path.exists() {
-                return bom_from_kicad_cli(&kicad_sch_path);
-            }
-        }
-    }
-
-    Ok(design_bom)
-}
-
-/// Generate BOM using kicad-cli sch export bom command
-fn bom_from_kicad_cli(kicad_sch_path: &std::path::Path) -> Result<Bom, KiCadBomError> {
-    // Create a temporary file for the CSV output
-    let temp_dir = std::env::temp_dir();
-    let temp_csv = temp_dir.join(format!("bom_{}.csv", std::process::id()));
-
-    // Execute kicad-cli to export BOM as CSV using KiCadCliBuilder
-    pcb_kicad::KiCadCliBuilder::new()
-        .command("sch")
-        .subcommand("export")
-        .subcommand("bom")
-        .arg(kicad_sch_path.to_string_lossy().as_ref())
-        .arg("-o")
-        .arg(temp_csv.to_string_lossy().as_ref())
-        .arg("--fields")
-        .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,${DNP}")
-        .arg("--labels")
-        .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,DNP")
-        .run()
-        .map_err(|e| KiCadBomError::KiCadCliError(format!("kicad-cli failed: {}", e)))?;
-
-    // Parse the CSV file
-    let csv_content = std::fs::read_to_string(&temp_csv)?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_csv);
-
-    parse_kicad_csv_bom(&csv_content)
-}
-
 /// Parse KiCad CSV BOM into our internal BOM structure
-fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
+pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
     let mut reader = csv::Reader::from_reader(csv_content.as_bytes());
     let mut entries = HashMap::new();
     let mut designators = HashMap::new();
