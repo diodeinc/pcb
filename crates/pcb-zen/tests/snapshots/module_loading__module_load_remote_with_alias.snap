@@ -20,8 +20,6 @@ expression: netlist
       (property (name "Type") (value "capacitor"))
       (property (name "Value") (value "1uF"))
       (property (name "description") (value "Unpolarized capacitor"))
-      (property (name "symbol_name") (value "C"))
-      (property (name "symbol_path") (value "[CACHE_DIR]gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"))
     )
   )
   (libparts
