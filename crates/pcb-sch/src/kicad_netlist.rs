@@ -237,8 +237,17 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 AttributeValue::Array(arr) => format_array_as_csv(arr),
                 AttributeValue::Json(j) => serde_json::to_string(j).unwrap_or("{}".to_owned()),
             };
-            // Skip keys already encoded separately, internal keys, or keys starting with __
-            if ["mpn", "type", "footprint", "prefix", "Reference"].contains(&key.as_str())
+            // Skip keys already encoded separately, internal keys, symbol metadata, or keys starting with __
+            if [
+                "mpn",
+                "type",
+                "footprint",
+                "prefix",
+                "Reference",
+                "symbol_name",
+                "symbol_path",
+            ]
+            .contains(&key.as_str())
                 || key.starts_with("__")
             {
                 continue;

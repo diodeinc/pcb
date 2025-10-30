@@ -2044,12 +2044,14 @@ class ImportNetlist(Step):
                 elif prop.name.lower() == "description":
                     fp.GetFieldByName("Description").SetText(prop.value)
                     fp.GetFieldByName("Description").SetVisible(False)
-                # Skip built-in fields and specially handled properties
+                # Skip built-in fields, symbol metadata, and specially handled properties
                 elif prop.name.lower() not in [
                     "value",
                     "reference",
                     "dnp",  # Skip the standardized dnp attribute (handled above)
                     "exclude_from_bom",
+                    "symbol_name",  # Symbol metadata - not needed in PCB
+                    "symbol_path",  # Symbol metadata - not needed in PCB
                 ] and not prop.name.startswith("_"):
                     # Convert snake_case property names to Title Case for display in KiCad
                     # e.g., "logic_level" -> "Logic Level"
