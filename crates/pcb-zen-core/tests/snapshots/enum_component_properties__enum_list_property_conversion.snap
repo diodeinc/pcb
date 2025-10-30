@@ -1,0 +1,108 @@
+---
+source: crates/pcb-zen-core/tests/enum_component_properties.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "U2",
+                    footprint: "TEST:0402",
+                    prefix: "U",
+                    connections: {
+                        "IN": FrozenValue(
+                            Net {
+                                name: "INPUT",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "mixed_list": FrozenValue(
+                            ListGen(
+                                FrozenList {
+                                    content: [
+                                        FrozenValue(
+                                            EnumValue {
+                                                type: EnumType {
+                                                    variants: [
+                                                        "IDLE",
+                                                        "RUNNING",
+                                                        "STOPPED",
+                                                    ],
+                                                },
+                                                index: 0,
+                                            },
+                                        ),
+                                        FrozenValue(
+                                            "string",
+                                        ),
+                                        FrozenValue(
+                                            123,
+                                        ),
+                                    ],
+                                },
+                            ),
+                        ),
+                        "valid_states": FrozenValue(
+                            ListGen(
+                                FrozenList {
+                                    content: [
+                                        FrozenValue(
+                                            EnumValue {
+                                                type: EnumType {
+                                                    variants: [
+                                                        "IDLE",
+                                                        "RUNNING",
+                                                        "STOPPED",
+                                                    ],
+                                                },
+                                                index: 0,
+                                            },
+                                        ),
+                                        FrozenValue(
+                                            EnumValue {
+                                                type: EnumType {
+                                                    variants: [
+                                                        "IDLE",
+                                                        "RUNNING",
+                                                        "STOPPED",
+                                                    ],
+                                                },
+                                                index: 1,
+                                            },
+                                        ),
+                                        FrozenValue(
+                                            EnumValue {
+                                                type: EnumType {
+                                                    variants: [
+                                                        "IDLE",
+                                                        "RUNNING",
+                                                        "STOPPED",
+                                                    ],
+                                                },
+                                                index: 2,
+                                            },
+                                        ),
+                                    ],
+                                },
+                            ),
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "IN",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

@@ -1,5 +1,6 @@
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::module::{find_moved_span, ModulePath};
+use crate::lang::r#enum::EnumValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
@@ -869,6 +870,8 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::Boolean(b));
     } else if let Some(&physical) = v.downcast_ref::<PhysicalValue>() {
         return Ok(AttributeValue::Physical(physical));
+    } else if let Some(enum_val) = v.downcast_ref::<EnumValue>() {
+        return Ok(AttributeValue::String(enum_val.value().to_string()));
     }
 
     // Handle lists (no nested list support)
