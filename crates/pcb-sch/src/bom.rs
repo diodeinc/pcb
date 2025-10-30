@@ -359,106 +359,17 @@ impl Bom {
     }
 }
 
-/// Errors that can occur during KiCad schematic BOM parsing
+/// Errors that can occur during KiCad BOM generation
 #[derive(Debug, thiserror::Error)]
 pub enum KiCadBomError {
-    #[error("Failed to parse KiCad schematic S-expression: {0}")]
-    ParseError(#[from] pcb_sexpr::ParseError),
+    #[error("Failed to execute kicad-cli: {0}")]
+    KiCadCliError(String),
 
-    #[error("Invalid KiCad schematic format")]
-    InvalidFormat,
-}
+    #[error("Failed to parse CSV: {0}")]
+    CsvError(#[from] csv::Error),
 
-/// Parse KiCad schematic file contents and extract BOM
-pub fn bom_from_kicad_schematic(kicad_sch_content: &str) -> Result<Bom, KiCadBomError> {
-    let parsed_sch = pcb_sexpr::parse(kicad_sch_content)?;
-
-    let components = extract_kicad_symbols(&parsed_sch)?
-        .into_iter()
-        .filter_map(|symbol| extract_kicad_symbol_entry(symbol).transpose())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let (entries, designators) = components
-        .into_iter()
-        .map(|(path, designator, entry)| ((path.clone(), entry), (path, designator)))
-        .unzip();
-
-    Ok(Bom {
-        entries,
-        designators,
-    })
-}
-
-/// Parse KiCad schematic from file path, including hierarchical sheets
-pub fn bom_from_kicad_schematic_file(
-    kicad_sch_path: &std::path::Path,
-) -> Result<Bom, KiCadBomError> {
-    let mut all_entries = HashMap::new();
-    let mut all_designators = HashMap::new();
-
-    // Process the root schematic and all hierarchical sheets
-    collect_hierarchical_bom(kicad_sch_path, &mut all_entries, &mut all_designators)?;
-
-    Ok(Bom {
-        entries: all_entries,
-        designators: all_designators,
-    })
-}
-
-/// Recursively collect BOM from hierarchical KiCad schematics
-fn collect_hierarchical_bom(
-    sch_path: &std::path::Path,
-    entries: &mut HashMap<String, BomEntry>,
-    designators: &mut HashMap<String, String>,
-) -> Result<(), KiCadBomError> {
-    use std::fs;
-
-    let sch_content = fs::read_to_string(sch_path).map_err(|_| KiCadBomError::InvalidFormat)?;
-
-    let parsed_sch = pcb_sexpr::parse(&sch_content)?;
-
-    // Extract components from this schematic
-    let components = extract_kicad_symbols(&parsed_sch)?
-        .into_iter()
-        .filter_map(|symbol| extract_kicad_symbol_entry(symbol).transpose())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Add components to the overall BOM
-    for (path, designator, entry) in components {
-        entries.insert(path.clone(), entry);
-        designators.insert(path, designator);
-    }
-
-    // Find and process hierarchical sheets
-    let sheet_files = extract_sheet_files(&parsed_sch)?;
-    let base_dir = sch_path.parent().ok_or(KiCadBomError::InvalidFormat)?;
-
-    for sheet_file in sheet_files {
-        let sheet_path = base_dir.join(&sheet_file);
-        if sheet_path.exists() {
-            collect_hierarchical_bom(&sheet_path, entries, designators)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Extract referenced sheet files from KiCad schematic
-fn extract_sheet_files(parsed_sch: &pcb_sexpr::Sexpr) -> Result<Vec<String>, KiCadBomError> {
-    let root_list = parsed_sch.as_list().ok_or(KiCadBomError::InvalidFormat)?;
-
-    let sheet_files = root_list
-        .iter()
-        .filter_map(|expr| expr.as_list())
-        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("sheet"))
-        .flat_map(|sheet| sheet.iter())
-        .filter_map(|item| item.as_list())
-        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("property"))
-        .filter(|list| list.len() >= 3 && list[1].as_atom() == Some("Sheetfile"))
-        .filter_map(|list| list[2].as_atom().map(|s| s.to_string()))
-        .collect();
-
-    Ok(sheet_files)
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
 }
 
 /// Generate BOM with KiCad fallback if design BOM is empty
@@ -471,7 +382,7 @@ pub fn generate_bom_with_fallback(
             let kicad_sch_path = layout_dir.join("layout.kicad_sch");
 
             if kicad_sch_path.exists() {
-                return bom_from_kicad_schematic_file(&kicad_sch_path);
+                return bom_from_kicad_cli(&kicad_sch_path);
             }
         }
     }
@@ -479,112 +390,94 @@ pub fn generate_bom_with_fallback(
     Ok(design_bom)
 }
 
-/// Extract all symbol S-expressions from KiCad schematic
-fn extract_kicad_symbols(
-    parsed_sch: &pcb_sexpr::Sexpr,
-) -> Result<Vec<&[pcb_sexpr::Sexpr]>, KiCadBomError> {
-    let root_list = parsed_sch.as_list().ok_or(KiCadBomError::InvalidFormat)?;
+/// Generate BOM using kicad-cli sch export bom command
+fn bom_from_kicad_cli(kicad_sch_path: &std::path::Path) -> Result<Bom, KiCadBomError> {
+    // Create a temporary file for the CSV output
+    let temp_dir = std::env::temp_dir();
+    let temp_csv = temp_dir.join(format!("bom_{}.csv", std::process::id()));
 
-    let symbols = root_list
-        .iter()
-        .filter_map(|expr| expr.as_list())
-        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("symbol"))
-        .collect();
+    // Execute kicad-cli to export BOM as CSV using KiCadCliBuilder
+    pcb_kicad::KiCadCliBuilder::new()
+        .command("sch")
+        .subcommand("export")
+        .subcommand("bom")
+        .arg(kicad_sch_path.to_string_lossy().as_ref())
+        .arg("-o")
+        .arg(temp_csv.to_string_lossy().as_ref())
+        .arg("--fields")
+        .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,${DNP}")
+        .arg("--labels")
+        .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,DNP")
+        .run()
+        .map_err(|e| KiCadBomError::KiCadCliError(format!("kicad-cli failed: {}", e)))?;
 
-    Ok(symbols)
+    // Parse the CSV file
+    let csv_content = std::fs::read_to_string(&temp_csv)?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_csv);
+
+    parse_kicad_csv_bom(&csv_content)
 }
 
-/// Extract BOM entry from a KiCad symbol S-expression
-fn extract_kicad_symbol_entry(
-    symbol_list: &[pcb_sexpr::Sexpr],
-) -> Result<Option<(String, String, BomEntry)>, KiCadBomError> {
-    // Parse symbol attributes using functional approach
-    let in_bom = symbol_list
-        .iter()
-        .filter_map(|item| item.as_list())
-        .find(|list| !list.is_empty() && list[0].as_atom() == Some("in_bom"))
-        .and_then(|list| list.get(1)?.as_atom())
-        .map(|v| v == "yes")
-        .unwrap_or(false);
+/// Parse KiCad CSV BOM into our internal BOM structure
+fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
+    let mut reader = csv::Reader::from_reader(csv_content.as_bytes());
+    let mut entries = HashMap::new();
+    let mut designators = HashMap::new();
 
-    if !in_bom {
-        return Ok(None);
+    for result in reader.records() {
+        let record = result?;
+
+        if record.is_empty() {
+            continue;
+        }
+
+        // Get fields by position (matching our kicad-cli labels order)
+        let reference = record.get(0).unwrap_or("").trim();
+        let value = record.get(1).unwrap_or("").trim();
+        let footprint = record.get(2).unwrap_or("").trim();
+        let manufacturer = record.get(3).unwrap_or("").trim();
+        let mpn = record.get(4).unwrap_or("").trim();
+        let description = record.get(5).unwrap_or("").trim();
+        let dnp = record.get(6).unwrap_or("").trim();
+
+        // Skip power symbols and net labels
+        if reference.is_empty() || reference.starts_with('#') {
+            continue;
+        }
+
+        let path = format!("kicad::{}", reference);
+
+        // Helper to convert empty string to None
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+
+        let entry = BomEntry {
+            mpn: non_empty(mpn).or_else(|| {
+                // Use Value as MPN if it looks like a part number (no spaces)
+                non_empty(value).filter(|v| !v.contains(' '))
+            }),
+            alternatives: Vec::new(),
+            manufacturer: non_empty(manufacturer),
+            package: non_empty(footprint).map(|fp| {
+                // Remove library prefix (e.g., "Lib:Package" -> "Package")
+                fp.split(':').next_back().unwrap_or(&fp).to_string()
+            }),
+            value: non_empty(value),
+            description: non_empty(description),
+            generic_data: None,
+            offers: Vec::new(),
+            dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
+        };
+
+        entries.insert(path.clone(), entry);
+        designators.insert(path, reference.to_string());
     }
 
-    let properties: HashMap<String, String> = symbol_list
-        .iter()
-        .filter_map(|item| item.as_list())
-        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("property"))
-        .filter_map(|list| {
-            if list.len() >= 3 {
-                Some((
-                    list[1].as_atom()?.to_string(),
-                    list[2].as_atom()?.to_string(),
-                ))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let reference = symbol_list
-        .iter()
-        .filter_map(|item| item.as_list())
-        .find(|list| !list.is_empty() && list[0].as_atom() == Some("instances"))
-        .and_then(extract_kicad_reference_from_instances);
-
-    let designator = reference
-        .or_else(|| properties.get("Reference").cloned())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    // Filter out power symbols and net labels (designators starting with #)
-    if designator.starts_with('#') {
-        return Ok(None);
-    }
-
-    let path = format!("kicad::{}", designator);
-
-    // Use Value as MPN if no explicit MPN and Value has no spaces (looks like part number)
-    let mpn = properties.get("MPN").cloned().or_else(|| {
-        properties
-            .get("Value")
-            .filter(|value| !value.contains(' '))
-            .cloned()
-    });
-
-    let entry = BomEntry {
-        mpn,
-        alternatives: Vec::new(),
-        manufacturer: properties.get("Manufacturer").cloned(),
-        package: properties
-            .get("Footprint")
-            .or_else(|| properties.get("Package"))
-            .map(|pkg| pkg.split(':').next_back().unwrap_or(pkg).to_string()),
-        value: properties.get("Value").cloned(),
-        description: properties.get("Description").cloned(),
-        generic_data: None,
-        offers: Vec::new(),
-        dnp: ["DNP", "Do_not_populate"]
-            .iter()
-            .any(|key| properties.get(*key).map(|v| v == "yes").unwrap_or(false)),
-    };
-
-    Ok(Some((path, designator, entry)))
-}
-
-/// Extract reference designator from instances section
-fn extract_kicad_reference_from_instances(instances_list: &[pcb_sexpr::Sexpr]) -> Option<String> {
-    instances_list
-        .iter()
-        .filter_map(|item| item.as_list())
-        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("project"))
-        .flat_map(|project| &project[1..])
-        .filter_map(|item| item.as_list())
-        .filter(|list| !list.is_empty() && list[0].as_atom() == Some("path"))
-        .flat_map(|path| &path[1..])
-        .filter_map(|item| item.as_list())
-        .find(|list| !list.is_empty() && list[0].as_atom() == Some("reference") && list.len() > 1)
-        .and_then(|ref_list| ref_list[1].as_atom().map(|s| s.to_string()))
+    Ok(Bom {
+        entries,
+        designators,
+    })
 }
 
 /// Detect generic components based on Type attribute
@@ -992,118 +885,5 @@ mod tests {
             matched_by: path_rule.key.clone(),
         };
         assert!(entry.offers.contains(&expected_mouser_matched_offer));
-    }
-
-    #[test]
-    fn test_kicad_bom_parsing() {
-        let kicad_sch_content = r#"
-        (kicad_sch
-            (version 20250114)
-            (symbol
-                (lib_id "Library:R")
-                (at 100 100 0)
-                (unit 1)
-                (in_bom yes)
-                (on_board yes)
-                (property "Reference" "R1"
-                    (at 100 100 0)
-                )
-                (property "Value" "RC0603FR-0710KL")
-                (property "Footprint" "MyLib:R_0603_1608Metric")
-                (instances
-                    (project "test"
-                        (path "/test"
-                            (reference "R1")
-                            (unit 1)
-                        )
-                    )
-                )
-            )
-            (symbol
-                (lib_id "Library:GND")
-                (at 200 200 0)
-                (unit 1)
-                (in_bom no)
-                (on_board yes)
-                (property "Reference" "PWR01"
-                    (at 200 200 0)
-                )
-            )
-        )"#;
-
-        let result = bom_from_kicad_schematic(kicad_sch_content);
-        assert!(
-            result.is_ok(),
-            "Failed to parse KiCad schematic: {:?}",
-            result.err()
-        );
-
-        let bom = result.unwrap();
-
-        // Should only have the resistor (in_bom = yes), not the power symbol (in_bom = no)
-        assert_eq!(bom.len(), 1);
-
-        let r1_entry = &bom.entries["kicad::R1"];
-        assert_eq!(r1_entry.value, Some("RC0603FR-0710KL".to_string()));
-        assert_eq!(r1_entry.mpn, Some("RC0603FR-0710KL".to_string())); // Value → MPN (no spaces)
-        assert_eq!(r1_entry.package, Some("R_0603_1608Metric".to_string())); // Library prefix stripped
-        assert!(!r1_entry.dnp);
-
-        assert_eq!(bom.designators["kicad::R1"], "R1");
-    }
-
-    #[test]
-    fn test_filter_power_symbols() {
-        // Test with concatenated string to avoid raw string parsing issues
-        let mut kicad_sch_content = r#"
-        (kicad_sch
-            (version 20250114)
-            (symbol
-                (lib_id "Library:R")
-                (at 100 100 0)
-                (unit 1)
-                (in_bom yes)
-                (on_board yes)
-                (property "Reference" "R1")
-                (property "Value" "10k")
-                (instances
-                    (project "test"
-                        (path "/test"
-                            (reference "R1")
-                        )
-                    )
-                )
-            )
-            (symbol
-                (lib_id "Library:PWR")
-                (at 200 200 0)
-                (unit 1)
-                (in_bom yes)
-                (on_board yes)
-                (property "Reference" "PWR01")
-                (property "Value" "GND")
-                (instances
-                    (project "test"
-                        (path "/test"
-                            (reference "PWR01")
-                        )
-                    )
-                )
-            )
-        )"#
-        .to_string();
-
-        // Replace PWR01 with #PWR01 to test power symbol filtering
-        kicad_sch_content = kicad_sch_content.replace("PWR01", "#PWR01");
-
-        let result = bom_from_kicad_schematic(&kicad_sch_content);
-        assert!(result.is_ok());
-
-        let bom = result.unwrap();
-
-        // Should only have the resistor, not the power symbol
-        assert_eq!(bom.len(), 1);
-        assert!(bom.designators.contains_key("kicad::R1"));
-        assert!(!bom.designators.values().any(|d| d.starts_with('#')));
     }
 }
