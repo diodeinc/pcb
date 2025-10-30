@@ -29,18 +29,6 @@ expression: output
                         ),
                     },
                     properties: {
-                        "__resistance__": FrozenValue(
-                            PhysicalValue {
-                                value: 10000,
-                                tolerance: 0,
-                                unit: PhysicalUnitDims {
-                                    current: -1,
-                                    time: 0,
-                                    voltage: 1,
-                                    temp: 0,
-                                },
-                            },
-                        ),
                         "resistance": FrozenValue(
                             "10k",
                         ),
@@ -78,18 +66,6 @@ expression: output
                         ),
                     },
                     properties: {
-                        "__resistance__": FrozenValue(
-                            PhysicalValue {
-                                value: 100000,
-                                tolerance: 0,
-                                unit: PhysicalUnitDims {
-                                    current: -1,
-                                    time: 0,
-                                    voltage: 1,
-                                    temp: 0,
-                                },
-                            },
-                        ),
                         "resistance": FrozenValue(
                             "100k",
                         ),
@@ -125,18 +101,6 @@ expression: output
                         ),
                     },
                     properties: {
-                        "__resistance__": FrozenValue(
-                            PhysicalValue {
-                                value: 1000,
-                                tolerance: 0,
-                                unit: PhysicalUnitDims {
-                                    current: -1,
-                                    time: 0,
-                                    voltage: 1,
-                                    temp: 0,
-                                },
-                            },
-                        ),
                         "resistance": FrozenValue(
                             "1k",
                         ),
