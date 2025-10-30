@@ -317,25 +317,30 @@ fn build_netclass_assignments(
 
     for (net_name, net) in &schematic.nets {
         // Check for differential impedance (from DiffPair propagation)
-        let diff_impedance =
-            net.properties
-                .get("differential_impedance")
-                .and_then(|attr| match attr {
-                    AttributeValue::Physical(pv)
-                        if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() =>
-                    {
-                        pv.value.to_f64()
-                    }
-                    _ => None,
-                });
+        let diff_impedance = net
+            .properties
+            .get("differential_impedance")
+            .and_then(AttributeValue::physical)
+            .and_then(|pv| {
+                if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() {
+                    pv.value.to_f64()
+                } else {
+                    None
+                }
+            });
 
         // Check for single-ended impedance (from individual nets)
-        let se_impedance = net.properties.get("impedance").and_then(|attr| match attr {
-            AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() => {
-                pv.value.to_f64()
-            }
-            _ => None,
-        });
+        let se_impedance = net
+            .properties
+            .get("impedance")
+            .and_then(AttributeValue::physical)
+            .and_then(|pv| {
+                if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() {
+                    pv.value.to_f64()
+                } else {
+                    None
+                }
+            });
 
         // Match differential impedance to differential netclasses
         if let Some(imp) = diff_impedance {

@@ -499,8 +499,8 @@ mod tests {
             AttributeValue::String("resistor".to_string()),
         );
         attributes.insert(
-            "__resistance__".to_string(),
-            AttributeValue::Physical(PhysicalValue::new(10000.0, 0.01, PhysicalUnit::Ohms)),
+            "resistance".to_string(),
+            AttributeValue::String("10k 1%".to_string()),
         );
 
         let instance = test_instance(attributes);
@@ -527,8 +527,8 @@ mod tests {
             AttributeValue::String("capacitor".to_string()),
         );
         capacitor_attributes.insert(
-            "__capacitance__".to_string(),
-            AttributeValue::Physical(PhysicalValue::new(100e-9, 0.2, PhysicalUnit::Farads)),
+            "capacitance".to_string(),
+            AttributeValue::String("100nF 20%".to_string()),
         );
         capacitor_attributes.insert(
             "Dielectric".to_string(),

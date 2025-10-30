@@ -281,6 +281,30 @@ class JsonNetlistParser:
                                 attr_name, "true" if attr_value["Boolean"] else "false"
                             )
                             part.properties.append(prop)
+                        elif "Number" in attr_value:
+                            prop = JsonNetlistParser.Property(
+                                attr_name, str(attr_value["Number"])
+                            )
+                            part.properties.append(prop)
+                        elif "Array" in attr_value:
+                            # Arrays are formatted as CSV strings
+                            # Convert array elements to CSV format
+                            array_items = []
+                            for item in attr_value["Array"]:
+                                if isinstance(item, dict):
+                                    if "String" in item:
+                                        array_items.append(item["String"])
+                                    elif "Number" in item:
+                                        array_items.append(str(item["Number"]))
+                                    elif "Boolean" in item:
+                                        array_items.append("true" if item["Boolean"] else "false")
+                                    else:
+                                        # For other types, use string representation
+                                        array_items.append(str(item))
+                            prop = JsonNetlistParser.Property(
+                                attr_name, ",".join(array_items)
+                            )
+                            part.properties.append(prop)
 
             parser.parts.append(part)
 

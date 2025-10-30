@@ -40,13 +40,12 @@ fn escape_kicad_string(s: &str) -> String {
 }
 
 /// Format an array of AttributeValues as a comma-separated string.
-fn format_array_as_csv(arr: &[AttributeValue]) -> String {
+pub(crate) fn format_array_as_csv(arr: &[AttributeValue]) -> String {
     arr.iter()
         .map(|v| match v {
             AttributeValue::String(s) => s.clone(),
             AttributeValue::Number(n) => n.to_string(),
             AttributeValue::Boolean(b) => b.to_string(),
-            AttributeValue::Physical(p) => p.to_string(),
             AttributeValue::Port(s) => s.clone(),
             AttributeValue::Array(_) => "[]".to_string(), // Nested arrays not supported
             AttributeValue::Json(j) => serde_json::to_string(j).unwrap_or("{}".to_owned()),
@@ -234,7 +233,6 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 AttributeValue::String(s) => s.clone(),
                 AttributeValue::Number(n) => n.to_string(),
                 AttributeValue::Boolean(b) => b.to_string(),
-                AttributeValue::Physical(p) => p.to_string(),
                 AttributeValue::Port(s) => s.clone(),
                 AttributeValue::Array(arr) => format_array_as_csv(arr),
                 AttributeValue::Json(j) => serde_json::to_string(j).unwrap_or("{}".to_owned()),
@@ -629,13 +627,5 @@ mod tests {
         // Test single element
         let arr = vec![AttributeValue::String("solo".to_string())];
         assert_eq!(format_array_as_csv(&arr), "solo");
-
-        // Test with physical values
-        use crate::{PhysicalUnit, PhysicalValue};
-        let arr = vec![
-            AttributeValue::Physical(PhysicalValue::new(3.3, 0.0, PhysicalUnit::Volts)),
-            AttributeValue::Physical(PhysicalValue::new(5.0, 0.0, PhysicalUnit::Volts)),
-        ];
-        assert_eq!(format_array_as_csv(&arr), "3.3V, 5V");
     }
 }

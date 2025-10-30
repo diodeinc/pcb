@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
+use starlark::values::record::FrozenRecord;
 use starlark::values::{dict::DictRef, FrozenValue, Value, ValueLike};
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -869,9 +870,19 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
     } else if let Some(b) = v.unpack_bool() {
         return Ok(AttributeValue::Boolean(b));
     } else if let Some(&physical) = v.downcast_ref::<PhysicalValue>() {
-        return Ok(AttributeValue::Physical(physical));
+        return Ok(AttributeValue::String(physical.to_string()));
     } else if let Some(enum_val) = v.downcast_ref::<EnumValue>() {
         return Ok(AttributeValue::String(enum_val.value().to_string()));
+    }
+
+    if v.downcast_ref::<FrozenRecord>().is_some() {
+        match v.to_value().to_json_value() {
+            Ok(json) => return Ok(AttributeValue::Json(json)),
+            Err(_) => {
+                // If JSON conversion fails, fall back to string
+                return Ok(AttributeValue::String(v.to_string()));
+            }
+        }
     }
 
     // Handle lists (no nested list support)

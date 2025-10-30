@@ -252,7 +252,6 @@ pub enum AttributeValue {
     String(String),
     Number(f64),
     Boolean(bool),
-    Physical(PhysicalValue),
     Port(String),
     Array(Vec<AttributeValue>),
     Json(serde_json::Value),
@@ -262,6 +261,13 @@ impl AttributeValue {
     pub fn string(&self) -> Option<&str> {
         match self {
             AttributeValue::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn physical(&self) -> Option<PhysicalValue> {
+        match self {
+            AttributeValue::String(s) => s.parse().ok(),
             _ => None,
         }
     }
@@ -388,7 +394,6 @@ impl Instance {
         keys.iter().find_map(|&key| {
             self.attributes.get(key).and_then(|attr| match attr {
                 AttributeValue::String(s) => Some(s.clone()),
-                AttributeValue::Physical(pv) => Some(pv.to_string()),
                 _ => None,
             })
         })
@@ -460,12 +465,8 @@ impl Instance {
     }
 
     pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
-        keys.iter().find_map(|&key| {
-            self.attributes.get(key).and_then(|attr| match attr {
-                AttributeValue::Physical(pv) => Some(*pv),
-                _ => None,
-            })
-        })
+        keys.iter()
+            .find_map(|&key| self.attributes.get(key).and_then(|attr| attr.physical()))
     }
 
     pub fn component_type(&self) -> Option<String> {
