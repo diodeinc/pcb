@@ -39,6 +39,22 @@ fn escape_kicad_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Format an array of AttributeValues as a comma-separated string.
+fn format_array_as_csv(arr: &[AttributeValue]) -> String {
+    arr.iter()
+        .map(|v| match v {
+            AttributeValue::String(s) => s.clone(),
+            AttributeValue::Number(n) => n.to_string(),
+            AttributeValue::Boolean(b) => b.to_string(),
+            AttributeValue::Physical(p) => p.to_string(),
+            AttributeValue::Port(s) => s.clone(),
+            AttributeValue::Array(_) => "[]".to_string(), // Nested arrays not supported
+            AttributeValue::Json(j) => serde_json::to_string(j).unwrap_or("{}".to_owned()),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Export the provided [`Schematic`] into a KiCad-compatible net-list (S-expression, E-series).
 ///
 /// The implementation focuses on the mandatory `(components …)` and `(nets …)` sections that
@@ -220,7 +236,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 AttributeValue::Boolean(b) => b.to_string(),
                 AttributeValue::Physical(p) => p.to_string(),
                 AttributeValue::Port(s) => s.clone(),
-                AttributeValue::Array(arr) => serde_json::to_string(arr).unwrap_or("[]".to_owned()),
+                AttributeValue::Array(arr) => format_array_as_csv(arr),
                 AttributeValue::Json(j) => serde_json::to_string(j).unwrap_or("{}".to_owned()),
             };
             // Skip keys already encoded separately, internal keys, or keys starting with __
@@ -578,5 +594,48 @@ mod tests {
 
         // Multiple colons (should return false since split_once will only match first)
         assert!(is_kicad_lib_fp("lib:footprint:extra")); // This will be treated as lib "lib" and footprint "footprint:extra"
+    }
+
+    #[test]
+    fn test_format_array_as_csv() {
+        // Test array of strings
+        let arr = vec![
+            AttributeValue::String("IDLE".to_string()),
+            AttributeValue::String("RUNNING".to_string()),
+            AttributeValue::String("STOPPED".to_string()),
+        ];
+        assert_eq!(format_array_as_csv(&arr), "IDLE, RUNNING, STOPPED");
+
+        // Test array of numbers
+        let arr = vec![
+            AttributeValue::Number(1.0),
+            AttributeValue::Number(2.0),
+            AttributeValue::Number(3.0),
+        ];
+        assert_eq!(format_array_as_csv(&arr), "1, 2, 3");
+
+        // Test mixed array
+        let arr = vec![
+            AttributeValue::String("a".to_string()),
+            AttributeValue::Number(123.0),
+            AttributeValue::Boolean(true),
+        ];
+        assert_eq!(format_array_as_csv(&arr), "a, 123, true");
+
+        // Test empty array
+        let arr: Vec<AttributeValue> = vec![];
+        assert_eq!(format_array_as_csv(&arr), "");
+
+        // Test single element
+        let arr = vec![AttributeValue::String("solo".to_string())];
+        assert_eq!(format_array_as_csv(&arr), "solo");
+
+        // Test with physical values
+        use crate::{PhysicalUnit, PhysicalValue};
+        let arr = vec![
+            AttributeValue::Physical(PhysicalValue::new(3.3, 0.0, PhysicalUnit::Volts)),
+            AttributeValue::Physical(PhysicalValue::new(5.0, 0.0, PhysicalUnit::Volts)),
+        ];
+        assert_eq!(format_array_as_csv(&arr), "3.3V, 5V");
     }
 }
