@@ -1,0 +1,29 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom kicad-bom.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "path": "kicad::R1",
+    "designator": "R1",
+    "mpn": "ERJ-2RKF1003X",
+    "package": "R_0402_1005Metric",
+    "value": "ERJ-2RKF1003X",
+    "description": "Resistor",
+    "dnp": false
+  },
+  {
+    "path": "kicad::R2",
+    "designator": "R2",
+    "mpn": "ERJ-2RKF1003X",
+    "package": "R_0402_1005Metric",
+    "value": "ERJ-2RKF1003X",
+    "description": "Resistor",
+    "dnp": true
+  }
+]
+--- STDERR ---
