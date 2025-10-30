@@ -7,6 +7,46 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+/// Detect if we're running in WSL
+fn is_wsl() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // Check for WSL-specific indicators
+        if let Ok(version) = std::fs::read_to_string("/proc/version") {
+            if version.to_lowercase().contains("microsoft")
+                || version.to_lowercase().contains("wsl")
+            {
+                return true;
+            }
+        }
+        // Also check for WSL environment variable
+        if std::env::var("WSL_DISTRO_NAME").is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Convert a WSL Linux path to a Windows path that Windows executables can understand
+fn wsl_path_to_windows(linux_path: &str) -> Result<String> {
+    let output = Command::new("wslpath")
+        .arg("-w")
+        .arg(linux_path)
+        .output()
+        .context("Failed to run wslpath command")?;
+
+    if !output.status.success() {
+        anyhow::bail!("wslpath command failed");
+    }
+
+    let windows_path = String::from_utf8(output.stdout)
+        .context("wslpath output is not valid UTF-8")?
+        .trim()
+        .to_string();
+
+    Ok(windows_path)
+}
+
 #[cfg(target_os = "macos")]
 mod paths {
     pub(crate) fn python_interpreter() -> String {
@@ -86,13 +126,54 @@ mod paths {
 
 #[cfg(target_os = "linux")]
 mod paths {
+    use super::is_wsl;
+
     pub(crate) fn python_interpreter() -> String {
-        std::env::var("KICAD_PYTHON_INTERPRETER").unwrap_or_else(|_| "/usr/bin/python3".to_string())
+        if let Ok(path) = std::env::var("KICAD_PYTHON_INTERPRETER") {
+            return path;
+        }
+
+        if is_wsl() {
+            // In WSL, try to use Windows KiCad Python
+            // First check common Windows installation paths
+            let windows_paths = vec!["/mnt/c/Program Files/KiCad/9.0/bin/python.exe"];
+
+            for path in windows_paths {
+                if std::path::Path::new(path).exists() {
+                    return path.to_string();
+                }
+            }
+
+            // Fallback to trying to execute python.exe from PATH
+            "python.exe".to_string()
+        } else {
+            // Native Linux
+            "/usr/bin/python3".to_string()
+        }
     }
 
     pub(crate) fn python_site_packages() -> String {
-        std::env::var("KICAD_PYTHON_SITE_PACKAGES")
-            .unwrap_or_else(|_| "/usr/lib/python3/dist-packages".to_string())
+        if let Ok(path) = std::env::var("KICAD_PYTHON_SITE_PACKAGES") {
+            return path;
+        }
+
+        if is_wsl() {
+            // In WSL, use Windows KiCad Python site-packages
+            // Try to find it in common locations
+            let windows_paths = vec!["/mnt/c/Program Files/KiCad/9.0/lib/python3.11/site-packages"];
+
+            for path in windows_paths {
+                if std::path::Path::new(path).exists() {
+                    return path.to_string();
+                }
+            }
+
+            // Fallback
+            "/mnt/c/Program Files/KiCad/9.0/lib/python3.11/site-packages".to_string()
+        } else {
+            // Native Linux
+            "/usr/lib/python3/dist-packages".to_string()
+        }
     }
 
     pub(crate) fn venv_site_packages() -> String {
@@ -108,7 +189,26 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        std::env::var("KICAD_CLI").unwrap_or_else(|_| "/usr/bin/kicad-cli".to_string())
+        if let Ok(path) = std::env::var("KICAD_CLI") {
+            return path;
+        }
+
+        if is_wsl() {
+            // In WSL, try to use Windows KiCad CLI
+            let windows_paths = vec!["/mnt/c/Program Files/KiCad/9.0/bin/kicad-cli.exe"];
+
+            for path in windows_paths {
+                if std::path::Path::new(path).exists() {
+                    return path.to_string();
+                }
+            }
+
+            // Fallback
+            "kicad-cli.exe".to_string()
+        } else {
+            // Native Linux
+            "/usr/bin/kicad-cli".to_string()
+        }
     }
 }
 
@@ -342,21 +442,55 @@ pub fn run_python_script(script: &str, options: PythonScriptOptions) -> Result<(
         .to_str()
         .ok_or_else(|| anyhow!("Failed to convert temporary file path to string"))?;
 
+    // In WSL, if we're calling a Windows executable, we need to convert the path
+    let temp_file_path_for_cmd = if is_wsl() && paths::python_interpreter().ends_with(".exe") {
+        wsl_path_to_windows(temp_file_path)?
+    } else {
+        temp_file_path.to_string()
+    };
+
     // Set up PYTHONPATH
     #[cfg(target_os = "windows")]
     let path_separator = ";";
     #[cfg(not(target_os = "windows"))]
     let path_separator = ":";
 
+    // In WSL calling Windows executables, use Windows path separator
+    let path_separator = if is_wsl() && paths::python_interpreter().ends_with(".exe") {
+        ";"
+    } else {
+        path_separator
+    };
+
+    // Convert PYTHONPATH to Windows format if needed
+    let python_site_packages = paths::python_site_packages();
+    let venv_site_packages = paths::venv_site_packages();
+    
+    let (python_site_packages, venv_site_packages) = 
+        if is_wsl() && paths::python_interpreter().ends_with(".exe") {
+            // Convert both paths to Windows format
+            let psp = if python_site_packages.starts_with("/mnt/") {
+                // Already a mount path, convert it
+                wsl_path_to_windows(&python_site_packages)
+                    .unwrap_or_else(|_| python_site_packages.clone())
+            } else {
+                python_site_packages.clone()
+            };
+            
+            let vsp = wsl_path_to_windows(&venv_site_packages)
+                .unwrap_or_else(|_| venv_site_packages.clone());
+            
+            (psp, vsp)
+        } else {
+            (python_site_packages, venv_site_packages)
+        };
+
     let python_path = format!(
-        "{}{}{}",
-        paths::python_site_packages(),
-        path_separator,
-        paths::venv_site_packages()
+        "{python_site_packages}{path_separator}{venv_site_packages}"
     );
 
     // Build the command
-    let mut cmd = CommandRunner::new(paths::python_interpreter()).arg(temp_file_path);
+    let mut cmd = CommandRunner::new(paths::python_interpreter()).arg(temp_file_path_for_cmd);
 
     // Add script arguments
     for arg in args_refs {
