@@ -8,6 +8,8 @@
 Auto-generated using `pcb search`. Do not modify.
 """
 
+mpn = config("mpn", str, optional=True)
+
 Pins = struct(
 {%- for pin in pin_groups %}
     {{ pin.sanitized_name }} = io("{{ pin.sanitized_name }}", Net){{ "," if not loop.last }}
@@ -16,7 +18,7 @@ Pins = struct(
 
 Component(
     name = "{{ component_name }}",
-    mpn = "{{ mpn }}",
+    mpn = mpn or "{{ mpn }}",
 {%- if manufacturer %}
     manufacturer = "{{ manufacturer }}",
 {%- endif %}

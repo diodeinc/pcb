@@ -15,6 +15,7 @@ mod bom;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
+pub mod physical;
 pub mod position;
 
 // Re-export BOM functionality
@@ -22,14 +23,13 @@ pub use bom::{
     parse_kicad_csv_bom, Bom, BomMatchingKey, BomMatchingRule, GenericMatchingKey, KiCadBomError,
     Offer,
 };
-
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use rust_decimal::{prelude::FromPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 
+use crate::physical::PhysicalValue;
 use crate::position::Position;
 
 /// Helper type alias – we map the original Atopile `Symbol` to a plain
@@ -246,97 +246,12 @@ impl std::str::FromStr for PhysicalUnit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PhysicalValue {
-    // Serialize as a string to preserve full precision in JSON
-    #[serde(with = "rust_decimal::serde::str")]
-    pub value: Decimal,
-    // 0 => no tolerance. Using Decimal to stay in the same domain.
-    #[serde(with = "rust_decimal::serde::str")]
-    pub tolerance: Decimal,
-    pub unit: PhysicalUnit,
-}
-
-impl PhysicalValue {
-    /// Construct from f64s that arrive from Starlark.
-    /// Panics only if the number is out of Decimal's range (~1e28).
-    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
-        Self {
-            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
-            tolerance: Decimal::from_f64(tolerance)
-                .expect("tolerance not representable as Decimal"),
-            unit,
-        }
-    }
-
-    /// Get the effective tolerance, using a default if none is specified
-    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
-        if self.tolerance.is_zero() {
-            default
-        } else {
-            self.tolerance
-        }
-    }
-
-    /// Get the minimum value considering tolerance
-    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
-        self.value * (Decimal::ONE - tolerance)
-    }
-
-    /// Get the maximum value considering tolerance
-    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
-        self.value * (Decimal::ONE + tolerance)
-    }
-
-    /// Check if this value's range fits within another value's range
-    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
-        let other_tolerance = other.tolerance_or_default(default_tolerance);
-        let other_min = other.min_value(other_tolerance);
-        let other_max = other.max_value(other_tolerance);
-
-        let self_min = self.min_value(self.tolerance);
-        let self_max = self.max_value(self.tolerance);
-
-        // Self range must fit within other range
-        self_min >= other_min && self_max <= other_max
-    }
-
-    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
-    pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
-        let default_tolerance = match other.unit {
-            PhysicalUnit::Ohms => "0.01".parse().unwrap(), // 1% for resistors
-            PhysicalUnit::Farads => "0.1".parse().unwrap(), // 10% for capacitors
-            _ => "0.01".parse().unwrap(),                  // 1% for others
-        };
-        self.fits_within(other, default_tolerance)
-    }
-}
-
-impl From<(f64, f64, PhysicalUnit)> for PhysicalValue {
-    fn from((v, t, u): (f64, f64, PhysicalUnit)) -> Self {
-        PhysicalValue::new(v, t, u)
-    }
-}
-
-impl std::fmt::Display for PhysicalValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.tolerance > Decimal::ZERO {
-            // Convert tolerance to percentage and format
-            let pct = (self.tolerance * Decimal::ONE_HUNDRED).round_dp(0);
-            write!(f, "{}{} ±{}%", self.value, self.unit.suffix(), pct)
-        } else {
-            write!(f, "{}{}", self.value, self.unit.suffix())
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")] // Match original casing in JSON (String, Number ...)
 pub enum AttributeValue {
     String(String),
     Number(f64),
     Boolean(bool),
-    Physical(PhysicalValue),
     Port(String),
     Array(Vec<AttributeValue>),
     Json(serde_json::Value),
@@ -346,6 +261,13 @@ impl AttributeValue {
     pub fn string(&self) -> Option<&str> {
         match self {
             AttributeValue::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn physical(&self) -> Option<PhysicalValue> {
+        match self {
+            AttributeValue::String(s) => s.parse().ok(),
             _ => None,
         }
     }
@@ -472,7 +394,6 @@ impl Instance {
         keys.iter().find_map(|&key| {
             self.attributes.get(key).and_then(|attr| match attr {
                 AttributeValue::String(s) => Some(s.clone()),
-                AttributeValue::Physical(pv) => Some(pv.to_string()),
                 _ => None,
             })
         })
@@ -503,53 +424,48 @@ impl Instance {
             .unwrap_or_default()
     }
 
-    pub fn alternatives_attr(&self, keys: &[&str]) -> Vec<crate::bom::Alternative> {
+    pub fn alternatives_attr(&self) -> Vec<crate::bom::Alternative> {
         use crate::bom::Alternative;
 
+        let keys = ["alternatives", "__alternatives__"];
         keys.iter()
-            .find_map(|&key| {
-                let attr = self.attributes.get(key)?;
-                match attr {
-                    AttributeValue::Array(arr) => {
-                        let alternatives: Vec<Alternative> = arr
-                            .iter()
-                            .filter_map(|av| {
-                                // Try to parse as JSON object
-                                if let AttributeValue::Json(json_val) = av {
-                                    let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                                    let manufacturer =
-                                        json_val.get("manufacturer")?.as_str()?.to_string();
-                                    return Some(Alternative { mpn, manufacturer });
-                                }
-                                // Try to parse JSON string (from Starlark dict serialization)
-                                if let AttributeValue::String(s) = av {
-                                    if let Ok(json_val) =
-                                        serde_json::from_str::<serde_json::Value>(s)
-                                    {
-                                        let mpn = json_val.get("mpn")?.as_str()?.to_string();
-                                        let manufacturer =
-                                            json_val.get("manufacturer")?.as_str()?.to_string();
-                                        return Some(Alternative { mpn, manufacturer });
-                                    }
-                                }
-                                None
-                            })
-                            .collect();
-                        Some(alternatives)
-                    }
-                    _ => None,
-                }
+            .filter_map(|&key| self.attributes.get(key))
+            .filter_map(|val| match val {
+                AttributeValue::Array(arr) => Some(arr),
+                _ => None,
             })
+            .map(|arr| {
+                let alternatives: Vec<Alternative> = arr
+                    .iter()
+                    .filter_map(|av| {
+                        // Try to parse as JSON object
+                        if let AttributeValue::Json(json_val) = av {
+                            let mpn = json_val.get("mpn")?.as_str()?.to_string();
+                            let manufacturer = json_val.get("manufacturer")?.as_str()?.to_string();
+                            return Some(Alternative { mpn, manufacturer });
+                        }
+                        // Try to parse JSON string (from Starlark dict serialization)
+                        if let AttributeValue::String(s) = av {
+                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(s) {
+                                let mpn = json_val.get("mpn")?.as_str()?.to_string();
+                                let manufacturer =
+                                    json_val.get("manufacturer")?.as_str()?.to_string();
+                                return Some(Alternative { mpn, manufacturer });
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+                alternatives
+            })
+            .next()
             .unwrap_or_default()
     }
 
     pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
-        keys.iter().find_map(|&key| {
-            self.attributes.get(key).and_then(|attr| match attr {
-                AttributeValue::Physical(pv) => Some(pv.clone()),
-                _ => None,
-            })
-        })
+        keys.iter()
+            .filter_map(|&key| self.attributes.get(key))
+            .find_map(|attr| attr.physical())
     }
 
     pub fn component_type(&self) -> Option<String> {

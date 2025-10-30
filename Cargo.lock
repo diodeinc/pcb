@@ -3063,6 +3063,8 @@ dependencies = [
 name = "pcb-sch"
 version = "0.2.17"
 dependencies = [
+ "allocative",
+ "anyhow",
  "chrono",
  "csv",
  "dirs",
@@ -3071,9 +3073,12 @@ dependencies = [
  "pathdiff",
  "pcb-sexpr",
  "rust_decimal",
+ "rust_decimal_macros",
  "scan_fmt",
  "serde",
  "serde_json",
+ "starlark",
+ "starlark_map",
  "tempfile",
  "thiserror 1.0.69",
  "uuid",
@@ -4141,6 +4146,16 @@ dependencies = [
  "rkyv",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rust_decimal_macros"
+version = "1.39.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae8c0cb48f413ebe24dc2d148788e0efbe09ba3e011d9277162f2eaf8e1069a3"
+dependencies = [
+ "quote",
+ "syn 2.0.104",
 ]
 
 [[package]]

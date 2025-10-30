@@ -281,6 +281,30 @@ class JsonNetlistParser:
                                 attr_name, "true" if attr_value["Boolean"] else "false"
                             )
                             part.properties.append(prop)
+                        elif "Number" in attr_value:
+                            prop = JsonNetlistParser.Property(
+                                attr_name, str(attr_value["Number"])
+                            )
+                            part.properties.append(prop)
+                        elif "Array" in attr_value:
+                            # Arrays are formatted as CSV strings
+                            # Convert array elements to CSV format
+                            array_items = []
+                            for item in attr_value["Array"]:
+                                if isinstance(item, dict):
+                                    if "String" in item:
+                                        array_items.append(item["String"])
+                                    elif "Number" in item:
+                                        array_items.append(str(item["Number"]))
+                                    elif "Boolean" in item:
+                                        array_items.append("true" if item["Boolean"] else "false")
+                                    else:
+                                        # For other types, use string representation
+                                        array_items.append(str(item))
+                            prop = JsonNetlistParser.Property(
+                                attr_name, ",".join(array_items)
+                            )
+                            part.properties.append(prop)
 
             parser.parts.append(part)
 
@@ -1984,6 +2008,7 @@ class ImportNetlist(Step):
                 self.board.Delete(fp)
 
         def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
+            # Remove all custom fields (keep Reference, Value, Datasheet built-ins)
             for field in fp.GetFields():
                 if (
                     not field.IsValue()
@@ -2026,8 +2051,11 @@ class ImportNetlist(Step):
                     "dnp",  # Skip the standardized dnp attribute (handled above)
                     "exclude_from_bom",
                 ] and not prop.name.startswith("_"):
-                    fp.SetField(prop.name, prop.value)
-                    fp.GetFieldByName(prop.name).SetVisible(False)
+                    # Convert snake_case property names to Title Case for display in KiCad
+                    # e.g., "logic_level" -> "Logic Level"
+                    display_name = prop.name.replace('_', ' ').title()
+                    fp.SetField(display_name, prop.value)
+                    fp.GetFieldByName(display_name).SetVisible(False)
 
         for fp_id in netlist_footprint_ids - board_footprint_ids:
             # Create a new footprint from the netlist.

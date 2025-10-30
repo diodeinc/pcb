@@ -1,6 +1,7 @@
 use std::fmt;
 
 use allocative::Allocative;
+use pcb_sch::physical::*;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
@@ -12,7 +13,7 @@ use starlark::{
     Error,
 };
 
-use crate::lang::{evaluator_ext::EvaluatorExt, net::*, physical::*, stackup::BoardConfig};
+use crate::lang::{evaluator_ext::EvaluatorExt, net::*, stackup::BoardConfig};
 
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;

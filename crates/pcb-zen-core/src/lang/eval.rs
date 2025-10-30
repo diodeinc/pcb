@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::anyhow;
+use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
 use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
@@ -24,7 +25,6 @@ use crate::lang::{assert::assert_globals, component::init_net_global};
 use crate::lang::{
     builtin::builtin_globals,
     component::component_globals,
-    physical::*,
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::lang::{

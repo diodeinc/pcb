@@ -1,0 +1,88 @@
+---
+source: crates/pcb-zen-core/tests/enum_component_properties.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "U1",
+                    footprint: "TEST:0402",
+                    prefix: "U",
+                    connections: {
+                        "IN": FrozenValue(
+                            Net {
+                                name: "INPUT",
+                                id: "<ID>",
+                            },
+                        ),
+                        "OUT": FrozenValue(
+                            Net {
+                                name: "OUTPUT",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "__voltage__": FrozenValue(
+                            PhysicalValue {
+                                value: 3.3,
+                                tolerance: 0,
+                                unit: PhysicalUnitDims {
+                                    current: 0,
+                                    time: 0,
+                                    voltage: 1,
+                                    temp: 0,
+                                },
+                            },
+                        ),
+                        "count": FrozenValue(
+                            42,
+                        ),
+                        "logic_level": FrozenValue(
+                            EnumValue {
+                                type: EnumType {
+                                    variants: [
+                                        "LOW",
+                                        "HIGH",
+                                        "TRISTATE",
+                                    ],
+                                },
+                                index: 1,
+                            },
+                        ),
+                        "orientation": FrozenValue(
+                            EnumValue {
+                                type: EnumType {
+                                    variants: [
+                                        "NORTH",
+                                        "SOUTH",
+                                        "EAST",
+                                        "WEST",
+                                    ],
+                                },
+                                index: 0,
+                            },
+                        ),
+                        "voltage": FrozenValue(
+                            "3.3V",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "IN",
+                                "2": "OUT",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

@@ -4,8 +4,12 @@ use std::{cmp::Ordering, fmt, hash::Hash, str::FromStr};
 
 use allocative::Allocative;
 
-use pcb_sch::PhysicalUnit;
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use crate::PhysicalUnit;
+use rust_decimal::{
+    prelude::{FromPrimitive, ToPrimitive},
+    Decimal,
+};
+use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
@@ -29,6 +33,72 @@ use starlark::{
 };
 use starlark_map::{sorted_map::SortedMap, StarlarkHasher};
 
+// Shared type instance ID cache for unit-based types
+fn get_type_instance_id(
+    unit: PhysicalUnitDims,
+    cache: &OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>>,
+) -> TypeInstanceId {
+    let map = cache.get_or_init(|| Mutex::new(HashMap::new()));
+    *map.lock()
+        .unwrap()
+        .entry(unit)
+        .or_insert_with(TypeInstanceId::gen)
+}
+
+// Constants
+const KELVIN_OFFSET: Decimal = dec!(273.15);
+const MINUTE: Decimal = dec!(60);
+const HOUR: Decimal = dec!(3600);
+const ONE_HUNDRED: Decimal = dec!(100);
+
+/// Parse percentage or decimal string to tolerance fraction
+fn parse_percentish_decimal(s: &str) -> Result<Decimal, ParseError> {
+    if let Some(inner) = s.strip_suffix('%') {
+        Ok(inner
+            .parse::<Decimal>()
+            .map_err(|_| ParseError::InvalidNumber)?
+            / ONE_HUNDRED)
+    } else {
+        s.parse::<Decimal>().map_err(|_| ParseError::InvalidNumber)
+    }
+}
+
+/// Helper for resistor "4k7" notation -> 4.7kOhm
+fn parse_resistor_k_notation(s: &str, tolerance: Decimal) -> Option<PhysicalValue> {
+    let k_pos = s.find('k')?;
+    let before_k = &s[..k_pos];
+    let after_k = &s[k_pos + 1..];
+
+    if after_k.is_empty()
+        || !before_k
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
+        || !after_k.chars().all(|c| c.is_ascii_digit() || c == '.')
+    {
+        return None;
+    }
+
+    let before_num = before_k.parse::<Decimal>().ok()?;
+    let after_num = after_k.parse::<Decimal>().ok()?;
+
+    let divisor = pow10(-(after_k.len() as i32));
+    let decimal_num = before_num + after_num * divisor;
+    let combined_value = decimal_num * Decimal::from(1000);
+
+    Some(PhysicalValue::from_decimal(
+        combined_value,
+        tolerance,
+        PhysicalUnit::Ohms.into(),
+    ))
+}
+
+/// Helper to convert Decimal to f64 for Starlark
+fn to_f64(d: Decimal, label: &'static str) -> starlark::Result<f64> {
+    d.to_f64().ok_or_else(|| {
+        starlark::Error::new_other(anyhow::anyhow!("Failed to convert {} to f64", label))
+    })
+}
+
 /// Convert Starlark value to Decimal for math operations
 fn starlark_value_to_decimal(
     value: &starlark::values::Value,
@@ -48,37 +118,51 @@ fn starlark_value_to_decimal(
 }
 
 #[derive(
-    Copy, Clone, Debug, PartialEq, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize,
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    ProvidesStaticType,
+    Freeze,
+    Allocative,
+    Serialize,
+    Deserialize,
 )]
 pub struct PhysicalValue {
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    pub(crate) value: Decimal,
+    pub value: Decimal,
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    pub(crate) tolerance: Decimal,
-    pub(crate) unit: PhysicalUnitDims,
+    pub tolerance: Decimal,
+    pub unit: PhysicalUnitDims,
 }
 
 impl PhysicalValue {
+    /// Construct from f64s that arrive from Starlark or other APIs
+    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
+        Self::from_decimal(
+            Decimal::from_f64(value)
+                .unwrap_or_else(|| panic!("value {} not representable as Decimal", value)),
+            Decimal::from_f64(tolerance)
+                .unwrap_or_else(|| panic!("tolerance {} not representable as Decimal", tolerance)),
+            unit.into(),
+        )
+    }
+
+    /// Get the unit as a PhysicalUnit if it has a simple alias
+    pub fn unit(&self) -> Option<PhysicalUnit> {
+        self.unit.alias()
+    }
+
     pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
         Self {
             value: value.into(),
             tolerance: 0.into(),
             unit: PhysicalUnitDims::DIMENSIONLESS,
         }
-    }
-
-    pub fn pcb_sch_value(&self) -> Result<pcb_sch::PhysicalValue, PhysicalValueError> {
-        let alias = self
-            .unit
-            .alias()
-            .ok_or(PhysicalValueError::InvalidPhysicalUnit)?;
-        Ok(pcb_sch::PhysicalValue {
-            value: self.value,
-            tolerance: self.tolerance,
-            unit: alias,
-        })
     }
 
     pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnitDims) -> Self {
@@ -97,6 +181,48 @@ impl PhysicalValue {
             });
         }
         Ok(self)
+    }
+
+    /// Get the effective tolerance, using a default if none is specified
+    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
+        if self.tolerance.is_zero() {
+            default
+        } else {
+            self.tolerance
+        }
+    }
+
+    /// Get the minimum value considering tolerance
+    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE - tolerance)
+    }
+
+    /// Get the maximum value considering tolerance
+    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE + tolerance)
+    }
+
+    /// Check if this value's range fits within another value's range
+    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
+        let other_tolerance = other.tolerance_or_default(default_tolerance);
+        let other_min = other.min_value(other_tolerance);
+        let other_max = other.max_value(other_tolerance);
+
+        let self_min = self.min_value(self.tolerance);
+        let self_max = self.max_value(self.tolerance);
+
+        // Self range must fit within other range
+        self_min >= other_min && self_max <= other_max
+    }
+
+    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
+    pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
+        let default_tolerance = match other.unit.alias() {
+            Some(PhysicalUnit::Ohms) => "0.01".parse().unwrap(), // 1% for resistors
+            Some(PhysicalUnit::Farads) => "0.1".parse().unwrap(), // 10% for capacitors
+            _ => "0.01".parse().unwrap(),                        // 1% for others
+        };
+        self.fits_within(other, default_tolerance)
     }
 
     fn fields() -> SortedMap<String, Ty> {
@@ -250,10 +376,7 @@ impl std::ops::Sub for PhysicalValue {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash, Serialize, Deserialize,
-)]
-#[serde(into = "String", try_from = "String")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash)]
 pub struct PhysicalUnitDims {
     pub current: i8,
     pub time: i8,
@@ -298,9 +421,9 @@ impl fmt::Display for PhysicalUnitDims {
     }
 }
 
-impl From<pcb_sch::PhysicalUnit> for PhysicalUnitDims {
-    fn from(unit: pcb_sch::PhysicalUnit) -> Self {
-        use pcb_sch::PhysicalUnit::*;
+impl From<PhysicalUnit> for PhysicalUnitDims {
+    fn from(unit: PhysicalUnit) -> Self {
+        use PhysicalUnit::*;
         match unit {
             Amperes => Self::CURRENT,
             Seconds => Self::TIME,
@@ -363,7 +486,32 @@ impl FromStr for PhysicalUnitDims {
 
 impl From<PhysicalUnitDims> for String {
     fn from(dims: PhysicalUnitDims) -> String {
-        dims.to_string()
+        // Serialize as unit enum name (e.g., "Farads") not suffix (e.g., "F")
+        // to maintain compatibility with old PhysicalUnit serialization
+        if let Some(alias) = dims.alias() {
+            format!("{:?}", alias)
+        } else {
+            dims.to_string()
+        }
+    }
+}
+
+impl serde::Serialize for PhysicalUnitDims {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        String::from(*self).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PhysicalUnitDims {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -409,8 +557,8 @@ impl PhysicalUnitDims {
         }
     }
 
-    fn alias(&self) -> Option<pcb_sch::PhysicalUnit> {
-        use pcb_sch::PhysicalUnit::*;
+    fn alias(&self) -> Option<PhysicalUnit> {
+        use PhysicalUnit::*;
         let PhysicalUnitDims {
             current,
             time,
@@ -676,68 +824,27 @@ impl FromStr for PhysicalValue {
         // Extract tolerance if provided (last token ending with "%")
         let mut tolerance = Decimal::ZERO;
         let value_unit_str = if parts.len() > 1 && parts.last().unwrap().ends_with('%') {
-            let tolerance_str = parts.last().unwrap();
-            let tolerance_digits = tolerance_str
-                .strip_suffix('%')
-                .ok_or(ParseError::InvalidFormat)?;
-            if tolerance_digits.is_empty() {
-                return Err(ParseError::InvalidFormat);
-            }
-            tolerance = tolerance_digits
-                .parse::<Decimal>()
-                .map_err(|_| ParseError::InvalidNumber)?
-                / Decimal::from(100);
-
-            // Rejoin all parts except the last one
+            tolerance = parse_percentish_decimal(parts.last().unwrap())?;
             parts[..parts.len() - 1].join("")
         } else {
-            // No tolerance, join all parts
             parts.join("")
         };
 
         // Handle special case like "4k7" (resistance notation -> 4.7kOhm)
-        if let Some(k_pos) = value_unit_str.find('k') {
-            let before_k = &value_unit_str[..k_pos];
-            let after_k = &value_unit_str[k_pos + 1..];
-
-            if !after_k.is_empty()
-                && before_k
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
-                && after_k.chars().all(|c| c.is_ascii_digit() || c == '.')
-            {
-                if let (Ok(before_num), Ok(after_num)) =
-                    (before_k.parse::<Decimal>(), after_k.parse::<Decimal>())
-                {
-                    // Treat as decimal notation: "4k7" -> "4.7k" -> 4700
-                    let divisor = pow10(-(after_k.len() as i32));
-                    let decimal_num = before_num + after_num * divisor;
-                    let combined_value = decimal_num * Decimal::from(1000);
-                    return Ok(PhysicalValue::from_decimal(
-                        combined_value,
-                        tolerance,
-                        PhysicalUnit::Ohms.into(),
-                    ));
-                }
-            }
+        if let Some(result) = parse_resistor_k_notation(&value_unit_str, tolerance) {
+            return Ok(result);
         }
 
-        // Standard parsing: find where number ends
-        let mut split_pos = value_unit_str.len();
-        for (i, ch) in value_unit_str.char_indices() {
-            if !ch.is_ascii_digit() && ch != '.' && ch != '-' && ch != '+' {
-                split_pos = i;
-                break;
-            }
-        }
+        // Find where number ends
+        let split_pos = value_unit_str
+            .find(|ch: char| !ch.is_ascii_digit() && ch != '.' && ch != '-' && ch != '+')
+            .unwrap_or(value_unit_str.len());
 
         if split_pos == 0 {
             return Err(ParseError::InvalidFormat);
         }
 
-        let number_str = &value_unit_str[..split_pos];
-        let unit_str = &value_unit_str[split_pos..];
-
+        let (number_str, unit_str) = value_unit_str.split_at(split_pos);
         let base_number: Decimal = number_str.parse().map_err(|_| ParseError::InvalidNumber)?;
 
         // Parse unit with prefix
@@ -749,11 +856,8 @@ impl FromStr for PhysicalValue {
 
 fn convert_temperature_to_kelvin(value: Decimal, unit: &str) -> Decimal {
     match unit {
-        "°C" => value + Decimal::from_str("273.15").unwrap(),
-        "°F" => {
-            (value - Decimal::from(32)) * Decimal::from(5) / Decimal::from(9)
-                + Decimal::from_str("273.15").unwrap()
-        }
+        "°C" => value + KELVIN_OFFSET,
+        "°F" => (value - Decimal::from(32)) * Decimal::from(5) / Decimal::from(9) + KELVIN_OFFSET,
         _ => value, // Already in Kelvin or other
     }
 }
@@ -767,104 +871,69 @@ fn parse_unit_with_prefix(
         return Ok((base_value, PhysicalUnit::Ohms.into()));
     }
 
-    // Handle special time units and temperature units (non-SI but common) first
     match unit_str {
-        "h" => return Ok((base_value * Decimal::from(3600), PhysicalUnitDims::TIME)), // 1 hour = 3600 seconds
-        "min" => return Ok((base_value * Decimal::from(60), PhysicalUnitDims::TIME)), // 1 minute = 60 seconds
+        "h" => return Ok((base_value * HOUR, PhysicalUnitDims::TIME)),
+        "min" => return Ok((base_value * MINUTE, PhysicalUnitDims::TIME)),
         "°C" | "°F" => {
-            let kelvin_value = convert_temperature_to_kelvin(base_value, unit_str);
-            return Ok((kelvin_value, PhysicalUnitDims::TEMP));
+            return Ok((
+                convert_temperature_to_kelvin(base_value, unit_str),
+                PhysicalUnitDims::TEMP,
+            ))
         }
         _ => {}
     }
 
-    // Try each SI prefix from longest to shortest
+    // Try SI prefixes
     for &(exp, prefix) in &SI_PREFIXES {
-        if prefix.is_empty() {
-            continue; // Handle base unit separately
-        }
-
-        if let Some(base_unit) = unit_str.strip_prefix(prefix) {
-            let multiplier = pow10(exp);
-
-            // Special handling for prefixed hours
-            if base_unit == "h" {
-                let hour_multiplier = Decimal::from(3600);
-                return Ok((
-                    base_value * multiplier * hour_multiplier,
-                    PhysicalUnitDims::TIME,
-                ));
+        if !prefix.is_empty() {
+            if let Some(base_unit) = unit_str.strip_prefix(prefix) {
+                let multiplier = pow10(exp);
+                if base_unit == "h" {
+                    return Ok((base_value * multiplier * HOUR, PhysicalUnitDims::TIME));
+                }
+                return Ok((base_value * multiplier, base_unit.parse()?));
             }
-
-            let unit = base_unit.parse()?;
-            return Ok((base_value * multiplier, unit));
         }
     }
 
-    // Handle base units (no prefix)
-    let unit = unit_str.parse()?;
-    Ok((base_value, unit))
+    Ok((base_value, unit_str.parse()?))
 }
 
 impl std::fmt::Display for PhysicalValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tol = self.tolerance * Decimal::from(100);
-        let show_tol = tol > Decimal::ZERO;
-
-        let alias = self.unit.alias();
-
-        if alias == Some(PhysicalUnit::Kelvin) {
-            // Convert from internal Kelvin to Celsius for display
-            let celsius = self.value - Decimal::from_str("273.15").unwrap();
-            let val_str = fmt_significant(celsius);
-
-            if show_tol {
-                write!(f, "{}°C {}%", val_str, tol.round())
-            } else {
-                write!(f, "{}°C", val_str)
-            }
-        } else if alias == Some(PhysicalUnit::Seconds) {
-            let seconds = self.value;
-
-            // Format time in the most natural unit
-            if seconds >= Decimal::from(3600) {
-                // Display in hours if >= 1 hour
-                let hours = seconds / Decimal::from(3600);
-                let val_str = fmt_significant(hours);
-                if show_tol {
-                    write!(f, "{}h {}%", val_str, tol.round())
-                } else {
-                    write!(f, "{}h", val_str)
-                }
-            } else if seconds >= Decimal::from(60) {
-                // Display in minutes if >= 1 minute
-                let minutes = seconds / Decimal::from(60);
-                let val_str = fmt_significant(minutes);
-                if show_tol {
-                    write!(f, "{}min {}%", val_str, tol.round())
-                } else {
-                    write!(f, "{}min", val_str)
-                }
-            } else {
-                // Display in seconds with SI prefixes
-                let (scaled, prefix) = scale_to_si(seconds);
-                let val_str = fmt_significant(scaled);
-                if show_tol {
-                    write!(f, "{}{}s {}%", val_str, prefix, tol.round())
-                } else {
-                    write!(f, "{}{}s", val_str, prefix)
-                }
-            }
+        let tol_percent = self.tolerance * ONE_HUNDRED;
+        let tol_str = if tol_percent > Decimal::ZERO {
+            format!(" {}%", tol_percent.round())
         } else {
-            // Standard formatting for all other units
-            let (scaled, prefix) = scale_to_si(self.value);
-            let val_str = fmt_significant(scaled);
-            let suffix = self.unit.fmt_unit();
+            String::new()
+        };
 
-            if show_tol {
-                write!(f, "{val_str}{prefix}{} {}%", suffix, tol.round())
-            } else {
-                write!(f, "{val_str}{prefix}{}", suffix)
+        match self.unit.alias() {
+            Some(PhysicalUnit::Kelvin) => {
+                let celsius = self.value - KELVIN_OFFSET;
+                write!(f, "{}°C{}", fmt_significant(celsius), tol_str)
+            }
+            Some(PhysicalUnit::Seconds) => {
+                let (value_str, unit_suffix) = if self.value >= HOUR {
+                    (fmt_significant(self.value / HOUR), "h")
+                } else if self.value >= MINUTE {
+                    (fmt_significant(self.value / MINUTE), "min")
+                } else {
+                    let (scaled, prefix) = scale_to_si(self.value);
+                    return write!(f, "{}{}s{}", fmt_significant(scaled), prefix, tol_str);
+                };
+                write!(f, "{}{}{}", value_str, unit_suffix, tol_str)
+            }
+            _ => {
+                let (scaled, prefix) = scale_to_si(self.value);
+                write!(
+                    f,
+                    "{}{}{}{}",
+                    fmt_significant(scaled),
+                    prefix,
+                    self.unit.fmt_unit(),
+                    tol_str
+                )
             }
         }
     }
@@ -886,16 +955,12 @@ starlark_simple_value!(PhysicalValue);
 fn physical_value_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn value<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
-        this.value.to_f64().ok_or_else(|| {
-            starlark::Error::new_other(anyhow::anyhow!("Failed to convert value to f64"))
-        })
+        to_f64(this.value, "value")
     }
 
     #[starlark(attribute)]
     fn tolerance<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
-        this.tolerance.to_f64().ok_or_else(|| {
-            starlark::Error::new_other(anyhow::anyhow!("Failed to convert tolerance to f64"))
-        })
+        to_f64(this.tolerance, "tolerance")
     }
 
     #[starlark(attribute)]
@@ -920,24 +985,10 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         #[starlark(require = pos)] tolerance_arg: Value<'v>,
     ) -> starlark::Result<PhysicalValue> {
         let new_tolerance = if let Some(s) = tolerance_arg.unpack_str() {
-            // Handle percentage string like "3%"
-            if let Some(percent_str) = s.strip_suffix('%') {
-                let percent_value: Decimal =
-                    percent_str
-                        .parse()
-                        .map_err(|_| PhysicalValueError::InvalidPercentage {
-                            value: s.to_string(),
-                        })?;
-                percent_value / Decimal::from(100)
-            } else {
-                // Handle string number like "0.03"
-                s.parse::<Decimal>()
-                    .map_err(|_| PhysicalValueError::InvalidTolerance {
-                        value: s.to_string(),
-                    })?
-            }
+            parse_percentish_decimal(s).map_err(|_| PhysicalValueError::InvalidTolerance {
+                value: s.to_string(),
+            })?
         } else {
-            // Handle numeric value
             starlark_value_to_decimal(&tolerance_arg)?
         };
 
@@ -1121,13 +1172,7 @@ impl PhysicalValueType {
 
     fn type_instance_id(&self) -> TypeInstanceId {
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
-
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        *cache
-            .lock()
-            .unwrap()
-            .entry(self.unit)
-            .or_insert_with(TypeInstanceId::r#gen)
+        get_type_instance_id(self.unit, &CACHE)
     }
 
     fn instance_ty_name(&self) -> String {
@@ -1528,13 +1573,7 @@ impl PhysicalRangeType {
 
     fn type_instance_id(&self) -> TypeInstanceId {
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
-
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        *cache
-            .lock()
-            .unwrap()
-            .entry(self.unit)
-            .or_insert_with(TypeInstanceId::r#gen)
+        get_type_instance_id(self.unit, &CACHE)
     }
 
     fn instance_ty_name(&self) -> String {
@@ -1716,7 +1755,6 @@ impl RangeBuilder {
     }
 
     fn add_str(&mut self, str: &str) -> Result<(), PhysicalValueError> {
-        // If range is already set, error
         if self.range.is_some() {
             return Err(PhysicalValueError::InvalidArguments {
                 args: vec!["value".to_string()],
@@ -1730,32 +1768,30 @@ impl RangeBuilder {
     }
 
     fn add_physical_value(&mut self, value: PhysicalValue) -> Result<(), PhysicalValueError> {
-        // If range is already set, error
         if self.range.is_some() {
             return Err(PhysicalValueError::InvalidArguments {
                 args: vec!["value".to_string()],
             });
         }
 
-        // Expand tolerance to range (works correctly when tolerance is zero)
-        let min = value.value * (Decimal::ONE - value.tolerance);
-        let max = value.value * (Decimal::ONE + value.tolerance);
-
+        // Use existing min_value/max_value methods
+        let min = value.min_value(value.tolerance);
+        let max = value.max_value(value.tolerance);
         self.range = Some((min, max));
         self.unit = Some(value.unit);
         Ok(())
     }
 
     fn add_min_max(&mut self, min: Value, max: Value) -> Result<(), PhysicalValueError> {
-        // if self.range is already set, we can't set it again
         if self.range.is_some() {
             return Err(PhysicalValueError::InvalidArguments {
                 args: vec!["min".to_string(), "max".to_string()],
             });
         }
-        let min = starlark_value_to_decimal(&min)?;
-        let max = starlark_value_to_decimal(&max)?;
-        self.range = Some((min, max));
+        self.range = Some((
+            starlark_value_to_decimal(&min)?,
+            starlark_value_to_decimal(&max)?,
+        ));
         Ok(())
     }
 
@@ -1892,7 +1928,6 @@ fn range_methods(methods: &mut MethodsBuilder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::prelude::*;
     use starlark::values::Heap;
 
     #[cfg(test)]

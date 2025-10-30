@@ -1,6 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
 use allocative::Allocative;
+use pcb_sch::physical::PhysicalValue;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -16,7 +17,7 @@ use starlark::{
 use std::cell::RefCell;
 
 use crate::{
-    lang::{evaluator_ext::EvaluatorExt, physical::PhysicalValue, spice_model::SpiceModelValue},
+    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
     FrozenSpiceModelValue,
 };
 
@@ -308,20 +309,38 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     .collect();
                 Some(heap.alloc(AllocDict(connections_vec)))
             }
-            "capacitance" => Some(
-                data.properties
-                    .get("__capacitance__")
-                    .map(|v| v.to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "resistance" => Some(
-                data.properties
-                    .get("__resistance__")
-                    .map(|v| v.to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
             // Fallback: check properties map
-            _ => data.properties.get(attr).map(|v| v.to_value()),
+            _ => {
+                fn capitalize_first(s: &str) -> String {
+                    let mut c = s.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                }
+
+                // We have to check both the original and capitalized keys
+                // because config_properties does automatic case conversion
+                // TODO: drop this when config_properties no longer does case conversion
+                let keys = [attr.to_string(), capitalize_first(attr)];
+                keys.iter()
+                    .find_map(|key| data.properties.get(key))
+                    .map(|v| {
+                        // For capacitance/resistance, attempt to convert string to PhysicalValue
+                        let is_special = matches!(
+                            attr,
+                            "capacitance" | "Capacitance" | "resistance" | "Resistance"
+                        );
+                        if is_special {
+                            if let Some(s) = v.unpack_str() {
+                                if let Ok(pv) = s.parse::<PhysicalValue>() {
+                                    return heap.alloc(pv);
+                                }
+                            }
+                        }
+                        v.to_value()
+                    })
+            }
         }
     }
 
@@ -459,21 +478,37 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .collect();
                 Some(heap.alloc(AllocDict(connections_vec)))
             }
-            "capacitance" => Some(
-                self.data
-                    .properties
-                    .get("__capacitance__")
-                    .map(|v| v.to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "resistance" => Some(
-                self.data
-                    .properties
-                    .get("__resistance__")
-                    .map(|v| v.to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            _ => None,
+            _ => {
+                fn capitalize_first(s: &str) -> String {
+                    let mut c = s.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                }
+
+                // We have to check both the original and capitalized keys
+                // because config_properties does automatic case conversion
+                // TODO: drop this when config_properties no longer does case conversion
+                let keys = [attr.to_string(), capitalize_first(attr)];
+                keys.iter()
+                    .find_map(|key| self.data.properties.get(key))
+                    .map(|v| {
+                        // For capacitance/resistance, attempt to convert string to PhysicalValue
+                        let is_special = matches!(
+                            attr,
+                            "capacitance" | "Capacitance" | "resistance" | "Resistance"
+                        );
+                        if is_special {
+                            if let Some(s) = v.to_value().unpack_str() {
+                                if let Ok(pv) = s.parse::<PhysicalValue>() {
+                                    return heap.alloc(pv);
+                                }
+                            }
+                        }
+                        v.to_value()
+                    })
+            }
         }
     }
 

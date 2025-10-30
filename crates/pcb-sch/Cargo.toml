@@ -18,9 +18,14 @@ dirs = { workspace = true }
 log = { workspace = true }
 pcb-sexpr = { workspace = true }
 rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
 scan_fmt = { workspace = true }
 natord = { workspace = true }
 csv = { workspace = true }
+starlark = { workspace = true }
+starlark_map = { workspace = true }
+allocative = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

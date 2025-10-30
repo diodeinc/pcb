@@ -18,9 +18,9 @@ def print_info(module: Module, inputs):
         if comp.type:
             print("    Type:", comp.type)
         if comp.type == "capacitor":
-            print("    Capacitance:", comp.capacitance.__str__(comp.capacitance))
+            print("    Capacitance:", str(comp.capacitance))
         elif comp.type == "resistor":
-            print("    Resistance:", comp.resistance.__str__(comp.resistance))
+            print("    Resistance:", str(comp.resistance))
         print("    Properties:", comp.properties)
         pins = {}
         for (pin, net) in comp.pins.items():
@@ -52,8 +52,8 @@ def check_resistor_values(module, inputs):
     components = module.components()
     for (comp_name, comp) in components.items():
         if comp.type == "resistor":
-            resistance = comp.resistance
-            print("✓ " + comp_name + " has resistance: " + resistance.__str__(resistance))
+            resistance = str(comp.resistance)
+            print("✓ " + comp_name + " has resistance: " + resistance)
 
 def print_graph_info(module: Module, inputs):
     print("Circuit Graph Information:")
