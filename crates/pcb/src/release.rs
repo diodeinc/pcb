@@ -3,8 +3,9 @@ use clap::{Args, ValueEnum};
 
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
-use pcb_sch::generate_bom_with_fallback;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
+
+use crate::bom::generate_bom_with_fallback;
 use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};

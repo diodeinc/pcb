@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::build::create_diagnostics_passes;
 use crate::release::extract_layout_path;
@@ -7,9 +7,45 @@ use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
-use pcb_sch::{generate_bom_with_fallback, Bom};
+use pcb_sch::{parse_kicad_csv_bom, Bom};
 use pcb_ui::prelude::*;
 use starlark_syntax::slice_vec_ext::SliceExt;
+
+/// Generate BOM with KiCad fallback if design BOM is empty
+pub fn generate_bom_with_fallback(design_bom: Bom, layout_path: Option<&Path>) -> Result<Bom> {
+    if design_bom.is_empty() {
+        if let Some(layout_dir) = layout_path {
+            let kicad_sch_path = layout_dir.join("layout.kicad_sch");
+
+            if kicad_sch_path.exists() {
+                let temp_csv = std::env::temp_dir().join(format!("bom_{}.csv", std::process::id()));
+
+                pcb_kicad::KiCadCliBuilder::new()
+                    .command("sch")
+                    .subcommand("export")
+                    .subcommand("bom")
+                    .arg(kicad_sch_path.to_string_lossy().as_ref())
+                    .arg("-o")
+                    .arg(temp_csv.to_string_lossy().as_ref())
+                    .arg("--fields")
+                    .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,${DNP}")
+                    .arg("--labels")
+                    .arg("Reference,Value,Footprint,Manufacturer,MPN,Description,DNP")
+                    .run()
+                    .context("Failed to extract BOM from KiCad schematic")?;
+
+                let csv_content = std::fs::read_to_string(&temp_csv)
+                    .context("Failed to read KiCad BOM export")?;
+                let _ = std::fs::remove_file(&temp_csv);
+
+                return parse_kicad_csv_bom(&csv_content)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse KiCad BOM: {}", e));
+            }
+        }
+    }
+
+    Ok(design_bom)
+}
 
 #[derive(ValueEnum, Debug, Clone, Default)]
 pub enum BomFormat {
@@ -63,8 +99,8 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let schematic = eval_output
         .to_schematic()
         .context("Failed to convert to schematic")?;
-    let mut bom = generate_bom_with_fallback(schematic.bom(), layout_path.as_deref())
-        .map_err(|e| anyhow::anyhow!("Failed to generate BOM: {}", e))?;
+
+    let mut bom = generate_bom_with_fallback(schematic.bom(), layout_path.as_deref())?;
 
     // Apply BOM matching rules if provided
     if let Some(rules_path) = &args.rules {
