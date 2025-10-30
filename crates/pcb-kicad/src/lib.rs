@@ -465,8 +465,8 @@ pub fn run_python_script(script: &str, options: PythonScriptOptions) -> Result<(
     // Convert PYTHONPATH to Windows format if needed
     let python_site_packages = paths::python_site_packages();
     let venv_site_packages = paths::venv_site_packages();
-    
-    let (python_site_packages, venv_site_packages) = 
+
+    let (python_site_packages, venv_site_packages) =
         if is_wsl() && paths::python_interpreter().ends_with(".exe") {
             // Convert both paths to Windows format
             let psp = if python_site_packages.starts_with("/mnt/") {
@@ -476,18 +476,16 @@ pub fn run_python_script(script: &str, options: PythonScriptOptions) -> Result<(
             } else {
                 python_site_packages.clone()
             };
-            
+
             let vsp = wsl_path_to_windows(&venv_site_packages)
                 .unwrap_or_else(|_| venv_site_packages.clone());
-            
+
             (psp, vsp)
         } else {
             (python_site_packages, venv_site_packages)
         };
 
-    let python_path = format!(
-        "{python_site_packages}{path_separator}{venv_site_packages}"
-    );
+    let python_path = format!("{python_site_packages}{path_separator}{venv_site_packages}");
 
     // Build the command
     let mut cmd = CommandRunner::new(paths::python_interpreter()).arg(temp_file_path_for_cmd);
