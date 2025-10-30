@@ -2,6 +2,7 @@ use std::sync::{Mutex, OnceLock};
 use std::{cell::RefCell, collections::HashMap, fmt};
 
 use allocative::Allocative;
+use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
 use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
@@ -24,7 +25,6 @@ use starlark_map::sorted_map::SortedMap;
 use crate::lang::symbol::SymbolValue;
 
 use super::context::ContextValue;
-use super::physical::{PhysicalRangeType, PhysicalValueType};
 use super::symbol::SymbolType;
 use super::validation::validate_identifier_name;
 

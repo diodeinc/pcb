@@ -321,7 +321,9 @@ fn build_netclass_assignments(
             net.properties
                 .get("differential_impedance")
                 .and_then(|attr| match attr {
-                    AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms => {
+                    AttributeValue::Physical(pv)
+                        if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() =>
+                    {
                         pv.value.to_f64()
                     }
                     _ => None,
@@ -329,7 +331,7 @@ fn build_netclass_assignments(
 
         // Check for single-ended impedance (from individual nets)
         let se_impedance = net.properties.get("impedance").and_then(|attr| match attr {
-            AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms => {
+            AttributeValue::Physical(pv) if pv.unit == pcb_sch::PhysicalUnit::Ohms.into() => {
                 pv.value.to_f64()
             }
             _ => None,

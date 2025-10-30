@@ -3063,6 +3063,8 @@ dependencies = [
 name = "pcb-sch"
 version = "0.2.17"
 dependencies = [
+ "allocative",
+ "anyhow",
  "chrono",
  "csv",
  "dirs",
@@ -3074,6 +3076,8 @@ dependencies = [
  "scan_fmt",
  "serde",
  "serde_json",
+ "starlark",
+ "starlark_map",
  "tempfile",
  "thiserror 1.0.69",
  "uuid",

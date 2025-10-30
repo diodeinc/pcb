@@ -4,8 +4,11 @@ use std::{cmp::Ordering, fmt, hash::Hash, str::FromStr};
 
 use allocative::Allocative;
 
-use pcb_sch::PhysicalUnit;
-use rust_decimal::{prelude::ToPrimitive, Decimal};
+use crate::PhysicalUnit;
+use rust_decimal::{
+    prelude::{FromPrimitive, ToPrimitive},
+    Decimal,
+};
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
@@ -48,37 +51,51 @@ fn starlark_value_to_decimal(
 }
 
 #[derive(
-    Copy, Clone, Debug, PartialEq, ProvidesStaticType, Freeze, Allocative, Serialize, Deserialize,
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    ProvidesStaticType,
+    Freeze,
+    Allocative,
+    Serialize,
+    Deserialize,
 )]
 pub struct PhysicalValue {
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    pub(crate) value: Decimal,
+    pub value: Decimal,
     #[allocative(skip)]
     #[serde(with = "rust_decimal::serde::str")]
-    pub(crate) tolerance: Decimal,
-    pub(crate) unit: PhysicalUnitDims,
+    pub tolerance: Decimal,
+    pub unit: PhysicalUnitDims,
 }
 
 impl PhysicalValue {
+    /// Construct from f64s that arrive from Starlark or other APIs
+    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
+        Self::from_decimal(
+            Decimal::from_f64(value)
+                .unwrap_or_else(|| panic!("value {} not representable as Decimal", value)),
+            Decimal::from_f64(tolerance)
+                .unwrap_or_else(|| panic!("tolerance {} not representable as Decimal", tolerance)),
+            unit.into(),
+        )
+    }
+
+    /// Get the unit as a PhysicalUnit if it has a simple alias
+    pub fn unit(&self) -> Option<PhysicalUnit> {
+        self.unit.alias()
+    }
+
     pub fn dimensionless<D: Into<Decimal>>(value: D) -> Self {
         Self {
             value: value.into(),
             tolerance: 0.into(),
             unit: PhysicalUnitDims::DIMENSIONLESS,
         }
-    }
-
-    pub fn pcb_sch_value(&self) -> Result<pcb_sch::PhysicalValue, PhysicalValueError> {
-        let alias = self
-            .unit
-            .alias()
-            .ok_or(PhysicalValueError::InvalidPhysicalUnit)?;
-        Ok(pcb_sch::PhysicalValue {
-            value: self.value,
-            tolerance: self.tolerance,
-            unit: alias,
-        })
     }
 
     pub fn from_decimal(value: Decimal, tolerance: Decimal, unit: PhysicalUnitDims) -> Self {
@@ -97,6 +114,48 @@ impl PhysicalValue {
             });
         }
         Ok(self)
+    }
+
+    /// Get the effective tolerance, using a default if none is specified
+    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
+        if self.tolerance.is_zero() {
+            default
+        } else {
+            self.tolerance
+        }
+    }
+
+    /// Get the minimum value considering tolerance
+    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE - tolerance)
+    }
+
+    /// Get the maximum value considering tolerance
+    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
+        self.value * (Decimal::ONE + tolerance)
+    }
+
+    /// Check if this value's range fits within another value's range
+    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
+        let other_tolerance = other.tolerance_or_default(default_tolerance);
+        let other_min = other.min_value(other_tolerance);
+        let other_max = other.max_value(other_tolerance);
+
+        let self_min = self.min_value(self.tolerance);
+        let self_max = self.max_value(self.tolerance);
+
+        // Self range must fit within other range
+        self_min >= other_min && self_max <= other_max
+    }
+
+    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
+    pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
+        let default_tolerance = match other.unit.alias() {
+            Some(PhysicalUnit::Ohms) => "0.01".parse().unwrap(), // 1% for resistors
+            Some(PhysicalUnit::Farads) => "0.1".parse().unwrap(), // 10% for capacitors
+            _ => "0.01".parse().unwrap(),                        // 1% for others
+        };
+        self.fits_within(other, default_tolerance)
     }
 
     fn fields() -> SortedMap<String, Ty> {
@@ -250,10 +309,7 @@ impl std::ops::Sub for PhysicalValue {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash, Serialize, Deserialize,
-)]
-#[serde(into = "String", try_from = "String")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash)]
 pub struct PhysicalUnitDims {
     pub current: i8,
     pub time: i8,
@@ -298,9 +354,9 @@ impl fmt::Display for PhysicalUnitDims {
     }
 }
 
-impl From<pcb_sch::PhysicalUnit> for PhysicalUnitDims {
-    fn from(unit: pcb_sch::PhysicalUnit) -> Self {
-        use pcb_sch::PhysicalUnit::*;
+impl From<PhysicalUnit> for PhysicalUnitDims {
+    fn from(unit: PhysicalUnit) -> Self {
+        use PhysicalUnit::*;
         match unit {
             Amperes => Self::CURRENT,
             Seconds => Self::TIME,
@@ -363,7 +419,32 @@ impl FromStr for PhysicalUnitDims {
 
 impl From<PhysicalUnitDims> for String {
     fn from(dims: PhysicalUnitDims) -> String {
-        dims.to_string()
+        // Serialize as unit enum name (e.g., "Farads") not suffix (e.g., "F")
+        // to maintain compatibility with old PhysicalUnit serialization
+        if let Some(alias) = dims.alias() {
+            format!("{:?}", alias)
+        } else {
+            dims.to_string()
+        }
+    }
+}
+
+impl serde::Serialize for PhysicalUnitDims {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        String::from(*self).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PhysicalUnitDims {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -409,8 +490,8 @@ impl PhysicalUnitDims {
         }
     }
 
-    fn alias(&self) -> Option<pcb_sch::PhysicalUnit> {
-        use pcb_sch::PhysicalUnit::*;
+    fn alias(&self) -> Option<PhysicalUnit> {
+        use PhysicalUnit::*;
         let PhysicalUnitDims {
             current,
             time,
@@ -1892,7 +1973,6 @@ fn range_methods(methods: &mut MethodsBuilder) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::prelude::*;
     use starlark::values::Heap;
 
     #[cfg(test)]

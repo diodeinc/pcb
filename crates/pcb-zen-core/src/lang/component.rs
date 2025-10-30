@@ -1,6 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
 use allocative::Allocative;
+use pcb_sch::physical::PhysicalValue;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -16,7 +17,7 @@ use starlark::{
 use std::cell::RefCell;
 
 use crate::{
-    lang::{evaluator_ext::EvaluatorExt, physical::PhysicalValue, spice_model::SpiceModelValue},
+    lang::{evaluator_ext::EvaluatorExt, spice_model::SpiceModelValue},
     FrozenSpiceModelValue,
 };
 

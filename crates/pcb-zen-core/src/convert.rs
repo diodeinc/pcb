@@ -1,6 +1,5 @@
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::module::{find_moved_span, ModulePath};
-use crate::lang::physical::PhysicalValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{collect_existing_paths, scoped_path, Remapper};
@@ -9,6 +8,7 @@ use crate::{
     FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
 };
 use itertools::Itertools;
+use pcb_sch::physical::PhysicalValue;
 use pcb_sch::position::Position;
 use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net, NetKind, Schematic};
 use serde::{Deserialize, Serialize};
@@ -868,7 +868,7 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
     } else if let Some(b) = v.unpack_bool() {
         return Ok(AttributeValue::Boolean(b));
     } else if let Some(&physical) = v.downcast_ref::<PhysicalValue>() {
-        return Ok(AttributeValue::Physical(physical.pcb_sch_value()?));
+        return Ok(AttributeValue::Physical(physical));
     }
 
     // Handle lists (no nested list support)

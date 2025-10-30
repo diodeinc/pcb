@@ -15,6 +15,7 @@ mod bom;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
+pub mod physical;
 pub mod position;
 
 // Re-export BOM functionality
@@ -22,14 +23,13 @@ pub use bom::{
     parse_kicad_csv_bom, Bom, BomMatchingKey, BomMatchingRule, GenericMatchingKey, KiCadBomError,
     Offer,
 };
-
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use rust_decimal::{prelude::FromPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 
+use crate::physical::PhysicalValue;
 use crate::position::Position;
 
 /// Helper type alias – we map the original Atopile `Symbol` to a plain
@@ -242,90 +242,6 @@ impl std::str::FromStr for PhysicalUnit {
             "S" | "siemens" | "Siemens" => Ok(PhysicalUnit::Siemens),
             "Wb" | "weber" | "Weber" | "webers" | "Webers" => Ok(PhysicalUnit::Webers),
             _ => Err(format!("Unknown unit: '{}'", s)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PhysicalValue {
-    // Serialize as a string to preserve full precision in JSON
-    #[serde(with = "rust_decimal::serde::str")]
-    pub value: Decimal,
-    // 0 => no tolerance. Using Decimal to stay in the same domain.
-    #[serde(with = "rust_decimal::serde::str")]
-    pub tolerance: Decimal,
-    pub unit: PhysicalUnit,
-}
-
-impl PhysicalValue {
-    /// Construct from f64s that arrive from Starlark.
-    /// Panics only if the number is out of Decimal's range (~1e28).
-    pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
-        Self {
-            value: Decimal::from_f64(value).expect("value not representable as Decimal"),
-            tolerance: Decimal::from_f64(tolerance)
-                .expect("tolerance not representable as Decimal"),
-            unit,
-        }
-    }
-
-    /// Get the effective tolerance, using a default if none is specified
-    pub fn tolerance_or_default(&self, default: Decimal) -> Decimal {
-        if self.tolerance.is_zero() {
-            default
-        } else {
-            self.tolerance
-        }
-    }
-
-    /// Get the minimum value considering tolerance
-    pub fn min_value(&self, tolerance: Decimal) -> Decimal {
-        self.value * (Decimal::ONE - tolerance)
-    }
-
-    /// Get the maximum value considering tolerance
-    pub fn max_value(&self, tolerance: Decimal) -> Decimal {
-        self.value * (Decimal::ONE + tolerance)
-    }
-
-    /// Check if this value's range fits within another value's range
-    pub fn fits_within(&self, other: &PhysicalValue, default_tolerance: Decimal) -> bool {
-        let other_tolerance = other.tolerance_or_default(default_tolerance);
-        let other_min = other.min_value(other_tolerance);
-        let other_max = other.max_value(other_tolerance);
-
-        let self_min = self.min_value(self.tolerance);
-        let self_max = self.max_value(self.tolerance);
-
-        // Self range must fit within other range
-        self_min >= other_min && self_max <= other_max
-    }
-
-    /// Check if this value's range fits within another value's range, using unit-aware default tolerances
-    pub fn fits_within_default(&self, other: &PhysicalValue) -> bool {
-        let default_tolerance = match other.unit {
-            PhysicalUnit::Ohms => "0.01".parse().unwrap(), // 1% for resistors
-            PhysicalUnit::Farads => "0.1".parse().unwrap(), // 10% for capacitors
-            _ => "0.01".parse().unwrap(),                  // 1% for others
-        };
-        self.fits_within(other, default_tolerance)
-    }
-}
-
-impl From<(f64, f64, PhysicalUnit)> for PhysicalValue {
-    fn from((v, t, u): (f64, f64, PhysicalUnit)) -> Self {
-        PhysicalValue::new(v, t, u)
-    }
-}
-
-impl std::fmt::Display for PhysicalValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.tolerance > Decimal::ZERO {
-            // Convert tolerance to percentage and format
-            let pct = (self.tolerance * Decimal::ONE_HUNDRED).round_dp(0);
-            write!(f, "{}{} ±{}%", self.value, self.unit.suffix(), pct)
-        } else {
-            write!(f, "{}{}", self.value, self.unit.suffix())
         }
     }
 }
@@ -546,7 +462,7 @@ impl Instance {
     pub fn physical_attr(&self, keys: &[&str]) -> Option<PhysicalValue> {
         keys.iter().find_map(|&key| {
             self.attributes.get(key).and_then(|attr| match attr {
-                AttributeValue::Physical(pv) => Some(pv.clone()),
+                AttributeValue::Physical(pv) => Some(*pv),
                 _ => None,
             })
         })
