@@ -2008,6 +2008,7 @@ class ImportNetlist(Step):
                 self.board.Delete(fp)
 
         def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
+            # Remove all custom fields (keep Reference, Value, Datasheet built-ins)
             for field in fp.GetFields():
                 if (
                     not field.IsValue()
@@ -2050,8 +2051,11 @@ class ImportNetlist(Step):
                     "dnp",  # Skip the standardized dnp attribute (handled above)
                     "exclude_from_bom",
                 ] and not prop.name.startswith("_"):
-                    fp.SetField(prop.name, prop.value)
-                    fp.GetFieldByName(prop.name).SetVisible(False)
+                    # Convert snake_case property names to Title Case for display in KiCad
+                    # e.g., "logic_level" -> "Logic Level"
+                    display_name = prop.name.replace('_', ' ').title()
+                    fp.SetField(display_name, prop.value)
+                    fp.GetFieldByName(display_name).SetVisible(False)
 
         for fp_id in netlist_footprint_ids - board_footprint_ids:
             # Create a new footprint from the netlist.
