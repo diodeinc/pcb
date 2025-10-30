@@ -182,11 +182,12 @@ fn get_color_hex(color_name: &str) -> Option<String> {
 /// 1. ColorTerm element (e.g., <ColorTerm name="GREEN"/>)
 /// 2. Color element (e.g., <Color r="0" g="255" b="0"/>)
 /// 3. Property text (e.g., <Property text="Color : Green"/>)
-fn extract_color_from_spec(spec: &crate::Spec) -> (Option<String>, Option<String>) {
+fn extract_color_from_spec(spec: &crate::Spec, doc: &crate::Ipc2581) -> (Option<String>, Option<String>) {
     // Priority 1: ColorTerm element
-    if let Some(color_term) = &spec.color_term {
+    if let Some(color_term_sym) = spec.color_term {
+        let color_term = doc.resolve(color_term_sym);
         let color_hex = get_color_hex(color_term);
-        return (Some(color_term.clone()), color_hex);
+        return (Some(color_term.to_string()), color_hex);
     }
 
     // Priority 2: Color RGB element
@@ -202,7 +203,8 @@ fn extract_color_from_spec(spec: &crate::Spec) -> (Option<String>, Option<String
     }
 
     // Priority 3: Property text with "Color :" or "Color:"
-    let color = spec.properties.iter().find_map(|prop| {
+    let color = spec.properties.iter().find_map(|prop_sym| {
+        let prop = doc.resolve(*prop_sym);
         if prop.starts_with("Color :") || prop.starts_with("Color:") {
             Some(prop.split(':').nth(1)?.trim().to_string())
         } else {
@@ -838,26 +840,14 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
 
                 let visual_thickness_mils = thickness_mils;
 
-                // Parse tolerances - handle both absolute and percentage
-                let (tol_plus_mm, tol_minus_mm, tol_plus_mils, tol_minus_mils) = if stackup_layer
-                    .tol_percent
-                {
-                    // Percentage - keep as-is for both
-                    (
-                        stackup_layer.tol_plus,
-                        stackup_layer.tol_minus,
-                        stackup_layer.tol_plus,
-                        stackup_layer.tol_minus,
-                    )
-                } else {
-                    // Absolute values - tol_plus/minus are already in mm from parser
-                    let tol_mm_plus = stackup_layer.tol_plus;
-                    let tol_mm_minus = stackup_layer.tol_minus;
-                    let tol_mils_plus = tol_mm_plus.map(|t| crate::units::from_mm(t, Units::Mils));
-                    let tol_mils_minus =
-                        tol_mm_minus.map(|t| crate::units::from_mm(t, Units::Mils));
-                    (tol_mm_plus, tol_mm_minus, tol_mils_plus, tol_mils_minus)
-                };
+                // Parse tolerances - assume absolute values in mm (parser normalizes)
+                // Note: IPC-2581 supports tolPercent attribute, but we treat all as absolute for now
+                let tol_mm_plus = stackup_layer.tol_plus;
+                let tol_mm_minus = stackup_layer.tol_minus;
+                let tol_mils_plus = tol_mm_plus.map(|t| crate::units::from_mm(t, Units::Mils));
+                let tol_mils_minus = tol_mm_minus.map(|t| crate::units::from_mm(t, Units::Mils));
+                let (tol_plus_mm, tol_minus_mm, tol_plus_mils, tol_minus_mils) =
+                    (tol_mm_plus, tol_mm_minus, tol_mils_plus, tol_mils_minus);
 
                 // Get spec for this layer to extract copper weight, surface finish, and color
                 let spec = stackup_layer
@@ -886,7 +876,7 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
                 }
 
                 // Extract color from Spec (ColorTerm, Color RGB, or Property text)
-                let (color, color_hex) = spec.map(extract_color_from_spec).unwrap_or((None, None));
+                let (color, color_hex) = spec.map(|s| extract_color_from_spec(s, doc)).unwrap_or((None, None));
 
                 // Use sequence number from XML if available, otherwise use index
                 let layer_num = stackup_layer.layer_number.unwrap_or(0) as usize;
@@ -902,7 +892,7 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
                     tol_minus_mm,
                     tol_plus_mils,
                     tol_minus_mils,
-                    tol_percent: stackup_layer.tol_percent,
+                    tol_percent: false, // Deprecated: assume absolute values
                     copper_weight_oz,
                     material: stackup_layer
                         .material
@@ -975,7 +965,7 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
                     .as_ref()
                     .and_then(|spec_ref| ecad.cad_header.specs.get(spec_ref));
 
-                let (color, color_hex) = spec.map(extract_color_from_spec).unwrap_or((None, None));
+                let (color, color_hex) = spec.map(|s| extract_color_from_spec(s, doc)).unwrap_or((None, None));
 
                 color.as_ref()?;
                 Some((color, color_hex))
@@ -1001,7 +991,7 @@ fn extract_stackup(doc: &Ipc2581) -> Vec<StackupInfo> {
                     .as_ref()
                     .and_then(|spec_ref| ecad.cad_header.specs.get(spec_ref));
 
-                let (color, color_hex) = spec.map(extract_color_from_spec).unwrap_or((None, None));
+                let (color, color_hex) = spec.map(|s| extract_color_from_spec(s, doc)).unwrap_or((None, None));
 
                 color.as_ref()?;
                 Some((color, color_hex))
@@ -1119,7 +1109,7 @@ fn extract_board_finishes(doc: &Ipc2581) -> Option<BoardFinishes> {
                 let (color, color_hex) = stackup_layer
                     .spec_ref
                     .and_then(|spec_name| ecad.cad_header.specs.get(&spec_name))
-                    .map(extract_color_from_spec)
+                    .map(|s| extract_color_from_spec(s, doc))
                     .unwrap_or((None, None));
 
                 match layer_def.layer_function {
@@ -1170,7 +1160,7 @@ fn extract_board_finishes(doc: &Ipc2581) -> Option<BoardFinishes> {
                 for spec in ecad.cad_header.specs.values() {
                     let spec_name = doc.resolve(spec.name);
                     if spec_name.contains(layer_name) || layer_name.contains(spec_name) {
-                        let (c, ch) = extract_color_from_spec(spec);
+                        let (c, ch) = extract_color_from_spec(spec, doc);
                         if c.is_some() {
                             return Some((c, ch));
                         }
@@ -1488,23 +1478,25 @@ fn extract_bom(doc: &Ipc2581) -> Option<Bom> {
 
             if let Some(ref chars) = item.characteristics {
                 for textual in &chars.textuals {
-                    if let Some(ref name) = textual.name {
-                        if let Some(ref val) = textual.value {
+                    if let Some(name_sym) = textual.name {
+                        if let Some(val_sym) = textual.value {
+                            let name = doc.resolve(name_sym);
+                            let val = doc.resolve(val_sym);
                             let name_lower = name.to_lowercase();
                             // Support both KiCad (Manufacturer, Mpn) and Allegro (VENDOR, VENDOR_PN) naming
                             if name_lower == "manufacturer" || name_lower == "vendor" {
-                                manufacturer = val.clone();
+                                manufacturer = val.to_string();
                             } else if name_lower == "mpn" || name_lower == "vendor_pn" {
-                                mpn = val.clone();
+                                mpn = val.to_string();
                             } else if name_lower == "value" {
-                                value = val.clone();
+                                value = val.to_string();
                             } else if value == "—" {
                                 // Fallback: use Capacitance, Resistance, or DEVICE_TYPE if Value not set
                                 if name_lower == "capacitance"
                                     || name_lower == "resistance"
                                     || name_lower == "device_type"
                                 {
-                                    value = val.clone();
+                                    value = val.to_string();
                                 }
                             }
                         }

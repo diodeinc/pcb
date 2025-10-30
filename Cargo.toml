@@ -1,5 +1,25 @@
 [workspace]
-members = ["crates/*"]
+members = [
+    "crates/ipc2581",        # Pure IPC-2581 parser
+    "crates/ipc2581-tools",  # Export/visualization tools
+    "crates/pcb",
+    "crates/pcb-command-runner",
+    "crates/pcb-diode-api",
+    "crates/pcb-eda",
+    "crates/pcb-fmt",
+    "crates/pcb-kicad",
+    "crates/pcb-layout",
+    "crates/pcb-mcp",
+    "crates/pcb-sch",
+    "crates/pcb-sexpr",
+    "crates/pcb-sim",
+    "crates/pcb-starlark-lsp",
+    "crates/pcb-test-utils",
+    "crates/pcb-ui",
+    "crates/pcb-zen",
+    "crates/pcb-zen-core",
+    "crates/pcb-zen-wasm",
+]
 resolver = "2"
 
 [workspace.package]

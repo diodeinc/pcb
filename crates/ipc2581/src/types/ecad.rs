@@ -20,17 +20,17 @@ pub struct CadHeader {
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub name: Symbol,
-    pub material: Option<String>,
+    pub material: Option<Symbol>,
     pub dielectric_constant: Option<f64>,
     pub loss_tangent: Option<f64>,
     /// All Property text values from General type="MATERIAL" elements
-    pub properties: Vec<String>,
+    pub properties: Vec<Symbol>,
     /// Surface finish specification (ENIG, OSP, etc.)
     pub surface_finish: Option<SurfaceFinish>,
     /// Copper weight in oz/ft² from Conductor type="WEIGHT"
     pub copper_weight_oz: Option<f64>,
     /// Color specified via ColorTerm element (e.g., "GREEN", "WHITE", "BLACK")
-    pub color_term: Option<String>,
+    pub color_term: Option<Symbol>,
     /// RGB color specified via Color element (r, g, b values 0-255)
     pub color_rgb: Option<(u8, u8, u8)>,
 }
@@ -68,7 +68,6 @@ pub struct StackupLayer {
     pub thickness: Option<f64>,
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
-    pub tol_percent: bool, // True if tolerances are percentages (default: false)
     pub material: Option<Symbol>,
     pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
     pub dielectric_constant: Option<f64>,
@@ -378,7 +377,7 @@ pub enum Side {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Polarity {
     Positive,
     Negative,
@@ -449,7 +448,7 @@ pub enum ProductCriteria {
 /// Product specification for a surface finish
 #[derive(Debug, Clone)]
 pub struct FinishProduct {
-    pub name: String,
+    pub name: Symbol,
     pub criteria: Option<ProductCriteria>,
 }
 
@@ -457,6 +456,6 @@ pub struct FinishProduct {
 #[derive(Debug, Clone)]
 pub struct SurfaceFinish {
     pub finish_type: FinishType,
-    pub comment: Option<String>,
+    pub comment: Option<Symbol>,
     pub products: Vec<FinishProduct>,
 }

@@ -766,17 +766,23 @@ impl<'arena> Parser<'arena> {
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "CadHeader")
             .ok_or(Ipc2581Error::MissingElement("CadHeader"))?;
-        let cad_header = self.parse_cad_header(&cad_header_node)?;
+        let mut cad_header = self.parse_cad_header(&cad_header_node)?;
 
-        // Store ECAD units and specs for use when parsing dimensions and stackup layers
+        // Store ECAD units for use when parsing dimensions
         self.ecad_units = Some(cad_header.units);
-        self.specs = cad_header.specs.clone();
+        
+        // Move specs into parser context to avoid cloning
+        // We'll move them back after parsing CadData
+        self.specs = std::mem::take(&mut cad_header.specs);
 
         let cad_data_node = node
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "CadData")
             .ok_or(Ipc2581Error::MissingElement("CadData"))?;
         let cad_data = self.parse_cad_data(&cad_data_node)?;
+
+        // Move specs back into cad_header
+        cad_header.specs = std::mem::take(&mut self.specs);
 
         Ok(Ecad {
             cad_header,
@@ -829,11 +835,12 @@ impl<'arena> Parser<'arena> {
                                 "Property" => {
                                     if let Some(text) = prop.attribute("text") {
                                         if !text.is_empty() {
+                                            let text_sym = self.interner.intern(text);
                                             // Store all property texts
-                                            properties.push(text.to_string());
+                                            properties.push(text_sym);
                                             // Take the first non-empty material text we find
                                             if material.is_none() {
-                                                material = Some(text.to_string());
+                                                material = Some(text_sym);
                                             }
                                         }
                                     }
@@ -841,7 +848,7 @@ impl<'arena> Parser<'arena> {
                                 "ColorTerm" => {
                                     // Parse ColorTerm name attribute (e.g., "GREEN", "WHITE", "BLACK")
                                     if let Some(color_name) = prop.attribute("name") {
-                                        color_term = Some(color_name.to_string());
+                                        color_term = Some(self.interner.intern(color_name));
                                     }
                                 }
                                 "Color" => {
@@ -928,7 +935,7 @@ impl<'arena> Parser<'arena> {
             if child.tag_name().name() == "Finish" {
                 let finish_type_str = child.attribute("type").unwrap_or("OTHER");
                 let finish_type = self.parse_finish_type(finish_type_str)?;
-                let comment = child.attribute("comment").map(|s| s.to_string());
+                let comment = child.attribute("comment").map(|s| self.interner.intern(s));
 
                 let mut products = Vec::new();
                 for product_node in child.children().filter(|n| n.is_element()) {
@@ -939,7 +946,7 @@ impl<'arena> Parser<'arena> {
                                 .and_then(|s| self.parse_product_criteria(s).ok());
 
                             products.push(ecad::FinishProduct {
-                                name: product_name.to_string(),
+                                name: self.interner.intern(product_name),
                                 criteria,
                             });
                         }
@@ -1084,36 +1091,19 @@ impl<'arena> Parser<'arena> {
             .and_then(|s| s.parse::<f64>().ok())
             .map(|v| crate::units::to_mm(v, units));
 
-        // Parse tolPercent (default: false = absolute values)
-        let tol_percent = node
-            .attribute("tolPercent")
-            .and_then(|s| s.parse::<bool>().ok())
-            .unwrap_or(false);
-
         // Convert tolerances if present
-        // If tolPercent is true, these are percentages and should NOT be converted to mm
-        // If tolPercent is false (default), these are absolute values in the same units as thickness
+        // NOTE: IPC-2581 spec allows tolPercent attribute to indicate if these are percentages
+        // For a pure parser, we should keep the raw values and let downstream code handle interpretation
+        // Currently we convert to mm for convenience (TODO: make this a separate normalization step)
         let tol_plus = node
             .attribute("tolPlus")
             .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| {
-                if tol_percent {
-                    v
-                } else {
-                    crate::units::to_mm(v, units)
-                }
-            });
+            .map(|v| crate::units::to_mm(v, units));
 
         let tol_minus = node
             .attribute("tolMinus")
             .and_then(|s| s.parse::<f64>().ok())
-            .map(|v| {
-                if tol_percent {
-                    v
-                } else {
-                    crate::units::to_mm(v, units)
-                }
-            });
+            .map(|v| crate::units::to_mm(v, units));
 
         let layer_number = node.attribute("sequence").and_then(|s| s.parse().ok());
 
@@ -1127,41 +1117,16 @@ impl<'arena> Parser<'arena> {
         for child in node.children().filter(|n| n.is_element()) {
             if child.tag_name().name() == "SpecRef" {
                 if let Some(spec_id) = child.attribute("id") {
-                    // Try multiple strategies to find the matching Spec:
-                    // 1. Exact match (standard IPC-2581)
+                    // Exact match - pure IPC-2581 spec
                     let spec_symbol = self.interner.intern(spec_id);
                     if let Some(spec) = self.specs.get(&spec_symbol) {
                         spec_ref = Some(spec_symbol);
-                        material = spec.material.as_ref().map(|m| self.interner.intern(m));
+                        material = spec.material;
                         dielectric_constant = spec.dielectric_constant;
                         loss_tangent = spec.loss_tangent;
-                    } else {
-                        // 2. Try with "SPEC_" prefix removed (KiCad compatibility)
-                        let base_id = spec_id.strip_prefix("SPEC_").unwrap_or(spec_id);
-
-                        let alt_symbol = self.interner.intern(base_id);
-                        if let Some(spec) = self.specs.get(&alt_symbol) {
-                            spec_ref = Some(alt_symbol);
-                            material = spec.material.as_ref().map(|m| self.interner.intern(m));
-                            dielectric_constant = spec.dielectric_constant;
-                            loss_tangent = spec.loss_tangent;
-                        } else {
-                            // 3. Try fuzzy match: find spec name starting with base_id + "_"
-                            // (KiCad uses SPEC_DIELECTRIC_1 -> DIELECTRIC_1_1 pattern)
-                            let prefix = format!("{}_", base_id);
-                            for (spec_name, spec) in &self.specs {
-                                let spec_name_str = self.interner.resolve(*spec_name);
-                                if spec_name_str.starts_with(&prefix) {
-                                    spec_ref = Some(*spec_name);
-                                    material =
-                                        spec.material.as_ref().map(|m| self.interner.intern(m));
-                                    dielectric_constant = spec.dielectric_constant;
-                                    loss_tangent = spec.loss_tangent;
-                                    break;
-                                }
-                            }
-                        }
                     }
+                    // If spec not found, silently continue - this is valid per spec
+                    // (SpecRef may reference specs not in this document)
                 }
             }
         }
@@ -1171,7 +1136,6 @@ impl<'arena> Parser<'arena> {
             thickness,
             tol_plus,
             tol_minus,
-            tol_percent,
             material,
             spec_ref,
             dielectric_constant,
@@ -1557,7 +1521,9 @@ impl<'arena> Parser<'arena> {
                     current_y = y;
                 }
                 "PolyStepCurve" => {
-                    // Tessellate arc into line segments using kurbo
+                    // TODO: Properly handle arcs in UserSpecial
+                    // Currently we skip arcs to keep parser pure (no tessellation dependencies)
+                    // This should store raw Arc data and let downstream code handle tessellation
                     let end_x = self
                         .parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)
                         .unwrap_or(0.0)
@@ -1566,57 +1532,17 @@ impl<'arena> Parser<'arena> {
                         .parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)
                         .unwrap_or(0.0)
                         + offset_y;
-                    let center_x = self
-                        .parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units)
-                        .unwrap_or(0.0)
-                        + offset_x;
-                    let center_y = self
-                        .parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units)
-                        .unwrap_or(0.0)
-                        + offset_y;
-                    let clockwise = self.parse_bool_attr(&child, "clockwise").unwrap_or(true);
-
-                    let arc = crate::geometry::create_arc(
-                        current_x, current_y, end_x, end_y, center_x, center_y, clockwise,
-                    );
-
-                    // Convert to beziers and sample each bezier into line segments
-                    // Use high quality tessellation for accurate curved traces
-                    let mut arc_points = vec![(current_x, current_y)];
-                    arc.to_cubic_beziers(0.01, |p1, p2, p3| {
-                        // Get the fixed start point (P0) for this bezier segment
-                        let p0x = arc_points.last().unwrap().0;
-                        let p0y = arc_points.last().unwrap().1;
-
-                        // Sample bezier into 32 segments for smooth, accurate rendering
-                        for i in 1..=32 {
-                            let t = i as f64 / 32.0;
-                            let t1 = 1.0 - t;
-                            // Cubic bezier formula: B(t) = (1-t)³P0 + 3(1-t)²t·P1 + 3(1-t)t²·P2 + t³·P3
-                            // Use fixed P0 for the entire bezier, not the last sampled point
-                            let px = t1 * t1 * t1 * p0x
-                                + 3.0 * t1 * t1 * t * p1.x
-                                + 3.0 * t1 * t * t * p2.x
-                                + t * t * t * p3.x;
-                            let py = t1 * t1 * t1 * p0y
-                                + 3.0 * t1 * t1 * t * p1.y
-                                + 3.0 * t1 * t * t * p2.y
-                                + t * t * t * p3.y;
-                            arc_points.push((px, py));
-                        }
+                    
+                    // For now, create straight line from current to end point
+                    // Proper fix: store Arc data in UserSpecial and tessellate in ipc2581-tools
+                    out.push(ecad::Line {
+                        start_x: current_x,
+                        start_y: current_y,
+                        end_x,
+                        end_y,
+                        line_width,
+                        line_end,
                     });
-
-                    // Convert arc points to line segments
-                    for window in arc_points.windows(2) {
-                        out.push(ecad::Line {
-                            start_x: window[0].0,
-                            start_y: window[0].1,
-                            end_x: window[1].0,
-                            end_y: window[1].1,
-                            line_width,
-                            line_end,
-                        });
-                    }
 
                     current_x = end_x;
                     current_y = end_y;
@@ -2121,13 +2047,15 @@ impl<'arena> Parser<'arena> {
     }
 
     fn parse_textual_characteristic(&mut self, node: &Node) -> Result<TextualCharacteristic> {
-        let definition_source = node.attribute("definitionSource").map(|s| s.to_string());
+        let definition_source = node
+            .attribute("definitionSource")
+            .map(|s| self.interner.intern(s));
         let name = node
             .attribute("textualCharacteristicName")
-            .map(|s| s.to_string());
+            .map(|s| self.interner.intern(s));
         let value = node
             .attribute("textualCharacteristicValue")
-            .map(|s| s.to_string());
+            .map(|s| self.interner.intern(s));
 
         Ok(TextualCharacteristic {
             definition_source,

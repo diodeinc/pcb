@@ -1,13 +1,9 @@
-pub mod board_outline;
+// Pure IPC-2581 parser modules
 mod checksum;
-pub mod copper_layer;
-pub mod geometry;
-pub mod html_generator;
 mod intern;
 mod parse;
-pub mod svg_export;
 pub mod types;
-mod units;
+pub mod units;
 
 pub use intern::{Interner, Symbol};
 pub use types::*;

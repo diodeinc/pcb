@@ -1,11 +1,11 @@
 use bumpalo::Bump;
 use clap::{Parser, Subcommand};
-use ipc_2581::html_generator::generate_html;
-use ipc_2581::svg_export::{
+use ipc2581::html_generator::generate_html;
+use ipc2581_tools::svg_export::{
     build_board_context, convert_to_paths, expand_padstacks, flatten_layers, resolve_features,
     FeatureBucket, PipelineTiming, ResolvedFeature, ResolvedGeometry,
 };
-use ipc_2581::{Ipc2581, LayerFunction, PlatingStatus};
+use ipc2581::{Ipc2581, LayerFunction, PlatingStatus};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
@@ -197,7 +197,7 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
     let content = doc.content();
     let is_reduced_layer_file = matches!(
         content.function_mode.mode,
-        ipc_2581::Mode::Assembly | ipc_2581::Mode::Test | ipc_2581::Mode::Stencil
+        ipc2581::Mode::Assembly | ipc2581::Mode::Test | ipc2581::Mode::Stencil
     );
 
     // Check if we have Ecad data
@@ -465,8 +465,8 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
 
             for poly_step in &polygon.steps {
                 let (x, y) = match poly_step {
-                    ipc_2581::PolyStep::Segment(s) => (s.x, s.y),
-                    ipc_2581::PolyStep::Curve(c) => (c.x, c.y),
+                    ipc2581::PolyStep::Segment(s) => (s.x, s.y),
+                    ipc2581::PolyStep::Curve(c) => (c.x, c.y),
                 };
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
@@ -494,11 +494,11 @@ fn check_file(path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::E
 
         for item in &bom.items {
             match item.category {
-                Some(ipc_2581::BomCategory::Mechanical) => {
+                Some(ipc2581::BomCategory::Mechanical) => {
                     mechanical_qty += item.quantity.unwrap_or(0);
                     mechanical_types += 1;
                 }
-                Some(ipc_2581::BomCategory::Electrical) => {
+                Some(ipc2581::BomCategory::Electrical) => {
                     electrical_qty += item.quantity.unwrap_or(0);
                 }
                 None => {}
@@ -834,7 +834,7 @@ fn export_svg(
                 debug_path.clone()
             };
 
-            use ipc_2581::svg_export::debug::export_layer_paths_svg;
+            use ipc2581_tools::svg_export::debug::export_layer_paths_svg;
             export_layer_paths_svg(paths, output_path.to_str().unwrap())?;
         }
         println!();
@@ -842,7 +842,7 @@ fn export_svg(
 
     // Export individual bucket if requested
     if let Some(bucket_name) = debug_bucket {
-        use ipc_2581::svg_export::debug::export_bucket_svg;
+        use ipc2581_tools::svg_export::debug::export_bucket_svg;
 
         let bucket = match bucket_name.to_lowercase().as_str() {
             "smd" => FeatureBucket::Smd,
@@ -924,7 +924,7 @@ fn export_svg(
                 debug_path.clone()
             };
 
-            use ipc_2581::svg_export::debug::export_flattened_svg_with_drill_mask;
+            use ipc2581_tools::svg_export::debug::export_flattened_svg_with_drill_mask;
 
             // Get drill layer mask if available
             let drill_mask = flattened_layers

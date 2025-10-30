@@ -43,7 +43,7 @@ pub struct Characteristics {
 /// Textual characteristic with name/value pairs
 #[derive(Debug, Clone)]
 pub struct TextualCharacteristic {
-    pub definition_source: Option<String>,
-    pub name: Option<String>,
-    pub value: Option<String>,
+    pub definition_source: Option<Symbol>,
+    pub name: Option<Symbol>,
+    pub value: Option<Symbol>,
 }
