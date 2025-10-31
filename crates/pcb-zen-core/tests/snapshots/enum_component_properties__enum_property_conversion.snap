@@ -27,18 +27,6 @@ expression: output
                         ),
                     },
                     properties: {
-                        "__voltage__": FrozenValue(
-                            PhysicalValue {
-                                value: 3.3,
-                                tolerance: 0,
-                                unit: PhysicalUnitDims {
-                                    current: 0,
-                                    time: 0,
-                                    voltage: 1,
-                                    temp: 0,
-                                },
-                            },
-                        ),
                         "count": FrozenValue(
                             42,
                         ),

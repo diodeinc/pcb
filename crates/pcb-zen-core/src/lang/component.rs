@@ -245,6 +245,14 @@ impl std::fmt::Debug for FrozenComponentValue {
     }
 }
 
+fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
 // StarlarkValue implementation for mutable ComponentValue
 #[starlark_value(type = "Component")]
 impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
@@ -311,14 +319,6 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             }
             // Fallback: check properties map
             _ => {
-                fn capitalize_first(s: &str) -> String {
-                    let mut c = s.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                }
-
                 // We have to check both the original and capitalized keys
                 // because config_properties does automatic case conversion
                 // TODO: drop this when config_properties no longer does case conversion
@@ -370,21 +370,12 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
         if matches!(
             attr,
-            "name"
-                | "prefix"
-                | "mpn"
-                | "manufacturer"
-                | "dnp"
-                | "type"
-                | "properties"
-                | "pins"
-                | "capacitance"
-                | "resistance"
+            "name" | "prefix" | "mpn" | "manufacturer" | "dnp" | "type" | "properties" | "pins"
         ) {
             return true;
         }
         let data = self.data.borrow();
-        data.properties.contains_key(attr)
+        data.properties.contains_key(attr) || data.properties.contains_key(&capitalize_first(attr))
     }
 
     fn dir_attr(&self) -> Vec<String> {
@@ -397,8 +388,6 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "type".to_string(),
             "properties".to_string(),
             "pins".to_string(),
-            "capacitance".to_string(),
-            "resistance".to_string(),
         ];
         let data = self.data.borrow();
         for key in data.properties.keys() {
@@ -479,14 +468,6 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 Some(heap.alloc(AllocDict(connections_vec)))
             }
             _ => {
-                fn capitalize_first(s: &str) -> String {
-                    let mut c = s.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                }
-
                 // We have to check both the original and capitalized keys
                 // because config_properties does automatic case conversion
                 // TODO: drop this when config_properties no longer does case conversion
@@ -515,19 +496,12 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
         if matches!(
             attr,
-            "name"
-                | "prefix"
-                | "mpn"
-                | "manufacturer"
-                | "type"
-                | "properties"
-                | "pins"
-                | "capacitance"
-                | "resistance"
+            "name" | "prefix" | "mpn" | "manufacturer" | "type" | "properties" | "pins"
         ) {
             return true;
         }
         self.data.properties.contains_key(attr)
+            || self.data.properties.contains_key(&capitalize_first(attr))
     }
 
     fn dir_attr(&self) -> Vec<String> {
@@ -540,8 +514,6 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             "type".to_string(),
             "properties".to_string(),
             "pins".to_string(),
-            "capacitance".to_string(),
-            "resistance".to_string(),
         ];
         for key in self.data.properties.keys() {
             if !key.starts_with("__") {
@@ -939,12 +911,6 @@ where
                             .unpack_str()
                             .map(|s| s.to_owned())
                             .unwrap_or_else(|| k_val.to_string());
-                        try_add_physical_property(
-                            eval_ctx.heap(),
-                            &mut properties_map,
-                            &key_str,
-                            &v_val,
-                        );
                         properties_map.insert(key_str, v_val);
                     }
                 } else {
@@ -1100,21 +1066,6 @@ where
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
         Some(<ComponentType as StarlarkValue>::get_type_starlark_repr())
     }
-}
-
-fn try_add_physical_property<'a, 'b>(
-    heap: &'a Heap,
-    map: &mut SmallMap<String, Value<'a>>,
-    key: &str,
-    value: &Value<'b>,
-) -> Option<PhysicalValue> {
-    if let Some(val) = value.unpack_str() {
-        if let Ok(physical) = val.parse::<PhysicalValue>() {
-            let key = format!("__{}__", key.to_ascii_lowercase());
-            map.insert(key, heap.alloc(physical));
-        }
-    }
-    None
 }
 
 impl std::fmt::Display for ComponentType {
