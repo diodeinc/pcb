@@ -349,6 +349,7 @@ pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
             }
             .into(),
         )),
+        suppressed: false,
     };
 
     (passed, vec![diagnostic])

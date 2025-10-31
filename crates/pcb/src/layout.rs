@@ -68,6 +68,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
             &zen_path,
             args.offline,
             create_diagnostics_passes(&[]),
+            false, // don't deny warnings for layout command
             &mut has_errors,
         ) else {
             continue;

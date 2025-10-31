@@ -69,6 +69,9 @@ pub struct Diagnostic {
     /// for detailed analysis while keeping the diagnostic struct generic-free.
     /// Using Arc to preserve type information during clone operations.
     pub source_error: Option<Arc<anyhow::Error>>,
+
+    /// If true, this diagnostic should be rendered but not cause build failure
+    pub suppressed: bool,
 }
 
 impl From<starlark::Error> for Diagnostic {
@@ -97,6 +100,7 @@ impl From<starlark::Error> for Diagnostic {
             call_stack: Some(err.call_stack().clone()),
             child: None,
             source_error: Some(Arc::new(err.into_anyhow())),
+            suppressed: false,
         }
     }
 }
@@ -111,6 +115,7 @@ impl From<EvalMessage> for Diagnostic {
             call_stack: None,
             child: None,
             source_error: None, // EvalMessage doesn't have an underlying error to preserve
+            suppressed: false,
         }
     }
 }
@@ -127,6 +132,7 @@ impl From<anyhow::Error> for Diagnostic {
             call_stack: None,
             child: None,
             source_error: Some(Arc::new(err)),
+            suppressed: false,
         }
     }
 }
@@ -164,6 +170,7 @@ impl Diagnostic {
             call_stack: None,
             child: None,
             source_error: None,
+            suppressed: false,
         }
     }
 

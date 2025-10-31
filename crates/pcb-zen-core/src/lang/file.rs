@@ -108,6 +108,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
                 call_stack: None,
                 child: None,
                 source_error: None,
+                suppressed: false,
             };
 
             // Wrap with each outer frame that has location info
@@ -123,6 +124,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
                         } else {
                             None
                         },
+                        suppressed: false,
                         child: Some(Box::new(diagnostic)),
                         source_error: None,
                     };

@@ -8,16 +8,10 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Error: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
+Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
    ╭─[ <TEMP_DIR>/board.zen:2:18 ]
-   │
- 2 │ SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
-   │                  ───────────────────────────────┬──────────────────────────────  
-   │                                                 ╰──────────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
-───╯
-
-Stack trace (most recent call last):
-    <TEMP_DIR>/board.zen:2:18 ('@github/mycompany/components:main' is an unstable reference. Use a pinned version.)
+ 2 │SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
+   │                                                ╰─────────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
 
 ✗ board.zen: Build failed
 Error: Build failed with errors

@@ -23,11 +23,10 @@ fn execute_electrical_check(
     pcb_zen_core::lang::electrical_check::execute_electrical_check(&mut eval, check, module_value)
 }
 
-/// Create diagnostics passes for the given deny list
-pub fn create_diagnostics_passes(deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+/// Create diagnostics passes
+pub fn create_diagnostics_passes(_deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
     vec![
         Box::new(pcb_zen_core::FilterHiddenPass),
-        Box::new(pcb_zen_core::PromoteDeniedPass::new(deny)),
         Box::new(pcb_zen_core::AggregatePass),
         Box::new(pcb_zen_core::SortPass),
         Box::new(pcb_zen::diagnostics::RenderPass),
@@ -66,6 +65,7 @@ pub fn build(
     zen_path: &Path,
     offline: bool,
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
+    deny_warnings: bool,
     has_errors: &mut bool,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
@@ -109,7 +109,19 @@ pub fn build(
 
     diagnostics.apply_passes(&passes);
 
-    if diagnostics.has_errors() {
+    // Check if build should fail due to errors OR denied warnings
+    // Skip suppressed diagnostics when determining failure
+    let has_unsuppressed_warnings = diagnostics
+        .diagnostics
+        .iter()
+        .any(|d| !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Warning));
+    let has_unsuppressed_errors = diagnostics
+        .diagnostics
+        .iter()
+        .any(|d| !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Error));
+    let should_fail = has_unsuppressed_errors || (deny_warnings && has_unsuppressed_warnings);
+
+    if should_fail {
         *has_errors = true;
         eprintln!(
             "{} {}: Build failed",
@@ -137,12 +149,14 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     }
 
     // Process each .zen file
+    let deny_warnings = args.deny.contains(&"warnings".to_string());
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let Some(schematic) = build(
             zen_path,
             args.offline,
             create_diagnostics_passes(&args.deny),
+            deny_warnings,
             &mut has_errors,
         ) else {
             continue;

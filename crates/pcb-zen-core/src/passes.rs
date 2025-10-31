@@ -1,30 +1,7 @@
-use crate::{Diagnostic, Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
+use crate::{Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
 use starlark::errors::EvalSeverity;
 use std::path::Path;
 use std::sync::Arc;
-
-/// A pass that promotes diagnostics based on deny rules
-pub struct PromoteDeniedPass {
-    deny_warnings: bool,
-}
-
-impl PromoteDeniedPass {
-    pub fn new(deny: &[String]) -> Self {
-        Self {
-            deny_warnings: deny.contains(&"warnings".to_string()),
-        }
-    }
-}
-
-impl DiagnosticsPass for PromoteDeniedPass {
-    fn apply(&self, diagnostics: &mut Diagnostics) {
-        if self.deny_warnings {
-            for diagnostic in &mut diagnostics.diagnostics {
-                promote_diagnostic_to_error(diagnostic);
-            }
-        }
-    }
-}
 
 /// A pass that filters out hidden diagnostics (containing "<hidden>")
 pub struct FilterHiddenPass;
@@ -127,16 +104,6 @@ impl DiagnosticsPass for AggregatePass {
         }
 
         diagnostics.diagnostics = result;
-    }
-}
-
-/// Recursively promote a diagnostic and all its children to error severity
-fn promote_diagnostic_to_error(diagnostic: &mut Diagnostic) {
-    if matches!(diagnostic.severity, EvalSeverity::Warning) {
-        diagnostic.severity = EvalSeverity::Error;
-    }
-    if let Some(ref mut child) = diagnostic.child {
-        promote_diagnostic_to_error(child);
     }
 }
 
