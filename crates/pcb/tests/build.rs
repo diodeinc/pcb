@@ -64,6 +64,25 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 )
 "#;
 
+const SUPPRESSED_WARNINGS_ZEN: &str = r#"
+warn("Regular warning")
+warn("Suppressed warning 1", suppress=True)
+warn("Suppressed warning 2", suppress=True)
+"#;
+
+const SUPPRESSED_ERRORS_ZEN: &str = r#"
+error("Suppressed error 1", suppress=True)
+error("Suppressed error 2", suppress=True)
+"#;
+
+const MIXED_SUPPRESSED_ZEN: &str = r#"
+warn("Regular warning 1")
+warn("Suppressed warning 1", suppress=True)
+warn("Suppressed warning 2", suppress=True)
+error("Suppressed error 1", suppress=True)
+warn("Regular warning 2")
+"#;
+
 #[test]
 fn test_pcb_build_unstable_ref_warning() {
     let mut sandbox = Sandbox::new();
@@ -166,6 +185,58 @@ fn test_deny_warnings_flag() {
         .write("board.zen", UNSTABLE_REF_BOARD_ZEN)
         .snapshot_run("pcb", ["build", "board.zen", "-Dwarnings"]);
     assert_snapshot!("deny_warnings_flag", output);
+}
+
+#[test]
+fn test_suppressed_warnings() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", SUPPRESSED_WARNINGS_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("suppressed_warnings", output);
+}
+
+#[test]
+fn test_suppressed_errors() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", SUPPRESSED_ERRORS_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("suppressed_errors", output);
+}
+
+#[test]
+fn test_mixed_suppressed_diagnostics() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", MIXED_SUPPRESSED_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("mixed_suppressed_diagnostics", output);
+}
+
+#[test]
+fn test_suppressed_warnings_with_deny_flag() {
+    let mut sandbox = Sandbox::new();
+
+    // Suppressed warnings should not cause build failure even with -Dwarnings
+    let output = sandbox
+        .write("test.zen", SUPPRESSED_ERRORS_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
+    assert_snapshot!("suppressed_with_deny_flag", output);
+}
+
+#[test]
+fn test_mixed_suppressed_with_deny_flag() {
+    let mut sandbox = Sandbox::new();
+
+    // Regular warnings should still fail with -Dwarnings, but suppressed should not
+    let output = sandbox
+        .write("test.zen", MIXED_SUPPRESSED_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
+    assert_snapshot!("mixed_suppressed_with_deny_flag", output);
 }
 
 #[test]

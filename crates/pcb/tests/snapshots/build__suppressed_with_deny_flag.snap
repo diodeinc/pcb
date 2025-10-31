@@ -1,0 +1,12 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen -Dwarnings
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Suppressed 2 errors
+✓ test.zen (0 components)
