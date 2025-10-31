@@ -76,7 +76,7 @@ impl ModuleRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
-#[serde(into = "String")] // serialise using Display impl (string path)
+#[serde(into = "String", try_from = "String")] // serialize and deserialize using string format
 pub struct InstanceRef {
     /// Reference to the root module this instance belongs to.
     pub module: ModuleRef,
@@ -136,6 +136,36 @@ impl std::fmt::Display for InstanceRef {
 impl From<InstanceRef> for String {
     fn from(i: InstanceRef) -> Self {
         i.to_string()
+    }
+}
+
+impl std::str::FromStr for InstanceRef {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Parse format: "path/to/file.zen:module_name.instance.path"
+        let (module_part, instance_path_str) = s
+            .split_once(':')
+            .ok_or_else(|| format!("Invalid InstanceRef format: missing ':' in '{}'", s))?;
+
+        let parts: Vec<&str> = instance_path_str.split('.').collect();
+        if parts.is_empty() {
+            return Err(format!("Invalid InstanceRef: no module name in '{}'", s));
+        }
+
+        let module_name = parts[0];
+        let instance_path: Vec<Symbol> = parts[1..].iter().map(|&p| p.into()).collect();
+
+        let module_ref = ModuleRef::new(PathBuf::from(module_part), Symbol::from(module_name));
+        Ok(InstanceRef::new(module_ref, instance_path))
+    }
+}
+
+impl TryFrom<String> for InstanceRef {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -306,7 +336,7 @@ pub struct Instance {
     pub attributes: HashMap<Symbol, AttributeValue>,
     pub children: HashMap<Symbol, InstanceRef>,
     pub reference_designator: Option<String>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub symbol_positions: HashMap<String, Position>,
 }
 
