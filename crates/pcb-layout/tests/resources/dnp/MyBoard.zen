@@ -1,4 +1,4 @@
-Resistor = Module("@stdlib/generics/Resistor.zen")
+Resistor = Module("@stdlib:v0.3.4/generics/Resistor.zen")
 
 P1 = Net("P1")
 P2 = Net("P2")
