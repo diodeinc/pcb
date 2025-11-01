@@ -32,8 +32,6 @@ pub(crate) struct ModuleConverter {
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
     // Mapping <module instance ref> -> <module value> for position processing
     module_instances: Vec<(InstanceRef, FrozenModuleValue)>,
-    // Module tree for looking up children
-    module_tree: BTreeMap<ModulePath, FrozenModuleValue>,
 }
 
 /// Module signature information to be serialized as JSON
@@ -149,7 +147,6 @@ impl ModuleConverter {
             net_to_properties: HashMap::new(),
             comp_models: Vec::new(),
             module_instances: Vec::new(),
-            module_tree: BTreeMap::new(),
         }
     }
 
@@ -191,7 +188,7 @@ impl ModuleConverter {
         }
 
         // Propagate impedance from DiffPair interfaces to P/N nets (before creating Net objects)
-        propagate_diffpair_impedance(&mut self.net_to_properties, &self.module_tree);
+        propagate_diffpair_impedance(&mut self.net_to_properties, &module_tree);
 
         // Create Net objects directly using the names recorded per-module.
         // Ensure global uniqueness and stable creation order by sorting names.
