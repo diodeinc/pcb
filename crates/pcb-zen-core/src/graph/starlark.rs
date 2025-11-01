@@ -113,6 +113,7 @@ impl<V: ValueLifetimeless> PathMatchesCallableGen<V> {
             call_stack: None,
             child: Some(Box::new(child)),
             source_error: None,
+            suppressed: false,
         };
 
         parent.into()

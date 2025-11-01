@@ -1,0 +1,17 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Regular warning
+   ╭─[ <TEMP_DIR>/test.zen:2:1 ]
+ 2 │warn("Regular warning")
+   │           ╰──────────── Regular warning
+
+Suppressed 2 warnings
+✓ test.zen (0 components)

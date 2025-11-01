@@ -873,6 +873,7 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
         &staged_zen_path,
         true, // offline mode since all dependencies should be vendored
         crate::build::create_diagnostics_passes(&["warnings".to_string()]), // deny all warnings
+        true, // deny_warnings
         &mut has_errors,
     );
 

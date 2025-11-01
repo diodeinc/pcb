@@ -1352,6 +1352,7 @@ impl EvalContext {
                     call_stack: None,
                     child: Some(Box::new(diag.clone())),
                     source_error: None,
+                    suppressed: false,
                 });
             }
         });
@@ -1366,6 +1367,7 @@ impl EvalContext {
                 call_stack: None,
                 child: Some(Box::new(first_error.clone())),
                 source_error: None,
+                suppressed: false,
             };
             return Err(diagnostic.into());
         }
@@ -1384,6 +1386,7 @@ impl EvalContext {
                 call_stack: None,
                 child: None,
                 source_error: None,
+                suppressed: false,
             };
             Err(diagnostic.into())
         }
@@ -1429,6 +1432,7 @@ impl EvalContext {
                 call_stack: Some(pending.call_stack.clone()),
                 child: Some(Box::new(child_diag.clone())),
                 source_error: None,
+                suppressed: false,
             };
 
             diagnostics.borrow_mut().push(diag_to_add);
@@ -1471,6 +1475,7 @@ impl EvalContext {
                 call_stack: Some(pending.call_stack.clone()),
                 child: None,
                 source_error: None,
+                suppressed: false,
             };
             diagnostics.borrow_mut().push(diag);
         }

@@ -11,13 +11,56 @@ pub struct RenderPass;
 
 impl pcb_zen_core::DiagnosticsPass for RenderPass {
     fn apply(&self, diagnostics: &mut Diagnostics) {
+        // Count suppressed diagnostics by severity
+        let mut suppressed_errors = 0;
+        let mut suppressed_warnings = 0;
+
+        // Render non-suppressed diagnostics
         for diag in &diagnostics.diagnostics {
-            // Skip rendering advice severity diagnostics to reduce noise
+            // Skip advice severity diagnostics to reduce noise
             if matches!(diag.severity, EvalSeverity::Advice) {
                 continue;
             }
+
+            // Skip suppressed diagnostics - we'll summarize them at the end
+            if diag.suppressed {
+                match diag.severity {
+                    EvalSeverity::Error => suppressed_errors += 1,
+                    EvalSeverity::Warning => suppressed_warnings += 1,
+                    _ => {}
+                }
+                continue;
+            }
+
             render_diagnostic(diag);
             eprintln!();
+        }
+
+        // Print summary of suppressed diagnostics
+        use pcb_ui::prelude::*;
+
+        if suppressed_errors > 0 || suppressed_warnings > 0 {
+            let mut parts = Vec::new();
+
+            if suppressed_errors > 0 {
+                let error_text = format!(
+                    "{} error{}",
+                    suppressed_errors,
+                    if suppressed_errors == 1 { "" } else { "s" }
+                );
+                parts.push(error_text.red().to_string());
+            }
+
+            if suppressed_warnings > 0 {
+                let warning_text = format!(
+                    "{} warning{}",
+                    suppressed_warnings,
+                    if suppressed_warnings == 1 { "" } else { "s" }
+                );
+                parts.push(warning_text.yellow().to_string());
+            }
+
+            eprintln!("{} {}", "Suppressed".dimmed(), parts.join(", "));
         }
     }
 }

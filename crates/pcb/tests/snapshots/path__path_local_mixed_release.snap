@@ -18,38 +18,20 @@ Existing file: <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/existin
 Nonexistent file: <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/missing.toml
 Existing directory: <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/config
 Nonexistent directory: <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/missing_dir
-Error: Path 'build/LocalPathTest' does not exist
+Warning: Path 'build/LocalPathTest' does not exist
    ╭─[ <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:3:29 ]
-   │
- 3 │ add_property("layout_path", Path("build/LocalPathTest", allow_not_exist=True))
-   │                             ────────────────────────┬────────────────────────  
-   │                                                     ╰────────────────────────── Path 'build/LocalPathTest' does not exist
-───╯
+ 3 │add_property("layout_path", Path("build/LocalPathTest", allow_not_exist=True))
+   │                                                    ╰───────────────────────── Path 'build/LocalPathTest' does not exist
 
-Stack trace (most recent call last):
-    <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:3:29 (Path 'build/LocalPathTest' does not exist)
-
-Error: Path 'missing.toml' does not exist
+Warning: Path 'missing.toml' does not exist
    ╭─[ <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:6:20 ]
-   │
- 6 │ nonexistent_file = Path("missing.toml", allow_not_exist=True)
-   │                    ─────────────────────┬────────────────────  
-   │                                         ╰────────────────────── Path 'missing.toml' does not exist
-───╯
+ 6 │nonexistent_file = Path("missing.toml", allow_not_exist=True)
+   │                                        ╰───────────────────── Path 'missing.toml' does not exist
 
-Stack trace (most recent call last):
-    <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:6:20 (Path 'missing.toml' does not exist)
-
-Error: Path 'missing_dir' does not exist
+Warning: Path 'missing_dir' does not exist
    ╭─[ <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:8:19 ]
-   │
- 8 │ nonexistent_dir = Path("missing_dir", allow_not_exist=True)
-   │                   ────────────────────┬────────────────────  
-   │                                       ╰────────────────────── Path 'missing_dir' does not exist
-───╯
-
-Stack trace (most recent call last):
-    <TEMP_DIR>/.pcb/releases/LocalPathTest-unknown/src/boards/LocalPathTest.zen:8:19 (Path 'missing_dir' does not exist)
+ 8 │nonexistent_dir = Path("missing_dir", allow_not_exist=True)
+   │                                      ╰───────────────────── Path 'missing_dir' does not exist
 
 ✗ LocalPathTest.zen: Build failed
 ✗ Validating build from staged sources failed

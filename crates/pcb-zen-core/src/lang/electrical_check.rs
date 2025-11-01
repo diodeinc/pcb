@@ -87,5 +87,6 @@ pub fn execute_electrical_check<'v, V: ValueLike<'v>>(
         call_stack: None,
         child: result.err().map(|e| Box::new(Diagnostic::from(e))),
         source_error: None,
+        suppressed: false,
     }
 }
