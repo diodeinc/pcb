@@ -3029,6 +3029,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-ipc2581"
+version = "0.2.19"
+dependencies = [
+ "anyhow",
+ "axoupdater",
+ "clap",
+ "colored",
+ "env_logger",
+ "ipc2581",
+]
+
+[[package]]
 name = "pcb-kicad"
 version = "0.2.19"
 dependencies = [
