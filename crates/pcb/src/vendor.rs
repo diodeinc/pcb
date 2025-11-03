@@ -197,7 +197,7 @@ fn gather_vendor_info(
     let passes = if ignore_errors {
         None
     } else {
-        Some(create_diagnostics_passes(&Vec::new()))
+        Some(create_diagnostics_passes(&[]))
     };
     for zen_file in &zen_files {
         // Don't use the vendor path for the workspace info, we're just gathering dependencies

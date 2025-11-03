@@ -1,0 +1,27 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen -S electrical
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Regular warning
+   ╭─[ <TEMP_DIR>/test.zen:2:1 ]
+ 2 │warn("Regular warning")
+   │           ╰──────────── Regular warning
+
+Warning: Another regular warning
+   ╭─[ <TEMP_DIR>/test.zen:4:1 ]
+ 4 │warn("Another regular warning")
+   │               ╰──────────────── Another regular warning
+
+Warning: BOM warning
+   ╭─[ <TEMP_DIR>/test.zen:6:1 ]
+ 6 │warn("BOM warning", kind="bom.missing")
+   │                   ╰──────────────────── BOM warning
+
+Suppressed 1 error, 1 warning
+✓ test.zen (0 components)

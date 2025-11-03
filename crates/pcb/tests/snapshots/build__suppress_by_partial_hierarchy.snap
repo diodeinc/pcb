@@ -1,0 +1,22 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen -S electrical.voltage
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Current too high
+   ╭─[ <TEMP_DIR>/test.zen:4:1 ]
+ 4 │warn("Current too high", kind="electrical.current.overcurrent")
+   │                               ╰──────────────────────────────── Current too high
+
+Warning: Layout issue
+   ╭─[ <TEMP_DIR>/test.zen:5:1 ]
+ 5 │warn("Layout issue", kind="layout.spacing")
+   │                     ╰────────────────────── Layout issue
+
+Suppressed 2 warnings
+✓ test.zen (0 components)

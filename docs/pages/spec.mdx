@@ -666,14 +666,26 @@ optional_file = Path("./optional.zen", allow_not_exist=True)
 - `path`: String path to resolve (supports any LoadSpec format)
 - `allow_not_exist`: Optional boolean (default: False). If True, allows non-existent paths. Can only be used with local path LoadSpecs, not package/GitHub/GitLab specs.
 
-### error(msg)
+### error(msg, suppress=False, kind=None)
 
-Raises a runtime error with the given message.
+Raises a runtime error with the given message. With `suppress=True`, the error is rendered but doesn't stop evaluation or fail the build.
 
 ```python
+# Basic error (stops evaluation)
 if not condition:
     error("Condition failed")
+
+# Suppressed error (rendered but doesn't fail build)
+error("Non-critical issue detected", suppress=True)
+
+# Categorized error for filtering
+error("Voltage out of range", suppress=True, kind="electrical.voltage")
 ```
+
+**Parameters:**
+- `msg`: Error message (required)
+- `suppress`: If True, renders diagnostic but doesn't stop evaluation or fail build (default: False)
+- `kind`: Optional diagnostic kind for filtering/categorization (e.g., "electrical.voltage_mismatch")
 
 ### check(condition, msg)
 
@@ -684,14 +696,47 @@ check(voltage > 0, "Voltage must be positive")
 check(len(pins) == 8, "Expected 8 pins")
 ```
 
-### warn(msg)
+### warn(msg, suppress=False, kind=None)
 
 Emits a warning diagnostic with the given message and continues execution. Unlike `error()`, this does not stop evaluation.
 
 ```python
+# Basic warning
 warn("Component value is outside typical range")
-warn("This configuration may have performance implications")
+
+# Suppressed warning (won't fail build with -Dwarnings)
+warn("Optimization suggestion", suppress=True)
+
+# Categorized warning for filtering
+warn("High current detected", kind="electrical.current")
+warn("Trace too narrow", kind="layout.spacing")
 ```
+
+**Parameters:**
+- `msg`: Warning message (required)
+- `suppress`: If True, won't cause build failure with `-Dwarnings` flag (default: False)
+- `kind`: Optional diagnostic kind for filtering/categorization (e.g., "electrical.overvoltage")
+
+**Diagnostic Kinds:**
+
+The `kind` parameter enables hierarchical categorization of diagnostics for filtering at the CLI level:
+
+```python
+# Categorize by domain
+warn("Voltage exceeds spec", kind="electrical")
+warn("Trace spacing too narrow", kind="layout")
+warn("Missing part number", kind="bom")
+
+# Hierarchical kinds use dot-separated segments
+warn("Overvoltage detected", kind="electrical.voltage.overvoltage")
+warn("Trace clearance violation", kind="layout.spacing.clearance")
+```
+
+Kinds can be suppressed at build time using the `-S` flag with hierarchical matching:
+- `-S electrical` suppresses all electrical.* warnings
+- `-S electrical.voltage` suppresses electrical.voltage.* warnings
+- `-S warnings` suppresses all warnings regardless of kind
+- `-S errors` suppresses all errors regardless of kind
 
 ### add_property(name, value)
 

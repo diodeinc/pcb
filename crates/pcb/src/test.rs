@@ -27,6 +27,12 @@ pub struct TestArgs {
     #[arg(short = 'D', long = "deny", value_name = "LINT")]
     pub deny: Vec<String>,
 
+    /// Suppress diagnostics by kind or severity. Use 'warnings' or 'errors' for all
+    /// warnings/errors, or specific kinds like 'electrical.voltage_mismatch'.
+    /// Supports hierarchical matching (e.g., 'electrical' matches 'electrical.voltage_mismatch')
+    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
+    pub suppress: Vec<String>,
+
     /// Output format for test results
     #[arg(short = 'f', long = "format", value_enum, default_value_t = OutputFormat::Table)]
     pub format: OutputFormat,
@@ -237,7 +243,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
         let (results, had_errors_file) = test(
             &zen_path,
             args.offline,
-            create_diagnostics_passes(&args.deny),
+            create_diagnostics_passes(&args.suppress),
         );
         all_test_results.extend(results);
         if had_errors_file {

@@ -83,6 +83,28 @@ error("Suppressed error 1", suppress=True)
 warn("Regular warning 2")
 "#;
 
+const CATEGORIZED_DIAGNOSTICS_ZEN: &str = r#"
+warn("Voltage mismatch detected", kind="electrical.voltage_mismatch")
+warn("Spacing violation", kind="layout.spacing")
+warn("BOM missing part", kind="bom.missing_part")
+warn("Regular warning without kind")
+"#;
+
+const MULTIPLE_ELECTRICAL_WARNINGS_ZEN: &str = r#"
+warn("Overvoltage detected", kind="electrical.voltage.overvoltage")
+warn("Undervoltage detected", kind="electrical.voltage.undervoltage")
+warn("Current too high", kind="electrical.current.overcurrent")
+warn("Layout issue", kind="layout.spacing")
+"#;
+
+const MIXED_CATEGORIZED_ZEN: &str = r#"
+warn("Regular warning")
+warn("Voltage issue", kind="electrical.voltage")
+warn("Another regular warning")
+error("Layout error", suppress=True, kind="layout.error")
+warn("BOM warning", kind="bom.missing")
+"#;
+
 #[test]
 fn test_pcb_build_unstable_ref_warning() {
     let mut sandbox = Sandbox::new();
@@ -676,4 +698,125 @@ SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
         .write("board.zen", unstable_default_zen)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("commit_stable_ref", output);
+}
+
+// Tests for -S flag with kind-based suppression
+
+#[test]
+fn test_suppress_by_exact_kind() {
+    let mut sandbox = Sandbox::new();
+
+    // Suppress only electrical.voltage_mismatch
+    let output = sandbox
+        .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
+        .snapshot_run(
+            "pcb",
+            ["build", "test.zen", "-S", "electrical.voltage_mismatch"],
+        );
+    assert_snapshot!("suppress_by_exact_kind", output);
+}
+
+#[test]
+fn test_suppress_by_hierarchical_kind() {
+    let mut sandbox = Sandbox::new();
+
+    // -S electrical should suppress all electrical.* warnings
+    let output = sandbox
+        .write("test.zen", MULTIPLE_ELECTRICAL_WARNINGS_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
+    assert_snapshot!("suppress_by_hierarchical_kind", output);
+}
+
+#[test]
+fn test_suppress_by_partial_hierarchy() {
+    let mut sandbox = Sandbox::new();
+
+    // -S electrical.voltage should suppress electrical.voltage.* but not electrical.current.*
+    let output = sandbox
+        .write("test.zen", MULTIPLE_ELECTRICAL_WARNINGS_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical.voltage"]);
+    assert_snapshot!("suppress_by_partial_hierarchy", output);
+}
+
+#[test]
+fn test_suppress_multiple_kinds() {
+    let mut sandbox = Sandbox::new();
+
+    // Suppress multiple different kinds
+    let output = sandbox
+        .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
+        .snapshot_run(
+            "pcb",
+            [
+                "build",
+                "test.zen",
+                "-S",
+                "electrical.voltage_mismatch",
+                "-S",
+                "layout.spacing",
+            ],
+        );
+    assert_snapshot!("suppress_multiple_kinds", output);
+}
+
+#[test]
+fn test_suppress_all_warnings_by_severity() {
+    let mut sandbox = Sandbox::new();
+
+    // -S warnings should suppress all warnings regardless of kind
+    let output = sandbox
+        .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen", "-S", "warnings"]);
+    assert_snapshot!("suppress_all_warnings_by_severity", output);
+}
+
+#[test]
+fn test_suppress_all_errors_by_severity() {
+    let mut sandbox = Sandbox::new();
+
+    let errors_zen = r#"
+error("Error 1", suppress=True, kind="validation.error1")
+error("Error 2", suppress=True, kind="validation.error2")
+"#;
+
+    // -S errors should suppress all errors
+    let output = sandbox
+        .write("test.zen", errors_zen)
+        .snapshot_run("pcb", ["build", "test.zen", "-S", "errors"]);
+    assert_snapshot!("suppress_all_errors_by_severity", output);
+}
+
+#[test]
+fn test_suppress_kind_with_deny_warnings() {
+    let mut sandbox = Sandbox::new();
+
+    // Suppressed warnings should not cause build failure even with -Dwarnings
+    let output = sandbox
+        .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
+        .snapshot_run(
+            "pcb",
+            [
+                "build",
+                "test.zen",
+                "-S",
+                "electrical.voltage_mismatch",
+                "-S",
+                "layout.spacing",
+                "-S",
+                "bom.missing_part",
+                "-Dwarnings",
+            ],
+        );
+    assert_snapshot!("suppress_kind_with_deny_warnings", output);
+}
+
+#[test]
+fn test_mixed_suppress_and_regular_diagnostics() {
+    let mut sandbox = Sandbox::new();
+
+    // Mix of suppressed (by -S) and regular warnings
+    let output = sandbox
+        .write("test.zen", MIXED_CATEGORIZED_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
+    assert_snapshot!("mixed_suppress_and_regular", output);
 }
