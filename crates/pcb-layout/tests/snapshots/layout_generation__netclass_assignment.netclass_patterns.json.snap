@@ -1,0 +1,14 @@
+---
+source: crates/pcb-layout/tests/layout_generation.rs
+expression: content
+---
+[
+  {
+    "netclass": "50Ohm SE",
+    "pattern": "CLK_50"
+  },
+  {
+    "netclass": "50Ohm SE",
+    "pattern": "SPI_CLK_50"
+  }
+]
