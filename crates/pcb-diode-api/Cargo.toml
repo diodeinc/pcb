@@ -30,8 +30,8 @@ clap = { workspace = true }
 pcb-zen-core = { workspace = true }
 pcb-kicad = { workspace = true }
 deunicode = { workspace = true }
-minijinja = "2.5"
-zstd = "0.13"
+minijinja = { workspace = true }
+zstd = { workspace = true }
 regex = { workspace = true }
 base64 = { workspace = true }
 fslock = { workspace = true }
