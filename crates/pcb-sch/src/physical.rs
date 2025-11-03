@@ -225,6 +225,24 @@ impl PhysicalValue {
         self.fits_within(other, default_tolerance)
     }
 
+    /// Get the absolute value of this physical value
+    pub fn abs(&self) -> PhysicalValue {
+        PhysicalValue {
+            value: self.value.abs(),
+            tolerance: self.tolerance,
+            unit: self.unit,
+        }
+    }
+
+    /// Get the absolute difference between two physical values
+    /// Returns an error if units don't match
+    pub fn diff(&self, other: &PhysicalValue) -> Result<PhysicalValue, PhysicalValueError> {
+        // Use the subtraction operator which validates units
+        let result = (*self - *other)?;
+        // Return the absolute value
+        Ok(result.abs())
+    }
+
     fn fields() -> SortedMap<String, Ty> {
         fn single_param_spec(param_type: Ty) -> ParamSpec {
             ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
@@ -234,6 +252,8 @@ impl PhysicalValue {
         let with_tolerance_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::string()));
         let with_value_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::int()));
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
+        let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let abs_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
 
         SortedMap::from_iter([
             ("value".to_string(), Ty::float()),
@@ -263,6 +283,14 @@ impl PhysicalValue {
                     with_unit_param_spec,
                     PhysicalValue::get_type_starlark_repr(),
                 ),
+            ),
+            (
+                "abs".to_string(),
+                Ty::callable(abs_param_spec, PhysicalValue::get_type_starlark_repr()),
+            ),
+            (
+                "diff".to_string(),
+                Ty::callable(diff_param_spec, PhysicalValue::get_type_starlark_repr()),
             ),
         ])
     }
@@ -1028,6 +1056,32 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
             this.tolerance,
             new_unit,
         ))
+    }
+
+    fn abs<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] _arg: Value<'v>,
+    ) -> starlark::Result<PhysicalValue> {
+        Ok(this.abs())
+    }
+
+    fn diff<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] other: Value<'v>,
+    ) -> starlark::Result<PhysicalValue> {
+        let other_pv = PhysicalValue::try_from(other).map_err(|_| {
+            PhysicalValueError::InvalidArgumentType {
+                unit: this.unit.quantity(),
+            }
+        })?;
+        this.diff(&other_pv).map_err(|err| {
+            PhysicalValueError::SubtractionError {
+                lhs_unit: this.unit.quantity(),
+                rhs_unit: other_pv.unit.quantity(),
+                error: err.to_string(),
+            }
+            .into()
+        })
     }
 }
 
@@ -3108,5 +3162,93 @@ mod tests {
         assert_eq!(range.min, Decimal::from(1));
         assert_eq!(range.max, Decimal::from(10));
         assert_eq!(range.nominal, Some(Decimal::from(5)));
+    }
+
+    #[test]
+    fn test_abs_positive_value() {
+        let pv = physical_value(3.3, 0.0, PhysicalUnit::Volts);
+        let result = pv.abs();
+        assert_eq!(result.value, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_abs_negative_value() {
+        let pv = physical_value(-3.3, 0.0, PhysicalUnit::Volts);
+        let result = pv.abs();
+        assert_eq!(result.value, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_abs_preserves_tolerance() {
+        let pv = physical_value(-5.0, 0.05, PhysicalUnit::Amperes);
+        let result = pv.abs();
+        assert_eq!(result.value, Decimal::from_f64(5.0).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Amperes.into());
+        assert_eq!(result.tolerance, Decimal::from_f64(0.05).unwrap());
+    }
+
+    #[test]
+    fn test_diff_positive_difference() {
+        let pv1 = physical_value(10.0, 0.0, PhysicalUnit::Volts);
+        let pv2 = physical_value(3.0, 0.0, PhysicalUnit::Volts);
+        let result = pv1.diff(&pv2).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(7.0).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_diff_negative_difference_returns_positive() {
+        let pv1 = physical_value(3.0, 0.0, PhysicalUnit::Volts);
+        let pv2 = physical_value(10.0, 0.0, PhysicalUnit::Volts);
+        let result = pv1.diff(&pv2).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(7.0).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_diff_unit_mismatch() {
+        let pv1 = physical_value(10.0, 0.0, PhysicalUnit::Volts);
+        let pv2 = physical_value(3.0, 0.0, PhysicalUnit::Amperes);
+        let result = pv1.diff(&pv2);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PhysicalValueError::UnitMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_diff_drops_tolerance() {
+        // Based on subtraction behavior, diff should drop tolerance
+        let pv1 = physical_value(10.0, 0.1, PhysicalUnit::Volts);
+        let pv2 = physical_value(3.0, 0.05, PhysicalUnit::Volts);
+        let result = pv1.diff(&pv2).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(7.0).unwrap());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_diff_with_string_conversion() {
+        // Test that diff works when the other value is parsed from a string
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+        let pv1 = heap.alloc(physical_value(3.3, 0.0, PhysicalUnit::Volts));
+        let pv2_str = heap.alloc("5V");
+
+        // Convert string to PhysicalValue
+        let pv2 = PhysicalValue::try_from(pv2_str).unwrap();
+        let pv1_val = PhysicalValue::try_from(pv1).unwrap();
+
+        // Test diff
+        let result = pv1_val.diff(&pv2).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(1.7).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
     }
 }
