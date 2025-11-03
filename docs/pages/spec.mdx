@@ -815,6 +815,133 @@ main_rail = PowerRail("MAIN_RAIL",
 
 **Returns:** A callable net type constructor that creates typed net instances
 
+### builtin.physical_value(unit)
+
+**Built-in function** that creates unit-specific physical value constructor types for electrical quantities with optional tolerances.
+
+```python
+# Create physical value constructors for different units
+Voltage = builtin.physical_value("V")
+Current = builtin.physical_value("A")
+Resistance = builtin.physical_value("Ohm")
+Capacitance = builtin.physical_value("F")
+Inductance = builtin.physical_value("H")
+Frequency = builtin.physical_value("Hz")
+Temperature = builtin.physical_value("K")
+Time = builtin.physical_value("s")
+Power = builtin.physical_value("W")
+
+# Use the constructors to create physical values
+supply = Voltage("3.3V")
+current = Current("100mA")
+resistor = Resistance("4k7")  # 4.7kΩ using resistor notation
+
+# With tolerance
+precise_voltage = Voltage("3.3V").with_tolerance("5%")  # 3.3V ±5%
+loose_resistor = Resistance("10kOhm").with_tolerance(0.1)  # ±10%
+```
+
+**Parameters:**
+
+- `unit`: String identifier for the physical unit (e.g., `"V"`, `"A"`, `"Ohm"`, `"F"`, `"H"`, `"Hz"`, `"K"`, `"s"`, `"W"`)
+
+**Returns:** A `PhysicalValueType` that can be called to create `PhysicalValue` instances
+
+**Standard Usage:**
+
+This builtin is typically accessed through `@stdlib/units.zen`, which provides pre-defined constructors:
+
+```python
+load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "unit")
+
+# Create physical values
+v = unit("3.3V", Voltage)
+i = unit("100mA", Current)
+
+# Perform calculations - units are tracked automatically
+p = v * i  # Power = Voltage × Current (330mW)
+r = v / i  # Resistance = Voltage / Current (33Ω)
+```
+
+**Physical Value Methods:**
+
+Physical values support several methods for manipulation:
+
+- `.with_tolerance(tolerance)` - Returns a new physical value with updated tolerance
+  - `tolerance`: String like `"5%"` or decimal like `0.05`
+- `.with_value(value)` - Returns a new physical value with updated numeric value
+  - `value`: Numeric value (int or float)
+- `.with_unit(unit)` - Returns a new physical value with updated unit (for unit conversion/casting)
+  - `unit`: String unit identifier or `None` for dimensionless
+- `.abs()` - Returns the absolute value of the physical value, preserving unit and tolerance
+  - No parameters required
+- `.diff(other)` - Returns the absolute difference between two physical values
+  - `other`: Another PhysicalValue or string (e.g., `"5V"`) to compare against
+  - Units must match or an error is raised
+  - Always returns a positive value
+  - Tolerance is dropped (consistent with subtraction behavior)
+
+**Attributes:**
+
+- `.value` - The numeric value as a float
+- `.tolerance` - The tolerance as a decimal fraction (e.g., 0.05 for 5%)
+- `.unit` - The unit string representation
+
+**Mathematical Operations:**
+
+Physical values support arithmetic with automatic unit tracking:
+
+```python
+# Multiplication - units multiply dimensionally
+power = Voltage("3.3V") * Current("0.5A")  # 1.65W
+
+# Division - units divide dimensionally
+resistance = Voltage("5V") / Current("100mA")  # 50Ω
+
+# Addition - requires matching units
+total = Voltage("3.3V") + Voltage("5V")  # 8.3V
+
+# Subtraction - requires matching units
+delta = Voltage("5V") - Voltage("3.3V")  # 1.7V
+
+# Absolute value
+abs_voltage = Voltage("-3.3V").abs()  # 3.3V
+
+# Difference (always positive)
+diff = Voltage("3.3V").diff(Voltage("5V"))  # 1.7V
+diff_str = Voltage("3.3V").diff("5V")       # 1.7V (strings are auto-converted)
+```
+
+**Note:** All arithmetic operations and methods automatically convert string arguments to physical values when possible. For example, `Voltage("3.3V") + "2V"` works and returns `5.3V`.
+
+**Tolerance Handling:**
+
+- Multiplication/Division: Tolerance preserved only for dimensionless scaling (e.g., `2 * 3.3V±1%` keeps 1%)
+- Addition/Subtraction: Tolerance is always dropped
+- `.abs()`: Tolerance is preserved
+- `.diff()`: Tolerance is dropped (consistent with subtraction)
+
+**Parsing Support:**
+
+Physical value constructors accept flexible string formats:
+
+```python
+# Basic format with units
+Voltage("3.3V")
+Current("100mA")
+
+# SI prefixes: m, μ/u, n, p, k, M, G
+Capacitance("100nF")
+Resistance("4.7kOhm")
+
+# Resistor notation (4k7 = 4.7kΩ)
+Resistance("4k7")
+
+# Temperature conversions
+Temperature("25C")   # Converts to Kelvin
+Temperature("77F")   # Converts to Kelvin
+```
+
 ### builtin.physical_range(unit)
 
 **Built-in function** that creates unit-specific range constructor types for defining bounded physical value ranges.
