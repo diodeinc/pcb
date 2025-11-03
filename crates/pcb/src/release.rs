@@ -205,43 +205,53 @@ fn get_manufacturing_tasks(excluded: &[ArtifactType]) -> Vec<(&'static str, Task
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)]) -> Result<()> {
     for (name, task) in tasks {
         let spinner = Spinner::builder(*name).start();
-        let res = task(info);
-
         spinner.finish();
-        match res {
-            Ok(()) => eprintln!("{} {name}", "✓".green()),
-            Err(e) => {
-                eprintln!("{} {name} failed", "✗".red());
-                return Err(e.context(format!("{name} failed")));
-            }
-        }
+
+        task(info)?;
+        eprintln!("{} {name}", "✓".green());
     }
     Ok(())
 }
 
 pub fn execute(args: ReleaseArgs) -> Result<()> {
-    // Gather all release information based on whether board or file was provided
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
-        let info = if let Some(board_name) = &args.board {
-            gather_release_info(
-                board_name.clone(),
-                args.path.clone(),
-                args.source_only,
-                args.output_dir.clone(),
-                args.output_name.clone(),
-            )?
+
+        // Gather workspace info and evaluate the zen file
+        let (workspace, board_name) = if let Some(board_name) = &args.board {
+            let start_path = args.path.as_deref().unwrap_or(".");
+            let workspace_info = get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
+            let board_info = workspace_info.find_board_by_name(&board_name)?;
+            let zen_path = board_info.absolute_zen_path(&workspace_info.root);
+            let workspace = gather_workspace_info(zen_path, true)?;
+            (workspace, board_name.clone())
         } else if let Some(zen_file) = &args.file {
-            gather_release_info_from_file(
-                zen_file.clone(),
-                args.source_only,
-                args.output_dir.clone(),
-                args.output_name.clone(),
-            )?
+            let workspace = gather_workspace_info(zen_file.clone(), true)?;
+            let board_name = workspace.board_display_name();
+            (workspace, board_name)
         } else {
             unreachable!("Either board or file must be provided due to clap validation")
         };
+
         info_spinner.finish();
+
+        // Render diagnostics and fail early if there are errors
+        let diagnostics = &workspace.eval_result.diagnostics;
+        if diagnostics.has_errors() || workspace.eval_result.output.is_none() {
+            let mut diagnostics = workspace.eval_result.diagnostics.clone();
+            let passes = crate::build::create_diagnostics_passes(&[]);
+            diagnostics.apply_passes(&passes);
+            anyhow::bail!("Evaluation failed");
+        }
+
+        let info = build_release_info(
+            workspace,
+            board_name,
+            args.source_only,
+            args.output_dir.clone(),
+            args.output_name.clone()
+        )?;
+
         eprintln!("{} Release information gathered", "✓".green());
         info
     };
@@ -277,32 +287,6 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Gather all information needed for the release using board name discovery
-fn gather_release_info(
-    board_name: String,
-    path: Option<String>,
-    source_only: bool,
-    output_dir: Option<PathBuf>,
-    output_name: Option<String>,
-) -> Result<ReleaseInfo> {
-    debug!("Starting release information gathering");
-
-    // Get workspace info using discovery
-    let start_path = path.as_deref().unwrap_or(".");
-    let workspace_info = get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
-
-    // Find the zen file for the given board
-    let board_info = workspace_info.find_board_by_name(&board_name)?;
-
-    let zen_path = board_info.absolute_zen_path(&workspace_info.root);
-
-    // Use common workspace info gathering with the found zen file
-    let workspace = gather_workspace_info(zen_path, true)?;
-
-    // Use shared helper to build release info
-    build_release_info(workspace, board_name, source_only, output_dir, output_name)
 }
 
 /// Build ReleaseInfo from workspace info and other parameters
@@ -374,27 +358,6 @@ fn build_release_info(
         output_dir,
         output_name,
     })
-}
-
-/// Gather all information needed for the release using direct zen file path
-fn gather_release_info_from_file(
-    zen_file_path: PathBuf,
-    source_only: bool,
-    output_dir: Option<PathBuf>,
-    output_name: Option<String>,
-) -> Result<ReleaseInfo> {
-    debug!(
-        "Starting release information gathering from file: {}",
-        zen_file_path.display()
-    );
-
-    // Use common workspace info gathering with the zen file path
-    let workspace = gather_workspace_info(zen_file_path, true)?;
-
-    // Get board name from workspace or fallback to zen file stem
-    let board_name = workspace.board_display_name();
-
-    build_release_info(workspace, board_name, source_only, output_dir, output_name)
 }
 
 /// Display all the gathered release information
@@ -599,7 +562,7 @@ pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) 
     let output = eval
         .output
         .as_ref()
-        .context("No output in evaluation result")?;
+        .context("Evaluation failed - see diagnostics above")?;
     let properties = output.sch_module.properties();
 
     let layout_path_value = properties.get("layout_path")
@@ -878,10 +841,8 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     );
 
     if has_errors {
-        anyhow::bail!(
-            "Build validation failed for staged zen file: {}",
-            staged_zen_path.display()
-        );
+        // Error already printed by build(), just signal failure
+        std::process::exit(1);
     }
     Ok(())
 }
