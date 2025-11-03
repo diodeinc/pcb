@@ -1,3 +1,4 @@
+use crate::lang::error::CategorizedDiagnostic;
 use crate::{Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
 use starlark::errors::EvalSeverity;
 use std::path::Path;
@@ -42,6 +43,33 @@ impl DiagnosticsPass for LspFilterPass {
                 })
                 .unwrap_or(true) // Keep non-unstable-ref diagnostics
         });
+    }
+}
+
+/// Suppress diagnostics by kind or severity.
+/// Special patterns: "warnings", "errors" suppress by severity.
+/// Hierarchical matching: "electrical" matches "electrical.voltage_mismatch".
+pub struct SuppressPass {
+    patterns: Vec<String>,
+}
+
+impl SuppressPass {
+    pub fn new(patterns: Vec<String>) -> Self {
+        Self { patterns }
+    }
+}
+
+impl DiagnosticsPass for SuppressPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diag in &mut diagnostics.diagnostics {
+            diag.suppressed |= self.patterns.iter().any(|p| match p.as_str() {
+                "warnings" => matches!(diag.severity, EvalSeverity::Warning),
+                "errors" => matches!(diag.severity, EvalSeverity::Error),
+                _ => diag
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == *p || c.kind.starts_with(&format!("{p}."))),
+            });
+        }
     }
 }
 

@@ -1,0 +1,18 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen -S electrical.voltage_mismatch -S layout.spacing -S bom.missing_part -Dwarnings
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Regular warning without kind
+   ╭─[ <TEMP_DIR>/test.zen:5:1 ]
+ 5 │warn("Regular warning without kind")
+   │                  ╰────────────────── Regular warning without kind
+
+Suppressed 3 warnings
+✗ test.zen: Build failed
+Error: Build failed with errors

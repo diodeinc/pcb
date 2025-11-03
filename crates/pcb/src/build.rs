@@ -23,10 +23,12 @@ fn execute_electrical_check(
     pcb_zen_core::lang::electrical_check::execute_electrical_check(&mut eval, check, module_value)
 }
 
-/// Create diagnostics passes
-pub fn create_diagnostics_passes(_deny: &[String]) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+pub fn create_diagnostics_passes(
+    suppress: &[String],
+) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
     vec![
         Box::new(pcb_zen_core::FilterHiddenPass),
+        Box::new(pcb_zen_core::SuppressPass::new(suppress.to_vec())),
         Box::new(pcb_zen_core::AggregatePass),
         Box::new(pcb_zen_core::SortPass),
         Box::new(pcb_zen::diagnostics::RenderPass),
@@ -57,6 +59,12 @@ pub struct BuildArgs {
     /// or specific lint names like 'unstable-refs'
     #[arg(short = 'D', long = "deny", value_name = "LINT")]
     pub deny: Vec<String>,
+
+    /// Suppress diagnostics by kind or severity. Use 'warnings' or 'errors' for all
+    /// warnings/errors, or specific kinds like 'electrical.voltage_mismatch'.
+    /// Supports hierarchical matching (e.g., 'electrical' matches 'electrical.voltage_mismatch')
+    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
+    pub suppress: Vec<String>,
 }
 
 /// Evaluate a single Starlark file and print any diagnostics
@@ -155,7 +163,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let Some(schematic) = build(
             zen_path,
             args.offline,
-            create_diagnostics_passes(&args.deny),
+            create_diagnostics_passes(&args.suppress),
             deny_warnings,
             &mut has_errors,
         ) else {

@@ -872,7 +872,7 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     let _schematic = crate::build::build(
         &staged_zen_path,
         true, // offline mode since all dependencies should be vendored
-        crate::build::create_diagnostics_passes(&["warnings".to_string()]), // deny all warnings
+        crate::build::create_diagnostics_passes(&[]), // no suppression for release
         true, // deny_warnings
         &mut has_errors,
     );
