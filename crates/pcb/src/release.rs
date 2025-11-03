@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
-
+use inquire::Confirm;
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -13,7 +13,7 @@ use pcb_zen_core::{EvalOutput, WithDiagnostics};
 use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -136,6 +136,10 @@ pub struct ReleaseArgs {
     /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
     #[arg(long, value_enum)]
     pub exclude: Vec<ArtifactType>,
+
+    /// Skip confirmation prompt when warnings are present during validation
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// All information gathered during the release preparation phase
@@ -160,6 +164,8 @@ pub struct ReleaseInfo {
     pub output_dir: PathBuf,
     /// Name of the output .zip file
     pub output_name: String,
+    /// Skip confirmation prompt for warnings
+    pub yes: bool,
 }
 
 type TaskFn = fn(&ReleaseInfo) -> Result<()>;
@@ -220,8 +226,9 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         // Gather workspace info and evaluate the zen file
         let (workspace, board_name) = if let Some(board_name) = &args.board {
             let start_path = args.path.as_deref().unwrap_or(".");
-            let workspace_info = get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
-            let board_info = workspace_info.find_board_by_name(&board_name)?;
+            let workspace_info =
+                get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
+            let board_info = workspace_info.find_board_by_name(board_name)?;
             let zen_path = board_info.absolute_zen_path(&workspace_info.root);
             let workspace = gather_workspace_info(zen_path, true)?;
             (workspace, board_name.clone())
@@ -249,7 +256,8 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
             board_name,
             args.source_only,
             args.output_dir.clone(),
-            args.output_name.clone()
+            args.output_name.clone(),
+            args.yes,
         )?;
 
         eprintln!("{} Release information gathered", "✓".green());
@@ -296,6 +304,7 @@ fn build_release_info(
     source_only: bool,
     output_dir: Option<PathBuf>,
     output_name: Option<String>,
+    yes: bool,
 ) -> Result<ReleaseInfo> {
     // Get version and git hash from git
     let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
@@ -357,6 +366,7 @@ fn build_release_info(
         kind,
         output_dir,
         output_name,
+        yes,
     })
 }
 
@@ -830,20 +840,44 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Use build function with strict settings - offline mode and deny warnings
+    let file_name = staged_zen_path.file_name().unwrap().to_string_lossy();
+
+    // Use build function with offline mode but allow warnings
     let mut has_errors = false;
+    let mut has_warnings = false;
     let _schematic = crate::build::build(
         &staged_zen_path,
         true, // offline mode since all dependencies should be vendored
-        crate::build::create_diagnostics_passes(&[]), // no suppression for release
-        true, // deny_warnings
+        crate::build::create_diagnostics_passes(&[]),
+        false, // don't deny warnings - we'll prompt user instead
         &mut has_errors,
+        &mut has_warnings,
     );
 
     if has_errors {
-        // Error already printed by build(), just signal failure
         std::process::exit(1);
     }
+
+    // Handle warnings if present and --yes flag wasn't passed
+    if has_warnings && !info.yes {
+        // Non-interactive if stdin OR stdout is not a terminal
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            eprintln!(
+                "{} {}: Build failed",
+                pcb_ui::icons::error(),
+                file_name.with_style(Style::Red).bold()
+            );
+            std::process::exit(1);
+        }
+        let confirmed =
+            Confirm::new("Build completed with warnings. Do you want to proceed with the release?")
+                .with_default(true)
+                .prompt()?;
+        if !confirmed {
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 

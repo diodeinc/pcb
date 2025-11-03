@@ -59,6 +59,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
     }
 
     let mut has_errors = false;
+    let mut has_warnings = false;
     let mut generated_layouts = Vec::new();
 
     // Process each .zen file
@@ -70,6 +71,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
             create_diagnostics_passes(&[]),
             false, // don't deny warnings for layout command
             &mut has_errors,
+            &mut has_warnings,
         ) else {
             continue;
         };
