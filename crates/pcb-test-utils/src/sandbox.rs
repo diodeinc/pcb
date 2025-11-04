@@ -461,6 +461,10 @@ impl Sandbox {
             })
             .to_string();
 
+        // Sanitize timing information (e.g., "00:05: ✓ (00.4s)" -> "✓")
+        let timing_pattern = Regex::new(r"\d{2}:\d{2}: ✓ \(\s*\d+\.\d+[sm]\)").unwrap();
+        result = timing_pattern.replace_all(&result, "✓").to_string();
+
         result
     }
 
