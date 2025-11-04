@@ -1,7 +1,5 @@
 mod test_helpers;
 
-use ipc2581::Ipc2581;
-
 #[test]
 fn parse_kicad_generated_file() {
     let result = test_helpers::parse_compressed("tests/data/DM0002-IPC-2518.xml");

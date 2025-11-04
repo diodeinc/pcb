@@ -29,14 +29,15 @@ fn output_text(ipc: &ipc2581::Ipc2581, unit_format: UnitFormat) -> Result<()> {
 
     // File metadata at the end (greyed out)
     let content = ipc.content();
+    let mode_str = if let Some(level) = content.function_mode.level {
+        format!("{:?}/{:?}", content.function_mode.mode, level)
+    } else {
+        format!("{:?}", content.function_mode.mode)
+    };
+
     println!(
         "{}",
-        format!(
-            "IPC-2581 {} • Mode: {:?}",
-            ipc.revision(),
-            content.function_mode.mode
-        )
-        .dimmed()
+        format!("IPC-2581 {} • {}", ipc.revision(), mode_str).dimmed()
     );
 
     Ok(())
@@ -210,6 +211,7 @@ fn output_json(ipc: &ipc2581::Ipc2581) -> Result<()> {
     let mut info = json!({
         "revision": ipc.revision(),
         "mode": format!("{:?}", content.function_mode.mode),
+        "level": content.function_mode.level.map(|l| format!("{:?}", l)),
     });
 
     if let Some(ecad) = ipc.ecad() {
