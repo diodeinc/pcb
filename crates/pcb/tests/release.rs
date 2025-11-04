@@ -249,7 +249,7 @@ fn test_pcb_release_full() {
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .ignore_globs(["layout/*", "3d/*"]);
+        .ignore_globs(["layout/*", "3d/*", "manufacturing/*.xml"]);
 
     // Run full release with JSON output
     let output = sb

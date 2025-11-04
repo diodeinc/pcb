@@ -22,6 +22,7 @@ Exit Code: 0
 ✓ Generating pick-and-place file
 ✓ Generating assembly drawings
 ✓ Generating ODB++ files
+✓ Generating IPC-2581 file
 ✓ Generating STEP model
 ✓ Generating VRML model
 ✓ Generating GLB model

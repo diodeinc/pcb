@@ -58,6 +58,7 @@ pub enum ArtifactType {
     Cpl,
     Assembly,
     Odb,
+    Ipc2581,
     Step,
     Vrml,
     Glb,
@@ -74,6 +75,7 @@ impl ArtifactType {
             ArtifactType::Cpl => "Generating pick-and-place file",
             ArtifactType::Assembly => "Generating assembly drawings",
             ArtifactType::Odb => "Generating ODB++ files",
+            ArtifactType::Ipc2581 => "Generating IPC-2581 file",
             ArtifactType::Step => "Generating STEP model",
             ArtifactType::Vrml => "Generating VRML model",
             ArtifactType::Glb => "Generating GLB model",
@@ -90,6 +92,7 @@ impl ArtifactType {
             ArtifactType::Cpl => generate_cpl,
             ArtifactType::Assembly => generate_assembly_drawings,
             ArtifactType::Odb => generate_odb,
+            ArtifactType::Ipc2581 => generate_ipc2581,
             ArtifactType::Step => generate_step_model,
             ArtifactType::Vrml => generate_vrml_model,
             ArtifactType::Glb => generate_glb_model,
@@ -187,6 +190,7 @@ const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
     ArtifactType::Cpl,
     ArtifactType::Assembly,
     ArtifactType::Odb,
+    ArtifactType::Ipc2581,
     ArtifactType::Step,
     ArtifactType::Vrml,
     ArtifactType::Glb,
@@ -1170,6 +1174,27 @@ fn generate_odb(info: &ReleaseInfo) -> Result<()> {
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate ODB++ files")?;
+
+    Ok(())
+}
+
+/// Generate IPC-2581 file
+fn generate_ipc2581(info: &ReleaseInfo) -> Result<()> {
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+    let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
+
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("export")
+        .subcommand("ipc2581")
+        .arg("--output")
+        .arg(ipc2581_path.to_string_lossy())
+        .arg(kicad_pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to generate IPC-2581 file")?;
 
     Ok(())
 }
