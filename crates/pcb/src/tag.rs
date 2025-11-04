@@ -163,6 +163,7 @@ fn run_release(info: &TagInfo) -> Result<()> {
         output_dir: None,                  // Use default
         output_name: None,                 // Use default
         exclude: info.exclude.clone(),     // Pass through exclude list from tag command
+        yes: false,                        // Prompt for warnings
     };
 
     // Run the full release process - this validates everything

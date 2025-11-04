@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
-
+use inquire::Confirm;
 use log::{debug, info, warn};
 use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -13,7 +13,7 @@ use pcb_zen_core::{EvalOutput, WithDiagnostics};
 use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -136,6 +136,10 @@ pub struct ReleaseArgs {
     /// Exclude specific manufacturing artifacts from the release (can be specified multiple times)
     #[arg(long, value_enum)]
     pub exclude: Vec<ArtifactType>,
+
+    /// Skip confirmation prompt when warnings are present during validation
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// All information gathered during the release preparation phase
@@ -160,6 +164,8 @@ pub struct ReleaseInfo {
     pub output_dir: PathBuf,
     /// Name of the output .zip file
     pub output_name: String,
+    /// Skip confirmation prompt for warnings
+    pub yes: bool,
 }
 
 type TaskFn = fn(&ReleaseInfo) -> Result<()>;
@@ -205,43 +211,55 @@ fn get_manufacturing_tasks(excluded: &[ArtifactType]) -> Vec<(&'static str, Task
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)]) -> Result<()> {
     for (name, task) in tasks {
         let spinner = Spinner::builder(*name).start();
-        let res = task(info);
-
         spinner.finish();
-        match res {
-            Ok(()) => eprintln!("{} {name}", "✓".green()),
-            Err(e) => {
-                eprintln!("{} {name} failed", "✗".red());
-                return Err(e.context(format!("{name} failed")));
-            }
-        }
+
+        task(info)?;
+        eprintln!("{} {name}", "✓".green());
     }
     Ok(())
 }
 
 pub fn execute(args: ReleaseArgs) -> Result<()> {
-    // Gather all release information based on whether board or file was provided
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
-        let info = if let Some(board_name) = &args.board {
-            gather_release_info(
-                board_name.clone(),
-                args.path.clone(),
-                args.source_only,
-                args.output_dir.clone(),
-                args.output_name.clone(),
-            )?
+
+        // Gather workspace info and evaluate the zen file
+        let (workspace, board_name) = if let Some(board_name) = &args.board {
+            let start_path = args.path.as_deref().unwrap_or(".");
+            let workspace_info =
+                get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
+            let board_info = workspace_info.find_board_by_name(board_name)?;
+            let zen_path = board_info.absolute_zen_path(&workspace_info.root);
+            let workspace = gather_workspace_info(zen_path, true)?;
+            (workspace, board_name.clone())
         } else if let Some(zen_file) = &args.file {
-            gather_release_info_from_file(
-                zen_file.clone(),
-                args.source_only,
-                args.output_dir.clone(),
-                args.output_name.clone(),
-            )?
+            let workspace = gather_workspace_info(zen_file.clone(), true)?;
+            let board_name = workspace.board_display_name();
+            (workspace, board_name)
         } else {
             unreachable!("Either board or file must be provided due to clap validation")
         };
+
         info_spinner.finish();
+
+        // Render diagnostics and fail early if there are errors
+        let diagnostics = &workspace.eval_result.diagnostics;
+        if diagnostics.has_errors() || workspace.eval_result.output.is_none() {
+            let mut diagnostics = workspace.eval_result.diagnostics.clone();
+            let passes = crate::build::create_diagnostics_passes(&[]);
+            diagnostics.apply_passes(&passes);
+            anyhow::bail!("Evaluation failed");
+        }
+
+        let info = build_release_info(
+            workspace,
+            board_name,
+            args.source_only,
+            args.output_dir.clone(),
+            args.output_name.clone(),
+            args.yes,
+        )?;
+
         eprintln!("{} Release information gathered", "✓".green());
         info
     };
@@ -279,32 +297,6 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     Ok(())
 }
 
-/// Gather all information needed for the release using board name discovery
-fn gather_release_info(
-    board_name: String,
-    path: Option<String>,
-    source_only: bool,
-    output_dir: Option<PathBuf>,
-    output_name: Option<String>,
-) -> Result<ReleaseInfo> {
-    debug!("Starting release information gathering");
-
-    // Get workspace info using discovery
-    let start_path = path.as_deref().unwrap_or(".");
-    let workspace_info = get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
-
-    // Find the zen file for the given board
-    let board_info = workspace_info.find_board_by_name(&board_name)?;
-
-    let zen_path = board_info.absolute_zen_path(&workspace_info.root);
-
-    // Use common workspace info gathering with the found zen file
-    let workspace = gather_workspace_info(zen_path, true)?;
-
-    // Use shared helper to build release info
-    build_release_info(workspace, board_name, source_only, output_dir, output_name)
-}
-
 /// Build ReleaseInfo from workspace info and other parameters
 fn build_release_info(
     workspace: WorkspaceInfo,
@@ -312,6 +304,7 @@ fn build_release_info(
     source_only: bool,
     output_dir: Option<PathBuf>,
     output_name: Option<String>,
+    yes: bool,
 ) -> Result<ReleaseInfo> {
     // Get version and git hash from git
     let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
@@ -373,28 +366,8 @@ fn build_release_info(
         kind,
         output_dir,
         output_name,
+        yes,
     })
-}
-
-/// Gather all information needed for the release using direct zen file path
-fn gather_release_info_from_file(
-    zen_file_path: PathBuf,
-    source_only: bool,
-    output_dir: Option<PathBuf>,
-    output_name: Option<String>,
-) -> Result<ReleaseInfo> {
-    debug!(
-        "Starting release information gathering from file: {}",
-        zen_file_path.display()
-    );
-
-    // Use common workspace info gathering with the zen file path
-    let workspace = gather_workspace_info(zen_file_path, true)?;
-
-    // Get board name from workspace or fallback to zen file stem
-    let board_name = workspace.board_display_name();
-
-    build_release_info(workspace, board_name, source_only, output_dir, output_name)
 }
 
 /// Display all the gathered release information
@@ -599,7 +572,7 @@ pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) 
     let output = eval
         .output
         .as_ref()
-        .context("No output in evaluation result")?;
+        .context("Evaluation failed - see diagnostics above")?;
     let properties = output.sch_module.properties();
 
     let layout_path_value = properties.get("layout_path")
@@ -867,22 +840,44 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Use build function with strict settings - offline mode and deny warnings
+    let file_name = staged_zen_path.file_name().unwrap().to_string_lossy();
+
+    // Use build function with offline mode but allow warnings
     let mut has_errors = false;
+    let mut has_warnings = false;
     let _schematic = crate::build::build(
         &staged_zen_path,
         true, // offline mode since all dependencies should be vendored
-        crate::build::create_diagnostics_passes(&[]), // no suppression for release
-        true, // deny_warnings
+        crate::build::create_diagnostics_passes(&[]),
+        false, // don't deny warnings - we'll prompt user instead
         &mut has_errors,
+        &mut has_warnings,
     );
 
     if has_errors {
-        anyhow::bail!(
-            "Build validation failed for staged zen file: {}",
-            staged_zen_path.display()
-        );
+        std::process::exit(1);
     }
+
+    // Handle warnings if present and --yes flag wasn't passed
+    if has_warnings && !info.yes {
+        // Non-interactive if stdin OR stdout is not a terminal
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            eprintln!(
+                "{} {}: Build failed",
+                pcb_ui::icons::error(),
+                file_name.with_style(Style::Red).bold()
+            );
+            std::process::exit(1);
+        }
+        let confirmed =
+            Confirm::new("Build completed with warnings. Do you want to proceed with the release?")
+                .with_default(true)
+                .prompt()?;
+        if !confirmed {
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 

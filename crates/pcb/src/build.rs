@@ -75,6 +75,7 @@ pub fn build(
     passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
     deny_warnings: bool,
     has_errors: &mut bool,
+    has_warnings: &mut bool,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -129,6 +130,10 @@ pub fn build(
         .any(|d| !d.suppressed && matches!(d.severity, starlark::errors::EvalSeverity::Error));
     let should_fail = has_unsuppressed_errors || (deny_warnings && has_unsuppressed_warnings);
 
+    if has_unsuppressed_warnings {
+        *has_warnings = true;
+    }
+
     if should_fail {
         *has_errors = true;
         eprintln!(
@@ -158,6 +163,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
+    let mut has_warnings = false;
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let Some(schematic) = build(
@@ -166,6 +172,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             create_diagnostics_passes(&args.suppress),
             deny_warnings,
             &mut has_errors,
+            &mut has_warnings,
         ) else {
             continue;
         };
