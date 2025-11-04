@@ -129,3 +129,39 @@ macro_rules! assert_zip_snapshot {
         insta::assert_snapshot!($name, contents.join("\n"));
     };
 }
+
+/// Extracts and formats netclass_patterns from a .kicad_pro file for snapshot testing
+#[allow(unused)]
+pub fn create_netclass_patterns_snapshot<P: AsRef<Path>>(kicad_pro_path: P) -> Result<String> {
+    use serde_json::Value;
+
+    let content = fs::read_to_string(kicad_pro_path)?;
+    let json: Value = serde_json::from_str(&content)?;
+
+    // Extract netclass_patterns from net_settings
+    let patterns = json
+        .get("net_settings")
+        .and_then(|ns| ns.get("netclass_patterns"))
+        .ok_or_else(|| anyhow::anyhow!("netclass_patterns not found in .kicad_pro file"))?;
+
+    // Sort patterns by pattern name for stable snapshots
+    let mut patterns_array: Vec<Value> = serde_json::from_value(patterns.clone())?;
+    patterns_array.sort_by(|a, b| {
+        let a_pattern = a.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+        let b_pattern = b.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+        a_pattern.cmp(b_pattern)
+    });
+
+    // Serialize with pretty printing for readable snapshots
+    let formatted = serde_json::to_string_pretty(&patterns_array)?;
+    Ok(formatted)
+}
+
+/// Macro to generate a snapshot test of netclass_patterns from a .kicad_pro file
+#[macro_export]
+macro_rules! assert_netclass_patterns_snapshot {
+    ($name:expr, $kicad_pro_file:expr) => {
+        let content = create_netclass_patterns_snapshot($kicad_pro_file)?;
+        insta::assert_snapshot!($name, content);
+    };
+}

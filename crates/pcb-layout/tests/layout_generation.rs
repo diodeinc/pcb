@@ -9,6 +9,9 @@ use helpers::*;
 
 macro_rules! layout_test {
     ($name:expr, $board_name:expr) => {
+        layout_test!($name, $board_name, false);
+    };
+    ($name:expr, $board_name:expr, $snapshot_kicad_pro:expr) => {
         paste::paste! {
             #[cfg(not(target_os = "windows"))]
             #[test]
@@ -36,8 +39,8 @@ macro_rules! layout_test {
 
                 let schematic = output.expect("Zen evaluation should produce a schematic");
 
-                // Process the layout
-                let result = process_layout(&schematic, &zen_file, false, false)?;
+                // Process the layout (enable sync_board_config for tests that need netclass assignment)
+                let result = process_layout(&schematic, &zen_file, $snapshot_kicad_pro, false)?;
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");
@@ -57,6 +60,16 @@ macro_rules! layout_test {
                     format!("{}.layout.json", $name),
                     result.snapshot_file
                 );
+
+                // Snapshot netclass_patterns from .kicad_pro if requested
+                if $snapshot_kicad_pro {
+                    let kicad_pro_path = result.pcb_file.with_extension("kicad_pro");
+                    assert!(kicad_pro_path.exists(), "kicad_pro file should exist");
+                    assert_netclass_patterns_snapshot!(
+                        format!("{}.netclass_patterns.json", $name),
+                        kicad_pro_path
+                    );
+                }
 
                 Ok(())
             }
@@ -82,3 +95,5 @@ layout_test!("tracks", "Board");
 layout_test!("graphics", "Board");
 
 layout_test!("complex", "Board");
+
+layout_test!("netclass_assignment", "netclass", true);
