@@ -1,3 +1,4 @@
+pub mod avl;
 pub mod bom;
 pub mod content;
 pub mod dictionary;
@@ -6,6 +7,8 @@ pub mod metadata;
 pub mod primitives;
 pub mod transform;
 
+#[allow(ambiguous_glob_reexports)]
+pub use avl::*;
 #[allow(ambiguous_glob_reexports)]
 pub use bom::*;
 #[allow(ambiguous_glob_reexports)]

@@ -46,6 +46,7 @@ impl Parser {
         let mut history_record = None;
         let mut ecad = None;
         let mut bom = None;
+        let mut avl = None;
 
         for child in root.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
@@ -54,6 +55,7 @@ impl Parser {
                 "HistoryRecord" => history_record = Some(self.parse_history_record(&child)?),
                 "Ecad" => ecad = Some(self.parse_ecad(&child)?),
                 "Bom" => bom = Some(self.parse_bom(&child)?),
+                "Avl" => avl = Some(self.parse_avl(&child)?),
                 _ => {}
             }
         }
@@ -68,6 +70,7 @@ impl Parser {
             history_record,
             ecad,
             bom,
+            avl,
         })
     }
 
@@ -2067,6 +2070,137 @@ impl Parser {
         })
     }
 
+    fn parse_avl(&mut self, node: &Node) -> Result<Avl> {
+        let name = self.required_attr(node, "name", "Avl")?;
+
+        let mut header = None;
+        let mut items = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "AvlHeader" => header = Some(self.parse_avl_header(&child)?),
+                "AvlItem" => items.push(self.parse_avl_item(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok(Avl {
+            name,
+            header,
+            items,
+        })
+    }
+
+    fn parse_avl_header(&mut self, node: &Node) -> Result<AvlHeader> {
+        let title = self.required_attr(node, "title", "AvlHeader")?;
+        let source = self.required_attr(node, "source", "AvlHeader")?;
+        let author = self.required_attr(node, "author", "AvlHeader")?;
+        let datetime = self.required_attr(node, "datetime", "AvlHeader")?;
+
+        let version = node
+            .attribute("version")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let comment = self.optional_attr(node, "comment");
+        let mod_ref = self.optional_attr(node, "modRef");
+
+        Ok(AvlHeader {
+            title,
+            source,
+            author,
+            datetime,
+            version,
+            comment,
+            mod_ref,
+        })
+    }
+
+    fn parse_avl_item(&mut self, node: &Node) -> Result<AvlItem> {
+        let oem_design_number = self.required_attr(node, "OEMDesignNumber", "AvlItem")?;
+
+        let mut vmpn_list = Vec::new();
+        let mut spec_refs = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "AvlVmpn" => vmpn_list.push(self.parse_avl_vmpn(&child)?),
+                "SpecRef" => {
+                    if let Some(id) = child.attribute("id") {
+                        spec_refs.push(self.interner.intern(id));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(AvlItem {
+            oem_design_number,
+            vmpn_list,
+            spec_refs,
+        })
+    }
+
+    fn parse_avl_vmpn(&mut self, node: &Node) -> Result<AvlVmpn> {
+        let evpl_vendor = self.optional_attr(node, "evplVendor");
+        let evpl_mpn = self.optional_attr(node, "evplMpn");
+
+        let qualified = node.attribute("qualified").map(|s| s == "true");
+
+        let chosen = node.attribute("chosen").map(|s| s == "true");
+
+        let mut mpns = Vec::new();
+        let mut vendors = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "AvlMpn" => mpns.push(self.parse_avl_mpn(&child)?),
+                "AvlVendor" => vendors.push(self.parse_avl_vendor(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok(AvlVmpn {
+            evpl_vendor,
+            evpl_mpn,
+            qualified,
+            chosen,
+            mpns,
+            vendors,
+        })
+    }
+
+    fn parse_avl_mpn(&mut self, node: &Node) -> Result<AvlMpn> {
+        let name = self.required_attr(node, "name", "AvlMpn")?;
+
+        let rank = node.attribute("rank").and_then(|s| s.parse().ok());
+
+        let cost = node.attribute("cost").and_then(|s| s.parse().ok());
+
+        let moisture_sensitivity = node
+            .attribute("moistureSensitivity")
+            .and_then(MoistureSensitivity::parse);
+
+        let availability = node.attribute("availability").map(|s| s == "true");
+
+        let other = self.optional_attr(node, "other");
+
+        Ok(AvlMpn {
+            name,
+            rank,
+            cost,
+            moisture_sensitivity,
+            availability,
+            other,
+        })
+    }
+
+    fn parse_avl_vendor(&mut self, node: &Node) -> Result<AvlVendor> {
+        let enterprise_ref = self.required_attr(node, "enterpriseRef", "AvlVendor")?;
+
+        Ok(AvlVendor { enterprise_ref })
+    }
+
     fn parse_xform(&self, node: &Node) -> Xform {
         let x_offset = node
             .attribute("xOffset")
@@ -2108,4 +2242,5 @@ pub struct ParsedIpc2581 {
     pub history_record: Option<HistoryRecord>,
     pub ecad: Option<Ecad>,
     pub bom: Option<Bom>,
+    pub avl: Option<Avl>,
 }
