@@ -3043,6 +3043,7 @@ dependencies = [
  "pcb-sch",
  "serde",
  "serde_json",
+ "starlark_syntax",
  "zstd",
 ]
 

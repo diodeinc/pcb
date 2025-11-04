@@ -6,6 +6,7 @@ use anyhow::Result;
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 use comfy_table::Table;
 use pcb_sch::{Bom, BomEntry};
+use starlark_syntax::slice_vec_ext::SliceExt;
 
 use crate::utils::file as file_utils;
 use crate::OutputFormat;
@@ -133,25 +134,21 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
     Ok(Bom::new(entries, designators))
 }
 
-/// Write BOM table in the same format as pcb bom (using grouped JSON)
 fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
 
-    // Parse grouped JSON to get the table data
     let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
     for entry in json.as_array().unwrap() {
         let designators = entry["designators"]
             .as_array()
             .unwrap()
-            .iter()
-            .filter_map(|d| d.as_str())
-            .collect::<Vec<_>>()
+            .map(|d| d.as_str().unwrap())
             .join(",");
 
         // Use first offer info if available, otherwise use base component info
-        let (mpn, manufacturer, distributor) = entry
+        let (mpn, manufacturer) = entry
             .get("offers")
             .and_then(|o| o.as_array())
             .and_then(|arr| arr.first())
@@ -159,14 +156,12 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
                 (
                     offer["manufacturer_pn"].as_str().unwrap_or_default(),
                     offer["manufacturer"].as_str().unwrap_or_default(),
-                    offer["distributor"].as_str().unwrap_or_default(),
                 )
             })
             .unwrap_or_else(|| {
                 (
                     entry["mpn"].as_str().unwrap_or_default(),
                     entry["manufacturer"].as_str().unwrap_or_default(),
-                    "",
                 )
             });
 
@@ -182,7 +177,6 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             manufacturer,
             entry["package"].as_str().unwrap_or_default(),
             description,
-            distributor,
             if entry["dnp"].as_bool().unwrap() {
                 "Yes"
             } else {
@@ -198,7 +192,6 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
         "Manufacturer",
         "Package",
         "Description",
-        "Distributor",
         "DNP",
     ]);
 

@@ -135,8 +135,9 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             .unwrap()
             .map(|d| d.as_str().unwrap())
             .join(",");
+
         // Use first offer info if available, otherwise use base component info
-        let (mpn, manufacturer, distributor) = entry
+        let (mpn, manufacturer) = entry
             .get("offers")
             .and_then(|o| o.as_array())
             .and_then(|arr| arr.first())
@@ -144,14 +145,12 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
                 (
                     offer["manufacturer_pn"].as_str().unwrap_or_default(),
                     offer["manufacturer"].as_str().unwrap_or_default(),
-                    offer["distributor"].as_str().unwrap_or_default(),
                 )
             })
             .unwrap_or_else(|| {
                 (
                     entry["mpn"].as_str().unwrap_or_default(),
                     entry["manufacturer"].as_str().unwrap_or_default(),
-                    "",
                 )
             });
 
@@ -164,7 +163,6 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             manufacturer,
             entry["package"].as_str().unwrap_or_default(),
             description,
-            distributor,
             if entry["dnp"].as_bool().unwrap() {
                 "Yes"
             } else {
@@ -180,7 +178,6 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
         "Manufacturer",
         "Package",
         "Description",
-        "Distributor",
         "DNP",
     ]);
 
