@@ -317,13 +317,13 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         )?;
 
         let elapsed = start_time.elapsed().as_secs_f64();
-        let cumulative = start_time.elapsed().as_secs_f64();
         eprintln!(
             "{}: {} ({}) Release information gathered",
-            format_cumulative_time(cumulative),
+            format_cumulative_time(elapsed),
             "✓".green(),
             format_task_duration(elapsed)
         );
+
         info
     };
 
@@ -1234,7 +1234,7 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
-    let kicad_pcb_path = info.layout_path.join("layout.kicad_pcb");
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
     let odb_path = manufacturing_dir.join("odb.zip");
 
     KiCadCliBuilder::new()
@@ -1476,14 +1476,15 @@ fn extract_drc_category(diagnostic: &pcb_zen_core::Diagnostic) -> String {
 
     // Fallback: parse from body
     diagnostic
-        .body
-        .find('[')
-        .and_then(|start| {
-            diagnostic.body[start..]
-                .find(']')
-                .map(|end| diagnostic.body[start + 1..start + end].to_string())
+        .source_error
+        .as_ref()
+        .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
+        .and_then(|c| c.kind.strip_prefix("layout.drc."))
+        .map(String::from)
+        .unwrap_or_else(|| {
+            log::warn!("Could not extract DRC category from diagnostic, using 'other'");
+            "other".to_string()
         })
-        .unwrap_or_else(|| "other".to_string())
 }
 
 /// Run KiCad DRC checks on the layout file
@@ -1492,11 +1493,14 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     use pcb_zen_core::passes::{FilterHiddenPass, SortPass, SuppressPass};
     use starlark::errors::EvalSeverity;
 
-    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
-
-    if !kicad_pcb_path.exists() {
-        anyhow::bail!("Layout file not found at {}", kicad_pcb_path.display());
-    }
+    // Find the .kicad_pcb file in the layout directory
+    let layout_dir = info.staging_dir.join("layout");
+    let kicad_pcb_path = std::fs::read_dir(&layout_dir)
+        .context("Failed to read layout directory")?
+        .filter_map(Result::ok)
+        .find(|e| e.path().extension().and_then(|s| s.to_str()) == Some("kicad_pcb"))
+        .map(|e| e.path())
+        .ok_or_else(|| anyhow::anyhow!("No .kicad_pcb file found in {}", layout_dir.display()))?;
 
     // Run DRC using the pcb-kicad crate
     let drc_report = pcb_kicad::run_drc(&kicad_pcb_path).context("Failed to run KiCad DRC")?;

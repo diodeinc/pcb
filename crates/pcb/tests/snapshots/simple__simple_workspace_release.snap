@@ -1,8 +1,8 @@
 ---
 source: crates/pcb/tests/simple.rs
-expression: "sb.snapshot_run(\"pcb\", [\"release\", \"-b\", \"TestBoard\", \"-f\", \"json\"])"
+expression: "sb.snapshot_run(\"pcb\",\n[\"release\", \"-b\", \"TestBoard\", \"-f\", \"json\", \"-S\",\n\"layout.drc.invalid_outline\", \"-S\", \"warnings\"])"
 ---
-Command: pcb release -b TestBoard -f json
+Command: pcb release -b TestBoard -f json -S layout.drc.invalid_outline -S warnings
 Exit Code: 0
 
 --- STDOUT ---
@@ -40,6 +40,17 @@ Exit Code: 0
 ✓ Generating board config
 ✓ Copying documentation
 ✓ Substituting version variables
+
+┌────────────────────────────────────────────────────────────────┐
+│ Category               Errors (excluded)   Warnings (excluded) │
+╞════════════════════════════════════════════════════════════════╡
+│ invalid_outline        (1)                 -                   │
+│ lib_footprint_issues   -                   (10)                │
+│ silk_over_copper       -                   (5)                 │
+│ silk_overlap           -                   (8)                 │
+│ Total                  (1)                 (23)                │
+└────────────────────────────────────────────────────────────────┘
+✓ Running KiCad DRC checks
 ✓ Generating fabrication drawing
 ✓ Generating design BOM
 ✓ Generating gerber files

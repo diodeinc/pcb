@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use log::warn;
 use pcb_zen_core::diagnostics::{Diagnostic, Diagnostics};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use serde::{Deserialize, Serialize};
@@ -63,8 +64,11 @@ impl DrcReport {
         let mut diagnostics = Vec::new();
 
         for violation in &self.violations {
-            if let Ok(diagnostic) = violation.to_diagnostic(pcb_path) {
-                diagnostics.push(diagnostic);
+            match violation.to_diagnostic(pcb_path) {
+                Ok(diagnostic) => diagnostics.push(diagnostic),
+                Err(e) => {
+                    warn!("Failed to convert DRC violation to diagnostic: {}", e);
+                }
             }
         }
 
