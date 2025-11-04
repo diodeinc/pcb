@@ -1,0 +1,21 @@
+[package]
+name = "ipc2581"
+version = "0.3.0"
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Pure IPC-2581 XML parser - spec-compliant, zero dependencies on visualization"
+license = "MIT OR Apache-2.0"
+keywords = ["pcb", "ipc-2581", "parser", "eda"]
+categories = ["parsing", "hardware-support"]
+
+[dependencies]
+roxmltree = "0.21"
+md-5 = "0.10"
+base64 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+walkdir = { workspace = true }
+zstd = { workspace = true }

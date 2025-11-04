@@ -23,6 +23,7 @@ gltfpack-sys = "0.1.2"
 
 similar = "2.7.0"
 
+ipc2581 = { path = "crates/ipc2581" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
 pcb-layout = { path = "crates/pcb-layout" }
@@ -41,6 +42,7 @@ pcb-mcp = { path = "crates/pcb-mcp" }
 
 anyhow = "1.0"
 ariadne = { version = "0.5", features = ["auto-color"] }
+axoupdater = { version = "0.9", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 colored = "2"
@@ -124,6 +126,7 @@ dir-diff = "0.3"
 ignore = "0.4"
 sha2 = "0.10"
 semver = "1.0"
+zstd = "0.13"
 
 # The profile that 'dist' will build with
 [profile.dist]

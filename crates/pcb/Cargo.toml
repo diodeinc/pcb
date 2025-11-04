@@ -6,6 +6,7 @@ repository = { workspace = true }
 description = "next-gen tooling for pcb design"
 homepage = { workspace = true }
 authors = { workspace = true }
+default-run = "pcb"
 
 [features]
 default = ["api"]
@@ -60,9 +61,7 @@ terminal_size = { workspace = true }
 unicode-width = { workspace = true }
 indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
-
-
-axoupdater = { version = "0.9", features = ["blocking"] }
+axoupdater = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

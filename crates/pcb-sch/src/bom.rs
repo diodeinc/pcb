@@ -7,15 +7,15 @@ use crate::{InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bom {
-    entries: HashMap<String, BomEntry>,   // path -> BomEntry
-    designators: HashMap<String, String>, // path -> designator
+    pub entries: HashMap<String, BomEntry>,   // path -> BomEntry
+    pub designators: HashMap<String, String>, // path -> designator
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct GroupedBomEntry {
-    designators: BTreeSet<String>,
+pub struct GroupedBomEntry {
+    pub designators: BTreeSet<String>,
     #[serde(flatten)]
-    entry: BomEntry,
+    pub entry: BomEntry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -25,25 +25,25 @@ pub struct Alternative {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-struct BomEntry {
+pub struct BomEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    mpn: Option<String>,
+    pub mpn: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    alternatives: Vec<Alternative>,
+    pub alternatives: Vec<Alternative>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    manufacturer: Option<String>,
+    pub manufacturer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    package: Option<String>,
+    pub package: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<String>,
+    pub value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
+    pub description: Option<String>,
     #[serde(flatten)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    generic_data: Option<GenericComponent>,
+    pub generic_data: Option<GenericComponent>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    offers: Vec<MatchedOffer>,
-    dnp: bool,
+    pub offers: Vec<MatchedOffer>,
+    pub dnp: bool,
 }
 
 impl BomEntry {
@@ -88,11 +88,11 @@ impl BomEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct UngroupedBomEntry {
-    path: String,
-    designator: String,
+pub struct UngroupedBomEntry {
+    pub path: String,
+    pub designator: String,
     #[serde(flatten)]
-    entry: BomEntry,
+    pub entry: BomEntry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -253,6 +253,14 @@ impl Bom {
     /// Check if the BOM is empty
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Create a BOM from raw entries and designators
+    pub fn new(entries: HashMap<String, BomEntry>, designators: HashMap<String, String>) -> Self {
+        Bom {
+            entries,
+            designators,
+        }
     }
 
     pub fn from_schematic(schematic: &Schematic) -> Self {
