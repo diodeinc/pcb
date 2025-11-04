@@ -6,7 +6,7 @@ use std::path::Path;
 
 // Helper to get BOM stats without loading the whole document
 fn get_bom_stats() -> (u32, u32, usize, usize) {
-    let bom_path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-BOM.xml");
+    let bom_path = Path::new("tests/data/testcase1-revc/testcase1-revc-bom.xml");
     let compressed_path = bom_path.with_extension("xml.zst");
     if !compressed_path.exists() {
         return (0, 0, 0, 0);
@@ -174,43 +174,45 @@ fn parse_and_validate(path: &Path) {
 // Test Case 1: Network Card - Full mode
 #[test]
 fn test_testcase1_full() {
-    let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-full.xml");
+    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-full.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_assembly() {
-    let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Assembly.xml");
+    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-assembly.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_fabrication() {
-    let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Fabrication.xml");
+    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-fabrication.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_test() {
-    let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Test.xml");
+    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-test.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase1_stencil() {
-    let path = Path::new("tests/data/Testcase1-RevC/testcase1-RevC-Stencil.xml");
+    let path = Path::new("tests/data/testcase1-revc/testcase1-revc-stencil.xml");
     parse_and_validate(path);
 }
 
 // Test Case 3: Round Test Card
 #[test]
 fn test_testcase3_all_modes() {
-    let dir = Path::new("tests/data/testcase3_2581REVC");
+    let dir = Path::new("tests/data/testcase3-revc");
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("xml") {
-            parse_and_validate(&path);
+        if path.extension().and_then(|s| s.to_str()) == Some("zst") {
+            // Remove .zst extension to get the .xml path for parse_and_validate
+            let xml_path = path.with_extension("").with_extension("");
+            parse_and_validate(&xml_path);
         }
     }
 }
@@ -218,60 +220,60 @@ fn test_testcase3_all_modes() {
 // Test Case 5: Cadence Allegro
 #[test]
 fn test_testcase5_full() {
-    let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-Full.xml");
+    let path = Path::new("tests/data/testcase5-revc/testcase5-revc-full.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase5_bom() {
-    let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-BOM.xml");
+    let path = Path::new("tests/data/testcase5-revc/testcase5-revc-bom.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase5_stackup() {
-    let path = Path::new("tests/data/testcase5-revC-Data/testcase5-RevC-Stackup.xml");
+    let path = Path::new("tests/data/testcase5-revc/testcase5-revc-stackup.xml");
     parse_and_validate(path);
 }
 
 // Test Case 6: Cadence Allegro
 #[test]
 fn test_testcase6_full() {
-    let path = Path::new("tests/data/testcase6-RevC_Data/testcase6-RevC-Full.xml");
+    let path = Path::new("tests/data/testcase6-revc/testcase6-revc-full.xml");
     parse_and_validate(path);
 }
 
 // Test Case 9: LED Display Card
 #[test]
 fn test_testcase9_full() {
-    let path = Path::new("tests/data/testcase9-RevC-data/testcase9-RevC-Full.xml");
+    let path = Path::new("tests/data/testcase9-revc/testcase9-revc-full.xml");
     parse_and_validate(path);
 }
 
 // Test Case 10: Demo Board
 #[test]
 fn test_testcase10_full() {
-    let path = Path::new("tests/data/testcase10-Rev C data/testcase10-RevC-Full.xml");
+    let path = Path::new("tests/data/testcase10-revc/testcase10-revc-full.xml");
     parse_and_validate(path);
 }
 
 // Test Case 11: Rigid Flex Display Card
 #[test]
 fn test_testcase11_full() {
-    let path = Path::new("tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml");
+    let path = Path::new("tests/data/testcase11-revc/testcase11-rdgflx-revc-full.xml");
     parse_and_validate(path);
 }
 
 #[test]
 fn test_testcase11_assembly() {
-    let path = Path::new("tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Assembly.xml");
+    let path = Path::new("tests/data/testcase11-revc/testcase11-rdgflx-revc-assembly.xml");
     parse_and_validate(path);
 }
 
 // Test Case 12: Display board w/controller
 #[test]
 fn test_testcase12_full() {
-    let path = Path::new("tests/data/testcase12-RevC/testcase12-rdgflx-full.xml");
+    let path = Path::new("tests/data/testcase12-revc/testcase12-rdgflx-full.xml");
     parse_and_validate(path);
 }
 
@@ -345,27 +347,27 @@ fn test_function_modes() {
 
     let test_files = [
         (
-            "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Assembly.xml",
+            "tests/data/testcase11-revc/testcase11-rdgflx-revc-assembly.xml",
             Mode::Assembly,
         ),
         (
-            "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Fabrication.xml",
+            "tests/data/testcase11-revc/testcase11-rdgflx-revc-fabrication.xml",
             Mode::Fabrication,
         ),
         (
-            "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Stackup.xml",
+            "tests/data/testcase11-revc/testcase11-rdgflx-revc-stackup.xml",
             Mode::Stackup,
         ),
         (
-            "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-BOM.xml",
+            "tests/data/testcase11-revc/testcase11-rdgflx-revc-bom.xml",
             Mode::Bom,
         ),
         (
-            "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Test.xml",
+            "tests/data/testcase11-revc/testcase11-rdgflx-revc-test.xml",
             Mode::Test,
         ),
         (
-            "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-Stencil.xml",
+            "tests/data/testcase11-revc/testcase11-rdgflx-revc-stencil.xml",
             Mode::Stencil,
         ),
     ];
@@ -386,7 +388,7 @@ fn test_function_modes() {
 fn test_testcase1_metadata() {
     use ipc2581::{LayerFunction, PlatingStatus};
 
-    let doc = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-full.xml")
+    let doc = test_helpers::parse_compressed("tests/data/testcase1-revc/testcase1-revc-full.xml")
         .unwrap();
 
     // Get Ecad data
@@ -599,7 +601,7 @@ macro_rules! testcase_metadata_test {
 
 testcase_metadata_test!(
     test_testcase3_metadata,
-    "tests/data/testcase3_2581REVC/testcase3-RevC-full.xml",
+    "tests/data/testcase3-revc/testcase3-revc-full.xml",
     "Testcase 3"
 );
 
@@ -750,45 +752,45 @@ fn print_testcase_metadata(
 
 testcase_metadata_test!(
     test_testcase5_metadata,
-    "tests/data/testcase5-revC-Data/testcase5-RevC-full.xml",
+    "tests/data/testcase5-revc/testcase5-revc-full.xml",
     "Testcase 5"
 );
 testcase_metadata_test!(
     test_testcase6_metadata,
-    "tests/data/testcase6-RevC_Data/testcase6-RevC-full.xml",
+    "tests/data/testcase6-revc/testcase6-revc-full.xml",
     "Testcase 6"
 );
 testcase_metadata_test!(
     test_testcase9_metadata,
-    "tests/data/testcase9-RevC-data/testcase9-RevC-full.xml",
+    "tests/data/testcase9-revc/testcase9-revc-full.xml",
     "Testcase 9"
 );
 testcase_metadata_test!(
     test_testcase10_metadata,
-    "tests/data/testcase10-Rev C data/testcase10-RevC-full.xml",
+    "tests/data/testcase10-revc/testcase10-revc-full.xml",
     "Testcase 10"
 );
 testcase_metadata_test!(
     test_testcase11_metadata,
-    "tests/data/testcase11-RevC/testcase11-rdgflx-RevC-full.xml",
+    "tests/data/testcase11-revc/testcase11-rdgflx-revc-full.xml",
     "Testcase 11"
 );
 testcase_metadata_test!(
     test_testcase12_metadata,
-    "tests/data/testcase12-RevC/testcase12-rdgflx-full.xml",
+    "tests/data/testcase12-revc/testcase12-rdgflx-full.xml",
     "Testcase 12"
 );
 
 #[test]
 fn test_testcase1_cross_file_consistency() {
     // Parse all three main views
-    let full = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-full.xml")
+    let full = test_helpers::parse_compressed("tests/data/testcase1-revc/testcase1-revc-full.xml")
         .unwrap();
     let assembly =
-        test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-Assembly.xml")
+        test_helpers::parse_compressed("tests/data/testcase1-revc/testcase1-revc-assembly.xml")
             .unwrap();
     let bom_doc =
-        test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-BOM.xml").unwrap();
+        test_helpers::parse_compressed("tests/data/testcase1-revc/testcase1-revc-bom.xml").unwrap();
 
     println!("\nCross-file Consistency Validation:");
 
