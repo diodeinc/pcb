@@ -1,3 +1,5 @@
+pub mod drc;
+
 use anyhow::{anyhow, Context, Result};
 use pcb_command_runner::CommandRunner;
 use std::collections::HashMap;
@@ -309,6 +311,58 @@ where
         builder = builder.arg(arg.as_ref());
     }
     builder.run()
+}
+
+/// Run KiCad DRC checks on a PCB file and return the parsed report
+///
+/// # Arguments
+/// * `pcb_path` - Path to the .kicad_pcb file to check
+///
+/// # Returns
+/// A `DrcReport` containing all violations found
+///
+/// # Example
+/// ```no_run
+/// use pcb_kicad::run_drc;
+/// let report = run_drc("layout/layout.kicad_pcb").unwrap();
+/// if report.has_errors() {
+///     eprintln!("DRC errors found!");
+/// }
+/// ```
+pub fn run_drc(pcb_path: impl AsRef<Path>) -> Result<drc::DrcReport> {
+    use drc::DrcReport;
+
+    // Check if KiCad is installed
+    check_kicad_installed()?;
+
+    let pcb_path = pcb_path.as_ref();
+    if !pcb_path.exists() {
+        anyhow::bail!("PCB file not found: {}", pcb_path.display());
+    }
+
+    // Create a temporary file for the JSON output
+    let temp_file =
+        NamedTempFile::new().context("Failed to create temporary file for DRC output")?;
+    let temp_path = temp_file.path();
+
+    // Run kicad-cli pcb drc with JSON output
+    KiCadCliBuilder::new()
+        .command("pcb")
+        .subcommand("drc")
+        .arg("--format")
+        .arg("json")
+        .arg("--severity-all") // Report all severities (errors and warnings)
+        .arg("--severity-exclusions") // Include violations excluded by user in KiCad
+        .arg("--output")
+        .arg(temp_path.to_string_lossy())
+        .arg(pcb_path.to_string_lossy())
+        .run()
+        .context("Failed to run KiCad DRC")?;
+
+    // Parse the JSON output
+    let report = DrcReport::from_file(temp_path).context("Failed to parse DRC report")?;
+
+    Ok(report)
 }
 
 /// Options for running Python scripts in the KiCad Python environment

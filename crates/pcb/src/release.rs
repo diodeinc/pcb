@@ -54,6 +54,7 @@ impl std::fmt::Display for ReleaseOutputFormat {
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
 #[value(rename_all = "lowercase")]
 pub enum ArtifactType {
+    Drc,
     Bom,
     Gerbers,
     Cpl,
@@ -71,6 +72,7 @@ impl ArtifactType {
     /// Get the human-readable task name for this artifact type
     fn task_name(&self) -> &'static str {
         match self {
+            ArtifactType::Drc => "Running KiCad DRC checks",
             ArtifactType::Bom => "Generating design BOM",
             ArtifactType::Gerbers => "Generating gerber files",
             ArtifactType::Cpl => "Generating pick-and-place file",
@@ -88,6 +90,7 @@ impl ArtifactType {
     /// Get the task function for this artifact type
     fn task_fn(&self) -> TaskFn {
         match self {
+            ArtifactType::Drc => run_kicad_drc,
             ArtifactType::Bom => generate_design_bom,
             ArtifactType::Gerbers => generate_gerbers,
             ArtifactType::Cpl => generate_cpl,
@@ -144,6 +147,12 @@ pub struct ReleaseArgs {
     /// Skip confirmation prompt when warnings are present during validation
     #[arg(long)]
     pub yes: bool,
+
+    /// Suppress diagnostics by kind or severity. Use 'warnings' or 'errors' for all
+    /// warnings/errors, or specific kinds like 'layout.drc.clearance'.
+    /// Supports hierarchical matching (e.g., 'layout.drc' matches 'layout.drc.clearance')
+    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
+    pub suppress: Vec<String>,
 }
 
 /// All information gathered during the release preparation phase
@@ -170,6 +179,8 @@ pub struct ReleaseInfo {
     pub output_name: String,
     /// Skip confirmation prompt for warnings
     pub yes: bool,
+    /// Diagnostic kinds to suppress
+    pub suppress: Vec<String>,
 }
 
 type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
@@ -185,6 +196,7 @@ const BASE_TASKS: &[(&str, TaskFn)] = &[
 
 /// All manufacturing artifacts in the order they should be generated
 const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
+    ArtifactType::Drc, // Run DRC checks first, before generating any manufacturing files
     ArtifactType::FabHtml,
     ArtifactType::Bom,
     ArtifactType::Gerbers,
@@ -301,6 +313,7 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
             args.output_dir.clone(),
             args.output_name.clone(),
             args.yes,
+            args.suppress.clone(),
         )?;
 
         let elapsed = start_time.elapsed().as_secs_f64();
@@ -355,6 +368,7 @@ fn build_release_info(
     output_dir: Option<PathBuf>,
     output_name: Option<String>,
     yes: bool,
+    suppress: Vec<String>,
 ) -> Result<ReleaseInfo> {
     // Get version and git hash from git
     let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
@@ -417,6 +431,7 @@ fn build_release_info(
         output_dir,
         output_name,
         yes,
+        suppress,
     })
 }
 
@@ -1423,6 +1438,239 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
         } else {
             return Err(e).context("Failed to generate SVG rendering");
         }
+    }
+
+    Ok(())
+}
+
+/// Helper to format a count with excluded count in parentheses
+fn format_count_with_excluded<F>(count: usize, excluded: usize, color_fn: F) -> String
+where
+    F: Fn(String) -> colored::ColoredString,
+{
+    match (count, excluded) {
+        (0, 0) => "-".dimmed().to_string(),
+        (0, e) => format!("({})", e).dimmed().to_string(),
+        (c, 0) => color_fn(c.to_string()).to_string(),
+        (c, e) => format!(
+            "{} {}",
+            color_fn(c.to_string()),
+            format!("({})", e).dimmed()
+        ),
+    }
+}
+
+/// Extract DRC category from diagnostic
+fn extract_drc_category(diagnostic: &pcb_zen_core::Diagnostic) -> String {
+    use pcb_zen_core::lang::error::CategorizedDiagnostic;
+
+    // Try to use the kind from CategorizedDiagnostic first
+    if let Some(source_error) = &diagnostic.source_error {
+        if let Some(categorized) = source_error.downcast_ref::<CategorizedDiagnostic>() {
+            // Extract the last component after "layout.drc."
+            if let Some(category) = categorized.kind.strip_prefix("layout.drc.") {
+                return category.to_string();
+            }
+        }
+    }
+
+    // Fallback: parse from body
+    diagnostic
+        .body
+        .find('[')
+        .and_then(|start| {
+            diagnostic.body[start..]
+                .find(']')
+                .map(|end| diagnostic.body[start + 1..start + end].to_string())
+        })
+        .unwrap_or_else(|| "other".to_string())
+}
+
+/// Run KiCad DRC checks on the layout file
+fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
+    use pcb_zen_core::diagnostics::DiagnosticsPass;
+    use pcb_zen_core::passes::{FilterHiddenPass, SortPass, SuppressPass};
+    use starlark::errors::EvalSeverity;
+
+    let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
+
+    if !kicad_pcb_path.exists() {
+        anyhow::bail!("Layout file not found at {}", kicad_pcb_path.display());
+    }
+
+    // Run DRC using the pcb-kicad crate
+    let drc_report = pcb_kicad::run_drc(&kicad_pcb_path).context("Failed to run KiCad DRC")?;
+
+    // Convert DRC report to diagnostics
+    let mut diagnostics = drc_report.to_diagnostics(&kicad_pcb_path.to_string_lossy());
+
+    // Apply diagnostic passes (filtering, suppression, and sorting)
+    let passes: Vec<Box<dyn DiagnosticsPass>> = vec![
+        Box::new(FilterHiddenPass),
+        Box::new(SuppressPass::new(info.suppress.clone())),
+        Box::new(SortPass),
+    ];
+
+    for pass in passes {
+        pass.apply(&mut diagnostics);
+    }
+
+    // Count errors, warnings, and suppressed (excluding suppressed from counts)
+    let (errors, warnings, suppressed_errors, suppressed_warnings) = diagnostics
+        .diagnostics
+        .iter()
+        .fold((0, 0, 0, 0), |(e, w, se, sw), d| {
+            if d.suppressed {
+                match d.severity {
+                    EvalSeverity::Error => (e, w, se + 1, sw),
+                    EvalSeverity::Warning => (e, w, se, sw + 1),
+                    _ => (e, w, se, sw),
+                }
+            } else {
+                match d.severity {
+                    EvalSeverity::Error => (e + 1, w, se, sw),
+                    EvalSeverity::Warning => (e, w + 1, se, sw),
+                    _ => (e, w, se, sw),
+                }
+            }
+        });
+
+    // Collect DRC categories for summary table
+    // HashMap<category, (errors, excluded_errors, warnings, excluded_warnings)>
+    use std::collections::HashMap;
+    let mut category_counts: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
+
+    // Render DRC diagnostics with colors
+    spinner.suspend(|| {
+        for diagnostic in &diagnostics.diagnostics {
+            // Extract category from diagnostic
+            let category = extract_drc_category(diagnostic);
+
+            // Update category counts (including suppressed/excluded)
+            let entry = category_counts.entry(category).or_insert((0, 0, 0, 0));
+            match (diagnostic.severity, diagnostic.suppressed) {
+                (EvalSeverity::Error, false) => entry.0 += 1,
+                (EvalSeverity::Error, true) => entry.1 += 1,
+                (EvalSeverity::Warning, false) => entry.2 += 1,
+                (EvalSeverity::Warning, true) => entry.3 += 1,
+                _ => {}
+            }
+
+            // Skip rendering suppressed diagnostics
+            if diagnostic.suppressed {
+                continue;
+            }
+
+            let (severity_str, severity_color) = match diagnostic.severity {
+                EvalSeverity::Error => ("Error", Style::Red),
+                EvalSeverity::Warning => ("Warning", Style::Yellow),
+                _ => continue,
+            };
+
+            // Split body into first line (main message) and items
+            let lines: Vec<&str> = diagnostic.body.lines().collect();
+            if let Some(first_line) = lines.first() {
+                eprintln!(
+                    "{}: {}",
+                    severity_str.with_style(severity_color).bold(),
+                    first_line
+                );
+
+                // Print remaining lines (items) in dimmed color
+                for line in lines.iter().skip(1) {
+                    eprintln!("{}", line.dimmed());
+                }
+            }
+        }
+
+        // Print summary table if there are any diagnostics (including suppressed)
+        if !diagnostics.diagnostics.is_empty() {
+            use comfy_table::{presets, Attribute, Cell, ContentArrangement, Table};
+
+            eprintln!(); // Blank line before table
+
+            let mut table = Table::new();
+            table
+                .load_preset(presets::UTF8_BORDERS_ONLY)
+                .set_content_arrangement(ContentArrangement::Dynamic);
+
+            table.set_header(vec![
+                Cell::new("Category").add_attribute(Attribute::Bold),
+                Cell::new(format!(
+                    "{} {}",
+                    "Errors".red().bold(),
+                    "(excluded)".dimmed()
+                )),
+                Cell::new(format!(
+                    "{} {}",
+                    "Warnings".yellow().bold(),
+                    "(excluded)".dimmed()
+                )),
+            ]);
+
+            // Sort categories alphabetically
+            let mut sorted_categories: Vec<_> = category_counts.iter().collect();
+            sorted_categories.sort_by_key(|(k, _)| *k);
+
+            for (category, (err_count, excl_err_count, warn_count, excl_warn_count)) in
+                sorted_categories
+            {
+                table.add_row(vec![
+                    Cell::new(category),
+                    Cell::new(format_count_with_excluded(
+                        *err_count,
+                        *excl_err_count,
+                        |s| s.red(),
+                    )),
+                    Cell::new(format_count_with_excluded(
+                        *warn_count,
+                        *excl_warn_count,
+                        |s| s.yellow(),
+                    )),
+                ]);
+            }
+
+            // Add totals row
+            table.add_row(vec![
+                Cell::new("Total").add_attribute(Attribute::Bold),
+                Cell::new(format_count_with_excluded(errors, suppressed_errors, |s| {
+                    s.red().bold()
+                })),
+                Cell::new(format_count_with_excluded(
+                    warnings,
+                    suppressed_warnings,
+                    |s| s.yellow().bold(),
+                )),
+            ]);
+
+            eprintln!("{}", table);
+        }
+    });
+
+    // Handle errors - always fail if there are errors
+    if errors > 0 {
+        anyhow::bail!("DRC check failed with {} error(s)", errors);
+    }
+
+    // Handle warnings - prompt user if there are warnings (unless --yes flag)
+    if warnings > 0 && !info.yes {
+        spinner.suspend(|| {
+            // Non-interactive if stdin OR stdout is not a terminal
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                eprintln!("{} DRC check failed with warnings", pcb_ui::icons::error());
+                std::process::exit(1);
+            }
+            let confirmed = Confirm::new(&format!(
+                "DRC completed with {} warning(s). Do you want to proceed with the release?",
+                warnings
+            ))
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false);
+            if !confirmed {
+                std::process::exit(1);
+            }
+        });
     }
 
     Ok(())

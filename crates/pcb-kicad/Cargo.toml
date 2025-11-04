@@ -18,3 +18,5 @@ chrono = { workspace = true }
 regress = { workspace = true }
 log = { workspace = true }
 pcb-command-runner = { workspace = true }
+pcb-zen-core = { workspace = true }
+starlark = { workspace = true }
