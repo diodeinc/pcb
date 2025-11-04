@@ -1,0 +1,59 @@
+load("@stdlib:v0.3.4/board_config.zen", "Board")
+load("@stdlib:v0.3.4/units.zen", "Impedance")
+load("@stdlib:v0.3.4/interfaces.zen", "Usb2")
+
+# Test case 1: Single-ended 50Ω impedance → should match "50Ohm SE"
+clk_50 = Net("CLK_50", impedance=Impedance(50))
+spi_clk_50 = Net("SPI_CLK_50", impedance=Impedance(50))
+
+# Test case 2: Tolerance matching - 51Ω should match 50Ω (within 5% tolerance)
+clk_51 = Net("CLK_51", impedance=Impedance(51))
+
+# Test case 3: Differential pair 90Ω impedance → should match "90Ohm Diff"
+# Create Usb2 interface with DiffPair(impedance=90Ω) and pass to module
+# This tests propagate_diffpair_impedance() walking module tree (regression from 02bff04)
+usb = Usb2("USB")
+UsbModule = Module("usb_module.zen")
+usb_module = UsbModule(name="USB_MOD", usb=usb)
+
+# Test case 4: Unmatched impedance (no netclass for 1000Ω) → uses Default
+high_z = Net("HIGH_Z", impedance=Impedance(1000))
+
+# Test case 5: Nets without impedance → uses Default netclass
+gnd = Net("GND")
+vcc = Net("VCC")
+data = Net("DATA")
+
+# Add components to create actual nets in schematic
+Component(
+    name="U1",
+    footprint="Connector_PinHeader_2.54mm:PinHeader_2x04_P2.54mm_Vertical",
+    pin_defs={
+        "1": "1", "2": "2", "3": "3", "4": "4",
+        "5": "5", "6": "6", "7": "7", "8": "8"
+    },
+    pins={
+        "1": clk_50,
+        "2": spi_clk_50,
+        "3": clk_51,
+        "4": usb.D.P,
+        "5": usb.D.N,
+        "6": high_z,
+        "7": gnd,
+        "8": vcc,
+    },
+)
+
+Component(
+    name="U2",
+    footprint="Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical",
+    pin_defs={"1": "1"},
+    pins={"1": data},
+)
+
+# Use Board() with layers=4 which includes impedance netclasses (50Ohm SE, 85/90/100Ohm Diff)
+Board(
+    name="netclass_test",
+    layout_path="module/",
+    layers=4,
+)

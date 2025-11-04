@@ -96,5 +96,4 @@ layout_test!("graphics", "Board");
 
 layout_test!("complex", "Board");
 
-// Netclass assignment regression test (snapshot_kicad_pro=true to snapshot netclass_patterns)
-layout_test!("netclass_assignment", "NetclassSE", true);
+layout_test!("netclass_assignment", "netclass", true);

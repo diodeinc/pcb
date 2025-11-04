@@ -9,6 +9,18 @@ expression: content
   },
   {
     "netclass": "50Ohm SE",
+    "pattern": "CLK_51"
+  },
+  {
+    "netclass": "50Ohm SE",
     "pattern": "SPI_CLK_50"
+  },
+  {
+    "netclass": "90Ohm Diff",
+    "pattern": "USB_D_N"
+  },
+  {
+    "netclass": "90Ohm Diff",
+    "pattern": "USB_D_P"
   }
 ]
