@@ -3036,8 +3036,14 @@ dependencies = [
  "axoupdater",
  "clap",
  "colored",
+ "comfy-table",
  "env_logger",
  "ipc2581",
+ "log",
+ "pcb-sch",
+ "serde",
+ "serde_json",
+ "zstd",
 ]
 
 [[package]]

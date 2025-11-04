@@ -386,7 +386,8 @@ fn test_function_modes() {
 fn test_testcase1_metadata() {
     use ipc2581::{LayerFunction, PlatingStatus};
 
-    let doc = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-full.xml").unwrap();
+    let doc = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-full.xml")
+        .unwrap();
 
     // Get Ecad data
     if let Some(ecad) = doc.ecad() {
@@ -781,9 +782,13 @@ testcase_metadata_test!(
 #[test]
 fn test_testcase1_cross_file_consistency() {
     // Parse all three main views
-    let full = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-full.xml").unwrap();
-    let assembly = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-Assembly.xml").unwrap();
-    let bom_doc = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-BOM.xml").unwrap();
+    let full = test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-full.xml")
+        .unwrap();
+    let assembly =
+        test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-Assembly.xml")
+            .unwrap();
+    let bom_doc =
+        test_helpers::parse_compressed("tests/data/Testcase1-RevC/testcase1-RevC-BOM.xml").unwrap();
 
     println!("\nCross-file Consistency Validation:");
 
