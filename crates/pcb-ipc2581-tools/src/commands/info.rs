@@ -114,6 +114,8 @@ fn output_ecad_info(ecad: &Ecad, unit_format: UnitFormat) -> Result<()> {
 
 fn calculate_board_dimensions(step: &Step) -> Option<(f64, f64)> {
     // Calculate bounding box from profile
+    // TODO: Make arc-aware - currently only checks arc endpoints, not the actual arc path
+    // For curves, we should calculate the true bounding box including arc bulge
     if let Some(profile) = &step.profile {
         let mut min_x = f64::MAX;
         let mut max_x = f64::MIN;
@@ -135,6 +137,7 @@ fn calculate_board_dimensions(step: &Step) -> Option<(f64, f64)> {
                     max_y = max_y.max(seg.y);
                 }
                 ipc2581::types::PolyStep::Curve(curve) => {
+                    // TODO: Calculate actual arc bounding box, not just endpoints
                     min_x = min_x.min(curve.x);
                     max_x = max_x.max(curve.x);
                     min_y = min_y.min(curve.y);
