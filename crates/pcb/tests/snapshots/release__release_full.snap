@@ -69,6 +69,10 @@ expression: sb.snapshot_dir(staging_dir)
     "dnp": false
   }
 ]
+=== diagnostics.json
+{
+  "boards/TestBoard.zen": []
+}
 === manufacturing/cpl.csv
 Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
 "C1","100nF","C_0402_1005Metric",149.855000,-103.970000,0.000000,top

@@ -142,7 +142,7 @@ impl serde::Serialize for Diagnostic {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Diagnostic", 7)?;
+        let mut state = serializer.serialize_struct("Diagnostic", 8)?;
         state.serialize_field("path", &self.path)?;
         state.serialize_field("span", &self.span.map(|span| span.to_string()))?;
         state.serialize_field("severity", &self.severity)?;
@@ -156,6 +156,7 @@ impl serde::Serialize for Diagnostic {
             "source_error",
             &self.source_error.as_ref().map(|err| err.to_string()),
         )?;
+        state.serialize_field("suppressed", &self.suppressed)?;
         state.end()
     }
 }
@@ -299,9 +300,106 @@ pub struct WithDiagnostics<T> {
     pub output: Option<T>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Diagnostics {
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// A frame in a diagnostic stack trace, representing one level of context
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticFrame {
+    /// Combined location as "path:line:col" or "path:line:col-line:col"
+    pub location: String,
+    /// Message for this frame
+    pub message: String,
+}
+
+/// Flattened diagnostic representation suitable for structured reports
+/// The diagnostic hierarchy is flattened so the innermost error becomes
+/// the primary diagnostic, with parent context in the stack
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticReport {
+    /// Combined location of the innermost diagnostic
+    pub location: String,
+    /// Severity of the innermost diagnostic
+    pub severity: starlark::errors::EvalSeverity,
+    /// Body/message of the innermost diagnostic
+    pub body: String,
+    /// Whether this diagnostic was suppressed
+    pub suppressed: bool,
+    /// Number of times this diagnostic occurred (1 if not aggregated)
+    pub occurrences: usize,
+    /// Parent context for this diagnostic (innermost to outermost)
+    /// Empty if there is no parent context. Does not include the innermost diagnostic itself.
+    pub stack: Vec<DiagnosticFrame>,
+}
+
+impl DiagnosticReport {
+    /// Convert a potentially nested Diagnostic into a flattened DiagnosticReport
+    pub fn from_diagnostic(diagnostic: &Diagnostic) -> Self {
+        // Find innermost diagnostic
+        let innermost = diagnostic.innermost();
+
+        // Build stack from outermost to parent (excluding innermost)
+        let mut stack = Vec::new();
+        let mut current = diagnostic;
+
+        while let Some(child) = &current.child {
+            stack.push(DiagnosticFrame {
+                location: format_location(&current.path, current.span),
+                message: current.body.clone(),
+            });
+            current = child.as_ref();
+        }
+
+        // Extract occurrence count from SuppressedDiagnostics if present (from AggregatePass)
+        let occurrences = diagnostic
+            .downcast_error_ref::<crate::lang::error::SuppressedDiagnostics>()
+            .map(|suppressed| 1 + suppressed.suppressed.len())
+            .unwrap_or(1);
+
+        DiagnosticReport {
+            location: format_location(&innermost.path, innermost.span),
+            severity: innermost.severity,
+            body: innermost.body.clone(),
+            suppressed: diagnostic.suppressed, // Use outermost suppression status
+            occurrences,
+            stack,
+        }
+    }
+}
+
+/// Format a location as "path:span" or just "path" if no span
+fn format_location(path: &str, span: Option<starlark::codemap::ResolvedSpan>) -> String {
+    match span {
+        Some(span) => format!("{}:{}", path, span),
+        None => path.to_string(),
+    }
+}
+
+/// Container for diagnostic reports suitable for JSON export
+/// Maps source file paths (relative to workspace root) to their diagnostics
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiagnosticsReport {
+    #[serde(flatten)]
+    pub files: std::collections::HashMap<String, Vec<DiagnosticReport>>,
+}
+
+impl DiagnosticsReport {
+    /// Convert Diagnostics to DiagnosticsReport by flattening each diagnostic
+    /// The source_file should be the path relative to workspace root
+    pub fn from_diagnostics(diagnostics: &Diagnostics, source_file: &str) -> Self {
+        Self {
+            files: std::collections::HashMap::from([(
+                source_file.to_string(),
+                diagnostics
+                    .diagnostics
+                    .iter()
+                    .map(DiagnosticReport::from_diagnostic)
+                    .collect(),
+            )]),
+        }
+    }
 }
 
 impl Deref for Diagnostics {

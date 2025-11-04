@@ -2,6 +2,10 @@
 source: crates/pcb/tests/release.rs
 expression: sb.snapshot_dir(staging_dir)
 ---
+=== diagnostics.json
+{
+  "boards/DescBoard.zen": []
+}
 === metadata.json
 {
   "git": {

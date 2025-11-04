@@ -897,10 +897,18 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     let (has_errors, has_warnings) = spinner.suspend(|| {
         let mut has_errors = false;
         let mut has_warnings = false;
+
+        // Export diagnostics to JSON for release artifacts
+        let mut passes = crate::build::create_diagnostics_passes(&[]);
+        passes.push(Box::new(pcb_zen_core::JsonExportPass::new(
+            info.staging_dir.join("diagnostics.json"),
+            zen_file_rel.display().to_string(),
+        )));
+
         let _schematic = crate::build::build(
             &staged_zen_path,
             true, // offline mode since all dependencies should be vendored
-            crate::build::create_diagnostics_passes(&[]),
+            passes,
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,

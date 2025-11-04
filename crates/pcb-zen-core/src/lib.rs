@@ -48,12 +48,15 @@ pub mod attrs {
 // Re-export commonly used types
 pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{
-    Diagnostic, DiagnosticError, Diagnostics, DiagnosticsPass, LoadError, WithDiagnostics,
+    Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
+    DiagnosticsReport, LoadError, WithDiagnostics,
 };
 pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use load_spec::LoadSpec;
-pub use passes::{AggregatePass, FilterHiddenPass, LspFilterPass, SortPass, SuppressPass};
+pub use passes::{
+    AggregatePass, FilterHiddenPass, JsonExportPass, LspFilterPass, SortPass, SuppressPass,
+};
 
 // Re-export file provider types
 pub use file_provider::InMemoryFileProvider;

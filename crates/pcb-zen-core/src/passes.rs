@@ -144,3 +144,40 @@ fn severity_sort_order(severity: EvalSeverity) -> u8 {
         EvalSeverity::Disabled => 3,
     }
 }
+
+/// A pass that exports diagnostics to JSON file
+pub struct JsonExportPass {
+    output_path: std::path::PathBuf,
+    source_file: String,
+}
+
+impl JsonExportPass {
+    pub fn new(output_path: std::path::PathBuf, source_file: String) -> Self {
+        Self {
+            output_path,
+            source_file,
+        }
+    }
+}
+
+impl DiagnosticsPass for JsonExportPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        let report = crate::DiagnosticsReport::from_diagnostics(diagnostics, &self.source_file);
+
+        let json = match serde_json::to_string_pretty(&report) {
+            Ok(json) => json,
+            Err(e) => {
+                eprintln!("Failed to serialize diagnostics: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = std::fs::write(&self.output_path, &json) {
+            eprintln!(
+                "Failed to write diagnostics to {}: {}",
+                self.output_path.display(),
+                e
+            );
+        }
+    }
+}
