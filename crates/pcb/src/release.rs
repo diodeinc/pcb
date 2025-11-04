@@ -14,6 +14,7 @@ use crate::workspace::{gather_workspace_info, WorkspaceInfo};
 
 use std::fs;
 use std::io::{IsTerminal, Write};
+use std::time::Instant;
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
@@ -171,7 +172,7 @@ pub struct ReleaseInfo {
     pub yes: bool,
 }
 
-type TaskFn = fn(&ReleaseInfo) -> Result<()>;
+type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
 
 const BASE_TASKS: &[(&str, TaskFn)] = &[
     ("Copying source files and dependencies", copy_sources),
@@ -211,19 +212,57 @@ fn get_manufacturing_tasks(excluded: &[ArtifactType]) -> Vec<(&'static str, Task
         .collect()
 }
 
+/// Format cumulative time as MM:SS
+fn format_cumulative_time(seconds: f64) -> String {
+    let total_secs = seconds as u64;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    format!("{:02}:{:02}", mins, secs)
+}
+
+/// Format task duration as seconds or minutes depending on the value
+fn format_task_duration_value(seconds: f64) -> String {
+    if seconds >= 60.0 {
+        format!("{:4.1}m", seconds / 60.0)
+    } else {
+        format!("{:4.1}s", seconds)
+    }
+}
+
+/// Format a task duration (dimmed if < 60s, red if >= 60s)
+fn format_task_duration(seconds: f64) -> colored::ColoredString {
+    let formatted = format_task_duration_value(seconds);
+    if seconds >= 60.0 {
+        formatted.red()
+    } else {
+        formatted.dimmed()
+    }
+}
+
 /// Execute a list of tasks with proper error handling and UI feedback
-fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)]) -> Result<()> {
+fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Instant) -> Result<()> {
     for (name, task) in tasks {
         let spinner = Spinner::builder(*name).start();
-        spinner.finish();
 
-        task(info)?;
-        eprintln!("{} {name}", "✓".green());
+        let task_start = Instant::now();
+        task(info, &spinner)?;
+        let task_duration = task_start.elapsed().as_secs_f64();
+        let cumulative_duration = start_time.elapsed().as_secs_f64();
+
+        spinner.finish();
+        eprintln!(
+            "{}: {} ({}) {name}",
+            format_cumulative_time(cumulative_duration),
+            "✓".green(),
+            format_task_duration(task_duration)
+        );
     }
     Ok(())
 }
 
 pub fn execute(args: ReleaseArgs) -> Result<()> {
+    let start_time = Instant::now();
+
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
 
@@ -264,28 +303,35 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
             args.yes,
         )?;
 
-        eprintln!("{} Release information gathered", "✓".green());
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let cumulative = start_time.elapsed().as_secs_f64();
+        eprintln!(
+            "{}: {} ({}) Release information gathered",
+            format_cumulative_time(cumulative),
+            "✓".green(),
+            format_task_duration(elapsed)
+        );
         info
     };
 
     // Execute base tasks
-    execute_tasks(&release_info, BASE_TASKS)?;
+    execute_tasks(&release_info, BASE_TASKS, start_time)?;
 
     // Execute manufacturing tasks if full release
     if matches!(release_info.kind, ReleaseKind::Full) {
         let manufacturing_tasks = get_manufacturing_tasks(&args.exclude);
-        execute_tasks(&release_info, &manufacturing_tasks)?;
+        execute_tasks(&release_info, &manufacturing_tasks, start_time)?;
     }
 
     // Execute finalization tasks
-    execute_tasks(&release_info, FINALIZATION_TASKS)?;
+    execute_tasks(&release_info, FINALIZATION_TASKS, start_time)?;
 
     // Calculate archive path
     let zip_path = archive_zip_path(&release_info);
 
     eprintln!(
         "{} {}",
-        "✓".green().bold(),
+        "✓".green(),
         format!("Release {} staged successfully", release_info.version).bold()
     );
     display_release_info(&release_info, args.format.clone());
@@ -600,7 +646,7 @@ pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) 
 }
 
 /// Copy source files and vendor dependencies
-fn copy_sources(info: &ReleaseInfo) -> Result<()> {
+fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let output = info.workspace.eval_result.output.as_ref().unwrap();
     let tracked_files = output.core_resolver().unwrap().get_tracked_files();
     let workspace_root = info.workspace.root();
@@ -611,7 +657,7 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Copy KiCad layout files
-fn copy_layout(info: &ReleaseInfo) -> Result<()> {
+fn copy_layout(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // If build directory doesn't exist, generate layout files first
     if !info.layout_path.exists() {
         pcb_layout::process_layout(&info.schematic, &info.workspace.zen_path, false, false)?;
@@ -634,7 +680,7 @@ fn copy_layout(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate board config JSON file
-fn generate_board_config(info: &ReleaseInfo) -> Result<()> {
+fn generate_board_config(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Extract board config from the schematic
     let Some(board_config) = pcb_layout::utils::extract_board_config(&info.schematic) else {
         debug!("No board config found in schematic, skipping");
@@ -656,7 +702,7 @@ fn generate_board_config(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate fabrication drawing HTML file
-fn generate_fab_drawing(info: &ReleaseInfo) -> Result<()> {
+fn generate_fab_drawing(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Extract board config from the schematic
     let Some(board_config) = pcb_layout::utils::extract_board_config(&info.schematic) else {
         debug!("No board config found in schematic, skipping fab drawing");
@@ -675,7 +721,7 @@ fn generate_fab_drawing(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Copy documentation files from docs directory adjacent to zen file
-fn copy_docs(info: &ReleaseInfo) -> Result<()> {
+fn copy_docs(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Look for docs directory adjacent to zen file
     let docs_source_dir = info.workspace.zen_path.parent().unwrap().join("docs");
 
@@ -788,7 +834,7 @@ fn update_kicad_pro_text_variables(
 }
 
 /// Substitute version, git hash and name variables in KiCad PCB files
-fn substitute_variables(info: &ReleaseInfo) -> Result<()> {
+fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     debug!("Substituting version variables in KiCad files");
 
     // Determine display name of the board
@@ -833,7 +879,7 @@ print("Text variables updated successfully")
 }
 
 /// Validate that the staged zen file can be built successfully
-fn validate_build(info: &ReleaseInfo) -> Result<()> {
+fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Calculate the zen file path in the staging directory
     let zen_file_rel = info
         .workspace
@@ -847,16 +893,20 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
     let file_name = staged_zen_path.file_name().unwrap().to_string_lossy();
 
     // Use build function with offline mode but allow warnings
-    let mut has_errors = false;
-    let mut has_warnings = false;
-    let _schematic = crate::build::build(
-        &staged_zen_path,
-        true, // offline mode since all dependencies should be vendored
-        crate::build::create_diagnostics_passes(&[]),
-        false, // don't deny warnings - we'll prompt user instead
-        &mut has_errors,
-        &mut has_warnings,
-    );
+    // Suspend spinner during build to allow diagnostics to render properly
+    let (has_errors, has_warnings) = spinner.suspend(|| {
+        let mut has_errors = false;
+        let mut has_warnings = false;
+        let _schematic = crate::build::build(
+            &staged_zen_path,
+            true, // offline mode since all dependencies should be vendored
+            crate::build::create_diagnostics_passes(&[]),
+            false, // don't deny warnings - we'll prompt user instead
+            &mut has_errors,
+            &mut has_warnings,
+        );
+        (has_errors, has_warnings)
+    });
 
     if has_errors {
         std::process::exit(1);
@@ -864,29 +914,34 @@ fn validate_build(info: &ReleaseInfo) -> Result<()> {
 
     // Handle warnings if present and --yes flag wasn't passed
     if has_warnings && !info.yes {
-        // Non-interactive if stdin OR stdout is not a terminal
-        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-            eprintln!(
-                "{} {}: Build failed",
-                pcb_ui::icons::error(),
-                file_name.with_style(Style::Red).bold()
-            );
-            std::process::exit(1);
-        }
-        let confirmed =
-            Confirm::new("Build completed with warnings. Do you want to proceed with the release?")
-                .with_default(true)
-                .prompt()?;
-        if !confirmed {
-            std::process::exit(1);
-        }
+        // Suspend spinner during user prompt
+        spinner.suspend(|| {
+            // Non-interactive if stdin OR stdout is not a terminal
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                eprintln!(
+                    "{} {}: Build failed",
+                    pcb_ui::icons::error(),
+                    file_name.with_style(Style::Red).bold()
+                );
+                std::process::exit(1);
+            }
+            let confirmed = Confirm::new(
+                "Build completed with warnings. Do you want to proceed with the release?",
+            )
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false);
+            if !confirmed {
+                std::process::exit(1);
+            }
+        });
     }
 
     Ok(())
 }
 
 /// Generate design BOM JSON file with KiCad fallback
-fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
+fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Generate BOM entries from the schematic
     let bom = info.schematic.bom();
 
@@ -907,7 +962,7 @@ fn generate_design_bom(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Write release metadata to JSON file
-fn write_metadata(info: &ReleaseInfo) -> Result<()> {
+fn write_metadata(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let metadata = create_metadata_json(info);
     let metadata_str = serde_json::to_string_pretty(&metadata)?;
     fs::write(info.staging_dir.join("metadata.json"), metadata_str)?;
@@ -956,7 +1011,7 @@ fn archive_zip_path(info: &ReleaseInfo) -> PathBuf {
 }
 
 /// Create zip archive of release staging directory
-fn zip_release(info: &ReleaseInfo) -> Result<()> {
+fn zip_release(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let zip_path = archive_zip_path(info);
 
     // Ensure output directory exists
@@ -990,7 +1045,7 @@ fn add_directory_to_zip(zip: &mut ZipWriter<fs::File>, dir: &Path, base_path: &P
 }
 
 /// Generate gerber files
-fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
+fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1044,7 +1099,7 @@ fn generate_gerbers(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate pick-and-place file
-fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
+fn generate_cpl(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1072,7 +1127,7 @@ fn generate_cpl(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate assembly drawings (front and back PDFs)
-fn generate_assembly_drawings(info: &ReleaseInfo) -> Result<()> {
+fn generate_assembly_drawings(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1152,7 +1207,7 @@ fn fix_cpl_header(cpl_path: &Path) -> Result<()> {
 }
 
 /// Generate ODB++ files
-fn generate_odb(info: &ReleaseInfo) -> Result<()> {
+fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1179,7 +1234,7 @@ fn generate_odb(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate IPC-2581 file
-fn generate_ipc2581(info: &ReleaseInfo) -> Result<()> {
+fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1200,7 +1255,7 @@ fn generate_ipc2581(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate STEP model
-fn generate_step_model(info: &ReleaseInfo) -> Result<()> {
+fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
@@ -1241,7 +1296,7 @@ fn generate_step_model(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate VRML model
-fn generate_vrml_model(info: &ReleaseInfo) -> Result<()> {
+fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
@@ -1277,7 +1332,7 @@ fn generate_vrml_model(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate GLB model
-fn generate_glb_model(info: &ReleaseInfo) -> Result<()> {
+fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
@@ -1328,7 +1383,7 @@ fn generate_glb_model(info: &ReleaseInfo) -> Result<()> {
 }
 
 /// Generate SVG rendering
-fn generate_svg_rendering(info: &ReleaseInfo) -> Result<()> {
+fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let models_dir = info.staging_dir.join("3d");
     fs::create_dir_all(&models_dir)?;
 
