@@ -11,6 +11,60 @@ use starlark_syntax::slice_vec_ext::SliceExt;
 use crate::utils::file as file_utils;
 use crate::OutputFormat;
 
+/// Extracted characteristics data from IPC-2581 BOM items
+#[derive(Debug, Default)]
+pub struct CharacteristicsData {
+    pub mpn: Option<String>,
+    pub manufacturer: Option<String>,
+    pub package: Option<String>,
+    pub value: Option<String>,
+}
+
+/// Extract common characteristics from IPC-2581 Characteristics
+pub fn extract_characteristics(
+    ipc: &ipc2581::Ipc2581,
+    chars: &ipc2581::types::Characteristics,
+) -> CharacteristicsData {
+    let mut data = CharacteristicsData::default();
+
+    for textual in &chars.textuals {
+        if let (Some(name), Some(val)) = (textual.name, textual.value) {
+            let name_lower = ipc.resolve(name).to_lowercase();
+            let val_str = ipc.resolve(val).to_string();
+
+            match name_lower.as_str() {
+                "mpn" | "manufacturerpartnumber" | "partnumber" => data.mpn = Some(val_str),
+                "manufacturer" => data.manufacturer = Some(val_str),
+                "package" | "footprint" => data.package = Some(val_str),
+                "value" => data.value = Some(val_str),
+                _ => {}
+            }
+        }
+    }
+
+    data
+}
+
+/// Extract just the MPN from IPC-2581 Characteristics
+pub fn extract_mpn(
+    ipc: &ipc2581::Ipc2581,
+    chars: &ipc2581::types::Characteristics,
+) -> Option<String> {
+    chars.textuals.iter().find_map(|textual| {
+        textual.name.and_then(|name| {
+            let name_str = ipc.resolve(name).to_lowercase();
+            if matches!(
+                name_str.as_str(),
+                "mpn" | "manufacturerpartnumber" | "partnumber"
+            ) {
+                textual.value.map(|v| ipc.resolve(v).to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
 pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
@@ -43,36 +97,16 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
 
             // Extract MPN and other data from characteristics
-            let (mpn, manufacturer, package, value) = if let Some(chars) = &item.characteristics {
-                let mut mpn = None;
-                let mut manufacturer = None;
-                let mut package = None;
-                let mut value = None;
-
-                for textual in &chars.textuals {
-                    if let Some(name) = textual.name {
-                        let name_str = ipc.resolve(name);
-                        if let Some(val) = textual.value {
-                            let val_str = ipc.resolve(val).to_string();
-                            // Case-insensitive matching for common field names
-                            let name_lower = name_str.to_lowercase();
-                            match name_lower.as_str() {
-                                "mpn" | "manufacturerpartnumber" | "partnumber" => {
-                                    mpn = Some(val_str.clone());
-                                }
-                                "manufacturer" => manufacturer = Some(val_str.clone()),
-                                "package" | "footprint" => package = Some(val_str.clone()),
-                                "value" => value = Some(val_str.clone()),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-
-                (mpn, manufacturer, package, value)
-            } else {
-                (None, None, None, None)
-            };
+            let CharacteristicsData {
+                mpn,
+                manufacturer,
+                package,
+                value,
+            } = item
+                .characteristics
+                .as_ref()
+                .map(|chars| extract_characteristics(ipc, chars))
+                .unwrap_or_default();
 
             // AVL data takes priority over BomItem characteristics
             // AVL = sourcing truth (matched parts), BomItem = design intent

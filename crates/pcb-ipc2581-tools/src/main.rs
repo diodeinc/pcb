@@ -115,8 +115,8 @@ fn main() -> anyhow::Result<()> {
                 file,
                 rules,
                 output,
-                format,
-            } => commands::bom_edit::execute(&file, &rules, output.as_deref(), format),
+                ..
+            } => commands::bom_edit::execute(&file, &rules, output.as_deref()),
         },
     }
 }

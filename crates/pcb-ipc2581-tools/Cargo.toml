@@ -20,4 +20,5 @@ pcb-sch = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 starlark_syntax = { workspace = true }
-zstd = "0.13"
+quick-xml = { workspace = true }
+zstd = { workspace = true }
