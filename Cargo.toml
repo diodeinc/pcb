@@ -126,6 +126,7 @@ dir-diff = "0.3"
 ignore = "0.4"
 sha2 = "0.10"
 semver = "1.0"
+quick-xml = "0.38"
 zstd = "0.13"
 
 # The profile that 'dist' will build with

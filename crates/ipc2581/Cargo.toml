@@ -12,6 +12,7 @@ categories = ["parsing", "hardware-support"]
 
 [dependencies]
 roxmltree = "0.21"
+quick-xml = "0.37"
 md-5 = "0.10"
 base64 = { workspace = true }
 thiserror = { workspace = true }

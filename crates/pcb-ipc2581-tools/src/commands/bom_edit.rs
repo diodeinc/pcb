@@ -5,170 +5,181 @@ use anyhow::{Context, Result};
 use pcb_sch::{BomMatchingKey, BomMatchingRule, GenericComponent};
 
 use crate::utils::file as file_utils;
-use crate::OutputFormat;
 
-/// Extract generic component data from BOM item characteristics
+/// Key for deduplicating VMPN entries by MPN and manufacturer
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+struct VmpnKey {
+    mpn: String,
+    manufacturer: String,
+}
+
+impl VmpnKey {
+    fn new(mpn: String, manufacturer: String) -> Self {
+        Self { mpn, manufacturer }
+    }
+}
+
+/// Helper to create an AvlVmpn with minimal boilerplate
+fn create_vmpn(
+    interner: &mut ipc2581::Interner,
+    mpn: &str,
+    manufacturer: &str,
+    rank: Option<u32>,
+    qualified: Option<bool>,
+) -> ipc2581::types::AvlVmpn {
+    let mpn_entry = ipc2581::types::AvlMpn {
+        name: interner.intern(mpn),
+        rank,
+        cost: None,
+        moisture_sensitivity: None,
+        availability: None,
+        other: None,
+    };
+
+    let vendor = ipc2581::types::AvlVendor {
+        enterprise_ref: interner.intern(manufacturer),
+    };
+
+    ipc2581::types::AvlVmpn {
+        evpl_vendor: None,
+        evpl_mpn: None,
+        qualified,
+        chosen: None,
+        mpns: vec![mpn_entry],
+        vendors: vec![vendor],
+    }
+}
+
 fn extract_generic_component(
     ipc: &ipc2581::Ipc2581,
     item: &ipc2581::types::BomItem,
 ) -> Option<(GenericComponent, String)> {
     let chars = item.characteristics.as_ref()?;
-
-    // Extract type, package, and value
-    let mut component_type = None;
-    let mut package = None;
-    let mut value = None;
-
-    for textual in &chars.textuals {
-        if let Some(name) = textual.name {
-            let name_str = ipc.resolve(name).to_lowercase();
-            if let Some(val) = textual.value {
-                let val_str = ipc.resolve(val);
-                match name_str.as_str() {
-                    "type" => component_type = Some(val_str.to_string()),
-                    "package" => package = Some(val_str.to_string()),
-                    "capacitance" | "resistance" | "value" => value = Some(val_str.to_string()),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let package = package?;
-    let value_str = value?;
-
-    // Parse based on component type
-    match component_type.as_deref() {
-        Some("capacitor") => {
-            let capacitance = value_str.parse().ok()?;
+    let mut fields: HashMap<String, String> = chars
+        .textuals
+        .iter()
+        .filter_map(|t| {
             Some((
-                GenericComponent::Capacitor(pcb_sch::Capacitor {
-                    capacitance,
-                    dielectric: None,
-                    esr: None,
-                    voltage: None,
-                }),
-                package,
+                ipc.resolve(t.name?).to_lowercase(),
+                ipc.resolve(t.value?).to_string(),
             ))
+        })
+        .collect();
+
+    let package = fields.remove("package")?;
+    let value = fields
+        .remove("capacitance")
+        .or_else(|| fields.remove("resistance"))
+        .or_else(|| fields.remove("value"))?;
+
+    match fields.get("type")?.as_str() {
+        "capacitor" => Some((
+            GenericComponent::Capacitor(pcb_sch::Capacitor {
+                capacitance: value.parse().ok()?,
+                dielectric: None,
+                esr: None,
+                voltage: None,
+            }),
+            package,
+        )),
+        "resistor" => Some((
+            GenericComponent::Resistor(pcb_sch::Resistor {
+                resistance: value.parse().ok()?,
+                voltage: None,
+            }),
+            package,
+        )),
+        t => {
+            eprintln!(
+                "Unsupported type '{}' for {}",
+                t,
+                ipc.resolve(item.oem_design_number_ref)
+            );
+            None
         }
-        Some("resistor") => {
-            let resistance = value_str.parse().ok()?;
-            Some((
-                GenericComponent::Resistor(pcb_sch::Resistor {
-                    resistance,
-                    voltage: None,
-                }),
-                package,
-            ))
-        }
-        _ => None,
     }
 }
 
-/// Load existing AVL entries from IPC-2581 file
-/// Returns: OEMDesignNumber -> (MPN, Manufacturer) -> AvlVmpn
+fn reintern_vmpn(
+    ipc: &ipc2581::Ipc2581,
+    vmpn: &ipc2581::types::AvlVmpn,
+    interner: &mut ipc2581::Interner,
+) -> (VmpnKey, ipc2581::types::AvlVmpn) {
+    (
+        VmpnKey::new(
+            ipc.resolve(vmpn.mpns[0].name).to_string(),
+            ipc.resolve(vmpn.vendors[0].enterprise_ref).to_string(),
+        ),
+        ipc2581::types::AvlVmpn {
+            evpl_vendor: vmpn.evpl_vendor.map(|s| interner.intern(ipc.resolve(s))),
+            evpl_mpn: vmpn.evpl_mpn.map(|s| interner.intern(ipc.resolve(s))),
+            qualified: vmpn.qualified,
+            chosen: vmpn.chosen,
+            mpns: vmpn
+                .mpns
+                .iter()
+                .map(|m| ipc2581::types::AvlMpn {
+                    name: interner.intern(ipc.resolve(m.name)),
+                    rank: m.rank,
+                    cost: m.cost,
+                    moisture_sensitivity: m.moisture_sensitivity,
+                    availability: m.availability,
+                    other: m.other.map(|s| interner.intern(ipc.resolve(s))),
+                })
+                .collect(),
+            vendors: vmpn
+                .vendors
+                .iter()
+                .map(|v| ipc2581::types::AvlVendor {
+                    enterprise_ref: interner.intern(ipc.resolve(v.enterprise_ref)),
+                })
+                .collect(),
+        },
+    )
+}
+
 fn load_existing_avl(
     ipc: &ipc2581::Ipc2581,
-    new_interner: &mut ipc2581::Interner,
-) -> HashMap<String, HashMap<(String, String), ipc2581::types::AvlVmpn>> {
-    let mut existing = HashMap::new();
+    interner: &mut ipc2581::Interner,
+) -> HashMap<String, HashMap<VmpnKey, ipc2581::types::AvlVmpn>> {
+    let Some(avl) = ipc.avl() else {
+        return HashMap::new();
+    };
 
-    if let Some(avl) = ipc.avl() {
-        for item in &avl.items {
-            let oem_number = ipc.resolve(item.oem_design_number).to_string();
-            let mut mpn_map = HashMap::new();
-
-            for vmpn in &item.vmpn_list {
-                if let (Some(mpn_entry), Some(vendor)) = (vmpn.mpns.first(), vmpn.vendors.first()) {
-                    let mpn = ipc.resolve(mpn_entry.name).to_string();
-                    let manufacturer = ipc.resolve(vendor.enterprise_ref).to_string();
-
-                    // Re-intern into new interner for consistent symbol space
-                    let new_mpn = ipc2581::types::AvlMpn {
-                        name: new_interner.intern(&mpn),
-                        rank: mpn_entry.rank,
-                        cost: mpn_entry.cost,
-                        moisture_sensitivity: mpn_entry.moisture_sensitivity,
-                        availability: mpn_entry.availability,
-                        other: mpn_entry.other.map(|s| new_interner.intern(ipc.resolve(s))),
-                    };
-
-                    let new_vendor = ipc2581::types::AvlVendor {
-                        enterprise_ref: new_interner.intern(&manufacturer),
-                    };
-
-                    let new_vmpn = ipc2581::types::AvlVmpn {
-                        evpl_vendor: vmpn
-                            .evpl_vendor
-                            .map(|s| new_interner.intern(ipc.resolve(s))),
-                        evpl_mpn: vmpn.evpl_mpn.map(|s| new_interner.intern(ipc.resolve(s))),
-                        qualified: vmpn.qualified,
-                        chosen: vmpn.chosen,
-                        mpns: vec![new_mpn],
-                        vendors: vec![new_vendor],
-                    };
-
-                    mpn_map.insert((mpn, manufacturer), new_vmpn);
-                }
-            }
-
-            existing.insert(oem_number, mpn_map);
-        }
-    }
-
-    existing
+    avl.items
+        .iter()
+        .map(|item| {
+            (
+                ipc.resolve(item.oem_design_number).to_string(),
+                item.vmpn_list
+                    .iter()
+                    .filter(|v| !v.mpns.is_empty() && !v.vendors.is_empty())
+                    .map(|v| reintern_vmpn(ipc, v, interner))
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
-pub fn execute(
-    file: &Path,
-    rules_file: &Path,
-    output: Option<&Path>,
-    _format: OutputFormat,
-) -> Result<()> {
-    // Load the IPC-2581 file
+pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
+    let mut interner = ipc2581::Interner::new();
 
-    // Create a new interner for new data
-    let mut new_interner = ipc2581::Interner::new();
-
-    // Load rules from JSON file
-    let rules_content = std::fs::read_to_string(rules_file)
-        .with_context(|| format!("Failed to read rules file: {:?}", rules_file))?;
     let rules: Vec<BomMatchingRule> =
-        serde_json::from_str(&rules_content).with_context(|| "Failed to parse rules JSON")?;
+        serde_json::from_str(&std::fs::read_to_string(rules_file).context("Read rules file")?)
+            .context("Parse rules JSON")?;
 
-    // Check if BOM section exists
-    let bom = ipc
-        .bom()
-        .ok_or_else(|| anyhow::anyhow!("IPC-2581 file has no BOM section"))?;
+    let bom = ipc.bom().ok_or_else(|| anyhow::anyhow!("No BOM section"))?;
+    let mut merged_items = load_existing_avl(&ipc, &mut interner);
 
-    // Load existing AVL entries: OEMDesignNumber -> (MPN, Manufacturer) -> AvlVmpn
-    let mut merged_items: HashMap<String, HashMap<(String, String), ipc2581::types::AvlVmpn>> =
-        load_existing_avl(&ipc, &mut new_interner);
-
-    // Match BOM items against rules
     for item in &bom.items {
         let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
+        let mpn = item
+            .characteristics
+            .as_ref()
+            .and_then(|c| super::bom::extract_mpn(&ipc, c));
 
-        // Try to extract MPN from characteristics for matching
-        let mpn = item.characteristics.as_ref().and_then(|chars| {
-            chars.textuals.iter().find_map(|textual| {
-                textual.name.and_then(|name| {
-                    let name_str = ipc.resolve(name).to_lowercase();
-                    if matches!(
-                        name_str.as_str(),
-                        "mpn" | "manufacturerpartnumber" | "partnumber"
-                    ) {
-                        textual.value.map(|v| ipc.resolve(v).to_string())
-                    } else {
-                        None
-                    }
-                })
-            })
-        });
-
-        // Match against rules
         for rule in &rules {
             let matched = match &rule.key {
                 BomMatchingKey::Mpn(rule_mpn) => mpn.as_ref() == Some(rule_mpn),
@@ -176,60 +187,27 @@ pub fn execute(
                     let designator = ipc.resolve(ref_des.name);
                     paths.iter().any(|path| path.ends_with(designator))
                 }),
-                BomMatchingKey::Generic(generic_key) => {
-                    // Extract generic component data and match
-                    if let Some((component, pkg)) = extract_generic_component(&ipc, item) {
-                        pkg == generic_key.package && component.matches(&generic_key.component)
-                    } else {
-                        false
-                    }
-                }
+                BomMatchingKey::Generic(generic_key) => extract_generic_component(&ipc, item)
+                    .is_some_and(|(c, p)| {
+                        p == generic_key.package && c.matches(&generic_key.component)
+                    }),
             };
 
             if matched {
                 let mpn_map = merged_items.entry(oem_design_number.clone()).or_default();
 
-                // Process each offer - new rules override existing AVL
                 for offer in &rule.offers {
-                    let mpn_str = offer.manufacturer_pn.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Offer missing manufacturer_pn for OEM design number: {}",
+                    let (mpn, mfr) = match (&offer.manufacturer_pn, &offer.manufacturer) {
+                        (Some(m), Some(f)) => (m, f),
+                        _ => anyhow::bail!(
+                            "Offer missing MPN or manufacturer for OEM: {}",
                             oem_design_number
-                        )
-                    })?;
-                    let manufacturer_str = offer.manufacturer.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Offer missing manufacturer for OEM design number: {}",
-                            oem_design_number
-                        )
-                    })?;
-
-                    let key = (mpn_str.clone(), manufacturer_str.clone());
-
-                    // Create or replace entry (new rules override existing)
-                    let mpn = ipc2581::types::AvlMpn {
-                        name: new_interner.intern(mpn_str),
-                        rank: offer.rank, // Use rank from offer (may be None)
-                        cost: None,
-                        moisture_sensitivity: None,
-                        availability: None,
-                        other: None,
+                        ),
                     };
-
-                    let vendor = ipc2581::types::AvlVendor {
-                        enterprise_ref: new_interner.intern(manufacturer_str),
-                    };
-
-                    let vmpn = ipc2581::types::AvlVmpn {
-                        evpl_vendor: None,
-                        evpl_mpn: None,
-                        qualified: Some(true),
-                        chosen: None, // Set after sorting
-                        mpns: vec![mpn],
-                        vendors: vec![vendor],
-                    };
-
-                    mpn_map.insert(key, vmpn);
+                    mpn_map.insert(
+                        VmpnKey::new(mpn.clone(), mfr.clone()),
+                        create_vmpn(&mut interner, mpn, mfr, offer.rank, Some(true)),
+                    );
                 }
             }
         }
@@ -240,22 +218,16 @@ pub fn execute(
         return Ok(());
     }
 
-    // Sort and set chosen flag for each OEMDesignNumber
     let avl_items: Vec<ipc2581::types::AvlItem> = merged_items
         .into_iter()
-        .map(|(oem_design_number, mpn_map)| {
+        .map(|(oem, mpn_map)| {
             let mut vmpn_list: Vec<_> = mpn_map.into_values().collect();
-
-            // Sort by priority: chosen → rank (ascending) → unranked
             vmpn_list.sort_by(|a, b| a.cmp_priority(b));
-
-            // Set chosen flag on best (first) entry
             for (i, vmpn) in vmpn_list.iter_mut().enumerate() {
                 vmpn.chosen = Some(i == 0);
             }
-
             ipc2581::types::AvlItem {
-                oem_design_number: new_interner.intern(&oem_design_number),
+                oem_design_number: interner.intern(&oem),
                 vmpn_list,
                 spec_refs: vec![],
             }
@@ -268,67 +240,68 @@ pub fn execute(
         avl_items.iter().map(|i| i.vmpn_list.len()).sum::<usize>()
     );
 
-    let avl_header = ipc2581::types::AvlHeader {
-        title: new_interner.intern("BOM Alternatives"),
-        source: new_interner.intern("pcb-ipc2581"),
-        author: new_interner.intern("BOM Add Tool"),
-        datetime: new_interner.intern(&chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string()),
-        version: 1,
-        comment: None,
-        mod_ref: None,
-    };
-
     let avl = ipc2581::types::Avl {
-        name: new_interner.intern("BOM_Alternatives"),
-        header: Some(avl_header),
+        name: interner.intern("BOM_Alternatives"),
+        header: Some(ipc2581::types::AvlHeader {
+            title: interner.intern("BOM Alternatives"),
+            source: interner.intern("pcb-ipc2581"),
+            author: interner.intern("BOM Add Tool"),
+            datetime: interner.intern(&chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string()),
+            version: 1,
+            comment: None,
+            mod_ref: None,
+        }),
         items: avl_items,
     };
 
-    // Generate AVL XML
-    let avl_xml = avl.to_xml(&new_interner);
+    let updated_xml = patch_or_add_avl_section(&content, &avl.to_xml(&interner))?;
+    file_utils::save_ipc_file(output.unwrap_or(file), &updated_xml)?;
 
-    // Patch the XML
-    let updated_xml = patch_or_add_avl_section(&content, &avl_xml)?;
-
-    // Write to output file
-    let output_path = output.unwrap_or(file);
-    file_utils::save_ipc_file(output_path, &updated_xml)?;
-
-    eprintln!("✓ Added BOM alternatives to {:?}", output_path);
-
+    eprintln!("✓ Added BOM alternatives to {:?}", output.unwrap_or(file));
     Ok(())
 }
 
-/// Patch the AVL section in the XML, or add it if it doesn't exist
+/// Patch AVL section in XML using quick-xml
 fn patch_or_add_avl_section(original_xml: &str, new_avl_xml: &str) -> Result<String> {
-    // Find if AVL section exists
-    if let Some(avl_start) = original_xml.find("<Avl ") {
-        // Find the end of the AVL section
-        let search_from = avl_start;
-        if let Some(avl_end_tag_start) = original_xml[search_from..].find("</Avl>") {
-            let avl_end = search_from + avl_end_tag_start + "</Avl>".len();
+    use quick_xml::{events::Event, Reader, Writer};
+    use std::io::{Cursor, Write};
 
-            // Replace existing AVL section
-            let mut result = String::new();
-            result.push_str(&original_xml[..avl_start]);
-            result.push_str(new_avl_xml);
-            result.push_str(&original_xml[avl_end..]);
+    let mut reader = Reader::from_str(original_xml);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
+    let (mut skip_depth, mut avl_added) = (0, false);
 
-            return Ok(result);
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Start(e) if e.name().as_ref() == b"Avl" && skip_depth == 0 => {
+                skip_depth = 1;
+                avl_added = true;
+                writer.get_mut().write_all(new_avl_xml.as_bytes())?;
+            }
+            Event::Start(_) if skip_depth > 0 => skip_depth += 1,
+            Event::End(e) if skip_depth > 0 => {
+                skip_depth -= 1;
+                if skip_depth == 0 && e.name().as_ref() != b"Avl" {
+                    writer.write_event(Event::End(e))?;
+                }
+            }
+            Event::End(e) if e.name().as_ref() == b"IPC-2581" => {
+                if !avl_added {
+                    writer.get_mut().write_all(new_avl_xml.as_bytes())?;
+                }
+                writer.write_event(Event::End(e))?;
+            }
+            Event::Empty(e) if e.name().as_ref() == b"Avl" => {
+                avl_added = true;
+                writer.get_mut().write_all(new_avl_xml.as_bytes())?;
+            }
+            e if skip_depth == 0 => writer.write_event(e)?,
+            _ => {}
         }
+        buf.clear();
     }
-
-    // AVL doesn't exist, insert it before </IPC-2581>
-    if let Some(ipc_end) = original_xml.rfind("</IPC-2581>") {
-        let mut result = String::new();
-        result.push_str(&original_xml[..ipc_end]);
-        result.push_str(new_avl_xml);
-        result.push_str(&original_xml[ipc_end..]);
-
-        return Ok(result);
-    }
-
-    anyhow::bail!("Could not find </IPC-2581> closing tag in XML");
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
 }
 
 #[cfg(test)]

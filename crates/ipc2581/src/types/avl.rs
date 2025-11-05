@@ -1,13 +1,5 @@
 use crate::{Interner, Symbol};
-
-/// Escape XML special characters to prevent injection
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
+use quick_xml::escape::escape;
 
 /// AVL (Approved Vendor List) section
 #[derive(Debug, Clone)]
@@ -20,10 +12,7 @@ pub struct Avl {
 impl Avl {
     /// Serialize to XML string
     pub fn to_xml(&self, interner: &Interner) -> String {
-        let mut xml = format!(
-            "  <Avl name=\"{}\">\n",
-            escape_xml(interner.resolve(self.name))
-        );
+        let mut xml = format!("  <Avl name=\"{}\">\n", escape(interner.resolve(self.name)));
 
         if let Some(ref header) = self.header {
             xml.push_str(&header.to_xml(interner));
@@ -54,24 +43,23 @@ impl AvlHeader {
     pub fn to_xml(&self, interner: &Interner) -> String {
         let mut xml = format!(
             "    <AvlHeader title=\"{}\" source=\"{}\" author=\"{}\" datetime=\"{}\" version=\"{}\"",
-            escape_xml(interner.resolve(self.title)),
-            escape_xml(interner.resolve(self.source)),
-            escape_xml(interner.resolve(self.author)),
-            escape_xml(interner.resolve(self.datetime)),
+            escape(interner.resolve(self.title)),
+            escape(interner.resolve(self.source)),
+            escape(interner.resolve(self.author)),
+            escape(interner.resolve(self.datetime)),
             self.version
         );
 
         if let Some(comment) = self.comment {
             xml.push_str(&format!(
                 " comment=\"{}\"",
-                escape_xml(interner.resolve(comment))
+                escape(interner.resolve(comment))
             ));
         }
-
         if let Some(mod_ref) = self.mod_ref {
             xml.push_str(&format!(
                 " modRef=\"{}\"",
-                escape_xml(interner.resolve(mod_ref))
+                escape(interner.resolve(mod_ref))
             ));
         }
 
@@ -95,7 +83,7 @@ impl AvlItem {
     pub fn to_xml(&self, interner: &Interner) -> String {
         let mut xml = format!(
             "    <AvlItem OEMDesignNumber=\"{}\">\n",
-            escape_xml(interner.resolve(self.oem_design_number))
+            escape(interner.resolve(self.oem_design_number))
         );
 
         for vmpn in &self.vmpn_list {
@@ -105,7 +93,7 @@ impl AvlItem {
         for spec_ref in &self.spec_refs {
             xml.push_str(&format!(
                 "      <SpecRef id=\"{}\"/>\n",
-                escape_xml(interner.resolve(*spec_ref))
+                escape(interner.resolve(*spec_ref))
             ));
         }
 
@@ -162,21 +150,18 @@ impl AvlVmpn {
         if let Some(evpl_vendor) = self.evpl_vendor {
             xml.push_str(&format!(
                 " evplVendor=\"{}\"",
-                escape_xml(interner.resolve(evpl_vendor))
+                escape(interner.resolve(evpl_vendor))
             ));
         }
-
         if let Some(evpl_mpn) = self.evpl_mpn {
             xml.push_str(&format!(
                 " evplMpn=\"{}\"",
-                escape_xml(interner.resolve(evpl_mpn))
+                escape(interner.resolve(evpl_mpn))
             ));
         }
-
         if let Some(qualified) = self.qualified {
             xml.push_str(&format!(" qualified=\"{}\"", qualified));
         }
-
         if let Some(chosen) = self.chosen {
             xml.push_str(&format!(" chosen=\"{}\"", chosen));
         }
@@ -217,30 +202,23 @@ impl AvlMpn {
     pub fn to_xml(&self, interner: &Interner) -> String {
         let mut xml = format!(
             "        <AvlMpn name=\"{}\"",
-            escape_xml(interner.resolve(self.name))
+            escape(interner.resolve(self.name))
         );
 
         if let Some(rank) = self.rank {
             xml.push_str(&format!(" rank=\"{}\"", rank));
         }
-
         if let Some(cost) = self.cost {
             xml.push_str(&format!(" cost=\"{}\"", cost));
         }
-
         if let Some(ref ms) = self.moisture_sensitivity {
             xml.push_str(&format!(" moistureSensitivity=\"{}\"", ms.as_str()));
         }
-
         if let Some(avail) = self.availability {
             xml.push_str(&format!(" availability=\"{}\"", avail));
         }
-
         if let Some(other) = self.other {
-            xml.push_str(&format!(
-                " other=\"{}\"",
-                escape_xml(interner.resolve(other))
-            ));
+            xml.push_str(&format!(" other=\"{}\"", escape(interner.resolve(other))));
         }
 
         xml.push_str("/>\n");
@@ -303,7 +281,7 @@ impl AvlVendor {
     pub fn to_xml(&self, interner: &Interner) -> String {
         format!(
             "        <AvlVendor enterpriseRef=\"{}\"/>\n",
-            escape_xml(interner.resolve(self.enterprise_ref))
+            escape(interner.resolve(self.enterprise_ref))
         )
     }
 }
@@ -336,19 +314,6 @@ mod tests {
         assert_eq!(MoistureSensitivity::OneYear.as_str(), "1_YEAR");
         assert_eq!(MoistureSensitivity::Hours168.as_str(), "168_HOURS");
         assert_eq!(MoistureSensitivity::Bake.as_str(), "BAKE");
-    }
-
-    #[test]
-    fn test_xml_escaping() {
-        assert_eq!(escape_xml("normal"), "normal");
-        assert_eq!(escape_xml("A&B"), "A&amp;B");
-        assert_eq!(escape_xml("<tag>"), "&lt;tag&gt;");
-        assert_eq!(escape_xml("\"quoted\""), "&quot;quoted&quot;");
-        assert_eq!(escape_xml("'single'"), "&apos;single&apos;");
-        assert_eq!(
-            escape_xml("R&D <script>alert('xss')</script>"),
-            "R&amp;D &lt;script&gt;alert(&apos;xss&apos;)&lt;/script&gt;"
-        );
     }
 
     #[test]
