@@ -251,11 +251,21 @@ fn test_pcb_release_full() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .ignore_globs(["layout/*", "3d/*", "manufacturing/*.xml"]);
 
-    // Run full release with JSON output
+    // Run full release with JSON output (suppress test board DRC issues)
     let output = sb
         .cmd(
             cargo_bin!("pcb"),
-            ["release", "--board", "TestBoard", "-f", "json"],
+            [
+                "release",
+                "--board",
+                "TestBoard",
+                "-f",
+                "json",
+                "-S",
+                "layout.drc.invalid_outline",
+                "-S",
+                "warnings",
+            ],
         )
         .read()
         .expect("Failed to run pcb release command");

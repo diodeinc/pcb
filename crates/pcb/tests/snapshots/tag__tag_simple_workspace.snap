@@ -2,7 +2,7 @@
 source: crates/pcb/tests/tag.rs
 expression: output
 ---
-Command: pcb tag -v 1.0.0 -b TB0001
+Command: pcb tag -v 1.0.0 -b TB0001 -S layout.drc.invalid_outline
 Exit Code: 0
 
 --- STDOUT ---
@@ -16,6 +16,14 @@ Exit Code: 0
 ✓ Generating board config
 ✓ Copying documentation
 ✓ Substituting version variables
+
+┌───────────────────────────────────────────────────────────┐
+│ Category          Errors (excluded)   Warnings (excluded) │
+╞═══════════════════════════════════════════════════════════╡
+│ invalid_outline   (1)                 -                   │
+│ Total             (1)                 -                   │
+└───────────────────────────────────────────────────────────┘
+✓ Running KiCad DRC checks
 ✓ Generating fabrication drawing
 ✓ Generating design BOM
 ✓ Generating gerber files

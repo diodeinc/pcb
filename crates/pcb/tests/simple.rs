@@ -162,10 +162,23 @@ fn test_pcb_release_simple_workspace() {
         sb.snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "json"])
     );
 
-    // Test release
+    // Test release (suppress DRC errors/warnings expected in minimal test boards)
     assert_snapshot!(
         "simple_workspace_release",
-        sb.snapshot_run("pcb", ["release", "-b", "TestBoard", "-f", "json"])
+        sb.snapshot_run(
+            "pcb",
+            [
+                "release",
+                "-b",
+                "TestBoard",
+                "-f",
+                "json",
+                "-S",
+                "layout.drc.invalid_outline",
+                "-S",
+                "warnings"
+            ]
+        )
     );
 }
 

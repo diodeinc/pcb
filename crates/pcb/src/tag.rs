@@ -37,6 +37,10 @@ pub struct TagArgs {
     /// Exclude specific manufacturing artifacts from the release validation (can be specified multiple times)
     #[arg(long, value_enum)]
     pub exclude: Vec<release::ArtifactType>,
+
+    /// Suppress diagnostics by kind or severity during validation
+    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
+    pub suppress: Vec<String>,
 }
 
 /// Information gathered for tag operation
@@ -57,6 +61,8 @@ pub struct TagInfo {
     pub discovery_path: Option<String>,
     /// Artifacts to exclude from release validation
     pub exclude: Vec<release::ArtifactType>,
+    /// Diagnostics to suppress during validation
+    pub suppress: Vec<String>,
 }
 
 type TaskFn = fn(&TagInfo) -> Result<()>;
@@ -111,6 +117,7 @@ pub fn execute(args: TagArgs) -> Result<()> {
             force: args.force,
             discovery_path: args.path.clone(),
             exclude: args.exclude,
+            suppress: args.suppress,
         };
         info_spinner.finish();
         info
@@ -164,6 +171,7 @@ fn run_release(info: &TagInfo) -> Result<()> {
         output_name: None,                 // Use default
         exclude: info.exclude.clone(),     // Pass through exclude list from tag command
         yes: false,                        // Prompt for warnings
+        suppress: info.suppress.clone(),   // Pass through suppress list from tag command
     };
 
     // Run the full release process - this validates everything
