@@ -93,6 +93,11 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
     // Get BOM from IPC-2581
     if let Some(bom_section) = ipc.bom() {
         for item in &bom_section.items {
+            // Skip items with DOCUMENT category (e.g., test points marked exclude_from_bom in KiCad)
+            if matches!(item.category, Some(ipc2581::types::BomCategory::Document)) {
+                continue;
+            }
+
             // Get OEM design number as the key
             let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
 
@@ -134,6 +139,12 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             // Process reference designators
             for ref_des in &item.ref_des_list {
                 let designator = ipc.resolve(ref_des.name).to_string();
+
+                // Skip empty designators (invalid/placeholder entries)
+                if designator.is_empty() {
+                    continue;
+                }
+
                 let path = format!("ipc::{}", designator);
 
                 // Check DNP status
@@ -152,6 +163,12 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             if let Some(step) = ecad.cad_data.steps.first() {
                 for component in &step.components {
                     let ref_des = ipc.resolve(component.ref_des).to_string();
+
+                    // Skip empty designators (invalid/placeholder entries)
+                    if ref_des.is_empty() {
+                        continue;
+                    }
+
                     let path = format!("ipc::{}", ref_des);
 
                     let package = Some(ipc.resolve(component.package_ref).to_string());

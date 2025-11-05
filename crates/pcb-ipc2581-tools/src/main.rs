@@ -49,6 +49,21 @@ enum Commands {
         #[command(subcommand)]
         command: EditCommands,
     },
+
+    /// Export a filtered view of an IPC-2581 file for a specific mode
+    View {
+        /// Input IPC-2581 XML file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        input: PathBuf,
+
+        /// Target function mode for the view
+        #[arg(short, long)]
+        mode: ViewMode,
+
+        /// Output file path
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -86,6 +101,31 @@ enum UnitFormat {
     Inch,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum ViewMode {
+    Bom,
+    Assembly,
+    Fabrication,
+    Stackup,
+    Test,
+    Stencil,
+    Dfx,
+}
+
+impl ViewMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Bom => "BOM",
+            Self::Assembly => "ASSEMBLY",
+            Self::Fabrication => "FABRICATION",
+            Self::Stackup => "STACKUP",
+            Self::Test => "TEST",
+            Self::Stencil => "STENCIL",
+            Self::Dfx => "DFX",
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -118,6 +158,12 @@ fn main() -> anyhow::Result<()> {
                 ..
             } => commands::bom_edit::execute(&file, &rules, output.as_deref()),
         },
+
+        Commands::View {
+            input,
+            mode,
+            output,
+        } => commands::view::execute(&input, mode, &output),
     }
 }
 

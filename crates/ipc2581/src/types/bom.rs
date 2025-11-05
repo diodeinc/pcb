@@ -31,6 +31,7 @@ pub struct BomRefDes {
 pub enum BomCategory {
     Electrical,
     Mechanical,
+    Document,
 }
 
 /// Characteristics for a BOM item
