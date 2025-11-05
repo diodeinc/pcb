@@ -34,6 +34,8 @@ pub mod attrs {
     pub const SYMBOL_VALUE: &str = "__symbol_value";
     pub const PADS: &str = "pads";
     pub const DNP: &str = "dnp";
+    pub const SKIP_BOM: &str = "skip_bom";
+    pub const SKIP_POS: &str = "skip_pos";
     pub const DATASHEET: &str = "datasheet";
     pub const DESCRIPTION: &str = "description";
 

@@ -128,6 +128,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 generic_data: None,
                 offers: Vec::new(),
                 dnp: false, // Check ref des for populate flag
+                skip_bom: false,
             };
 
             // Process reference designators
@@ -165,6 +166,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                         generic_data: None,
                         offers: Vec::new(),
                         dnp: false,
+                        skip_bom: false,
                     };
 
                     entries.insert(path.clone(), entry);

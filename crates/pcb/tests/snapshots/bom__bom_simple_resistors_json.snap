@@ -37,8 +37,7 @@ Exit Code: 0
           }
         }
       }
-    ],
-    "dnp": false
+    ]
   },
   {
     "path": "R2.R",
@@ -70,8 +69,7 @@ Exit Code: 0
           }
         }
       }
-    ],
-    "dnp": false
+    ]
   },
   {
     "path": "R3.R",
@@ -103,8 +101,7 @@ Exit Code: 0
           }
         }
       }
-    ],
-    "dnp": false
+    ]
   }
 ]
 --- STDERR ---

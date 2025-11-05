@@ -112,6 +112,9 @@ pub fn execute(args: BomArgs) -> Result<()> {
         bom.apply_bom_rules(&rules);
     }
 
+    // Filter out components marked as skip_bom
+    bom = bom.filter_excluded();
+
     spinner.finish();
 
     let mut writer = io::stdout().lock();

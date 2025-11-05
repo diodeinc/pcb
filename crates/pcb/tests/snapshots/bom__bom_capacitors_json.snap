@@ -24,8 +24,7 @@ Exit Code: 0
       "value": "16",
       "tolerance": "0",
       "unit": "Volts"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "C2.C",
@@ -44,8 +43,7 @@ Exit Code: 0
       "value": "25",
       "tolerance": "0",
       "unit": "Volts"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "C3.C",
@@ -58,8 +56,7 @@ Exit Code: 0
       "value": "0.000001",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   }
 ]
 --- STDERR ---
