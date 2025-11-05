@@ -1263,6 +1263,35 @@ ChildBoard(name="Board1")
 - Modifiers are inherited through the entire module hierarchy
 - Common uses: vendor policies, DNP rules, property validation, debug tagging
 
+### match_component(match, parts)
+
+**Stdlib helper function** (from `@stdlib/bom/helpers.zen`) for creating component modifiers that assign MPNs based on property matching.
+
+**Parameters:**
+- `match`: Dict of property names to values (all must match)
+- `parts`: Tuple `(mpn, manufacturer)` or list of tuples (first is primary, rest are alternatives)
+
+**Example:**
+```python
+load("@stdlib/bom/helpers.zen", "match_component")
+
+Board(
+    name="MyBoard",
+    layers=4,
+    modifiers=[
+        match_component(
+            match={"resistance": "10k", "package": "0603"},
+            parts=[
+                ("ERJ-3EKF1002V", "Panasonic"),  # Primary
+                ("RC0603FR-0710KL", "Yageo"),    # Alternative
+            ]
+        ),
+    ]
+)
+```
+
+Use to override default BOM matching or assign board-specific part numbers. Modifiers run before BOM profile.
+
 ### builtin.current_module_path()
 
 **Built-in function** that returns the current module's path as a list of strings.
@@ -1314,7 +1343,7 @@ load("@stdlib/board_config.zen",
 )
 ```
 
-### Board(name, layout_path, config=None, layers=None, layout_hints=None, default=False)
+### Board(name, layout_path, config=None, layers=None, layout_hints=None, default=False, modifiers=None, bom_profile=add_default_bom_profile)
 
 **Stdlib function** for declaring board configurations for PCB layout generation.
 
@@ -1366,6 +1395,41 @@ Board(
     config=config,
     default=True
 )
+
+# BOM customization with custom part matching
+load("@stdlib/bom/helpers.zen", "match_component")
+
+Board(
+    name="ProductionBoard",
+    layout_path="layout/",
+    layers=4,
+    default=True,
+    # Custom modifiers run BEFORE default BOM matching
+    modifiers=[
+        # Override specific components with preferred vendors
+        match_component(
+            match={"resistance": "10k", "package": "0603"},
+            parts=[
+                ("ERJ-3EKF1002V", "Panasonic"),
+                ("RC0603FR-0710KL", "Yageo"),  # Alternative
+            ]
+        ),
+        match_component(
+            match={"capacitance": "100nF", "voltage": "50V", "package": "0402"},
+            parts=("GCM155R71H104KE02D", "Murata")
+        ),
+    ]
+    # bom_profile defaults to add_default_bom_profile,
+    # which handles standard resistors/capacitors
+)
+
+# Disable automatic BOM matching entirely
+Board(
+    name="CustomBoard",
+    layout_path="layout/",
+    layers=4,
+    bom_profile=lambda: None  # No automatic BOM matching
+)
 ```
 
 **Parameters:**
@@ -1380,6 +1444,8 @@ Board(
   - `layers=8`: 8-layer board (1.6mm, 1oz outer/0.5oz inner, SIG/GND/SIG/PWR/GND/SIG/GND/SIG)
 - `layout_hints`: Optional list of layout optimization hints
 - `default`: If True, this becomes the default board config for the project
+- `modifiers`: Optional list of component modifier functions that run **before** BOM profile modifiers. Use this to override BOM matching or set custom part numbers for specific components. Functions are registered only at the root module level.
+- `bom_profile`: Function that registers BOM matching modifiers (default: `add_default_bom_profile`). The default profile automatically assigns manufacturer part numbers to generic resistors and capacitors. Pass `lambda: None` to disable BOM matching.
 
 **Note:** Either `config` or `layers` must be provided, but not both. If neither is provided, an error will be raised.
 
