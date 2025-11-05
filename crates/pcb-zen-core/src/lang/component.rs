@@ -318,8 +318,6 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 self.ctype
                     .as_ref()
                     .map(|ctype| heap.alloc_str(ctype).to_value())
-                    .or_else(|| data.properties.get("type").map(|t| t.to_value()))
-                    .or_else(|| data.properties.get("Type").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "properties" => {
@@ -484,8 +482,6 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 self.ctype
                     .as_ref()
                     .map(|ctype| heap.alloc_str(ctype).to_value())
-                    .or_else(|| self.data.properties.get("type").map(|t| t.to_value()))
-                    .or_else(|| self.data.properties.get("Type").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "properties" => {
@@ -1119,12 +1115,38 @@ where
                 &["Exclude_from_pos_files", "exclude_from_pos_files"],
             );
 
+            // If prefix is not explicitly provided, try to get it from the symbol's Reference property
+            let final_prefix = prefix
+                .or_else(|| {
+                    final_symbol
+                        .properties()
+                        .get("Reference")
+                        .map(|s| s.to_owned())
+                })
+                .unwrap_or_else(|| "U".to_owned());
+
+            // Consolidate ctype: check kwarg, then legacy properties (type, Type)
+            let final_ctype = ctype
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("type")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    properties_map
+                        .get("Type")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                });
+
             // Remove typed fields from properties map to avoid duplication
             properties_map.shift_remove("mpn");
             properties_map.shift_remove("Mpn");
             properties_map.shift_remove("manufacturer");
             properties_map.shift_remove("datasheet");
             properties_map.shift_remove("description");
+            properties_map.shift_remove("type");
+            properties_map.shift_remove("Type");
             // Remove DNP legacy keys
             properties_map.shift_remove("do_not_populate");
             properties_map.shift_remove("Do_not_populate");
@@ -1137,19 +1159,9 @@ where
             properties_map.shift_remove("Exclude_from_pos_files");
             properties_map.shift_remove("exclude_from_pos_files");
 
-            // If prefix is not explicitly provided, try to get it from the symbol's Reference property
-            let final_prefix = prefix
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Reference")
-                        .map(|s| s.to_owned())
-                })
-                .unwrap_or_else(|| "U".to_owned());
-
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
-                ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                ctype: final_ctype,
                 footprint,
                 prefix: final_prefix,
                 connections,
