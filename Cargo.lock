@@ -3034,6 +3034,7 @@ version = "0.2.19"
 dependencies = [
  "anyhow",
  "axoupdater",
+ "chrono",
  "clap",
  "colored",
  "comfy-table",

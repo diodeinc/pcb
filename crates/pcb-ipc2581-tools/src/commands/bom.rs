@@ -74,10 +74,19 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 (None, None, None, None)
             };
 
+            // AVL data takes priority over BomItem characteristics
+            // AVL = sourcing truth (matched parts), BomItem = design intent
+            let (avl_mpn, avl_manufacturer, avl_alternatives) =
+                lookup_from_avl(ipc, item.oem_design_number_ref);
+
+            // Use AVL first, fallback to characteristics
+            let mpn = avl_mpn.or(mpn);
+            let manufacturer = avl_manufacturer.or(manufacturer);
+
             // Build entry
             let entry = BomEntry {
                 mpn,
-                alternatives: Vec::new(),
+                alternatives: avl_alternatives,
                 manufacturer,
                 package,
                 value,
@@ -134,6 +143,68 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
     Ok(Bom::new(entries, designators))
 }
 
+/// Look up MPN, manufacturer, and alternatives from AVL section
+/// Returns (primary_mpn, primary_manufacturer, alternatives)
+/// Per IPC-2581 spec: rank=1 or chosen=true is primary, rest are alternatives
+fn lookup_from_avl(
+    ipc: &ipc2581::Ipc2581,
+    oem_design_number_ref: ipc2581::Symbol,
+) -> (Option<String>, Option<String>, Vec<pcb_sch::Alternative>) {
+    // Check if AVL section exists
+    let avl = match ipc.avl() {
+        Some(avl) => avl,
+        None => return (None, None, Vec::new()),
+    };
+
+    // Get the OEM design number string to match against
+    let oem_design_number_str = ipc.resolve(oem_design_number_ref);
+
+    // Find matching AvlItem
+    let avl_item = match avl
+        .items
+        .iter()
+        .find(|item| ipc.resolve(item.oem_design_number) == oem_design_number_str)
+    {
+        Some(item) => item,
+        None => return (None, None, Vec::new()),
+    };
+
+    if avl_item.vmpn_list.is_empty() {
+        return (None, None, Vec::new());
+    }
+
+    // Sort by priority: chosen → rank (ascending) → unranked
+    let mut sorted_vmpn: Vec<_> = avl_item.vmpn_list.iter().collect();
+    sorted_vmpn.sort_by(|a, b| a.cmp_priority(b));
+
+    // First entry is primary
+    let primary = sorted_vmpn[0];
+    let primary_mpn = primary
+        .mpns
+        .first()
+        .map(|m| ipc.resolve(m.name).to_string());
+    let primary_manufacturer = primary
+        .vendors
+        .first()
+        .map(|v| ipc.resolve(v.enterprise_ref).to_string());
+
+    // Rest are alternatives
+    let alternatives: Vec<pcb_sch::Alternative> = sorted_vmpn[1..]
+        .iter()
+        .filter_map(|vmpn| {
+            let mpn = vmpn.mpns.first()?.name;
+            let manufacturer = vmpn.vendors.first()?.enterprise_ref;
+
+            Some(pcb_sch::Alternative {
+                mpn: ipc.resolve(mpn).to_string(),
+                manufacturer: ipc.resolve(manufacturer).to_string(),
+            })
+        })
+        .collect();
+
+    (primary_mpn, primary_manufacturer, alternatives)
+}
+
 fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
@@ -151,7 +222,10 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
         let (mpn, manufacturer) = entry
             .get("offers")
             .and_then(|o| o.as_array())
-            .and_then(|arr| arr.first())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|offer| offer["distributor"].as_str() != Some("__AVL__"))
+            })
             .map(|offer| {
                 (
                     offer["manufacturer_pn"].as_str().unwrap_or_default(),
@@ -171,12 +245,29 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             .or_else(|| entry["description"].as_str())
             .unwrap_or_default();
 
+        // Get alternatives if present
+        let alternatives_str = entry
+            .get("alternatives")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                if arr.is_empty() {
+                    String::new()
+                } else {
+                    arr.iter()
+                        .filter_map(|alt| alt["mpn"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            })
+            .unwrap_or_default();
+
         table.add_row(vec![
             designators.as_str(),
             mpn,
             manufacturer,
             entry["package"].as_str().unwrap_or_default(),
             description,
+            alternatives_str.as_str(),
             if entry["dnp"].as_bool().unwrap() {
                 "Yes"
             } else {
@@ -192,6 +283,7 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
         "Manufacturer",
         "Package",
         "Description",
+        "Alternatives",
         "DNP",
     ]);
 

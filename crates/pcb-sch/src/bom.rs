@@ -225,10 +225,14 @@ pub struct GenericMatchingKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Offer {
-    pub distributor: String,
-    pub distributor_pn: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distributor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distributor_pn: Option<String>,
     pub manufacturer: Option<String>,
     pub manufacturer_pn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -796,10 +800,11 @@ mod tests {
                 package: "0603".to_string(),
             }),
             offers: vec![Offer {
-                distributor: "digikey".to_string(),
-                distributor_pn: "311-1.00KHRCT-ND".to_string(),
+                distributor: Some("digikey".to_string()),
+                distributor_pn: Some("311-1.00KHRCT-ND".to_string()),
                 manufacturer: Some("Yageo".to_string()),
                 manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+                rank: None,
             }],
         };
 
@@ -810,10 +815,11 @@ mod tests {
         assert_eq!(entry.offers.len(), 1);
         let expected_matched_offer = MatchedOffer {
             offer: Offer {
-                distributor: "digikey".to_string(),
-                distributor_pn: "311-1.00KHRCT-ND".to_string(),
+                distributor: Some("digikey".to_string()),
+                distributor_pn: Some("311-1.00KHRCT-ND".to_string()),
                 manufacturer: Some("Yageo".to_string()),
                 manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+                rank: None,
             },
             matched_by: resistor_rule.key.clone(),
         };
@@ -823,10 +829,11 @@ mod tests {
         let path_rule = BomMatchingRule {
             key: BomMatchingKey::Path(vec!["R1.R".to_string()]),
             offers: vec![Offer {
-                distributor: "mouser".to_string(),
-                distributor_pn: "603-RC0603FR-071KL".to_string(),
+                distributor: Some("mouser".to_string()),
+                distributor_pn: Some("603-RC0603FR-071KL".to_string()),
                 manufacturer: Some("Yageo".to_string()),
                 manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+                rank: None,
             }],
         };
 
@@ -837,10 +844,11 @@ mod tests {
         assert_eq!(entry.offers.len(), 2);
         let expected_mouser_matched_offer = MatchedOffer {
             offer: Offer {
-                distributor: "mouser".to_string(),
-                distributor_pn: "603-RC0603FR-071KL".to_string(),
+                distributor: Some("mouser".to_string()),
+                distributor_pn: Some("603-RC0603FR-071KL".to_string()),
                 manufacturer: Some("Yageo".to_string()),
                 manufacturer_pn: Some("RC0603FR-071KL".to_string()),
+                rank: None,
             },
             matched_by: path_rule.key.clone(),
         };

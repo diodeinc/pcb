@@ -132,6 +132,30 @@ pub struct AvlVmpn {
 }
 
 impl AvlVmpn {
+    /// Compare by priority: chosen flag first, then rank (Some before None, ascending)
+    /// Returns Ordering for use in sort_by
+    pub fn cmp_priority(&self, other: &Self) -> std::cmp::Ordering {
+        let chosen_a = if self.chosen == Some(true) { 0 } else { 1 };
+        let chosen_b = if other.chosen == Some(true) { 0 } else { 1 };
+
+        let rank_a = self.mpns.first().and_then(|m| m.rank);
+        let rank_b = other.mpns.first().and_then(|m| m.rank);
+
+        // Compare by chosen flag first
+        match chosen_a.cmp(&chosen_b) {
+            std::cmp::Ordering::Equal => {
+                // Then by rank (Some before None, lower number first)
+                match (rank_a, rank_b) {
+                    (Some(a), Some(b)) => a.cmp(&b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+            other => other,
+        }
+    }
+
     pub fn to_xml(&self, interner: &Interner) -> String {
         let mut xml = String::from("      <AvlVmpn");
 
