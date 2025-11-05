@@ -43,6 +43,34 @@ enum Commands {
         #[arg(short, long, default_value = "text")]
         format: OutputFormat,
     },
+
+    /// Edit IPC-2581 data
+    Edit {
+        #[command(subcommand)]
+        command: EditCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum EditCommands {
+    /// Add manufacturer/MPN alternatives to BOM entries
+    Bom {
+        /// IPC-2581 XML file to enrich
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+
+        /// JSON file with BOM alternatives
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        rules: PathBuf,
+
+        /// Output file (default: overwrite input)
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+
+        /// Output format for progress/errors
+        #[arg(short = 'f', long, default_value = "text")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -81,6 +109,15 @@ fn main() -> anyhow::Result<()> {
         } => commands::info::execute(&file, format, units),
 
         Commands::Bom { file, format } => commands::bom::execute(&file, format),
+
+        Commands::Edit { command } => match command {
+            EditCommands::Bom {
+                file,
+                rules,
+                output,
+                format,
+            } => commands::bom_edit::execute(&file, &rules, output.as_deref(), format),
+        },
     }
 }
 

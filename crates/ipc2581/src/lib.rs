@@ -56,6 +56,7 @@ pub struct Ipc2581 {
     history_record: Option<HistoryRecord>,
     ecad: Option<Ecad>,
     bom: Option<Bom>,
+    avl: Option<Avl>,
 }
 
 impl Ipc2581 {
@@ -88,6 +89,7 @@ impl Ipc2581 {
             history_record: parsed.history_record,
             ecad: parsed.ecad,
             bom: parsed.bom,
+            avl: parsed.avl,
         })
     }
 
@@ -125,6 +127,11 @@ impl Ipc2581 {
     /// Get the BOM section if present
     pub fn bom(&self) -> Option<&Bom> {
         self.bom.as_ref()
+    }
+
+    /// Get the AVL section if present
+    pub fn avl(&self) -> Option<&Avl> {
+        self.avl.as_ref()
     }
 
     /// Resolve a symbol to its string value
@@ -171,5 +178,49 @@ mod tests {
         let doc = result.unwrap();
         assert_eq!(doc.revision(), "C");
         assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
+    }
+
+    #[test]
+    fn parse_document_with_avl() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <DictionaryColor/>
+    <DictionaryLineDesc units="MILLIMETER"/>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER"/>
+    <DictionaryUser units="MILLIMETER"/>
+  </Content>
+  <Avl name="Test_AVL">
+    <AvlHeader title="Test" source="Test" author="Test" datetime="2025-01-04" version="1"/>
+    <AvlItem OEMDesignNumber="PART_001">
+      <AvlVmpn qualified="true" chosen="true">
+        <AvlMpn name="TEST123" rank="1"/>
+        <AvlVendor enterpriseRef="TestVendor"/>
+      </AvlVmpn>
+    </AvlItem>
+  </Avl>
+</IPC-2581>"#;
+
+        let result = Ipc2581::parse(xml);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let doc = result.unwrap();
+        assert!(doc.avl().is_some(), "AVL section should be parsed");
+
+        let avl = doc.avl().unwrap();
+        assert_eq!(doc.resolve(avl.name), "Test_AVL");
+        assert_eq!(avl.items.len(), 1);
+
+        let item = &avl.items[0];
+        assert_eq!(doc.resolve(item.oem_design_number), "PART_001");
+        assert_eq!(item.vmpn_list.len(), 1);
+
+        let vmpn = &item.vmpn_list[0];
+        assert_eq!(vmpn.qualified, Some(true));
+        assert_eq!(vmpn.chosen, Some(true));
+        assert_eq!(vmpn.mpns.len(), 1);
+        assert_eq!(doc.resolve(vmpn.mpns[0].name), "TEST123");
     }
 }
