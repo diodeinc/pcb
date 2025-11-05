@@ -93,6 +93,11 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
     // Get BOM from IPC-2581
     if let Some(bom_section) = ipc.bom() {
         for item in &bom_section.items {
+            // Skip items with DOCUMENT category (e.g., test points marked exclude_from_bom in KiCad)
+            if matches!(item.category, Some(ipc2581::types::BomCategory::Document)) {
+                continue;
+            }
+
             // Get OEM design number as the key
             let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
 

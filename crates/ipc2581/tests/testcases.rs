@@ -35,6 +35,9 @@ fn get_bom_stats() -> (u32, u32, usize, usize) {
             Some(BomCategory::Electrical) => {
                 electrical_qty += item.quantity.unwrap_or(0);
             }
+            Some(BomCategory::Document) => {
+                // Document items (logos, test points marked exclude_from_bom) are not counted
+            }
             None => {}
         }
     }

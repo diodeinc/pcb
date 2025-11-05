@@ -1994,6 +1994,7 @@ impl Parser {
         let category = node.attribute("category").map(|s| match s {
             "ELECTRICAL" => BomCategory::Electrical,
             "MECHANICAL" => BomCategory::Mechanical,
+            "DOCUMENT" => BomCategory::Document,
             _ => BomCategory::Electrical, // Default
         });
 
@@ -2040,6 +2041,7 @@ impl Parser {
         let category = node.attribute("category").map(|s| match s {
             "ELECTRICAL" => BomCategory::Electrical,
             "MECHANICAL" => BomCategory::Mechanical,
+            "DOCUMENT" => BomCategory::Document,
             _ => BomCategory::Electrical,
         });
 
