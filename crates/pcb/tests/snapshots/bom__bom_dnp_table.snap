@@ -1,0 +1,16 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/DnpBoard.zen -f table
+Exit Code: 0
+
+--- STDOUT ---
+┌─────────────┬─────────────────┬──────────────┬─────────┬─────────────┬─────┐
+│ Designators ┆ MPN             ┆ Manufacturer ┆ Package ┆ Description ┆ DNP │
+╞═════════════╪═════════════════╪══════════════╪═════════╪═════════════╪═════╡
+│ U2          ┆ RC0603FR-074K7L ┆ Yageo        ┆         ┆             ┆ Yes │
+│ U3          ┆ RC0603FR-0710KL ┆ Yageo        ┆         ┆             ┆ Yes │
+│ U4          ┆ RC0603FR-071KL  ┆ Yageo        ┆         ┆             ┆ No  │
+└─────────────┴─────────────────┴──────────────┴─────────┴─────────────┴─────┘
+--- STDERR ---

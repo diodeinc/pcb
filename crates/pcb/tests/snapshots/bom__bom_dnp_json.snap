@@ -1,0 +1,31 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/DnpBoard.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "path": "dnp_kwarg",
+    "designator": "U2",
+    "mpn": "RC0603FR-074K7L",
+    "manufacturer": "Yageo",
+    "dnp": true
+  },
+  {
+    "path": "dnp_legacy",
+    "designator": "U3",
+    "mpn": "RC0603FR-0710KL",
+    "manufacturer": "Yageo",
+    "dnp": true
+  },
+  {
+    "path": "normal",
+    "designator": "U4",
+    "mpn": "RC0603FR-071KL",
+    "manufacturer": "Yageo"
+  }
+]
+--- STDERR ---

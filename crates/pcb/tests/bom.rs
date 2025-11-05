@@ -78,6 +78,98 @@ Capacitor(name = "C2", value = "10uF", package = "0805", voltage = "25V", dielec
 Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
 "#;
 
+const SKIP_BOM_BOARD_ZEN: &str = r#"
+P1 = Net("P1")
+P2 = Net("P2")
+
+# Normal resistor - should appear in BOM
+Component(
+    name = "normal",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-071KL",
+    manufacturer = "Yageo",
+)
+
+# Component with skip_bom kwarg - should NOT appear in BOM
+Component(
+    name = "skip_bom_kwarg",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    skip_bom = True,
+)
+
+# Component with legacy Exclude_from_bom property - should NOT appear in BOM
+Component(
+    name = "exclude_from_bom_legacy",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    properties = {"Exclude_from_bom": True},
+)
+
+# Normal resistor - should appear in BOM
+Component(
+    name = "normal2",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-0710KL",
+    manufacturer = "Yageo",
+)
+"#;
+
+const DNP_BOARD_ZEN: &str = r#"
+P1 = Net("P1")
+P2 = Net("P2")
+
+# Normal component - should appear in BOM with dnp omitted (false)
+Component(
+    name = "normal",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-071KL",
+    manufacturer = "Yageo",
+)
+
+# DNP component (via legacy property) - should appear in BOM with dnp=true
+Component(
+    name = "dnp_legacy",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-0710KL",
+    manufacturer = "Yageo",
+    properties = {"do_not_populate": True},
+)
+
+# DNP component (via dnp kwarg) - should appear in BOM with dnp=true
+Component(
+    name = "dnp_kwarg",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-074K7L",
+    manufacturer = "Yageo",
+    dnp = True,
+)
+
+# Component with both DNP and skip_bom - should NOT appear in BOM (skip_bom wins)
+Component(
+    name = "dnp_and_skip_bom",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-07100KL",
+    manufacturer = "Yageo",
+    dnp = True,
+    skip_bom = True,
+)
+"#;
+
 const SAMPLE_BOM_RULES: &str = r#"[
   {
     "key": {
@@ -288,4 +380,48 @@ fn test_bom_kicad_fallback_json() {
         .write("layout/layout.kicad_pro", kicad_pro)
         .snapshot_run("pcb", ["bom", "kicad-bom.zen", "-f", "json"]);
     assert_snapshot!("bom_kicad_fallback_json", output);
+}
+
+#[test]
+fn test_bom_skip_bom_filtering() {
+    // Test that components with skip_bom are excluded from BOM output
+    let output = Sandbox::new()
+        .seed_stdlib(&["v0.2.10"])
+        .seed_kicad(&["9.0.0"])
+        .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
+        .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "json"]);
+    assert_snapshot!("bom_skip_bom_json", output);
+}
+
+#[test]
+fn test_bom_skip_bom_filtering_table() {
+    // Test skip_bom filtering in table format
+    let output = Sandbox::new()
+        .seed_stdlib(&["v0.2.10"])
+        .seed_kicad(&["9.0.0"])
+        .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
+        .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "table"]);
+    assert_snapshot!("bom_skip_bom_table", output);
+}
+
+#[test]
+fn test_bom_dnp_components() {
+    // Test that DNP components appear in BOM (dnp is for assembly, not procurement)
+    let output = Sandbox::new()
+        .seed_stdlib(&["v0.2.10"])
+        .seed_kicad(&["9.0.0"])
+        .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
+        .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "json"]);
+    assert_snapshot!("bom_dnp_json", output);
+}
+
+#[test]
+fn test_bom_dnp_components_table() {
+    // Test DNP components in table format
+    let output = Sandbox::new()
+        .seed_stdlib(&["v0.2.10"])
+        .seed_kicad(&["9.0.0"])
+        .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
+        .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "table"]);
+    assert_snapshot!("bom_dnp_table", output);
 }
