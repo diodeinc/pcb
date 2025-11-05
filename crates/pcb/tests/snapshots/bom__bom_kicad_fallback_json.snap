@@ -13,8 +13,7 @@ Exit Code: 0
     "mpn": "ERJ-2RKF1003X",
     "package": "R_0402_1005Metric",
     "value": "ERJ-2RKF1003X",
-    "description": "Resistor",
-    "dnp": false
+    "description": "Resistor"
   },
   {
     "path": "kicad::R2",

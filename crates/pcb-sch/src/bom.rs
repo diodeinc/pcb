@@ -43,7 +43,11 @@ pub struct BomEntry {
     pub generic_data: Option<GenericComponent>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub offers: Vec<MatchedOffer>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dnp: bool,
+    /// Whether this component should be excluded from BOM output (e.g., fiducials, test points)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_bom: bool,
 }
 
 impl BomEntry {
@@ -288,6 +292,7 @@ impl Bom {
                     generic_data: detect_generic_component(instance),
                     offers: Vec::new(),
                     dnp: instance.dnp(),
+                    skip_bom: instance.skip_bom(),
                 };
                 entries.insert(path.clone(), bom_entry);
                 designators.insert(path, designator);
@@ -369,6 +374,31 @@ impl Bom {
             self.apply_bom_rule(rule);
         }
     }
+
+    /// Filter out components that have skip_bom=true
+    /// Returns a new Bom with excluded components removed
+    pub fn filter_excluded(&self) -> Self {
+        let entries: HashMap<_, _> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.skip_bom)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let designators: HashMap<_, _> = entries
+            .keys()
+            .filter_map(|path| {
+                self.designators
+                    .get(path)
+                    .map(|d| (path.clone(), d.clone()))
+            })
+            .collect();
+
+        Bom {
+            entries,
+            designators,
+        }
+    }
 }
 
 /// Errors that can occur during KiCad BOM generation
@@ -432,6 +462,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
             generic_data: None,
             offers: Vec::new(),
             dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
+            skip_bom: false, // KiCad CSV exports don't include this field
         };
 
         entries.insert(path.clone(), entry);
@@ -785,6 +816,7 @@ mod tests {
             })),
             offers: Vec::new(),
             dnp: false,
+            skip_bom: false,
         };
 
         bom.entries.insert("R1.R".to_string(), resistor_entry);

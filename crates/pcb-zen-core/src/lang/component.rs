@@ -70,7 +70,9 @@ impl From<ComponentError> for starlark::Error {
 pub struct ComponentData<'v> {
     pub(crate) mpn: Option<String>,
     pub(crate) manufacturer: Option<String>,
-    pub(crate) dnp: Option<bool>,
+    pub(crate) dnp: bool,
+    pub(crate) skip_bom: bool,
+    pub(crate) skip_pos: bool,
     pub(crate) properties: SmallMap<String, Value<'v>>,
 }
 
@@ -79,7 +81,9 @@ pub struct ComponentData<'v> {
 pub struct FrozenComponentData {
     pub(crate) mpn: Option<String>,
     pub(crate) manufacturer: Option<String>,
-    pub(crate) dnp: Option<bool>,
+    pub(crate) dnp: bool,
+    pub(crate) skip_bom: bool,
+    pub(crate) skip_pos: bool,
     pub(crate) properties: SmallMap<String, FrozenValue>,
 }
 
@@ -128,6 +132,8 @@ impl<'v> Freeze for ComponentValue<'v> {
                 mpn: data.mpn,
                 manufacturer: data.manufacturer,
                 dnp: data.dnp,
+                skip_bom: data.skip_bom,
+                skip_pos: data.skip_pos,
                 properties: {
                     let mut frozen_props = SmallMap::new();
                     for (k, v) in data.properties.into_iter() {
@@ -253,6 +259,38 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
+/// Helper to consolidate boolean properties from kwargs and legacy property names.
+/// Handles both boolean values and string representations ("true", "1", etc.)
+fn consolidate_bool_property<'v>(
+    kwarg_val: Option<Value<'v>>,
+    properties_map: &SmallMap<String, Value<'v>>,
+    legacy_keys: &[&str],
+) -> Option<bool> {
+    kwarg_val.and_then(|v| v.unpack_bool()).or_else(|| {
+        legacy_keys.iter().find_map(|&key| {
+            properties_map.get(key).and_then(|v| {
+                // Try boolean first, then check if it's a string "true"/"false" or "1"/"0"
+                v.unpack_bool().or_else(|| {
+                    v.unpack_str().and_then(|s| match s {
+                        "true" | "1" => Some(true),
+                        "false" | "0" => Some(false),
+                        _ => {
+                            let lower = s.to_lowercase();
+                            if lower == "true" {
+                                Some(true)
+                            } else if lower == "false" {
+                                Some(false)
+                            } else {
+                                None
+                            }
+                        }
+                    })
+                })
+            })
+        })
+    })
+}
+
 // StarlarkValue implementation for mutable ComponentValue
 #[starlark_value(type = "Component")]
 impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
@@ -273,17 +311,13 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     .map(|m| heap.alloc_str(m).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
-            "dnp" => Some(
-                data.dnp
-                    .map(|b| heap.alloc(b).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
+            "dnp" => Some(heap.alloc(data.dnp).to_value()),
+            "skip_bom" => Some(heap.alloc(data.skip_bom).to_value()),
+            "skip_pos" => Some(heap.alloc(data.skip_pos).to_value()),
             "type" => Some(
                 self.ctype
                     .as_ref()
                     .map(|ctype| heap.alloc_str(ctype).to_value())
-                    .or_else(|| data.properties.get("type").map(|t| t.to_value()))
-                    .or_else(|| data.properties.get("Type").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "properties" => {
@@ -356,7 +390,15 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 Ok(())
             }
             "dnp" => {
-                data.dnp = value.unpack_bool();
+                data.dnp = value.unpack_bool().unwrap_or(false);
+                Ok(())
+            }
+            "skip_bom" => {
+                data.skip_bom = value.unpack_bool().unwrap_or(false);
+                Ok(())
+            }
+            "skip_pos" => {
+                data.skip_pos = value.unpack_bool().unwrap_or(false);
                 Ok(())
             }
             // Fallback: set in properties map (always allowed)
@@ -370,7 +412,16 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
         if matches!(
             attr,
-            "name" | "prefix" | "mpn" | "manufacturer" | "dnp" | "type" | "properties" | "pins"
+            "name"
+                | "prefix"
+                | "mpn"
+                | "manufacturer"
+                | "dnp"
+                | "skip_bom"
+                | "skip_pos"
+                | "type"
+                | "properties"
+                | "pins"
         ) {
             return true;
         }
@@ -385,6 +436,8 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "dnp".to_string(),
+            "skip_bom".to_string(),
+            "skip_pos".to_string(),
             "type".to_string(),
             "properties".to_string(),
             "pins".to_string(),
@@ -422,18 +475,13 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .map(|m| heap.alloc_str(m).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
-            "dnp" => Some(
-                self.data
-                    .dnp
-                    .map(|b| heap.alloc(b).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
+            "dnp" => Some(heap.alloc(self.data.dnp).to_value()),
+            "skip_bom" => Some(heap.alloc(self.data.skip_bom).to_value()),
+            "skip_pos" => Some(heap.alloc(self.data.skip_pos).to_value()),
             "type" => Some(
                 self.ctype
                     .as_ref()
                     .map(|ctype| heap.alloc_str(ctype).to_value())
-                    .or_else(|| self.data.properties.get("type").map(|t| t.to_value()))
-                    .or_else(|| self.data.properties.get("Type").map(|t| t.to_value()))
                     .unwrap_or_else(Value::new_none),
             ),
             "properties" => {
@@ -496,7 +544,16 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
     fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
         if matches!(
             attr,
-            "name" | "prefix" | "mpn" | "manufacturer" | "type" | "properties" | "pins"
+            "name"
+                | "prefix"
+                | "mpn"
+                | "manufacturer"
+                | "dnp"
+                | "skip_bom"
+                | "skip_pos"
+                | "type"
+                | "properties"
+                | "pins"
         ) {
             return true;
         }
@@ -511,6 +568,8 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "dnp".to_string(),
+            "skip_bom".to_string(),
+            "skip_pos".to_string(),
             "type".to_string(),
             "properties".to_string(),
             "pins".to_string(),
@@ -587,8 +646,16 @@ impl<'v> ComponentValue<'v> {
         self.ctype.as_deref()
     }
 
-    pub fn dnp(&self) -> Option<bool> {
+    pub fn dnp(&self) -> bool {
         self.data.borrow().dnp
+    }
+
+    pub fn skip_bom(&self) -> bool {
+        self.data.borrow().skip_bom
+    }
+
+    pub fn skip_pos(&self) -> bool {
+        self.data.borrow().skip_pos
     }
 
     pub fn datasheet(&self) -> Option<&str> {
@@ -649,8 +716,16 @@ impl FrozenComponentValue {
         self.ctype.as_deref()
     }
 
-    pub fn dnp(&self) -> Option<bool> {
+    pub fn dnp(&self) -> bool {
         self.data.dnp
+    }
+
+    pub fn skip_bom(&self) -> bool {
+        self.data.skip_bom
+    }
+
+    pub fn skip_pos(&self) -> bool {
+        self.data.skip_pos
     }
 
     pub fn datasheet(&self) -> Option<&str> {
@@ -723,6 +798,8 @@ where
                 ("properties", ParametersSpecParam::<Value<'_>>::Optional),
                 ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
                 ("dnp", ParametersSpecParam::<Value<'_>>::Optional),
+                ("skip_bom", ParametersSpecParam::<Value<'_>>::Optional),
+                ("skip_pos", ParametersSpecParam::<Value<'_>>::Optional),
                 ("datasheet", ParametersSpecParam::<Value<'_>>::Optional),
                 ("description", ParametersSpecParam::<Value<'_>>::Optional),
             ],
@@ -774,6 +851,8 @@ where
             let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
             let spice_model_val: Option<Value> = param_parser.next_opt()?;
             let dnp_val: Option<Value> = param_parser.next_opt()?;
+            let skip_bom_val: Option<Value> = param_parser.next_opt()?;
+            let skip_pos_val: Option<Value> = param_parser.next_opt()?;
             let datasheet_val: Option<Value> = param_parser.next_opt()?;
             let description_val: Option<Value> = param_parser.next_opt()?;
 
@@ -1015,12 +1094,26 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            // Remove mpn, manufacturer, datasheet, and description from properties map since we're storing them as typed fields
-            properties_map.shift_remove("mpn");
-            properties_map.shift_remove("Mpn");
-            properties_map.shift_remove("manufacturer");
-            properties_map.shift_remove("datasheet");
-            properties_map.shift_remove("description");
+            // Consolidate DNP: check kwarg, then legacy properties
+            let final_dnp = consolidate_bool_property(
+                dnp_val,
+                &properties_map,
+                &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
+            );
+
+            // Consolidate skip_bom: check kwarg, then legacy properties
+            let final_skip_bom = consolidate_bool_property(
+                skip_bom_val,
+                &properties_map,
+                &["Exclude_from_bom", "exclude_from_bom"],
+            );
+
+            // Consolidate skip_pos: check kwarg, then legacy properties
+            let final_skip_pos = consolidate_bool_property(
+                skip_pos_val,
+                &properties_map,
+                &["Exclude_from_pos_files", "exclude_from_pos_files"],
+            );
 
             // If prefix is not explicitly provided, try to get it from the symbol's Reference property
             let final_prefix = prefix
@@ -1032,16 +1125,52 @@ where
                 })
                 .unwrap_or_else(|| "U".to_owned());
 
+            // Consolidate ctype: check kwarg, then legacy properties (type, Type)
+            let final_ctype = ctype
+                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                .or_else(|| {
+                    properties_map
+                        .get("type")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    properties_map
+                        .get("Type")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                });
+
+            // Remove typed fields from properties map to avoid duplication
+            properties_map.shift_remove("mpn");
+            properties_map.shift_remove("Mpn");
+            properties_map.shift_remove("manufacturer");
+            properties_map.shift_remove("datasheet");
+            properties_map.shift_remove("description");
+            properties_map.shift_remove("type");
+            properties_map.shift_remove("Type");
+            // Remove DNP legacy keys
+            properties_map.shift_remove("do_not_populate");
+            properties_map.shift_remove("Do_not_populate");
+            properties_map.shift_remove("DNP");
+            properties_map.shift_remove("dnp");
+            // Remove skip_bom legacy keys
+            properties_map.shift_remove("Exclude_from_bom");
+            properties_map.shift_remove("exclude_from_bom");
+            // Remove skip_pos legacy keys
+            properties_map.shift_remove("Exclude_from_pos_files");
+            properties_map.shift_remove("exclude_from_pos_files");
+
             let component = eval_ctx.heap().alloc_complex(ComponentValue {
                 name,
-                ctype: ctype.and_then(|v| v.unpack_str().map(|s| s.to_owned())),
+                ctype: final_ctype,
                 footprint,
                 prefix: final_prefix,
                 connections,
                 data: RefCell::new(ComponentData {
                     mpn: final_mpn,
                     manufacturer: final_manufacturer,
-                    dnp: dnp_val.and_then(|v| v.unpack_bool()),
+                    dnp: final_dnp.unwrap_or(false),
+                    skip_bom: final_skip_bom.unwrap_or(false),
+                    skip_pos: final_skip_pos.unwrap_or(false),
                     properties: properties_map,
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),

@@ -528,6 +528,16 @@ impl Instance {
         // Check for the standardized boolean "dnp" attribute
         self.boolean_attr(&["dnp"]).unwrap_or(false)
     }
+
+    pub fn skip_bom(&self) -> bool {
+        // Check for the standardized boolean "skip_bom" attribute
+        self.boolean_attr(&["skip_bom"]).unwrap_or(false)
+    }
+
+    pub fn skip_pos(&self) -> bool {
+        // Check for the standardized boolean "skip_pos" attribute
+        self.boolean_attr(&["skip_pos"]).unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

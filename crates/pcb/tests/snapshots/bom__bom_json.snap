@@ -18,8 +18,7 @@ Exit Code: 0
       "value": "0.000000100",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "C2.C",
@@ -32,8 +31,7 @@ Exit Code: 0
       "value": "0.000010",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "C3.C",
@@ -46,8 +44,7 @@ Exit Code: 0
       "value": "0.000000000022",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "C4.C",
@@ -60,24 +57,21 @@ Exit Code: 0
       "value": "0.000000000022",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "LED1.D1.LED",
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
-    "description": "Light emitting diode, small symbol, filled shape",
-    "dnp": false
+    "description": "Light emitting diode, small symbol, filled shape"
   },
   {
     "path": "LED2.D1.LED",
     "designator": "D2",
     "package": "0603",
     "value": "LED RED",
-    "description": "Light emitting diode, small symbol, filled shape",
-    "dnp": false
+    "description": "Light emitting diode, small symbol, filled shape"
   },
   {
     "path": "LED1.R1.R",
@@ -90,8 +84,7 @@ Exit Code: 0
       "value": "330",
       "tolerance": "0",
       "unit": "Ohms"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "LED2.R1.R",
@@ -104,8 +97,7 @@ Exit Code: 0
       "value": "330",
       "tolerance": "0",
       "unit": "Ohms"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "R1.R",
@@ -118,16 +110,14 @@ Exit Code: 0
       "value": "10000",
       "tolerance": "0",
       "unit": "Ohms"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "X1.Y",
     "designator": "Y1",
     "package": "5032_2Pin",
     "value": "16MHz 18pF",
-    "description": "Two pin crystal",
-    "dnp": false
+    "description": "Two pin crystal"
   }
 ]
 --- STDERR ---

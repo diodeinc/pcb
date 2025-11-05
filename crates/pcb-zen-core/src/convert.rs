@@ -516,35 +516,10 @@ impl ModuleConverter {
             comp_inst.add_attribute(key.clone(), attr_value);
         }
 
-        // Consolidate DNP handling: check both new kwarg and legacy properties
-        // Priority: dnp kwarg > legacy properties (do_not_populate, DNP, etc.)
-        let is_dnp = if let Some(dnp_kwarg) = component.dnp() {
-            // DNP kwarg takes precedence
-            dnp_kwarg
-        } else {
-            // Fall back to checking legacy properties
-            let legacy_keys = ["do_not_populate", "Do_not_populate", "DNP", "dnp"];
-            legacy_keys.iter().any(|&key| {
-                component
-                    .properties()
-                    .get(key)
-                    .map(|val| {
-                        // Try to interpret the value as a boolean
-                        if let Some(s) = val.downcast_frozen_str() {
-                            let s_str = s.to_string();
-                            s_str.to_lowercase() == "true" || s_str == "1"
-                        } else {
-                            val.unpack_bool().unwrap_or_default()
-                        }
-                    })
-                    .unwrap_or(false)
-            })
-        };
-
-        // Only emit DNP attribute when it's true (false is the default)
-        if is_dnp {
-            comp_inst.add_attribute(crate::attrs::DNP.to_string(), AttributeValue::Boolean(true));
-        }
+        // Handle DNP, skip_bom, and skip_pos (legacy properties already consolidated in Component constructor)
+        add_bool_attribute_if_true(&mut comp_inst, crate::attrs::DNP, component.dnp());
+        add_bool_attribute_if_true(&mut comp_inst, crate::attrs::SKIP_BOM, component.skip_bom());
+        add_bool_attribute_if_true(&mut comp_inst, crate::attrs::SKIP_POS, component.skip_pos());
 
         if let Some(model_val) = component.spice_model() {
             let model =
@@ -855,6 +830,13 @@ fn propagate_from_value(
                 }
             }
         }
+    }
+}
+
+/// Helper to add a boolean attribute only if the value is true
+fn add_bool_attribute_if_true(instance: &mut Instance, attr_name: &str, value: bool) {
+    if value {
+        instance.add_attribute(attr_name.to_string(), AttributeValue::Boolean(true));
     }
 }
 

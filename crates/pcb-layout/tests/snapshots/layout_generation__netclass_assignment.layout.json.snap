@@ -7,6 +7,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -257,6 +258,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical",
       "graphical_items": [
         {
@@ -599,6 +601,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "Connector_PinHeader_2.54mm:PinHeader_2x04_P2.54mm_Vertical",
       "graphical_items": [
         {

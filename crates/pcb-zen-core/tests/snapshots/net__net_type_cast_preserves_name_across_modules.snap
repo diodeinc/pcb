@@ -20,6 +20,7 @@ Created Ground: GND
             FrozenValue(
                 Component {
                     name: "R",
+                    type: "resistor",
                     footprint: "TEST:0402",
                     prefix: "R",
                     connections: {
@@ -37,9 +38,6 @@ Created Ground: GND
                         ),
                     },
                     properties: {
-                        "type": FrozenValue(
-                            "resistor",
-                        ),
                         "value": FrozenValue(
                             "10kOhm",
                         ),

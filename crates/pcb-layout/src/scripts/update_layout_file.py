@@ -2024,12 +2024,20 @@ class ImportNetlist(Step):
             fp.SetPath(
                 pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
             )
-            dnp_prop = next((x for x in part.properties if x.name == "dnp"), None)
+            # Handle DNP property
+            dnp_prop = next((x for x in part.properties if x.name.lower() == "dnp"), None)
             fp.SetDNP(dnp_prop is not None and dnp_prop.value.lower() == "true")
 
-            # Handle exclude_from_bom property
+            # Handle skip_bom property
+            skip_bom_prop = next((x for x in part.properties if x.name.lower() == "skip_bom"), None)
             fp.SetExcludedFromBOM(
-                any(x.name.lower() == "exclude_from_bom" for x in part.properties)
+                skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
+            )
+
+            # Handle skip_pos property
+            skip_pos_prop = next((x for x in part.properties if x.name.lower() == "skip_pos"), None)
+            fp.SetExcludedFromPosFiles(
+                skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
             )
 
             fp.GetFieldByName("Value").SetVisible(False)
@@ -2049,7 +2057,8 @@ class ImportNetlist(Step):
                     "value",
                     "reference",
                     "dnp",  # Skip the standardized dnp attribute (handled above)
-                    "exclude_from_bom",
+                    "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
+                    "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
                     "symbol_name",  # Symbol metadata - not needed in PCB
                     "symbol_path",  # Symbol metadata - not needed in PCB
                 ] and not prop.name.startswith("_"):
@@ -3070,6 +3079,15 @@ class FinalizeBoard(Step):
                 else (
                     fp.GetFieldByName("exclude_from_bom").GetText() == "true"
                     if fp.GetFieldByName("exclude_from_bom")
+                    else False
+                )
+            ),
+            "exclude_from_pos_files": (
+                fp.IsExcludeFromPosFiles()
+                if hasattr(fp, "IsExcludeFromPosFiles")
+                else (
+                    fp.GetFieldByName("exclude_from_pos_files").GetText() == "true"
+                    if fp.GetFieldByName("exclude_from_pos_files")
                     else False
                 )
             ),

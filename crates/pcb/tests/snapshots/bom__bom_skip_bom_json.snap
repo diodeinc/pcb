@@ -1,0 +1,23 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/SkipBom.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "path": "normal",
+    "designator": "U2",
+    "mpn": "RC0603FR-071KL",
+    "manufacturer": "Yageo"
+  },
+  {
+    "path": "normal2",
+    "designator": "U3",
+    "mpn": "RC0603FR-0710KL",
+    "manufacturer": "Yageo"
+  }
+]
+--- STDERR ---

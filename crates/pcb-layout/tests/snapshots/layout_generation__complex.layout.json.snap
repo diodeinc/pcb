@@ -7,6 +7,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -257,6 +258,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -507,6 +509,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -757,6 +760,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -1007,6 +1011,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -1257,6 +1262,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -1507,6 +1513,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {
@@ -1757,6 +1764,7 @@ expression: content
     {
       "dnp": false,
       "exclude_from_bom": false,
+      "exclude_from_pos_files": false,
       "footprint": "R_0603_1608Metric:R_0603_1608Metric",
       "graphical_items": [
         {

@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/SkipBom.zen -f table
+Exit Code: 0
+
+--- STDOUT ---
+┌─────────────┬─────────────────┬──────────────┬─────────┬─────────────┬─────┐
+│ Designators ┆ MPN             ┆ Manufacturer ┆ Package ┆ Description ┆ DNP │
+╞═════════════╪═════════════════╪══════════════╪═════════╪═════════════╪═════╡
+│ U2          ┆ RC0603FR-071KL  ┆ Yageo        ┆         ┆             ┆ No  │
+│ U3          ┆ RC0603FR-0710KL ┆ Yageo        ┆         ┆             ┆ No  │
+└─────────────┴─────────────────┴──────────────┴─────────┴─────────────┴─────┘
+--- STDERR ---

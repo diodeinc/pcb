@@ -112,6 +112,9 @@ pub fn execute(args: BomArgs) -> Result<()> {
         bom.apply_bom_rules(&rules);
     }
 
+    // Filter out components marked as skip_bom
+    bom = bom.filter_excluded();
+
     spinner.finish();
 
     let mut writer = io::stdout().lock();
@@ -163,7 +166,7 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             manufacturer,
             entry["package"].as_str().unwrap_or_default(),
             description,
-            if entry["dnp"].as_bool().unwrap() {
+            if entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false) {
                 "Yes"
             } else {
                 "No"
