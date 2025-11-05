@@ -65,9 +65,14 @@ impl DiagnosticsPass for SuppressPass {
             diag.suppressed |= self.patterns.iter().any(|p| match p.as_str() {
                 "warnings" => matches!(diag.severity, EvalSeverity::Warning),
                 "errors" => matches!(diag.severity, EvalSeverity::Error),
-                _ => diag
-                    .downcast_error_ref::<CategorizedDiagnostic>()
-                    .is_some_and(|c| c.kind == *p || c.kind.starts_with(&format!("{p}."))),
+                _ => {
+                    // Check innermost diagnostic for categorization, since that's where
+                    // the kind is set (e.g., from warn(kind="bom.match_generic"))
+                    let innermost = diag.innermost();
+                    innermost
+                        .downcast_error_ref::<CategorizedDiagnostic>()
+                        .is_some_and(|c| c.kind == *p || c.kind.starts_with(&format!("{p}.")))
+                }
             });
         }
     }
@@ -179,5 +184,73 @@ impl DiagnosticsPass for JsonExportPass {
                 e
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Diagnostic;
+    use starlark::errors::EvalSeverity;
+    use std::path::Path;
+
+    #[test]
+    fn test_suppress_pass_checks_innermost_diagnostic() {
+        // Create an innermost diagnostic with a categorized kind
+        let innermost = Diagnostic::new(
+            "No house cap for 10uF 1206",
+            EvalSeverity::Warning,
+            Path::new("test.zen"),
+        )
+        .with_source_error(Some(
+            crate::lang::error::CategorizedDiagnostic::new(
+                "No house cap for 10uF 1206".to_string(),
+                "bom.match_generic".to_string(),
+            )
+            .unwrap(),
+        ));
+
+        // Wrap it in a parent diagnostic (simulating module boundaries)
+        let parent = Diagnostic::new(
+            "Warning from `Capacitor`",
+            EvalSeverity::Warning,
+            Path::new("test.zen"),
+        )
+        .with_child(innermost.boxed());
+
+        let mut diagnostics = Diagnostics {
+            diagnostics: vec![parent],
+        };
+
+        // Apply suppress pass with "bom.match_generic"
+        let suppress_pass = SuppressPass::new(vec!["bom.match_generic".to_string()]);
+        suppress_pass.apply(&mut diagnostics);
+
+        // The diagnostic should be suppressed
+        assert!(diagnostics.diagnostics[0].suppressed);
+    }
+
+    #[test]
+    fn test_suppress_pass_hierarchical_matching() {
+        // Create a diagnostic with "bom.match_generic" kind
+        let diag = Diagnostic::new("No house cap", EvalSeverity::Warning, Path::new("test.zen"))
+            .with_source_error(Some(
+                crate::lang::error::CategorizedDiagnostic::new(
+                    "No house cap".to_string(),
+                    "bom.match_generic".to_string(),
+                )
+                .unwrap(),
+            ));
+
+        let mut diagnostics = Diagnostics {
+            diagnostics: vec![diag],
+        };
+
+        // Apply suppress pass with parent kind "bom" (should match "bom.match_generic")
+        let suppress_pass = SuppressPass::new(vec!["bom".to_string()]);
+        suppress_pass.apply(&mut diagnostics);
+
+        // The diagnostic should be suppressed via hierarchical matching
+        assert!(diagnostics.diagnostics[0].suppressed);
     }
 }
