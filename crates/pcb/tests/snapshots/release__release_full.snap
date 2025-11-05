@@ -15,8 +15,7 @@ expression: sb.snapshot_dir(staging_dir)
       "value": "0.000000100",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "C2.C",
@@ -29,16 +28,14 @@ expression: sb.snapshot_dir(staging_dir)
       "value": "0.000010",
       "tolerance": "0",
       "unit": "Farads"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "LED1.D1.LED",
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
-    "description": "Light emitting diode, small symbol, filled shape",
-    "dnp": false
+    "description": "Light emitting diode, small symbol, filled shape"
   },
   {
     "path": "LED1.R1.R",
@@ -51,8 +48,7 @@ expression: sb.snapshot_dir(staging_dir)
       "value": "330",
       "tolerance": "0",
       "unit": "Ohms"
-    },
-    "dnp": false
+    }
   },
   {
     "path": "R1.R",
@@ -65,8 +61,7 @@ expression: sb.snapshot_dir(staging_dir)
       "value": "10000",
       "tolerance": "0",
       "unit": "Ohms"
-    },
-    "dnp": false
+    }
   }
 ]
 === diagnostics.json
