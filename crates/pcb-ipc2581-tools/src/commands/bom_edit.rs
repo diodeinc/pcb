@@ -175,10 +175,8 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
 
     for item in &bom.items {
         let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
-        let mpn = item
-            .characteristics
-            .as_ref()
-            .and_then(|c| super::bom::extract_mpn(&ipc, c));
+        // Get MPN from AVL (canonical source)
+        let (mpn, _, _) = super::bom::lookup_from_avl(&ipc, item.oem_design_number_ref);
 
         for rule in &rules {
             let matched = match &rule.key {

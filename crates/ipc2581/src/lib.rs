@@ -134,6 +134,24 @@ impl Ipc2581 {
         self.avl.as_ref()
     }
 
+    /// Look up an Enterprise by its ID reference and return its name
+    /// Filters out placeholder names like "Manufacturer" or "NONE"
+    pub fn resolve_enterprise(&self, enterprise_ref: Symbol) -> Option<&str> {
+        let logistic = self.logistic_header.as_ref()?;
+        let enterprise = logistic
+            .enterprises
+            .iter()
+            .find(|e| e.id == enterprise_ref)?;
+
+        let name = enterprise.name.map(|name| self.resolve(name))?;
+
+        // Filter out placeholder/template values
+        match name {
+            "Manufacturer" | "NONE" | "N/A" | "" => None,
+            _ => Some(name),
+        }
+    }
+
     /// Resolve a symbol to its string value
     pub fn resolve(&self, sym: Symbol) -> &str {
         self.interner.resolve(sym)

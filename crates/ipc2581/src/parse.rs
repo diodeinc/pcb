@@ -593,12 +593,37 @@ impl Parser {
         Ok(UserPrimitive::UserSpecial(UserSpecial { shapes }))
     }
 
-    fn parse_logistic_header(&mut self, _node: &Node) -> Result<LogisticHeader> {
-        // Simplified for now
+    fn parse_logistic_header(&mut self, node: &Node) -> Result<LogisticHeader> {
+        let mut roles = Vec::new();
+        let mut enterprises = Vec::new();
+        let mut persons = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "Role" => {
+                    let id = self.required_attr(&child, "id", "Role")?;
+                    let role_function = self.required_attr(&child, "roleFunction", "Role")?;
+                    roles.push(Role { id, role_function });
+                }
+                "Enterprise" => {
+                    let id = self.required_attr(&child, "id", "Enterprise")?;
+                    let code = self.required_attr(&child, "code", "Enterprise")?;
+                    let name = self.optional_attr(&child, "name");
+                    enterprises.push(Enterprise { id, code, name });
+                }
+                "Person" => {
+                    let name = self.required_attr(&child, "name", "Person")?;
+                    let email = self.optional_attr(&child, "email");
+                    persons.push(Person { name, email });
+                }
+                _ => {}
+            }
+        }
+
         Ok(LogisticHeader {
-            roles: vec![],
-            enterprises: vec![],
-            persons: vec![],
+            roles,
+            enterprises,
+            persons,
         })
     }
 

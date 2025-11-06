@@ -14,13 +14,14 @@ use crate::OutputFormat;
 /// Extracted characteristics data from IPC-2581 BOM items
 #[derive(Debug, Default)]
 pub struct CharacteristicsData {
-    pub mpn: Option<String>,
-    pub manufacturer: Option<String>,
     pub package: Option<String>,
     pub value: Option<String>,
+    pub properties: std::collections::BTreeMap<String, String>,
 }
 
-/// Extract common characteristics from IPC-2581 Characteristics
+/// Extract characteristics from IPC-2581 Characteristics
+/// Returns package, value, and custom properties only
+/// Note: MPN and Manufacturer must come from AVL/Enterprise (canonical IPC-2581 way)
 pub fn extract_characteristics(
     ipc: &ipc2581::Ipc2581,
     chars: &ipc2581::types::Characteristics,
@@ -29,40 +30,30 @@ pub fn extract_characteristics(
 
     for textual in &chars.textuals {
         if let (Some(name), Some(val)) = (textual.name, textual.value) {
-            let name_lower = ipc.resolve(name).to_lowercase();
+            let name_str = ipc.resolve(name).to_string();
+            let name_lower = name_str.to_lowercase();
             let val_str = ipc.resolve(val).to_string();
 
             match name_lower.as_str() {
-                "mpn" | "manufacturerpartnumber" | "partnumber" => data.mpn = Some(val_str),
-                "manufacturer" => data.manufacturer = Some(val_str),
                 "package" | "footprint" => data.package = Some(val_str),
                 "value" => data.value = Some(val_str),
-                _ => {}
+                // Exclude well-known fields and instance-specific metadata from properties
+                "mpn"
+                | "manufacturerpartnumber"
+                | "partnumber"
+                | "manufacturer"
+                | "path"
+                | "prefix"
+                | "symbol_name"
+                | "symbol_path" => {}
+                _ => {
+                    data.properties.insert(name_str, val_str);
+                }
             }
         }
     }
 
     data
-}
-
-/// Extract just the MPN from IPC-2581 Characteristics
-pub fn extract_mpn(
-    ipc: &ipc2581::Ipc2581,
-    chars: &ipc2581::types::Characteristics,
-) -> Option<String> {
-    chars.textuals.iter().find_map(|textual| {
-        textual.name.and_then(|name| {
-            let name_str = ipc.resolve(name).to_lowercase();
-            if matches!(
-                name_str.as_str(),
-                "mpn" | "manufacturerpartnumber" | "partnumber"
-            ) {
-                textual.value.map(|v| ipc.resolve(v).to_string())
-            } else {
-                None
-            }
-        })
-    })
 }
 
 pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
@@ -98,26 +89,20 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 continue;
             }
 
-            // Extract MPN and other data from characteristics
+            // Extract characteristics from BomItem
             let CharacteristicsData {
-                mpn,
-                manufacturer,
                 package,
                 value,
+                properties,
             } = item
                 .characteristics
                 .as_ref()
                 .map(|chars| extract_characteristics(ipc, chars))
                 .unwrap_or_default();
 
-            // AVL data takes priority over BomItem characteristics
-            // AVL = sourcing truth (matched parts), BomItem = design intent
-            let (avl_mpn, avl_manufacturer, avl_alternatives) =
+            // AVL provides canonical MPN and Manufacturer via Enterprise references
+            let (mpn, manufacturer, avl_alternatives) =
                 lookup_from_avl(ipc, item.oem_design_number_ref);
-
-            // Use AVL first, fallback to characteristics
-            let mpn = avl_mpn.or(mpn);
-            let manufacturer = avl_manufacturer.or(manufacturer);
 
             // Use BomItem description if present, otherwise use OEM design number
             let description = item.description.map(|sym| ipc.resolve(sym).to_string());
@@ -134,6 +119,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 offers: Vec::new(),
                 dnp: false, // Check ref des for populate flag
                 skip_bom: false,
+                properties,
             };
 
             // Process reference designators
@@ -145,7 +131,12 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                     continue;
                 }
 
-                let path = format!("ipc::{}", designator);
+                // Use Path property if available, otherwise use ipc::designator format
+                let path = entry
+                    .properties
+                    .get("Path")
+                    .cloned()
+                    .unwrap_or_else(|| format!("ipc::{}", designator));
 
                 // Check DNP status
                 let mut entry_with_dnp = entry.clone();
@@ -184,6 +175,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                         offers: Vec::new(),
                         dnp: false,
                         skip_bom: false,
+                        properties: std::collections::BTreeMap::new(),
                     };
 
                     entries.insert(path.clone(), entry);
@@ -199,7 +191,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
 /// Look up MPN, manufacturer, and alternatives from AVL section
 /// Returns (primary_mpn, primary_manufacturer, alternatives)
 /// Per IPC-2581 spec: rank=1 or chosen=true is primary, rest are alternatives
-fn lookup_from_avl(
+pub fn lookup_from_avl(
     ipc: &ipc2581::Ipc2581,
     oem_design_number_ref: ipc2581::Symbol,
 ) -> (Option<String>, Option<String>, Vec<pcb_sch::Alternative>) {
@@ -236,21 +228,22 @@ fn lookup_from_avl(
         .mpns
         .first()
         .map(|m| ipc.resolve(m.name).to_string());
-    let primary_manufacturer = primary
-        .vendors
-        .first()
-        .map(|v| ipc.resolve(v.enterprise_ref).to_string());
+    let primary_manufacturer = primary.vendors.first().and_then(|v| {
+        ipc.resolve_enterprise(v.enterprise_ref)
+            .map(|s| s.to_string())
+    });
 
     // Rest are alternatives
     let alternatives: Vec<pcb_sch::Alternative> = sorted_vmpn[1..]
         .iter()
         .filter_map(|vmpn| {
             let mpn = vmpn.mpns.first()?.name;
-            let manufacturer = vmpn.vendors.first()?.enterprise_ref;
+            let manufacturer_ref = vmpn.vendors.first()?.enterprise_ref;
+            let manufacturer = ipc.resolve_enterprise(manufacturer_ref)?;
 
             Some(pcb_sch::Alternative {
                 mpn: ipc.resolve(mpn).to_string(),
-                manufacturer: ipc.resolve(manufacturer).to_string(),
+                manufacturer: manufacturer.to_string(),
             })
         })
         .collect();

@@ -16,6 +16,7 @@ pub struct Role {
 
 #[derive(Debug, Clone)]
 pub struct Enterprise {
+    pub id: Symbol,
     pub code: Symbol,
     pub name: Option<Symbol>,
 }
