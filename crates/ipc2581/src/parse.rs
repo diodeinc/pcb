@@ -1998,6 +1998,10 @@ impl Parser {
             _ => BomCategory::Electrical, // Default
         });
 
+        let description = node
+            .attribute("description")
+            .map(|s| self.interner.intern(s));
+
         let mut ref_des_list = Vec::new();
         let mut characteristics = None;
 
@@ -2014,6 +2018,7 @@ impl Parser {
             quantity,
             pin_count,
             category,
+            description,
             ref_des_list,
             characteristics,
         })

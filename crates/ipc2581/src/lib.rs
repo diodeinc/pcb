@@ -223,4 +223,54 @@ mod tests {
         assert_eq!(vmpn.mpns.len(), 1);
         assert_eq!(doc.resolve(vmpn.mpns[0].name), "TEST123");
     }
+
+    #[test]
+    fn parse_bom_with_description() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <DictionaryColor/>
+    <DictionaryLineDesc units="MILLIMETER"/>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER"/>
+    <DictionaryUser units="MILLIMETER"/>
+  </Content>
+  <Bom name="TestBOM">
+    <BomHeader assembly="Test Design" revision="1.0"/>
+    <BomItem OEMDesignNumberRef="XO32-12MHZ" quantity="1" pinCount="4" category="ELECTRICAL" description="HCMOS Clock Oscillator">
+      <RefDes name="U4" packageRef="SG210" populate="true" layerRef="F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Frequency" textualCharacteristicValue="12MHz"/>
+      </Characteristics>
+    </BomItem>
+  </Bom>
+</IPC-2581>"#;
+
+        let result = Ipc2581::parse(xml);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let doc = result.unwrap();
+        assert!(doc.bom().is_some(), "BOM section should be parsed");
+
+        let bom = doc.bom().unwrap();
+        assert_eq!(doc.resolve(bom.name), "TestBOM");
+        assert_eq!(bom.items.len(), 1);
+
+        let item = &bom.items[0];
+        assert_eq!(doc.resolve(item.oem_design_number_ref), "XO32-12MHZ");
+
+        // Verify description attribute is parsed
+        assert!(item.description.is_some(), "Description should be present");
+        assert_eq!(
+            doc.resolve(item.description.unwrap()),
+            "HCMOS Clock Oscillator"
+        );
+
+        // Verify other attributes
+        assert_eq!(item.quantity, Some(1));
+        assert_eq!(item.pin_count, Some(4));
+        assert_eq!(item.ref_des_list.len(), 1);
+        assert_eq!(doc.resolve(item.ref_des_list[0].name), "U4");
+    }
 }
