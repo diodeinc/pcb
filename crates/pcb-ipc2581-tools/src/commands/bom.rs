@@ -122,6 +122,12 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             let mpn = avl_mpn.or(mpn);
             let manufacturer = avl_manufacturer.or(manufacturer);
 
+            // Use BomItem description if present, otherwise use OEM design number
+            let description = item
+                .description
+                .map(|sym| ipc.resolve(sym).to_string())
+                .or_else(|| Some(oem_design_number.clone()));
+
             // Build entry
             let entry = BomEntry {
                 mpn,
@@ -129,7 +135,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 manufacturer,
                 package,
                 value,
-                description: Some(oem_design_number),
+                description,
                 generic_data: None,
                 offers: Vec::new(),
                 dnp: false, // Check ref des for populate flag

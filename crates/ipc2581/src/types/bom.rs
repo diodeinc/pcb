@@ -14,6 +14,7 @@ pub struct BomItem {
     pub quantity: Option<u32>,
     pub pin_count: Option<u32>,
     pub category: Option<BomCategory>,
+    pub description: Option<Symbol>,
     pub ref_des_list: Vec<BomRefDes>,
     pub characteristics: Option<Characteristics>,
 }
