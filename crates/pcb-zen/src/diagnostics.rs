@@ -65,6 +65,13 @@ impl pcb_zen_core::DiagnosticsPass for RenderPass {
     }
 }
 
+/// Extract the first line from a message for use in span labels.
+/// Multi-line messages are displayed in full at the top of the report,
+/// but only the first line is shown in span annotations to reduce clutter.
+fn first_line(message: &str) -> &str {
+    message.lines().next().unwrap_or(message)
+}
+
 /// Render a [`Diagnostic`] using the `ariadne` crate.
 ///
 /// All related diagnostics that refer to the same file are rendered together in a
@@ -157,7 +164,7 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
     .with_message(&message)
     .with_label(
         Label::new((primary_path_id.clone(), primary_span.unwrap()))
-            .with_message(&deepest_error_msg.body)
+            .with_message(first_line(&deepest_error_msg.body))
             .with_color(red),
     );
 
@@ -172,7 +179,7 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
             if let Some(span) = compute_span(src, msg) {
                 report = report.with_label(
                     Label::new((msg.path.clone(), span))
-                        .with_message(&msg.body)
+                        .with_message(first_line(&msg.body))
                         .with_color(yellow)
                         .with_order((idx + 2) as i32), // Order 1 is the primary, so start from 2
                 );
