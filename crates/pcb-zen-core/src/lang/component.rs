@@ -1087,6 +1087,11 @@ where
                         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
                 })
                 .or_else(|| {
+                    properties_map
+                        .get("value")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
                     final_symbol
                         .properties()
                         .get("Description")
