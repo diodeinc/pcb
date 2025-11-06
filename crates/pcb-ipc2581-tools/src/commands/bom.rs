@@ -98,9 +98,6 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 continue;
             }
 
-            // Get OEM design number as the key
-            let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
-
             // Extract MPN and other data from characteristics
             let CharacteristicsData {
                 mpn,
@@ -123,10 +120,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             let manufacturer = avl_manufacturer.or(manufacturer);
 
             // Use BomItem description if present, otherwise use OEM design number
-            let description = item
-                .description
-                .map(|sym| ipc.resolve(sym).to_string())
-                .or_else(|| Some(oem_design_number.clone()));
+            let description = item.description.map(|sym| ipc.resolve(sym).to_string());
 
             // Build entry
             let entry = BomEntry {
@@ -327,7 +321,7 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             entry["package"].as_str().unwrap_or_default(),
             description,
             alternatives_str.as_str(),
-            if entry["dnp"].as_bool().unwrap() {
+            if entry["dnp"].as_bool().unwrap_or(false) {
                 "Yes"
             } else {
                 "No"
