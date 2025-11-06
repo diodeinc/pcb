@@ -1,4 +1,6 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
+use std::process::Command;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
@@ -64,6 +66,10 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
+
+    /// External subcommands are forwarded to pcb-ipc2581-<command>
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
 }
 
 #[derive(Subcommand)]
@@ -129,15 +135,10 @@ impl ViewMode {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Initialize color handling (respects NO_COLOR)
     utils::color::init_color();
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
 
-    // Initialize logger with default level (overridden by RUST_LOG)
-    let env = Env::default().default_filter_or("warn");
-    env_logger::Builder::from_env(env).init();
-
-    // Skip auto-update check in CI environments
-    if std::env::var("CI").is_err() {
+    if std::env::var("CI").is_err() && !is_update_command(&cli.command) {
         check_and_update();
     }
 
@@ -164,7 +165,37 @@ fn main() -> anyhow::Result<()> {
             mode,
             output,
         } => commands::view::execute(&input, mode, &output),
+
+        Commands::External(args) => {
+            let Some(cmd) = args.first() else {
+                anyhow::bail!("No external command specified");
+            };
+
+            let cmd_name = cmd.to_string_lossy();
+            let external_cmd = format!("pcb-ipc2581-{cmd_name}");
+
+            match Command::new(&external_cmd).args(&args[1..]).status() {
+                Ok(status) if status.success() => Ok(()),
+                Ok(status) => match status.code() {
+                    Some(code) => std::process::exit(code),
+                    None => anyhow::bail!("Command '{external_cmd}' terminated by signal"),
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("Error: Unknown command '{cmd_name}'");
+                    eprintln!("No built-in or external command '{external_cmd}' found");
+                    std::process::exit(1);
+                }
+                Err(e) => anyhow::bail!("Failed to execute '{external_cmd}': {e}"),
+            }
+        }
     }
+}
+
+fn is_update_command(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::External(args) if args.first().is_some_and(|s| s.to_string_lossy() == "update")
+    )
 }
 
 fn check_and_update() {
