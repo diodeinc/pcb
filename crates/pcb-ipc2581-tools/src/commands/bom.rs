@@ -20,7 +20,7 @@ pub struct CharacteristicsData {
 }
 
 /// Extract characteristics from IPC-2581 Characteristics
-/// Returns package, value, and custom properties only
+/// Returns package, value, and custom properties
 /// Note: MPN and Manufacturer must come from AVL/Enterprise (canonical IPC-2581 way)
 pub fn extract_characteristics(
     ipc: &ipc2581::Ipc2581,
@@ -37,7 +37,7 @@ pub fn extract_characteristics(
             match name_lower.as_str() {
                 "package" | "footprint" => data.package = Some(val_str),
                 "value" => data.value = Some(val_str),
-                // Exclude well-known fields and instance-specific metadata from properties
+                // Exclude well-known fields and instance-specific metadata
                 "mpn"
                 | "manufacturerpartnumber"
                 | "partnumber"
@@ -104,8 +104,11 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             let (mpn, manufacturer, avl_alternatives) =
                 lookup_from_avl(ipc, item.oem_design_number_ref);
 
-            // Use BomItem description if present, otherwise use OEM design number
-            let description = item.description.map(|sym| ipc.resolve(sym).to_string());
+            // Use BomItem description attribute if present, otherwise fallback to value
+            let description = item
+                .description
+                .map(|sym| ipc.resolve(sym).to_string())
+                .or(value.clone());
 
             // Build entry
             let entry = BomEntry {

@@ -158,7 +158,7 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             });
 
         // Use value as description until all the generics have proper descriptions
-        let description = entry["value"].as_str().unwrap_or_default();
+        let description = entry["description"].as_str().unwrap_or_default();
 
         table.add_row(vec![
             designators.as_str(),
