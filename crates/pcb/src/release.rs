@@ -1270,6 +1270,12 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .subcommand("ipc2581")
         .arg("--output")
         .arg(ipc2581_path.to_string_lossy())
+        .arg("--bom-col-int-id")
+        .arg("Path")
+        .arg("--bom-col-mfg-pn")
+        .arg("Mpn")
+        .arg("--bom-col-mfg")
+        .arg("Manufacturer")
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate IPC-2581 file")?;
