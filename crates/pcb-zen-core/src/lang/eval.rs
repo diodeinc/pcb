@@ -4,11 +4,12 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use anyhow::anyhow;
-use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
+use pcb_sch::physical::{PhysicalRange, PhysicalRangeType, PhysicalValueType};
 use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark::{
@@ -1245,11 +1246,25 @@ impl EvalContext {
             }
         }
 
-        // Ground: symbol=GND
+        // Ground: symbol=GND, voltage=0V
         if self.module.get("Ground").is_some() {
             if let Ok(symbol_field) = make_symbol_field("GND") {
                 let mut fields = SmallMap::new();
                 fields.insert("symbol".to_owned(), symbol_field);
+
+                // Add voltage field with default of 0V
+                let voltage_range_type = PhysicalRangeType::new(PhysicalUnit::Volts.into());
+                let default_voltage = heap.alloc(
+                    PhysicalRange::from_str("0V").expect("Failed to parse 0V as PhysicalRange"),
+                );
+                let voltage_type_compiled =
+                    TypeCompiled::new(heap.alloc(voltage_range_type).to_value(), heap).unwrap();
+                let voltage_field = heap.alloc(FieldGen::new(
+                    voltage_type_compiled,
+                    Some(default_voltage.to_value()),
+                ));
+                fields.insert("voltage".to_owned(), voltage_field.to_value());
+
                 self.module.set(
                     "Ground",
                     heap.alloc(NetType {
