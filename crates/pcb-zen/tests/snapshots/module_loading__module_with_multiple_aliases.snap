@@ -19,6 +19,7 @@ expression: netlist
       (property (name "Package") (value "0603"))
       (property (name "Resistance") (value "2kOhms +/-10%"))
       (property (name "Value") (value "SMD 0603 2kOhms +/-10%"))
+      (property (name "description") (value "SMD 0603 2kOhms +/-10%"))
     )
     (comp (ref "R2")
       (value "SMD 0805 3kOhms +/-10%")
@@ -31,6 +32,7 @@ expression: netlist
       (property (name "Package") (value "0805"))
       (property (name "Resistance") (value "3kOhms +/-10%"))
       (property (name "Value") (value "SMD 0805 3kOhms +/-10%"))
+      (property (name "description") (value "SMD 0805 3kOhms +/-10%"))
     )
   )
   (libparts

@@ -19,6 +19,7 @@ expression: netlist
       (property (name "Package") (value "0402"))
       (property (name "Resistance") (value "1kOhms +/-10%"))
       (property (name "Value") (value "SMD 0402 1kOhms +/-10%"))
+      (property (name "description") (value "SMD 0402 1kOhms +/-10%"))
     )
   )
   (libparts

@@ -288,10 +288,10 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
                 )
             });
 
-        // Use value as description if available, otherwise use description field
-        let description = entry["value"]
+        // Use description field if available, otherwise use value
+        let description = entry["description"]
             .as_str()
-            .or_else(|| entry["description"].as_str())
+            .or_else(|| entry["value"].as_str())
             .unwrap_or_default();
 
         // Get alternatives if present

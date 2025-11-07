@@ -1088,7 +1088,17 @@ where
                 })
                 .or_else(|| {
                     properties_map
+                        .get("Description")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    properties_map
                         .get("value")
+                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+                })
+                .or_else(|| {
+                    properties_map
+                        .get("Value")
                         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
                 })
                 .or_else(|| {
