@@ -1,5 +1,7 @@
 # pcb-ipc2581
 
+**Note:** This is a library crate providing IPC-2581 functionality. The CLI is integrated into the main `pcb` tool as the `ipc2581` subcommand.
+
 CLI tool for inspecting IPC-2581 PCB data files.
 
 ## Commands
@@ -9,8 +11,8 @@ CLI tool for inspecting IPC-2581 PCB data files.
 Board summary: dimensions, components, layers, drills, thickness.
 
 ```bash
-pcb-ipc2581 info board.xml
-pcb-ipc2581 info board.xml --units mil --format json
+pcb ipc2581 info board.xml
+pcb ipc2581 info board.xml --units mil --format json
 ```
 
 ### `bom <file>`
@@ -18,8 +20,8 @@ pcb-ipc2581 info board.xml --units mil --format json
 Extract bill of materials with manufacturer/MPN alternatives.
 
 ```bash
-pcb-ipc2581 bom board.xml
-pcb-ipc2581 bom board.xml --format json
+pcb ipc2581 bom board.xml
+pcb ipc2581 bom board.xml --format json
 ```
 
 Shows primary MPN/manufacturer and alternatives in separate column.
@@ -29,8 +31,8 @@ Shows primary MPN/manufacturer and alternatives in separate column.
 Add manufacturer/MPN alternatives to BOM entries via AVL section.
 
 ```bash
-pcb-ipc2581 edit bom board.xml --rules alternatives.json
-pcb-ipc2581 edit bom board.xml.zst --rules alternatives.json --output enriched.xml
+pcb ipc2581 edit bom board.xml --rules alternatives.json
+pcb ipc2581 edit bom board.xml.zst --rules alternatives.json --output enriched.xml
 ```
 
 **Rules format:**

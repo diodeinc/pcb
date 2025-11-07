@@ -242,7 +242,7 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
         name: interner.intern("BOM_Alternatives"),
         header: Some(ipc2581::types::AvlHeader {
             title: interner.intern("BOM Alternatives"),
-            source: interner.intern("pcb-ipc2581"),
+            source: interner.intern("pcb"),
             author: interner.intern("BOM Add Tool"),
             datetime: interner.intern(&chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string()),
             version: 1,
