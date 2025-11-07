@@ -1,6 +1,6 @@
 load("@stdlib:v0.3.4/board_config.zen", "Board")
 load("@stdlib:v0.3.4/units.zen", "Impedance")
-load("@stdlib:v0.3.4/interfaces.zen", "Usb2")
+load("@stdlib:v0.3.4/interfaces.zen", "Usb2", "DiffPair")
 
 # Test case 1: Single-ended 50Ω impedance → should match "50Ohm SE"
 clk_50 = Net("CLK_50", impedance=Impedance(50))
@@ -16,6 +16,14 @@ usb = Usb2("USB")
 UsbModule = Module("usb_module.zen")
 usb_module = UsbModule(name="USB_MOD", usb=usb)
 
+# Test case 6: Locally-created DiffPair with impedance passed to child module
+# Regression test: propagate_from_value() must check the interface itself for impedance,
+# not just nested fields. This tests that a DiffPair created with impedance=85 gets
+# properly propagated when passed as a parameter to a child module.
+hdmi_local = DiffPair("HDMI", impedance=Impedance(85))
+DiffPairModule = Module("diffpair_module.zen")
+diffpair_module = DiffPairModule(name="HDMI_MOD", signal=hdmi_local)
+
 # Test case 4: Unmatched impedance (no netclass for 1000Ω) → uses Default
 high_z = Net("HIGH_Z", impedance=Impedance(1000))
 
@@ -27,10 +35,10 @@ data = Net("DATA")
 # Add components to create actual nets in schematic
 Component(
     name="U1",
-    footprint="Connector_PinHeader_2.54mm:PinHeader_2x04_P2.54mm_Vertical",
+    footprint="Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical",
     pin_defs={
-        "1": "1", "2": "2", "3": "3", "4": "4",
-        "5": "5", "6": "6", "7": "7", "8": "8"
+        "1": "1", "2": "2", "3": "3", "4": "4", "5": "5",
+        "6": "6", "7": "7", "8": "8", "9": "9", "10": "10"
     },
     pins={
         "1": clk_50,
@@ -38,9 +46,11 @@ Component(
         "3": clk_51,
         "4": usb.D.P,
         "5": usb.D.N,
-        "6": high_z,
-        "7": gnd,
-        "8": vcc,
+        "6": hdmi_local.P,
+        "7": hdmi_local.N,
+        "8": high_z,
+        "9": gnd,
+        "10": vcc,
     },
 )
 

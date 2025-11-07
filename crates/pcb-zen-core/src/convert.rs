@@ -791,45 +791,41 @@ fn propagate_diffpair_impedance(
     }
 }
 
-/// Propagate impedance from interfaces to nested nets
+/// Propagate impedance from DiffPair interfaces to their P/N nets
 fn propagate_from_value(
     value: Value,
     net_props: &mut HashMap<NetId, HashMap<String, AttributeValue>>,
 ) {
-    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
-        for field in interface.fields().values() {
-            let fv = field.to_value();
+    let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() else {
+        return;
+    };
 
-            // Check if nested interface with impedance (DiffPair)
-            if let Some(nested) = fv.downcast_ref::<FrozenInterfaceValue>() {
-                if let Some(impedance_val) = nested.fields().get("impedance") {
-                    // Has impedance - propagate to P/N nets as differential_impedance
-                    if let (Some(p), Some(n)) = (
-                        nested
-                            .fields()
-                            .get("P")
-                            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
-                        nested
-                            .fields()
-                            .get("N")
-                            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
-                    ) {
-                        if let Ok(attr) = to_attribute_value(*impedance_val) {
-                            net_props
-                                .entry(p.id())
-                                .or_default()
-                                .insert("differential_impedance".to_string(), attr.clone());
-                            net_props
-                                .entry(n.id())
-                                .or_default()
-                                .insert("differential_impedance".to_string(), attr);
-                        }
-                    }
-                } else {
-                    propagate_from_value(fv, net_props);
-                }
-            }
+    // Try to extract DiffPair impedance: interface must have impedance, P, and N fields
+    let fields = interface.fields();
+    if let (Some(impedance_val), Some(p), Some(n)) = (
+        fields.get("impedance").filter(|v| !v.is_none()),
+        fields
+            .get("P")
+            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
+        fields
+            .get("N")
+            .and_then(|v| v.downcast_ref::<FrozenNetValue>()),
+    ) {
+        if let Ok(attr) = to_attribute_value(*impedance_val) {
+            net_props
+                .entry(p.id())
+                .or_default()
+                .insert("differential_impedance".to_string(), attr.clone());
+            net_props
+                .entry(n.id())
+                .or_default()
+                .insert("differential_impedance".to_string(), attr);
         }
+    }
+
+    // Recursively check all nested interface fields
+    for field in fields.values() {
+        propagate_from_value(field.to_value(), net_props);
     }
 }
 
