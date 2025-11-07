@@ -462,6 +462,27 @@ Properties:
 - With nominal: `11–26 V (12 V nom.)`
 - Without nominal: `11–26 V`
 
+**Methods**:
+
+- `.diff(other)` - Returns the maximum possible absolute difference between two ranges
+  - `other`: Another PhysicalRange or string (e.g., `"0V"`, `"1.7V to 2.0V"`)
+  - Returns PhysicalValue with the worst-case difference
+  - Units must match or an error is raised
+  - Tolerance is always zero (like PhysicalValue.diff())
+  - Useful for determining component voltage ratings (capacitors, level shifters, etc.)
+
+**Examples**:
+
+```python
+# Capacitor voltage rating
+vcc = VoltageRange("3.0V to 3.6V")
+cap_rating = vcc.diff("0V")  # 3.6V
+
+# Level shifter between two rails
+v_high = VoltageRange("3.0V to 3.6V")
+max_diff = v_high.diff("1.7V to 2.0V")  # 1.9V
+```
+
 #### PhysicalRangeType
 
 A `PhysicalRangeType` is a factory type that creates `PhysicalRange` instances for a specific physical unit. Each unit has its own range type (e.g., `VoltageRange` for volts, `CurrentRange` for amperes).
@@ -925,6 +946,10 @@ Physical values support several methods for manipulation:
   - Units must match or an error is raised
   - Always returns a positive value
   - Tolerance is dropped (consistent with subtraction behavior)
+- `.within(other)` - Checks if this value's tolerance range fits completely within another's
+  - `other`: Another PhysicalValue or string (e.g., `"3.3V"`)
+  - Returns `True` if self's range is completely contained within other's range
+  - Units must match or an error is raised
 
 **Attributes:**
 
@@ -955,6 +980,12 @@ abs_voltage = Voltage("-3.3V").abs()  # 3.3V
 # Difference (always positive)
 diff = Voltage("3.3V").diff(Voltage("5V"))  # 1.7V
 diff_str = Voltage("3.3V").diff("5V")       # 1.7V (strings are auto-converted)
+
+# Tolerance validation
+tight = Voltage("3.3V").with_tolerance("5%")   # 3.135V - 3.465V
+loose = Voltage("3.3V").with_tolerance("10%")  # 2.97V - 3.63V
+tight.within(loose)  # True - 5% tolerance fits within 10%
+loose.within(tight)  # False - 10% doesn't fit within 5%
 ```
 
 **Note:** All arithmetic operations and methods automatically convert string arguments to physical values when possible. For example, `Voltage("3.3V") + "2V"` works and returns `5.3V`.
@@ -965,6 +996,7 @@ diff_str = Voltage("3.3V").diff("5V")       # 1.7V (strings are auto-converted)
 - Addition/Subtraction: Tolerance is always dropped
 - `.abs()`: Tolerance is preserved
 - `.diff()`: Tolerance is dropped (consistent with subtraction)
+- `.within()`: Considers tolerance ranges for both values
 
 **Parsing Support:**
 

@@ -243,6 +243,40 @@ impl PhysicalValue {
         Ok(result.abs())
     }
 
+    /// Check if this value's tolerance range fits completely within another value's tolerance range
+    /// Returns an error if units don't match
+    pub fn within(&self, other: &PhysicalValue) -> Result<bool, PhysicalValueError> {
+        // Check units match
+        if self.unit != other.unit {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: other.unit.quantity(),
+                actual: self.unit.quantity(),
+            });
+        }
+
+        // Calculate min/max for self (considering tolerance)
+        // For negative values, min/max swap due to multiplication
+        let self_lower = self.value * (Decimal::ONE - self.tolerance);
+        let self_upper = self.value * (Decimal::ONE + self.tolerance);
+        let (self_min, self_max) = if self_lower < self_upper {
+            (self_lower, self_upper)
+        } else {
+            (self_upper, self_lower)
+        };
+
+        // Calculate min/max for other (considering tolerance)
+        let other_lower = other.value * (Decimal::ONE - other.tolerance);
+        let other_upper = other.value * (Decimal::ONE + other.tolerance);
+        let (other_min, other_max) = if other_lower < other_upper {
+            (other_lower, other_upper)
+        } else {
+            (other_upper, other_lower)
+        };
+
+        // Self's range must fit completely within other's range
+        Ok(self_min >= other_min && self_max <= other_max)
+    }
+
     fn fields() -> SortedMap<String, Ty> {
         fn single_param_spec(param_type: Ty) -> ParamSpec {
             ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
@@ -254,6 +288,7 @@ impl PhysicalValue {
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let abs_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let within_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
 
         SortedMap::from_iter([
             ("value".to_string(), Ty::float()),
@@ -291,6 +326,10 @@ impl PhysicalValue {
             (
                 "diff".to_string(),
                 Ty::callable(diff_param_spec, PhysicalValue::get_type_starlark_repr()),
+            ),
+            (
+                "within".to_string(),
+                Ty::callable(within_param_spec, Ty::bool()),
             ),
         ])
     }
@@ -1083,6 +1122,18 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
             .into()
         })
     }
+
+    fn within<'v>(
+        this: &PhysicalValue,
+        #[starlark(require = pos)] other: Value<'v>,
+    ) -> starlark::Result<bool> {
+        let other_pv = PhysicalValue::try_from(other).map_err(|_| {
+            PhysicalValueError::InvalidArgumentType {
+                unit: this.unit.quantity(),
+            }
+        })?;
+        this.within(&other_pv).map_err(|err| err.into())
+    }
 }
 
 #[starlark_value(type = "PhysicalValue")]
@@ -1436,12 +1487,50 @@ impl fmt::Display for PhysicalRange {
 impl PhysicalRange {
     pub const TYPE: &'static str = "PhysicalRange";
 
+    /// Calculate the maximum possible absolute difference between two ranges
+    /// This is useful for determining component voltage ratings (e.g., capacitor max voltage)
+    /// Returns PhysicalValue with the worst-case difference
+    pub fn diff(&self, other: &PhysicalRange) -> Result<PhysicalValue, PhysicalValueError> {
+        // Check units match
+        if self.r#type.unit != other.r#type.unit {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: other.r#type.unit.quantity(),
+                actual: self.r#type.unit.quantity(),
+            });
+        }
+
+        // Calculate the four possible differences at the extremes:
+        // self.max - other.min, self.max - other.max,
+        // self.min - other.min, self.min - other.max
+        // The maximum absolute difference is at the corners
+        let diff1 = (self.max - other.min).abs();
+        let diff2 = (self.min - other.max).abs();
+
+        let diff = if diff1 > diff2 { diff1 } else { diff2 };
+
+        Ok(PhysicalValue::from_decimal(
+            diff,
+            Decimal::ZERO, // No tolerance like PhysicalValue::diff()
+            self.r#type.unit,
+        ))
+    }
+
     fn fields() -> SortedMap<String, Ty> {
+        fn single_param_spec(param_type: Ty) -> ParamSpec {
+            ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
+        }
+
+        let diff_param_spec = single_param_spec(Ty::any());
+
         SortedMap::from_iter([
             ("min".to_string(), Ty::float()),
             ("max".to_string(), Ty::float()),
             ("nominal".to_string(), Ty::union2(Ty::float(), Ty::none())),
             ("unit".to_string(), Ty::string()),
+            (
+                "diff".to_string(),
+                Ty::callable(diff_param_spec, PhysicalValue::get_type_starlark_repr()),
+            ),
         ])
     }
 
@@ -1976,6 +2065,31 @@ fn range_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn unit(this: &PhysicalRange) -> starlark::Result<String> {
         Ok(this.r#type.unit.to_string())
+    }
+
+    fn diff<'v>(
+        this: &PhysicalRange,
+        #[starlark(require = pos)] other: Value<'v>,
+    ) -> starlark::Result<PhysicalValue> {
+        // Try to get PhysicalRange directly or convert from string
+        let other_range = if let Some(range) = other.downcast_ref::<PhysicalRange>() {
+            range.clone()
+        } else if let Some(s) = other.unpack_str() {
+            // Parse string as PhysicalRange
+            PhysicalRange::from_str(s).map_err(|e| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "Failed to parse '{}' as PhysicalRange: {}",
+                    s,
+                    e
+                ))
+            })?
+        } else {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "diff() requires a PhysicalRange or string argument"
+            )));
+        };
+
+        this.diff(&other_range).map_err(|err| err.into())
     }
 }
 
@@ -3249,6 +3363,276 @@ mod tests {
         // Test diff
         let result = pv1_val.diff(&pv2).unwrap();
         assert_eq!(result.value, Decimal::from_f64(1.7).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
+    }
+
+    #[test]
+    fn test_within_same_nominal_different_tolerance() {
+        // 3.3V ±5% fits within 3.3V ±10%
+        let tight = physical_value(3.3, 0.05, PhysicalUnit::Volts); // 3.135V - 3.465V
+        let loose = physical_value(3.3, 0.10, PhysicalUnit::Volts); // 2.97V - 3.63V
+        assert!(tight.within(&loose).unwrap());
+
+        // 3.3V ±10% does NOT fit within 3.3V ±5%
+        assert!(!loose.within(&tight).unwrap());
+    }
+
+    #[test]
+    fn test_within_different_nominal_values() {
+        // 3.3V ±1% (3.267V - 3.333V) fits within 5V ±50% (2.5V - 7.5V)
+        let small = physical_value(3.3, 0.01, PhysicalUnit::Volts);
+        let large = physical_value(5.0, 0.50, PhysicalUnit::Volts);
+        assert!(small.within(&large).unwrap());
+
+        // 5V ±50% does NOT fit within 3.3V ±1%
+        assert!(!large.within(&small).unwrap());
+    }
+
+    #[test]
+    fn test_within_exact_match() {
+        // Exact values with no tolerance should be within each other
+        let v1 = physical_value(3.3, 0.0, PhysicalUnit::Volts);
+        let v2 = physical_value(3.3, 0.0, PhysicalUnit::Volts);
+        assert!(v1.within(&v2).unwrap());
+        assert!(v2.within(&v1).unwrap());
+    }
+
+    #[test]
+    fn test_within_zero_tolerance_in_range() {
+        // Zero tolerance value at the center of a range
+        let exact = physical_value(3.3, 0.0, PhysicalUnit::Volts);
+        let range = physical_value(3.3, 0.10, PhysicalUnit::Volts); // 2.97V - 3.63V
+        assert!(exact.within(&range).unwrap());
+    }
+
+    #[test]
+    fn test_within_zero_tolerance_outside_range() {
+        // Zero tolerance value outside a range
+        let exact = physical_value(5.0, 0.0, PhysicalUnit::Volts);
+        let range = physical_value(3.3, 0.10, PhysicalUnit::Volts); // 2.97V - 3.63V
+        assert!(!exact.within(&range).unwrap());
+    }
+
+    #[test]
+    fn test_within_edge_cases() {
+        // Test boundary conditions
+        // Range: 3.3V ±10% = 2.97V - 3.63V
+        let range = physical_value(3.3, 0.10, PhysicalUnit::Volts);
+
+        // Value exactly at lower bound should be within
+        let at_min = physical_value(2.97, 0.0, PhysicalUnit::Volts);
+        assert!(at_min.within(&range).unwrap());
+
+        // Value exactly at upper bound should be within
+        let at_max = physical_value(3.63, 0.0, PhysicalUnit::Volts);
+        assert!(at_max.within(&range).unwrap());
+
+        // Value just outside lower bound should not be within
+        let below_min = physical_value(2.96, 0.0, PhysicalUnit::Volts);
+        assert!(!below_min.within(&range).unwrap());
+
+        // Value just outside upper bound should not be within
+        let above_max = physical_value(3.64, 0.0, PhysicalUnit::Volts);
+        assert!(!above_max.within(&range).unwrap());
+    }
+
+    #[test]
+    fn test_within_overlapping_but_not_contained() {
+        // Ranges that overlap but one doesn't contain the other
+        // Range 1: 3.3V ±10% = 2.97V - 3.63V
+        // Range 2: 3.5V ±5% = 3.325V - 3.675V
+        let range1 = physical_value(3.3, 0.10, PhysicalUnit::Volts);
+        let range2 = physical_value(3.5, 0.05, PhysicalUnit::Volts);
+
+        // They overlap but neither contains the other
+        assert!(!range1.within(&range2).unwrap());
+        assert!(!range2.within(&range1).unwrap());
+    }
+
+    #[test]
+    fn test_within_unit_mismatch() {
+        // Different units should return an error
+        let volts = physical_value(3.3, 0.1, PhysicalUnit::Volts);
+        let amps = physical_value(3.3, 0.1, PhysicalUnit::Amperes);
+
+        let result = volts.within(&amps);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PhysicalValueError::UnitMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_within_different_units() {
+        // Test with various unit types
+        let r1 = physical_value(1000.0, 0.01, PhysicalUnit::Ohms); // 1kΩ ±1%
+        let r2 = physical_value(1000.0, 0.05, PhysicalUnit::Ohms); // 1kΩ ±5%
+        assert!(r1.within(&r2).unwrap());
+
+        let c1 = physical_value(1e-7, 0.05, PhysicalUnit::Farads); // 100nF ±5%
+        let c2 = physical_value(1e-7, 0.20, PhysicalUnit::Farads); // 100nF ±20%
+        assert!(c1.within(&c2).unwrap());
+
+        let f1 = physical_value(1e6, 0.001, PhysicalUnit::Hertz); // 1MHz ±0.1%
+        let f2 = physical_value(1e6, 0.01, PhysicalUnit::Hertz); // 1MHz ±1%
+        assert!(f1.within(&f2).unwrap());
+    }
+
+    #[test]
+    fn test_within_negative_values() {
+        // Test with negative values
+        let v1 = physical_value(-3.3, 0.05, PhysicalUnit::Volts); // -3.3V ±5%
+        let v2 = physical_value(-3.3, 0.10, PhysicalUnit::Volts); // -3.3V ±10%
+        assert!(v1.within(&v2).unwrap());
+        assert!(!v2.within(&v1).unwrap());
+    }
+
+    // Helper for creating PhysicalRange
+    #[cfg(test)]
+    fn physical_range(min: f64, max: f64, unit: PhysicalUnit) -> PhysicalRange {
+        PhysicalRange {
+            min: Decimal::from_f64(min).unwrap(),
+            max: Decimal::from_f64(max).unwrap(),
+            nominal: None,
+            r#type: PhysicalRangeType::new(unit.into()),
+        }
+    }
+
+    #[test]
+    fn test_range_diff_power_to_ground() {
+        // VCC 3.0-3.6V, GND 0V -> diff = 3.6V
+        let vcc = physical_range(3.0, 3.6, PhysicalUnit::Volts);
+        let gnd = physical_range(0.0, 0.0, PhysicalUnit::Volts);
+        let result = vcc.diff(&gnd).unwrap();
+
+        assert_eq!(result.value, Decimal::from_f64(3.6).unwrap());
+        assert_eq!(result.unit, PhysicalUnit::Volts.into());
+        assert_eq!(result.tolerance, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_range_diff_two_rails() {
+        // V1: 3.0-3.6V, V2: 1.7-2.0V
+        // max(|3.6 - 1.7|, |3.0 - 2.0|) = max(1.9, 1.0) = 1.9V
+        let v1 = physical_range(3.0, 3.6, PhysicalUnit::Volts);
+        let v2 = physical_range(1.7, 2.0, PhysicalUnit::Volts);
+        let result = v1.diff(&v2).unwrap();
+
+        assert_eq!(result.value, Decimal::from_f64(1.9).unwrap());
+    }
+
+    #[test]
+    fn test_range_diff_ac_coupling() {
+        // Signal: -5 to +5V, Bias: 0V
+        // max(|5 - 0|, |-5 - 0|) = 5V
+        let signal = physical_range(-5.0, 5.0, PhysicalUnit::Volts);
+        let bias = physical_range(0.0, 0.0, PhysicalUnit::Volts);
+        let result = signal.diff(&bias).unwrap();
+
+        assert_eq!(result.value, Decimal::from_f64(5.0).unwrap());
+    }
+
+    #[test]
+    fn test_range_diff_negative_ranges() {
+        // V1: -5 to -3V, V2: -2 to -1V
+        // max(|-3 - (-2)|, |-5 - (-1)|) = max(1, 4) = 4V
+        let v1 = physical_range(-5.0, -3.0, PhysicalUnit::Volts);
+        let v2 = physical_range(-2.0, -1.0, PhysicalUnit::Volts);
+        let result = v1.diff(&v2).unwrap();
+
+        assert_eq!(result.value, Decimal::from_f64(4.0).unwrap());
+    }
+
+    #[test]
+    fn test_range_diff_symmetric() {
+        // diff should be symmetric: A.diff(B) == B.diff(A)
+        let v1 = physical_range(3.0, 3.6, PhysicalUnit::Volts);
+        let v2 = physical_range(1.7, 2.0, PhysicalUnit::Volts);
+
+        let diff_ab = v1.diff(&v2).unwrap();
+        let diff_ba = v2.diff(&v1).unwrap();
+
+        assert_eq!(diff_ab.value, diff_ba.value);
+    }
+
+    #[test]
+    fn test_range_diff_same_range() {
+        // Same range should have 0 difference
+        let v = physical_range(3.3, 3.3, PhysicalUnit::Volts);
+        let result = v.diff(&v).unwrap();
+
+        assert_eq!(result.value, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_range_diff_overlapping_ranges() {
+        // Range 1: 2.0-4.0V, Range 2: 3.0-5.0V
+        // max(|4.0 - 3.0|, |2.0 - 5.0|) = max(1.0, 3.0) = 3.0V
+        let r1 = physical_range(2.0, 4.0, PhysicalUnit::Volts);
+        let r2 = physical_range(3.0, 5.0, PhysicalUnit::Volts);
+        let result = r1.diff(&r2).unwrap();
+
+        assert_eq!(result.value, Decimal::from_f64(3.0).unwrap());
+    }
+
+    #[test]
+    fn test_range_diff_unit_mismatch() {
+        // Different units should return an error
+        let volts = physical_range(3.0, 3.6, PhysicalUnit::Volts);
+        let amps = physical_range(0.0, 1.0, PhysicalUnit::Amperes);
+
+        let result = volts.diff(&amps);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PhysicalValueError::UnitMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn test_range_diff_various_units() {
+        // Test with resistance ranges
+        let r1 = physical_range(900.0, 1100.0, PhysicalUnit::Ohms); // 1kΩ ±10%
+        let r2 = physical_range(0.0, 0.0, PhysicalUnit::Ohms); // 0Ω (short)
+        let result = r1.diff(&r2).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(1100.0).unwrap());
+
+        // Test with current ranges
+        let i1 = physical_range(0.1, 0.5, PhysicalUnit::Amperes);
+        let i2 = physical_range(0.0, 0.0, PhysicalUnit::Amperes);
+        let result = i1.diff(&i2).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(0.5).unwrap());
+    }
+
+    #[test]
+    fn test_range_diff_zero_tolerance() {
+        // Range with no tolerance always returns zero tolerance
+        let v1 = physical_range(3.3, 3.3, PhysicalUnit::Volts);
+        let v2 = physical_range(5.0, 5.0, PhysicalUnit::Volts);
+        let result = v1.diff(&v2).unwrap();
+
+        assert_eq!(result.tolerance, Decimal::ZERO);
+        assert_eq!(result.value, Decimal::from_f64(1.7).unwrap());
+    }
+
+    #[test]
+    fn test_range_diff_from_string() {
+        use starlark::values::Heap;
+
+        let heap = Heap::new();
+        let range = heap.alloc(physical_range(3.0, 3.6, PhysicalUnit::Volts));
+        let gnd_str = heap.alloc("0V");
+
+        // Get the range from heap
+        let range_val = range.downcast_ref::<PhysicalRange>().unwrap();
+
+        // Parse string as PhysicalRange
+        let gnd_range = PhysicalRange::from_str("0V").unwrap();
+
+        // Test diff works with parsed string
+        let result = range_val.diff(&gnd_range).unwrap();
+        assert_eq!(result.value, Decimal::from_f64(3.6).unwrap());
         assert_eq!(result.unit, PhysicalUnit::Volts.into());
     }
 }
