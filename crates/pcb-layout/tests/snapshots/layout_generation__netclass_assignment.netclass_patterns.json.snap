@@ -12,6 +12,14 @@ expression: content
     "pattern": "CLK_51"
   },
   {
+    "netclass": "85Ohm Diff",
+    "pattern": "HDMI_N"
+  },
+  {
+    "netclass": "85Ohm Diff",
+    "pattern": "HDMI_P"
+  },
+  {
     "netclass": "50Ohm SE",
     "pattern": "SPI_CLK_50"
   },
