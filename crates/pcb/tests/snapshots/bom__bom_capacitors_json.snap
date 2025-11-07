@@ -12,7 +12,7 @@ Exit Code: 0
     "designator": "C1",
     "package": "0402",
     "value": "100nF 16V X7R",
-    "description": "Unpolarized capacitor",
+    "description": "100nF 16V X7R",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000000100",
@@ -31,7 +31,7 @@ Exit Code: 0
     "designator": "C2",
     "package": "0805",
     "value": "10uF 25V X5R",
-    "description": "Unpolarized capacitor",
+    "description": "10uF 25V X5R",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000010",
@@ -50,7 +50,7 @@ Exit Code: 0
     "designator": "C3",
     "package": "0603",
     "value": "1uF",
-    "description": "Unpolarized capacitor",
+    "description": "1uF",
     "component_type": "Capacitor",
     "capacitance": {
       "value": "0.000001",

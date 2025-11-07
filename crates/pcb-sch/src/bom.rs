@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,10 @@ pub struct BomEntry {
     /// Whether this component should be excluded from BOM output (e.g., fiducials, test points)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skip_bom: bool,
+    /// Additional properties from IPC-2581 textual characteristics
+    #[serde(flatten)]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
 }
 
 impl BomEntry {
@@ -293,6 +297,7 @@ impl Bom {
                     offers: Vec::new(),
                     dnp: instance.dnp(),
                     skip_bom: instance.skip_bom(),
+                    properties: BTreeMap::new(),
                 };
                 entries.insert(path.clone(), bom_entry);
                 designators.insert(path, designator);
@@ -463,6 +468,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
             offers: Vec::new(),
             dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
             skip_bom: false, // KiCad CSV exports don't include this field
+            properties: BTreeMap::new(),
         };
 
         entries.insert(path.clone(), entry);
@@ -817,6 +823,7 @@ mod tests {
             offers: Vec::new(),
             dnp: false,
             skip_bom: false,
+            properties: BTreeMap::new(),
         };
 
         bom.entries.insert("R1.R".to_string(), resistor_entry);

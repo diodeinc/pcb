@@ -203,30 +203,12 @@ class JsonNetlistParser:
             # Get reference designator
             ref = instance.get("reference_designator", "U?")
 
-            # Get value - follow the same precedence as Rust: mpn > Value > Val > type > "?"
-            value = None
-            if (
-                "mpn" in instance["attributes"]
-                and "String" in instance["attributes"]["mpn"]
-            ):
-                value = instance["attributes"]["mpn"]["String"]
-            elif (
-                "Value" in instance["attributes"]
-                and "String" in instance["attributes"]["Value"]
-            ):
-                value = instance["attributes"]["Value"]["String"]
-            elif (
-                "Val" in instance["attributes"]
-                and "String" in instance["attributes"]["Val"]
-            ):
-                value = instance["attributes"]["Val"]["String"]
-            elif (
-                "type" in instance["attributes"]
-                and "String" in instance["attributes"]["type"]
-            ):
-                value = instance["attributes"]["type"]["String"]
-            if not value:
-                value = "?"
+            # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
+            value = "?"
+            for key in ["mpn", "value", "Value"]:
+                if key in instance["attributes"] and "String" in instance["attributes"][key]:
+                    value = instance["attributes"][key]["String"]
+                    break
 
             # Get footprint
             footprint_path = (

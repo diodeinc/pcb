@@ -18,7 +18,7 @@ expression: netlist
       (property (name "Capacitance") (value "1uF"))
       (property (name "Package") (value "0402"))
       (property (name "Value") (value "1uF"))
-      (property (name "description") (value "Unpolarized capacitor"))
+      (property (name "description") (value "1uF"))
     )
   )
   (libparts
