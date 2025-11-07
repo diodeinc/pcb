@@ -18,7 +18,7 @@ fi
 # Install matching wasm-bindgen-cli
 cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
-# Build pcb-zen-wasm with production optimizations (matching Bazel wasm-prod config)
+# Build pcb-zen-wasm with production optimizations
 echo "Building pcb-zen-wasm with production optimizations..."
 RUSTFLAGS="-C opt-level=3 -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C target-feature=+tail-call" \
   cargo build --release --target wasm32-unknown-unknown -p pcb-zen-wasm
