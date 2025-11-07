@@ -12,6 +12,7 @@ mod clean;
 mod file_walker;
 mod fmt;
 mod info;
+mod ipc2581;
 mod layout;
 mod lsp;
 mod mcp;
@@ -101,6 +102,9 @@ enum Commands {
     /// Start the Model Context Protocol (MCP) server
     Mcp(mcp::McpArgs),
 
+    /// IPC-2581 parser and inspection tool
+    Ipc2581(ipc2581::Ipc2581Args),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -144,6 +148,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Search(args) => api::execute_search(args),
         Commands::Sim(args) => sim::execute(args),
         Commands::Mcp(args) => mcp::execute(args),
+        Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");

@@ -2978,6 +2978,7 @@ dependencies = [
  "pcb-diode-api",
  "pcb-eda",
  "pcb-fmt",
+ "pcb-ipc2581-tools",
  "pcb-kicad",
  "pcb-layout",
  "pcb-mcp",
@@ -3068,16 +3069,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-ipc2581"
+name = "pcb-ipc2581-tools"
 version = "0.2.21"
 dependencies = [
  "anyhow",
- "axoupdater",
  "chrono",
  "clap",
  "colored",
  "comfy-table",
- "env_logger",
  "ipc2581",
  "log",
  "pcb-sch",
