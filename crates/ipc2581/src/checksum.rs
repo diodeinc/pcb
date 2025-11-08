@@ -55,7 +55,7 @@ pub fn validate_checksum(xml: &str) -> Result<()> {
     hasher.update(content.as_bytes());
     let actual_bytes = hasher.finalize();
 
-    if expected_bytes.as_slice() != actual_bytes.as_slice() {
+    if expected_bytes[..] != actual_bytes[..] {
         return Err(Ipc2581Error::ChecksumMismatch {
             expected: format!("{:x}", md5::Md5::digest(expected_bytes)),
             actual: format!("{:x}", md5::Md5::digest(actual_bytes)),
