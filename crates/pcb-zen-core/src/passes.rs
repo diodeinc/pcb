@@ -1,6 +1,7 @@
 use crate::lang::error::CategorizedDiagnostic;
-use crate::{Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
+use crate::{Diagnostic, Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
 use starlark::errors::EvalSeverity;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -147,6 +148,172 @@ fn severity_sort_order(severity: EvalSeverity) -> u8 {
         EvalSeverity::Error => 1,
         EvalSeverity::Advice => 2,
         EvalSeverity::Disabled => 3,
+    }
+}
+
+/// A pass that suppresses diagnostics based on inline `# suppress:` comments in source code.
+/// Looks for comments in the format `# suppress: pattern1, pattern2, ...` at the end of lines.
+/// Checks all spans in the diagnostic call stack for matching suppression comments.
+pub struct CommentSuppressPass {
+    source_cache: std::cell::RefCell<SourceCache>,
+}
+
+impl CommentSuppressPass {
+    pub fn new() -> Self {
+        Self {
+            source_cache: std::cell::RefCell::new(SourceCache::new()),
+        }
+    }
+}
+
+impl Default for CommentSuppressPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DiagnosticsPass for CommentSuppressPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        let mut cache = self.source_cache.borrow_mut();
+
+        for diag in &mut diagnostics.diagnostics {
+            if should_suppress_diagnostic(diag, &mut cache) {
+                diag.suppressed = true;
+            }
+        }
+    }
+}
+
+/// Source file cache to avoid repeated I/O
+struct SourceCache {
+    files: HashMap<String, Vec<String>>,
+}
+
+impl SourceCache {
+    fn new() -> Self {
+        Self {
+            files: HashMap::new(),
+        }
+    }
+
+    /// Get line content for a given path and line number (0-indexed)
+    fn get_line(&mut self, path: &str, line_number: usize) -> Option<&str> {
+        let lines = self.files.entry(path.to_string()).or_insert_with(|| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|content| content.lines().map(String::from).collect())
+                .unwrap_or_default()
+        });
+
+        lines.get(line_number).map(|s| s.as_str())
+    }
+}
+
+/// Check if a diagnostic should be suppressed based on inline comments
+fn should_suppress_diagnostic(diagnostic: &Diagnostic, cache: &mut SourceCache) -> bool {
+    // Walk entire diagnostic tree and collect all spans
+    let mut to_check = vec![diagnostic];
+    let mut checked = Vec::new();
+
+    while let Some(diag) = to_check.pop() {
+        checked.push(diag);
+        if let Some(child) = &diag.child {
+            to_check.push(child);
+        }
+    }
+
+    // For each diagnostic in the tree, check its spans
+    for diag in checked {
+        // Check primary span
+        if let Some(span) = &diag.span {
+            if let Some(patterns) = extract_suppress_patterns(cache, &diag.path, span.begin.line) {
+                if patterns.iter().any(|p| matches_pattern(diag, p)) {
+                    return true;
+                }
+            }
+        }
+
+        // Check all call stack frames
+        if let Some(call_stack) = &diag.call_stack {
+            for frame in &call_stack.frames {
+                if let Some(loc) = &frame.location {
+                    let span = loc.resolve_span();
+                    if let Some(patterns) =
+                        extract_suppress_patterns(cache, loc.file.filename(), span.begin.line)
+                    {
+                        if patterns.iter().any(|p| matches_pattern(diag, p)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Extract suppression patterns from a source line
+fn extract_suppress_patterns(
+    cache: &mut SourceCache,
+    path: &str,
+    line_number: usize,
+) -> Option<Vec<String>> {
+    let line = cache.get_line(path, line_number)?;
+
+    // Look for all occurrences of "# suppress:" (case-insensitive)
+    let mut patterns = Vec::new();
+    let line_lower = line.to_lowercase();
+
+    for (idx, _) in line_lower
+        .match_indices("# suppress:")
+        .chain(line_lower.match_indices("#suppress:"))
+    {
+        // Find the part after "suppress:"
+        let after_marker = if line_lower[idx..].starts_with("# suppress:") {
+            &line[idx + "# suppress:".len()..]
+        } else {
+            &line[idx + "#suppress:".len()..]
+        };
+
+        // Extract patterns until end of line or next comment
+        let pattern_text = after_marker
+            .split('#')
+            .next()
+            .unwrap_or(after_marker)
+            .trim();
+
+        // Split by comma and trim each pattern
+        for pattern in pattern_text.split(',') {
+            let pattern = pattern.trim();
+            if !pattern.is_empty() {
+                patterns.push(pattern.to_string());
+            }
+        }
+    }
+
+    if patterns.is_empty() {
+        None
+    } else {
+        Some(patterns)
+    }
+}
+
+/// Check if a pattern matches a diagnostic
+fn matches_pattern(diagnostic: &Diagnostic, pattern: &str) -> bool {
+    let pattern_lower = pattern.to_lowercase();
+
+    match pattern_lower.as_str() {
+        "all" => true,
+        "warnings" => matches!(diagnostic.severity, EvalSeverity::Warning),
+        "errors" => matches!(diagnostic.severity, EvalSeverity::Error),
+        _ => {
+            // Check if diagnostic has a categorized kind
+            diagnostic
+                .innermost()
+                .downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == pattern || c.kind.starts_with(&format!("{pattern}.")))
+        }
     }
 }
 

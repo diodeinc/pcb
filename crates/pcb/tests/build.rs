@@ -105,6 +105,45 @@ error("Layout error", suppress=True, kind="layout.error")
 warn("BOM warning", kind="bom.missing")
 "#;
 
+// Tests for inline comment suppression
+const INLINE_SUPPRESS_BASIC_ZEN: &str = r#"
+warn("This should be suppressed", kind="bom.match_generic")  # suppress: bom.match_generic
+warn("This should not be suppressed", kind="bom.match_generic")
+"#;
+
+const INLINE_SUPPRESS_HIERARCHICAL_ZEN: &str = r#"
+warn("Voltage warning", kind="electrical.voltage.overvoltage")  # suppress: electrical
+warn("Current warning", kind="electrical.current.overcurrent")  # suppress: electrical
+warn("Layout warning", kind="layout.spacing")
+"#;
+
+const INLINE_SUPPRESS_SEVERITY_ZEN: &str = r#"
+warn("Warning 1")  # suppress: warnings
+warn("Warning 2")
+error("Error 1", suppress=True)  # suppress: errors
+"#;
+
+const INLINE_SUPPRESS_MULTIPLE_ZEN: &str = r#"
+warn("Should be suppressed", kind="bom.match_generic")  # suppress: bom.match_generic, electrical
+warn("Should not be suppressed", kind="layout.spacing")
+"#;
+
+const INLINE_SUPPRESS_ALL_ZEN: &str = r#"
+warn("Suppressed by all", kind="bom.match_generic")  # suppress: all
+error("Also suppressed", suppress=True, kind="electrical.voltage")  # suppress: all
+warn("Not suppressed", kind="layout.spacing")
+"#;
+
+const INLINE_SUPPRESS_CASE_INSENSITIVE_ZEN: &str = r#"
+warn("Suppressed", kind="bom.match_generic")  # SUPPRESS: bom.match_generic
+warn("Also suppressed")  # suppress: WARNINGS
+"#;
+
+const INLINE_SUPPRESS_NO_SPACE_ZEN: &str = r#"
+warn("Suppressed without space", kind="bom.match_generic")  #suppress: bom.match_generic
+warn("Suppressed with space", kind="electrical.voltage")  # suppress: electrical
+"#;
+
 #[test]
 fn test_pcb_build_unstable_ref_warning() {
     let mut sandbox = Sandbox::new();
@@ -808,6 +847,95 @@ fn test_suppress_kind_with_deny_warnings() {
             ],
         );
     assert_snapshot!("suppress_kind_with_deny_warnings", output);
+}
+
+// Tests for inline comment suppression
+
+#[test]
+fn test_inline_suppress_basic() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_BASIC_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_basic", output);
+}
+
+#[test]
+fn test_inline_suppress_hierarchical() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_HIERARCHICAL_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_hierarchical", output);
+}
+
+#[test]
+fn test_inline_suppress_severity() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_SEVERITY_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_severity", output);
+}
+
+#[test]
+fn test_inline_suppress_multiple_patterns() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_MULTIPLE_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_multiple_patterns", output);
+}
+
+#[test]
+fn test_inline_suppress_all() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_ALL_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_all", output);
+}
+
+#[test]
+fn test_inline_suppress_case_insensitive() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_CASE_INSENSITIVE_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_case_insensitive", output);
+}
+
+#[test]
+fn test_inline_suppress_no_space_after_hash() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", INLINE_SUPPRESS_NO_SPACE_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_suppress_no_space_after_hash", output);
+}
+
+#[test]
+fn test_inline_suppress_combined_with_cli() {
+    let mut sandbox = Sandbox::new();
+
+    // Both inline and CLI suppression should work together
+    let combined_zen = r#"
+warn("Suppressed by inline", kind="bom.match_generic")  # suppress: bom.match_generic
+warn("Suppressed by CLI", kind="electrical.voltage")
+warn("Not suppressed", kind="layout.spacing")
+"#;
+
+    let output = sandbox
+        .write("test.zen", combined_zen)
+        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
+    assert_snapshot!("inline_suppress_combined_with_cli", output);
 }
 
 #[test]

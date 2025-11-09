@@ -1,0 +1,17 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Not suppressed
+   ╭─[ <TEMP_DIR>/test.zen:4:1 ]
+ 4 │warn("Not suppressed", kind="layout.spacing")
+   │                      ╰─────────────────────── Not suppressed
+
+Suppressed 1 error, 1 warning
+✓ test.zen (0 components)
