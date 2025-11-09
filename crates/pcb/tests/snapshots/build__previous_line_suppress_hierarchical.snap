@@ -1,0 +1,17 @@
+---
+source: crates/pcb/tests/build.rs
+expression: output
+---
+Command: pcb build test.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: Layout warning not suppressed
+   ╭─[ <TEMP_DIR>/test.zen:6:1 ]
+ 6 │warn("Layout warning not suppressed", kind="layout.spacing")
+   │                              ╰────────────────────────────── Layout warning not suppressed
+
+Suppressed 2 warnings
+✓ test.zen (0 components)

@@ -144,6 +144,56 @@ warn("Suppressed without space", kind="bom.match_generic")  #suppress: bom.match
 warn("Suppressed with space", kind="electrical.voltage")  # suppress: electrical
 "#;
 
+// Tests for previous-line suppression
+const PREVIOUS_LINE_SUPPRESS_BASIC_ZEN: &str = r#"
+# suppress: bom.match_generic
+warn("This should be suppressed", kind="bom.match_generic")
+warn("This should not be suppressed", kind="bom.match_generic")
+"#;
+
+const PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN: &str = r#"
+# suppress: electrical
+warn("Voltage warning", kind="electrical.voltage.overvoltage")
+# suppress: electrical
+warn("Current warning", kind="electrical.current.overcurrent")
+warn("Layout warning not suppressed", kind="layout.spacing")
+"#;
+
+const PREVIOUS_LINE_SUPPRESS_MULTIPLE_ZEN: &str = r#"
+# suppress: bom.match_generic, electrical.voltage
+warn("Should be suppressed by first pattern", kind="bom.match_generic")
+# suppress: layout, warnings
+warn("Should be suppressed by warnings pattern")
+"#;
+
+const PREVIOUS_LINE_MIXED_WITH_INLINE_ZEN: &str = r#"
+# suppress: bom.match_generic
+warn("Suppressed by previous line", kind="bom.match_generic")
+warn("Suppressed by inline", kind="electrical.voltage")  # suppress: electrical
+warn("Not suppressed", kind="layout.spacing")
+"#;
+
+const PREVIOUS_LINE_WITH_COMMENT_ZEN: &str = r#"
+# This is a regular comment explaining the code
+# suppress: bom.match_generic
+warn("Should be suppressed", kind="bom.match_generic")
+"#;
+
+const PREVIOUS_LINE_MULTILINE_STATEMENT_ZEN: &str = r#"
+# suppress: bom.match_generic
+warn(
+    "Should be suppressed",
+    kind="bom.match_generic"
+)
+"#;
+
+const INLINE_NO_CROSS_LINE_CONTAMINATION_ZEN: &str = r#"
+warn("Warning 1")  # suppress: warnings
+warn("Warning 2 should NOT be suppressed")
+warn("Warning 3")  # suppress: warnings
+warn("Warning 4 should NOT be suppressed")
+"#;
+
 #[test]
 fn test_pcb_build_unstable_ref_warning() {
     let mut sandbox = Sandbox::new();
@@ -936,6 +986,79 @@ warn("Not suppressed", kind="layout.spacing")
         .write("test.zen", combined_zen)
         .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("inline_suppress_combined_with_cli", output);
+}
+
+// Tests for previous-line suppression
+
+#[test]
+fn test_previous_line_suppress_basic() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", PREVIOUS_LINE_SUPPRESS_BASIC_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("previous_line_suppress_basic", output);
+}
+
+#[test]
+fn test_previous_line_suppress_hierarchical() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("previous_line_suppress_hierarchical", output);
+}
+
+#[test]
+fn test_previous_line_suppress_multiple_patterns() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", PREVIOUS_LINE_SUPPRESS_MULTIPLE_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("previous_line_suppress_multiple_patterns", output);
+}
+
+#[test]
+fn test_previous_line_mixed_with_inline() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", PREVIOUS_LINE_MIXED_WITH_INLINE_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("previous_line_mixed_with_inline", output);
+}
+
+#[test]
+fn test_previous_line_with_regular_comment() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", PREVIOUS_LINE_WITH_COMMENT_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("previous_line_with_regular_comment", output);
+}
+
+#[test]
+fn test_previous_line_multiline_statement() {
+    let mut sandbox = Sandbox::new();
+
+    let output = sandbox
+        .write("test.zen", PREVIOUS_LINE_MULTILINE_STATEMENT_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("previous_line_multiline_statement", output);
+}
+
+#[test]
+fn test_inline_no_cross_line_contamination() {
+    let mut sandbox = Sandbox::new();
+
+    // End-of-line comments should NOT affect the next line
+    let output = sandbox
+        .write("test.zen", INLINE_NO_CROSS_LINE_CONTAMINATION_ZEN)
+        .snapshot_run("pcb", ["build", "test.zen"]);
+    assert_snapshot!("inline_no_cross_line_contamination", output);
 }
 
 #[test]

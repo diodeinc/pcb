@@ -152,8 +152,12 @@ fn severity_sort_order(severity: EvalSeverity) -> u8 {
 }
 
 /// A pass that suppresses diagnostics based on inline `# suppress:` comments in source code.
-/// Looks for comments in the format `# suppress: pattern1, pattern2, ...` at the end of lines.
-/// Checks all spans in the diagnostic call stack for matching suppression comments.
+///
+/// Supports two modes:
+/// - End-of-line: `code()  # suppress: pattern` (suppresses that line only)
+/// - Standalone: `# suppress: pattern` on its own line (suppresses next line)
+///
+/// Checks all spans in the diagnostic tree (primary span and call stack) for matching patterns.
 pub struct CommentSuppressPass {
     source_cache: std::cell::RefCell<SourceCache>,
 }
@@ -211,46 +215,70 @@ impl SourceCache {
 
 /// Check if a diagnostic should be suppressed based on inline comments
 fn should_suppress_diagnostic(diagnostic: &Diagnostic, cache: &mut SourceCache) -> bool {
-    // Walk entire diagnostic tree and collect all spans
-    let mut to_check = vec![diagnostic];
-    let mut checked = Vec::new();
-
-    while let Some(diag) = to_check.pop() {
-        checked.push(diag);
-        if let Some(child) = &diag.child {
-            to_check.push(child);
-        }
-    }
-
-    // For each diagnostic in the tree, check its spans
-    for diag in checked {
+    // Walk entire diagnostic tree
+    let mut current = Some(diagnostic);
+    while let Some(diag) = current {
         // Check primary span
         if let Some(span) = &diag.span {
-            if let Some(patterns) = extract_suppress_patterns(cache, &diag.path, span.begin.line) {
-                if patterns.iter().any(|p| matches_pattern(diag, p)) {
-                    return true;
-                }
+            if check_span_for_suppression(diag, cache, &diag.path, span.begin.line) {
+                return true;
             }
         }
 
-        // Check all call stack frames
+        // Check call stack frames
         if let Some(call_stack) = &diag.call_stack {
             for frame in &call_stack.frames {
                 if let Some(loc) = &frame.location {
                     let span = loc.resolve_span();
-                    if let Some(patterns) =
-                        extract_suppress_patterns(cache, loc.file.filename(), span.begin.line)
+                    if check_span_for_suppression(diag, cache, loc.file.filename(), span.begin.line)
                     {
-                        if patterns.iter().any(|p| matches_pattern(diag, p)) {
-                            return true;
-                        }
+                        return true;
                     }
                 }
             }
         }
+
+        current = diag.child.as_deref();
     }
 
     false
+}
+
+/// Check if a span (and optionally its previous line) has a suppression comment
+fn check_span_for_suppression(
+    diag: &Diagnostic,
+    cache: &mut SourceCache,
+    path: &str,
+    line: usize,
+) -> bool {
+    // Check current line
+    if has_matching_suppression(diag, cache, path, line) {
+        return true;
+    }
+
+    // Check previous line (only if it's a standalone comment)
+    line > 0
+        && is_standalone_suppress_comment(cache, path, line - 1)
+        && has_matching_suppression(diag, cache, path, line - 1)
+}
+
+/// Check if a line has suppression patterns that match the diagnostic
+fn has_matching_suppression(
+    diag: &Diagnostic,
+    cache: &mut SourceCache,
+    path: &str,
+    line: usize,
+) -> bool {
+    extract_suppress_patterns(cache, path, line)
+        .is_some_and(|patterns| patterns.iter().any(|p| matches_pattern(diag, p)))
+}
+
+/// Check if a line contains only a standalone suppress comment (no code before the comment)
+fn is_standalone_suppress_comment(cache: &mut SourceCache, path: &str, line_number: usize) -> bool {
+    cache.get_line(path, line_number).is_some_and(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with('#') && trimmed.to_lowercase().contains("suppress:")
+    })
 }
 
 /// Extract suppression patterns from a source line
@@ -260,43 +288,31 @@ fn extract_suppress_patterns(
     line_number: usize,
 ) -> Option<Vec<String>> {
     let line = cache.get_line(path, line_number)?;
-
-    // Look for all occurrences of "# suppress:" (case-insensitive)
-    let mut patterns = Vec::new();
     let line_lower = line.to_lowercase();
 
-    for (idx, _) in line_lower
-        .match_indices("# suppress:")
-        .chain(line_lower.match_indices("#suppress:"))
-    {
-        // Find the part after "suppress:"
-        let after_marker = if line_lower[idx..].starts_with("# suppress:") {
-            &line[idx + "# suppress:".len()..]
-        } else {
-            &line[idx + "#suppress:".len()..]
-        };
+    // Find "suppress:" marker (with or without space after #)
+    let suppress_idx = line_lower
+        .find("# suppress:")
+        .or_else(|| line_lower.find("#suppress:"))?;
 
-        // Extract patterns until end of line or next comment
-        let pattern_text = after_marker
-            .split('#')
-            .next()
-            .unwrap_or(after_marker)
-            .trim();
-
-        // Split by comma and trim each pattern
-        for pattern in pattern_text.split(',') {
-            let pattern = pattern.trim();
-            if !pattern.is_empty() {
-                patterns.push(pattern.to_string());
-            }
-        }
-    }
-
-    if patterns.is_empty() {
-        None
+    // Extract text after "suppress:" until end or next comment
+    let marker_len = if line_lower[suppress_idx..].starts_with("# suppress:") {
+        "# suppress:".len()
     } else {
-        Some(patterns)
-    }
+        "#suppress:".len()
+    };
+
+    let pattern_text = line[suppress_idx + marker_len..].split('#').next()?.trim();
+
+    // Parse comma-separated patterns
+    let patterns: Vec<String> = pattern_text
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+
+    (!patterns.is_empty()).then_some(patterns)
 }
 
 /// Check if a pattern matches a diagnostic
