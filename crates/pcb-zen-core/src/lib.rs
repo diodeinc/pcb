@@ -57,7 +57,8 @@ pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use load_spec::LoadSpec;
 pub use passes::{
-    AggregatePass, FilterHiddenPass, JsonExportPass, LspFilterPass, SortPass, SuppressPass,
+    AggregatePass, CommentSuppressPass, FilterHiddenPass, JsonExportPass, LspFilterPass, SortPass,
+    SuppressPass,
 };
 
 // Re-export file provider types

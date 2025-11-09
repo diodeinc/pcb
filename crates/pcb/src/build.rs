@@ -29,6 +29,7 @@ pub fn create_diagnostics_passes(
     vec![
         Box::new(pcb_zen_core::FilterHiddenPass),
         Box::new(pcb_zen_core::SuppressPass::new(suppress.to_vec())),
+        Box::new(pcb_zen_core::CommentSuppressPass::new()),
         Box::new(pcb_zen_core::AggregatePass),
         Box::new(pcb_zen_core::SortPass),
         Box::new(pcb_zen::diagnostics::RenderPass),
