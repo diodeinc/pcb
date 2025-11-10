@@ -16,11 +16,13 @@ use crate::OutputFormat;
 pub struct CharacteristicsData {
     pub package: Option<String>,
     pub value: Option<String>,
+    pub path: Option<String>,
+    pub alternatives: Vec<pcb_sch::Alternative>,
     pub properties: std::collections::BTreeMap<String, String>,
 }
 
 /// Extract characteristics from IPC-2581 Characteristics
-/// Returns package, value, and custom properties
+/// Returns package, value, alternatives, and custom properties
 /// Note: MPN and Manufacturer must come from AVL/Enterprise (canonical IPC-2581 way)
 pub fn extract_characteristics(
     ipc: &ipc2581::Ipc2581,
@@ -37,12 +39,18 @@ pub fn extract_characteristics(
             match name_lower.as_str() {
                 "package" | "footprint" => data.package = Some(val_str),
                 "value" => data.value = Some(val_str),
-                // Exclude well-known fields and instance-specific metadata
+                "path" => data.path = Some(val_str),
+                "alternatives" => {
+                    if let Some(alternative) = parse_alternative_json(&val_str) {
+                        data.alternatives.push(alternative);
+                    }
+                }
+                // Exclude well-known fields (MPN/Manufacturer come from AVL)
+                // and instance-specific metadata
                 "mpn"
                 | "manufacturerpartnumber"
                 | "partnumber"
                 | "manufacturer"
-                | "path"
                 | "prefix"
                 | "symbol_name"
                 | "symbol_path" => {}
@@ -54,6 +62,22 @@ pub fn extract_characteristics(
     }
 
     data
+}
+
+/// Parse alternative part data from JSON string
+/// Handles HTML-encoded JSON like: {&quot;mpn&quot;: &quot;...&quot;, &quot;manufacturer&quot;: &quot;...&quot;}
+fn parse_alternative_json(json_str: &str) -> Option<pcb_sch::Alternative> {
+    // Decode HTML entities using quick-xml
+    let decoded = quick_xml::escape::unescape(json_str).ok()?.to_string();
+
+    // Parse as JSON
+    let parsed: serde_json::Value = serde_json::from_str(&decoded).ok()?;
+
+    // Extract mpn and manufacturer
+    let mpn = parsed.get("mpn")?.as_str()?.to_string();
+    let manufacturer = parsed.get("manufacturer")?.as_str()?.to_string();
+
+    Some(pcb_sch::Alternative { mpn, manufacturer })
 }
 
 pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
@@ -93,6 +117,8 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             let CharacteristicsData {
                 package,
                 value,
+                path: component_path,
+                alternatives: textual_alternatives,
                 properties,
             } = item
                 .characteristics
@@ -104,6 +130,10 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             let (mpn, manufacturer, avl_alternatives) =
                 lookup_from_avl(ipc, item.oem_design_number_ref);
 
+            // Merge alternatives: AVL takes precedence, then textual characteristics
+            let mut alternatives = avl_alternatives;
+            alternatives.extend(textual_alternatives);
+
             // Use BomItem description attribute if present, otherwise fallback to value
             let description = item
                 .description
@@ -113,14 +143,14 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             // Build entry
             let entry = BomEntry {
                 mpn,
-                alternatives: avl_alternatives,
+                alternatives,
                 manufacturer,
                 package,
                 value,
                 description,
                 generic_data: None,
                 offers: Vec::new(),
-                dnp: false, // Check ref des for populate flag
+                dnp: false, // Will be set per ref_des
                 skip_bom: false,
                 properties,
             };
@@ -128,20 +158,15 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             // Process reference designators
             for ref_des in &item.ref_des_list {
                 let designator = ipc.resolve(ref_des.name).to_string();
-
-                // Skip empty designators (invalid/placeholder entries)
                 if designator.is_empty() {
                     continue;
                 }
 
-                // Use Path property if available, otherwise use ipc::designator format
-                let path = entry
-                    .properties
-                    .get("Path")
-                    .cloned()
+                // Use Path from characteristics, or fallback to ipc::designator format
+                let path = component_path
+                    .clone()
                     .unwrap_or_else(|| format!("ipc::{}", designator));
 
-                // Check DNP status
                 let mut entry_with_dnp = entry.clone();
                 entry_with_dnp.dnp = !ref_des.populate;
 
@@ -198,23 +223,17 @@ pub fn lookup_from_avl(
     ipc: &ipc2581::Ipc2581,
     oem_design_number_ref: ipc2581::Symbol,
 ) -> (Option<String>, Option<String>, Vec<pcb_sch::Alternative>) {
-    // Check if AVL section exists
-    let avl = match ipc.avl() {
-        Some(avl) => avl,
-        None => return (None, None, Vec::new()),
+    let Some(avl) = ipc.avl() else {
+        return (None, None, Vec::new());
     };
 
-    // Get the OEM design number string to match against
     let oem_design_number_str = ipc.resolve(oem_design_number_ref);
-
-    // Find matching AvlItem
-    let avl_item = match avl
+    let Some(avl_item) = avl
         .items
         .iter()
         .find(|item| ipc.resolve(item.oem_design_number) == oem_design_number_str)
-    {
-        Some(item) => item,
-        None => return (None, None, Vec::new()),
+    else {
+        return (None, None, Vec::new());
     };
 
     if avl_item.vmpn_list.is_empty() {
@@ -237,17 +256,14 @@ pub fn lookup_from_avl(
     });
 
     // Rest are alternatives
-    let alternatives: Vec<pcb_sch::Alternative> = sorted_vmpn[1..]
+    let alternatives = sorted_vmpn[1..]
         .iter()
         .filter_map(|vmpn| {
-            let mpn = vmpn.mpns.first()?.name;
-            let manufacturer_ref = vmpn.vendors.first()?.enterprise_ref;
-            let manufacturer = ipc.resolve_enterprise(manufacturer_ref)?;
-
-            Some(pcb_sch::Alternative {
-                mpn: ipc.resolve(mpn).to_string(),
-                manufacturer: manufacturer.to_string(),
-            })
+            let mpn = ipc.resolve(vmpn.mpns.first()?.name).to_string();
+            let manufacturer = ipc
+                .resolve_enterprise(vmpn.vendors.first()?.enterprise_ref)?
+                .to_string();
+            Some(pcb_sch::Alternative { mpn, manufacturer })
         })
         .collect();
 
