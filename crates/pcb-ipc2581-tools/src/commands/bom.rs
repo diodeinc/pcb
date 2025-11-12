@@ -3,10 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::Result;
-use comfy_table::presets::UTF8_FULL_CONDENSED;
-use comfy_table::{Cell, Color, Table};
 use pcb_sch::{Bom, BomEntry};
-use starlark_syntax::slice_vec_ext::SliceExt;
 
 use crate::utils::file as file_utils;
 use crate::OutputFormat;
@@ -95,7 +92,7 @@ pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
             write!(writer, "{}", bom.ungrouped_json())?;
         }
         OutputFormat::Text => {
-            write_bom_table(&bom, writer)?;
+            bom.write_table(writer)?;
         }
     };
 
@@ -273,126 +270,4 @@ pub fn lookup_from_avl(
         .collect();
 
     (primary_mpn, primary_manufacturer, alternatives)
-}
-
-fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
-    // Print legend with color swatches
-    use colored::Colorize;
-    writeln!(writer, "Legend:")?;
-    writeln!(writer, "  {} House component", "■".blue())?;
-    writeln!(
-        writer,
-        "  {} Plenty available / easy to source",
-        "■".green()
-    )?;
-    writeln!(
-        writer,
-        "  {} Limited inventory / harder to source",
-        "■".yellow()
-    )?;
-    writeln!(writer, "  {} No inventory / hard to source", "■".red())?;
-
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
-
-    let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
-    for entry in json.as_array().unwrap() {
-        let designators = entry["designators"]
-            .as_array()
-            .unwrap()
-            .map(|d| d.as_str().unwrap())
-            .join(",");
-
-        // Use first offer info if available, otherwise use base component info
-        let (mpn, manufacturer) = entry
-            .get("offers")
-            .and_then(|o| o.as_array())
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|offer| offer["distributor"].as_str() != Some("__AVL__"))
-            })
-            .map(|offer| {
-                (
-                    offer["manufacturer_pn"].as_str().unwrap_or_default(),
-                    offer["manufacturer"].as_str().unwrap_or_default(),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    entry["mpn"].as_str().unwrap_or_default(),
-                    entry["manufacturer"].as_str().unwrap_or_default(),
-                )
-            });
-
-        // Use description field if available, otherwise use value
-        let description = entry["description"]
-            .as_str()
-            .or_else(|| entry["value"].as_str())
-            .unwrap_or_default();
-
-        // Get alternatives if present
-        let alternatives_str = entry
-            .get("alternatives")
-            .and_then(|a| a.as_array())
-            .map(|arr| {
-                if arr.is_empty() {
-                    String::new()
-                } else {
-                    arr.iter()
-                        .filter_map(|alt| alt["mpn"].as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                }
-            })
-            .unwrap_or_default();
-
-        // Check if this is a house part (assign_house_resistor or assign_house_capacitor)
-        let is_house_part = entry
-            .get("matcher")
-            .and_then(|m| m.as_str())
-            .map(|m| m.starts_with("assign_house_"))
-            .unwrap_or(false);
-
-        // Create cells with blue color for house parts
-        let mpn_cell = if is_house_part {
-            Cell::new(mpn).fg(Color::Blue)
-        } else {
-            Cell::new(mpn)
-        };
-
-        let alternatives_cell = if is_house_part {
-            Cell::new(alternatives_str.as_str()).fg(Color::Blue)
-        } else {
-            Cell::new(alternatives_str.as_str())
-        };
-
-        table.add_row(vec![
-            Cell::new(designators.as_str()),
-            mpn_cell,
-            Cell::new(manufacturer),
-            Cell::new(entry["package"].as_str().unwrap_or_default()),
-            Cell::new(description),
-            alternatives_cell,
-            Cell::new(if entry["dnp"].as_bool().unwrap_or(false) {
-                "Yes"
-            } else {
-                "No"
-            }),
-        ]);
-    }
-
-    // Set headers
-    table.set_header(vec![
-        "Designators",
-        "MPN",
-        "Manufacturer",
-        "Package",
-        "Description",
-        "Alternatives",
-        "DNP",
-    ]);
-
-    writeln!(writer, "{table}")?;
-    Ok(())
 }

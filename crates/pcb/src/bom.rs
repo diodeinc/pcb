@@ -5,11 +5,8 @@ use crate::build::create_diagnostics_passes;
 use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
-use comfy_table::presets::UTF8_FULL_CONDENSED;
-use comfy_table::{Cell, Color, Table};
 use pcb_sch::{parse_kicad_csv_bom, Bom};
 use pcb_ui::prelude::*;
-use starlark_syntax::slice_vec_ext::SliceExt;
 
 /// Generate BOM with KiCad fallback if design BOM is empty
 pub fn generate_bom_with_fallback(design_bom: Bom, layout_path: Option<&Path>) -> Result<Bom> {
@@ -120,103 +117,8 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let mut writer = io::stdout().lock();
     match args.format {
         BomFormat::Json => write!(writer, "{}", bom.ungrouped_json())?,
-        BomFormat::Table => write_bom_table(&bom, writer)?,
+        BomFormat::Table => bom.write_table(writer)?,
     };
 
-    Ok(())
-}
-
-fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
-    // Print legend with color swatches
-    writeln!(writer, "Legend:")?;
-    writeln!(writer, "  {} House component", "■".blue())?;
-    writeln!(
-        writer,
-        "  {} Plenty available / easy to source",
-        "■".green()
-    )?;
-    writeln!(
-        writer,
-        "  {} Limited inventory / harder to source",
-        "■".yellow()
-    )?;
-    writeln!(writer, "  {} No inventory / hard to source", "■".red())?;
-
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
-
-    let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
-    for entry in json.as_array().unwrap() {
-        let designators = entry["designators"]
-            .as_array()
-            .unwrap()
-            .map(|d| d.as_str().unwrap())
-            .join(",");
-
-        // Use first offer info if available, otherwise use base component info
-        let (mpn, manufacturer) = entry
-            .get("offers")
-            .and_then(|o| o.as_array())
-            .and_then(|arr| arr.first())
-            .map(|offer| {
-                (
-                    offer["manufacturer_pn"].as_str().unwrap_or_default(),
-                    offer["manufacturer"].as_str().unwrap_or_default(),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    entry["mpn"].as_str().unwrap_or_default(),
-                    entry["manufacturer"].as_str().unwrap_or_default(),
-                )
-            });
-
-        // Use value as description until all the generics have proper descriptions
-        let description = entry["description"].as_str().unwrap_or_default();
-
-        // Check if this is a house part (assign_house_resistor or assign_house_capacitor)
-        let is_house_part = entry
-            .get("matcher")
-            .and_then(|m| m.as_str())
-            .map(|m| m.starts_with("assign_house_"))
-            .unwrap_or(false);
-
-        // Create cells with blue color for house parts
-        let mpn_cell = if is_house_part {
-            Cell::new(mpn).fg(Color::Blue)
-        } else {
-            Cell::new(mpn)
-        };
-
-        let manufacturer_cell = Cell::new(manufacturer);
-
-        table.add_row(vec![
-            Cell::new(designators.as_str()),
-            mpn_cell,
-            manufacturer_cell,
-            Cell::new(entry["package"].as_str().unwrap_or_default()),
-            Cell::new(description),
-            Cell::new(
-                if entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    "Yes"
-                } else {
-                    "No"
-                },
-            ),
-        ]);
-    }
-
-    // Set headers
-    table.set_header(vec![
-        "Designators",
-        "MPN",
-        "Manufacturer",
-        "Package",
-        "Description",
-        "DNP",
-    ]);
-
-    writeln!(writer, "{table}")?;
     Ok(())
 }
