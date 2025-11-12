@@ -9,6 +9,7 @@ mod api;
 mod bom;
 mod build;
 mod clean;
+mod drc;
 mod file_walker;
 mod fmt;
 mod info;
