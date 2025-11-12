@@ -280,8 +280,16 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
     use colored::Colorize;
     writeln!(writer, "Legend:")?;
     writeln!(writer, "  {} House component", "■".blue())?;
-    writeln!(writer, "  {} Plenty available / easy to source", "■".green())?;
-    writeln!(writer, "  {} Limited inventory / harder to source", "■".yellow())?;
+    writeln!(
+        writer,
+        "  {} Plenty available / easy to source",
+        "■".green()
+    )?;
+    writeln!(
+        writer,
+        "  {} Limited inventory / harder to source",
+        "■".yellow()
+    )?;
     writeln!(writer, "  {} No inventory / hard to source", "■".red())?;
 
     let mut table = Table::new();

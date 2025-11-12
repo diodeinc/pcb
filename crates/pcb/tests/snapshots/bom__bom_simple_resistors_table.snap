@@ -6,6 +6,11 @@ Command: pcb bom boards/SimpleResistors.zen -r bom_rules.json -f table
 Exit Code: 0
 
 --- STDOUT ---
+Legend:
+  ■ House component
+  ■ Plenty available / easy to source
+  ■ Limited inventory / harder to source
+  ■ No inventory / hard to source
 ┌─────────────┬─────────────────┬──────────────┬─────────┬─────────────┬─────┐
 │ Designators ┆ MPN             ┆ Manufacturer ┆ Package ┆ Description ┆ DNP │
 ╞═════════════╪═════════════════╪══════════════╪═════════╪═════════════╪═════╡

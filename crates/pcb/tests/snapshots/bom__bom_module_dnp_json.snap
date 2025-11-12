@@ -1,0 +1,65 @@
+---
+source: crates/pcb/tests/bom.rs
+expression: output
+---
+Command: pcb bom boards/ModuleDnp.zen -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "path": "C1_DNP.C",
+    "designator": "C1",
+    "package": "0402",
+    "value": "100nF",
+    "description": "100nF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.000000100",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": true
+  },
+  {
+    "path": "C2.C",
+    "designator": "C2",
+    "package": "0805",
+    "value": "10uF",
+    "description": "10uF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.000010",
+      "tolerance": "0",
+      "unit": "Farads"
+    }
+  },
+  {
+    "path": "R1.R",
+    "designator": "R1",
+    "package": "0603",
+    "value": "1k",
+    "description": "1k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "1000",
+      "tolerance": "0",
+      "unit": "Ohms"
+    }
+  },
+  {
+    "path": "R2_DNP.R",
+    "designator": "R2",
+    "package": "0603",
+    "value": "10k",
+    "description": "10k",
+    "component_type": "Resistor",
+    "resistance": {
+      "value": "10000",
+      "tolerance": "0",
+      "unit": "Ohms"
+    },
+    "dnp": true
+  }
+]
+--- STDERR ---

@@ -6,6 +6,11 @@ Command: pcb bom boards/SkipBom.zen -f table
 Exit Code: 0
 
 --- STDOUT ---
+Legend:
+  ■ House component
+  ■ Plenty available / easy to source
+  ■ Limited inventory / harder to source
+  ■ No inventory / hard to source
 ┌─────────────┬─────────────────┬──────────────┬─────────┬─────────────┬─────┐
 │ Designators ┆ MPN             ┆ Manufacturer ┆ Package ┆ Description ┆ DNP │
 ╞═════════════╪═════════════════╪══════════════╪═════════╪═════════════╪═════╡

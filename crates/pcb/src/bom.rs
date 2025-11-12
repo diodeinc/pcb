@@ -130,8 +130,16 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
     // Print legend with color swatches
     writeln!(writer, "Legend:")?;
     writeln!(writer, "  {} House component", "■".blue())?;
-    writeln!(writer, "  {} Plenty available / easy to source", "■".green())?;
-    writeln!(writer, "  {} Limited inventory / harder to source", "■".yellow())?;
+    writeln!(
+        writer,
+        "  {} Plenty available / easy to source",
+        "■".green()
+    )?;
+    writeln!(
+        writer,
+        "  {} Limited inventory / harder to source",
+        "■".yellow()
+    )?;
     writeln!(writer, "  {} No inventory / hard to source", "■".red())?;
 
     let mut table = Table::new();
@@ -189,11 +197,13 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             manufacturer_cell,
             Cell::new(entry["package"].as_str().unwrap_or_default()),
             Cell::new(description),
-            Cell::new(if entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false) {
-                "Yes"
-            } else {
-                "No"
-            }),
+            Cell::new(
+                if entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    "Yes"
+                } else {
+                    "No"
+                },
+            ),
         ]);
     }
 
