@@ -1,21 +1,26 @@
 ---
 source: crates/pcb/tests/bom.rs
+assertion_line: 300
 expression: output
 ---
 Command: pcb bom boards/TestBoard.zen -f table
 Exit Code: 0
 
 --- STDOUT ---
-┌─────────────┬─────┬──────────────┬───────────┬─────────────┬─────┐
-│ Designators ┆ MPN ┆ Manufacturer ┆ Package   ┆ Description ┆ DNP │
-╞═════════════╪═════╪══════════════╪═══════════╪═════════════╪═════╡
-│ C1          ┆     ┆              ┆ 0402      ┆ 100nF       ┆ No  │
-│ C2          ┆     ┆              ┆ 0805      ┆ 10uF        ┆ No  │
-│ C3,C4       ┆     ┆              ┆ 0402      ┆ 22pF        ┆ No  │
-│ D1          ┆     ┆              ┆ 0603      ┆ LED GREEN   ┆ No  │
-│ D2          ┆     ┆              ┆ 0603      ┆ LED RED     ┆ No  │
-│ R1,R2       ┆     ┆              ┆ 0603      ┆ 330         ┆ No  │
-│ R3          ┆     ┆              ┆ 0603      ┆ 10k         ┆ No  │
-│ Y1          ┆     ┆              ┆ 5032_2Pin ┆ 16MHz 18pF  ┆ No  │
-└─────────────┴─────┴──────────────┴───────────┴─────────────┴─────┘
+Legend:
+ ■  Plenty available / easy to source         ■  House component       
+ ■  Limited inventory / harder to source      ■  DNP (Do Not Populate) 
+ ■  No inventory / hard to source                                      
+┌─────┬─────────────┬─────┬──────────────┬──────────────┬───────────┬─────────────┐
+│ Qty ┆ Designators ┆ MPN ┆ Alternatives ┆ Manufacturer ┆ Package   ┆ Description │
+╞═════╪═════════════╪═════╪══════════════╪══════════════╪═══════════╪═════════════╡
+│ 1   ┆ C1          ┆     ┆              ┆              ┆ 0402      ┆ 100nF       │
+│ 1   ┆ C2          ┆     ┆              ┆              ┆ 0805      ┆ 10uF        │
+│ 2   ┆ C3,C4       ┆     ┆              ┆              ┆ 0402      ┆ 22pF        │
+│ 1   ┆ D1          ┆     ┆              ┆              ┆ 0603      ┆ LED GREEN   │
+│ 1   ┆ D2          ┆     ┆              ┆              ┆ 0603      ┆ LED RED     │
+│ 2   ┆ R1,R2       ┆     ┆              ┆              ┆ 0603      ┆ 330         │
+│ 1   ┆ R3          ┆     ┆              ┆              ┆ 0603      ┆ 10k         │
+│ 1   ┆ Y1          ┆     ┆              ┆              ┆ 5032_2Pin ┆ 16MHz 18pF  │
+└─────┴─────────────┴─────┴──────────────┴──────────────┴───────────┴─────────────┘
 --- STDERR ---

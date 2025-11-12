@@ -1,0 +1,166 @@
+---
+source: crates/pcb-zen-core/tests/component.rs
+expression: output
+---
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+    sub_dnp: Module {
+        path: sub_dnp,
+        source: "/SubModule.zen",
+        properties: {
+            "dnp": "FrozenValue(StarlarkBool(true))",
+        },
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "resistance": FrozenValue(
+                            "10k",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+            FrozenValue(
+                Component {
+                    name: "C1",
+                    footprint: "0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "capacitance": FrozenValue(
+                            "100nF",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+    sub_normal: Module {
+        path: sub_normal,
+        source: "/SubModule.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "resistance": FrozenValue(
+                            "10k",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+            FrozenValue(
+                Component {
+                    name: "C1",
+                    footprint: "0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    properties: {
+                        "capacitance": FrozenValue(
+                            "100nF",
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

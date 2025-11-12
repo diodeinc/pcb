@@ -11,6 +11,7 @@ description = "Core functionality for Zen PCB design language"
 default = ["native"]
 native = ["reqwest", "dirs", "flate2", "tar", "walkdir"]
 wasm = ["uuid/js", "getrandom/js", "dep:getrandom"]
+table = ["pcb-sch/table"]
 
 [dependencies]
 dupe = { workspace = true }

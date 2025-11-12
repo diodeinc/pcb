@@ -6,10 +6,14 @@ Command: pcb bom boards/SimpleResistors.zen -r bom_rules.json -f table
 Exit Code: 0
 
 --- STDOUT ---
-┌─────────────┬─────────────────┬──────────────┬─────────┬─────────────┬─────┐
-│ Designators ┆ MPN             ┆ Manufacturer ┆ Package ┆ Description ┆ DNP │
-╞═════════════╪═════════════════╪══════════════╪═════════╪═════════════╪═════╡
-│ R1,R2       ┆ RC0603FR-071KL  ┆ Yageo        ┆ 0603    ┆ 1k          ┆ No  │
-│ R3          ┆ RC0402FR-074K7L ┆ Yageo        ┆ 0402    ┆ 4.7k        ┆ No  │
-└─────────────┴─────────────────┴──────────────┴─────────┴─────────────┴─────┘
+Legend:
+ ■  Plenty available / easy to source         ■  House component       
+ ■  Limited inventory / harder to source      ■  DNP (Do Not Populate) 
+ ■  No inventory / hard to source                                      
+┌─────┬─────────────┬─────────────────┬──────────────┬──────────────┬─────────┬─────────────┐
+│ Qty ┆ Designators ┆ MPN             ┆ Alternatives ┆ Manufacturer ┆ Package ┆ Description │
+╞═════╪═════════════╪═════════════════╪══════════════╪══════════════╪═════════╪═════════════╡
+│ 2   ┆ R1,R2       ┆ RC0603FR-071KL  ┆              ┆ Yageo        ┆ 0603    ┆ 1k          │
+│ 1   ┆ R3          ┆ RC0402FR-074K7L ┆              ┆ Yageo        ┆ 0402    ┆ 4.7k        │
+└─────┴─────────────┴─────────────────┴──────────────┴──────────────┴─────────┴─────────────┘
 --- STDERR ---

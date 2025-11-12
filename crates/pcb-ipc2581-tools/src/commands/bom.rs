@@ -3,13 +3,23 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::Result;
-use comfy_table::presets::UTF8_FULL_CONDENSED;
-use comfy_table::Table;
 use pcb_sch::{Bom, BomEntry};
-use starlark_syntax::slice_vec_ext::SliceExt;
 
 use crate::utils::file as file_utils;
 use crate::OutputFormat;
+
+/// Trim and truncate description to 100 chars max
+fn trim_description(s: Option<String>) -> Option<String> {
+    s.map(|s| {
+        let trimmed = s.trim();
+        if trimmed.len() > 100 {
+            format!("{} ...", &trimmed[..96])
+        } else {
+            trimmed.to_string()
+        }
+    })
+    .filter(|s| !s.is_empty())
+}
 
 /// Extracted characteristics data from IPC-2581 BOM items
 #[derive(Debug, Default)]
@@ -17,8 +27,15 @@ pub struct CharacteristicsData {
     pub package: Option<String>,
     pub value: Option<String>,
     pub path: Option<String>,
+    pub matcher: Option<String>,
     pub alternatives: Vec<pcb_sch::Alternative>,
     pub properties: std::collections::BTreeMap<String, String>,
+    pub component_type: Option<String>,
+    pub resistance: Option<String>,
+    pub capacitance: Option<String>,
+    pub voltage: Option<String>,
+    pub dielectric: Option<String>,
+    pub esr: Option<String>,
 }
 
 /// Extract characteristics from IPC-2581 Characteristics
@@ -40,11 +57,19 @@ pub fn extract_characteristics(
                 "package" | "footprint" => data.package = Some(val_str),
                 "value" => data.value = Some(val_str),
                 "path" => data.path = Some(val_str),
+                "matcher" => data.matcher = Some(val_str),
                 "alternatives" => {
                     if let Some(alternative) = parse_alternative_json(&val_str) {
                         data.alternatives.push(alternative);
                     }
                 }
+                // Generic component fields
+                "type" => data.component_type = Some(val_str.to_lowercase()),
+                "resistance" => data.resistance = Some(val_str),
+                "capacitance" => data.capacitance = Some(val_str),
+                "voltage" => data.voltage = Some(val_str),
+                "dielectric" => data.dielectric = Some(val_str),
+                "esr" => data.esr = Some(val_str),
                 // Exclude well-known fields (MPN/Manufacturer come from AVL)
                 // and instance-specific metadata
                 "mpn"
@@ -80,6 +105,34 @@ fn parse_alternative_json(json_str: &str) -> Option<pcb_sch::Alternative> {
     Some(pcb_sch::Alternative { mpn, manufacturer })
 }
 
+/// Build GenericComponent from extracted characteristics
+/// Reuses the same logic as detect_generic_component in pcb-sch
+fn build_generic_component(data: &CharacteristicsData) -> Option<pcb_sch::GenericComponent> {
+    match data.component_type.as_deref()? {
+        "resistor" => {
+            let resistance = data.resistance.as_ref()?.parse().ok()?;
+            let voltage = data.voltage.as_ref().and_then(|v| v.parse().ok());
+            Some(pcb_sch::GenericComponent::Resistor(pcb_sch::Resistor {
+                resistance,
+                voltage,
+            }))
+        }
+        "capacitor" => {
+            let capacitance = data.capacitance.as_ref()?.parse().ok()?;
+            let dielectric = data.dielectric.as_ref().and_then(|d| d.parse().ok());
+            let esr = data.esr.as_ref().and_then(|e| e.parse().ok());
+            let voltage = data.voltage.as_ref().and_then(|v| v.parse().ok());
+            Some(pcb_sch::GenericComponent::Capacitor(pcb_sch::Capacitor {
+                capacitance,
+                dielectric,
+                esr,
+                voltage,
+            }))
+        }
+        _ => None,
+    }
+}
+
 pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
@@ -93,7 +146,7 @@ pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
             write!(writer, "{}", bom.ungrouped_json())?;
         }
         OutputFormat::Text => {
-            write_bom_table(&bom, writer)?;
+            bom.write_table(writer)?;
         }
     };
 
@@ -114,17 +167,21 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             }
 
             // Extract characteristics from BomItem
-            let CharacteristicsData {
-                package,
-                value,
-                path: component_path,
-                alternatives: textual_alternatives,
-                properties,
-            } = item
+            let characteristics_data = item
                 .characteristics
                 .as_ref()
                 .map(|chars| extract_characteristics(ipc, chars))
                 .unwrap_or_default();
+
+            let CharacteristicsData {
+                package,
+                value,
+                path: component_path,
+                matcher,
+                alternatives: textual_alternatives,
+                properties,
+                ..
+            } = &characteristics_data;
 
             // AVL provides canonical MPN and Manufacturer via Enterprise references
             let (mpn, manufacturer, avl_alternatives) =
@@ -132,7 +189,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
 
             // Merge alternatives: AVL takes precedence, then textual characteristics
             let mut alternatives = avl_alternatives;
-            alternatives.extend(textual_alternatives);
+            alternatives.extend(textual_alternatives.clone());
 
             // Use BomItem description attribute if present, otherwise fallback to value
             let description = item
@@ -140,19 +197,23 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 .map(|sym| ipc.resolve(sym).to_string())
                 .or(value.clone());
 
+            // Build generic component data if available
+            let generic_data = build_generic_component(&characteristics_data);
+
             // Build entry
             let entry = BomEntry {
                 mpn,
                 alternatives,
                 manufacturer,
-                package,
-                value,
-                description,
-                generic_data: None,
+                package: package.clone(),
+                value: value.clone(),
+                description: trim_description(description),
+                generic_data,
                 offers: Vec::new(),
                 dnp: false, // Will be set per ref_des
                 skip_bom: false,
-                properties,
+                matcher: matcher.clone(),
+                properties: properties.clone(),
             };
 
             // Process reference designators
@@ -203,6 +264,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                         offers: Vec::new(),
                         dnp: false,
                         skip_bom: false,
+                        matcher: None,
                         properties: std::collections::BTreeMap::new(),
                     };
 
@@ -268,90 +330,4 @@ pub fn lookup_from_avl(
         .collect();
 
     (primary_mpn, primary_manufacturer, alternatives)
-}
-
-fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
-    let mut table = Table::new();
-    table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
-
-    let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
-    for entry in json.as_array().unwrap() {
-        let designators = entry["designators"]
-            .as_array()
-            .unwrap()
-            .map(|d| d.as_str().unwrap())
-            .join(",");
-
-        // Use first offer info if available, otherwise use base component info
-        let (mpn, manufacturer) = entry
-            .get("offers")
-            .and_then(|o| o.as_array())
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|offer| offer["distributor"].as_str() != Some("__AVL__"))
-            })
-            .map(|offer| {
-                (
-                    offer["manufacturer_pn"].as_str().unwrap_or_default(),
-                    offer["manufacturer"].as_str().unwrap_or_default(),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    entry["mpn"].as_str().unwrap_or_default(),
-                    entry["manufacturer"].as_str().unwrap_or_default(),
-                )
-            });
-
-        // Use description field if available, otherwise use value
-        let description = entry["description"]
-            .as_str()
-            .or_else(|| entry["value"].as_str())
-            .unwrap_or_default();
-
-        // Get alternatives if present
-        let alternatives_str = entry
-            .get("alternatives")
-            .and_then(|a| a.as_array())
-            .map(|arr| {
-                if arr.is_empty() {
-                    String::new()
-                } else {
-                    arr.iter()
-                        .filter_map(|alt| alt["mpn"].as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                }
-            })
-            .unwrap_or_default();
-
-        table.add_row(vec![
-            designators.as_str(),
-            mpn,
-            manufacturer,
-            entry["package"].as_str().unwrap_or_default(),
-            description,
-            alternatives_str.as_str(),
-            if entry["dnp"].as_bool().unwrap_or(false) {
-                "Yes"
-            } else {
-                "No"
-            },
-        ]);
-    }
-
-    // Set headers
-    table.set_header(vec![
-        "Designators",
-        "MPN",
-        "Manufacturer",
-        "Package",
-        "Description",
-        "Alternatives",
-        "DNP",
-    ]);
-
-    writeln!(writer, "{table}")?;
-    Ok(())
 }

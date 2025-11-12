@@ -11,6 +11,47 @@ pub struct Bom {
     pub designators: HashMap<String, String>, // path -> designator
 }
 
+/// Trim and truncate description to 100 chars max
+fn trim_description(s: Option<String>) -> Option<String> {
+    s.map(|s| {
+        let trimmed = s.trim();
+        if trimmed.len() > 100 {
+            format!("{} ...", &trimmed[..96])
+        } else {
+            trimmed.to_string()
+        }
+    })
+    .filter(|s| !s.is_empty())
+}
+
+/// Check if optional constraint A meets or exceeds B's requirement
+/// Returns true if A is compatible with B (A can replace B)
+fn meets_or_exceeds<T>(a: &Option<T>, b: &Option<T>, cmp: impl Fn(&T, &T) -> bool) -> bool {
+    match (a, b) {
+        (None, Some(_)) => false, // B requires, A doesn't have - incompatible
+        (Some(_), None) => true,  // B doesn't require, A has it - OK
+        (Some(va), Some(vb)) => cmp(va, vb), // Both have it - check if A meets B's requirement
+        (None, None) => true,     // Neither constrained - compatible
+    }
+}
+
+/// Format designators for logging
+fn fmt_designators(s: &BTreeSet<String>) -> String {
+    s.iter().map(String::as_str).collect::<Vec<_>>().join(",")
+}
+
+/// Merge source designators into target and log the consolidation
+fn merge_designators(target: &mut GroupedBomEntry, src: &GroupedBomEntry) {
+    log::info!(
+        "Consolidating BOM: Merging {} (loose spec: {}) into {} (strict spec: {})",
+        fmt_designators(&src.designators),
+        src.entry.description.as_deref().unwrap_or("?"),
+        fmt_designators(&target.designators),
+        target.entry.description.as_deref().unwrap_or("?")
+    );
+    target.designators.extend(src.designators.iter().cloned());
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupedBomEntry {
     pub designators: BTreeSet<String>,
@@ -48,6 +89,9 @@ pub struct BomEntry {
     /// Whether this component should be excluded from BOM output (e.g., fiducials, test points)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skip_bom: bool,
+    /// BOM matcher function name (used for custom BOM matching logic)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
     /// Additional properties from IPC-2581 textual characteristics
     #[serde(flatten)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -289,7 +333,7 @@ impl Bom {
                 let bom_entry = BomEntry {
                     mpn: instance.mpn(),
                     manufacturer: instance.manufacturer(),
-                    description: instance.description(),
+                    description: trim_description(instance.description()),
                     package: instance.package(),
                     value: instance.value(),
                     alternatives: instance.alternatives_attr(),
@@ -297,6 +341,7 @@ impl Bom {
                     offers: Vec::new(),
                     dnp: instance.dnp(),
                     skip_bom: instance.skip_bom(),
+                    matcher: instance.matcher(),
                     properties: BTreeMap::new(),
                 };
                 entries.insert(path.clone(), bom_entry);
@@ -319,7 +364,11 @@ impl Bom {
                 entry: entry.clone(),
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.designator.cmp(&b.designator));
+        // Sort by DNP status first (non-DNP before DNP), then by designator naturally
+        entries.sort_by(|a, b| match a.entry.dnp.cmp(&b.entry.dnp) {
+            std::cmp::Ordering::Equal => natord::compare(&a.designator, &b.designator),
+            other => other,
+        });
         serde_json::to_string_pretty(&entries).unwrap()
     }
 
@@ -340,10 +389,20 @@ impl Bom {
             .collect::<Vec<_>>();
 
         grouped_entries.sort_by(|a, b| {
-            let a_designator = a.designators.iter().next().unwrap();
-            let b_designator = b.designators.iter().next().unwrap();
-            a_designator.cmp(b_designator)
+            // Sort by DNP status first (non-DNP before DNP)
+            match a.entry.dnp.cmp(&b.entry.dnp) {
+                std::cmp::Ordering::Equal => {
+                    // Within same DNP status, sort by first designator naturally
+                    let a_first = a.designators.iter().next().unwrap();
+                    let b_first = b.designators.iter().next().unwrap();
+                    natord::compare(a_first, b_first)
+                }
+                other => other,
+            }
         });
+
+        // Apply generic BOM consolidation pass
+        grouped_entries = Self::consolidate_generic_entries(grouped_entries);
 
         serde_json::to_string_pretty(&grouped_entries).unwrap()
     }
@@ -403,6 +462,123 @@ impl Bom {
             entries,
             designators,
         }
+    }
+
+    /// Generic BOM Consolidation Pass
+    ///
+    /// Merges less-constrained generic component entries into more-constrained ones
+    /// to reduce unique BOM rows when safe to do so.
+    ///
+    /// # Strategy
+    ///
+    /// A part that meets stricter requirements automatically meets looser requirements.
+    /// For example, a 1µF 10V capacitor can be used anywhere that needs "1µF" (no voltage spec).
+    ///
+    /// # Safety Rules
+    ///
+    /// Consolidation only happens when ALL of these conditions are met:
+    ///
+    /// 1. **Generic components only** - Both entries must have `generic_data` populated
+    /// 2. **Identical component type** - Both resistors OR both capacitors
+    /// 3. **Identical package** - Same footprint (e.g., both 0402)
+    /// 4. **Identical DNP status** - Can't merge DNP with non-DNP
+    /// 5. **Stricter entry has MPN** - The more-constrained entry must have a part assigned
+    /// 6. **Compatible MPNs** - If both have MPNs, they must match (don't override user choice)
+    ///
+    /// # Strictness Comparison
+    ///
+    /// Entry A is "strictly more constrained" than Entry B if:
+    ///
+    /// **For Capacitors:**
+    /// - Capacitance matches (within tolerance)
+    /// - A has all constraints B has, plus at least one more:
+    ///   - A has voltage ≥ B.voltage (or B has no voltage)
+    ///   - A has same dielectric as B (or B has no dielectric)
+    ///   - A has ESR ≤ B.esr (or B has no ESR)
+    ///
+    /// **For Resistors:**
+    /// - Resistance matches (within tolerance)
+    /// - A has all constraints B has, plus at least one more:
+    ///   - A has voltage ≥ B.voltage (or B has no voltage)
+    ///
+    /// # Example
+    ///
+    /// Before:
+    /// ```text
+    /// 2 | C1,C2   | GRM155Z71A105KE01D | 1uF 10V
+    /// 2 | C14,C15 | GRM155Z71A105KE01D | 1uF
+    /// ```
+    ///
+    /// After:
+    /// ```text
+    /// 4 | C1,C2,C14,C15 | GRM155Z71A105KE01D | 1uF 10V
+    /// ```
+    ///
+    pub fn consolidate_generic_entries(entries: Vec<GroupedBomEntry>) -> Vec<GroupedBomEntry> {
+        use std::collections::HashMap;
+        use std::mem::discriminant;
+
+        let mut out = Vec::new();
+        let mut groups: HashMap<
+            (
+                std::mem::Discriminant<GenericComponent>,
+                Option<String>,
+                bool,
+            ),
+            Vec<GroupedBomEntry>,
+        > = HashMap::new();
+
+        // Separate generic from non-generic entries
+        for entry in entries {
+            if let Some(g) = &entry.entry.generic_data {
+                let key = (
+                    discriminant(g),
+                    entry.entry.package.clone(),
+                    entry.entry.dnp,
+                );
+                groups.entry(key).or_default().push(entry);
+            } else {
+                out.push(entry);
+            }
+        }
+
+        // Consolidate each group using absorb-into-representatives
+        for mut group in groups.into_values() {
+            let mut reps: Vec<GroupedBomEntry> = Vec::new();
+
+            while let Some(mut cur) = group.pop() {
+                let mut i = 0;
+                let mut absorbed = false;
+
+                while i < reps.len() {
+                    match consolidate_order(&reps[i].entry, &cur.entry) {
+                        Some(std::cmp::Ordering::Greater) => {
+                            // reps[i] stricter - absorb cur into it
+                            merge_designators(&mut reps[i], &cur);
+                            absorbed = true;
+                            break;
+                        }
+                        Some(std::cmp::Ordering::Less) => {
+                            // cur stricter - absorb reps[i] into cur, remove rep
+                            let victim = reps.remove(i);
+                            merge_designators(&mut cur, &victim);
+                            // Don't increment i - check next rep at same position
+                        }
+                        Some(std::cmp::Ordering::Equal) | None => {
+                            i += 1;
+                        }
+                    }
+                }
+
+                if !absorbed {
+                    reps.push(cur);
+                }
+            }
+
+            out.extend(reps);
+        }
+
+        out
     }
 }
 
@@ -468,6 +644,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
             offers: Vec::new(),
             dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
             skip_bom: false, // KiCad CSV exports don't include this field
+            matcher: None,
             properties: BTreeMap::new(),
         };
 
@@ -482,6 +659,97 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
 }
 
 /// Detect generic components based on Type attribute
+/// Compare two BOM entries for consolidation ordering
+///
+/// Returns Some(Ordering) indicating which entry is stricter, or None if not safe to consolidate
+fn consolidate_order(a: &BomEntry, b: &BomEntry) -> Option<std::cmp::Ordering> {
+    let ga = a.generic_data.as_ref()?;
+    let gb = b.generic_data.as_ref()?;
+
+    // Safety checks
+    if std::mem::discriminant(ga) != std::mem::discriminant(gb) {
+        return None;
+    }
+    if a.package != b.package {
+        return None;
+    }
+    if a.dnp != b.dnp {
+        return None;
+    }
+
+    // Check if components can replace each other
+    let a_meets_b = component_meets_or_exceeds(ga, gb);
+    let b_meets_a = component_meets_or_exceeds(gb, ga);
+
+    let ord = match (a_meets_b, b_meets_a) {
+        (true, false) => std::cmp::Ordering::Greater, // A meets B but not vice versa - A is stricter
+        (false, true) => std::cmp::Ordering::Less, // B meets A but not vice versa - B is stricter
+        (true, true) => std::cmp::Ordering::Equal, // Equivalent specs - either can replace the other
+        (false, false) => return None,             // Incompatible - can't consolidate
+    };
+
+    // MPN rules
+    if let (Some(ma), Some(mb)) = (&a.mpn, &b.mpn) {
+        if ma != mb {
+            return None;
+        }
+    }
+
+    // Consolidation rules based on ordering
+    match ord {
+        std::cmp::Ordering::Greater if a.mpn.is_some() => Some(std::cmp::Ordering::Greater),
+        std::cmp::Ordering::Less if b.mpn.is_some() => Some(std::cmp::Ordering::Less),
+        std::cmp::Ordering::Equal if a.mpn.is_some() || b.mpn.is_some() => {
+            // Equal specs - consolidate into whichever has MPN
+            if a.mpn.is_some() {
+                Some(std::cmp::Ordering::Greater)
+            } else {
+                Some(std::cmp::Ordering::Less)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Check if generic component A meets or exceeds B's requirements
+///
+/// Returns true if A can replace B (A's specs meet or exceed all of B's requirements)
+fn component_meets_or_exceeds(a: &GenericComponent, b: &GenericComponent) -> bool {
+    match (a, b) {
+        (GenericComponent::Resistor(res_a), GenericComponent::Resistor(res_b)) => {
+            resistor_meets_or_exceeds(res_a, res_b)
+        }
+        (GenericComponent::Capacitor(cap_a), GenericComponent::Capacitor(cap_b)) => {
+            capacitor_meets_or_exceeds(cap_a, cap_b)
+        }
+        _ => false, // Different types can't be compared
+    }
+}
+
+/// Check if resistor A meets or exceeds resistor B's requirements
+fn resistor_meets_or_exceeds(a: &Resistor, b: &Resistor) -> bool {
+    // A's resistance range must fit within B's (A's tolerance is same or tighter)
+    if !a.resistance.fits_within_default(&b.resistance) {
+        return false;
+    }
+
+    // A's voltage rating must meet or exceed B's (A has same or higher voltage rating)
+    meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.value >= vb.value)
+}
+
+/// Check if capacitor A meets or exceeds capacitor B's requirements
+fn capacitor_meets_or_exceeds(a: &Capacitor, b: &Capacitor) -> bool {
+    // A's capacitance range must fit within B's (A's tolerance is same or tighter)
+    if !a.capacitance.fits_within_default(&b.capacitance) {
+        return false;
+    }
+
+    // Check all optional constraints - A must meet or exceed each of B's requirements
+    meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.value >= vb.value)
+        && meets_or_exceeds(&a.dielectric, &b.dielectric, |da, db| da == db)
+        && meets_or_exceeds(&a.esr, &b.esr, |ea, eb| ea.value <= eb.value)
+}
+
 fn detect_generic_component(instance: &crate::Instance) -> Option<GenericComponent> {
     match instance.component_type()?.as_str() {
         "resistor" => {
@@ -823,6 +1091,7 @@ mod tests {
             offers: Vec::new(),
             dnp: false,
             skip_bom: false,
+            matcher: None,
             properties: BTreeMap::new(),
         };
 
@@ -892,5 +1161,584 @@ mod tests {
             matched_by: path_rule.key.clone(),
         };
         assert!(entry.offers.contains(&expected_mouser_matched_offer));
+    }
+
+    // ============================================================================
+    // Generic BOM Consolidation Tests
+    // ============================================================================
+
+    #[test]
+    fn test_consolidate_capacitor_voltage_stricter() {
+        // 1µF 10V should consolidate with 1µF (no voltage)
+        let cap_10v = BomEntry {
+            mpn: Some("PART-10V".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF 10V".to_string()),
+            description: Some("1uF 10V".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: Some(PhysicalValue::new(10.0, 0.0, PhysicalUnit::Volts)),
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_no_voltage = BomEntry {
+            mpn: Some("PART-10V".to_string()), // Same MPN
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_10v,
+                designators: BTreeSet::from(["C1".to_string(), "C2".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_no_voltage,
+                designators: BTreeSet::from(["C14".to_string(), "C15".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should consolidate into one entry
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(consolidated[0].designators.len(), 4);
+        assert!(consolidated[0].designators.contains("C1"));
+        assert!(consolidated[0].designators.contains("C2"));
+        assert!(consolidated[0].designators.contains("C14"));
+        assert!(consolidated[0].designators.contains("C15"));
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("1uF 10V".to_string())
+        );
+    }
+
+    #[test]
+    fn test_consolidate_resistor_voltage_stricter() {
+        // 10kΩ 100V should consolidate with 10kΩ (no voltage)
+        let res_100v = BomEntry {
+            mpn: Some("RES-100V".to_string()),
+            manufacturer: Some("Yageo".to_string()),
+            package: Some("0603".to_string()),
+            value: Some("10k 100V".to_string()),
+            description: Some("10k 100V".to_string()),
+            generic_data: Some(GenericComponent::Resistor(Resistor {
+                resistance: PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms),
+                voltage: Some(PhysicalValue::new(100.0, 0.0, PhysicalUnit::Volts)),
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let res_no_voltage = BomEntry {
+            mpn: Some("RES-100V".to_string()),
+            manufacturer: Some("Yageo".to_string()),
+            package: Some("0603".to_string()),
+            value: Some("10k".to_string()),
+            description: Some("10k".to_string()),
+            generic_data: Some(GenericComponent::Resistor(Resistor {
+                resistance: PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms),
+                voltage: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: res_100v,
+                designators: BTreeSet::from(["R1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: res_no_voltage,
+                designators: BTreeSet::from(["R2".to_string(), "R3".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(consolidated[0].designators.len(), 3);
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("10k 100V".to_string())
+        );
+    }
+
+    #[test]
+    fn test_no_consolidate_different_packages() {
+        // 1µF 0402 and 1µF 0603 should NOT consolidate
+        let cap_0402 = BomEntry {
+            mpn: Some("PART-0402".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_0603 = BomEntry {
+            mpn: Some("PART-0603".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0603".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_0402,
+                designators: BTreeSet::from(["C1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_0603,
+                designators: BTreeSet::from(["C2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should NOT consolidate - different packages
+        assert_eq!(consolidated.len(), 2);
+    }
+
+    #[test]
+    fn test_no_consolidate_different_dnp_status() {
+        // DNP and non-DNP should NOT consolidate
+        let cap_normal = BomEntry {
+            mpn: Some("PART-A".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_dnp = BomEntry {
+            dnp: true, // Different DNP status
+            ..cap_normal.clone()
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_normal,
+                designators: BTreeSet::from(["C1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_dnp,
+                designators: BTreeSet::from(["C2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should NOT consolidate - different DNP status
+        assert_eq!(consolidated.len(), 2);
+    }
+
+    #[test]
+    fn test_no_consolidate_different_mpns() {
+        // Different MPNs should NOT consolidate (user chose different parts)
+        let cap_a = BomEntry {
+            mpn: Some("PART-A".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF 10V".to_string()),
+            description: Some("1uF 10V".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: Some(PhysicalValue::new(10.0, 0.0, PhysicalUnit::Volts)),
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_b = BomEntry {
+            mpn: Some("PART-B".to_string()), // Different MPN
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_a,
+                designators: BTreeSet::from(["C1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_b,
+                designators: BTreeSet::from(["C2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should NOT consolidate - user chose different parts
+        assert_eq!(consolidated.len(), 2);
+    }
+
+    #[test]
+    fn test_no_consolidate_without_mpn() {
+        // Stricter entry without MPN should NOT consolidate
+        let cap_10v_no_mpn = BomEntry {
+            mpn: None, // No MPN
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF 10V".to_string()),
+            description: Some("1uF 10V".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: Some(PhysicalValue::new(10.0, 0.0, PhysicalUnit::Volts)),
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_no_voltage = BomEntry {
+            mpn: Some("PART-A".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_10v_no_mpn,
+                designators: BTreeSet::from(["C1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_no_voltage,
+                designators: BTreeSet::from(["C2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should NOT consolidate - stricter entry has no MPN
+        assert_eq!(consolidated.len(), 2);
+    }
+
+    #[test]
+    fn test_consolidate_capacitor_dielectric_stricter() {
+        // 1µF X7R should consolidate with 1µF (no dielectric)
+        let cap_x7r = BomEntry {
+            mpn: Some("CAP-X7R".to_string()),
+            manufacturer: Some("Samsung".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF X7R".to_string()),
+            description: Some("1uF X7R".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: Some(Dielectric::X7R),
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_no_dielec = BomEntry {
+            mpn: Some("CAP-X7R".to_string()),
+            manufacturer: Some("Samsung".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF".to_string()),
+            description: Some("1uF".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.0, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_x7r,
+                designators: BTreeSet::from(["C1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_no_dielec,
+                designators: BTreeSet::from(["C2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("1uF X7R".to_string())
+        );
+    }
+
+    #[test]
+    fn test_no_consolidate_non_generic() {
+        // Non-generic components should NOT consolidate
+        let entry_a = BomEntry {
+            mpn: Some("IC-A".to_string()),
+            manufacturer: Some("TI".to_string()),
+            package: Some("SOIC-8".to_string()),
+            value: Some("TPS82140".to_string()),
+            description: Some("3A Buck Converter".to_string()),
+            generic_data: None, // No generic data
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: entry_a.clone(),
+                designators: BTreeSet::from(["U1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: entry_a.clone(),
+                designators: BTreeSet::from(["U2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should NOT try to consolidate (though they'd be grouped by hash already)
+        assert_eq!(consolidated.len(), 2);
+    }
+
+    #[test]
+    fn test_consolidate_resistor_tighter_tolerance_different_nominal() {
+        // 50Ω ±1% should consolidate with 52Ω ±10%
+        // 50Ω ±1% = 49.5-50.5Ω, fits within 52Ω ±10% = 46.8-57.2Ω
+        let res_tight = BomEntry {
+            mpn: Some("RES-TIGHT".to_string()),
+            manufacturer: Some("Yageo".to_string()),
+            package: Some("0603".to_string()),
+            value: Some("50 1%".to_string()),
+            description: Some("50 1%".to_string()),
+            generic_data: Some(GenericComponent::Resistor(Resistor {
+                resistance: PhysicalValue::new(50.0, 0.01, PhysicalUnit::Ohms),
+                voltage: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let res_loose = BomEntry {
+            mpn: Some("RES-TIGHT".to_string()), // Same MPN - we're using the tighter spec part
+            manufacturer: Some("Yageo".to_string()),
+            package: Some("0603".to_string()),
+            value: Some("52 10%".to_string()),
+            description: Some("52 10%".to_string()),
+            generic_data: Some(GenericComponent::Resistor(Resistor {
+                resistance: PhysicalValue::new(52.0, 0.1, PhysicalUnit::Ohms),
+                voltage: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: res_tight,
+                designators: BTreeSet::from(["R1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: res_loose,
+                designators: BTreeSet::from(["R2".to_string(), "R3".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should consolidate to the tighter spec (50Ω ±1%)
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(consolidated[0].designators.len(), 3);
+        assert_eq!(consolidated[0].entry.description, Some("50 1%".to_string()));
+    }
+
+    #[test]
+    fn test_consolidate_capacitor_tighter_tolerance() {
+        // 1µF ±5% should consolidate with 1µF ±20%
+        let cap_tight = BomEntry {
+            mpn: Some("CAP-TIGHT".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF 5%".to_string()),
+            description: Some("1uF 5%".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.05, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let cap_loose = BomEntry {
+            mpn: Some("CAP-TIGHT".to_string()),
+            manufacturer: Some("Murata".to_string()),
+            package: Some("0402".to_string()),
+            value: Some("1uF 20%".to_string()),
+            description: Some("1uF 20%".to_string()),
+            generic_data: Some(GenericComponent::Capacitor(Capacitor {
+                capacitance: PhysicalValue::new(1e-6, 0.2, PhysicalUnit::Farads),
+                voltage: None,
+                dielectric: None,
+                esr: None,
+            })),
+            dnp: false,
+            alternatives: vec![],
+            offers: vec![],
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+
+        let entries = vec![
+            GroupedBomEntry {
+                entry: cap_tight,
+                designators: BTreeSet::from(["C1".to_string()]),
+            },
+            GroupedBomEntry {
+                entry: cap_loose,
+                designators: BTreeSet::from(["C2".to_string()]),
+            },
+        ];
+
+        let consolidated = Bom::consolidate_generic_entries(entries);
+
+        // Should consolidate to the tighter tolerance
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("1uF 5%".to_string())
+        );
     }
 }

@@ -778,15 +778,9 @@ where
             }
 
             if arg_name.as_str() == "dnp" {
-                // Handle dnp kwarg by adding it to properties
-                if properties_override.is_none() {
-                    properties_override = Some(SmallMap::new());
-                }
                 properties_override
-                    .as_mut()
-                    .unwrap()
+                    .get_or_insert_with(SmallMap::new)
                     .insert("dnp".to_string(), value.to_value());
-                // Do *not* treat `dnp` as an input placeholder.
                 continue;
             }
 
@@ -843,8 +837,29 @@ where
 
         let provided_names: Vec<String> = provided_names.into_iter().collect();
 
+        // Inherit dnp from parent module (parent dnp=True dominates child)
+        let parent_module = context.module();
+        let parent_dnp = parent_module
+            .properties()
+            .get("dnp")
+            .and_then(|v| v.unpack_bool())
+            .unwrap_or(false);
+
+        let child_dnp = properties_override
+            .as_ref()
+            .and_then(|m| m.get("dnp"))
+            .and_then(|v| v.unpack_bool())
+            .unwrap_or(false);
+
+        if parent_dnp || child_dnp {
+            properties_override
+                .get_or_insert_with(SmallMap::new)
+                .insert("dnp".to_string(), eval.heap().alloc(true).to_value());
+        }
+
         // Collect parent modifiers (parent's own + parent's ancestors)
-        let combined_modifiers = context.module().collect_all_component_modifiers_as_values();
+        let combined_modifiers = parent_module.collect_all_component_modifiers_as_values();
+        drop(parent_module);
 
         context.enqueue_child(PendingChild {
             loader: self.clone(),

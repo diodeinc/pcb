@@ -12,6 +12,8 @@
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
 mod bom;
+#[cfg(feature = "table")]
+mod bom_table;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
@@ -537,6 +539,10 @@ impl Instance {
     pub fn skip_pos(&self) -> bool {
         // Check for the standardized boolean "skip_pos" attribute
         self.boolean_attr(&["skip_pos"]).unwrap_or(false)
+    }
+
+    pub fn matcher(&self) -> Option<String> {
+        self.string_attr(&["Matcher", "matcher"])
     }
 }
 

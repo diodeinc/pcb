@@ -170,6 +170,26 @@ Component(
 )
 "#;
 
+const MODULE_DNP_BOARD_ZEN: &str = r#"
+load("@stdlib:v0.2.10/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib:v0.2.10/generics/Resistor.zen")
+Capacitor = Module("@stdlib:v0.2.10/generics/Capacitor.zen")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+
+# Normal module - components should NOT be DNP
+Resistor(name = "R1", value = "1kOhm", package = "0603", P1 = vcc.NET, P2 = gnd.NET)
+
+# Module with dnp=True - all child components should be DNP
+Resistor(name = "R2_DNP", value = "10kOhm", package = "0603", P1 = vcc.NET, P2 = gnd.NET, dnp = True)
+Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc.NET, P2 = gnd.NET, dnp = True)
+
+# Normal module again - should NOT be DNP
+Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc.NET, P2 = gnd.NET)
+"#;
+
 const SAMPLE_BOM_RULES: &str = r#"[
   {
     "key": {
@@ -416,12 +436,12 @@ fn test_bom_dnp_components() {
 }
 
 #[test]
-fn test_bom_dnp_components_table() {
-    // Test DNP components in table format
+fn test_bom_module_dnp_propagation() {
+    // Test that module-level dnp=True propagates to all child components
     let output = Sandbox::new()
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
-        .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "table"]);
-    assert_snapshot!("bom_dnp_table", output);
+        .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
+        .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
+    assert_snapshot!("bom_module_dnp_json", output);
 }
