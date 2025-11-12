@@ -29,7 +29,7 @@ pcb-eda = { path = "crates/pcb-eda" }
 pcb-layout = { path = "crates/pcb-layout" }
 pcb-sch = { path = "crates/pcb-sch" }
 pcb-zen = { path = "crates/pcb-zen" }
-pcb-zen-core = { path = "crates/pcb-zen-core", default-features = true }
+pcb-zen-core = { path = "crates/pcb-zen-core" }
 pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
 pcb-sexpr = { path = "crates/pcb-sexpr", features = ["serde"] }

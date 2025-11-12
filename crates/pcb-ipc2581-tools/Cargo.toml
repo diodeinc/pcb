@@ -14,7 +14,7 @@ colored = { workspace = true }
 comfy-table = { workspace = true }
 ipc2581 = { workspace = true }
 log = { workspace = true }
-pcb-sch = { workspace = true }
+pcb-sch = { workspace = true, features = ["table"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 starlark_syntax = { workspace = true }

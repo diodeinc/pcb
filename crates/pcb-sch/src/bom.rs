@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::{self, Write};
 use std::str::FromStr;
 
-use comfy_table::{Cell, Color, Table};
 use serde::{Deserialize, Serialize};
 
 use crate::{InstanceKind, PhysicalValue, Schematic};
@@ -30,10 +28,10 @@ fn trim_description(s: Option<String>) -> Option<String> {
 /// Returns true if A is compatible with B (A can replace B)
 fn meets_or_exceeds<T>(a: &Option<T>, b: &Option<T>, cmp: impl Fn(&T, &T) -> bool) -> bool {
     match (a, b) {
-        (None, Some(_)) => false,           // B requires, A doesn't have - incompatible
-        (Some(_), None) => true,            // B doesn't require, A has it - OK
+        (None, Some(_)) => false, // B requires, A doesn't have - incompatible
+        (Some(_), None) => true,  // B doesn't require, A has it - OK
         (Some(va), Some(vb)) => cmp(va, vb), // Both have it - check if A meets B's requirement
-        (None, None) => true,               // Neither constrained - compatible
+        (None, None) => true,     // Neither constrained - compatible
     }
 }
 
@@ -367,11 +365,9 @@ impl Bom {
             })
             .collect::<Vec<_>>();
         // Sort by DNP status first (non-DNP before DNP), then by designator naturally
-        entries.sort_by(|a, b| {
-            match a.entry.dnp.cmp(&b.entry.dnp) {
-                std::cmp::Ordering::Equal => natord::compare(&a.designator, &b.designator),
-                other => other,
-            }
+        entries.sort_by(|a, b| match a.entry.dnp.cmp(&b.entry.dnp) {
+            std::cmp::Ordering::Equal => natord::compare(&a.designator, &b.designator),
+            other => other,
         });
         serde_json::to_string_pretty(&entries).unwrap()
     }
@@ -518,9 +514,7 @@ impl Bom {
     /// 4 | C1,C2,C14,C15 | GRM155Z71A105KE01D | 1uF 10V
     /// ```
     ///
-    pub fn consolidate_generic_entries(
-        entries: Vec<GroupedBomEntry>,
-    ) -> Vec<GroupedBomEntry> {
+    pub fn consolidate_generic_entries(entries: Vec<GroupedBomEntry>) -> Vec<GroupedBomEntry> {
         use std::collections::HashMap;
         use std::mem::discriminant;
 
@@ -537,7 +531,11 @@ impl Bom {
         // Separate generic from non-generic entries
         for entry in entries {
             if let Some(g) = &entry.entry.generic_data {
-                let key = (discriminant(g), entry.entry.package.clone(), entry.entry.dnp);
+                let key = (
+                    discriminant(g),
+                    entry.entry.package.clone(),
+                    entry.entry.dnp,
+                );
                 groups.entry(key).or_default().push(entry);
             } else {
                 out.push(entry);
@@ -581,223 +579,6 @@ impl Bom {
         }
 
         out
-    }
-
-    /// Write BOM as a formatted table to the given writer
-    ///
-    /// # Arguments
-    /// * `writer` - Output destination
-    pub fn write_table<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        // Print legend in a compact table with 2 columns
-        writeln!(writer, "Legend:")?;
-        let mut legend_table = Table::new();
-        legend_table.load_preset(comfy_table::presets::NOTHING);
-        legend_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
-
-        legend_table.add_row(vec![
-            Cell::new("■").fg(Color::Green),
-            Cell::new("Plenty available / easy to source"),
-            Cell::new("  "),
-            Cell::new("■").fg(Color::Blue),
-            Cell::new("House component"),
-        ]);
-        legend_table.add_row(vec![
-            Cell::new("■").fg(Color::Yellow),
-            Cell::new("Limited inventory / harder to source"),
-            Cell::new("  "),
-            Cell::new("■").fg(Color::DarkGrey),
-            Cell::new("DNP (Do Not Populate)"),
-        ]);
-        legend_table.add_row(vec![
-            Cell::new("■").fg(Color::Red),
-            Cell::new("No inventory / hard to source"),
-            Cell::new(""),
-            Cell::new(""),
-            Cell::new(""),
-        ]);
-
-        writeln!(writer, "{legend_table}")?;
-
-        let mut table = Table::new();
-        table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
-        table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
-
-        let json: serde_json::Value = serde_json::from_str(&self.grouped_json()).unwrap();
-        let mut entries: Vec<&serde_json::Value> = json.as_array().unwrap().iter().collect();
-
-        // Sort entries: non-DNP first (sorted by first designator), then DNP items (sorted by first designator)
-        entries.sort_by(|a, b| {
-            let a_dnp = a.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
-            let b_dnp = b.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            // DNP status takes priority (non-DNP before DNP)
-            match a_dnp.cmp(&b_dnp) {
-                std::cmp::Ordering::Equal => {
-                    // Within same DNP status, sort by first designator naturally
-                    let a_first_designator = a["designators"]
-                        .as_array()
-                        .and_then(|arr| arr.first())
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-
-                    let b_first_designator = b["designators"]
-                        .as_array()
-                        .and_then(|arr| arr.first())
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-
-                    natord::compare(a_first_designator, b_first_designator)
-                }
-                other => other,
-            }
-        });
-
-        for entry in entries {
-            let mut designators_vec: Vec<&str> = entry["designators"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|d| d.as_str().unwrap())
-                .collect();
-
-            // Sort designators naturally (C3 before C10)
-            designators_vec.sort_by(|a, b| natord::compare(a, b));
-
-            let qty = designators_vec.len();
-            let designators = designators_vec.join(",");
-
-            // Use first offer info if available, otherwise use base component info
-            let (mpn, manufacturer) = entry
-                .get("offers")
-                .and_then(|o| o.as_array())
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|offer| offer["distributor"].as_str() != Some("__AVL__"))
-                })
-                .map(|offer| {
-                    (
-                        offer["manufacturer_pn"].as_str().unwrap_or_default(),
-                        offer["manufacturer"].as_str().unwrap_or_default(),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    (
-                        entry["mpn"].as_str().unwrap_or_default(),
-                        entry["manufacturer"].as_str().unwrap_or_default(),
-                    )
-                });
-
-            // Use description field if available, otherwise use value
-            let description = entry["description"]
-                .as_str()
-                .or_else(|| entry["value"].as_str())
-                .unwrap_or_default();
-
-            // Check if this is DNP
-            let is_dnp = entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            // Check if this is a house part (assign_house_resistor or assign_house_capacitor)
-            let is_house_part = entry
-                .get("matcher")
-                .and_then(|m| m.as_str())
-                .map(|m| m.starts_with("assign_house_"))
-                .unwrap_or(false);
-
-            // Check if missing MPN or manufacturer (hard to source)
-            let is_hard_to_source = mpn.is_empty() || manufacturer.is_empty();
-
-            // Create qty cell
-            let qty_cell = if is_dnp {
-                Cell::new(qty.to_string()).fg(Color::DarkGrey)
-            } else {
-                Cell::new(qty.to_string())
-            };
-
-            // Create cells - color designators based on sourcing, grey out DNP items
-            let designators_cell = if is_dnp {
-                Cell::new(designators.as_str()).fg(Color::DarkGrey)
-            } else if is_house_part {
-                Cell::new(designators.as_str()).fg(Color::Green)
-            } else if is_hard_to_source {
-                Cell::new(designators.as_str()).fg(Color::Red)
-            } else {
-                Cell::new(designators.as_str())
-            };
-
-            let mpn_cell = if is_dnp {
-                Cell::new(mpn).fg(Color::DarkGrey)
-            } else if is_house_part {
-                Cell::new(mpn).fg(Color::Blue)
-            } else {
-                Cell::new(mpn)
-            };
-
-            let manufacturer_cell = if is_dnp {
-                Cell::new(manufacturer).fg(Color::DarkGrey)
-            } else {
-                Cell::new(manufacturer)
-            };
-
-            let package_cell = if is_dnp {
-                Cell::new(entry["package"].as_str().unwrap_or_default()).fg(Color::DarkGrey)
-            } else {
-                Cell::new(entry["package"].as_str().unwrap_or_default())
-            };
-
-            let description_cell = if is_dnp {
-                Cell::new(description).fg(Color::DarkGrey)
-            } else {
-                Cell::new(description)
-            };
-
-            // Get alternatives
-            let alternatives_str = entry
-                .get("alternatives")
-                .and_then(|a| a.as_array())
-                .map(|arr| {
-                    if arr.is_empty() {
-                        String::new()
-                    } else {
-                        arr.iter()
-                            .filter_map(|alt| alt["mpn"].as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                })
-                .unwrap_or_default();
-
-            let alternatives_cell = if is_dnp {
-                Cell::new(alternatives_str.as_str()).fg(Color::DarkGrey)
-            } else if is_house_part {
-                Cell::new(alternatives_str.as_str()).fg(Color::Blue)
-            } else {
-                Cell::new(alternatives_str.as_str())
-            };
-
-            table.add_row(vec![
-                qty_cell,
-                designators_cell,
-                mpn_cell,
-                alternatives_cell,
-                manufacturer_cell,
-                package_cell,
-                description_cell,
-            ]);
-        }
-
-        // Set headers
-        table.set_header(vec![
-            "Qty",
-            "Designators",
-            "MPN",
-            "Alternatives",
-            "Manufacturer",
-            "Package",
-            "Description",
-        ]);
-
-        writeln!(writer, "{table}")?;
-        Ok(())
     }
 }
 
@@ -899,12 +680,12 @@ fn consolidate_order(a: &BomEntry, b: &BomEntry) -> Option<std::cmp::Ordering> {
     // Check if components can replace each other
     let a_meets_b = component_meets_or_exceeds(ga, gb);
     let b_meets_a = component_meets_or_exceeds(gb, ga);
-    
+
     let ord = match (a_meets_b, b_meets_a) {
-        (true, false) => std::cmp::Ordering::Greater,  // A meets B but not vice versa - A is stricter
-        (false, true) => std::cmp::Ordering::Less,     // B meets A but not vice versa - B is stricter
-        (true, true) => std::cmp::Ordering::Equal,     // Equivalent specs - either can replace the other
-        (false, false) => return None,                 // Incompatible - can't consolidate
+        (true, false) => std::cmp::Ordering::Greater, // A meets B but not vice versa - A is stricter
+        (false, true) => std::cmp::Ordering::Less, // B meets A but not vice versa - B is stricter
+        (true, true) => std::cmp::Ordering::Equal, // Equivalent specs - either can replace the other
+        (false, false) => return None,             // Incompatible - can't consolidate
     };
 
     // MPN rules
@@ -1449,7 +1230,10 @@ mod tests {
         assert!(consolidated[0].designators.contains("C2"));
         assert!(consolidated[0].designators.contains("C14"));
         assert!(consolidated[0].designators.contains("C15"));
-        assert_eq!(consolidated[0].entry.description, Some("1uF 10V".to_string()));
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("1uF 10V".to_string())
+        );
     }
 
     #[test]
@@ -1506,7 +1290,10 @@ mod tests {
 
         assert_eq!(consolidated.len(), 1);
         assert_eq!(consolidated[0].designators.len(), 3);
-        assert_eq!(consolidated[0].entry.description, Some("10k 100V".to_string()));
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("10k 100V".to_string())
+        );
     }
 
     #[test]
@@ -1791,7 +1578,10 @@ mod tests {
         let consolidated = Bom::consolidate_generic_entries(entries);
 
         assert_eq!(consolidated.len(), 1);
-        assert_eq!(consolidated[0].entry.description, Some("1uF X7R".to_string()));
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("1uF X7R".to_string())
+        );
     }
 
     #[test]
@@ -1946,6 +1736,9 @@ mod tests {
 
         // Should consolidate to the tighter tolerance
         assert_eq!(consolidated.len(), 1);
-        assert_eq!(consolidated[0].entry.description, Some("1uF 5%".to_string()));
+        assert_eq!(
+            consolidated[0].entry.description,
+            Some("1uF 5%".to_string())
+        );
     }
 }

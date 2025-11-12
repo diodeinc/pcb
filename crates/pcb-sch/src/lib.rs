@@ -12,6 +12,8 @@
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
 mod bom;
+#[cfg(feature = "table")]
+mod bom_table;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
