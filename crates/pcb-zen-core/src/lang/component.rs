@@ -783,6 +783,12 @@ where
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        // Check if parent module has dnp=True in properties
+        let module_has_dnp = eval
+            .module_value()
+            .and_then(|m| m.properties().get("dnp")?.unpack_bool())
+            .unwrap_or(false);
+
         let param_spec = ParametersSpec::new_named_only(
             "Component",
             [
@@ -1109,12 +1115,16 @@ where
                         .map(|s| s.to_owned())
                 });
 
-            // Consolidate DNP: check kwarg, then legacy properties
-            let final_dnp = consolidate_bool_property(
-                dnp_val,
-                &properties_map,
-                &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
-            );
+            // Consolidate DNP: module dnp (highest priority), then kwarg, then component properties
+            let final_dnp = if module_has_dnp {
+                Some(true)
+            } else {
+                consolidate_bool_property(
+                    dnp_val,
+                    &properties_map,
+                    &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
+                )
+            };
 
             // Consolidate skip_bom: check kwarg, then legacy properties
             let final_skip_bom = consolidate_bool_property(

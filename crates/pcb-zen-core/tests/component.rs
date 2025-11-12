@@ -173,6 +173,52 @@ snapshot_eval!(component_with_dnp_kwarg, {
     "#
 });
 
+snapshot_eval!(module_dnp_propagates_to_children, {
+    "SubModule.zen" => r#"
+        # Child module with multiple components
+        vcc = io("vcc", Net)
+        gnd = io("gnd", Net)
+        
+        Component(
+            name = "R1",
+            footprint = "0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd},
+            properties = {"resistance": "10k"}
+        )
+        
+        Component(
+            name = "C1",
+            footprint = "0402",
+            pin_defs = {"1": "1", "2": "2"},
+            pins = {"1": vcc, "2": gnd},
+            properties = {"capacitance": "100nF"}
+        )
+    "#,
+    "test.zen" => r#"
+        # Load and instantiate module with dnp=True
+        SubMod = Module("SubModule.zen")
+        
+        vcc = Net("VCC")
+        gnd = Net("GND")
+        
+        # This module and all its child components should be DNP
+        SubMod(
+            name = "sub_dnp",
+            vcc = vcc,
+            gnd = gnd,
+            dnp = True
+        )
+        
+        # This module should NOT be DNP
+        SubMod(
+            name = "sub_normal",
+            vcc = vcc,
+            gnd = gnd
+        )
+    "#
+});
+
 snapshot_eval!(component_inherits_reference_prefix, {
     "ic_symbol.kicad_sym" => r#"(kicad_symbol_lib
         (symbol "MyIC"
