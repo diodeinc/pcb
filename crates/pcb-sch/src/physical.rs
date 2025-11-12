@@ -3623,7 +3623,6 @@ mod tests {
 
         let heap = Heap::new();
         let range = heap.alloc(physical_range(3.0, 3.6, PhysicalUnit::Volts));
-        let gnd_str = heap.alloc("0V");
 
         // Get the range from heap
         let range_val = range.downcast_ref::<PhysicalRange>().unwrap();
