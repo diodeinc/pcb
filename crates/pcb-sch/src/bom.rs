@@ -48,6 +48,9 @@ pub struct BomEntry {
     /// Whether this component should be excluded from BOM output (e.g., fiducials, test points)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skip_bom: bool,
+    /// BOM matcher function name (used for custom BOM matching logic)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
     /// Additional properties from IPC-2581 textual characteristics
     #[serde(flatten)]
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -297,6 +300,7 @@ impl Bom {
                     offers: Vec::new(),
                     dnp: instance.dnp(),
                     skip_bom: instance.skip_bom(),
+                    matcher: instance.matcher(),
                     properties: BTreeMap::new(),
                 };
                 entries.insert(path.clone(), bom_entry);
@@ -468,6 +472,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
             offers: Vec::new(),
             dnp: dnp == "DNP" || dnp.to_lowercase() == "yes" || dnp == "1",
             skip_bom: false, // KiCad CSV exports don't include this field
+            matcher: None,
             properties: BTreeMap::new(),
         };
 
@@ -823,6 +828,7 @@ mod tests {
             offers: Vec::new(),
             dnp: false,
             skip_bom: false,
+            matcher: None,
             properties: BTreeMap::new(),
         };
 

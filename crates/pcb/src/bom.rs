@@ -6,7 +6,7 @@ use crate::release::extract_layout_path;
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::presets::UTF8_FULL_CONDENSED;
-use comfy_table::Table;
+use comfy_table::{Cell, Color, Table};
 use pcb_sch::{parse_kicad_csv_bom, Bom};
 use pcb_ui::prelude::*;
 use starlark_syntax::slice_vec_ext::SliceExt;
@@ -127,6 +127,13 @@ pub fn execute(args: BomArgs) -> Result<()> {
 }
 
 fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
+    // Print legend with color swatches
+    writeln!(writer, "Legend:")?;
+    writeln!(writer, "  {} House component", "■".blue())?;
+    writeln!(writer, "  {} Plenty available / easy to source", "■".green())?;
+    writeln!(writer, "  {} Limited inventory / harder to source", "■".yellow())?;
+    writeln!(writer, "  {} No inventory / hard to source", "■".red())?;
+
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
@@ -160,17 +167,33 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
         // Use value as description until all the generics have proper descriptions
         let description = entry["description"].as_str().unwrap_or_default();
 
+        // Check if this is a house part (assign_house_resistor or assign_house_capacitor)
+        let is_house_part = entry
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .map(|m| m.starts_with("assign_house_"))
+            .unwrap_or(false);
+
+        // Create cells with blue color for house parts
+        let mpn_cell = if is_house_part {
+            Cell::new(mpn).fg(Color::Blue)
+        } else {
+            Cell::new(mpn)
+        };
+
+        let manufacturer_cell = Cell::new(manufacturer);
+
         table.add_row(vec![
-            designators.as_str(),
-            mpn,
-            manufacturer,
-            entry["package"].as_str().unwrap_or_default(),
-            description,
-            if entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false) {
+            Cell::new(designators.as_str()),
+            mpn_cell,
+            manufacturer_cell,
+            Cell::new(entry["package"].as_str().unwrap_or_default()),
+            Cell::new(description),
+            Cell::new(if entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false) {
                 "Yes"
             } else {
                 "No"
-            },
+            }),
         ]);
     }
 

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use comfy_table::presets::UTF8_FULL_CONDENSED;
-use comfy_table::Table;
+use comfy_table::{Cell, Color, Table};
 use pcb_sch::{Bom, BomEntry};
 use starlark_syntax::slice_vec_ext::SliceExt;
 
@@ -17,6 +17,7 @@ pub struct CharacteristicsData {
     pub package: Option<String>,
     pub value: Option<String>,
     pub path: Option<String>,
+    pub matcher: Option<String>,
     pub alternatives: Vec<pcb_sch::Alternative>,
     pub properties: std::collections::BTreeMap<String, String>,
 }
@@ -40,6 +41,7 @@ pub fn extract_characteristics(
                 "package" | "footprint" => data.package = Some(val_str),
                 "value" => data.value = Some(val_str),
                 "path" => data.path = Some(val_str),
+                "matcher" => data.matcher = Some(val_str),
                 "alternatives" => {
                     if let Some(alternative) = parse_alternative_json(&val_str) {
                         data.alternatives.push(alternative);
@@ -118,6 +120,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 package,
                 value,
                 path: component_path,
+                matcher,
                 alternatives: textual_alternatives,
                 properties,
             } = item
@@ -152,6 +155,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 offers: Vec::new(),
                 dnp: false, // Will be set per ref_des
                 skip_bom: false,
+                matcher,
                 properties,
             };
 
@@ -203,6 +207,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                         offers: Vec::new(),
                         dnp: false,
                         skip_bom: false,
+                        matcher: None,
                         properties: std::collections::BTreeMap::new(),
                     };
 
@@ -271,6 +276,14 @@ pub fn lookup_from_avl(
 }
 
 fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
+    // Print legend with color swatches
+    use colored::Colorize;
+    writeln!(writer, "Legend:")?;
+    writeln!(writer, "  {} House component", "■".blue())?;
+    writeln!(writer, "  {} Plenty available / easy to source", "■".green())?;
+    writeln!(writer, "  {} Limited inventory / harder to source", "■".yellow())?;
+    writeln!(writer, "  {} No inventory / hard to source", "■".red())?;
+
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
@@ -326,18 +339,38 @@ fn write_bom_table<W: Write>(bom: &Bom, mut writer: W) -> io::Result<()> {
             })
             .unwrap_or_default();
 
+        // Check if this is a house part (assign_house_resistor or assign_house_capacitor)
+        let is_house_part = entry
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .map(|m| m.starts_with("assign_house_"))
+            .unwrap_or(false);
+
+        // Create cells with blue color for house parts
+        let mpn_cell = if is_house_part {
+            Cell::new(mpn).fg(Color::Blue)
+        } else {
+            Cell::new(mpn)
+        };
+
+        let alternatives_cell = if is_house_part {
+            Cell::new(alternatives_str.as_str()).fg(Color::Blue)
+        } else {
+            Cell::new(alternatives_str.as_str())
+        };
+
         table.add_row(vec![
-            designators.as_str(),
-            mpn,
-            manufacturer,
-            entry["package"].as_str().unwrap_or_default(),
-            description,
-            alternatives_str.as_str(),
-            if entry["dnp"].as_bool().unwrap_or(false) {
+            Cell::new(designators.as_str()),
+            mpn_cell,
+            Cell::new(manufacturer),
+            Cell::new(entry["package"].as_str().unwrap_or_default()),
+            Cell::new(description),
+            alternatives_cell,
+            Cell::new(if entry["dnp"].as_bool().unwrap_or(false) {
                 "Yes"
             } else {
                 "No"
-            },
+            }),
         ]);
     }
 
