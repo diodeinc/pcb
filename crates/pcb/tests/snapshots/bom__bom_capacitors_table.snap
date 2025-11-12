@@ -7,15 +7,14 @@ Exit Code: 0
 
 --- STDOUT ---
 Legend:
-  ■ House component
-  ■ Plenty available / easy to source
-  ■ Limited inventory / harder to source
-  ■ No inventory / hard to source
-┌─────────────┬─────┬──────────────┬─────────┬───────────────┬─────┐
-│ Designators ┆ MPN ┆ Manufacturer ┆ Package ┆ Description   ┆ DNP │
-╞═════════════╪═════╪══════════════╪═════════╪═══════════════╪═════╡
-│ C1          ┆     ┆              ┆ 0402    ┆ 100nF 16V X7R ┆ No  │
-│ C2          ┆     ┆              ┆ 0805    ┆ 10uF 25V X5R  ┆ No  │
-│ C3          ┆     ┆              ┆ 0603    ┆ 1uF           ┆ No  │
-└─────────────┴─────┴──────────────┴─────────┴───────────────┴─────┘
+ ■  Plenty available / easy to source         ■  House component       
+ ■  Limited inventory / harder to source      ■  DNP (Do Not Populate) 
+ ■  No inventory / hard to source                                      
+┌─────┬─────────────┬─────┬──────────────┬──────────────┬─────────┬───────────────┐
+│ Qty ┆ Designators ┆ MPN ┆ Alternatives ┆ Manufacturer ┆ Package ┆ Description   │
+╞═════╪═════════════╪═════╪══════════════╪══════════════╪═════════╪═══════════════╡
+│ 1   ┆ C1          ┆     ┆              ┆              ┆ 0402    ┆ 100nF 16V X7R │
+│ 1   ┆ C2          ┆     ┆              ┆              ┆ 0805    ┆ 10uF 25V X5R  │
+│ 1   ┆ C3          ┆     ┆              ┆              ┆ 0603    ┆ 1uF           │
+└─────┴─────────────┴─────┴──────────────┴──────────────┴─────────┴───────────────┘
 --- STDERR ---

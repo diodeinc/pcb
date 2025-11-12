@@ -4,7 +4,6 @@ use std::str::FromStr;
 
 use comfy_table::{Cell, Color, Table};
 use serde::{Deserialize, Serialize};
-use starlark_syntax::slice_vec_ext::SliceExt;
 
 use crate::{InstanceKind, PhysicalValue, Schematic};
 
@@ -458,11 +457,18 @@ impl Bom {
         entries.sort_by_key(|entry| entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false));
 
         for entry in entries {
-            let designators = entry["designators"]
+            let mut designators_vec: Vec<&str> = entry["designators"]
                 .as_array()
                 .unwrap()
+                .iter()
                 .map(|d| d.as_str().unwrap())
-                .join(",");
+                .collect();
+
+            // Sort designators naturally (C3 before C10)
+            designators_vec.sort_by(|a, b| natord::compare(a, b));
+
+            let qty = designators_vec.len();
+            let designators = designators_vec.join(",");
 
             // Use first offer info if available, otherwise use base component info
             let (mpn, manufacturer) = entry
@@ -503,6 +509,13 @@ impl Bom {
 
             // Check if missing MPN or manufacturer (hard to source)
             let is_hard_to_source = mpn.is_empty() || manufacturer.is_empty();
+
+            // Create qty cell
+            let qty_cell = if is_dnp {
+                Cell::new(qty.to_string()).fg(Color::DarkGrey)
+            } else {
+                Cell::new(qty.to_string())
+            };
 
             // Create cells - color designators based on sourcing, grey out DNP items
             let designators_cell = if is_dnp {
@@ -566,23 +579,25 @@ impl Bom {
             };
 
             table.add_row(vec![
+                qty_cell,
                 designators_cell,
                 mpn_cell,
+                alternatives_cell,
                 manufacturer_cell,
                 package_cell,
                 description_cell,
-                alternatives_cell,
             ]);
         }
 
         // Set headers
         table.set_header(vec![
+            "Qty",
             "Designators",
             "MPN",
+            "Alternatives",
             "Manufacturer",
             "Package",
             "Description",
-            "Alternatives",
         ]);
 
         writeln!(writer, "{table}")?;

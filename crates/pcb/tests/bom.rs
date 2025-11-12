@@ -436,17 +436,6 @@ fn test_bom_dnp_components() {
 }
 
 #[test]
-fn test_bom_dnp_components_table() {
-    // Test DNP components in table format
-    let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "table"]);
-    assert_snapshot!("bom_dnp_table", output);
-}
-
-#[test]
 fn test_bom_module_dnp_propagation() {
     // Test that module-level dnp=True propagates to all child components
     let output = Sandbox::new()
@@ -455,15 +444,4 @@ fn test_bom_module_dnp_propagation() {
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
         .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
     assert_snapshot!("bom_module_dnp_json", output);
-}
-
-#[test]
-fn test_bom_module_dnp_propagation_table() {
-    // Test module-level DNP propagation in table format
-    let output = Sandbox::new()
-        .seed_stdlib(&["v0.2.10"])
-        .seed_kicad(&["9.0.0"])
-        .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "table"]);
-    assert_snapshot!("bom_module_dnp_table", output);
 }

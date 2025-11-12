@@ -7,14 +7,13 @@ Exit Code: 0
 
 --- STDOUT ---
 Legend:
-  ■ House component
-  ■ Plenty available / easy to source
-  ■ Limited inventory / harder to source
-  ■ No inventory / hard to source
-┌─────────────┬─────────────────┬──────────────┬─────────┬─────────────┬─────┐
-│ Designators ┆ MPN             ┆ Manufacturer ┆ Package ┆ Description ┆ DNP │
-╞═════════════╪═════════════════╪══════════════╪═════════╪═════════════╪═════╡
-│ R1,R2       ┆ RC0603FR-071KL  ┆ Yageo        ┆ 0603    ┆ 1k          ┆ No  │
-│ R3          ┆ RC0402FR-074K7L ┆ Yageo        ┆ 0402    ┆ 4.7k        ┆ No  │
-└─────────────┴─────────────────┴──────────────┴─────────┴─────────────┴─────┘
+ ■  Plenty available / easy to source         ■  House component       
+ ■  Limited inventory / harder to source      ■  DNP (Do Not Populate) 
+ ■  No inventory / hard to source                                      
+┌─────┬─────────────┬─────────────────┬──────────────┬──────────────┬─────────┬─────────────┐
+│ Qty ┆ Designators ┆ MPN             ┆ Alternatives ┆ Manufacturer ┆ Package ┆ Description │
+╞═════╪═════════════╪═════════════════╪══════════════╪══════════════╪═════════╪═════════════╡
+│ 2   ┆ R1,R2       ┆ RC0603FR-071KL  ┆              ┆ Yageo        ┆ 0603    ┆ 1k          │
+│ 1   ┆ R3          ┆ RC0402FR-074K7L ┆              ┆ Yageo        ┆ 0402    ┆ 4.7k        │
+└─────┴─────────────┴─────────────────┴──────────────┴──────────────┴─────────┴─────────────┘
 --- STDERR ---
