@@ -17,6 +17,12 @@ pub struct CharacteristicsData {
     pub matcher: Option<String>,
     pub alternatives: Vec<pcb_sch::Alternative>,
     pub properties: std::collections::BTreeMap<String, String>,
+    pub component_type: Option<String>,
+    pub resistance: Option<String>,
+    pub capacitance: Option<String>,
+    pub voltage: Option<String>,
+    pub dielectric: Option<String>,
+    pub esr: Option<String>,
 }
 
 /// Extract characteristics from IPC-2581 Characteristics
@@ -44,6 +50,13 @@ pub fn extract_characteristics(
                         data.alternatives.push(alternative);
                     }
                 }
+                // Generic component fields
+                "type" => data.component_type = Some(val_str.to_lowercase()),
+                "resistance" => data.resistance = Some(val_str),
+                "capacitance" => data.capacitance = Some(val_str),
+                "voltage" => data.voltage = Some(val_str),
+                "dielectric" => data.dielectric = Some(val_str),
+                "esr" => data.esr = Some(val_str),
                 // Exclude well-known fields (MPN/Manufacturer come from AVL)
                 // and instance-specific metadata
                 "mpn"
@@ -77,6 +90,34 @@ fn parse_alternative_json(json_str: &str) -> Option<pcb_sch::Alternative> {
     let manufacturer = parsed.get("manufacturer")?.as_str()?.to_string();
 
     Some(pcb_sch::Alternative { mpn, manufacturer })
+}
+
+/// Build GenericComponent from extracted characteristics
+/// Reuses the same logic as detect_generic_component in pcb-sch
+fn build_generic_component(data: &CharacteristicsData) -> Option<pcb_sch::GenericComponent> {
+    match data.component_type.as_deref()? {
+        "resistor" => {
+            let resistance = data.resistance.as_ref()?.parse().ok()?;
+            let voltage = data.voltage.as_ref().and_then(|v| v.parse().ok());
+            Some(pcb_sch::GenericComponent::Resistor(pcb_sch::Resistor {
+                resistance,
+                voltage,
+            }))
+        }
+        "capacitor" => {
+            let capacitance = data.capacitance.as_ref()?.parse().ok()?;
+            let dielectric = data.dielectric.as_ref().and_then(|d| d.parse().ok());
+            let esr = data.esr.as_ref().and_then(|e| e.parse().ok());
+            let voltage = data.voltage.as_ref().and_then(|v| v.parse().ok());
+            Some(pcb_sch::GenericComponent::Capacitor(pcb_sch::Capacitor {
+                capacitance,
+                dielectric,
+                esr,
+                voltage,
+            }))
+        }
+        _ => None,
+    }
 }
 
 pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
@@ -113,6 +154,12 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
             }
 
             // Extract characteristics from BomItem
+            let characteristics_data = item
+                .characteristics
+                .as_ref()
+                .map(|chars| extract_characteristics(ipc, chars))
+                .unwrap_or_default();
+
             let CharacteristicsData {
                 package,
                 value,
@@ -120,11 +167,8 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 matcher,
                 alternatives: textual_alternatives,
                 properties,
-            } = item
-                .characteristics
-                .as_ref()
-                .map(|chars| extract_characteristics(ipc, chars))
-                .unwrap_or_default();
+                ..
+            } = &characteristics_data;
 
             // AVL provides canonical MPN and Manufacturer via Enterprise references
             let (mpn, manufacturer, avl_alternatives) =
@@ -132,7 +176,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
 
             // Merge alternatives: AVL takes precedence, then textual characteristics
             let mut alternatives = avl_alternatives;
-            alternatives.extend(textual_alternatives);
+            alternatives.extend(textual_alternatives.clone());
 
             // Use BomItem description attribute if present, otherwise fallback to value
             let description = item
@@ -140,20 +184,23 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 .map(|sym| ipc.resolve(sym).to_string())
                 .or(value.clone());
 
+            // Build generic component data if available
+            let generic_data = build_generic_component(&characteristics_data);
+
             // Build entry
             let entry = BomEntry {
                 mpn,
                 alternatives,
                 manufacturer,
-                package,
-                value,
+                package: package.clone(),
+                value: value.clone(),
                 description,
-                generic_data: None,
+                generic_data,
                 offers: Vec::new(),
                 dnp: false, // Will be set per ref_des
                 skip_bom: false,
-                matcher,
-                properties,
+                matcher: matcher.clone(),
+                properties: properties.clone(),
             };
 
             // Process reference designators
