@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/bom.rs
+assertion_line: 446
 expression: output
 ---
 Command: pcb bom boards/ModuleDnp.zen -f json
@@ -7,20 +8,6 @@ Exit Code: 0
 
 --- STDOUT ---
 [
-  {
-    "path": "C1_DNP.C",
-    "designator": "C1",
-    "package": "0402",
-    "value": "100nF",
-    "description": "100nF",
-    "component_type": "Capacitor",
-    "capacitance": {
-      "value": "0.000000100",
-      "tolerance": "0",
-      "unit": "Farads"
-    },
-    "dnp": true
-  },
   {
     "path": "C2.C",
     "designator": "C2",
@@ -46,6 +33,20 @@ Exit Code: 0
       "tolerance": "0",
       "unit": "Ohms"
     }
+  },
+  {
+    "path": "C1_DNP.C",
+    "designator": "C1",
+    "package": "0402",
+    "value": "100nF",
+    "description": "100nF",
+    "component_type": "Capacitor",
+    "capacitance": {
+      "value": "0.000000100",
+      "tolerance": "0",
+      "unit": "Farads"
+    },
+    "dnp": true
   },
   {
     "path": "R2_DNP.R",

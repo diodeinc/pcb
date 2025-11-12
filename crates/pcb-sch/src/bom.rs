@@ -366,7 +366,13 @@ impl Bom {
                 entry: entry.clone(),
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.designator.cmp(&b.designator));
+        // Sort by DNP status first (non-DNP before DNP), then by designator naturally
+        entries.sort_by(|a, b| {
+            match a.entry.dnp.cmp(&b.entry.dnp) {
+                std::cmp::Ordering::Equal => natord::compare(&a.designator, &b.designator),
+                other => other,
+            }
+        });
         serde_json::to_string_pretty(&entries).unwrap()
     }
 
@@ -387,9 +393,16 @@ impl Bom {
             .collect::<Vec<_>>();
 
         grouped_entries.sort_by(|a, b| {
-            let a_designator = a.designators.iter().next().unwrap();
-            let b_designator = b.designators.iter().next().unwrap();
-            a_designator.cmp(b_designator)
+            // Sort by DNP status first (non-DNP before DNP)
+            match a.entry.dnp.cmp(&b.entry.dnp) {
+                std::cmp::Ordering::Equal => {
+                    // Within same DNP status, sort by first designator naturally
+                    let a_first = a.designators.iter().next().unwrap();
+                    let b_first = b.designators.iter().next().unwrap();
+                    natord::compare(a_first, b_first)
+                }
+                other => other,
+            }
         });
 
         // Apply generic BOM consolidation pass
@@ -612,8 +625,32 @@ impl Bom {
         let json: serde_json::Value = serde_json::from_str(&self.grouped_json()).unwrap();
         let mut entries: Vec<&serde_json::Value> = json.as_array().unwrap().iter().collect();
 
-        // Sort entries: non-DNP first, then DNP items
-        entries.sort_by_key(|entry| entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false));
+        // Sort entries: non-DNP first (sorted by first designator), then DNP items (sorted by first designator)
+        entries.sort_by(|a, b| {
+            let a_dnp = a.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
+            let b_dnp = b.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            // DNP status takes priority (non-DNP before DNP)
+            match a_dnp.cmp(&b_dnp) {
+                std::cmp::Ordering::Equal => {
+                    // Within same DNP status, sort by first designator naturally
+                    let a_first_designator = a["designators"]
+                        .as_array()
+                        .and_then(|arr| arr.first())
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+
+                    let b_first_designator = b["designators"]
+                        .as_array()
+                        .and_then(|arr| arr.first())
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
+
+                    natord::compare(a_first_designator, b_first_designator)
+                }
+                other => other,
+            }
+        });
 
         for entry in entries {
             let mut designators_vec: Vec<&str> = entry["designators"]

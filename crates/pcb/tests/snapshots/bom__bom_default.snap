@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/bom.rs
+assertion_line: 311
 expression: output
 ---
 Command: pcb bom boards/TestBoard.zen
