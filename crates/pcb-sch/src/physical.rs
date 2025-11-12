@@ -208,8 +208,9 @@ impl PhysicalValue {
         let other_min = other.min_value(other_tolerance);
         let other_max = other.max_value(other_tolerance);
 
-        let self_min = self.min_value(self.tolerance);
-        let self_max = self.max_value(self.tolerance);
+        let self_tolerance = self.tolerance_or_default(default_tolerance);
+        let self_min = self.min_value(self_tolerance);
+        let self_max = self.max_value(self_tolerance);
 
         // Self range must fit within other range
         self_min >= other_min && self_max <= other_max

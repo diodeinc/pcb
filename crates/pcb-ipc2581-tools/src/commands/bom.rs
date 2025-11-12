@@ -8,6 +8,19 @@ use pcb_sch::{Bom, BomEntry};
 use crate::utils::file as file_utils;
 use crate::OutputFormat;
 
+/// Trim and truncate description to 100 chars max
+fn trim_description(s: Option<String>) -> Option<String> {
+    s.map(|s| {
+        let trimmed = s.trim();
+        if trimmed.len() > 100 {
+            format!("{} ...", &trimmed[..96])
+        } else {
+            trimmed.to_string()
+        }
+    })
+    .filter(|s| !s.is_empty())
+}
+
 /// Extracted characteristics data from IPC-2581 BOM items
 #[derive(Debug, Default)]
 pub struct CharacteristicsData {
@@ -194,7 +207,7 @@ fn extract_bom_from_ipc(ipc: &ipc2581::Ipc2581) -> Result<Bom> {
                 manufacturer,
                 package: package.clone(),
                 value: value.clone(),
-                description,
+                description: trim_description(description),
                 generic_data,
                 offers: Vec::new(),
                 dnp: false, // Will be set per ref_des
