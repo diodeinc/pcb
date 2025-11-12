@@ -1066,6 +1066,35 @@ where
                         .map(|s| s.to_owned())
                 });
 
+            // Warn if manufacturer is set but mpn is missing
+            if final_manufacturer.is_some() && final_mpn.is_none() {
+                if let Some(call_site) = eval_ctx.call_stack_top_location() {
+                    use crate::lang::error::CategorizedDiagnostic;
+                    use crate::Diagnostic;
+                    use starlark::errors::EvalSeverity;
+
+                    let body = "MPN must be specified if manufacturer is specified";
+                    let kind = "bom.incomplete_manufacturer";
+
+                    let source_error =
+                        CategorizedDiagnostic::new(body.to_string(), kind.to_string())
+                            .ok()
+                            .map(|c| std::sync::Arc::new(anyhow::Error::new(c)));
+
+                    let diag = Diagnostic {
+                        path: call_site.filename().to_string(),
+                        span: Some(call_site.resolve_span()),
+                        severity: EvalSeverity::Warning,
+                        body: body.to_string(),
+                        call_stack: None,
+                        child: None,
+                        source_error,
+                        suppressed: false,
+                    };
+                    eval_ctx.add_diagnostic(diag);
+                }
+            }
+
             // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
             // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
             let final_datasheet = datasheet_val
