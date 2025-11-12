@@ -6,6 +6,7 @@ use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
 use crate::build::{build, create_diagnostics_passes};
+use crate::drc;
 use crate::file_walker;
 
 #[derive(Args, Debug, Default, Clone)]
@@ -44,6 +45,10 @@ pub struct LayoutArgs {
     /// Generate layout in a temporary directory (fresh layout, opens KiCad)
     #[arg(long = "temp")]
     pub temp: bool,
+
+    /// Run KiCad DRC checks after layout generation
+    #[arg(long = "drc")]
+    pub drc: bool,
 }
 
 pub fn execute(args: LayoutArgs) -> Result<()> {
@@ -64,7 +69,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
 
     // Process each .zen file
     for zen_path in zen_paths {
-        let file_name = zen_path.file_name().unwrap().to_string_lossy();
+        let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
         let Some(schematic) = build(
             &zen_path,
             args.offline,
@@ -91,9 +96,33 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
                 println!(
                     "{} {} ({})",
                     pcb_ui::icons::success(),
-                    file_name.with_style(Style::Green).bold(),
+                    file_name.clone().with_style(Style::Green).bold(),
                     relative_path.display()
                 );
+
+                // Run DRC checks if requested
+                if args.drc {
+                    let drc_spinner =
+                        Spinner::builder(format!("{file_name}: Running DRC checks")).start();
+                    match drc::run_and_print_drc(&layout_result.pcb_file, &[]) {
+                        Ok((had_errors, _warnings)) => {
+                            drc_spinner.finish();
+                            if had_errors {
+                                has_errors = true;
+                            }
+                        }
+                        Err(e) => {
+                            drc_spinner.finish();
+                            eprintln!(
+                                "{} {}: {e:#}",
+                                pcb_ui::icons::error(),
+                                file_name.with_style(Style::Red).bold()
+                            );
+                            has_errors = true;
+                        }
+                    }
+                }
+
                 generated_layouts.push((zen_path.clone(), layout_result.pcb_file.clone()));
             }
             Err(LayoutError::NoLayoutPath) => {
@@ -121,7 +150,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
     }
 
     if has_errors {
-        anyhow::bail!("Layout generation failed with errors");
+        std::process::exit(1);
     }
 
     if generated_layouts.is_empty() {
