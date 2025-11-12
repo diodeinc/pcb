@@ -161,7 +161,8 @@ where
     F: Fn(String) -> colored::ColoredString,
 {
     match (count, excluded) {
-        (0, 0) => "—".dimmed().to_string(),
+        (0, 0) => "-".dimmed().to_string(),
+        (0, e) => format!("({})", e).dimmed().to_string(),
         (c, 0) => color_fn(c.to_string()).to_string(),
         (c, e) => format!(
             "{} {}",
