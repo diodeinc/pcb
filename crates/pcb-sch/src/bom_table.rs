@@ -34,8 +34,13 @@ fn get_sourcing_tier(
     };
 
     let stock = avail.stock_total;
-    if stock == 0 || mpn.is_empty() || manufacturer.is_empty() {
+    if stock == 0 {
         return Tier::NoInventory;
+    }
+
+    // Missing MPN/manufacturer makes it harder to source (Limited)
+    if mpn.is_empty() || manufacturer.is_empty() {
+        return Tier::Limited;
     }
 
     let is_small_passive = is_small_generic_passive(generic_data, package);
