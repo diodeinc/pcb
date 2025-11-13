@@ -4,72 +4,42 @@ use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
+use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier, NUM_BOARDS};
 use crate::{AvailabilityData, Bom, GenericComponent};
 
-/// Number of boards to use for availability and pricing calculations
-const NUM_BOARDS: i32 = 20;
-
-/// Sourcing status for component availability
-enum SourcingStatus {
-    None,    // Red - no stock available
-    Limited, // Yellow - limited stock or missing info
-    Good,    // Green - plenty available
+/// Map availability tier to table cell color
+fn color_for_tier(tier: Tier) -> Color {
+    match tier {
+        Tier::NoInventory => Color::Red,
+        Tier::Limited => Color::Yellow,
+        Tier::Plenty => Color::Green,
+    }
 }
 
-/// Check if this is a small generic passive requiring higher stock threshold
-fn is_small_generic_passive(
-    generic_data: Option<&GenericComponent>,
-    package: Option<&str>,
-) -> bool {
-    let is_generic_passive = matches!(
-        generic_data,
-        Some(GenericComponent::Resistor(_) | GenericComponent::Capacitor(_))
-    );
-    let is_small_package = matches!(package, Some("0201" | "0402" | "0603"));
-
-    is_generic_passive && is_small_package
-}
-
-/// Determine sourcing status from availability data
-fn get_sourcing_status(
+/// Determine sourcing status tier from availability data
+fn get_sourcing_tier(
     stock_data: Option<&AvailabilityData>,
     mpn: &str,
     manufacturer: &str,
     qty: usize,
     generic_data: Option<&GenericComponent>,
     package: Option<&str>,
-) -> SourcingStatus {
+) -> Tier {
     let Some(avail) = stock_data else {
-        // No availability data - fallback to basic check
         return if mpn.is_empty() || manufacturer.is_empty() {
-            SourcingStatus::None
+            Tier::NoInventory
         } else {
-            SourcingStatus::Good
+            Tier::Plenty
         };
     };
 
     let stock = avail.stock_total;
-    if stock == 0 {
-        return SourcingStatus::None;
+    if stock == 0 || mpn.is_empty() || manufacturer.is_empty() {
+        return Tier::NoInventory;
     }
 
-    let has_mpn_and_mfr = !mpn.is_empty() && !manufacturer.is_empty();
-    if !has_mpn_and_mfr {
-        return SourcingStatus::Limited;
-    }
-
-    // Small generic passives need ≥100 stock, others need qty × NUM_BOARDS
-    let required_stock = if is_small_generic_passive(generic_data, package) {
-        100
-    } else {
-        (qty as i32) * NUM_BOARDS
-    };
-
-    if stock >= required_stock {
-        SourcingStatus::Good
-    } else {
-        SourcingStatus::Limited
-    }
+    let is_small_passive = is_small_generic_passive(generic_data, package);
+    tier_for_stock(stock, qty as i32, is_small_passive)
 }
 
 /// Create a hyperlink if the terminal supports it, otherwise return plain text
@@ -221,7 +191,7 @@ impl Bom {
 
             let package = entry.get("package").and_then(|p| p.as_str());
 
-            let sourcing_status = get_sourcing_status(
+            let tier = get_sourcing_tier(
                 stock_data,
                 mpn,
                 manufacturer,
@@ -237,15 +207,11 @@ impl Bom {
                 Cell::new(qty.to_string())
             };
 
-            // Create cells - color designators based on sourcing status only, grey out DNP items
+            // Create cells - color designators based on sourcing tier, grey out DNP items
             let designators_cell = if is_dnp {
                 Cell::new(designators.as_str()).fg(Color::DarkGrey)
             } else {
-                match sourcing_status {
-                    SourcingStatus::None => Cell::new(designators.as_str()).fg(Color::Red),
-                    SourcingStatus::Limited => Cell::new(designators.as_str()).fg(Color::Yellow),
-                    SourcingStatus::Good => Cell::new(designators.as_str()).fg(Color::Green),
-                }
+                Cell::new(designators.as_str()).fg(color_for_tier(tier))
             };
 
             // Make MPN clickable with Digikey search link

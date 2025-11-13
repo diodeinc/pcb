@@ -11,7 +11,7 @@
 //!   stable [`netlist::InstanceRef`].
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
-mod bom;
+pub mod bom;
 #[cfg(feature = "table")]
 mod bom_table;
 pub mod hierarchical_layout;

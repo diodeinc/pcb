@@ -3,16 +3,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Number of boards to use for availability and pricing calculations
-const NUM_BOARDS: i32 = 20;
-
-/// Availability tier for offer selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum AvailabilityTier {
-    NoInventory = 0,
-    Limited = 1,
-    Plenty = 2,
-}
+use pcb_sch::bom::availability::{is_small_generic_passive, tier_for_stock, NUM_BOARDS};
 
 /// Price break structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -102,45 +93,6 @@ pub struct MatchBomResponse {
     pub results: Vec<DesignMatchResult>,
 }
 
-/// Check if this is a small generic passive requiring higher stock threshold
-fn is_small_generic_passive(entry: &pcb_sch::BomEntry) -> bool {
-    let is_generic_passive = matches!(
-        entry.generic_data,
-        Some(pcb_sch::GenericComponent::Resistor(_) | pcb_sch::GenericComponent::Capacitor(_))
-    );
-    let is_small_package = matches!(entry.package.as_deref(), Some("0201" | "0402" | "0603"));
-
-    is_generic_passive && is_small_package
-}
-
-/// Determine the availability tier for an offer
-fn get_availability_tier(stock: i32, qty: i32, is_small_passive: bool) -> AvailabilityTier {
-    if stock == 0 {
-        AvailabilityTier::NoInventory
-    } else {
-        let required_stock = if is_small_passive {
-            100
-        } else {
-            qty * NUM_BOARDS
-        };
-        if stock >= required_stock {
-            AvailabilityTier::Plenty
-        } else {
-            AvailabilityTier::Limited
-        }
-    }
-}
-
-/// Rank availability tier (lower is better)
-#[inline]
-fn tier_rank(tier: AvailabilityTier) -> u8 {
-    match tier {
-        AvailabilityTier::Plenty => 0,
-        AvailabilityTier::Limited => 1,
-        AvailabilityTier::NoInventory => 2,
-    }
-}
-
 /// Compare offers within the same tier: prefer lower price, then higher stock
 #[inline]
 fn within_tier_cmp(a: &OfferWithMatchKey, b: &OfferWithMatchKey, qty: i32) -> std::cmp::Ordering {
@@ -170,11 +122,12 @@ fn select_best_offer(
     offers.iter().min_by(|a, b| {
         let stock_a = a.stock_available.unwrap_or(0);
         let stock_b = b.stock_available.unwrap_or(0);
-        let tier_a = get_availability_tier(stock_a, qty, is_small_passive);
-        let tier_b = get_availability_tier(stock_b, qty, is_small_passive);
+        let tier_a = tier_for_stock(stock_a, qty, is_small_passive);
+        let tier_b = tier_for_stock(stock_b, qty, is_small_passive);
 
-        tier_rank(tier_a)
-            .cmp(&tier_rank(tier_b))
+        tier_a
+            .rank()
+            .cmp(&tier_b.rank())
             .then_with(|| within_tier_cmp(a, b, qty))
     })
 }
@@ -226,7 +179,10 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
 
             // Get BOM entry to check if it's a small generic passive
             let bom_entry = bom.entries.get(path).unwrap();
-            let is_small_passive = is_small_generic_passive(bom_entry);
+            let is_small_passive = is_small_generic_passive(
+                bom_entry.generic_data.as_ref(),
+                bom_entry.package.as_deref(),
+            );
 
             // Select the best offer based on availability tier (Plenty > Limited > None)
             // then price within tier. This single offer is used for all downstream data.
