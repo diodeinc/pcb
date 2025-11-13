@@ -74,6 +74,11 @@ pub struct BomArgs {
     /// JSON file containing BOM matching rules
     #[arg(short = 'r', long = "rules", value_hint = clap::ValueHint::FilePath)]
     pub rules: Option<PathBuf>,
+
+    /// Fetch part availability and pricing from Diode API
+    #[cfg(feature = "api")]
+    #[arg(long)]
+    pub availability: bool,
 }
 
 pub fn execute(args: BomArgs) -> Result<()> {
@@ -111,6 +116,17 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // Filter out components marked as skip_bom
     bom = bom.filter_excluded();
+
+    #[cfg(feature = "api")]
+    if args.availability {
+        spinner.set_message(format!("{file_name}: Fetching availability"));
+        let token = pcb_diode_api::auth::get_valid_token()
+            .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
+
+        if let Err(e) = pcb_diode_api::fetch_and_populate_availability(&token, &mut bom) {
+            log::warn!("Failed to fetch availability data: {}", e);
+        }
+    }
 
     spinner.finish();
 

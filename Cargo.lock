@@ -3031,6 +3031,7 @@ dependencies = [
  "pcb-eda",
  "pcb-kicad",
  "pcb-mcp",
+ "pcb-sch",
  "pcb-zen-core",
  "rand 0.8.5",
  "regex",
@@ -3079,7 +3080,9 @@ dependencies = [
  "comfy-table",
  "ipc2581",
  "log",
+ "pcb-diode-api",
  "pcb-sch",
+ "pcb-ui",
  "quick-xml 0.38.3",
  "serde",
  "serde_json",
@@ -3164,7 +3167,9 @@ dependencies = [
  "starlark",
  "starlark_map",
  "starlark_syntax",
+ "supports-hyperlinks",
  "tempfile",
+ "terminal_hyperlink",
  "thiserror 1.0.69",
  "uuid",
 ]
@@ -5077,6 +5082,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "supports-hyperlinks"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "804f44ed3c63152de6a9f90acbea1a110441de43006ea51bcce8f436196a288b"
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5179,6 +5190,12 @@ dependencies = [
  "rustversion",
  "winapi",
 ]
+
+[[package]]
+name = "terminal_hyperlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db7bfa7333cbbfca467f40042a640d3c86063d6e4085cef4a6effdbad7005d50"
 
 [[package]]
 name = "terminal_size"

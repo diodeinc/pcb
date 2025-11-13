@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;
 
+#[cfg(feature = "api")]
+use anyhow::Context;
 use anyhow::Result;
 use pcb_sch::{Bom, BomEntry};
 
@@ -133,12 +135,29 @@ fn build_generic_component(data: &CharacteristicsData) -> Option<pcb_sch::Generi
     }
 }
 
-pub fn execute(file: &Path, format: OutputFormat) -> Result<()> {
+pub fn execute(file: &Path, format: OutputFormat, availability: bool) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
 
     // Extract BOM from IPC-2581
-    let bom = extract_bom_from_ipc(&ipc)?;
+    #[cfg_attr(not(feature = "api"), allow(unused_mut))]
+    let mut bom = extract_bom_from_ipc(&ipc)?;
+
+    #[cfg(feature = "api")]
+    if availability {
+        use pcb_ui::prelude::*;
+        let file_name = file.file_name().unwrap_or_default().to_string_lossy();
+        let spinner = Spinner::builder(format!("{file_name}: Fetching availability")).start();
+
+        let token = pcb_diode_api::auth::get_valid_token()
+            .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
+
+        if let Err(e) = pcb_diode_api::fetch_and_populate_availability(&token, &mut bom) {
+            log::warn!("Failed to fetch availability data: {}", e);
+        }
+
+        spinner.finish();
+    }
 
     let mut writer = io::stdout().lock();
     match format {

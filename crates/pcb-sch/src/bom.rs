@@ -10,6 +10,17 @@ use crate::{InstanceKind, PhysicalValue, Schematic};
 pub struct Bom {
     pub entries: HashMap<String, BomEntry>,   // path -> BomEntry
     pub designators: HashMap<String, String>, // path -> designator
+    #[serde(skip)]
+    pub availability: HashMap<String, AvailabilityData>, // path -> availability data
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvailabilityData {
+    pub stock_total: i32,             // Total stock across all offers
+    pub price_single: Option<f64>,    // Cheapest price for single board qty
+    pub price_20x: Option<f64>,       // Cheapest price for 20 boards qty
+    pub lcsc_part_id: Option<String>, // LCSC part number for debugging
+    pub product_url: Option<String>,  // Product page URL for hyperlink
 }
 
 /// Trim and truncate description to 100 chars max
@@ -317,6 +328,7 @@ impl Bom {
         Bom {
             entries,
             designators,
+            availability: HashMap::new(),
         }
     }
 
@@ -352,6 +364,7 @@ impl Bom {
         Bom {
             entries,
             designators,
+            availability: HashMap::new(),
         }
     }
 
@@ -465,6 +478,7 @@ impl Bom {
         Bom {
             entries,
             designators,
+            availability: HashMap::new(),
         }
     }
 
@@ -659,6 +673,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
     Ok(Bom {
         entries,
         designators,
+        availability: HashMap::new(),
     })
 }
 
