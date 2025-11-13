@@ -140,6 +140,61 @@ pub struct PhysicalValue {
     pub unit: PhysicalUnitDims,
 }
 
+/// Helper to extract min/max bounds from a Starlark value
+fn extract_bounds(
+    value: Value,
+    expected_unit: PhysicalUnitDims,
+) -> Result<(Decimal, Decimal), PhysicalValueError> {
+    if let Some(pv) = value.downcast_ref::<PhysicalValue>() {
+        if pv.unit != expected_unit {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: expected_unit.quantity(),
+                actual: pv.unit.quantity(),
+            });
+        }
+        let min = pv.value * (Decimal::ONE - pv.tolerance);
+        let max = pv.value * (Decimal::ONE + pv.tolerance);
+        Ok((min, max))
+    } else if let Some(range) = value.downcast_ref::<PhysicalRange>() {
+        if range.r#type.unit != expected_unit {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: expected_unit.quantity(),
+                actual: range.r#type.unit.quantity(),
+            });
+        }
+        Ok((range.min, range.max))
+    } else if let Some(s) = value.unpack_str() {
+        // Try PhysicalValue first, then PhysicalRange
+        if let Ok(pv) = PhysicalValue::from_str(s) {
+            if pv.unit != expected_unit {
+                return Err(PhysicalValueError::UnitMismatch {
+                    expected: expected_unit.quantity(),
+                    actual: pv.unit.quantity(),
+                });
+            }
+            let min = pv.value * (Decimal::ONE - pv.tolerance);
+            let max = pv.value * (Decimal::ONE + pv.tolerance);
+            Ok((min, max))
+        } else if let Ok(range) = PhysicalRange::from_str(s) {
+            if range.r#type.unit != expected_unit {
+                return Err(PhysicalValueError::UnitMismatch {
+                    expected: expected_unit.quantity(),
+                    actual: range.r#type.unit.quantity(),
+                });
+            }
+            Ok((range.min, range.max))
+        } else {
+            Err(PhysicalValueError::InvalidArgumentType {
+                unit: expected_unit.quantity(),
+            })
+        }
+    } else {
+        Err(PhysicalValueError::InvalidArgumentType {
+            unit: expected_unit.quantity(),
+        })
+    }
+}
+
 impl PhysicalValue {
     /// Construct from f64s that arrive from Starlark or other APIs
     pub fn new(value: f64, tolerance: f64, unit: PhysicalUnit) -> Self {
@@ -247,7 +302,7 @@ impl PhysicalValue {
     /// Check if this value's tolerance range fits completely within another value's tolerance range
     /// Returns an error if units don't match
     pub fn within(&self, other: &PhysicalValue) -> Result<bool, PhysicalValueError> {
-        // Check units match
+        // Delegate to extract_bounds helper - same logic as is_in()
         if self.unit != other.unit {
             return Err(PhysicalValueError::UnitMismatch {
                 expected: other.unit.quantity(),
@@ -255,26 +310,11 @@ impl PhysicalValue {
             });
         }
 
-        // Calculate min/max for self (considering tolerance)
-        // For negative values, min/max swap due to multiplication
-        let self_lower = self.value * (Decimal::ONE - self.tolerance);
-        let self_upper = self.value * (Decimal::ONE + self.tolerance);
-        let (self_min, self_max) = if self_lower < self_upper {
-            (self_lower, self_upper)
-        } else {
-            (self_upper, self_lower)
-        };
+        let self_min = self.value * (Decimal::ONE - self.tolerance);
+        let self_max = self.value * (Decimal::ONE + self.tolerance);
+        let other_min = other.value * (Decimal::ONE - other.tolerance);
+        let other_max = other.value * (Decimal::ONE + other.tolerance);
 
-        // Calculate min/max for other (considering tolerance)
-        let other_lower = other.value * (Decimal::ONE - other.tolerance);
-        let other_upper = other.value * (Decimal::ONE + other.tolerance);
-        let (other_min, other_max) = if other_lower < other_upper {
-            (other_lower, other_upper)
-        } else {
-            (other_upper, other_lower)
-        };
-
-        // Self's range must fit completely within other's range
         Ok(self_min >= other_min && self_max <= other_max)
     }
 
@@ -289,11 +329,13 @@ impl PhysicalValue {
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let abs_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
-        let within_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let within_param_spec = single_param_spec(Ty::any()); // Accepts any type like is_in()
 
         SortedMap::from_iter([
             ("value".to_string(), Ty::float()),
             ("tolerance".to_string(), Ty::float()),
+            ("min".to_string(), Ty::float()),
+            ("max".to_string(), Ty::float()),
             ("unit".to_string(), Ty::string()),
             (
                 "__str__".to_string(),
@@ -1032,6 +1074,18 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
     }
 
     #[starlark(attribute)]
+    fn min<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
+        let min_val = this.value * (Decimal::ONE - this.tolerance);
+        to_f64(min_val, "min")
+    }
+
+    #[starlark(attribute)]
+    fn max<'v>(this: &PhysicalValue) -> starlark::Result<f64> {
+        let max_val = this.value * (Decimal::ONE + this.tolerance);
+        to_f64(max_val, "max")
+    }
+
+    #[starlark(attribute)]
     fn unit<'v>(this: &PhysicalValue) -> starlark::Result<String> {
         let unit_str = if this.unit == PhysicalUnit::Ohms.into() {
             "Ohm".to_string()
@@ -1128,12 +1182,8 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         this: &PhysicalValue,
         #[starlark(require = pos)] other: Value<'v>,
     ) -> starlark::Result<bool> {
-        let other_pv = PhysicalValue::try_from(other).map_err(|_| {
-            PhysicalValueError::InvalidArgumentType {
-                unit: this.unit.quantity(),
-            }
-        })?;
-        this.within(&other_pv).map_err(|err| err.into())
+        // Thin wrapper around is_in
+        this.is_in(other)
     }
 }
 
@@ -1245,6 +1295,21 @@ impl<'v> StarlarkValue<'v> for PhysicalValue {
 
         // Compare the underlying values
         Ok(self.value.cmp(&other.value))
+    }
+
+    fn is_in(&self, other: Value<'v>) -> starlark::Result<bool> {
+        let self_min = self.value * (Decimal::ONE - self.tolerance);
+        let self_max = self.value * (Decimal::ONE + self.tolerance);
+        let (other_min, other_max) = extract_bounds(other, self.unit)?;
+        Ok(other_min >= self_min && other_max <= self_max)
+    }
+
+    fn minus(&self, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        Ok(heap.alloc(PhysicalValue::from_decimal(
+            -self.value,
+            self.tolerance,
+            self.unit,
+        )))
     }
 }
 
@@ -1588,6 +1653,20 @@ impl<'v> StarlarkValue<'v> for PhysicalRange {
     fn get_methods() -> Option<&'static Methods> {
         static RES: MethodsStatic = MethodsStatic::new();
         RES.methods(range_methods)
+    }
+
+    fn is_in(&self, other: Value<'v>) -> starlark::Result<bool> {
+        let (other_min, other_max) = extract_bounds(other, self.r#type.unit)?;
+        Ok(other_min >= self.min && other_max <= self.max)
+    }
+
+    fn minus(&self, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        Ok(heap.alloc_simple(PhysicalRange {
+            min: -self.max,
+            max: -self.min,
+            nominal: self.nominal.map(|n| -n),
+            r#type: self.r#type,
+        }))
     }
 }
 
