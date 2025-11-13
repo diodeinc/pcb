@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
 
-use crate::{AvailabilityData, Bom};
+use crate::{AvailabilityData, Bom, GenericComponent};
 
 /// Sourcing status for component availability
 enum SourcingStatus {
@@ -12,32 +12,59 @@ enum SourcingStatus {
     Good,    // Green - plenty available
 }
 
+/// Check if this is a small generic passive requiring higher stock threshold
+fn is_small_generic_passive(
+    generic_data: Option<&GenericComponent>,
+    package: Option<&str>,
+) -> bool {
+    let is_generic_passive = matches!(
+        generic_data,
+        Some(GenericComponent::Resistor(_) | GenericComponent::Capacitor(_))
+    );
+    let is_small_package = matches!(package, Some("0201" | "0402" | "0603"));
+
+    is_generic_passive && is_small_package
+}
+
 /// Determine sourcing status from availability data
 fn get_sourcing_status(
     stock_data: Option<&AvailabilityData>,
     mpn: &str,
     manufacturer: &str,
     qty: usize,
+    generic_data: Option<&GenericComponent>,
+    package: Option<&str>,
 ) -> SourcingStatus {
-    if let Some(avail) = stock_data {
-        let stock = avail.stock_total;
-        let has_mpn_and_mfr = !mpn.is_empty() && !manufacturer.is_empty();
-        let qty_for_20_boards = (qty as i32) * 20;
-
-        if stock == 0 {
-            SourcingStatus::None
-        } else if !has_mpn_and_mfr || stock < qty_for_20_boards {
-            SourcingStatus::Limited
-        } else {
-            SourcingStatus::Good
-        }
-    } else {
+    let Some(avail) = stock_data else {
         // No availability data - fallback to basic check
-        if mpn.is_empty() || manufacturer.is_empty() {
+        return if mpn.is_empty() || manufacturer.is_empty() {
             SourcingStatus::None
         } else {
             SourcingStatus::Good
-        }
+        };
+    };
+
+    let stock = avail.stock_total;
+    if stock == 0 {
+        return SourcingStatus::None;
+    }
+
+    let has_mpn_and_mfr = !mpn.is_empty() && !manufacturer.is_empty();
+    if !has_mpn_and_mfr {
+        return SourcingStatus::Limited;
+    }
+
+    // Small generic passives need ≥100 stock, others need qty × 20
+    let required_stock = if is_small_generic_passive(generic_data, package) {
+        100
+    } else {
+        (qty as i32) * 20
+    };
+
+    if stock >= required_stock {
+        SourcingStatus::Good
+    } else {
+        SourcingStatus::Limited
     }
 }
 
@@ -183,7 +210,21 @@ impl Bom {
                 None
             };
 
-            let sourcing_status = get_sourcing_status(stock_data, mpn, manufacturer, qty);
+            // Get generic_data and package for sourcing status
+            let generic_data = entry
+                .get("generic_data")
+                .and_then(|gd| serde_json::from_value::<GenericComponent>(gd.clone()).ok());
+
+            let package = entry.get("package").and_then(|p| p.as_str());
+
+            let sourcing_status = get_sourcing_status(
+                stock_data,
+                mpn,
+                manufacturer,
+                qty,
+                generic_data.as_ref(),
+                package,
+            );
 
             // Create qty cell
             let qty_cell = if is_dnp {
