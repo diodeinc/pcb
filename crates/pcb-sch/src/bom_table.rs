@@ -75,16 +75,14 @@ impl Bom {
         });
 
         for entry in entries {
-            let mut designators_vec: Vec<&str> = entry["designators"]
+            let designators_vec: Vec<&str> = entry["designators"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(|d| d.as_str().unwrap())
                 .collect();
 
-            // Sort designators naturally (C3 before C10)
-            designators_vec.sort_by(|a, b| natord::compare(a, b));
-
+            // Designators already naturally sorted by BTreeSet<NaturalString>
             let qty = designators_vec.len();
             let designators = designators_vec.join(",");
 
