@@ -16,11 +16,10 @@ pub struct Bom {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AvailabilityData {
-    pub stock_total: i32,             // Total stock across all offers
-    pub price_single: Option<f64>,    // Cheapest price for single board qty
-    pub price_20x: Option<f64>,       // Cheapest price for 20 boards qty
-    pub lcsc_part_id: Option<String>, // LCSC part number for debugging
-    pub product_url: Option<String>,  // Product page URL for hyperlink
+    pub stock_total: i32,                     // Total stock across all offers
+    pub price_single: Option<f64>,            // Cheapest price for single board qty
+    pub price_boards: Option<f64>,            // Cheapest price for NUM_BOARDS boards qty
+    pub lcsc_part_ids: Vec<(String, String)>, // Vec of (LCSC part number, product URL)
 }
 
 /// Trim and truncate description to 100 chars max

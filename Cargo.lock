@@ -3171,6 +3171,7 @@ dependencies = [
  "tempfile",
  "terminal_hyperlink",
  "thiserror 1.0.69",
+ "urlencoding",
  "uuid",
 ]
 

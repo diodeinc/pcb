@@ -2,8 +2,12 @@ use std::io::{self, Write};
 
 use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
+use urlencoding::encode as urlencode;
 
 use crate::{AvailabilityData, Bom, GenericComponent};
+
+/// Number of boards to use for availability and pricing calculations
+const NUM_BOARDS: i32 = 20;
 
 /// Sourcing status for component availability
 enum SourcingStatus {
@@ -54,11 +58,11 @@ fn get_sourcing_status(
         return SourcingStatus::Limited;
     }
 
-    // Small generic passives need ≥100 stock, others need qty × 20
+    // Small generic passives need ≥100 stock, others need qty × NUM_BOARDS
     let required_stock = if is_small_generic_passive(generic_data, package) {
         100
     } else {
-        (qty as i32) * 20
+        (qty as i32) * NUM_BOARDS
     };
 
     if stock >= required_stock {
@@ -244,12 +248,23 @@ impl Bom {
                 }
             };
 
-            let mpn_cell = if is_dnp {
-                Cell::new(mpn).fg(Color::DarkGrey)
-            } else if is_house_part {
-                Cell::new(mpn).fg(Color::Blue)
+            // Make MPN clickable with Digikey search link
+            let mpn_display = if mpn.is_empty() {
+                String::new()
             } else {
-                Cell::new(mpn)
+                let digikey_url = format!(
+                    "https://www.digikey.com/en/products/result?keywords={}",
+                    urlencode(mpn)
+                );
+                hyperlink(&digikey_url, mpn)
+            };
+
+            let mpn_cell = if is_dnp {
+                Cell::new(mpn_display).fg(Color::DarkGrey)
+            } else if is_house_part {
+                Cell::new(mpn_display).fg(Color::Blue)
+            } else {
+                Cell::new(mpn_display)
             };
 
             let manufacturer_cell = if is_dnp {
@@ -270,30 +285,6 @@ impl Bom {
                 Cell::new(description)
             };
 
-            // Get alternatives
-            let alternatives_str = entry
-                .get("alternatives")
-                .and_then(|a| a.as_array())
-                .map(|arr| {
-                    if arr.is_empty() {
-                        String::new()
-                    } else {
-                        arr.iter()
-                            .filter_map(|alt| alt["mpn"].as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                })
-                .unwrap_or_default();
-
-            let alternatives_cell = if is_dnp {
-                Cell::new(alternatives_str.as_str()).fg(Color::DarkGrey)
-            } else if is_house_part {
-                Cell::new(alternatives_str.as_str()).fg(Color::Blue)
-            } else {
-                Cell::new(alternatives_str.as_str())
-            };
-
             // Build row with stock as 2nd column when availability is present
             let mut row = vec![qty_cell];
 
@@ -309,22 +300,22 @@ impl Bom {
                             stock.to_string()
                         };
 
-                        // Price: "$X.XX ($Y.YY)" - unit price and total for 20 boards
-                        let price_str = match (avail.price_single, avail.price_20x) {
-                            (Some(p1), Some(p20)) => {
-                                format!("${:.2} (${:.2})", p1, p20)
+                        // Price: "$X.XX ($Y.YY)" - unit price and total for NUM_BOARDS boards
+                        let price_str = match (avail.price_single, avail.price_boards) {
+                            (Some(unit), Some(total)) => {
+                                format!("${:.2} (${:.2})", unit, total)
                             }
-                            (Some(p1), None) => format!("${:.2}", p1),
+                            (Some(unit), None) => format!("${:.2}", unit),
                             _ => String::new(),
                         };
 
                         // Color stock cell based on availability
-                        let qty_for_20_boards = (qty as i32) * 20;
+                        let qty_for_boards = (qty as i32) * NUM_BOARDS;
                         let stock_cell = if is_dnp {
                             Cell::new(stock_str).fg(Color::DarkGrey)
                         } else if stock == 0 {
                             Cell::new(stock_str).fg(Color::Red)
-                        } else if stock < qty_for_20_boards {
+                        } else if stock < qty_for_boards {
                             Cell::new(stock_str).fg(Color::Yellow)
                         } else {
                             Cell::new(stock_str).fg(Color::Green)
@@ -336,18 +327,13 @@ impl Bom {
                             Cell::new(price_str)
                         };
 
-                        let lcsc_pn = avail.lcsc_part_id.as_deref().unwrap_or("");
-
-                        // Make LCSC part ID clickable if product_url is available
-                        let lcsc_display = if let Some(url) = &avail.product_url {
-                            if !lcsc_pn.is_empty() {
-                                hyperlink(url, lcsc_pn)
-                            } else {
-                                String::new()
-                            }
-                        } else {
-                            lcsc_pn.to_string()
-                        };
+                        // Make all LCSC part IDs clickable with their URLs
+                        let lcsc_display = avail
+                            .lcsc_part_ids
+                            .iter()
+                            .map(|(id, url)| hyperlink(url, id))
+                            .collect::<Vec<_>>()
+                            .join(", ");
 
                         let lcsc_cell = if is_dnp {
                             Cell::new(lcsc_display).fg(Color::DarkGrey)
@@ -376,7 +362,6 @@ impl Bom {
             row.extend(vec![
                 designators_cell,
                 mpn_cell,
-                alternatives_cell,
                 manufacturer_cell,
                 package_cell,
             ]);
@@ -394,23 +379,18 @@ impl Bom {
         }
 
         // Set headers with Stock as 2nd column when available
+        let price_header = format!("Price ({}x boards)", NUM_BOARDS);
         let mut headers = vec!["Qty"];
 
         if has_availability {
             headers.push("Stock");
         }
 
-        headers.extend(vec![
-            "Designators",
-            "MPN",
-            "Alternatives",
-            "Manufacturer",
-            "Package",
-        ]);
+        headers.extend(vec!["Designators", "MPN", "Manufacturer", "Package"]);
 
         if has_availability {
             headers.push("LCSC");
-            headers.push("Price (20x)");
+            headers.push(&price_header);
         }
 
         headers.push("Description");
