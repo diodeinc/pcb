@@ -1093,6 +1093,7 @@ mod tests {
         let mut bom = Bom {
             entries: HashMap::new(),
             designators: HashMap::new(),
+            availability: HashMap::new(),
         };
 
         let resistor_entry = BomEntry {
