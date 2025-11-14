@@ -1,9 +1,14 @@
 pub mod auth;
+pub mod bom;
 pub mod component;
 pub mod mcp;
 pub mod scan;
 
 pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCommand, AuthTokens};
+pub use bom::{
+    fetch_and_populate_availability, DesignMatchResult, MatchBomResponse, OfferWithMatchKey,
+    PriceBreak,
+};
 pub use component::{
     add_component_to_workspace, download_component, execute as execute_search,
     search_and_add_single, search_components, search_interactive, search_json, AddComponentResult,

@@ -11,20 +11,21 @@
 //!   stable [`netlist::InstanceRef`].
 //! * `nets` – all electrical nets keyed by their deduplicated name.
 
-mod bom;
+pub mod bom;
 #[cfg(feature = "table")]
 mod bom_table;
 pub mod hierarchical_layout;
 pub mod kicad_netlist;
 pub mod kicad_schematic;
+pub mod natural_string;
 pub mod physical;
 pub mod position;
 
 // Re-export BOM functionality
 pub use bom::{
-    parse_kicad_csv_bom, Alternative, Bom, BomEntry, BomMatchingKey, BomMatchingRule, Capacitor,
-    Dielectric, GenericComponent, GenericMatchingKey, GroupedBomEntry, KiCadBomError, MatchedOffer,
-    Offer, Resistor, UngroupedBomEntry,
+    parse_kicad_csv_bom, Alternative, AvailabilityData, Bom, BomEntry, BomMatchingKey,
+    BomMatchingRule, Capacitor, Dielectric, GenericComponent, GenericMatchingKey, GroupedBomEntry,
+    KiCadBomError, MatchedOffer, Offer, Resistor, UngroupedBomEntry,
 };
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

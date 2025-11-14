@@ -28,10 +28,13 @@ allocative = { workspace = true }
 anyhow = { workspace = true }
 comfy-table = { workspace = true, optional = true }
 starlark_syntax = { workspace = true }
+supports-hyperlinks = { version = "3.1", optional = true }
+terminal_hyperlink = { version = "0.1", optional = true }
+urlencoding = { version = "2.1", optional = true }
 
 [features]
 default = []
-table = ["comfy-table"]
+table = ["comfy-table", "supports-hyperlinks", "terminal_hyperlink", "urlencoding"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

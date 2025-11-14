@@ -1,10 +1,11 @@
 use scan_fmt::scan_fmt;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::{Seek, Write};
 use std::path::Path;
+
+use crate::natural_string::NaturalString;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Position {
@@ -12,51 +13,6 @@ pub struct Position {
     pub y: f64,
     #[serde(default)]
     pub rotation: f64,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct NaturalString(String);
-
-impl Ord for NaturalString {
-    fn cmp(&self, other: &Self) -> Ordering {
-        natord::compare(&self.0, &other.0)
-    }
-}
-
-impl PartialOrd for NaturalString {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl std::borrow::Borrow<str> for NaturalString {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::borrow::Borrow<String> for NaturalString {
-    fn borrow(&self) -> &String {
-        &self.0
-    }
-}
-
-impl From<&str> for NaturalString {
-    fn from(s: &str) -> Self {
-        Self(s.to_owned())
-    }
-}
-
-impl From<String> for NaturalString {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl std::fmt::Display for NaturalString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 pub fn parse_position_comments(content: &str) -> (BTreeMap<NaturalString, Position>, usize) {

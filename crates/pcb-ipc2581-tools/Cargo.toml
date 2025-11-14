@@ -20,3 +20,9 @@ serde_json = { workspace = true }
 starlark_syntax = { workspace = true }
 quick-xml = { workspace = true }
 zstd = { workspace = true }
+pcb-diode-api = { workspace = true, optional = true }
+pcb-ui = { workspace = true, optional = true }
+
+[features]
+default = []
+api = ["dep:pcb-diode-api", "dep:pcb-ui"]

@@ -3,12 +3,23 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::natural_string::NaturalString;
 use crate::{InstanceKind, PhysicalValue, Schematic};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bom {
     pub entries: HashMap<String, BomEntry>,   // path -> BomEntry
     pub designators: HashMap<String, String>, // path -> designator
+    #[serde(skip)]
+    pub availability: HashMap<String, AvailabilityData>, // path -> availability data
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvailabilityData {
+    pub stock_total: i32,                     // Total stock across all offers
+    pub price_single: Option<f64>,            // Cheapest price for single board qty
+    pub price_boards: Option<f64>,            // Cheapest price for NUM_BOARDS boards qty
+    pub lcsc_part_ids: Vec<(String, String)>, // Vec of (LCSC part number, product URL)
 }
 
 /// Trim and truncate description to 100 chars max
@@ -36,8 +47,8 @@ fn meets_or_exceeds<T>(a: &Option<T>, b: &Option<T>, cmp: impl Fn(&T, &T) -> boo
 }
 
 /// Format designators for logging
-fn fmt_designators(s: &BTreeSet<String>) -> String {
-    s.iter().map(String::as_str).collect::<Vec<_>>().join(",")
+fn fmt_designators(s: &BTreeSet<NaturalString>) -> String {
+    s.iter().map(|ns| ns.as_ref()).collect::<Vec<_>>().join(",")
 }
 
 /// Merge source designators into target and log the consolidation
@@ -54,7 +65,7 @@ fn merge_designators(target: &mut GroupedBomEntry, src: &GroupedBomEntry) {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupedBomEntry {
-    pub designators: BTreeSet<String>,
+    pub designators: BTreeSet<NaturalString>,
     #[serde(flatten)]
     pub entry: BomEntry,
 }
@@ -316,6 +327,7 @@ impl Bom {
         Bom {
             entries,
             designators,
+            availability: HashMap::new(),
         }
     }
 
@@ -351,6 +363,7 @@ impl Bom {
         Bom {
             entries,
             designators,
+            availability: HashMap::new(),
         }
     }
 
@@ -374,15 +387,16 @@ impl Bom {
 
     pub fn grouped_json(&self) -> String {
         // Group entries by their BomEntry content
-        let mut groups = HashMap::<BomEntry, BTreeSet<String>>::new();
+        let mut groups = HashMap::<BomEntry, BTreeSet<NaturalString>>::new();
 
         for (path, entry) in &self.entries {
             groups
                 .entry(entry.clone())
                 .or_default()
-                .insert(self.designators[path].clone());
+                .insert(self.designators[path].clone().into());
         }
 
+        // Convert to vec - BTreeSet<NaturalString> automatically maintains natural order
         let mut grouped_entries = groups
             .into_iter()
             .map(|(entry, designators)| GroupedBomEntry { entry, designators })
@@ -392,10 +406,12 @@ impl Bom {
             // Sort by DNP status first (non-DNP before DNP)
             match a.entry.dnp.cmp(&b.entry.dnp) {
                 std::cmp::Ordering::Equal => {
-                    // Within same DNP status, sort by first designator naturally
-                    let a_first = a.designators.iter().next().unwrap();
-                    let b_first = b.designators.iter().next().unwrap();
-                    natord::compare(a_first, b_first)
+                    // Within same DNP status, sort by first designator
+                    // BTreeSet<NaturalString> maintains natural order, so first() is correct
+                    a.designators
+                        .iter()
+                        .next()
+                        .cmp(&b.designators.iter().next())
                 }
                 other => other,
             }
@@ -461,6 +477,7 @@ impl Bom {
         Bom {
             entries,
             designators,
+            availability: HashMap::new(),
         }
     }
 
@@ -655,6 +672,7 @@ pub fn parse_kicad_csv_bom(csv_content: &str) -> Result<Bom, KiCadBomError> {
     Ok(Bom {
         entries,
         designators,
+        availability: HashMap::new(),
     })
 }
 
@@ -1075,6 +1093,7 @@ mod tests {
         let mut bom = Bom {
             entries: HashMap::new(),
             designators: HashMap::new(),
+            availability: HashMap::new(),
         };
 
         let resistor_entry = BomEntry {
@@ -1213,11 +1232,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_10v,
-                designators: BTreeSet::from(["C1".to_string(), "C2".to_string()]),
+                designators: BTreeSet::from(["C1".into(), "C2".into()]),
             },
             GroupedBomEntry {
                 entry: cap_no_voltage,
-                designators: BTreeSet::from(["C14".to_string(), "C15".to_string()]),
+                designators: BTreeSet::from(["C14".into(), "C15".into()]),
             },
         ];
 
@@ -1226,10 +1245,18 @@ mod tests {
         // Should consolidate into one entry
         assert_eq!(consolidated.len(), 1);
         assert_eq!(consolidated[0].designators.len(), 4);
-        assert!(consolidated[0].designators.contains("C1"));
-        assert!(consolidated[0].designators.contains("C2"));
-        assert!(consolidated[0].designators.contains("C14"));
-        assert!(consolidated[0].designators.contains("C15"));
+        assert!(consolidated[0]
+            .designators
+            .contains(&NaturalString::from("C1")));
+        assert!(consolidated[0]
+            .designators
+            .contains(&NaturalString::from("C2")));
+        assert!(consolidated[0]
+            .designators
+            .contains(&NaturalString::from("C14")));
+        assert!(consolidated[0]
+            .designators
+            .contains(&NaturalString::from("C15")));
         assert_eq!(
             consolidated[0].entry.description,
             Some("1uF 10V".to_string())
@@ -1278,11 +1305,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: res_100v,
-                designators: BTreeSet::from(["R1".to_string()]),
+                designators: BTreeSet::from(["R1".into()]),
             },
             GroupedBomEntry {
                 entry: res_no_voltage,
-                designators: BTreeSet::from(["R2".to_string(), "R3".to_string()]),
+                designators: BTreeSet::from(["R2".into(), "R3".into()]),
             },
         ];
 
@@ -1342,11 +1369,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_0402,
-                designators: BTreeSet::from(["C1".to_string()]),
+                designators: BTreeSet::from(["C1".into()]),
             },
             GroupedBomEntry {
                 entry: cap_0603,
-                designators: BTreeSet::from(["C2".to_string()]),
+                designators: BTreeSet::from(["C2".into()]),
             },
         ];
 
@@ -1387,11 +1414,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_normal,
-                designators: BTreeSet::from(["C1".to_string()]),
+                designators: BTreeSet::from(["C1".into()]),
             },
             GroupedBomEntry {
                 entry: cap_dnp,
-                designators: BTreeSet::from(["C2".to_string()]),
+                designators: BTreeSet::from(["C2".into()]),
             },
         ];
 
@@ -1447,11 +1474,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_a,
-                designators: BTreeSet::from(["C1".to_string()]),
+                designators: BTreeSet::from(["C1".into()]),
             },
             GroupedBomEntry {
                 entry: cap_b,
-                designators: BTreeSet::from(["C2".to_string()]),
+                designators: BTreeSet::from(["C2".into()]),
             },
         ];
 
@@ -1507,11 +1534,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_10v_no_mpn,
-                designators: BTreeSet::from(["C1".to_string()]),
+                designators: BTreeSet::from(["C1".into()]),
             },
             GroupedBomEntry {
                 entry: cap_no_voltage,
-                designators: BTreeSet::from(["C2".to_string()]),
+                designators: BTreeSet::from(["C2".into()]),
             },
         ];
 
@@ -1567,11 +1594,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_x7r,
-                designators: BTreeSet::from(["C1".to_string()]),
+                designators: BTreeSet::from(["C1".into()]),
             },
             GroupedBomEntry {
                 entry: cap_no_dielec,
-                designators: BTreeSet::from(["C2".to_string()]),
+                designators: BTreeSet::from(["C2".into()]),
             },
         ];
 
@@ -1605,11 +1632,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: entry_a.clone(),
-                designators: BTreeSet::from(["U1".to_string()]),
+                designators: BTreeSet::from(["U1".into()]),
             },
             GroupedBomEntry {
                 entry: entry_a.clone(),
-                designators: BTreeSet::from(["U2".to_string()]),
+                designators: BTreeSet::from(["U2".into()]),
             },
         ];
 
@@ -1662,11 +1689,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: res_tight,
-                designators: BTreeSet::from(["R1".to_string()]),
+                designators: BTreeSet::from(["R1".into()]),
             },
             GroupedBomEntry {
                 entry: res_loose,
-                designators: BTreeSet::from(["R2".to_string(), "R3".to_string()]),
+                designators: BTreeSet::from(["R2".into(), "R3".into()]),
             },
         ];
 
@@ -1724,11 +1751,11 @@ mod tests {
         let entries = vec![
             GroupedBomEntry {
                 entry: cap_tight,
-                designators: BTreeSet::from(["C1".to_string()]),
+                designators: BTreeSet::from(["C1".into()]),
             },
             GroupedBomEntry {
                 entry: cap_loose,
-                designators: BTreeSet::from(["C2".to_string()]),
+                designators: BTreeSet::from(["C2".into()]),
             },
         ];
 

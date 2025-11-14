@@ -6,9 +6,9 @@ use lsp_types::{
     request::Request, Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities,
     SignatureHelpOptions, Url, WorkDoneProgressOptions,
 };
+use pcb_sch::natural_string::NaturalString;
 use pcb_sch::position::{
-    parse_position_comments, replace_pcb_sch_comments, symbol_id_to_comment_key, NaturalString,
-    Position,
+    parse_position_comments, replace_pcb_sch_comments, symbol_id_to_comment_key, Position,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,

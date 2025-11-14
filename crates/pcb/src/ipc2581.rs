@@ -28,6 +28,10 @@ enum Commands {
         file: PathBuf,
         #[arg(short, long, default_value = "text")]
         format: OutputFormat,
+        /// Fetch part availability and pricing from Diode API
+        #[cfg(feature = "api")]
+        #[arg(long)]
+        availability: bool,
     },
     /// Edit IPC-2581 data
     Edit {
@@ -71,7 +75,21 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             units,
         } => commands::info::execute(&file, format, units),
-        Commands::Bom { file, format } => commands::bom::execute(&file, format),
+        Commands::Bom {
+            file,
+            format,
+            #[cfg(feature = "api")]
+            availability,
+        } => commands::bom::execute(&file, format, {
+            #[cfg(feature = "api")]
+            {
+                availability
+            }
+            #[cfg(not(feature = "api"))]
+            {
+                false
+            }
+        }),
         Commands::Edit { command } => match command {
             EditCommands::Bom {
                 file,
