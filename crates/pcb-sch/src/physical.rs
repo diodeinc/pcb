@@ -1173,8 +1173,18 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         this: &PhysicalValue,
         #[starlark(require = pos)] other: Value<'v>,
     ) -> starlark::Result<bool> {
-        // Thin wrapper around is_in
-        this.is_in(other)
+        // Check if this fits within other
+        let (other_min, other_max) = extract_bounds(other, this.unit)?;
+
+        let self_lower = this.value * (Decimal::ONE - this.tolerance);
+        let self_upper = this.value * (Decimal::ONE + this.tolerance);
+        let (self_min, self_max) = if self_lower < self_upper {
+            (self_lower, self_upper)
+        } else {
+            (self_upper, self_lower)
+        };
+
+        Ok(self_min >= other_min && self_max <= other_max)
     }
 }
 
@@ -4056,5 +4066,99 @@ mod tests {
         // Unit mismatch should error
         let result = volts.downcast_ref::<PhysicalRange>().unwrap().is_in(amps);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_within_method() {
+        use starlark::environment::Module;
+        use starlark::eval::Evaluator;
+        use starlark::values::Heap;
+
+        let module = Module::new();
+        let heap = module.heap();
+        let mut eval = Evaluator::new(&module);
+
+        // Test case from the regression: 4.7uF ±10% (house part) should fit within 4.7uF requirement
+        let house_part = heap.alloc(physical_value(4.7e-6, 0.1, PhysicalUnit::Farads)); // 4.7uF ±10%
+        let requirement = heap.alloc_str("4.7uF"); // 4.7uF (no tolerance = 0%)
+
+        // within() should check if house_part fits within requirement
+        let result = eval.eval_function(
+            house_part.get_attr("within", heap).unwrap().unwrap(),
+            &[requirement.to_value()],
+            &[],
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unpack_bool(), Some(false)); // 10% tolerance doesn't fit in 0% tolerance
+
+        // Test case: tight tolerance fits within loose tolerance
+        let tight = heap.alloc(physical_value(5.5, 0.01, PhysicalUnit::Volts)); // 5.5V ±1%
+        let loose = heap.alloc_str("6V 10%"); // 6V ±10% = [5.4V, 6.6V]
+
+        let result = eval.eval_function(
+            tight.get_attr("within", heap).unwrap().unwrap(),
+            &[loose.to_value()],
+            &[],
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unpack_bool(), Some(true)); // [5.445, 5.555] fits in [5.4, 6.6]
+
+        // Test case: loose tolerance doesn't fit within tight tolerance
+        let loose_val = heap.alloc(physical_value(6.0, 0.1, PhysicalUnit::Volts)); // 6V ±10%
+        let tight_val = heap.alloc_str("5.5V 1%"); // 5.5V ±1%
+
+        let result = eval.eval_function(
+            loose_val.get_attr("within", heap).unwrap().unwrap(),
+            &[tight_val.to_value()],
+            &[],
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unpack_bool(), Some(false)); // [5.4, 6.6] doesn't fit in [5.445, 5.555]
+    }
+
+    #[test]
+    fn test_within_vs_is_in_semantics() {
+        use starlark::environment::Module;
+        use starlark::eval::Evaluator;
+        use starlark::values::Heap;
+
+        let module = Module::new();
+        let heap = module.heap();
+        let mut eval = Evaluator::new(&module);
+
+        // Create values: tight = 5.5V ±1%, loose = 6V ±10%
+        let tight = heap.alloc(physical_value(5.5, 0.01, PhysicalUnit::Volts));
+        let loose = heap.alloc(physical_value(6.0, 0.1, PhysicalUnit::Volts));
+
+        // tight.within(loose) should be true (tight fits in loose)
+        let within_result = eval
+            .eval_function(
+                tight.get_attr("within", heap).unwrap().unwrap(),
+                &[loose.to_value()],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(within_result.unpack_bool(), Some(true));
+
+        // "tight in loose" (Starlark syntax) should also be true
+        // This calls loose.is_in(tight), checking if tight is in loose
+        let is_in_result = loose.downcast_ref::<PhysicalValue>().unwrap().is_in(tight);
+        assert!(is_in_result.is_ok());
+        assert_eq!(is_in_result.unwrap(), true);
+
+        // loose.within(tight) should be false (loose doesn't fit in tight)
+        let within_result2 = eval
+            .eval_function(
+                loose.get_attr("within", heap).unwrap().unwrap(),
+                &[tight.to_value()],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(within_result2.unpack_bool(), Some(false));
+
+        // tight.is_in(loose) checks if loose is in tight, should be false
+        let is_in_result2 = tight.downcast_ref::<PhysicalValue>().unwrap().is_in(loose);
+        assert!(is_in_result2.is_ok());
+        assert_eq!(is_in_result2.unwrap(), false);
     }
 }
