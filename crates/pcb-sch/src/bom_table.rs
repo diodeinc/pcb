@@ -25,26 +25,22 @@ fn get_sourcing_tier(
     generic_data: Option<&GenericComponent>,
     package: Option<&str>,
 ) -> Tier {
-    let Some(avail) = stock_data else {
-        return if mpn.is_empty() || manufacturer.is_empty() {
-            Tier::NoInventory
-        } else {
-            Tier::Plenty
-        };
-    };
-
-    let stock = avail.stock_total;
-    if stock == 0 {
-        return Tier::NoInventory;
-    }
-
-    // Missing MPN/manufacturer makes it harder to source (Limited)
+    // Missing MPN/manufacturer makes it harder to source
     if mpn.is_empty() || manufacturer.is_empty() {
         return Tier::Limited;
     }
 
+    let Some(avail) = stock_data else {
+        // No availability data but have MPN/manufacturer - assume plenty
+        return Tier::Plenty;
+    };
+
+    if avail.stock_total == 0 {
+        return Tier::NoInventory;
+    }
+
     let is_small_passive = is_small_generic_passive(generic_data, package);
-    tier_for_stock(stock, qty as i32, is_small_passive)
+    tier_for_stock(avail.stock_total, qty as i32, is_small_passive)
 }
 
 /// Create a hyperlink if the terminal supports it, otherwise return plain text
@@ -212,11 +208,10 @@ impl Bom {
                 Cell::new(qty.to_string())
             };
 
-            // Create cells - color designators based on sourcing tier, grey out DNP items
-            let designators_cell = if is_dnp {
-                Cell::new(designators.as_str()).fg(Color::DarkGrey)
-            } else {
-                Cell::new(designators.as_str()).fg(color_for_tier(tier))
+            let designators_cell = match (is_dnp, has_availability) {
+                (true, _) => Cell::new(designators.as_str()).fg(Color::DarkGrey),
+                (false, true) => Cell::new(designators.as_str()).fg(color_for_tier(tier)),
+                (false, false) => Cell::new(designators.as_str()),
             };
 
             // Make MPN clickable with Digikey search link
