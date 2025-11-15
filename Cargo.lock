@@ -2950,7 +2950,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pcb"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -3002,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-command-runner"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "log",
@@ -3013,7 +3013,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-diode-api"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "base64",
@@ -3049,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-eda"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -3061,7 +3061,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-fmt"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "ruff_formatter",
@@ -3071,7 +3071,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ipc2581-tools"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3092,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-kicad"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3110,7 +3110,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-layout"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-mcp"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "rpc-router",
@@ -3147,7 +3147,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sch"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sexpr"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "log",
  "serde",
@@ -3185,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sim"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-starlark-lsp"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "derivative",
@@ -3236,7 +3236,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-test-utils"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "assert_cmd",
  "assert_fs",
@@ -3255,7 +3255,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ui"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "colored",
@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3320,7 +3320,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-core"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3368,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-wasm"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "base64",
