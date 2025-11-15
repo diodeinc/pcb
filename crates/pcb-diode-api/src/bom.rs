@@ -189,7 +189,7 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
             let best_offer = select_best_offer(&result.offers, qty, is_small_passive);
 
             // Extract all data from the best matched offer
-            let (stock_total, lcsc_part_ids, price_single, price_boards) = match best_offer {
+            let (stock_total, lcsc_part_ids, price_breaks) = match best_offer {
                 Some(offer) => {
                     let stock = offer.stock_available.unwrap_or(0);
 
@@ -209,21 +209,22 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
                         _ => Vec::new(),
                     };
 
-                    let single = offer.unit_price_at_qty(qty);
-                    let unit_boards = offer.unit_price_at_qty(qty * NUM_BOARDS);
-                    let total_boards = unit_boards.map(|p| p * (qty * NUM_BOARDS) as f64);
+                    // Store price breaks for recalculation with grouped quantities
+                    let breaks = offer
+                        .price_breaks
+                        .as_ref()
+                        .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
 
-                    (stock, lcsc_id, single, total_boards)
+                    (stock, lcsc_id, breaks)
                 }
-                None => (0, Vec::new(), None, None),
+                None => (0, Vec::new(), None),
             };
 
             bom.availability.insert(
                 path.to_string(),
                 pcb_sch::AvailabilityData {
                     stock_total,
-                    price_single,
-                    price_boards,
+                    price_breaks,
                     lcsc_part_ids,
                 },
             );
