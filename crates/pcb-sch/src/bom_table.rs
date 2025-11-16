@@ -1,11 +1,68 @@
 use std::io::{self, Write};
 
+use colored::Colorize;
 use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier, NUM_BOARDS};
 use crate::{Bom, GenericComponent};
+
+/// Create a cell with quantity and percentage (percentage in grey)
+fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
+    Cell::new(format!(
+        "{:>4} {}",
+        qty,
+        format!("({:>5.1}%)", percentage).dimmed()
+    ))
+}
+
+/// Configure a summary table with standard layout
+fn configure_summary_table(table: &mut Table) {
+    table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
+    table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
+    table.set_header(vec!["", "Category", "Unique Parts", "Total Qty"]);
+
+    // Column 0: icon (content width)
+    table
+        .column_mut(0)
+        .unwrap()
+        .set_constraint(comfy_table::ColumnConstraint::ContentWidth);
+
+    // Column 1: category (fixed 40 chars)
+    table
+        .column_mut(1)
+        .unwrap()
+        .set_constraint(comfy_table::ColumnConstraint::LowerBoundary(
+            comfy_table::Width::Fixed(40),
+        ));
+
+    // Columns 2-3: right-aligned numeric columns (fixed 18 chars)
+    for col_idx in 2..=3 {
+        let col = table.column_mut(col_idx).unwrap();
+        col.set_constraint(comfy_table::ColumnConstraint::LowerBoundary(
+            comfy_table::Width::Fixed(18),
+        ));
+        col.set_cell_alignment(comfy_table::CellAlignment::Right);
+    }
+}
+
+/// Create a summary row with icon, label, and two qty+percentage cells
+fn summary_row(
+    icon_color: Color,
+    label: &str,
+    count: usize,
+    count_total: usize,
+    qty: usize,
+    qty_total: usize,
+) -> Vec<Cell> {
+    vec![
+        Cell::new("■").fg(icon_color),
+        Cell::new(label),
+        qty_with_percentage_cell(count, (count as f64 / count_total as f64) * 100.0),
+        qty_with_percentage_cell(qty, (qty as f64 / qty_total as f64) * 100.0),
+    ]
+}
 
 /// Map availability tier to table cell color
 fn color_for_tier(tier: Tier) -> Color {
@@ -308,7 +365,7 @@ impl Bom {
             }
 
             // Create qty and designators cells
-            let qty_cell = styled_cell(qty.to_string(), is_dnp, false, None);
+            let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, false, None);
             let designators_cell = styled_cell(
                 designators.as_str(),
                 is_dnp,
@@ -344,9 +401,9 @@ impl Bom {
             // Build availability cells
             let (stock_cell_opt, price_cell_opt, lcsc_cell_opt) = if has_availability {
                 let stock_str = if aggregated_stock == 0 && aggregated_price_single.is_none() {
-                    "-".to_string()
+                    format!("{:>7}", "-")
                 } else {
-                    aggregated_stock.to_string()
+                    format!("{:>7}", aggregated_stock)
                 };
 
                 // Price: "$X.XX ($Y.YY)" - total for 1 board and total for NUM_BOARDS boards
@@ -437,89 +494,73 @@ impl Bom {
         if has_availability {
             writeln!(writer)?;
             writeln!(writer, "Availability Summary:")?;
+
             let mut summary_table = Table::new();
-            summary_table.load_preset(comfy_table::presets::UTF8_BORDERS_ONLY);
-            summary_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
+            configure_summary_table(&mut summary_table);
 
-            summary_table.set_header(vec!["", "Category", "Unique Parts", "Total Qty"]);
+            let total_count = plenty_count + limited_count + hard_count + dnp_count;
+            let total_with_dnp = plenty_qty + limited_qty + hard_qty + dnp_qty;
 
-            // Set explicit column widths for alignment
-            summary_table
-                .column_mut(0)
-                .unwrap()
-                .set_constraint(comfy_table::ColumnConstraint::ContentWidth);
-            summary_table.column_mut(1).unwrap().set_constraint(
-                comfy_table::ColumnConstraint::LowerBoundary(comfy_table::Width::Fixed(40)),
-            );
-            summary_table.column_mut(2).unwrap().set_constraint(
-                comfy_table::ColumnConstraint::LowerBoundary(comfy_table::Width::Fixed(14)),
-            );
-            summary_table.column_mut(3).unwrap().set_constraint(
-                comfy_table::ColumnConstraint::LowerBoundary(comfy_table::Width::Fixed(10)),
-            );
-
-            summary_table.add_row(vec![
-                Cell::new("■").fg(Color::Green),
-                Cell::new("Plenty available / easy to source"),
-                Cell::new(plenty_count.to_string()),
-                Cell::new(plenty_qty.to_string()),
-            ]);
-            summary_table.add_row(vec![
-                Cell::new("■").fg(Color::Yellow),
-                Cell::new("Limited inventory / harder to source"),
-                Cell::new(limited_count.to_string()),
-                Cell::new(limited_qty.to_string()),
-            ]);
-            summary_table.add_row(vec![
-                Cell::new("■").fg(Color::Red),
-                Cell::new("Insufficient stock / hard to source"),
-                Cell::new(hard_count.to_string()),
-                Cell::new(hard_qty.to_string()),
-            ]);
-            summary_table.add_row(vec![
-                Cell::new("■").fg(Color::DarkGrey),
-                Cell::new("DNP (Do Not Populate)"),
-                Cell::new(dnp_count.to_string()),
-                Cell::new(dnp_qty.to_string()),
-            ]);
+            summary_table.add_row(summary_row(
+                Color::Green,
+                "Plenty available / easy to source",
+                plenty_count,
+                total_count,
+                plenty_qty,
+                total_with_dnp,
+            ));
+            summary_table.add_row(summary_row(
+                Color::Yellow,
+                "Limited inventory / harder to source",
+                limited_count,
+                total_count,
+                limited_qty,
+                total_with_dnp,
+            ));
+            summary_table.add_row(summary_row(
+                Color::Red,
+                "Insufficient stock / hard to source",
+                hard_count,
+                total_count,
+                hard_qty,
+                total_with_dnp,
+            ));
+            summary_table.add_row(summary_row(
+                Color::DarkGrey,
+                "DNP (Do Not Populate)",
+                dnp_count,
+                total_count,
+                dnp_qty,
+                total_with_dnp,
+            ));
 
             writeln!(writer, "{summary_table}")?;
 
             writeln!(writer)?;
             writeln!(writer, "House Component Summary:")?;
+
             let mut house_table = Table::new();
-            house_table.load_preset(comfy_table::presets::UTF8_BORDERS_ONLY);
-            house_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
+            configure_summary_table(&mut house_table);
 
-            house_table.set_header(vec!["", "Category", "Unique Parts", "Total Qty"]);
+            let house_total_count = house_count + non_house_count;
+            let house_total_qty = house_qty + non_house_qty;
 
-            // Set same explicit column widths for alignment
-            house_table
-                .column_mut(0)
-                .unwrap()
-                .set_constraint(comfy_table::ColumnConstraint::ContentWidth);
-            house_table.column_mut(1).unwrap().set_constraint(
-                comfy_table::ColumnConstraint::LowerBoundary(comfy_table::Width::Fixed(40)),
-            );
-            house_table.column_mut(2).unwrap().set_constraint(
-                comfy_table::ColumnConstraint::LowerBoundary(comfy_table::Width::Fixed(14)),
-            );
-            house_table.column_mut(3).unwrap().set_constraint(
-                comfy_table::ColumnConstraint::LowerBoundary(comfy_table::Width::Fixed(10)),
-            );
-
-            house_table.add_row(vec![
-                Cell::new("■").fg(Color::Blue),
-                Cell::new("House component"),
-                Cell::new(house_count.to_string()),
-                Cell::new(house_qty.to_string()),
-            ]);
-            house_table.add_row(vec![
-                Cell::new("■").fg(Color::White),
-                Cell::new("Non-house component"),
-                Cell::new(non_house_count.to_string()),
-                Cell::new(non_house_qty.to_string()),
-            ]);
+            house_table.add_row(summary_row(
+                Color::Blue,
+                "House component",
+                house_count,
+                house_total_count,
+                house_qty,
+                house_total_qty,
+            ));
+            house_table.add_row(summary_row(
+                Color::White,
+                "Non-house component",
+                non_house_count,
+                house_total_count,
+                non_house_qty,
+                house_total_qty,
+            ));
 
             writeln!(writer, "{house_table}")?;
         }
