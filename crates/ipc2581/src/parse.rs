@@ -418,6 +418,25 @@ impl<'arena> Parser<'arena> {
                     lower_left,
                 }))
             }
+            "RectCham" => {
+                let width = self.parse_f64_attr_with_units(node, "width", "RectCham", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "RectCham", units)?;
+                let chamfer = self.parse_f64_attr_with_units(node, "chamfer", "RectCham", units)?;
+                let upper_right = self.parse_bool_attr(node, "upperRight").unwrap_or(false);
+                let upper_left = self.parse_bool_attr(node, "upperLeft").unwrap_or(false);
+                let lower_right = self.parse_bool_attr(node, "lowerRight").unwrap_or(false);
+                let lower_left = self.parse_bool_attr(node, "lowerLeft").unwrap_or(false);
+
+                Ok(StandardPrimitive::RectCham(RectCham {
+                    width,
+                    height,
+                    chamfer,
+                    upper_right,
+                    upper_left,
+                    lower_right,
+                    lower_left,
+                }))
+            }
             "Oval" => {
                 let width = self.parse_f64_attr_with_units(node, "width", "Oval", units)?;
                 let height = self.parse_f64_attr_with_units(node, "height", "Oval", units)?;
@@ -1648,12 +1667,22 @@ impl<'arena> Parser<'arena> {
             SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
+        // Parse Xform child element if present (for rotation, mirror, scale)
+        let mut xform = None;
+        for child in node.children() {
+            if child.tag_name().name() == "Xform" {
+                xform = Some(self.parse_xform(&child));
+                break;
+            }
+        }
+
         Ok(Slot {
             name,
             shape,
             plating_status,
             x,
             y,
+            xform,
         })
     }
 

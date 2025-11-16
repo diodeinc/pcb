@@ -563,9 +563,16 @@ fn extract_drill_features(
             for slot in &set.slots {
                 // SlotCavity can have Outline (polygon) OR StandardPrimitive (Oval, Circle, etc.)
                 let path = match &slot.shape {
-                    crate::SlotShape::Outline(polygon) => polygon_to_path(polygon),
+                    crate::SlotShape::Outline(polygon) => {
+                        let mut path = polygon_to_path(polygon);
+                        // Apply Xform to outline polygons if present
+                        if let Some(xform) = &slot.xform {
+                            apply_xform_to_path(&mut path, slot.x, slot.y, xform);
+                        }
+                        path
+                    }
                     crate::SlotShape::Primitive(primitive) => {
-                        convert_primitive_to_path(primitive, slot.x, slot.y)
+                        convert_primitive_to_path(primitive, slot.x, slot.y, slot.xform.as_ref())
                     }
                 };
 
@@ -648,8 +655,56 @@ fn polygon_to_path(polygon: &crate::Polygon) -> Path {
     path
 }
 
+/// Apply IPC-2581 Xform transformation to a path
+///
+/// Per IPC-2581C §3.3: Transformation order must be:
+/// 1. Modify origin (xOffset, yOffset)
+/// 2. Apply rotation
+/// 3. Mirror
+/// 4. Scale
+///
+/// All transformations are applied relative to the slot's center point (cx, cy).
+fn apply_xform_to_path(path: &mut Path, cx: f64, cy: f64, xform: &crate::Xform) {
+    let mut matrix = skia_safe::Matrix::new_identity();
+
+    // Step 1: Origin offset (applied first in transformation chain)
+    // Note: In IPC-2581, xOffset/yOffset modify the origin BEFORE other transforms
+    // This affects where rotation/mirror/scale pivot points are
+    if xform.x_offset != 0.0 || xform.y_offset != 0.0 {
+        // Translate to apply offset relative to center
+        matrix.pre_translate((xform.x_offset as f32, xform.y_offset as f32));
+    }
+
+    // Step 2: Rotation (counter-clockwise in degrees)
+    if xform.rotation != 0.0 {
+        matrix.pre_rotate(xform.rotation as f32, Some((cx as f32, cy as f32).into()));
+    }
+
+    // Step 3: Mirror (flip across y-axis, i.e., x → -x)
+    if xform.mirror {
+        // Mirror across y-axis at the center point
+        matrix.pre_translate((cx as f32, 0.0));
+        matrix.pre_scale((-1.0, 1.0), None);
+        matrix.pre_translate((-(cx as f32), 0.0));
+    }
+
+    // Step 4: Scale
+    if xform.scale != 1.0 {
+        matrix.pre_scale((xform.scale as f32, xform.scale as f32), Some((cx as f32, cy as f32).into()));
+    }
+
+    path.transform(&matrix);
+}
+
 /// Convert a StandardPrimitive to a Skia path for drill slot
-fn convert_primitive_to_path(primitive: &crate::StandardPrimitive, x: f64, y: f64) -> Path {
+///
+/// Applies full IPC-2581 Xform transformation if provided.
+fn convert_primitive_to_path(
+    primitive: &crate::StandardPrimitive,
+    x: f64,
+    y: f64,
+    xform: Option<&crate::Xform>,
+) -> Path {
     use crate::StandardPrimitive;
 
     let mut path = Path::new();
@@ -684,6 +739,11 @@ fn convert_primitive_to_path(primitive: &crate::StandardPrimitive, x: f64, y: f6
             // Fallback: treat as circle with 0.5mm radius
             super::primitives::add_circle_as_cubics(&mut path, (x as f32, y as f32), 0.5);
         }
+    }
+
+    // Apply Xform transformation if present
+    if let Some(xform) = xform {
+        apply_xform_to_path(&mut path, x, y, xform);
     }
 
     path

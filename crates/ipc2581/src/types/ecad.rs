@@ -219,6 +219,7 @@ pub struct FeatureSet {
     pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
     pub traces: Vec<Trace>,
+    pub arcs: Vec<super::Arc>,         // Curved trace segments from Features > Arc
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
     pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
 }
@@ -265,6 +266,7 @@ pub struct Slot {
     pub plating_status: PlatingStatus,
     pub x: f64,
     pub y: f64,
+    pub xform: Option<super::Xform>,
 }
 
 /// Pad represents a pad instance on a layer

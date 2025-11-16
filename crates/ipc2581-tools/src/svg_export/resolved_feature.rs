@@ -60,6 +60,9 @@ pub enum ResolvedGeometry {
     /// Polyline trace with absolute coordinates
     Polyline {
         points: Vec<Point>,
+        /// Arc data for each edge (None = straight line, Some = arc to this point)
+        /// Index i contains arc data for edge from points[i-1] to points[i]
+        arc_segments: Vec<Option<ArcSegment>>,
         line_width: f64,
         line_end: LineEndStyle,
     },
