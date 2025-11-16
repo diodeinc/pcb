@@ -312,6 +312,11 @@ impl Parser {
         }
     }
 
+    /// Generic enum parser using FromStr trait
+    fn parse_enum_attr<T: std::str::FromStr<Err = String>>(&self, s: &str) -> Result<T> {
+        s.parse().map_err(|e| Ipc2581Error::InvalidAttribute(e))
+    }
+
     /// Parse optional FillDesc and LineDesc children from a primitive node
     fn parse_fill_and_line_desc(
         &mut self,
@@ -416,6 +421,149 @@ impl Parser {
                     lower_right,
                     lower_left,
                 }))
+            }
+            "RectCham" => {
+                let width = self.parse_f64_attr_with_units(node, "width", "RectCham", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "RectCham", units)?;
+                let chamfer = self.parse_f64_attr_with_units(node, "chamfer", "RectCham", units)?;
+                let upper_right = self.parse_bool_attr(node, "upperRight").unwrap_or(false);
+                let upper_left = self.parse_bool_attr(node, "upperLeft").unwrap_or(false);
+                let lower_right = self.parse_bool_attr(node, "lowerRight").unwrap_or(false);
+                let lower_left = self.parse_bool_attr(node, "lowerLeft").unwrap_or(false);
+
+                Ok(StandardPrimitive::RectCham(RectCham {
+                    width,
+                    height,
+                    chamfer,
+                    upper_right,
+                    upper_left,
+                    lower_right,
+                    lower_left,
+                }))
+            }
+            "RectCorner" => {
+                let lower_left_x =
+                    self.parse_f64_attr_with_units(node, "lowerLeftX", "RectCorner", units)?;
+                let lower_left_y =
+                    self.parse_f64_attr_with_units(node, "lowerLeftY", "RectCorner", units)?;
+                let upper_right_x =
+                    self.parse_f64_attr_with_units(node, "upperRightX", "RectCorner", units)?;
+                let upper_right_y =
+                    self.parse_f64_attr_with_units(node, "upperRightY", "RectCorner", units)?;
+
+                Ok(StandardPrimitive::RectCorner(RectCorner {
+                    lower_left_x,
+                    lower_left_y,
+                    upper_right_x,
+                    upper_right_y,
+                }))
+            }
+            "Butterfly" => {
+                let shape_attr = self.required_attr(node, "shape", "Butterfly")?;
+                let shape =
+                    self.parse_enum_attr::<ButterflyShape>(self.interner.resolve(shape_attr))?;
+
+                // Parse either diameter (for ROUND) or side (for SQUARE)
+                let size = match shape {
+                    ButterflyShape::Round => {
+                        self.parse_f64_attr_with_units(node, "diameter", "Butterfly", units)?
+                    }
+                    ButterflyShape::Square => {
+                        self.parse_f64_attr_with_units(node, "side", "Butterfly", units)?
+                    }
+                };
+
+                Ok(StandardPrimitive::Butterfly(Butterfly { shape, size }))
+            }
+            "Diamond" => {
+                let width = self.parse_f64_attr_with_units(node, "width", "Diamond", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "Diamond", units)?;
+                Ok(StandardPrimitive::Diamond(Diamond { width, height }))
+            }
+            "Donut" => {
+                let shape_attr = self.required_attr(node, "shape", "Donut")?;
+                let shape =
+                    self.parse_enum_attr::<DonutShape>(self.interner.resolve(shape_attr))?;
+                let outer_diameter =
+                    self.parse_f64_attr_with_units(node, "outerDiameter", "Donut", units)?;
+                let inner_diameter =
+                    self.parse_f64_attr_with_units(node, "innerDiameter", "Donut", units)?;
+
+                Ok(StandardPrimitive::Donut(Donut {
+                    shape,
+                    outer_diameter,
+                    inner_diameter,
+                }))
+            }
+            "Ellipse" => {
+                let width = self.parse_f64_attr_with_units(node, "width", "Ellipse", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "Ellipse", units)?;
+                Ok(StandardPrimitive::Ellipse(Ellipse { width, height }))
+            }
+            "Hexagon" => {
+                let point_to_point =
+                    self.parse_f64_attr_with_units(node, "length", "Hexagon", units)?;
+                Ok(StandardPrimitive::Hexagon(Hexagon { point_to_point }))
+            }
+            "Moire" => {
+                let diameter = self.parse_f64_attr_with_units(node, "diameter", "Moire", units)?;
+                let ring_width =
+                    self.parse_f64_attr_with_units(node, "ringWidth", "Moire", units)?;
+                let ring_gap = self.parse_f64_attr_with_units(node, "ringGap", "Moire", units)?;
+                let ring_number = self.parse_u32_attr(node, "ringNumber", "Moire")?;
+
+                // Optional crosshair attributes
+                let line_width =
+                    self.parse_optional_f64_attr_with_units(node, "lineWidth", units)?;
+                let line_length =
+                    self.parse_optional_f64_attr_with_units(node, "lineLength", units)?;
+                let line_angle = self.parse_optional_f64_attr(node, "lineAngle")?;
+
+                Ok(StandardPrimitive::Moire(Moire {
+                    diameter,
+                    ring_width,
+                    ring_gap,
+                    ring_number,
+                    line_width,
+                    line_length,
+                    line_angle,
+                }))
+            }
+            "Octagon" => {
+                let point_to_point =
+                    self.parse_f64_attr_with_units(node, "length", "Octagon", units)?;
+                Ok(StandardPrimitive::Octagon(Octagon { point_to_point }))
+            }
+            "Thermal" => {
+                let shape_attr = self.required_attr(node, "shape", "Thermal")?;
+                let shape =
+                    self.parse_enum_attr::<ThermalShape>(self.interner.resolve(shape_attr))?;
+                let outer_diameter =
+                    self.parse_f64_attr_with_units(node, "outerDiameter", "Thermal", units)?;
+                let inner_diameter =
+                    self.parse_f64_attr_with_units(node, "innerDiameter", "Thermal", units)?;
+
+                // Optional attributes with defaults
+                let spoke_count = self
+                    .parse_optional_u32_attr(node, "spokeCount")?
+                    .unwrap_or(4);
+                let spoke_width =
+                    self.parse_optional_f64_attr_with_units(node, "spokeWidth", units)?;
+                let spoke_start_angle = self.parse_optional_f64_attr(node, "spokeStartAngle")?;
+
+                Ok(StandardPrimitive::Thermal(Thermal {
+                    shape,
+                    outer_diameter,
+                    inner_diameter,
+                    spoke_count,
+                    spoke_width,
+                    spoke_start_angle,
+                }))
+            }
+            "Triangle" => {
+                let base = self.parse_f64_attr_with_units(node, "base", "Triangle", units)?;
+                let height = self.parse_f64_attr_with_units(node, "height", "Triangle", units)?;
+                Ok(StandardPrimitive::Triangle(Triangle { base, height }))
             }
             "Oval" => {
                 let width = self.parse_f64_attr_with_units(node, "width", "Oval", units)?;
@@ -764,9 +912,65 @@ impl Parser {
         let attr_val = node
             .attribute(attr)
             .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val
-            .parse()
-            .map_err(|_| Ipc2581Error::InvalidAttribute(format!("Invalid u8 value for {}", attr)))
+        attr_val.parse().map_err(|_| {
+            Ipc2581Error::InvalidAttribute(format!("Invalid u8 value for {} in {}", attr, element))
+        })
+    }
+
+    fn parse_u32_attr(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        element: &'static str,
+    ) -> Result<u32> {
+        let attr_val = node
+            .attribute(attr)
+            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
+        attr_val.parse().map_err(|_| {
+            Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {} in {}", attr, element))
+        })
+    }
+
+    /// Parse an f64 from a string value and convert to mm using the given units
+    fn parse_f64_str_with_units(&self, s: &str, units: Units) -> Result<f64> {
+        let value = s
+            .parse::<f64>()
+            .map_err(|_| Ipc2581Error::InvalidAttribute("Invalid f64 value".to_string()))?;
+        Ok(crate::units::to_mm(value, units))
+    }
+
+    /// Parse optional f64 attribute (no unit conversion)
+    fn parse_optional_f64_attr(&self, node: &Node, attr: &'static str) -> Result<Option<f64>> {
+        node.attribute(attr)
+            .map(|v| {
+                v.parse::<f64>().map_err(|_| {
+                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr))
+                })
+            })
+            .transpose()
+    }
+
+    /// Parse optional u32 attribute
+    fn parse_optional_u32_attr(&self, node: &Node, attr: &'static str) -> Result<Option<u32>> {
+        node.attribute(attr)
+            .map(|v| {
+                v.parse::<u32>().map_err(|_| {
+                    Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {}", attr))
+                })
+            })
+            .transpose()
+    }
+
+    /// Parse optional f64 attribute with unit conversion
+    fn parse_optional_f64_attr_with_units(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        units: Units,
+    ) -> Result<Option<f64>> {
+        node.attribute(attr)
+            .map(|v| self.parse_f64_str_with_units(v, units))
+            .transpose()
     }
 
     fn parse_bool_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {

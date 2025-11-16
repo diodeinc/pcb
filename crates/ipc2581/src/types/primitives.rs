@@ -1,4 +1,5 @@
 use crate::Symbol;
+use std::str::FromStr;
 
 /// Standard geometric primitives
 #[derive(Debug, Clone, PartialEq)]
@@ -326,4 +327,45 @@ pub enum UserShapeType {
     Oval(Oval),
     Polygon(Polygon),
     // Other standard shapes as needed (e.g., Polyline)
+}
+
+// FromStr implementations for shape enums
+impl FromStr for ButterflyShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ROUND" => Ok(ButterflyShape::Round),
+            "SQUARE" => Ok(ButterflyShape::Square),
+            _ => Err(format!("Unknown butterflyShape: {}", s)),
+        }
+    }
+}
+
+impl FromStr for DonutShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ROUND" => Ok(DonutShape::Round),
+            "SQUARE" => Ok(DonutShape::Square),
+            "HEXAGON" => Ok(DonutShape::Hexagon),
+            "OCTAGON" => Ok(DonutShape::Octagon),
+            _ => Err(format!("Unknown donutShape: {}", s)),
+        }
+    }
+}
+
+impl FromStr for ThermalShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ROUND" => Ok(ThermalShape::Round),
+            "SQUARE" => Ok(ThermalShape::Square),
+            "HEXAGON" => Ok(ThermalShape::Hexagon),
+            "OCTAGON" => Ok(ThermalShape::Octagon),
+            _ => Err(format!("Unknown thermalShape: {}", s)),
+        }
+    }
 }
