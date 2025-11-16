@@ -67,7 +67,7 @@ fn summary_row(
 /// Map availability tier to table cell color
 fn color_for_tier(tier: Tier) -> Color {
     match tier {
-        Tier::HardToSource => Color::Red,
+        Tier::Insufficient => Color::Red,
         Tier::Limited => Color::Yellow,
         Tier::Plenty => Color::Green,
     }
@@ -328,7 +328,7 @@ impl Bom {
                 let is_small_passive = is_small_generic_passive(generic_data.as_ref(), package);
                 tier_for_stock(aggregated_stock, qty as i32, is_small_passive)
             } else {
-                Tier::HardToSource
+                Tier::Insufficient
             };
             let designator_tier = get_designator_tier(stock_tier, mpn, manufacturer);
 
@@ -347,7 +347,7 @@ impl Bom {
                             limited_count += 1;
                             limited_qty += qty;
                         }
-                        Tier::HardToSource => {
+                        Tier::Insufficient => {
                             hard_count += 1;
                             hard_qty += qty;
                         }
