@@ -132,17 +132,17 @@ fn calculate_board_dimensions(step: &Step) -> Option<(f64, f64)> {
         for step in &profile.polygon.steps {
             match step {
                 ipc2581::types::PolyStep::Segment(seg) => {
-                    min_x = min_x.min(seg.x);
-                    max_x = max_x.max(seg.x);
-                    min_y = min_y.min(seg.y);
-                    max_y = max_y.max(seg.y);
+                    min_x = min_x.min(seg.point.x);
+                    max_x = max_x.max(seg.point.x);
+                    min_y = min_y.min(seg.point.y);
+                    max_y = max_y.max(seg.point.y);
                 }
                 ipc2581::types::PolyStep::Curve(curve) => {
                     // TODO: Calculate actual arc bounding box, not just endpoints
-                    min_x = min_x.min(curve.x);
-                    max_x = max_x.max(curve.x);
-                    min_y = min_y.min(curve.y);
-                    max_y = max_y.max(curve.y);
+                    min_x = min_x.min(curve.point.x);
+                    max_x = max_x.max(curve.point.x);
+                    min_y = min_y.min(curve.point.y);
+                    max_y = max_y.max(curve.point.y);
                 }
             }
         }
