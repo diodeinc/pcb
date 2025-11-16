@@ -314,7 +314,8 @@ impl Bom {
                 is_dnp,
                 false,
                 has_availability.then_some(designator_tier),
-            );
+            )
+            .set_delimiter(',');
 
             // Make MPN clickable with Digikey search link
             let mpn_display = if mpn.is_empty() {
