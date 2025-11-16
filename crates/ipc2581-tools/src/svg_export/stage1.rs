@@ -95,6 +95,15 @@ pub fn resolve_features(
                 bbox = bbox.union(&resolved.bbox);
                 features.push(resolved);
             }
+
+            // Resolve arcs (curved trace segments)
+            for arc in &set.arcs {
+                if let Some(resolved) = resolve_arc(doc, context, arc, net_sym, set_polarity) {
+                    stats.record(resolved.bucket);
+                    bbox = bbox.union(&resolved.bbox);
+                    features.push(resolved);
+                }
+            }
         }
 
         layer_resolutions.insert(
@@ -254,8 +263,10 @@ fn resolve_trace(
         max_y: bbox.max_y + half_width,
     };
 
+    let num_points = points.len();
     let geometry = ResolvedGeometry::Polyline {
         points,
+        arc_segments: vec![None; num_points], // Traces have no arc segments
         line_width,
         line_end,
     };
@@ -356,10 +367,73 @@ fn resolve_line(
         net,
         polarity,
         geometry: ResolvedGeometry::Polyline {
+            arc_segments: vec![None; points.len()], // Lines have no arc segments
             points,
             line_width,
             line_end,
         },
         bbox,
     }
+}
+
+/// Resolve an arc (curved trace segment from Features > Arc)
+fn resolve_arc(
+    _doc: &crate::Ipc2581,
+    _context: &BoardContext,
+    arc: &crate::Arc,
+    net: Option<Symbol>,
+    polarity: Polarity,
+) -> Option<ResolvedFeature> {
+    // Arc has start, end, and center points
+    let points = vec![
+        Point::new(arc.start_x, arc.start_y),
+        Point::new(arc.end_x, arc.end_y),
+    ];
+
+    // Arc segments: first point has no arc (starting point), second point has the arc to it
+    let arc_segments = vec![
+        None, // First point has no incoming arc
+        Some(ArcSegment {
+            center: Point::new(arc.center_x, arc.center_y),
+            clockwise: arc.clockwise,
+        }),
+    ];
+
+    // Line width and end are stored directly in Arc (already in mm)
+    let line_width = arc.line_width;
+    let line_end = arc
+        .line_end
+        .map(|le| match le {
+            crate::LineEnd::Round => LineEndStyle::Round,
+            crate::LineEnd::Square => LineEndStyle::Square,
+            crate::LineEnd::Flat => LineEndStyle::None,
+        })
+        .unwrap_or(LineEndStyle::Round);
+
+    let half_width = line_width / 2.0;
+
+    // Calculate bounding box considering arc curvature
+    // For now, use a conservative bounding box from start/end points + center
+    let mut bbox = BoundingBox::from_point(points[0]);
+    bbox.expand_to_point(points[1]);
+    bbox.expand_to_point(Point::new(arc.center_x, arc.center_y));
+    bbox = BoundingBox {
+        min_x: bbox.min_x - half_width,
+        min_y: bbox.min_y - half_width,
+        max_x: bbox.max_x + half_width,
+        max_y: bbox.max_y + half_width,
+    };
+
+    Some(ResolvedFeature {
+        bucket: FeatureBucket::Trace,
+        net,
+        polarity,
+        geometry: ResolvedGeometry::Polyline {
+            points,
+            arc_segments,
+            line_width,
+            line_end,
+        },
+        bbox,
+    })
 }

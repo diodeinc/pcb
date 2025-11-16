@@ -232,7 +232,7 @@ pub struct Line {
     pub end_y: f64,
 }
 
-/// Arc segment
+/// Arc segment (curved trace)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arc {
     pub start_x: f64,
@@ -242,7 +242,8 @@ pub struct Arc {
     pub center_x: f64,
     pub center_y: f64,
     pub clockwise: bool,
-    pub line_desc_ref: Option<Symbol>, // Reference to LineDesc for line width/end style
+    pub line_width: f64, // Line width in mm
+    pub line_end: Option<LineEnd>, // Line end style
 }
 
 /// Line description (width, end style, property)

@@ -1357,6 +1357,7 @@ impl<'arena> Parser<'arena> {
         let mut slots = Vec::new();
         let mut pads = Vec::new();
         let mut traces = Vec::new();
+        let mut arcs = Vec::new();
         let mut polygons = Vec::new();
         let mut lines = Vec::new();
 
@@ -1367,9 +1368,10 @@ impl<'arena> Parser<'arena> {
                 "Pad" => pads.push(self.parse_pad(&child)?),
                 "Polyline" => traces.push(self.parse_trace(&child)?),
                 "Features" => {
-                    // Parse polygons and lines from Features
-                    let (feat_polygons, feat_lines) = self.parse_features(&child);
+                    // Parse polygons, arcs, and lines from Features
+                    let (feat_polygons, feat_arcs, feat_lines) = self.parse_features(&child);
                     polygons.extend(feat_polygons);
+                    arcs.extend(feat_arcs);
                     lines.extend(feat_lines);
                 }
                 _ => {}
@@ -1384,13 +1386,15 @@ impl<'arena> Parser<'arena> {
             slots,
             pads,
             traces,
+            arcs,
             polygons,
             lines,
         })
     }
 
-    fn parse_features(&mut self, features_node: &Node) -> (Vec<Polygon>, Vec<ecad::Line>) {
+    fn parse_features(&mut self, features_node: &Node) -> (Vec<Polygon>, Vec<Arc>, Vec<ecad::Line>) {
         let mut polygons = Vec::new();
+        let mut arcs = Vec::new();
         let mut lines = Vec::new();
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
 
@@ -1424,8 +1428,14 @@ impl<'arena> Parser<'arena> {
                     // Polyline traces in Features
                     lines.extend(self.parse_polyline_to_lines(&child, units, offset_x, offset_y));
                 }
+                "Arc" => {
+                    // Arc curved trace segments
+                    if let Ok(arc) = self.parse_arc(&child, units) {
+                        arcs.push(arc);
+                    }
+                }
                 "UserSpecial" => {
-                    // UserSpecial contains Contour > Polygon OR Line
+                    // UserSpecial contains Contour > Polygon OR Line OR Arc
                     for inner in child.children().filter(|n| n.is_element()) {
                         match inner.tag_name().name() {
                             "Contour" => {
@@ -1442,6 +1452,11 @@ impl<'arena> Parser<'arena> {
                                     lines.push(line);
                                 }
                             }
+                            "Arc" => {
+                                if let Ok(arc) = self.parse_arc(&inner, units) {
+                                    arcs.push(arc);
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1450,7 +1465,7 @@ impl<'arena> Parser<'arena> {
             }
         }
 
-        (polygons, lines)
+        (polygons, arcs, lines)
     }
 
     fn parse_line(&mut self, node: &Node, units: Units) -> Result<ecad::Line> {
@@ -1486,6 +1501,54 @@ impl<'arena> Parser<'arena> {
             start_y,
             end_x,
             end_y,
+            line_width,
+            line_end,
+        })
+    }
+
+    fn parse_arc(&mut self, node: &Node, units: Units) -> Result<Arc> {
+        let start_x = self.parse_f64_attr_with_units(node, "startX", "Arc", units)?;
+        let start_y = self.parse_f64_attr_with_units(node, "startY", "Arc", units)?;
+        let end_x = self.parse_f64_attr_with_units(node, "endX", "Arc", units)?;
+        let end_y = self.parse_f64_attr_with_units(node, "endY", "Arc", units)?;
+        let center_x = self.parse_f64_attr_with_units(node, "centerX", "Arc", units)?;
+        let center_y = self.parse_f64_attr_with_units(node, "centerY", "Arc", units)?;
+
+        let clockwise = node
+            .attribute("clockwise")
+            .map(|s| s == "true")
+            .unwrap_or(false);
+
+        // Parse line width and end style from inline LineDesc child
+        let mut line_width = 0.25; // Default
+        let mut line_end = None;
+
+        for child in node.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "LineDesc" {
+                line_width = child
+                    .attribute("lineWidth")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units))
+                    .unwrap_or(0.25);
+
+                line_end = child.attribute("lineEnd").and_then(|s| match s {
+                    "ROUND" => Some(LineEnd::Round),
+                    "SQUARE" => Some(LineEnd::Square),
+                    "FLAT" => Some(LineEnd::Flat),
+                    _ => None,
+                });
+                break;
+            }
+        }
+
+        Ok(Arc {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            center_x,
+            center_y,
+            clockwise,
             line_width,
             line_end,
         })

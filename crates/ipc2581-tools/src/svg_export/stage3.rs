@@ -192,9 +192,10 @@ fn convert_geometry(geometry: &ResolvedGeometry) -> Result<Vec<Path>> {
 
         ResolvedGeometry::Polyline {
             points,
+            arc_segments,
             line_width,
             line_end,
-        } => Ok(vec![convert_polyline(points, *line_width, *line_end)]),
+        } => Ok(vec![convert_polyline(points, arc_segments, *line_width, *line_end)]),
 
         ResolvedGeometry::Group { geometries } => {
             // Recursively convert all geometries in the group
@@ -626,16 +627,37 @@ fn add_polygon_contour(path: &mut Path, points: &[Point], arc_segments: &[Option
 }
 
 
-fn convert_polyline(points: &[Point], line_width: f64, line_end: LineEndStyle) -> Path {
+fn convert_polyline(
+    points: &[Point],
+    arc_segments: &[Option<ArcSegment>],
+    line_width: f64,
+    line_end: LineEndStyle,
+) -> Path {
     if points.is_empty() {
         return Path::new();
     }
 
-    // Create centerline path
+    // Create centerline path with arc support
     let mut centerline = Path::new();
     centerline.move_to(to_skia_point(points[0]));
-    for point in &points[1..] {
-        centerline.line_to(to_skia_point(*point));
+
+    for (i, point) in points[1..].iter().enumerate() {
+        let segment_index = i + 1; // arc_segments[i+1] describes arc from points[i] to points[i+1]
+
+        if let Some(Some(arc)) = arc_segments.get(segment_index) {
+            // Arc segment - use add_arc_segment from primitives module
+            let prev_point = points[i];
+            super::primitives::add_arc_segment(
+                &mut centerline,
+                (prev_point.x, prev_point.y),
+                (point.x, point.y),
+                (arc.center.x, arc.center.y),
+                arc.clockwise,
+            );
+        } else {
+            // Straight line segment
+            centerline.line_to(to_skia_point(*point));
+        }
     }
 
     // Create paint with stroke properties
