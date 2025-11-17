@@ -193,18 +193,17 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
                 Some(offer) => {
                     let stock = offer.stock_available.unwrap_or(0);
 
-                    let lcsc_id = match (
-                        offer.distributor.as_deref(),
-                        &offer.distributor_part_id,
-                        &offer.product_url,
-                    ) {
-                        (Some("lcsc"), Some(id), Some(url)) => {
+                    let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
+                        (Some("lcsc"), Some(id)) => {
                             let formatted_id = if id.starts_with('C') {
                                 id.clone()
                             } else {
                                 format!("C{}", id)
                             };
-                            vec![(formatted_id, url.clone())]
+                            let url = offer.product_url.clone().unwrap_or_else(|| {
+                                format!("https://lcsc.com/product-detail/{}.html", formatted_id)
+                            });
+                            vec![(formatted_id, url)]
                         }
                         _ => Vec::new(),
                     };

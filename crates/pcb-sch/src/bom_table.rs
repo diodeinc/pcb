@@ -518,6 +518,33 @@ impl Bom {
 
         writeln!(writer, "{table}")?;
 
+        // Calculate and print total BOM cost if availability data is present
+        if has_availability {
+            let total_single = self.entries.iter().fold(0.0, |acc, (path, _entry)| {
+                let qty = self
+                    .designators
+                    .iter()
+                    .filter(|(p, _)| p.as_str() == path)
+                    .count() as i32;
+
+                if let Some(avail) = self.availability.get(path) {
+                    let price_single = avail
+                        .price_breaks
+                        .as_ref()
+                        .and_then(|breaks| unit_price_from_breaks(breaks, qty))
+                        .map(|unit_price| unit_price * qty as f64)
+                        .unwrap_or(0.0);
+
+                    acc + price_single
+                } else {
+                    acc
+                }
+            });
+
+            let total_cents = (total_single * 100.0).ceil() / 100.0;
+            writeln!(writer, "Total: ${:.2}", total_cents)?;
+        }
+
         // Print summary tables if availability data is present
         if has_availability {
             writeln!(writer)?;
