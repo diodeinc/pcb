@@ -19,6 +19,10 @@ pub struct AvailabilityData {
     pub stock_total: i32,                      // Stock for selected offer
     pub price_breaks: Option<Vec<(i32, f64)>>, // Price breaks as (qty, unit_price)
     pub lcsc_part_ids: Vec<(String, String)>,  // Vec of (LCSC part number, product URL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpn: Option<String>, // Manufacturer part number from offer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>, // Manufacturer from offer
 }
 
 /// Trim and truncate description to 100 chars max

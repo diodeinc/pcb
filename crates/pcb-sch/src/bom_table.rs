@@ -17,6 +17,30 @@ fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
     ))
 }
 
+/// Fill in missing value from availability data, returning (value, is_autofilled)
+fn autofill_from_availability<'a>(
+    original: &'a str,
+    availability: &'a Option<String>,
+) -> (&'a str, bool) {
+    if original.is_empty() {
+        availability
+            .as_ref()
+            .map(|s| (s.as_str(), true))
+            .unwrap_or((original, false))
+    } else {
+        (original, false)
+    }
+}
+
+/// Apply dimmed+italic styling if autofilled
+fn style_if_autofilled(value: String, is_autofilled: bool) -> String {
+    if is_autofilled && !value.is_empty() {
+        format!("{}", value.dimmed().italic())
+    } else {
+        value
+    }
+}
+
 /// Configure a summary table with standard layout
 fn configure_summary_table(table: &mut Table) {
     table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
@@ -226,26 +250,9 @@ impl Bom {
             let qty = designators_vec.len();
             let designators = designators_vec.join(",");
 
-            // Use first offer info if available, otherwise use base component info
-            let (mpn, manufacturer) = entry
-                .get("offers")
-                .and_then(|o| o.as_array())
-                .and_then(|arr| {
-                    arr.iter()
-                        .find(|offer| offer["distributor"].as_str() != Some("__AVL__"))
-                })
-                .map(|offer| {
-                    (
-                        offer["manufacturer_pn"].as_str().unwrap_or_default(),
-                        offer["manufacturer"].as_str().unwrap_or_default(),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    (
-                        entry["mpn"].as_str().unwrap_or_default(),
-                        entry["manufacturer"].as_str().unwrap_or_default(),
-                    )
-                });
+            // Get MPN/manufacturer from original entry
+            let original_mpn = entry["mpn"].as_str().unwrap_or_default();
+            let original_manufacturer = entry["manufacturer"].as_str().unwrap_or_default();
 
             // Use description field if available, otherwise use value
             let description = entry["description"]
@@ -277,6 +284,8 @@ impl Bom {
                 aggregated_price_single,
                 aggregated_price_boards,
                 lcsc_ids,
+                avail_mpn,
+                avail_manufacturer,
                 has_avail,
             ) = if has_availability {
                 let best_avail = paths
@@ -284,14 +293,17 @@ impl Bom {
                     .filter_map(|path| self.availability.get(*path))
                     .max_by_key(|avail| (avail.price_breaks.is_some(), avail.stock_total));
 
-                let (stock, price_breaks_data, lcsc_part_ids) = match best_avail {
-                    Some(avail) => (
-                        avail.stock_total,
-                        avail.price_breaks.clone(),
-                        avail.lcsc_part_ids.clone(),
-                    ),
-                    None => (0, None, Vec::new()),
-                };
+                let (stock, price_breaks_data, lcsc_part_ids, offer_mpn, offer_mfr) =
+                    match best_avail {
+                        Some(avail) => (
+                            avail.stock_total,
+                            avail.price_breaks.clone(),
+                            avail.lcsc_part_ids.clone(),
+                            avail.mpn.clone(),
+                            avail.manufacturer.clone(),
+                        ),
+                        None => (0, None, Vec::new(), None, None),
+                    };
 
                 // Recalculate prices using grouped quantity and price breaks
                 let (price_single, price_boards) = if let Some(breaks) = price_breaks_data {
@@ -310,11 +322,18 @@ impl Bom {
                     price_single,
                     price_boards,
                     lcsc_part_ids,
+                    offer_mpn,
+                    offer_mfr,
                     best_avail.is_some(),
                 )
             } else {
-                (0, None, None, Vec::new(), false)
+                (0, None, None, Vec::new(), None, None, false)
             };
+
+            // Fill in missing MPN/manufacturer from availability data
+            let (mpn, is_mpn_autofilled) = autofill_from_availability(original_mpn, &avail_mpn);
+            let (manufacturer, is_manufacturer_autofilled) =
+                autofill_from_availability(original_manufacturer, &avail_manufacturer);
 
             // Get generic_data and package for sourcing status
             let generic_data = entry
@@ -374,19 +393,28 @@ impl Bom {
             )
             .set_delimiter(',');
 
-            // Make MPN clickable with Digikey search link
+            // MPN: create hyperlink and style if auto-filled
             let mpn_display = if mpn.is_empty() {
                 String::new()
             } else {
-                let digikey_url = format!(
-                    "https://www.digikey.com/en/products/result?keywords={}",
-                    urlencode(mpn)
+                let link = hyperlink(
+                    &format!(
+                        "https://www.digikey.com/en/products/result?keywords={}",
+                        urlencode(mpn)
+                    ),
+                    mpn,
                 );
-                hyperlink(&digikey_url, mpn)
+                style_if_autofilled(link, is_mpn_autofilled)
             };
-
             let mpn_cell = styled_cell(mpn_display, is_dnp, is_house_part, None);
-            let manufacturer_cell = styled_cell(manufacturer, is_dnp, false, None);
+
+            // Manufacturer: style if auto-filled
+            let manufacturer_cell = styled_cell(
+                style_if_autofilled(manufacturer.to_string(), is_manufacturer_autofilled),
+                is_dnp,
+                false,
+                None,
+            );
             let package_cell = styled_cell(
                 entry["package"].as_str().unwrap_or_default(),
                 is_dnp,

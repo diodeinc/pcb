@@ -189,7 +189,7 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
             let best_offer = select_best_offer(&result.offers, qty, is_small_passive);
 
             // Extract all data from the best matched offer
-            let (stock_total, lcsc_part_ids, price_breaks) = match best_offer {
+            let (stock_total, lcsc_part_ids, price_breaks, mpn, manufacturer) = match best_offer {
                 Some(offer) => {
                     let stock = offer.stock_available.unwrap_or(0);
 
@@ -215,9 +215,12 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
                         .as_ref()
                         .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
 
-                    (stock, lcsc_id, breaks)
+                    let offer_mpn = offer.mpn.clone().filter(|s| !s.is_empty());
+                    let offer_mfr = offer.manufacturer.clone().filter(|s| !s.is_empty());
+
+                    (stock, lcsc_id, breaks, offer_mpn, offer_mfr)
                 }
-                None => (0, Vec::new(), None),
+                None => (0, Vec::new(), None, None, None),
             };
 
             bom.availability.insert(
@@ -226,6 +229,8 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
                     stock_total,
                     price_breaks,
                     lcsc_part_ids,
+                    mpn,
+                    manufacturer,
                 },
             );
         }
