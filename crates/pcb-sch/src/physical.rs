@@ -4072,7 +4072,6 @@ mod tests {
     fn test_within_method() {
         use starlark::environment::Module;
         use starlark::eval::Evaluator;
-        use starlark::values::Heap;
 
         let module = Module::new();
         let heap = module.heap();
@@ -4120,7 +4119,6 @@ mod tests {
     fn test_within_vs_is_in_semantics() {
         use starlark::environment::Module;
         use starlark::eval::Evaluator;
-        use starlark::values::Heap;
 
         let module = Module::new();
         let heap = module.heap();

@@ -3152,6 +3152,7 @@ dependencies = [
  "allocative",
  "anyhow",
  "chrono",
+ "colored",
  "comfy-table",
  "csv",
  "dirs",
