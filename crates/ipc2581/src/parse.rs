@@ -312,6 +312,11 @@ impl Parser {
         }
     }
 
+    /// Generic enum parser using FromStr trait
+    fn parse_enum_attr<T: std::str::FromStr<Err = String>>(&self, s: &str) -> Result<T> {
+        s.parse().map_err(Ipc2581Error::InvalidAttribute)
+    }
+
     /// Parse optional FillDesc and LineDesc children from a primitive node
     fn parse_fill_and_line_desc(
         &mut self,
@@ -336,6 +341,16 @@ impl Parser {
         }
 
         Ok((fill_property, line_desc_ref))
+    }
+
+    /// Wrap a shape with styling (fill_property and line_desc_ref)
+    fn styled<T>(&mut self, node: &Node, shape: T) -> Result<Styled<T>> {
+        let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(node)?;
+        Ok(Styled {
+            shape,
+            fill_property,
+            line_desc_ref,
+        })
     }
 
     fn parse_dictionary_standard(&mut self, node: &Node) -> Result<DictionaryStandard> {
@@ -372,56 +387,235 @@ impl Parser {
 
     fn parse_standard_primitive(&mut self, node: &Node, units: Units) -> Result<StandardPrimitive> {
         match node.tag_name().name() {
-            "Circle" => {
-                let diameter = self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?;
-
-                // Parse optional FillDesc child
-                let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(node)?;
-
-                Ok(StandardPrimitive::Circle(Circle {
-                    diameter,
-                    fill_property,
-                    line_desc_ref,
-                }))
+            "Circle" => Ok(StandardPrimitive::Circle(self.styled(
+                node,
+                Circle {
+                    diameter: self.parse_f64_attr_with_units(node, "diameter", "Circle", units)?,
+                },
+            )?)),
+            "RectCenter" => Ok(StandardPrimitive::RectCenter(self.styled(
+                node,
+                RectCenter {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(
+                            node,
+                            "width",
+                            "RectCenter",
+                            units,
+                        )?,
+                        height: self.parse_f64_attr_with_units(
+                            node,
+                            "height",
+                            "RectCenter",
+                            units,
+                        )?,
+                    },
+                },
+            )?)),
+            "RectRound" => Ok(StandardPrimitive::RectRound(self.styled(
+                node,
+                RectRound {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(node, "width", "RectRound", units)?,
+                        height: self.parse_f64_attr_with_units(
+                            node,
+                            "height",
+                            "RectRound",
+                            units,
+                        )?,
+                    },
+                    radius: self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?,
+                    upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
+                    upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
+                    lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
+                    lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
+                },
+            )?)),
+            "RectCham" => Ok(StandardPrimitive::RectCham(self.styled(
+                node,
+                RectCham {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(node, "width", "RectCham", units)?,
+                        height:
+                            self.parse_f64_attr_with_units(node, "height", "RectCham", units)?,
+                    },
+                    chamfer: self.parse_f64_attr_with_units(node, "chamfer", "RectCham", units)?,
+                    upper_right: self.parse_bool_attr(node, "upperRight").unwrap_or(false),
+                    upper_left: self.parse_bool_attr(node, "upperLeft").unwrap_or(false),
+                    lower_right: self.parse_bool_attr(node, "lowerRight").unwrap_or(false),
+                    lower_left: self.parse_bool_attr(node, "lowerLeft").unwrap_or(false),
+                },
+            )?)),
+            "RectCorner" => Ok(StandardPrimitive::RectCorner(self.styled(
+                node,
+                RectCorner {
+                    lower_left: Point {
+                        x: self.parse_f64_attr_with_units(
+                            node,
+                            "lowerLeftX",
+                            "RectCorner",
+                            units,
+                        )?,
+                        y: self.parse_f64_attr_with_units(
+                            node,
+                            "lowerLeftY",
+                            "RectCorner",
+                            units,
+                        )?,
+                    },
+                    upper_right: Point {
+                        x: self.parse_f64_attr_with_units(
+                            node,
+                            "upperRightX",
+                            "RectCorner",
+                            units,
+                        )?,
+                        y: self.parse_f64_attr_with_units(
+                            node,
+                            "upperRightY",
+                            "RectCorner",
+                            units,
+                        )?,
+                    },
+                },
+            )?)),
+            "Butterfly" => {
+                let shape_attr = self.required_attr(node, "shape", "Butterfly")?;
+                let shape =
+                    self.parse_enum_attr::<ButterflyShape>(self.interner.resolve(shape_attr))?;
+                let attr_name = if matches!(shape, ButterflyShape::Round) {
+                    "diameter"
+                } else {
+                    "side"
+                };
+                Ok(StandardPrimitive::Butterfly(self.styled(
+                    node,
+                    Butterfly {
+                        shape,
+                        size: self.parse_f64_attr_with_units(
+                            node,
+                            attr_name,
+                            "Butterfly",
+                            units,
+                        )?,
+                    },
+                )?))
             }
-            "RectCenter" => {
-                let width = self.parse_f64_attr_with_units(node, "width", "RectCenter", units)?;
-                let height = self.parse_f64_attr_with_units(node, "height", "RectCenter", units)?;
-
-                // Parse optional FillDesc child
-                let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(node)?;
-
-                Ok(StandardPrimitive::RectCenter(RectCenter {
-                    width,
-                    height,
-                    fill_property,
-                    line_desc_ref,
-                }))
+            "Diamond" => Ok(StandardPrimitive::Diamond(self.styled(
+                node,
+                Diamond {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(node, "width", "Diamond", units)?,
+                        height: self.parse_f64_attr_with_units(node, "height", "Diamond", units)?,
+                    },
+                },
+            )?)),
+            "Donut" => {
+                let shape_attr = self.required_attr(node, "shape", "Donut")?;
+                let shape =
+                    self.parse_enum_attr::<ConcentricShape>(self.interner.resolve(shape_attr))?;
+                Ok(StandardPrimitive::Donut(self.styled(
+                    node,
+                    Donut {
+                        shape,
+                        outer_diameter: self.parse_f64_attr_with_units(
+                            node,
+                            "outerDiameter",
+                            "Donut",
+                            units,
+                        )?,
+                        inner_diameter: self.parse_f64_attr_with_units(
+                            node,
+                            "innerDiameter",
+                            "Donut",
+                            units,
+                        )?,
+                    },
+                )?))
             }
-            "RectRound" => {
-                let width = self.parse_f64_attr_with_units(node, "width", "RectRound", units)?;
-                let height = self.parse_f64_attr_with_units(node, "height", "RectRound", units)?;
-                let radius = self.parse_f64_attr_with_units(node, "radius", "RectRound", units)?;
-                let upper_right = self.parse_bool_attr(node, "upperRight").unwrap_or(false);
-                let upper_left = self.parse_bool_attr(node, "upperLeft").unwrap_or(false);
-                let lower_right = self.parse_bool_attr(node, "lowerRight").unwrap_or(false);
-                let lower_left = self.parse_bool_attr(node, "lowerLeft").unwrap_or(false);
-
-                Ok(StandardPrimitive::RectRound(RectRound {
-                    width,
-                    height,
-                    radius,
-                    upper_right,
-                    upper_left,
-                    lower_right,
-                    lower_left,
-                }))
+            "Ellipse" => Ok(StandardPrimitive::Ellipse(self.styled(
+                node,
+                Ellipse {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(node, "width", "Ellipse", units)?,
+                        height: self.parse_f64_attr_with_units(node, "height", "Ellipse", units)?,
+                    },
+                },
+            )?)),
+            "Hexagon" => Ok(StandardPrimitive::Hexagon(self.styled(
+                node,
+                Hexagon {
+                    point_to_point:
+                        self.parse_f64_attr_with_units(node, "length", "Hexagon", units)?,
+                },
+            )?)),
+            "Moire" => Ok(StandardPrimitive::Moire(Moire {
+                diameter: self.parse_f64_attr_with_units(node, "diameter", "Moire", units)?,
+                ring_width: self.parse_f64_attr_with_units(node, "ringWidth", "Moire", units)?,
+                ring_gap: self.parse_f64_attr_with_units(node, "ringGap", "Moire", units)?,
+                ring_number: self.parse_u32_attr(node, "ringNumber", "Moire")?,
+                line_width: self.parse_optional_f64_attr_with_units(node, "lineWidth", units)?,
+                line_length: self.parse_optional_f64_attr_with_units(node, "lineLength", units)?,
+                line_angle: self.parse_optional_f64_attr(node, "lineAngle")?,
+            })),
+            "Octagon" => Ok(StandardPrimitive::Octagon(self.styled(
+                node,
+                Octagon {
+                    point_to_point:
+                        self.parse_f64_attr_with_units(node, "length", "Octagon", units)?,
+                },
+            )?)),
+            "Thermal" => {
+                let shape_attr = self.required_attr(node, "shape", "Thermal")?;
+                let shape =
+                    self.parse_enum_attr::<ConcentricShape>(self.interner.resolve(shape_attr))?;
+                Ok(StandardPrimitive::Thermal(
+                    self.styled(
+                        node,
+                        Thermal {
+                            shape,
+                            outer_diameter: self.parse_f64_attr_with_units(
+                                node,
+                                "outerDiameter",
+                                "Thermal",
+                                units,
+                            )?,
+                            inner_diameter: self.parse_f64_attr_with_units(
+                                node,
+                                "innerDiameter",
+                                "Thermal",
+                                units,
+                            )?,
+                            spoke_count: self
+                                .parse_optional_u32_attr(node, "spokeCount")?
+                                .unwrap_or(4),
+                            spoke_width: self.parse_optional_f64_attr_with_units(
+                                node,
+                                "spokeWidth",
+                                units,
+                            )?,
+                            spoke_start_angle: self
+                                .parse_optional_f64_attr(node, "spokeStartAngle")?,
+                        },
+                    )?,
+                ))
             }
-            "Oval" => {
-                let width = self.parse_f64_attr_with_units(node, "width", "Oval", units)?;
-                let height = self.parse_f64_attr_with_units(node, "height", "Oval", units)?;
-                Ok(StandardPrimitive::Oval(Oval { width, height }))
-            }
+            "Triangle" => Ok(StandardPrimitive::Triangle(self.styled(
+                node,
+                Triangle {
+                    base: self.parse_f64_attr_with_units(node, "base", "Triangle", units)?,
+                    height: self.parse_f64_attr_with_units(node, "height", "Triangle", units)?,
+                },
+            )?)),
+            "Oval" => Ok(StandardPrimitive::Oval(self.styled(
+                node,
+                Oval {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(node, "width", "Oval", units)?,
+                        height: self.parse_f64_attr_with_units(node, "height", "Oval", units)?,
+                    },
+                },
+            )?)),
             "Contour" => {
                 // Parse Polygon and Cutouts
                 let polygon_node = node
@@ -447,45 +641,52 @@ impl Parser {
     }
 
     fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
-        let mut begin: Option<PolyBegin> = None;
+        let mut begin: Option<Point> = None;
         let mut steps = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
             match child.tag_name().name() {
                 "PolyBegin" => {
-                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?;
-                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?;
-                    begin = Some(PolyBegin { x, y });
+                    begin = Some(Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?,
+                    })
                 }
-                "PolyStepSegment" => {
-                    let x =
-                        self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)?;
-                    let y =
-                        self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)?;
-                    steps.push(PolyStep::Segment(PolyStepSegment { x, y }));
-                }
-                "PolyStepCurve" => {
-                    let x = self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)?;
-                    let y = self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)?;
-                    let center_x =
-                        self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units)?;
-                    let center_y =
-                        self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units)?;
-                    let clockwise = self.parse_bool_attr(&child, "clockwise")?;
-                    steps.push(PolyStep::Curve(PolyStepCurve {
-                        x,
-                        y,
-                        center_x,
-                        center_y,
-                        clockwise,
-                    }));
-                }
-                _ => {} // Ignore other elements like LineDesc, FillDesc
+                "PolyStepSegment" => steps.push(PolyStep::Segment(PolyStepSegment {
+                    point: Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)?,
+                    },
+                })),
+                "PolyStepCurve" => steps.push(PolyStep::Curve(PolyStepCurve {
+                    point: Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)?,
+                    },
+                    center: Point {
+                        x: self.parse_f64_attr_with_units(
+                            &child,
+                            "centerX",
+                            "PolyStepCurve",
+                            units,
+                        )?,
+                        y: self.parse_f64_attr_with_units(
+                            &child,
+                            "centerY",
+                            "PolyStepCurve",
+                            units,
+                        )?,
+                    },
+                    clockwise: self.parse_bool_attr(&child, "clockwise")?,
+                })),
+                _ => {}
             }
         }
 
-        let begin = begin.ok_or(Ipc2581Error::MissingElement("PolyBegin"))?;
-        Ok(Polygon { begin, steps })
+        Ok(Polygon {
+            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin"))?,
+            steps,
+        })
     }
 
     fn parse_dictionary_user(&mut self, node: &Node) -> Result<DictionaryUser> {
@@ -532,40 +733,34 @@ impl Parser {
 
             // Parse shape based on tag name
             let shape_type = match tag_name {
-                "Circle" => {
-                    let diameter =
-                        self.parse_f64_attr_with_units(&child, "diameter", "Circle", units)?;
-                    let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(&child)?;
-                    Some(UserShapeType::Circle(Circle {
-                        diameter,
-                        fill_property,
-                        line_desc_ref,
-                    }))
-                }
-                "RectCenter" => {
-                    let width =
-                        self.parse_f64_attr_with_units(&child, "width", "RectCenter", units)?;
-                    let height =
-                        self.parse_f64_attr_with_units(&child, "height", "RectCenter", units)?;
-                    let (fill_property, line_desc_ref) = self.parse_fill_and_line_desc(&child)?;
-                    Some(UserShapeType::RectCenter(RectCenter {
-                        width,
-                        height,
-                        fill_property,
-                        line_desc_ref,
-                    }))
-                }
-                "Oval" => {
-                    let width = self.parse_f64_attr_with_units(&child, "width", "Oval", units)?;
-                    let height = self.parse_f64_attr_with_units(&child, "height", "Oval", units)?;
-                    Some(UserShapeType::Oval(Oval { width, height }))
-                }
-                "Polygon" => {
-                    let polygon = self.parse_polygon(&child, units)?;
-                    Some(UserShapeType::Polygon(polygon))
-                }
-                // TODO: Add Polyline parsing when needed
-                _ => None, // Skip unknown shape types
+                "Circle" => Some(UserShapeType::Circle(Circle {
+                    diameter: self
+                        .parse_f64_attr_with_units(&child, "diameter", "Circle", units)?,
+                })),
+                "RectCenter" => Some(UserShapeType::RectCenter(RectCenter {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(
+                            &child,
+                            "width",
+                            "RectCenter",
+                            units,
+                        )?,
+                        height: self.parse_f64_attr_with_units(
+                            &child,
+                            "height",
+                            "RectCenter",
+                            units,
+                        )?,
+                    },
+                })),
+                "Oval" => Some(UserShapeType::Oval(Oval {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(&child, "width", "Oval", units)?,
+                        height: self.parse_f64_attr_with_units(&child, "height", "Oval", units)?,
+                    },
+                })),
+                "Polygon" => Some(UserShapeType::Polygon(self.parse_polygon(&child, units)?)),
+                _ => None,
             };
 
             if let Some(shape_type) = shape_type {
@@ -764,9 +959,65 @@ impl Parser {
         let attr_val = node
             .attribute(attr)
             .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
-        attr_val
-            .parse()
-            .map_err(|_| Ipc2581Error::InvalidAttribute(format!("Invalid u8 value for {}", attr)))
+        attr_val.parse().map_err(|_| {
+            Ipc2581Error::InvalidAttribute(format!("Invalid u8 value for {} in {}", attr, element))
+        })
+    }
+
+    fn parse_u32_attr(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        element: &'static str,
+    ) -> Result<u32> {
+        let attr_val = node
+            .attribute(attr)
+            .ok_or(Ipc2581Error::MissingAttribute { element, attr })?;
+        attr_val.parse().map_err(|_| {
+            Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {} in {}", attr, element))
+        })
+    }
+
+    /// Parse an f64 from a string value and convert to mm using the given units
+    fn parse_f64_str_with_units(&self, s: &str, units: Units) -> Result<f64> {
+        let value = s
+            .parse::<f64>()
+            .map_err(|_| Ipc2581Error::InvalidAttribute("Invalid f64 value".to_string()))?;
+        Ok(crate::units::to_mm(value, units))
+    }
+
+    /// Parse optional f64 attribute (no unit conversion)
+    fn parse_optional_f64_attr(&self, node: &Node, attr: &'static str) -> Result<Option<f64>> {
+        node.attribute(attr)
+            .map(|v| {
+                v.parse::<f64>().map_err(|_| {
+                    Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr))
+                })
+            })
+            .transpose()
+    }
+
+    /// Parse optional u32 attribute
+    fn parse_optional_u32_attr(&self, node: &Node, attr: &'static str) -> Result<Option<u32>> {
+        node.attribute(attr)
+            .map(|v| {
+                v.parse::<u32>().map_err(|_| {
+                    Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {}", attr))
+                })
+            })
+            .transpose()
+    }
+
+    /// Parse optional f64 attribute with unit conversion
+    fn parse_optional_f64_attr_with_units(
+        &self,
+        node: &Node,
+        attr: &'static str,
+        units: Units,
+    ) -> Result<Option<f64>> {
+        node.attribute(attr)
+            .map(|v| self.parse_f64_str_with_units(v, units))
+            .transpose()
     }
 
     fn parse_bool_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {

@@ -108,24 +108,24 @@ fn parse_and_validate(path: &Path) {
                 // Validate primitive-specific constraints
                 match &entry.primitive {
                     StandardPrimitive::Circle(c) => {
-                        assert!(c.diameter > 0.0, "Circle diameter must be positive");
+                        assert!(c.shape.diameter > 0.0, "Circle diameter must be positive");
                     }
                     StandardPrimitive::RectCenter(r) => {
                         assert!(
-                            r.width > 0.0 && r.height > 0.0,
+                            r.shape.size.width > 0.0 && r.shape.size.height > 0.0,
                             "Rectangle dimensions must be positive"
                         );
                     }
                     StandardPrimitive::RectRound(r) => {
                         assert!(
-                            r.width > 0.0 && r.height > 0.0,
+                            r.shape.size.width > 0.0 && r.shape.size.height > 0.0,
                             "Rectangle dimensions must be positive"
                         );
-                        assert!(r.radius >= 0.0, "Radius must be non-negative");
+                        assert!(r.shape.radius >= 0.0, "Radius must be non-negative");
                     }
                     StandardPrimitive::Oval(o) => {
                         assert!(
-                            o.width > 0.0 && o.height > 0.0,
+                            o.shape.size.width > 0.0 && o.shape.size.height > 0.0,
                             "Oval dimensions must be positive"
                         );
                     }
@@ -324,11 +324,11 @@ fn test_kicad_dm0002() {
 
         match &entry.primitive {
             StandardPrimitive::Circle(c) => {
-                assert!(c.diameter > 0.0, "Circle diameter must be positive");
+                assert!(c.shape.diameter > 0.0, "Circle diameter must be positive");
             }
             StandardPrimitive::RectCenter(r) => {
                 assert!(
-                    r.width > 0.0 && r.height > 0.0,
+                    r.shape.size.width > 0.0 && r.shape.size.height > 0.0,
                     "Rectangle dimensions must be positive"
                 );
             }
@@ -461,8 +461,8 @@ fn test_testcase1_metadata() {
 
             for step in &polygon.steps {
                 let (x, y) = match step {
-                    ipc2581::PolyStep::Segment(s) => (s.x, s.y),
-                    ipc2581::PolyStep::Curve(c) => (c.x, c.y),
+                    ipc2581::PolyStep::Segment(s) => (s.point.x, s.point.y),
+                    ipc2581::PolyStep::Curve(c) => (c.point.x, c.point.y),
                 };
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);
@@ -688,8 +688,8 @@ fn print_testcase_metadata(
 
             for step in &polygon.steps {
                 let (x, y) = match step {
-                    ipc2581::PolyStep::Segment(s) => (s.x, s.y),
-                    ipc2581::PolyStep::Curve(c) => (c.x, c.y),
+                    ipc2581::PolyStep::Segment(s) => (s.point.x, s.point.y),
+                    ipc2581::PolyStep::Curve(c) => (c.point.x, c.point.y),
                 };
                 min_x = min_x.min(x);
                 max_x = max_x.max(x);

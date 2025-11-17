@@ -1,48 +1,65 @@
 use crate::Symbol;
+use std::str::FromStr;
+
+/// 2D point
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// 2D size (width × height)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Size {
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Wrapper for primitives with optional fill and line styling
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Styled<T> {
+    pub shape: T,
+    pub fill_property: Option<FillProperty>,
+    pub line_desc_ref: Option<Symbol>,
+}
 
 /// Standard geometric primitives
 #[derive(Debug, Clone, PartialEq)]
 pub enum StandardPrimitive {
-    Circle(Circle),
-    RectCenter(RectCenter),
-    RectRound(RectRound),
-    RectCham(RectCham),
-    RectCorner(RectCorner),
-    Oval(Oval),
-    Butterfly(Butterfly),
-    Diamond(Diamond),
-    Donut(Donut),
-    Ellipse(Ellipse),
-    Hexagon(Hexagon),
-    Moire(Moire),
-    Octagon(Octagon),
-    Thermal(Thermal),
-    Triangle(Triangle),
-    Contour(Contour),
+    Circle(Styled<Circle>),
+    RectCenter(Styled<RectCenter>),
+    RectRound(Styled<RectRound>),
+    RectCham(Styled<RectCham>),
+    RectCorner(Styled<RectCorner>),
+    Oval(Styled<Oval>),
+    Butterfly(Styled<Butterfly>),
+    Diamond(Styled<Diamond>),
+    Donut(Styled<Donut>),
+    Ellipse(Styled<Ellipse>),
+    Hexagon(Styled<Hexagon>),
+    Moire(Moire), // Moire doesn't have styling
+    Octagon(Styled<Octagon>),
+    Thermal(Styled<Thermal>),
+    Triangle(Styled<Triangle>),
+    Contour(Contour), // Contour has its own structure
 }
 
 /// Circle primitive defined by diameter
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Circle {
     pub diameter: f64,
-    pub fill_property: Option<FillProperty>,
-    pub line_desc_ref: Option<Symbol>,
 }
 
 /// Rectangle centered at origin
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RectCenter {
-    pub width: f64,
-    pub height: f64,
-    pub fill_property: Option<FillProperty>,
-    pub line_desc_ref: Option<Symbol>,
+    pub size: Size,
 }
 
 /// Rectangle with rounded corners
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RectRound {
-    pub width: f64,
-    pub height: f64,
+    pub size: Size,
     pub radius: f64,
     pub upper_right: bool,
     pub upper_left: bool,
@@ -53,8 +70,7 @@ pub struct RectRound {
 /// Rectangle with chamfered corners
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RectCham {
-    pub width: f64,
-    pub height: f64,
+    pub size: Size,
     pub chamfer: f64,
     pub upper_right: bool,
     pub upper_left: bool,
@@ -65,17 +81,14 @@ pub struct RectCham {
 /// Rectangle defined by corner coordinates
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RectCorner {
-    pub lower_left_x: f64,
-    pub lower_left_y: f64,
-    pub upper_right_x: f64,
-    pub upper_right_y: f64,
+    pub lower_left: Point,
+    pub upper_right: Point,
 }
 
 /// Oval (rectangle with rounded ends)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Oval {
-    pub width: f64,
-    pub height: f64,
+    pub size: Size,
 }
 
 /// Butterfly shape (round or square with 2 quadrants removed)
@@ -94,20 +107,20 @@ pub enum ButterflyShape {
 /// Diamond (4-sided with equal sides)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Diamond {
-    pub width: f64,
-    pub height: f64,
+    pub size: Size,
 }
 
 /// Donut (concentric shapes)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Donut {
-    pub shape: DonutShape,
+    pub shape: ConcentricShape,
     pub outer_diameter: f64,
     pub inner_diameter: f64,
 }
 
+/// Shape used for Donut and Thermal primitives
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DonutShape {
+pub enum ConcentricShape {
     Round,
     Square,
     Hexagon,
@@ -117,8 +130,7 @@ pub enum DonutShape {
 /// Ellipse
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ellipse {
-    pub width: f64,
-    pub height: f64,
+    pub size: Size,
 }
 
 /// Hexagon (6-sided regular polygon)
@@ -148,20 +160,12 @@ pub struct Octagon {
 /// Thermal relief pattern
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Thermal {
-    pub shape: ThermalShape,
+    pub shape: ConcentricShape,
     pub outer_diameter: f64,
     pub inner_diameter: f64,
     pub spoke_count: u32,
     pub spoke_width: Option<f64>,
     pub spoke_start_angle: Option<f64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThermalShape {
-    Round,
-    Square,
-    Hexagon,
-    Octagon,
 }
 
 /// Triangle (isosceles)
@@ -186,11 +190,7 @@ pub struct Polygon {
 }
 
 /// Polygon starting point
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PolyBegin {
-    pub x: f64,
-    pub y: f64,
-}
+pub type PolyBegin = Point;
 
 /// Polygon continuation step
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -202,17 +202,14 @@ pub enum PolyStep {
 /// Straight line segment in polygon
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PolyStepSegment {
-    pub x: f64,
-    pub y: f64,
+    pub point: Point,
 }
 
 /// Curved arc segment in polygon
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PolyStepCurve {
-    pub x: f64,
-    pub y: f64,
-    pub center_x: f64,
-    pub center_y: f64,
+    pub point: Point,
+    pub center: Point,
     pub clockwise: bool,
 }
 
@@ -226,21 +223,16 @@ pub struct Polyline {
 /// Line segment
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Line {
-    pub start_x: f64,
-    pub start_y: f64,
-    pub end_x: f64,
-    pub end_y: f64,
+    pub start: Point,
+    pub end: Point,
 }
 
 /// Arc segment
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Arc {
-    pub start_x: f64,
-    pub start_y: f64,
-    pub end_x: f64,
-    pub end_y: f64,
-    pub center_x: f64,
-    pub center_y: f64,
+    pub start: Point,
+    pub end: Point,
+    pub center: Point,
     pub clockwise: bool,
 }
 
@@ -326,4 +318,31 @@ pub enum UserShapeType {
     Oval(Oval),
     Polygon(Polygon),
     // Other standard shapes as needed (e.g., Polyline)
+}
+
+// FromStr implementations for shape enums
+impl FromStr for ButterflyShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ROUND" => Ok(ButterflyShape::Round),
+            "SQUARE" => Ok(ButterflyShape::Square),
+            _ => Err(format!("Unknown butterflyShape: {}", s)),
+        }
+    }
+}
+
+impl FromStr for ConcentricShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ROUND" => Ok(ConcentricShape::Round),
+            "SQUARE" => Ok(ConcentricShape::Square),
+            "HEXAGON" => Ok(ConcentricShape::Hexagon),
+            "OCTAGON" => Ok(ConcentricShape::Octagon),
+            _ => Err(format!("Unknown concentricShape: {}", s)),
+        }
+    }
 }
