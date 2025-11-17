@@ -250,9 +250,32 @@ impl Bom {
             let qty = designators_vec.len();
             let designators = designators_vec.join(",");
 
-            // Get MPN/manufacturer from original entry
-            let original_mpn = entry["mpn"].as_str().unwrap_or_default();
-            let original_manufacturer = entry["manufacturer"].as_str().unwrap_or_default();
+            // Priority: component's own fields, then first offer, then empty
+            let original_mpn = entry["mpn"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    entry
+                        .get("offers")?
+                        .as_array()?
+                        .first()?
+                        .get("manufacturer_pn")?
+                        .as_str()
+                })
+                .unwrap_or_default();
+
+            let original_manufacturer = entry["manufacturer"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    entry
+                        .get("offers")?
+                        .as_array()?
+                        .first()?
+                        .get("manufacturer")?
+                        .as_str()
+                })
+                .unwrap_or_default();
 
             // Use description field if available, otherwise use value
             let description = entry["description"]
