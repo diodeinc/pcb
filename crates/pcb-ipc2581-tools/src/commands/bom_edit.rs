@@ -183,7 +183,7 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
                 BomMatchingKey::Mpn(rule_mpn) => mpn.as_ref() == Some(rule_mpn),
                 BomMatchingKey::Path(paths) => item.ref_des_list.iter().any(|ref_des| {
                     let designator = ipc.resolve(ref_des.name);
-                    paths.iter().any(|path| path.ends_with(designator))
+                    paths.iter().any(|path| path == designator)
                 }),
                 BomMatchingKey::Generic(generic_key) => extract_generic_component(&ipc, item)
                     .is_some_and(|(c, p)| {
