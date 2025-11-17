@@ -195,15 +195,13 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
                 let mpn_map = merged_items.entry(oem_design_number.clone()).or_default();
 
                 for offer in &rule.offers {
-                    let (mpn, mfr) = match (&offer.manufacturer_pn, &offer.manufacturer) {
-                        (Some(m), Some(f)) => (m, f),
-                        _ => anyhow::bail!(
-                            "Offer missing MPN or manufacturer for OEM: {}",
-                            oem_design_number
-                        ),
+                    let mpn = match &offer.manufacturer_pn {
+                        Some(m) => m,
+                        _ => anyhow::bail!("Offer missing MPN for OEM: {}", oem_design_number),
                     };
+                    let mfr = offer.manufacturer.as_deref().unwrap_or("");
                     mpn_map.insert(
-                        VmpnKey::new(mpn.clone(), mfr.clone()),
+                        VmpnKey::new(mpn.clone(), mfr.to_string()),
                         create_vmpn(&mut interner, mpn, mfr, offer.rank, Some(true)),
                     );
                 }
