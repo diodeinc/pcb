@@ -372,7 +372,9 @@ impl Bom {
             } else {
                 Tier::Insufficient
             };
-            let designator_tier = get_designator_tier(stock_tier, mpn, manufacturer);
+            // Use original values (before autofill) to determine tier cap
+            let designator_tier =
+                get_designator_tier(stock_tier, original_mpn, original_manufacturer);
 
             // Track summary stats
             if has_availability {
