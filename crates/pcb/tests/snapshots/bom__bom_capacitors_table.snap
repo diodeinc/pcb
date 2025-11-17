@@ -9,12 +9,12 @@ Exit Code: 0
 Legend:
  ■  Plenty available / easy to source         ■  House component       
  ■  Limited inventory / harder to source      ■  DNP (Do Not Populate) 
- ■  No inventory / hard to source                                      
-┌─────┬─────────────┬─────┬──────────────┬─────────┬───────────────┐
-│ Qty ┆ Designators ┆ MPN ┆ Manufacturer ┆ Package ┆ Description   │
-╞═════╪═════════════╪═════╪══════════════╪═════════╪═══════════════╡
-│ 1   ┆ C1          ┆     ┆              ┆ 0402    ┆ 100nF 16V X7R │
-│ 1   ┆ C2          ┆     ┆              ┆ 0805    ┆ 10uF 25V X5R  │
-│ 1   ┆ C3          ┆     ┆              ┆ 0603    ┆ 1uF           │
-└─────┴─────────────┴─────┴──────────────┴─────────┴───────────────┘
+ ■  Insufficient stock / hard to source                                
+┌──────┬─────────────┬─────┬──────────────┬─────────┬───────────────┐
+│ Qty  ┆ Designators ┆ MPN ┆ Manufacturer ┆ Package ┆ Description   │
+╞══════╪═════════════╪═════╪══════════════╪═════════╪═══════════════╡
+│    1 ┆ C1          ┆     ┆              ┆ 0402    ┆ 100nF 16V X7R │
+│    1 ┆ C2          ┆     ┆              ┆ 0805    ┆ 10uF 25V X5R  │
+│    1 ┆ C3          ┆     ┆              ┆ 0603    ┆ 1uF           │
+└──────┴─────────────┴─────┴──────────────┴─────────┴───────────────┘
 --- STDERR ---

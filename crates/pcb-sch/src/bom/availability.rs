@@ -7,7 +7,7 @@ pub const NUM_BOARDS: i32 = 20;
 /// Availability tier for sourcing status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tier {
-    NoInventory = 0,
+    Insufficient = 0,
     Limited = 1,
     Plenty = 2,
 }
@@ -19,7 +19,7 @@ impl Tier {
         match self {
             Tier::Plenty => 0,
             Tier::Limited => 1,
-            Tier::NoInventory => 2,
+            Tier::Insufficient => 2,
         }
     }
 }
@@ -40,18 +40,21 @@ pub fn is_small_generic_passive(
 
 /// Determine availability tier based on stock and quantity
 pub fn tier_for_stock(stock: i32, qty: i32, is_small_passive: bool) -> Tier {
-    if stock == 0 {
-        Tier::NoInventory
+    // Red tier: not enough for even 1 board
+    if stock < qty {
+        return Tier::Insufficient;
+    }
+
+    // Green tier: enough for NUM_BOARDS or 100 for small passives
+    let required_stock = if is_small_passive {
+        100
     } else {
-        let required_stock = if is_small_passive {
-            100
-        } else {
-            qty * NUM_BOARDS
-        };
-        if stock >= required_stock {
-            Tier::Plenty
-        } else {
-            Tier::Limited
-        }
+        qty * NUM_BOARDS
+    };
+
+    if stock >= required_stock {
+        Tier::Plenty
+    } else {
+        Tier::Limited
     }
 }

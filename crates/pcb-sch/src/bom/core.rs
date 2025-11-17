@@ -14,12 +14,15 @@ pub struct Bom {
     pub availability: HashMap<String, AvailabilityData>, // path -> availability data
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AvailabilityData {
-    pub stock_total: i32,                     // Total stock across all offers
-    pub price_single: Option<f64>,            // Cheapest price for single board qty
-    pub price_boards: Option<f64>,            // Cheapest price for NUM_BOARDS boards qty
-    pub lcsc_part_ids: Vec<(String, String)>, // Vec of (LCSC part number, product URL)
+    pub stock_total: i32,                      // Stock for selected offer
+    pub price_breaks: Option<Vec<(i32, f64)>>, // Price breaks as (qty, unit_price)
+    pub lcsc_part_ids: Vec<(String, String)>,  // Vec of (LCSC part number, product URL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpn: Option<String>, // Manufacturer part number from offer
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>, // Manufacturer from offer
 }
 
 /// Trim and truncate description to 100 chars max
