@@ -14,8 +14,8 @@ expression: content
           "description": "IC1 at BMI270.IC",
           "hierarchical_path": "BMI270.IC",
           "pos": {
-            "x": 148.5,
-            "y": 105.485
+            "x": 0.0,
+            "y": 0.0
           },
           "uuid": "233c70a3-0882-5e15-a03d-8be81cfdc04b"
         }
@@ -31,8 +31,8 @@ expression: content
           "description": "U1 at BMI270.C.C",
           "hierarchical_path": "BMI270.C.C",
           "pos": {
-            "x": 146.885,
-            "y": 102.7
+            "x": 0.0,
+            "y": 0.0
           },
           "uuid": "394660df-0570-5ff9-815b-abf03e6c9830"
         }

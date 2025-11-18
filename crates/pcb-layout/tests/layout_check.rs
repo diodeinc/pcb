@@ -191,5 +191,19 @@ fn sanitize_report_json(json: &mut serde_json::Value) {
         obj.remove("timestamp");
         obj.remove("source");
         obj.remove("netlist_source");
+
+        // Mask positions in items as they can vary (e.g. 0.0 vs placed coords)
+        if let Some(changes) = obj.get_mut("changes").and_then(|c| c.as_array_mut()) {
+            for change in changes {
+                if let Some(items) = change.get_mut("items").and_then(|i| i.as_array_mut()) {
+                    for item in items {
+                        if let Some(pos) = item.get_mut("pos").and_then(|p| p.as_object_mut()) {
+                            pos.insert("x".to_string(), serde_json::json!(0.0));
+                            pos.insert("y".to_string(), serde_json::json!(0.0));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

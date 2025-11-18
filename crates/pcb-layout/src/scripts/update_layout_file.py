@@ -55,19 +55,21 @@ logger = logging.getLogger("pcb")
 def natural_sort_key(text: str) -> List:
     """
     Generate a sort key for natural (human-friendly) sorting.
-    
+
     Splits a string into numeric and non-numeric parts, converting numeric
     parts to integers so that "C2" sorts before "C10".
-    
+
     Example:
         "C10" -> ['C', 10]
         "C2"  -> ['C', 2]
         "IC1.R5" -> ['IC', 1, '.R', 5]
     """
+
     def convert(part):
         return int(part) if part.isdigit() else part.lower()
-    
-    return [convert(c) for c in re.split('([0-9]+)', text)]
+
+    return [convert(c) for c in re.split("([0-9]+)", text)]
+
 
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
@@ -114,17 +116,19 @@ class ChangeDetector:
         """Apply all staged changes to the board."""
         logger.info(f"Committing {len(self.changes)} changes...")
         for i, change in enumerate(self.changes, 1):
-            logger.debug(f"Applying change {i}/{len(self.changes)}: {change.__class__.__name__}")
+            logger.debug(
+                f"Applying change {i}/{len(self.changes)}: {change.__class__.__name__}"
+            )
             change.apply(board)
 
     def to_json(self, source_path: str, netlist_path: str) -> dict:
         """Export all changes as JSON for check mode."""
         from datetime import datetime
-        
+
         # Sort changes for deterministic output
         sorted_changes = sorted(
             [c.to_json() for c in self.changes],
-            key=lambda x: (x.get("change_type", ""), x.get("description", ""))
+            key=lambda x: (x.get("change_type", ""), x.get("description", "")),
         )
 
         return {
@@ -132,7 +136,7 @@ class ChangeDetector:
             "netlist_source": netlist_path,
             "timestamp": datetime.now().isoformat(),
             "change_count": len(self.changes),
-            "changes": sorted_changes
+            "changes": sorted_changes,
         }
 
 
@@ -147,15 +151,21 @@ class AddFootprint(StagedChange):
 
     def to_json(self) -> dict:
         pos = self.footprint.GetPosition()
-        hier_path = self.part.sheetpath.names.split(":")[-1] if ":" in self.part.sheetpath.names else self.part.sheetpath.names
-        
-        items = [{
-            "description": f"{self.part.ref} at {hier_path}\n    value: {self.part.value}\n    footprint: {self.part.footprint}",
-            "uuid": self.fp_id,
-            "hierarchical_path": hier_path,
-            "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0}
-        }]
-        
+        hier_path = (
+            self.part.sheetpath.names.split(":")[-1]
+            if ":" in self.part.sheetpath.names
+            else self.part.sheetpath.names
+        )
+
+        items = [
+            {
+                "description": f"{self.part.ref} at {hier_path}\n    value: {self.part.value}\n    footprint: {self.part.footprint}",
+                "uuid": self.fp_id,
+                "hierarchical_path": hier_path,
+                "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0},
+            }
+        ]
+
         # Sort items for deterministic output
         sorted_items = sorted(items, key=lambda x: x.get("description", ""))
 
@@ -164,7 +174,7 @@ class AddFootprint(StagedChange):
             "severity": "error",
             "category": "",
             "description": f"{self.part.ref} ({hier_path}) missing from board",
-            "items": sorted_items
+            "items": sorted_items,
         }
 
 
@@ -183,12 +193,14 @@ class RemoveFootprint(StagedChange):
         pos = self.footprint.GetPosition()
         path_desc = f" at {self.hier_path}" if self.hier_path else ""
 
-        items = [{
-            "description": f"{self.reference}{path_desc}",
-            "uuid": self.fp_id,
-            "hierarchical_path": self.hier_path,
-            "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0}
-        }]
+        items = [
+            {
+                "description": f"{self.reference}{path_desc}",
+                "uuid": self.fp_id,
+                "hierarchical_path": self.hier_path,
+                "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0},
+            }
+        ]
 
         # Sort items for deterministic output
         sorted_items = sorted(items, key=lambda x: x.get("description", ""))
@@ -198,14 +210,16 @@ class RemoveFootprint(StagedChange):
             "severity": "error",
             "category": "",
             "description": f"{self.reference} ({self.hier_path or 'unknown path'}) not in netlist",
-            "items": sorted_items
+            "items": sorted_items,
         }
 
 
 class UpdateFootprintMetadata(StagedChange):
     """Stage update of footprint metadata (reference, value, properties, etc.)."""
 
-    def __init__(self, footprint: pcbnew.FOOTPRINT, part: Any, fp_id: str, configure_fn):
+    def __init__(
+        self, footprint: pcbnew.FOOTPRINT, part: Any, fp_id: str, configure_fn
+    ):
         self.footprint = footprint
         self.part = part
         self.fp_id = fp_id
@@ -218,38 +232,62 @@ class UpdateFootprintMetadata(StagedChange):
 
         # Check reference
         if self.footprint.GetReference() != self.part.ref:
-            changes.append(f"reference: '{self.footprint.GetReference()}' → '{self.part.ref}'")
+            changes.append(
+                f"reference: '{self.footprint.GetReference()}' → '{self.part.ref}'"
+            )
 
         # Check value
         if self.footprint.GetValue() != self.part.value:
-            changes.append(f"value: '{self.footprint.GetValue()}' → '{self.part.value}'")
+            changes.append(
+                f"value: '{self.footprint.GetValue()}' → '{self.part.value}'"
+            )
 
         # Check FPID
         if self.footprint.GetFPIDAsString() != self.part.footprint:
-            changes.append(f"footprint: '{self.footprint.GetFPIDAsString()}' → '{self.part.footprint}'")
+            changes.append(
+                f"footprint: '{self.footprint.GetFPIDAsString()}' → '{self.part.footprint}'"
+            )
 
         # Check DNP
-        dnp_prop = next((x for x in self.part.properties if x.name.lower() == "dnp"), None)
+        dnp_prop = next(
+            (x for x in self.part.properties if x.name.lower() == "dnp"), None
+        )
         expected_dnp = dnp_prop is not None and dnp_prop.value.lower() == "true"
         if self.footprint.IsDNP() != expected_dnp:
             changes.append(f"DNP: {self.footprint.IsDNP()} → {expected_dnp}")
 
         # Check skip_bom
-        skip_bom_prop = next((x for x in self.part.properties if x.name.lower() == "skip_bom"), None)
-        expected_skip_bom = skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
+        skip_bom_prop = next(
+            (x for x in self.part.properties if x.name.lower() == "skip_bom"), None
+        )
+        expected_skip_bom = (
+            skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
+        )
         if self.footprint.IsExcludedFromBOM() != expected_skip_bom:
-            changes.append(f"exclude_from_bom: {self.footprint.IsExcludedFromBOM()} → {expected_skip_bom}")
+            changes.append(
+                f"exclude_from_bom: {self.footprint.IsExcludedFromBOM()} → {expected_skip_bom}"
+            )
 
         # Check skip_pos
-        skip_pos_prop = next((x for x in self.part.properties if x.name.lower() == "skip_pos"), None)
-        expected_skip_pos = skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
+        skip_pos_prop = next(
+            (x for x in self.part.properties if x.name.lower() == "skip_pos"), None
+        )
+        expected_skip_pos = (
+            skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
+        )
         if self.footprint.IsExcludedFromPosFiles() != expected_skip_pos:
-            changes.append(f"exclude_from_pos: {self.footprint.IsExcludedFromPosFiles()} → {expected_skip_pos}")
+            changes.append(
+                f"exclude_from_pos: {self.footprint.IsExcludedFromPosFiles()} → {expected_skip_pos}"
+            )
 
         # Get current fields (excluding built-ins we already checked)
         current_fields = {}
         for field in self.footprint.GetFields():
-            if not field.IsValue() and not field.IsReference() and field.GetName() not in ["Path"]:
+            if (
+                not field.IsValue()
+                and not field.IsReference()
+                and field.GetName() not in ["Path"]
+            ):
                 current_fields[field.GetName()] = field.GetText()
 
         # Track expected fields from netlist
@@ -259,8 +297,16 @@ class UpdateFootprintMetadata(StagedChange):
                 expected_fields["Datasheet"] = prop.value
             elif prop.name.lower() in ["description"]:
                 expected_fields["Description"] = prop.value
-            elif prop.name.lower() not in ["value", "reference", "dnp", "skip_bom", "skip_pos", "symbol_name", "symbol_path"] and not prop.name.startswith("_"):
-                display_name = prop.name.replace('_', ' ').title()
+            elif prop.name.lower() not in [
+                "value",
+                "reference",
+                "dnp",
+                "skip_bom",
+                "skip_pos",
+                "symbol_name",
+                "symbol_path",
+            ] and not prop.name.startswith("_"):
+                display_name = prop.name.replace("_", " ").title()
                 expected_fields[display_name] = prop.value
 
         # Check for changed/added fields
@@ -274,7 +320,10 @@ class UpdateFootprintMetadata(StagedChange):
 
         # Check for removed fields
         for field_name in current_fields:
-            if field_name not in expected_fields and field_name not in ["Datasheet", "Description"]:
+            if field_name not in expected_fields and field_name not in [
+                "Datasheet",
+                "Description",
+            ]:
                 changes.append(f"-{field_name}: '{current_fields[field_name]}'")
 
         return changes
@@ -283,15 +332,21 @@ class UpdateFootprintMetadata(StagedChange):
         self.configure_fn(self.footprint, self.part)
 
     def to_json(self) -> dict:
-        hier_path = self.part.sheetpath.names.split(":")[-1] if ":" in self.part.sheetpath.names else self.part.sheetpath.names
+        hier_path = (
+            self.part.sheetpath.names.split(":")[-1]
+            if ":" in self.part.sheetpath.names
+            else self.part.sheetpath.names
+        )
         changes_text = "\n    ".join(self.changes)
 
-        items = [{
-            "description": f"{self.part.ref} at {hier_path}\n    {changes_text}",
-            "uuid": self.fp_id,
-            "hierarchical_path": hier_path,
-            "pos": None
-        }]
+        items = [
+            {
+                "description": f"{self.part.ref} at {hier_path}\n    {changes_text}",
+                "uuid": self.fp_id,
+                "hierarchical_path": hier_path,
+                "pos": None,
+            }
+        ]
 
         # Sort items for deterministic output
         sorted_items = sorted(items, key=lambda x: x.get("description", ""))
@@ -301,7 +356,7 @@ class UpdateFootprintMetadata(StagedChange):
             "severity": "error",
             "category": "",
             "description": f"{self.part.ref} ({hier_path}) metadata out of sync",
-            "items": sorted_items
+            "items": sorted_items,
         }
 
 
@@ -318,13 +373,18 @@ class UpdateFootprintPosition(StagedChange):
     def to_json(self) -> dict:
         delta_x = (self.new_pos.x - self.old_pos.x) / 1000000.0
         delta_y = (self.new_pos.y - self.old_pos.y) / 1000000.0
-        
-        items = [{
-            "description": f"{self.fp_name}\n  Expected: ({self.new_pos.x / 1000000.0:.3f}, {self.new_pos.y / 1000000.0:.3f}) mm\n  Actual: ({self.old_pos.x / 1000000.0:.3f}, {self.old_pos.y / 1000000.0:.3f}) mm\n  Delta: ({delta_x:.3f}, {delta_y:.3f}) mm",
-            "uuid": None,
-            "hierarchical_path": self.fp_name,
-            "pos": {"x": self.old_pos.x / 1000000.0, "y": self.old_pos.y / 1000000.0}
-        }]
+
+        items = [
+            {
+                "description": f"{self.fp_name}\n  Expected: ({self.new_pos.x / 1000000.0:.3f}, {self.new_pos.y / 1000000.0:.3f}) mm\n  Actual: ({self.old_pos.x / 1000000.0:.3f}, {self.old_pos.y / 1000000.0:.3f}) mm\n  Delta: ({delta_x:.3f}, {delta_y:.3f}) mm",
+                "uuid": None,
+                "hierarchical_path": self.fp_name,
+                "pos": {
+                    "x": self.old_pos.x / 1000000.0,
+                    "y": self.old_pos.y / 1000000.0,
+                },
+            }
+        ]
 
         # Sort items for deterministic output
         sorted_items = sorted(items, key=lambda x: x.get("description", ""))
@@ -334,7 +394,7 @@ class UpdateFootprintPosition(StagedChange):
             "severity": "error",
             "category": "fragment",
             "description": f"{self.fp_name} position differs from layout fragment",
-            "items": sorted_items
+            "items": sorted_items,
         }
 
 
@@ -474,7 +534,10 @@ class JsonNetlistParser:
             # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
             value = "?"
             for key in ["mpn", "value", "Value"]:
-                if key in instance["attributes"] and "String" in instance["attributes"][key]:
+                if (
+                    key in instance["attributes"]
+                    and "String" in instance["attributes"][key]
+                ):
                     value = instance["attributes"][key]["String"]
                     break
 
@@ -547,7 +610,9 @@ class JsonNetlistParser:
                                     elif "Number" in item:
                                         array_items.append(str(item["Number"]))
                                     elif "Boolean" in item:
-                                        array_items.append("true" if item["Boolean"] else "false")
+                                        array_items.append(
+                                            "true" if item["Boolean"] else "false"
+                                        )
                                     else:
                                         # For other types, use string representation
                                         array_items.append(str(item))
@@ -2225,7 +2290,9 @@ class ImportNetlist(Step):
             # Stage removal of the footprint from the board.
             fp = self.board.FindFootprintByPath(pcbnew.KIID_PATH(f"{fp_id}/{fp_id}"))
             if fp:
-                logger.info(f"{fp_id} ({fp.GetReference()}): Staging removal from board")
+                logger.info(
+                    f"{fp_id} ({fp.GetReference()}): Staging removal from board"
+                )
                 self.state.track_footprint_removed(fp)
                 self.change_detector.add_change(RemoveFootprint(fp, fp_id))
 
@@ -2247,17 +2314,23 @@ class ImportNetlist(Step):
                 pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
             )
             # Handle DNP property
-            dnp_prop = next((x for x in part.properties if x.name.lower() == "dnp"), None)
+            dnp_prop = next(
+                (x for x in part.properties if x.name.lower() == "dnp"), None
+            )
             fp.SetDNP(dnp_prop is not None and dnp_prop.value.lower() == "true")
 
             # Handle skip_bom property
-            skip_bom_prop = next((x for x in part.properties if x.name.lower() == "skip_bom"), None)
+            skip_bom_prop = next(
+                (x for x in part.properties if x.name.lower() == "skip_bom"), None
+            )
             fp.SetExcludedFromBOM(
                 skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
             )
 
             # Handle skip_pos property
-            skip_pos_prop = next((x for x in part.properties if x.name.lower() == "skip_pos"), None)
+            skip_pos_prop = next(
+                (x for x in part.properties if x.name.lower() == "skip_pos"), None
+            )
             fp.SetExcludedFromPosFiles(
                 skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
             )
@@ -2275,18 +2348,22 @@ class ImportNetlist(Step):
                     fp.GetFieldByName("Description").SetText(prop.value)
                     fp.GetFieldByName("Description").SetVisible(False)
                 # Skip built-in fields, symbol metadata, and specially handled properties
-                elif prop.name.lower() not in [
-                    "value",
-                    "reference",
-                    "dnp",  # Skip the standardized dnp attribute (handled above)
-                    "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
-                    "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
-                    "symbol_name",  # Symbol metadata - not needed in PCB
-                    "symbol_path",  # Symbol metadata - not needed in PCB
-                ] and not prop.name.startswith("_"):
+                elif (
+                    prop.name.lower()
+                    not in [
+                        "value",
+                        "reference",
+                        "dnp",  # Skip the standardized dnp attribute (handled above)
+                        "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
+                        "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
+                        "symbol_name",  # Symbol metadata - not needed in PCB
+                        "symbol_path",  # Symbol metadata - not needed in PCB
+                    ]
+                    and not prop.name.startswith("_")
+                ):
                     # Convert snake_case property names to Title Case for display in KiCad
                     # e.g., "logic_level" -> "Logic Level"
-                    display_name = prop.name.replace('_', ' ').title()
+                    display_name = prop.name.replace("_", " ").title()
                     fp.SetField(display_name, prop.value)
                     fp.GetFieldByName(display_name).SetVisible(False)
 
@@ -2341,9 +2418,13 @@ class ImportNetlist(Step):
             )
 
             # Only stage if there are actual changes
-            metadata_change = UpdateFootprintMetadata(fp, part, fp_id, _configure_footprint)
+            metadata_change = UpdateFootprintMetadata(
+                fp, part, fp_id, _configure_footprint
+            )
             if metadata_change.changes:
-                logger.info(f"{fp_id} ({part.ref}): Staging metadata update - {len(metadata_change.changes)} changes")
+                logger.info(
+                    f"{fp_id} ({part.ref}): Staging metadata update - {len(metadata_change.changes)} changes"
+                )
                 self.change_detector.add_change(metadata_change)
             else:
                 logger.debug(f"{fp_id} ({part.ref}): No metadata changes detected")
@@ -2987,7 +3068,9 @@ class PlaceComponents(Step):
 
         # Sort by area (largest first) for better packing, then by name for determinism
         # Use natural sort for names so "C2" comes before "C10"
-        items_with_bbox.sort(key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id))
+        items_with_bbox.sort(
+            key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id)
+        )
 
         # Storage for potential placement points (as (x, y) tuples)
         # These are points where we can place the bottom-left corner of an item
@@ -3187,7 +3270,8 @@ class PlaceComponents(Step):
             # If root is a group, use its children as top-level items
             # Sort them for deterministic ordering using natural sort
             top_level_added = sorted(
-                sparse_tree.children, key=lambda item: (natural_sort_key(item.name), item.id)
+                sparse_tree.children,
+                key=lambda item: (natural_sort_key(item.name), item.id),
             )
         else:
             # If root is a single item, use it
@@ -3224,7 +3308,8 @@ class PlaceComponents(Step):
             if not item.added and isinstance(item, VirtualGroup):
                 # Sort children for deterministic traversal using natural sort
                 sorted_children = sorted(
-                    item.children, key=lambda child: (natural_sort_key(child.name), child.id)
+                    item.children,
+                    key=lambda child: (natural_sort_key(child.name), child.id),
                 )
                 for child in sorted_children:
                     collect_existing_bbox(child)
@@ -3750,7 +3835,7 @@ def main():
     if args.check:
         # Check mode: Write JSON and exit
         change_json = change_detector.to_json(args.output, args.json_input)
-        with open(args.changes_output, 'w') as f:
+        with open(args.changes_output, "w") as f:
             json.dump(change_json, f, indent=2)
 
         logger.info(f"Check complete: {len(change_detector.changes)} changes detected")
@@ -3761,7 +3846,9 @@ def main():
         change_detector.commit_all(board)
 
         # Run finalization step
-        finalize_step = FinalizeBoard(state, board, Path(args.snapshot) if args.snapshot else None)
+        finalize_step = FinalizeBoard(
+            state, board, Path(args.snapshot) if args.snapshot else None
+        )
         logger.info("-" * 80)
         logger.info(f"Running step: {finalize_step.__class__.__name__}")
         logger.info("-" * 80)
