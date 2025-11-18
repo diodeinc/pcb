@@ -51,6 +51,24 @@ from collections import defaultdict
 # Global logger.
 logger = logging.getLogger("pcb")
 
+
+def natural_sort_key(text: str) -> List:
+    """
+    Generate a sort key for natural (human-friendly) sorting.
+    
+    Splits a string into numeric and non-numeric parts, converting numeric
+    parts to integers so that "C2" sorts before "C10".
+    
+    Example:
+        "C10" -> ['C', 10]
+        "C2"  -> ['C', 2]
+        "IC1.R5" -> ['IC', 1, '.R', 5]
+    """
+    def convert(part):
+        return int(part) if part.isdigit() else part.lower()
+    
+    return [convert(c) for c in re.split('([0-9]+)', text)]
+
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
 path_separator = (
@@ -2743,7 +2761,8 @@ class PlaceComponents(Step):
             return
 
         # Sort by area (largest first) for better packing, then by name for determinism
-        items_with_bbox.sort(key=lambda item: (-item.bbox.area, item.name, item.id))
+        # Use natural sort for names so "C2" comes before "C10"
+        items_with_bbox.sort(key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id))
 
         # Storage for potential placement points (as (x, y) tuples)
         # These are points where we can place the bottom-left corner of an item
@@ -2887,8 +2906,9 @@ class PlaceComponents(Step):
                 return None
 
         # Sort children by name and id for deterministic processing order
+        # Use natural sort for names so "C2" comes before "C10"
         sorted_children = sorted(
-            group.children, key=lambda child: (child.name, child.id)
+            group.children, key=lambda child: (natural_sort_key(child.name), child.id)
         )
 
         # Recursively process all children and collect sparse subtrees
@@ -2940,9 +2960,9 @@ class PlaceComponents(Step):
         top_level_added = []
         if isinstance(sparse_tree, VirtualGroup):
             # If root is a group, use its children as top-level items
-            # Sort them for deterministic ordering
+            # Sort them for deterministic ordering using natural sort
             top_level_added = sorted(
-                sparse_tree.children, key=lambda item: (item.name, item.id)
+                sparse_tree.children, key=lambda item: (natural_sort_key(item.name), item.id)
             )
         else:
             # If root is a single item, use it
@@ -2977,9 +2997,9 @@ class PlaceComponents(Step):
                     existing_bbox = existing_bbox.merge(item.bbox)
             # Don't recurse into added groups
             if not item.added and isinstance(item, VirtualGroup):
-                # Sort children for deterministic traversal
+                # Sort children for deterministic traversal using natural sort
                 sorted_children = sorted(
-                    item.children, key=lambda child: (child.name, child.id)
+                    item.children, key=lambda child: (natural_sort_key(child.name), child.id)
                 )
                 for child in sorted_children:
                     collect_existing_bbox(child)
