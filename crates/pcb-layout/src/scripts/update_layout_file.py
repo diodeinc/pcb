@@ -2014,76 +2014,142 @@ class ImportNetlist(Step):
                 self.state.track_footprint_removed(fp)
                 self.board.Delete(fp)
 
+        # Properties that shouldn't be added as PCB fields
+        SKIP_PROPERTIES = {"value", "reference", "symbol_name", "symbol_path"}
+
+        def _parse_bool(value: str) -> bool:
+            """Safely parse a boolean value from a property string."""
+            if value is None:
+                return False
+            return str(value).lower() == "true"
+
         def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
-            # Remove all custom fields (keep Reference, Value, Datasheet built-ins)
+            """Configure footprint metadata, only updating fields that have actually changed."""
+            changes = []
+
+            # Update basic fields if different
+            if fp.GetReference() != part.ref:
+                changes.append(f"Reference: {fp.GetReference()} -> {part.ref}")
+                fp.SetReference(part.ref)
+
+            if fp.GetValue() != part.value:
+                changes.append(f"Value: {fp.GetValue()} -> {part.value}")
+                fp.SetValue(part.value)
+
+            # Update FPID if different
+            if fp.GetFPIDAsString() != part.footprint:
+                changes.append(f"FPID: {fp.GetFPIDAsString()} -> {part.footprint}")
+                fp.SetFPIDAsString(part.footprint)
+
+            # Update KiCad path (UUID-based) if different
+            new_kiid_path = f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}"
+            current_kiid_path = fp.GetPath().AsString().lstrip("/")  # Strip leading '/'
+            if current_kiid_path != new_kiid_path:
+                changes.append(
+                    f"KiCad Path: '{current_kiid_path}' -> '{new_kiid_path}'"
+                )
+                fp.SetPath(pcbnew.KIID_PATH(new_kiid_path))
+
+            # Process all properties in a single pass
+            desired_fields = {
+                "Datasheet": "",
+                "Description": "",
+            }  # Always include built-ins
+            new_dnp = False
+            new_skip_bom = False
+            new_skip_pos = False
+
+            for prop in part.properties:
+                prop_name_lower = prop.name.lower()
+
+                # Extract special boolean flags
+                if prop_name_lower == "dnp":
+                    new_dnp = _parse_bool(prop.value)
+                elif prop_name_lower == "skip_bom":
+                    new_skip_bom = _parse_bool(prop.value)
+                elif prop_name_lower == "skip_pos":
+                    new_skip_pos = _parse_bool(prop.value)
+                # Map to built-in KiCad fields
+                elif prop_name_lower == "datasheet":
+                    desired_fields["Datasheet"] = prop.value
+                elif prop_name_lower == "description":
+                    desired_fields["Description"] = prop.value
+                # Skip internal/system properties
+                elif prop_name_lower in SKIP_PROPERTIES or prop.name.startswith("_"):
+                    continue
+                # Convert all other properties to custom fields
+                else:
+                    display_name = prop.name.replace("_", " ").title()
+                    desired_fields[display_name] = prop.value
+
+            # Update flags if changed
+            if fp.IsDNP() != new_dnp:
+                changes.append(f"DNP: {fp.IsDNP()} -> {new_dnp}")
+                fp.SetDNP(new_dnp)
+
+            if fp.IsExcludedFromBOM() != new_skip_bom:
+                changes.append(
+                    f"Exclude from BOM: {fp.IsExcludedFromBOM()} -> {new_skip_bom}"
+                )
+                fp.SetExcludedFromBOM(new_skip_bom)
+
+            if fp.IsExcludedFromPosFiles() != new_skip_pos:
+                changes.append(
+                    f"Exclude from Pos: {fp.IsExcludedFromPosFiles()} -> {new_skip_pos}"
+                )
+                fp.SetExcludedFromPosFiles(new_skip_pos)
+
+            # Build map of existing fields (excluding built-ins and Path)
+            existing_fields = {}
             for field in fp.GetFields():
+                field_name = field.GetName()
                 if (
                     not field.IsValue()
                     and not field.IsReference()
-                    and not field.IsDatasheet()
+                    and field_name != "Path"
                 ):
-                    fp.RemoveField(field.GetName())
+                    existing_fields[field_name] = field.GetText()
 
-            fp.SetReference(part.ref)
-            fp.SetValue(part.value)
-            fp.SetField("Path", part.sheetpath.names.split(":")[-1])
-            fp.SetFPIDAsString(part.footprint)
-            fp.SetPath(
-                pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
-            )
-            # Handle DNP property
-            dnp_prop = next(
-                (x for x in part.properties if x.name.lower() == "dnp"), None
-            )
-            fp.SetDNP(dnp_prop is not None and dnp_prop.value.lower() == "true")
+            # Find fields to remove (exist but not desired)
+            fields_to_remove = [
+                name for name in existing_fields if name not in desired_fields
+            ]
+            for field_name in fields_to_remove:
+                changes.append(
+                    f"Removed field: {field_name} = '{existing_fields[field_name]}'"
+                )
+                fp.RemoveField(field_name)
 
-            # Handle skip_bom property
-            skip_bom_prop = next(
-                (x for x in part.properties if x.name.lower() == "skip_bom"), None
-            )
-            fp.SetExcludedFromBOM(
-                skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
-            )
+            # Update or add fields that changed
+            for field_name, desired_value in desired_fields.items():
+                existing_value = existing_fields.get(field_name)
+                if existing_value != desired_value:
+                    if existing_value is None:
+                        changes.append(f"Added field: {field_name} = {desired_value}")
+                    else:
+                        changes.append(
+                            f"Updated field: {field_name}: {existing_value} -> {desired_value}"
+                        )
+                    fp.SetField(field_name, desired_value)
+                    # Ensure field is invisible
+                    field = fp.GetFieldByName(field_name)
+                    if field:
+                        field.SetVisible(False)
 
-            # Handle skip_pos property
-            skip_pos_prop = next(
-                (x for x in part.properties if x.name.lower() == "skip_pos"), None
-            )
-            fp.SetExcludedFromPosFiles(
-                skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
-            )
+            # Ensure special fields are always invisible (Path, Value)
+            for field_name in ["Path", "Value"]:
+                field = fp.GetFieldByName(field_name)
+                if field and field.IsVisible():
+                    field.SetVisible(False)
+                    changes.append(f"{field_name} field visibility: True -> False")
 
-            fp.GetFieldByName("Value").SetVisible(False)
-            fp.GetFieldByName("Path").SetVisible(False)
-
-            for prop in part.properties:
-                # Handle datasheet specially - use the built-in KiCad "Datasheet" field
-                if prop.name.lower() == "datasheet":
-                    fp.GetFieldByName("Datasheet").SetText(prop.value)
-                    fp.GetFieldByName("Datasheet").SetVisible(False)
-                # Handle description specially - use the built-in KiCad "Description" field
-                elif prop.name.lower() == "description":
-                    fp.GetFieldByName("Description").SetText(prop.value)
-                    fp.GetFieldByName("Description").SetVisible(False)
-                # Skip built-in fields, symbol metadata, and specially handled properties
-                elif (
-                    prop.name.lower()
-                    not in [
-                        "value",
-                        "reference",
-                        "dnp",  # Skip the standardized dnp attribute (handled above)
-                        "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
-                        "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
-                        "symbol_name",  # Symbol metadata - not needed in PCB
-                        "symbol_path",  # Symbol metadata - not needed in PCB
-                    ]
-                    and not prop.name.startswith("_")
-                ):
-                    # Convert snake_case property names to Title Case for display in KiCad
-                    # e.g., "logic_level" -> "Logic Level"
-                    display_name = prop.name.replace("_", " ").title()
-                    fp.SetField(display_name, prop.value)
-                    fp.GetFieldByName(display_name).SetVisible(False)
+            # Log summary
+            if changes:
+                logger.debug(f"{part.ref}: Updated {len(changes)} field(s):")
+                for change in changes:
+                    logger.debug(f"  - {change}")
+            else:
+                logger.debug(f"{part.ref}: No metadata changes detected")
 
         for fp_id in netlist_footprint_ids - board_footprint_ids:
             # Create a new footprint from the netlist.
