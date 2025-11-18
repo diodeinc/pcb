@@ -1,0 +1,23 @@
+---
+source: crates/pcb-layout/tests/layout_check.rs
+expression: content
+---
+{
+  "change_count": 1,
+  "changes": [
+    {
+      "category": "",
+      "change_type": "footprint_metadata_updated",
+      "description": "U1 (BMI270.C.C) metadata out of sync",
+      "items": [
+        {
+          "description": "U1 at BMI270.C.C\n    value: '0F' → '100M'",
+          "hierarchical_path": "BMI270.C.C",
+          "pos": null,
+          "uuid": "394660df-0570-5ff9-815b-abf03e6c9830"
+        }
+      ],
+      "severity": "error"
+    }
+  ]
+}

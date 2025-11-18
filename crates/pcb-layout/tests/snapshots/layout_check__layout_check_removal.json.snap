@@ -1,0 +1,43 @@
+---
+source: crates/pcb-layout/tests/layout_check.rs
+expression: content
+---
+{
+  "change_count": 2,
+  "changes": [
+    {
+      "category": "",
+      "change_type": "footprint_removed",
+      "description": "IC1 (BMI270.IC) not in netlist",
+      "items": [
+        {
+          "description": "IC1 at BMI270.IC",
+          "hierarchical_path": "BMI270.IC",
+          "pos": {
+            "x": 148.5,
+            "y": 105.485
+          },
+          "uuid": "233c70a3-0882-5e15-a03d-8be81cfdc04b"
+        }
+      ],
+      "severity": "error"
+    },
+    {
+      "category": "",
+      "change_type": "footprint_removed",
+      "description": "U1 (BMI270.C.C) not in netlist",
+      "items": [
+        {
+          "description": "U1 at BMI270.C.C",
+          "hierarchical_path": "BMI270.C.C",
+          "pos": {
+            "x": 146.885,
+            "y": 102.7
+          },
+          "uuid": "394660df-0570-5ff9-815b-abf03e6c9830"
+        }
+      ],
+      "severity": "error"
+    }
+  ]
+}

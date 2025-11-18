@@ -120,12 +120,19 @@ class ChangeDetector:
     def to_json(self, source_path: str, netlist_path: str) -> dict:
         """Export all changes as JSON for check mode."""
         from datetime import datetime
+        
+        # Sort changes for deterministic output
+        sorted_changes = sorted(
+            [c.to_json() for c in self.changes],
+            key=lambda x: (x.get("change_type", ""), x.get("description", ""))
+        )
+
         return {
             "source": source_path,
             "netlist_source": netlist_path,
             "timestamp": datetime.now().isoformat(),
             "change_count": len(self.changes),
-            "changes": [c.to_json() for c in self.changes]
+            "changes": sorted_changes
         }
 
 
@@ -141,17 +148,23 @@ class AddFootprint(StagedChange):
     def to_json(self) -> dict:
         pos = self.footprint.GetPosition()
         hier_path = self.part.sheetpath.names.split(":")[-1] if ":" in self.part.sheetpath.names else self.part.sheetpath.names
+        
+        items = [{
+            "description": f"{self.part.ref} at {hier_path}\n    value: {self.part.value}\n    footprint: {self.part.footprint}",
+            "uuid": self.fp_id,
+            "hierarchical_path": hier_path,
+            "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0}
+        }]
+        
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
         return {
             "change_type": "footprint_added",
             "severity": "error",
             "category": "",
             "description": f"{self.part.ref} ({hier_path}) missing from board",
-            "items": [{
-                "description": f"{self.part.ref} at {hier_path}\n    value: {self.part.value}\n    footprint: {self.part.footprint}",
-                "uuid": self.fp_id,
-                "hierarchical_path": hier_path,
-                "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0}
-            }]
+            "items": sorted_items
         }
 
 
@@ -169,17 +182,23 @@ class RemoveFootprint(StagedChange):
     def to_json(self) -> dict:
         pos = self.footprint.GetPosition()
         path_desc = f" at {self.hier_path}" if self.hier_path else ""
+
+        items = [{
+            "description": f"{self.reference}{path_desc}",
+            "uuid": self.fp_id,
+            "hierarchical_path": self.hier_path,
+            "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0}
+        }]
+
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
         return {
             "change_type": "footprint_removed",
             "severity": "error",
             "category": "",
             "description": f"{self.reference} ({self.hier_path or 'unknown path'}) not in netlist",
-            "items": [{
-                "description": f"{self.reference}{path_desc}",
-                "uuid": self.fp_id,
-                "hierarchical_path": self.hier_path,
-                "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0}
-            }]
+            "items": sorted_items
         }
 
 
@@ -267,17 +286,22 @@ class UpdateFootprintMetadata(StagedChange):
         hier_path = self.part.sheetpath.names.split(":")[-1] if ":" in self.part.sheetpath.names else self.part.sheetpath.names
         changes_text = "\n    ".join(self.changes)
 
+        items = [{
+            "description": f"{self.part.ref} at {hier_path}\n    {changes_text}",
+            "uuid": self.fp_id,
+            "hierarchical_path": hier_path,
+            "pos": None
+        }]
+
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
         return {
             "change_type": "footprint_metadata_updated",
             "severity": "error",
             "category": "",
             "description": f"{self.part.ref} ({hier_path}) metadata out of sync",
-            "items": [{
-                "description": f"{self.part.ref} at {hier_path}\n    {changes_text}",
-                "uuid": self.fp_id,
-                "hierarchical_path": hier_path,
-                "pos": None
-            }]
+            "items": sorted_items
         }
 
 
@@ -294,17 +318,23 @@ class UpdateFootprintPosition(StagedChange):
     def to_json(self) -> dict:
         delta_x = (self.new_pos.x - self.old_pos.x) / 1000000.0
         delta_y = (self.new_pos.y - self.old_pos.y) / 1000000.0
+        
+        items = [{
+            "description": f"{self.fp_name}\n  Expected: ({self.new_pos.x / 1000000.0:.3f}, {self.new_pos.y / 1000000.0:.3f}) mm\n  Actual: ({self.old_pos.x / 1000000.0:.3f}, {self.old_pos.y / 1000000.0:.3f}) mm\n  Delta: ({delta_x:.3f}, {delta_y:.3f}) mm",
+            "uuid": None,
+            "hierarchical_path": self.fp_name,
+            "pos": {"x": self.old_pos.x / 1000000.0, "y": self.old_pos.y / 1000000.0}
+        }]
+
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
         return {
             "change_type": "footprint_position_changed",
             "severity": "error",
             "category": "fragment",
             "description": f"{self.fp_name} position differs from layout fragment",
-            "items": [{
-                "description": f"{self.fp_name}\n  Expected: ({self.new_pos.x / 1000000.0:.3f}, {self.new_pos.y / 1000000.0:.3f}) mm\n  Actual: ({self.old_pos.x / 1000000.0:.3f}, {self.old_pos.y / 1000000.0:.3f}) mm\n  Delta: ({delta_x:.3f}, {delta_y:.3f}) mm",
-                "uuid": None,
-                "hierarchical_path": self.fp_name,
-                "pos": {"x": self.old_pos.x / 1000000.0, "y": self.old_pos.y / 1000000.0}
-            }]
+            "items": sorted_items
         }
 
 
