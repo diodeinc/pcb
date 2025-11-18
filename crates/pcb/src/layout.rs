@@ -57,7 +57,12 @@ pub struct LayoutArgs {
     pub suppress: Vec<String>,
 }
 
-pub fn execute(args: LayoutArgs) -> Result<()> {
+pub fn execute(mut args: LayoutArgs) -> Result<()> {
+    // --check implies --no-open
+    if args.check {
+        args.no_open = true;
+    }
+
     // Collect .zen files to process - always recursive for directories
     let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
 
