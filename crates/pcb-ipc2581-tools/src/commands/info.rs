@@ -103,6 +103,24 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         format!("IPC-2581 {} • {}", ipc.revision(), mode_str).dimmed()
     );
 
+    // Additional metadata (greyed out)
+    if let Some(metadata) = accessor.file_metadata() {
+        if let Some(units) = &metadata.source_units {
+            println!("{}", format!("Source Units: {}", units).dimmed());
+        }
+        if let Some(created) = &metadata.created {
+            println!("{}", format!("Created: {}", created).dimmed());
+        }
+        if let Some(modified) = &metadata.last_modified {
+            println!("{}", format!("Last Modified: {}", modified).dimmed());
+        }
+        if let Some(software) = &metadata.software {
+            if let Some(formatted) = software.format() {
+                println!("{}", format!("Software: {}", formatted).dimmed());
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -115,6 +133,22 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         "mode": format!("{:?}", content.function_mode.mode),
         "level": content.function_mode.level.map(|l| format!("{:?}", l)),
     });
+
+    // File metadata
+    if let Some(metadata) = accessor.file_metadata() {
+        info["source_units"] = json!(metadata.source_units);
+        info["created"] = json!(metadata.created);
+        info["last_modified"] = json!(metadata.last_modified);
+        if let Some(software) = &metadata.software {
+            info["software"] = json!({
+                "name": software.name,
+                "package_name": software.package_name,
+                "package_revision": software.package_revision,
+                "vendor": software.vendor,
+                "formatted": software.format(),
+            });
+        }
+    }
 
     // Board dimensions
     if let Some(dimensions) = accessor.board_dimensions() {

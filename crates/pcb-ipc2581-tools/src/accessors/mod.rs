@@ -6,6 +6,7 @@ mod bom;
 mod components;
 mod drills;
 mod layers;
+mod metadata;
 
 // Re-export types
 pub use board::{BoardDimensions, StackupInfo};
@@ -13,6 +14,7 @@ pub use bom::{AvlLookup, BomStats, CharacteristicsData};
 pub use components::ComponentStats;
 pub use drills::DrillStats;
 pub use layers::{LayerStats, NetStats};
+pub use metadata::{FileMetadata, SoftwareInfo};
 
 /// Main accessor for IPC-2581 data extraction
 ///
