@@ -186,24 +186,105 @@ fn test_layout_check_diff() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
+#[test]
+#[serial]
+fn test_layout_check_fragment() -> Result<()> {
+    // 1. Setup "module_layout" project
+    let temp = TempDir::new()?.into_persistent();
+    let resource_path = get_resource_path("module_layout");
+    temp.copy_from(&resource_path, &["**/*", "!.pcb/cache/**/*"])?;
+
+    let module_zen = temp.path().join("Module.zen");
+    let main_zen = temp.path().join("Main.zen");
+
+    // 2. Generate layout for the submodule (to be used as fragment)
+    {
+        let (output, _) = pcb_zen::run(&module_zen, pcb_zen::EvalConfig::default()).unpack();
+        let schematic = output.expect("module schematic");
+        process_layout(&schematic, &module_zen, false, false)?;
+    }
+
+    // 3. Generate layout for the main board
+    let (output, _) = pcb_zen::run(&main_zen, pcb_zen::EvalConfig::default()).unpack();
+    let schematic = output.expect("main schematic");
+    let main_result = process_layout(&schematic, &main_zen, false, false)?;
+    let main_pcb = main_result.pcb_file;
+
+    // 4. Modify the submodule's layout file
+    // We'll use a Python script to load the module layout, move a footprint, and save it.
+    let module_layout_path = temp.path().join("build/module_layout/layout.kicad_pcb");
+    assert!(module_layout_path.exists(), "Module layout should exist");
+
+    let move_script = r#"
+import pcbnew
+import sys
+
+layout_path = sys.argv[1]
+board = pcbnew.LoadBoard(layout_path)
+footprints = board.GetFootprints()
+
+# Find C1 and move it
+for fp in footprints:
+    if fp.GetReference() == "C1":
+        pos = fp.GetPosition()
+        # Move by 1mm (1000000 nm) in X
+        new_pos = pcbnew.VECTOR2I(pos.x + 1000000, pos.y)
+        fp.SetPosition(new_pos)
+        break
+
+pcbnew.SaveBoard(layout_path, board)
+"#;
+
+    // Execute the script to modify the module layout
+    PythonScriptBuilder::new(move_script)
+        .arg(module_layout_path.to_str().unwrap())
+        .run()?;
+
+    // 5. Run check on main board
+    let check_changes_path = temp.path().join("fragment_changes.json");
+    let main_netlist_path = temp.path().join("main_netlist.json");
+    std::fs::write(&main_netlist_path, schematic.to_json()?)?;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let script_path = Path::new(manifest_dir).join("src/scripts/update_layout_file.py");
+    let script_content = std::fs::read_to_string(script_path)?;
+
+    let check_log_path = temp.path().join("fragment_check.log");
+    let check_log_file = std::fs::File::create(&check_log_path)?;
+
+    let script_builder = PythonScriptBuilder::new(&script_content)
+        .arg("--check")
+        .arg("--changes-output")
+        .arg(check_changes_path.to_str().unwrap())
+        .arg("-j")
+        .arg(main_netlist_path.to_str().unwrap())
+        .arg("-o")
+        .arg(main_pcb.to_str().unwrap())
+        .log_file(check_log_file);
+
+    script_builder.run()?;
+
+    // 6. Verify changes
+    let report = SyncReport::from_json_file(&check_changes_path)?;
+    assert!(report.change_count > 0, "Should detect fragment changes");
+
+    let mut changes_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&check_changes_path)?)?;
+    sanitize_report_json(&mut changes_json);
+    std::fs::write(
+        &check_changes_path,
+        serde_json::to_string_pretty(&changes_json)?,
+    )?;
+    assert_file_snapshot!("layout_check_fragment.json", check_changes_path);
+
+    Ok(())
+}
+
 fn sanitize_report_json(json: &mut serde_json::Value) {
     if let Some(obj) = json.as_object_mut() {
         obj.remove("timestamp");
         obj.remove("source");
         obj.remove("netlist_source");
-
-        // Mask positions in items as they can vary (e.g. 0.0 vs placed coords)
-        if let Some(changes) = obj.get_mut("changes").and_then(|c| c.as_array_mut()) {
-            for change in changes {
-                if let Some(items) = change.get_mut("items").and_then(|i| i.as_array_mut()) {
-                    for item in items {
-                        if let Some(pos) = item.get_mut("pos").and_then(|p| p.as_object_mut()) {
-                            pos.insert("x".to_string(), serde_json::json!(0.0));
-                            pos.insert("y".to_string(), serde_json::json!(0.0));
-                        }
-                    }
-                }
-            }
-        }
     }
 }

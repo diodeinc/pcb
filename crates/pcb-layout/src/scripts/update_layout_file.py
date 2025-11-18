@@ -360,41 +360,42 @@ class UpdateFootprintMetadata(StagedChange):
         }
 
 
-class UpdateFootprintPosition(StagedChange):
-    def __init__(self, footprint: pcbnew.FOOTPRINT, new_pos: Any, fp_name: str):
-        self.footprint = footprint
-        self.new_pos = new_pos
-        self.old_pos = footprint.GetPosition()
+class SyncFootprintWithLayout(StagedChange):
+    """Sync a footprint's layout properties (position, orientation, layer) from a source footprint."""
+
+    def __init__(
+        self,
+        target_vfp: "VirtualFootprint",
+        source_vfp: "VirtualFootprint",
+        fp_name: str,
+    ):
+        self.target_vfp = target_vfp
+        self.source_vfp = source_vfp
         self.fp_name = fp_name
+        self.changes = target_vfp.diff(source_vfp)
 
     def apply(self, board: pcbnew.BOARD) -> None:
-        self.footprint.SetPosition(self.new_pos)
+        self.target_vfp.replace_with(self.source_vfp)
 
     def to_json(self) -> dict:
-        delta_x = (self.new_pos.x - self.old_pos.x) / 1000000.0
-        delta_y = (self.new_pos.y - self.old_pos.y) / 1000000.0
-
-        items = [
-            {
-                "description": f"{self.fp_name}\n  Expected: ({self.new_pos.x / 1000000.0:.3f}, {self.new_pos.y / 1000000.0:.3f}) mm\n  Actual: ({self.old_pos.x / 1000000.0:.3f}, {self.old_pos.y / 1000000.0:.3f}) mm\n  Delta: ({delta_x:.3f}, {delta_y:.3f}) mm",
-                "uuid": None,
-                "hierarchical_path": self.fp_name,
-                "pos": {
-                    "x": self.old_pos.x / 1000000.0,
-                    "y": self.old_pos.y / 1000000.0,
-                },
-            }
-        ]
-
-        # Sort items for deterministic output
-        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
-
+        changes_text = "\n    ".join(self.changes)
+        target_fp = self.target_vfp.kicad_footprint
         return {
-            "change_type": "footprint_position_changed",
-            "severity": "error",
+            "change_type": "footprint_layout_updated",
+            "severity": "warning",
             "category": "fragment",
-            "description": f"{self.fp_name} position differs from layout fragment",
-            "items": sorted_items,
+            "description": f"{self.fp_name} layout differs from layout fragment",
+            "items": [
+                {
+                    "description": f"{self.fp_name}\n    {changes_text}",
+                    "uuid": get_footprint_uuid(target_fp),
+                    "hierarchical_path": self.fp_name,
+                    "pos": {
+                        "x": target_fp.GetPosition().x / 1000000.0,
+                        "y": target_fp.GetPosition().y / 1000000.0,
+                    },
+                }
+            ],
         }
 
 
@@ -932,8 +933,43 @@ class VirtualFootprint(VirtualElement):
                 target_val.SetPosition(source_val.GetPosition())
                 target_val.SetAttributes(source_val.GetAttributes())
 
+    def diff(self, source_footprint: "VirtualFootprint") -> list[str]:
+        """Return a list of differences between this footprint and a source footprint."""
+        changes = []
+
+        # Need kicad footprints to compare
+        if not self.kicad_footprint or not source_footprint.kicad_footprint:
+            return changes
+
+        target = self.kicad_footprint
+        source = source_footprint.kicad_footprint
+
+        # Position
+        target_pos = target.GetPosition()
+        source_pos = source.GetPosition()
+        if target_pos != source_pos:
+            # Convert to mm for display
+            tx, ty = target_pos.x / 1000000.0, target_pos.y / 1000000.0
+            sx, sy = source_pos.x / 1000000.0, source_pos.y / 1000000.0
+            changes.append(f"position: ({tx:.3f}, {ty:.3f}) → ({sx:.3f}, {sy:.3f})")
+
+        # Orientation
+        target_orient = target.GetOrientation()
+        source_orient = source_footprint.kicad_footprint.GetOrientation()
+        if target_orient != source_orient:
+            changes.append(
+                f"orientation: {target_orient.AsDegrees():.1f}° → {source_orient.AsDegrees():.1f}°"
+            )
+
+        # Layer
+        target_layer = target.GetLayerName()
+        source_layer = source_footprint.kicad_footprint.GetLayerName()
+        if target_layer != source_layer:
+            changes.append(f"layer: {target_layer} → {source_layer}")
+
+        return changes
+
     def render_tree(self, indent: int = 0) -> str:
-        """Render this footprint as a string."""
         prefix = "  " * indent
         status_markers = []
         if self.added:
@@ -2732,11 +2768,16 @@ class SyncLayouts(Step):
     """Sync layouts from layout files to groups marked as newly added."""
 
     def __init__(
-        self, state: SyncState, board: pcbnew.BOARD, netlist: JsonNetlistParser
+        self,
+        state: SyncState,
+        board: pcbnew.BOARD,
+        netlist: JsonNetlistParser,
+        change_detector: ChangeDetector,
     ):
         self.state = state
         self.board = board
         self.netlist = netlist
+        self.change_detector = change_detector
 
     def _sync_connected_item(
         self,
@@ -2797,7 +2838,17 @@ class SyncLayouts(Step):
         """Sync all elements (footprints, zones, graphics) in a group from a layout file."""
         # Load the layout file into a virtual board
         layout_board = pcbnew.LoadBoard(str(layout_file))
-        layout_vboard = build_virtual_dom_from_board(layout_board)
+
+        # Build virtual DOM from the fragment board.
+        # We ONLY need footprints here for matching. Tracks, zones, and graphics are
+        # retrieved directly from the layout_board object later, so we disable their
+        # processing in the VDOM build to save time and avoid duplication.
+        layout_vboard = build_virtual_dom_from_board(
+            layout_board,
+            include_zones=False,
+            include_graphics=False,
+            include_tracks=False,
+        )
 
         # Get all footprints in the target group (recursively)
         target_footprints = self._get_footprints_in_group(group)
@@ -2833,9 +2884,17 @@ class SyncLayouts(Step):
             if rel_path in source_by_path:
                 # Found a match - sync the footprint
                 source_fp = source_by_path[rel_path]
-                target_fp.replace_with(source_fp)
+
+                # Check for layout changes
+                change = SyncFootprintWithLayout(target_fp, source_fp, target_fp.name)
+                if change.changes:
+                    logger.info(f"  Detected layout changes for {target_fp.name}")
+                    self.change_detector.add_change(change)
+                else:
+                    logger.debug(f"  Matched and synced: {target_fp.name} (no changes)")
+                    # Even if no changes, we consider it matched
+
                 matched_pairs.append((source_fp, target_fp))
-                logger.debug(f"  Matched and synced: {target_fp.name}")
             else:
                 unmatched_target.append(target_fp.name)
                 logger.debug(f"  No match found for: {target_fp.name}")
@@ -2867,7 +2926,8 @@ class SyncLayouts(Step):
                 logger.info(f"    - {fp}")
 
         # Only sync zones and graphics if we matched at least one footprint
-        if matched_pairs:
+        # AND the group is newly added (to avoid duplicating items in existing groups)
+        if matched_pairs and group.added:
             # Build net code mapping from matched footprints
             net_code_map = build_net_code_mapping(
                 layout_board, self.board, matched_pairs
@@ -2944,6 +3004,10 @@ class SyncLayouts(Step):
                     break
 
             logger.info(f"  Marked group {group.id} as synced")
+        elif not group.added:
+            logger.debug(
+                "  Skipping non-footprint items for existing group (to avoid duplication)"
+            )
 
         # Explicitly delete the layout board to release resources (important for Windows)
         del layout_board
@@ -2984,27 +3048,24 @@ class SyncLayouts(Step):
             should_sync = False
             layout_file = None
 
-            if current.added:
-                # Check if this group has a corresponding module with layout_path
-                module = self.netlist.modules.get(current.id)
-                if module and module.layout_path:
-                    # Resolve the layout path
-                    layout_path = Path(module.layout_path)
-                    if not layout_path.is_absolute():
-                        layout_path = (
-                            Path(self.board.GetFileName()).parent / layout_path
-                        )
+            # Check if this group has a corresponding module with layout_path
+            module = self.netlist.modules.get(current.id)
+            if module and module.layout_path:
+                # Resolve the layout path
+                layout_path = Path(module.layout_path)
+                if not layout_path.is_absolute():
+                    layout_path = Path(self.board.GetFileName()).parent / layout_path
 
-                    layout_file = layout_path / "layout.kicad_pcb"
+                layout_file = layout_path / "layout.kicad_pcb"
 
-                    # Check if layout file exists
-                    if layout_file.exists():
-                        should_sync = True
-                    else:
-                        logger.warning(
-                            f"Layout file not found for {current.id} at {layout_file}. "
-                            f"Skipping layout sync for this module."
-                        )
+                # Check if layout file exists
+                if layout_file.exists():
+                    should_sync = True
+                else:
+                    logger.warning(
+                        f"Layout file not found for {current.id} at {layout_file}. "
+                        f"Skipping layout sync for this module."
+                    )
 
             if should_sync:
                 # Sync this group
@@ -3019,11 +3080,7 @@ class SyncLayouts(Step):
             else:
                 # Only add children to queue if we didn't sync this group
                 queue.extend(current.children)
-
-                if not current.added:
-                    logger.debug(f"Skipping group {current.id} - not newly added")
-                else:
-                    logger.debug(f"Skipping group {current.id} - no layout_path")
+                logger.debug(f"Skipping group {current.id} - no layout_path")
 
         logger.info(f"Completed layout sync: synced {synced_count} groups")
 
@@ -3820,7 +3877,7 @@ def main():
             SetupBoard(state, board, args.board_config, args.sync_board_config),
             ApplyMovedPaths(state, board, schematic_data),
             ImportNetlist(state, board, args.output, netlist, change_detector),
-            SyncLayouts(state, board, netlist),
+            SyncLayouts(state, board, netlist, change_detector),
             PlaceComponents(state, board, netlist),
         ]
 

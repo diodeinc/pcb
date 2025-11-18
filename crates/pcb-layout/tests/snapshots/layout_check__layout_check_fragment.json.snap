@@ -1,0 +1,77 @@
+---
+source: crates/pcb-layout/tests/layout_check.rs
+expression: content
+---
+{
+  "change_count": 4,
+  "changes": [
+    {
+      "category": "fragment",
+      "change_type": "footprint_layout_updated",
+      "description": "MODULE1.C1.C layout differs from layout fragment",
+      "items": [
+        {
+          "description": "MODULE1.C1.C\n    position: (147.930, 104.245) → (148.930, 104.245)\n    orientation: 0.0° → 0.0°",
+          "hierarchical_path": "MODULE1.C1.C",
+          "pos": {
+            "x": 147.93,
+            "y": 104.245
+          },
+          "uuid": "501479b6-11f1-5dcd-80dd-6e36914d9845"
+        }
+      ],
+      "severity": "warning"
+    },
+    {
+      "category": "fragment",
+      "change_type": "footprint_layout_updated",
+      "description": "MODULE1.C2.C layout differs from layout fragment",
+      "items": [
+        {
+          "description": "MODULE1.C2.C\n    orientation: 0.0° → 0.0°",
+          "hierarchical_path": "MODULE1.C2.C",
+          "pos": {
+            "x": 148.5,
+            "y": 105.485
+          },
+          "uuid": "7bb5c8c4-7322-5347-8f94-bf52be6f1e6b"
+        }
+      ],
+      "severity": "warning"
+    },
+    {
+      "category": "fragment",
+      "change_type": "footprint_layout_updated",
+      "description": "MODULE2.C1.C layout differs from layout fragment",
+      "items": [
+        {
+          "description": "MODULE2.C1.C\n    position: (147.930, 104.245) → (148.930, 104.245)\n    orientation: 0.0° → 0.0°",
+          "hierarchical_path": "MODULE2.C1.C",
+          "pos": {
+            "x": 147.93,
+            "y": 104.245
+          },
+          "uuid": "ef130123-aa9a-5a2c-83ea-87b77fda62a6"
+        }
+      ],
+      "severity": "warning"
+    },
+    {
+      "category": "fragment",
+      "change_type": "footprint_layout_updated",
+      "description": "MODULE2.C2.C layout differs from layout fragment",
+      "items": [
+        {
+          "description": "MODULE2.C2.C\n    orientation: 0.0° → 0.0°",
+          "hierarchical_path": "MODULE2.C2.C",
+          "pos": {
+            "x": 148.5,
+            "y": 105.485
+          },
+          "uuid": "a9a3cb20-d570-5a6d-b3fb-397529fe57d7"
+        }
+      ],
+      "severity": "warning"
+    }
+  ]
+}
