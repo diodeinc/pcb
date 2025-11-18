@@ -2,6 +2,7 @@ use minijinja::{context, Environment};
 use pcb_zen_core::lang::stackup::{BoardConfig, CopperFinish, DielectricForm, Layer};
 use serde::Serialize;
 
+const MM_PER_OZ: f64 = 0.035;
 const TEMPLATE: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -129,24 +130,6 @@ fn finish_name(finish: &CopperFinish) -> &str {
     }
 }
 
-fn validate_copper_oz(oz: f64, layer_description: &str) -> Result<f64, String> {
-    const STANDARD_OZ: [f64; 3] = [0.5, 1.0, 2.0];
-    const TOLERANCE: f64 = 0.2; // 20%
-
-    for &standard in &STANDARD_OZ {
-        let lower = standard * (1.0 - TOLERANCE);
-        let upper = standard * (1.0 + TOLERANCE);
-        if oz >= lower && oz <= upper {
-            return Ok(standard);
-        }
-    }
-
-    Err(format!(
-        "{} copper weight {:.2} oz is not within 20% of standard values (0.5oz, 1.0oz, 2.0oz)",
-        layer_description, oz
-    ))
-}
-
 pub fn generate_html(board_config: &BoardConfig) -> String {
     let Some(stackup) = &board_config.stackup else {
         return r#"<!DOCTYPE html><html><head><meta charset="UTF-8"><title>No Stackup Data</title></head><body><h1>No stackup data available</h1></body></html>"#.to_string();
@@ -179,7 +162,7 @@ pub fn generate_html(board_config: &BoardConfig) -> String {
         .thickness
         .unwrap_or_else(|| layers.iter().map(|l| l.thickness()).sum());
 
-    let outer_oz = validate_copper_oz(copper_thicknesses[0] / 0.035, "Outer").unwrap();
+    let outer_oz = copper_thicknesses[0] / MM_PER_OZ;
 
     // Check if we have inner layers and if they're consistent
     let inner_oz = if copper_count > 2 {
@@ -188,7 +171,7 @@ pub fn generate_html(board_config: &BoardConfig) -> String {
             let first = inner_layers[0];
             let consistent = inner_layers.iter().all(|&t| (t - first).abs() < 0.001);
             if consistent {
-                Some(validate_copper_oz(first / 0.035, "Inner").unwrap())
+                Some(first / MM_PER_OZ)
             } else {
                 None
             }
