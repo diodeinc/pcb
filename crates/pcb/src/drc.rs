@@ -49,7 +49,7 @@ fn print_drc_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> Result<(boo
             .source_error
             .as_ref()
             .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
-            .and_then(|c| c.kind.strip_prefix("layout.drc."))
+            .map(|c| c.kind.as_str())
             .unwrap_or("other");
 
         let entry = category_counts
