@@ -318,10 +318,12 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
 
     let avl_items = create_avl_items(merged_items, &mut interner);
 
+    let num_items = avl_items.len();
+    let num_alternatives: usize = avl_items.iter().map(|i| i.vmpn_list.len()).sum();
+
     eprintln!(
         "Created AVL entries for {} BOM items with {} total alternatives",
-        avl_items.len(),
-        avl_items.iter().map(|i| i.vmpn_list.len()).sum::<usize>()
+        num_items, num_alternatives
     );
 
     let avl = ipc2581::types::Avl {
@@ -350,19 +352,30 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
 
     // Then patch AVL section
     updated_xml = patch_or_add_avl_section(&updated_xml, &avl.to_xml(&interner))?;
+
+    // Append FileRevision to HistoryRecord per IPC-2581C spec
+    let comment = format!(
+        "BOM alternatives added ({} items, {} total alternatives)",
+        num_items, num_alternatives
+    );
+    updated_xml = crate::utils::history::append_file_revision(&updated_xml, &comment)?;
+
+    // Reformat XML with proper indentation
+    updated_xml = crate::utils::format::reformat_xml(&updated_xml)?;
+
     file_utils::save_ipc_file(output.unwrap_or(file), &updated_xml)?;
 
     eprintln!("✓ Added BOM alternatives to {:?}", output.unwrap_or(file));
     Ok(())
 }
 
-/// Patch LogisticHeader to add new Enterprise entries
+/// Patch LogisticHeader to add new Enterprise entries (before Person or closing tag)
 fn patch_logistic_header(
     original_xml: &str,
     new_enterprises: &[(String, String)],
 ) -> Result<String> {
     use quick_xml::{
-        events::{BytesStart, BytesText, Event},
+        events::{BytesStart, Event},
         Reader, Writer,
     };
     use std::io::Cursor;
@@ -370,21 +383,39 @@ fn patch_logistic_header(
     let mut reader = Reader::from_str(original_xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buf = Vec::new();
+    let (mut in_header, mut inserted) = (false, false);
 
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
-            Event::End(e) if e.name().as_ref() == b"LogisticHeader" => {
+            Event::Start(ref e) if e.name().as_ref() == b"LogisticHeader" => {
+                in_header = true;
+                writer.write_event(Event::Start(e.to_owned()))?;
+            }
+            Event::Empty(ref e) | Event::Start(ref e)
+                if in_header && !inserted && e.name().as_ref() == b"Person" =>
+            {
                 for (id, name) in new_enterprises {
-                    writer.write_event(Event::Text(BytesText::new("    ")))?;
                     let mut elem = BytesStart::new("Enterprise");
                     elem.push_attribute(("id", id.as_str()));
                     elem.push_attribute(("name", name.as_str()));
                     elem.push_attribute(("code", "NONE"));
                     writer.write_event(Event::Empty(elem))?;
-                    writer.write_event(Event::Text(BytesText::new("\n")))?;
                 }
-                writer.write_event(Event::End(e))?;
+                inserted = true;
+                writer.write_event(Event::Empty(e.to_owned()).into_owned())?;
+            }
+            Event::End(ref e) if e.name().as_ref() == b"LogisticHeader" => {
+                if !inserted {
+                    for (id, name) in new_enterprises {
+                        let mut elem = BytesStart::new("Enterprise");
+                        elem.push_attribute(("id", id.as_str()));
+                        elem.push_attribute(("name", name.as_str()));
+                        elem.push_attribute(("code", "NONE"));
+                        writer.write_event(Event::Empty(elem))?;
+                    }
+                }
+                writer.write_event(Event::End(e.to_owned()))?;
             }
             e => writer.write_event(e)?,
         }
