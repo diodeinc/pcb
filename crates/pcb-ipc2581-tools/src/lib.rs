@@ -1,5 +1,6 @@
 use clap::ValueEnum;
 
+pub mod accessors;
 pub mod commands;
 pub mod utils;
 

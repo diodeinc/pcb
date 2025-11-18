@@ -279,7 +279,9 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
     for item in &bom.items {
         let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
         // Get MPN from AVL (canonical source)
-        let (mpn, _, _) = super::bom::lookup_from_avl(&ipc, item.oem_design_number_ref);
+        let accessor = crate::accessors::IpcAccessor::new(&ipc);
+        let avl_lookup = accessor.lookup_avl(item.oem_design_number_ref);
+        let mpn = avl_lookup.primary_mpn;
 
         for rule in &rules {
             if !matches_rule_key(&ipc, item, &rule.key, mpn.as_ref()) {
