@@ -55,19 +55,21 @@ logger = logging.getLogger("pcb")
 def natural_sort_key(text: str) -> List:
     """
     Generate a sort key for natural (human-friendly) sorting.
-    
+
     Splits a string into numeric and non-numeric parts, converting numeric
     parts to integers so that "C2" sorts before "C10".
-    
+
     Example:
         "C10" -> ['C', 10]
         "C2"  -> ['C', 2]
         "IC1.R5" -> ['IC', 1, '.R', 5]
     """
+
     def convert(part):
         return int(part) if part.isdigit() else part.lower()
-    
-    return [convert(c) for c in re.split('([0-9]+)', text)]
+
+    return [convert(c) for c in re.split("([0-9]+)", text)]
+
 
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
@@ -224,7 +226,10 @@ class JsonNetlistParser:
             # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
             value = "?"
             for key in ["mpn", "value", "Value"]:
-                if key in instance["attributes"] and "String" in instance["attributes"][key]:
+                if (
+                    key in instance["attributes"]
+                    and "String" in instance["attributes"][key]
+                ):
                     value = instance["attributes"][key]["String"]
                     break
 
@@ -297,7 +302,9 @@ class JsonNetlistParser:
                                     elif "Number" in item:
                                         array_items.append(str(item["Number"]))
                                     elif "Boolean" in item:
-                                        array_items.append("true" if item["Boolean"] else "false")
+                                        array_items.append(
+                                            "true" if item["Boolean"] else "false"
+                                        )
                                     else:
                                         # For other types, use string representation
                                         array_items.append(str(item))
@@ -2025,17 +2032,23 @@ class ImportNetlist(Step):
                 pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
             )
             # Handle DNP property
-            dnp_prop = next((x for x in part.properties if x.name.lower() == "dnp"), None)
+            dnp_prop = next(
+                (x for x in part.properties if x.name.lower() == "dnp"), None
+            )
             fp.SetDNP(dnp_prop is not None and dnp_prop.value.lower() == "true")
 
             # Handle skip_bom property
-            skip_bom_prop = next((x for x in part.properties if x.name.lower() == "skip_bom"), None)
+            skip_bom_prop = next(
+                (x for x in part.properties if x.name.lower() == "skip_bom"), None
+            )
             fp.SetExcludedFromBOM(
                 skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
             )
 
             # Handle skip_pos property
-            skip_pos_prop = next((x for x in part.properties if x.name.lower() == "skip_pos"), None)
+            skip_pos_prop = next(
+                (x for x in part.properties if x.name.lower() == "skip_pos"), None
+            )
             fp.SetExcludedFromPosFiles(
                 skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
             )
@@ -2053,18 +2066,22 @@ class ImportNetlist(Step):
                     fp.GetFieldByName("Description").SetText(prop.value)
                     fp.GetFieldByName("Description").SetVisible(False)
                 # Skip built-in fields, symbol metadata, and specially handled properties
-                elif prop.name.lower() not in [
-                    "value",
-                    "reference",
-                    "dnp",  # Skip the standardized dnp attribute (handled above)
-                    "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
-                    "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
-                    "symbol_name",  # Symbol metadata - not needed in PCB
-                    "symbol_path",  # Symbol metadata - not needed in PCB
-                ] and not prop.name.startswith("_"):
+                elif (
+                    prop.name.lower()
+                    not in [
+                        "value",
+                        "reference",
+                        "dnp",  # Skip the standardized dnp attribute (handled above)
+                        "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
+                        "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
+                        "symbol_name",  # Symbol metadata - not needed in PCB
+                        "symbol_path",  # Symbol metadata - not needed in PCB
+                    ]
+                    and not prop.name.startswith("_")
+                ):
                     # Convert snake_case property names to Title Case for display in KiCad
                     # e.g., "logic_level" -> "Logic Level"
-                    display_name = prop.name.replace('_', ' ').title()
+                    display_name = prop.name.replace("_", " ").title()
                     fp.SetField(display_name, prop.value)
                     fp.GetFieldByName(display_name).SetVisible(False)
 
@@ -2762,7 +2779,9 @@ class PlaceComponents(Step):
 
         # Sort by area (largest first) for better packing, then by name for determinism
         # Use natural sort for names so "C2" comes before "C10"
-        items_with_bbox.sort(key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id))
+        items_with_bbox.sort(
+            key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id)
+        )
 
         # Storage for potential placement points (as (x, y) tuples)
         # These are points where we can place the bottom-left corner of an item
@@ -2962,7 +2981,8 @@ class PlaceComponents(Step):
             # If root is a group, use its children as top-level items
             # Sort them for deterministic ordering using natural sort
             top_level_added = sorted(
-                sparse_tree.children, key=lambda item: (natural_sort_key(item.name), item.id)
+                sparse_tree.children,
+                key=lambda item: (natural_sort_key(item.name), item.id),
             )
         else:
             # If root is a single item, use it
@@ -2999,7 +3019,8 @@ class PlaceComponents(Step):
             if not item.added and isinstance(item, VirtualGroup):
                 # Sort children for deterministic traversal using natural sort
                 sorted_children = sorted(
-                    item.children, key=lambda child: (natural_sort_key(child.name), child.id)
+                    item.children,
+                    key=lambda child: (natural_sort_key(child.name), child.id),
                 )
                 for child in sorted_children:
                     collect_existing_bbox(child)
