@@ -1449,7 +1449,7 @@ fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> 
     Ok(())
 }
 
-/// Run KiCad DRC checks on the layout file
+/// Run layout sync check and KiCad DRC checks on the layout file
 fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Find the .kicad_pcb file in the layout directory
     let layout_dir = info.staging_dir.join("layout");
@@ -1460,9 +1460,18 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .map(|e| e.path())
         .ok_or_else(|| anyhow::anyhow!("No .kicad_pcb file found in {}", layout_dir.display()))?;
 
-    // Run DRC checks and print results
-    let (had_errors, warnings) =
-        spinner.suspend(|| crate::drc::run_and_print_drc(&kicad_pcb_path, &info.suppress))?;
+    // Find the .zen source file
+    let zen_path = info.staging_dir.join(format!("{}.zen", info.board_name));
+
+    // Run combined layout sync + DRC checks
+    let (had_errors, warnings) = spinner.suspend(|| {
+        crate::layout::run_combined_layout_checks(
+            &zen_path,
+            &kicad_pcb_path,
+            &info.schematic,
+            &info.suppress,
+        )
+    })?;
 
     // Handle errors - always fail if there are errors
     if had_errors {
@@ -1474,11 +1483,11 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         spinner.suspend(|| {
             // Non-interactive if stdin OR stdout is not a terminal
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-                eprintln!("{} DRC check failed with warnings", pcb_ui::icons::error());
+                eprintln!("{} Layout check failed with warnings", pcb_ui::icons::error());
                 std::process::exit(1);
             }
             let confirmed = Confirm::new(&format!(
-                "DRC completed with {} warning(s). Do you want to proceed with the release?",
+                "Layout check completed with {} warning(s). Do you want to proceed with the release?",
                 warnings
             ))
             .with_default(true)

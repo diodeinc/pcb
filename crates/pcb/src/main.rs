@@ -15,6 +15,7 @@ mod fmt;
 mod info;
 mod ipc2581;
 mod layout;
+mod layout_check;
 mod lsp;
 mod mcp;
 mod open;

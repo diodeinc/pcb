@@ -14,6 +14,7 @@ use pcb_kicad::PythonScriptBuilder;
 use pcb_sch::kicad_netlist::{format_footprint, write_fp_lib_table};
 
 pub mod fab_drawing;
+pub mod sync_check;
 
 /// Result of layout generation/update
 #[derive(Debug)]
