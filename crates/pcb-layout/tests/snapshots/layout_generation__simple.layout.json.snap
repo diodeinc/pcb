@@ -73,7 +73,7 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 146500000,
+            "x": 146600000,
             "y": 104735000
           },
           "layer": "F.Silkscreen",
@@ -83,7 +83,7 @@ expression: content
           },
           "shape": 2,
           "start": {
-            "x": 146600000,
+            "x": 146500000,
             "y": 104735000
           },
           "text": null,
@@ -93,7 +93,7 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 146600000,
+            "x": 146500000,
             "y": 104735000
           },
           "layer": "F.Silkscreen",
@@ -103,7 +103,7 @@ expression: content
           },
           "shape": 2,
           "start": {
-            "x": 146500000,
+            "x": 146600000,
             "y": 104735000
           },
           "text": null,
