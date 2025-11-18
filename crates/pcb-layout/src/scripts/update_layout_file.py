@@ -1517,7 +1517,36 @@ class SetupBoard(Step):
         """Set track width list from list of width values in mm."""
         track_list = ds.m_TrackWidthList
 
-        # Clear existing list and add new values
+        # Check if list already matches desired values
+        # Note: The placeholder at index 0 may not persist in saved files,
+        # so we compare with and without it
+        actual_size = track_list.size()
+        has_placeholder = actual_size == len(values) + 1
+        exact_match = actual_size == len(values)
+
+        if has_placeholder or exact_match:
+            matches = True
+            start_idx = 1 if has_placeholder else 0
+
+            # Check placeholder if present
+            if has_placeholder and track_list[0] != 0:
+                matches = False
+
+            # Check all values
+            if matches:
+                for i, width in enumerate(values):
+                    expected_val = pcbnew.FromMM(width)
+                    actual_val = track_list[start_idx + i]
+                    if actual_val != expected_val:
+                        matches = False
+                        break
+
+            if matches:
+                logger.debug(f"Track width list unchanged ({len(values)} widths)")
+                return
+
+        # List differs, rebuild it
+        logger.info(f"Updating track width list: {len(values)} widths")
         track_list.clear()
 
         # Index 0 is reserved to "make room for the netclass value" (from KiCad source)
@@ -1527,15 +1556,36 @@ class SetupBoard(Step):
 
         for width in values:
             track_list.push_back(pcbnew.FromMM(width))
-        logger.info(
-            f"Set {track_list.size()} pre-defined track widths (including 0.0 placeholder)"
-        )
 
     def _set_via_dimensions_list(self, ds, values):
         """Set via dimensions list from list of {diameter, drill} objects."""
         via_list = ds.m_ViasDimensionsList
 
-        # Clear existing list and add new values
+        # Check if list already matches desired values
+        expected_size = len(values) + 1  # +1 for placeholder at index 0
+        if via_list.size() == expected_size:
+            # Verify placeholder and all values match
+            matches = via_list[0].m_Diameter == 0 and via_list[0].m_Drill == 0
+            for i, via_def in enumerate(values):
+                if (
+                    isinstance(via_def, dict)
+                    and "diameter" in via_def
+                    and "drill" in via_def
+                ):
+                    via_dim = via_list[i + 1]
+                    matches = matches and (
+                        via_dim.m_Diameter == pcbnew.FromMM(via_def["diameter"])
+                        and via_dim.m_Drill == pcbnew.FromMM(via_def["drill"])
+                    )
+
+            if matches:
+                logger.debug(
+                    f"Via dimensions list unchanged ({len(values)} dimensions)"
+                )
+                return
+
+        # List differs, rebuild it
+        logger.info(f"Updating via dimensions list: {len(values)} dimensions")
         via_list.clear()
 
         # Index 0 is reserved to "make room for the netclass value" (from KiCad source)
@@ -1557,9 +1607,6 @@ class SetupBoard(Step):
             drill = pcbnew.FromMM(via_def["drill"])
             via_dim = pcbnew.VIA_DIMENSION(diameter, drill)
             via_list.push_back(via_dim)
-        logger.info(
-            f"Set {via_list.size()} pre-defined via dimensions (including 0.0/0.0 placeholder)"
-        )
 
     def _set_netclasses(self, ds, values):
         """Set netclasses from list of netclass definitions."""
@@ -1569,8 +1616,57 @@ class SetupBoard(Step):
 
         netSettings = ds.m_NetSettings
 
-        # Clear existing netclasses (except default)
-        netSettings.ClearNetclasses()
+        def netclass_matches(netclass, nc_def):
+            """Check if a netclass matches the definition."""
+            checks = []
+            if "clearance" in nc_def and nc_def["clearance"] is not None:
+                checks.append(
+                    netclass.GetClearance() == pcbnew.FromMM(nc_def["clearance"])
+                )
+            if "track_width" in nc_def and nc_def["track_width"] is not None:
+                checks.append(
+                    netclass.GetTrackWidth() == pcbnew.FromMM(nc_def["track_width"])
+                )
+            if "via_diameter" in nc_def and nc_def["via_diameter"] is not None:
+                checks.append(
+                    netclass.GetViaDiameter() == pcbnew.FromMM(nc_def["via_diameter"])
+                )
+            if "via_drill" in nc_def and nc_def["via_drill"] is not None:
+                checks.append(
+                    netclass.GetViaDrill() == pcbnew.FromMM(nc_def["via_drill"])
+                )
+            if (
+                "microvia_diameter" in nc_def
+                and nc_def["microvia_diameter"] is not None
+            ):
+                checks.append(
+                    netclass.GetuViaDiameter()
+                    == pcbnew.FromMM(nc_def["microvia_diameter"])
+                )
+            if "microvia_drill" in nc_def and nc_def["microvia_drill"] is not None:
+                checks.append(
+                    netclass.GetuViaDrill() == pcbnew.FromMM(nc_def["microvia_drill"])
+                )
+            if "diff_pair_width" in nc_def and nc_def["diff_pair_width"] is not None:
+                checks.append(
+                    netclass.GetDiffPairWidth()
+                    == pcbnew.FromMM(nc_def["diff_pair_width"])
+                )
+            if "diff_pair_gap" in nc_def and nc_def["diff_pair_gap"] is not None:
+                checks.append(
+                    netclass.GetDiffPairGap() == pcbnew.FromMM(nc_def["diff_pair_gap"])
+                )
+            if (
+                "diff_pair_via_gap" in nc_def
+                and nc_def["diff_pair_via_gap"] is not None
+            ):
+                checks.append(
+                    netclass.GetDiffPairViaGap()
+                    == pcbnew.FromMM(nc_def["diff_pair_via_gap"])
+                )
+            if "priority" in nc_def and nc_def["priority"] is not None:
+                checks.append(netclass.GetPriority() == int(nc_def["priority"]))
+            return all(checks) if checks else True
 
         def apply_netclass_properties(netclass, nc_def):
             """Apply properties from definition dict to a netclass object."""
@@ -1610,6 +1706,49 @@ class SetupBoard(Step):
                         f"Failed to parse color '{nc_def['color']}' for netclass '{name}': {e}"
                     )
 
+        # Check if netclasses need updating
+        needs_update = False
+        existing_netclasses = {}
+
+        # Get existing netclasses - GetNetclasses() returns a map-like object
+        netclasses_map = netSettings.GetNetclasses()
+        for name, nc in netclasses_map.items():
+            existing_netclasses[name] = nc
+
+        # Check for differences
+        desired_names = {
+            nc_def["name"]
+            for nc_def in values
+            if isinstance(nc_def, dict) and "name" in nc_def
+        }
+        existing_names = set(existing_netclasses.keys())
+
+        # Check if sets of names differ
+        if desired_names != existing_names:
+            needs_update = True
+            logger.debug(
+                f"Netclass names differ - desired: {desired_names}, existing: {existing_names}"
+            )
+        else:
+            # Check if any netclass properties differ
+            for nc_def in values:
+                if not isinstance(nc_def, dict) or "name" not in nc_def:
+                    continue
+                name = nc_def["name"]
+                if name in existing_netclasses:
+                    if not netclass_matches(existing_netclasses[name], nc_def):
+                        needs_update = True
+                        logger.debug(f"Netclass '{name}' properties differ")
+                        break
+
+        if not needs_update:
+            logger.debug(f"Netclasses unchanged ({len(values)} netclasses)")
+            return
+
+        # Netclasses differ, rebuild them
+        logger.info(f"Updating netclasses: {len(values)} netclasses")
+        netSettings.ClearNetclasses()
+
         for nc_def in values:
             if not isinstance(nc_def, dict) or "name" not in nc_def:
                 logger.warning(f"Netclass definition must have 'name' key: {nc_def}")
@@ -1629,15 +1768,9 @@ class SetupBoard(Step):
                 # Update the actual internal default netclass (m_DefaultNetclass)
                 default_nc = netSettings.GetDefaultNetclass()
                 apply_netclass_properties(default_nc, nc_def)
-                logger.info(
-                    f"Updated internal m_DefaultNetclass with properties from 'Default' netclass"
-                )
             else:
                 # Add netclass to the collection (skip for Default since it's already there)
                 netSettings.SetNetclass(netclass.GetName(), netclass)
-                logger.info(f"Added netclass '{name}' to board")
-
-        logger.info(f"Set {len(values)} netclasses")
 
     def _apply_board_config(self):
         """Apply board configuration from JSON file to design settings."""
@@ -1675,8 +1808,17 @@ class SetupBoard(Step):
                     else:
                         logger.warning(f"Unknown custom setter: {custom_setter}")
                 else:
-                    setattr(ds, ds_attr, pcbnew.FromMM(value))
-                    logger.info(f"Set {display_name}: {value}mm")
+                    # Compare before setting to avoid unnecessary modifications
+                    current_value = getattr(ds, ds_attr)
+                    new_value = pcbnew.FromMM(value)
+
+                    if current_value != new_value:
+                        setattr(ds, ds_attr, new_value)
+                        logger.info(
+                            f"Updated {display_name}: {pcbnew.ToMM(current_value):.3f}mm -> {value}mm"
+                        )
+                    else:
+                        logger.debug(f"{display_name} unchanged: {value}mm")
 
     def _setup_title_block(self):
         """Configure the title block with variable placeholders."""
