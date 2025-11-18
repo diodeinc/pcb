@@ -6,8 +6,7 @@ pub mod scan;
 
 pub use auth::{execute as execute_auth, login, logout, status, AuthArgs, AuthCommand, AuthTokens};
 pub use bom::{
-    fetch_and_populate_availability, DesignMatchResult, MatchBomResponse, OfferWithMatchKey,
-    PriceBreak,
+    fetch_and_populate_availability, BomLine, ComponentOffer, MatchBomResponse, PriceBreak,
 };
 pub use component::{
     add_component_to_workspace, download_component, execute as execute_search,
