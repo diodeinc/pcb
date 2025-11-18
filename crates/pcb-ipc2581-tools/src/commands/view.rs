@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use log::debug;
 use quick_xml::{
     events::{BytesStart, Event},
     Reader, Writer,
@@ -77,14 +76,21 @@ fn excluded_sections(mode: ViewMode) -> &'static [&'static str] {
 
 pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let filtered_xml = filter_by_mode(&content, mode)?;
+    let mut filtered_xml = filter_by_mode(&content, mode)?;
+
+    // Append FileRevision to HistoryRecord per IPC-2581C spec
+    let comment = format!("Filtered to {} view", mode.as_str());
+    filtered_xml = crate::utils::history::append_file_revision(&filtered_xml, &comment)?;
+
+    // Reformat XML with proper indentation
+    filtered_xml = crate::utils::format::reformat_xml(&filtered_xml)?;
+
     file_utils::save_ipc_file(output, &filtered_xml)?;
 
     eprintln!("✓ Exported {} mode view to {:?}", mode.as_str(), output);
     Ok(())
 }
 
-/// Filter IPC-2581 XML based on the specified mode
 fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
     let excluded = excluded_sections(mode);
     let mut reader = Reader::from_str(xml);
@@ -95,53 +101,27 @@ fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
     loop {
         match reader.read_event_into(&mut buf)? {
             Event::Eof => break,
-
-            // Update FunctionMode element with target mode
-            Event::Empty(ref e) if e.name().as_ref() == b"FunctionMode" => {
+            Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"FunctionMode" => {
                 write_function_mode_element(&mut writer, mode, e)?;
             }
-
-            Event::Start(ref e) if e.name().as_ref() == b"FunctionMode" => {
-                write_function_mode_element(&mut writer, mode, e)?;
-            }
-
             Event::End(ref e) if e.name().as_ref() == b"FunctionMode" => {
                 writer.write_event(Event::End(e.to_owned()))?;
             }
-
-            // Check if we should skip this element
             Event::Start(ref e) if skip_depth == 0 => {
-                let name = e.name();
-                if should_exclude(name.as_ref(), excluded) {
+                if should_exclude(e.name().as_ref(), excluded) {
                     skip_depth = 1;
-                    debug!(
-                        "Excluding section: {}",
-                        String::from_utf8_lossy(name.as_ref())
-                    );
                 } else {
                     writer.write_event(Event::Start(e.to_owned()))?;
                 }
             }
-
             Event::Empty(ref e) if skip_depth == 0 => {
-                let name = e.name();
-                if should_exclude(name.as_ref(), excluded) {
-                    debug!(
-                        "Excluding empty element: {}",
-                        String::from_utf8_lossy(name.as_ref())
-                    );
-                } else {
+                if !should_exclude(e.name().as_ref(), excluded) {
                     writer.write_event(Event::Empty(e.to_owned()))?;
                 }
             }
-
-            // Track nested depth when skipping
             Event::Start(_) if skip_depth > 0 => skip_depth += 1,
             Event::End(_) if skip_depth > 0 => skip_depth -= 1,
-
-            // Copy everything else when not skipping
             event if skip_depth == 0 => writer.write_event(event)?,
-
             _ => {}
         }
         buf.clear();
@@ -161,14 +141,11 @@ fn write_function_mode_element(
 ) -> Result<()> {
     let mut elem = BytesStart::new("FunctionMode");
     elem.push_attribute(("mode", mode.as_str()));
-
-    // Copy other attributes except mode
     for attr in event.attributes().flatten() {
         if attr.key.as_ref() != b"mode" {
             elem.push_attribute(attr);
         }
     }
-
     writer.write_event(Event::Empty(elem))?;
     Ok(())
 }

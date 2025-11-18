@@ -129,6 +129,7 @@ sha2 = "0.10"
 semver = "1.0"
 quick-xml = "0.38"
 zstd = "0.13"
+jiff = "0.2"
 
 # The profile that 'dist' will build with
 [profile.dist]
