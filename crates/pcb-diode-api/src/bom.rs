@@ -12,11 +12,10 @@ pub struct PriceBreak {
     pub price: f64,
 }
 
-/// Offer with match key - represents a distributor part availability
+/// Component offer - represents a distributor part availability
 #[derive(Debug, Clone, Deserialize)]
-pub struct OfferWithMatchKey {
-    #[serde(rename = "componentOfferId")]
-    pub component_offer_id: String,
+pub struct ComponentOffer {
+    pub id: String,
 
     // Part identification
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,7 +47,7 @@ pub struct OfferWithMatchKey {
     pub product_url: Option<String>,
 }
 
-impl OfferWithMatchKey {
+impl ComponentOffer {
     /// Calculate unit price at a given quantity using price breaks
     pub fn unit_price_at_qty(&self, qty: i32) -> Option<f64> {
         let price_breaks = self.price_breaks.as_ref()?;
@@ -79,23 +78,43 @@ impl OfferWithMatchKey {
     }
 }
 
-/// Match result for a single design entry
+/// Design BOM entry structure from the API
 #[derive(Debug, Deserialize)]
-pub struct DesignMatchResult {
-    #[serde(rename = "designIndex")]
-    pub design_index: usize,
-    pub offers: Vec<OfferWithMatchKey>,
+pub struct DesignBomEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub designator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// BOM Line - represents a single line in the matched BOM response
+#[derive(Debug, Deserialize)]
+pub struct BomLine {
+    pub id: String,
+    #[serde(rename = "designEntry")]
+    pub design_entry: DesignBomEntry,
+    pub offers: Vec<ComponentOffer>,
+    #[serde(rename = "selectedOfferId")]
+    pub selected_offer_id: Option<String>,
 }
 
 /// Response from /api/boms/match endpoint
 #[derive(Debug, Deserialize)]
 pub struct MatchBomResponse {
-    pub results: Vec<DesignMatchResult>,
+    pub results: Vec<BomLine>,
 }
 
 /// Compare offers within the same tier: prefer lower price, then higher stock
 #[inline]
-fn within_tier_cmp(a: &OfferWithMatchKey, b: &OfferWithMatchKey, qty: i32) -> std::cmp::Ordering {
+fn within_tier_cmp(a: &ComponentOffer, b: &ComponentOffer, qty: i32) -> std::cmp::Ordering {
     use std::cmp::Ordering::*;
 
     let price_a = a.unit_price_at_qty(qty * NUM_BOARDS);
@@ -115,10 +134,10 @@ fn within_tier_cmp(a: &OfferWithMatchKey, b: &OfferWithMatchKey, qty: i32) -> st
 /// Select the best offer: Plenty > Limited > None tier, then lowest price within tier.
 /// Single-pass, allocation-free selection using iterator comparator.
 fn select_best_offer(
-    offers: &[OfferWithMatchKey],
+    offers: &[ComponentOffer],
     qty: i32,
     is_small_passive: bool,
-) -> Option<&OfferWithMatchKey> {
+) -> Option<&ComponentOffer> {
     offers.iter().min_by(|a, b| {
         let stock_a = a.stock_available.unwrap_or(0);
         let stock_b = b.stock_available.unwrap_or(0);
@@ -163,76 +182,78 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
         .context("Failed to parse BOM match response")?;
 
     // Populate availability data
-    for result in match_response.results {
-        if let Some(entry_json) = bom_entries.get(result.design_index) {
-            let path = entry_json["path"].as_str().unwrap();
+    for bom_line in match_response.results {
+        // Get the path from the design entry
+        let path = match &bom_line.design_entry.path {
+            Some(p) => p.as_str(),
+            None => continue,
+        };
 
-            if !bom.entries.contains_key(path) {
-                continue;
-            }
-
-            let qty = bom
-                .designators
-                .iter()
-                .filter(|(p, _)| p.as_str() == path)
-                .count() as i32;
-
-            // Get BOM entry to check if it's a small generic passive
-            let bom_entry = bom.entries.get(path).unwrap();
-            let is_small_passive = is_small_generic_passive(
-                bom_entry.generic_data.as_ref(),
-                bom_entry.package.as_deref(),
-            );
-
-            // Select the best offer based on availability tier (Plenty > Limited > None)
-            // then price within tier. This single offer is used for all downstream data.
-            let best_offer = select_best_offer(&result.offers, qty, is_small_passive);
-
-            // Extract all data from the best matched offer
-            let (stock_total, lcsc_part_ids, price_breaks, mpn, manufacturer) = match best_offer {
-                Some(offer) => {
-                    let stock = offer.stock_available.unwrap_or(0);
-
-                    let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
-                        (Some("lcsc"), Some(id)) => {
-                            let formatted_id = if id.starts_with('C') {
-                                id.clone()
-                            } else {
-                                format!("C{}", id)
-                            };
-                            let url = offer.product_url.clone().unwrap_or_else(|| {
-                                format!("https://lcsc.com/product-detail/{}.html", formatted_id)
-                            });
-                            vec![(formatted_id, url)]
-                        }
-                        _ => Vec::new(),
-                    };
-
-                    // Store price breaks for recalculation with grouped quantities
-                    let breaks = offer
-                        .price_breaks
-                        .as_ref()
-                        .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
-
-                    let offer_mpn = offer.mpn.clone().filter(|s| !s.is_empty());
-                    let offer_mfr = offer.manufacturer.clone().filter(|s| !s.is_empty());
-
-                    (stock, lcsc_id, breaks, offer_mpn, offer_mfr)
-                }
-                None => (0, Vec::new(), None, None, None),
-            };
-
-            bom.availability.insert(
-                path.to_string(),
-                pcb_sch::AvailabilityData {
-                    stock_total,
-                    price_breaks,
-                    lcsc_part_ids,
-                    mpn,
-                    manufacturer,
-                },
-            );
+        if !bom.entries.contains_key(path) {
+            continue;
         }
+
+        let qty = bom
+            .designators
+            .iter()
+            .filter(|(p, _)| p.as_str() == path)
+            .count() as i32;
+
+        // Get BOM entry to check if it's a small generic passive
+        let bom_entry = bom.entries.get(path).unwrap();
+        let is_small_passive = is_small_generic_passive(
+            bom_entry.generic_data.as_ref(),
+            bom_entry.package.as_deref(),
+        );
+
+        // Select the best offer based on availability tier (Plenty > Limited > None)
+        // then price within tier. This single offer is used for all downstream data.
+        let best_offer = select_best_offer(&bom_line.offers, qty, is_small_passive);
+
+        // Extract all data from the best matched offer
+        let (stock_total, lcsc_part_ids, price_breaks, mpn, manufacturer) = match best_offer {
+            Some(offer) => {
+                let stock = offer.stock_available.unwrap_or(0);
+
+                let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
+                    (Some("lcsc"), Some(id)) => {
+                        let formatted_id = if id.starts_with('C') {
+                            id.clone()
+                        } else {
+                            format!("C{}", id)
+                        };
+                        let url = offer.product_url.clone().unwrap_or_else(|| {
+                            format!("https://lcsc.com/product-detail/{}.html", formatted_id)
+                        });
+                        vec![(formatted_id, url)]
+                    }
+                    _ => Vec::new(),
+                };
+
+                // Store price breaks for recalculation with grouped quantities
+                let breaks = offer
+                    .price_breaks
+                    .as_ref()
+                    .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
+
+                let offer_mpn = offer.mpn.clone().filter(|s| !s.is_empty());
+                let offer_mfr = offer.manufacturer.clone().filter(|s| !s.is_empty());
+
+                (stock, lcsc_id, breaks, offer_mpn, offer_mfr)
+            }
+            None => (0, Vec::new(), None, None, None),
+        };
+
+        bom.availability.insert(
+            path.to_string(),
+            pcb_sch::AvailabilityData {
+                stock_total,
+                price_breaks,
+                lcsc_part_ids,
+                mpn,
+                manufacturer,
+            },
+        );
     }
 
     Ok(())
