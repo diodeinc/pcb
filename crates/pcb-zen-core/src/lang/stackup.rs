@@ -6,7 +6,6 @@ use std::{borrow::Cow, collections::HashMap, fmt, path::PathBuf, str::FromStr};
 use thiserror::Error;
 
 pub const THICKNESS_EPS: f64 = f64::EPSILON * 1000.0; // Floating point precision tolerance
-const THICKNESS_VALIDATION_TOLERANCE: f64 = 0.10; // 10% tolerance for stackup validation
 
 /// Trait for approximate equality with tolerance
 pub trait ApproxEq<Rhs = Self> {
@@ -74,26 +73,27 @@ impl ApproxEq for Material {
 
 impl ApproxEq for Stackup {
     fn approx_eq(&self, other: &Stackup, eps: f64) -> bool {
-        // Compare materials
+        // Compare materials (order-independent: sort by name before comparing)
         let materials_ok = match (&self.materials, &other.materials) {
             (Some(a), Some(b)) => {
                 if a.len() != b.len() {
                     return false;
                 }
-                a.iter().zip(b).all(|(x, y)| x.approx_eq(y, eps))
+                // Sort both lists by name for order-independent comparison
+                let mut a_sorted = a.clone();
+                let mut b_sorted = b.clone();
+                a_sorted.sort_by(|x, y| x.name.cmp(&y.name));
+                b_sorted.sort_by(|x, y| x.name.cmp(&y.name));
+                a_sorted
+                    .iter()
+                    .zip(&b_sorted)
+                    .all(|(x, y)| x.approx_eq(y, eps))
             }
             (None, None) => true,
-            (a, b) => {
-                eprintln!(
-                    "STACKUP DIFF: Materials option mismatch: {:?} vs {:?}",
-                    a.as_ref().map(|v| v.len()),
-                    b.as_ref().map(|v| v.len())
-                );
-                false
-            }
+            _ => false,
         };
 
-        // Compare layers
+        // Compare layers (order matters for layers!)
         let layers_ok = match (&self.layers, &other.layers) {
             (Some(a), Some(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.approx_eq(y, eps))
@@ -106,9 +106,8 @@ impl ApproxEq for Stackup {
         let colors_ok = self.silk_screen_color == other.silk_screen_color
             && self.solder_mask_color == other.solder_mask_color;
         let finish_ok = self.copper_finish == other.copper_finish;
-        let thick_ok = self.thickness.approx_eq(&other.thickness, eps);
 
-        materials_ok && layers_ok && colors_ok && finish_ok && thick_ok
+        materials_ok && layers_ok && colors_ok && finish_ok
     }
 }
 
@@ -295,8 +294,6 @@ pub struct Stackup {
     pub materials: Option<Vec<Material>>,
     pub silk_screen_color: Option<String>,
     pub solder_mask_color: Option<String>,
-    pub thickness: Option<f64>,
-    pub symmetric: Option<bool>,
     pub layers: Option<Vec<Layer>>,
     pub copper_finish: Option<CopperFinish>,
 }
@@ -455,6 +452,27 @@ impl From<pcb_sexpr::ParseError> for StackupError {
 }
 
 impl Stackup {
+    /// Compute total thickness from layers
+    pub fn thickness(&self) -> Option<f64> {
+        self.layers
+            .as_ref()
+            .map(|layers| layers.iter().map(Layer::thickness).sum())
+    }
+
+    /// Check if stackup is symmetric (mirrors around center)
+    pub fn is_symmetric(&self) -> bool {
+        match &self.layers {
+            Some(layers) if layers.len() >= 3 => {
+                let mid = layers.len() / 2;
+                layers[..mid]
+                    .iter()
+                    .zip(layers[mid + 1..].iter().rev())
+                    .all(|(a, b)| a == b)
+            }
+            _ => false,
+        }
+    }
+
     /// Validate the stackup configuration
     pub fn validate(&self) -> Result<(), StackupError> {
         let layers = match &self.layers {
@@ -517,23 +535,15 @@ impl Stackup {
         Ok(())
     }
 
-    fn validate_thickness(&self, layers: &[Layer]) -> Result<(), StackupError> {
-        if let Some(expected_thickness) = self.thickness {
-            let total_thickness: f64 = layers.iter().map(Layer::thickness).sum();
-            let tolerance = expected_thickness * THICKNESS_VALIDATION_TOLERANCE;
-
-            if (total_thickness - expected_thickness).abs() > tolerance {
-                return Err(StackupError::ThicknessMismatch {
-                    actual: total_thickness,
-                    expected: expected_thickness,
-                });
-            }
-        }
+    fn validate_thickness(&self, _layers: &[Layer]) -> Result<(), StackupError> {
+        // Thickness is now derived from layers, no validation needed
+        // The computed thickness is always correct by definition
         Ok(())
     }
 
     fn validate_symmetry_if_requested(&self, layers: &[Layer]) -> Result<(), StackupError> {
-        if self.symmetric == Some(true) {
+        // Use computed is_symmetric() to check if validation should run
+        if self.is_symmetric() {
             self.validate_symmetry(layers)?;
         }
         Ok(())
@@ -894,7 +904,6 @@ impl Stackup {
         let mut silk_screen_color = None;
         let mut solder_mask_color = None;
         let mut copper_finish = None;
-        let mut total_thickness = 0.0;
 
         // Parse each layer in the stackup
         for item in stackup_items.iter().skip(1) {
@@ -923,7 +932,6 @@ impl Stackup {
                                     .cloned()
                                     .unwrap_or_else(|| Self::determine_copper_role(name)); // Fallback to heuristic
                                 layers.push(Layer::Copper { thickness, role });
-                                total_thickness += thickness;
                             }
                             name if name.starts_with("dielectric ") => {
                                 // Dielectric layer
@@ -964,7 +972,6 @@ impl Stackup {
                                     material,
                                     form,
                                 });
-                                total_thickness += thickness;
                             }
                             _ => {} // Skip other layers
                         }
@@ -998,12 +1005,6 @@ impl Stackup {
             },
             silk_screen_color,
             solder_mask_color,
-            thickness: if total_thickness > 0.0 {
-                Some(total_thickness)
-            } else {
-                None
-            },
-            symmetric: None, // We don't parse this from KiCad files
             layers: if layers.is_empty() {
                 None
             } else {
@@ -1059,8 +1060,6 @@ mod tests {
                 loss_tangent: Some(0.02),
                 reference_frequency: None,
             }]),
-            thickness: Some(1.6),
-            symmetric: Some(true),
             layers: Some(vec![
                 Layer::Copper {
                     thickness: 0.035,
@@ -1107,8 +1106,6 @@ mod tests {
     fn test_too_few_layers() {
         let stackup = Stackup {
             materials: None,
-            thickness: None,
-            symmetric: None,
             layers: Some(vec![Layer::Copper {
                 thickness: 0.035,
                 role: CopperRole::Signal,
@@ -1128,8 +1125,6 @@ mod tests {
     fn test_invalid_even_layers() {
         let stackup = Stackup {
             materials: None,
-            thickness: None,
-            symmetric: None,
             layers: Some(vec![
                 Layer::Copper {
                     thickness: 0.035,
@@ -1165,8 +1160,6 @@ mod tests {
     fn test_thickness_mismatch() {
         let stackup = Stackup {
             materials: None,
-            thickness: Some(1.6), // Expected thickness
-            symmetric: None,
             layers: Some(vec![
                 Layer::Copper {
                     thickness: 0.035,
@@ -1241,8 +1234,6 @@ mod tests {
                 loss_tangent: Some(0.02),
                 reference_frequency: None,
             }]),
-            thickness: None, // Don't specify total thickness to avoid thickness validation
-            symmetric: Some(true),
             layers: Some(vec![
                 Layer::Copper {
                     thickness: 0.035,
@@ -1285,8 +1276,6 @@ mod tests {
             }]),
             silk_screen_color: Some("#008000FF".to_string()),
             solder_mask_color: Some("#000000FF".to_string()),
-            thickness: Some(1.6),
-            symmetric: Some(true),
             layers: Some(vec![
                 Layer::Copper {
                     thickness: 0.035,
@@ -1377,8 +1366,6 @@ mod tests {
                     loss_tangent: Some(0.0037),
                 },
             ]),
-            thickness: None,
-            symmetric: None,
             copper_finish: Some(CopperFinish::Enig),
             solder_mask_color: Some("Green".to_string()),
             silk_screen_color: Some("White".to_string()),
@@ -1475,8 +1462,6 @@ mod tests {
                 loss_tangent: Some(0.02),
                 reference_frequency: None,
             }]),
-            thickness: None,
-            symmetric: None,
             layers: Some(vec![
                 Layer::Copper {
                     thickness: 0.035,

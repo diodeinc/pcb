@@ -447,7 +447,7 @@ fn patch_stackup_if_needed(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(),
     };
 
     if !needs_update {
-        info!("Stackup configuration matches existing PCB file, no update needed");
+        debug!("Stackup configuration matches, skipping update");
         return Ok(());
     }
 
