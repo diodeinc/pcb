@@ -1,0 +1,11 @@
+version = "2"
+
+[package]
+pcb-version = "0.3"
+
+[board]
+name = "StandaloneBoard"
+path = "board.zen"
+
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3"

@@ -1,0 +1,7 @@
+version = "2"
+
+[workspace]
+allow = ["*"]
+
+[workspace.dependencies]
+"github.com/diodeinc/stdlib" = "0.3.13"

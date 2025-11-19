@@ -1,0 +1,45 @@
+# W25Q16JVUXIQ - 16Mbit QSPI Flash Module
+# Winbond 16Mbit Serial Flash in USON-8 3x2mm package
+
+load("@stdlib/interfaces.zen", "Ground", "Power", "Qspi")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+# Configuration
+add_pullups = config("add_pullups", bool, default = True)
+
+# External interfaces
+vcc = io("vcc", Power)
+gnd = io("gnd", Ground)
+qspi = io("qspi", Qspi)
+
+Component(
+    name = "W25Q16JVUXIQ",
+    symbol = Symbol(library = "@kicad-symbols/Memory_Flash.kicad_sym", name = "W25Q16JVSS"),
+    footprint = File("@kicad-footprints/Package_SON.pretty/Winbond_USON-8-1EP_3x2mm_P0.5mm_EP0.2x1.6mm.kicad_mod"),
+    mpn = "W25Q16JVUXIQ",
+    manufacturer = "Winbond Electronics",
+    description = "FLASH - NOR Memory IC 16Mbit SPI - Quad I/O 133 MHz 6 ns",
+    properties = {
+        "package": "8-USON (2x3)",
+    },
+    pins = {
+        "~{CS}": qspi.CS,
+        "CLK": qspi.CLK,
+        "DI/IO_{0}": qspi.IO0,
+        "DO/IO_{1}": qspi.IO1,
+        "~{WP}/IO_{2}": qspi.IO2,
+        "~{HOLD}/~{RESET}/IO_{3}": qspi.IO3,
+        "VCC": vcc.NET,
+        "GND": gnd.NET,
+    },
+)
+
+Capacitor(name = "C_FLASH_DEC", package = "0402", value = "100nF", P1 = vcc, P2 = gnd)
+Resistor(name = "R_FLASH_CS", package = "0402", value = "10kohm", P1 = qspi.CS, P2 = vcc)
+
+# Optional pull-ups on IO2/IO3 for reliable boot (IO2=~WP, IO3=~HOLD)
+if add_pullups:
+    Resistor(name = "R_FLASH_IO2", package = "0402", value = "10kohm", P1 = vcc, P2 = qspi.IO2)
+    Resistor(name = "R_FLASH_IO3", package = "0402", value = "10kohm", P1 = vcc, P2 = qspi.IO3)

@@ -1,0 +1,116 @@
+"""
+RP2040 Microcontroller Module
+"""
+
+load("@stdlib/interfaces.zen", "Analog", "Gpio", "Ground", "OscPair", "Power", "Qspi", "Swd", "Usb2")
+
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+TestPoint = Module("@stdlib/generics/TestPoint.zen")
+
+W25Q16JVUXIQ = Module("W25Q16JVUXIQ.zen")
+Button = Module("Button.zen")
+Oscillator = Module("Oscillator.zen")
+
+add_property("layout_path", "build/RP2040")
+
+# Public interfaces
+vdd_3v3 = io("vdd_3v3", Power)
+gnd = io("gnd", Ground)
+swd = io("swd", Swd, optional = True)
+usb = io("usb", Usb2, optional = True)
+run = io("run", Net, optional = True)
+
+# Internal interfaces
+vdd_1v1 = Power("VDD_1V1")
+qspi = Qspi("QSPI")
+osc = OscPair("XO")
+usb_internal = Usb2("USB_MCU")  # Internal USB interface (before series resistors)
+
+# Build pins dictionary
+pins = {
+    "ADC_AVDD": vdd_3v3.NET,
+    "DVDD": vdd_1v1.NET,
+    "GND": gnd.NET,
+    "IOVDD": vdd_3v3.NET,
+    "QSPI_SCLK": qspi.CLK,
+    "QSPI_SD0": qspi.IO0,
+    "QSPI_SD1": qspi.IO1,
+    "QSPI_SD2": qspi.IO2,
+    "QSPI_SD3": qspi.IO3,
+    "QSPI_SS": qspi.CS,
+    "RUN": run,
+    "SWCLK": swd.SWCLK,
+    "SWD": swd.SWDIO,
+    "TESTEN": gnd.NET,
+    "USB_DM": usb_internal.D.N,
+    "USB_DP": usb_internal.D.P,
+    "USB_VDD": vdd_3v3.NET,
+    "VREG_IN": vdd_3v3.NET,
+    "VREG_VOUT": vdd_1v1.NET,
+    "XIN": osc.XIN,
+    "XOUT": osc.XOUT,
+}
+
+# Add GPIO pins 0-25 using loop
+for i in range(26):
+    gpio = io("GPIO%d" % i, Gpio, optional = True)
+    pins["GPIO%d" % i] = gpio.NET
+
+# Add ADC GPIO pins 26-29 using loop
+for i in range(4):
+    adc = io("GPIO%d_ADC%d" % (26 + i, i), Analog, optional = True)
+    pins["GPIO%d_ADC%d" % (26 + i, i)] = adc.NET
+
+Component(
+    name = "RP2040",
+    symbol = Symbol(library = "@kicad-symbols/MCU_RaspberryPi.kicad_sym", name = "RP2040"),
+    footprint = File("@kicad-footprints/Package_DFN_QFN.pretty/QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm.kicad_mod"),
+    mpn = "RP2040",
+    manufacturer = "Raspberry Pi",
+    description = "Raspberry Pi RP2040 Microcontroller",
+    pins = pins,
+    properties = {
+        "package": "56-QFN",
+        "alternatives": [
+            {"mpn": "SC0914(7)", "manufacturer": "Raspberry Pi"},
+            {"mpn": "SC0914(13)", "manufacturer": "Raspberry Pi"},
+        ],
+    },
+)
+
+# Decoupling capacitors (0402, 100nF typical)
+# DVDD: 2 pins (23, 50) - need 2 caps
+for i in range(2):
+    Capacitor(name = "C_DVDD_%d" % (i + 1), package = "0402", value = "100nF", P1 = vdd_1v1, P2 = gnd)
+
+# IOVDD: 6 pins (1, 10, 22, 33, 42, 49) - need 6 caps
+for i in range(6):
+    Capacitor(name = "C_IOVDD_%d" % (i + 1), package = "0402", value = "100nF", P1 = vdd_3v3, P2 = gnd)
+
+# Single pin VDD nets - 1 cap each
+Capacitor(name = "C_ADC_AVDD", package = "0402", value = "100nF", P1 = vdd_3v3, P2 = gnd)
+Capacitor(name = "C_USB_VDD", package = "0402", value = "100nF", P1 = vdd_3v3, P2 = gnd)
+Capacitor(name = "C_VREG_IN", package = "0402", value = "1uF", P1 = vdd_3v3, P2 = gnd)
+Capacitor(name = "C_VREG_VOUT", package = "0402", value = "1uF", P1 = vdd_1v1, P2 = gnd)
+
+# RUN pin reset circuit
+Resistor(name = "R_RUN_PU", package = "0402", value = "10kohm", P1 = vdd_3v3, P2 = run)
+Capacitor(name = "C_RUN_POR", package = "0402", value = "100nF", P1 = run, P2 = gnd)
+
+# USB series resistors (27R as per Pi Pico reference design)
+Resistor(name = "R_USB_DP", package = "0402", value = "27ohm", P1 = usb_internal.D.P, P2 = usb.D.P)
+Resistor(name = "R_USB_DM", package = "0402", value = "27ohm", P1 = usb_internal.D.N, P2 = usb.D.N)
+
+# BOOTSEL button
+Button(name = "SW_BOOTSEL", P1 = qspi.CS, P2 = gnd)
+
+# QSPI Flash Memory
+W25Q16JVUXIQ(name = "FLASH", vcc = vdd_3v3, gnd = gnd, qspi = qspi)
+
+# Crystal Oscillator (12MHz)
+Oscillator(name = "XO", frequency = "12MHz", VCC = vdd_3v3, GND = gnd, OUT = osc.XIN)
+
+# SWD Test Points (1.5mm diameter pads for probing)
+TestPoint(name = "TP_SWDIO", variant = "Pad_D1.5mm", P1 = swd.SWDIO)
+TestPoint(name = "TP_SWCLK", variant = "Pad_D1.5mm", P1 = swd.SWCLK)

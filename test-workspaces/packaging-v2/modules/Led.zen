@@ -1,0 +1,74 @@
+# LED + series resistor, 0402
+#
+# Exposed pins:
+#   vcc – connect to power rail
+#   gnd – connect to GND
+#
+# Parameters:
+#   color – one of {"blue", "green", "orange", "red"}
+#   supply_voltage – supply voltage (e.g., "3.3V")
+
+load("@stdlib/interfaces.zen", "Power", "Ground")
+load("@stdlib/units.zen", "unit", "Voltage", "Resistance", "Current")
+Led      = Module("@stdlib/generics/Led.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+# ------------------------------------------------------------
+# User parameters
+# ------------------------------------------------------------
+color = config("color", Led.Color, default="red")
+supply_voltage = config("supply_voltage", Voltage, default=Voltage("3.3V"))
+
+# ------------------------------------------------------------
+# Static part database (0402 LEDs from Vishay + series R)
+# Data from Digikey: Forward voltage and test current per datasheet
+# ------------------------------------------------------------
+parts = {
+    "blue":   { "vf": 2.8, "i_test": 0.005, "r": 110 },
+    "green":  { "vf": 2.0, "i_test": 0.020, "r": 150 },
+    "orange": { "vf": 2.0, "i_test": 0.020, "r": 261 },
+    "red":    { "vf": 2.0, "i_test": 0.020, "r": 150 },
+}
+
+data    = parts[color.value]
+vf      = Voltage(data["vf"])            # forward voltage in volts
+i_test  = Current(data["i_test"])        # test current in amps
+r_ohm   = Resistance(data["r"])          # series resistor in ohms
+i_led   = (supply_voltage - vf) / r_ohm  # resulting current (A)
+
+# ------------------------------------------------------------
+# Safety checks
+# ------------------------------------------------------------
+check(vf < supply_voltage, "Forward voltage (%s) >= supply (%s)" % (vf, supply_voltage))
+check(i_led >= 0, "Calculated LED current is negative")
+check(i_led <= i_test, "LED current (%s) exceeds rated test current (%s)" % (i_led, i_test))
+
+# ------------------------------------------------------------
+# External interfaces
+# ------------------------------------------------------------
+p1 = io("p1", Net)  # Connect to VCC for open-drain or MCU pin for push-pull
+p2 = io("p2", Net)  # Connect to MCU pin for open-drain or GND for push-pull
+
+# Internal net between LED and resistor
+led_r_net = Net("LED_R_NET")
+
+# ------------------------------------------------------------
+# Components
+# ------------------------------------------------------------
+Led(
+    name            = "D",
+    package         = "0402",
+    color           = color,
+    forward_voltage = vf,
+    forward_current = i_led,
+    A               = led_r_net,    # Anode to p1 (VCC for open-drain)
+    K               = p2,           # Cathode to internal net
+)
+
+Resistor(
+    name    = "R_D",
+    package = "0402",
+    value   = r_ohm,
+    P1      = p1,          # From LED cathode
+    P2      = led_r_net,   # To p2 (MCU pin for open-drain)
+)

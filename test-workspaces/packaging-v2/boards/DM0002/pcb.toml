@@ -1,0 +1,11 @@
+version = "2"
+
+[package]
+pcb-version = "0.2"
+
+[board]
+name = "DM0002"
+description = "Diode Probe (RP2040 CMSIS-DAP)"
+
+[dependencies]
+"github.com/diodeinc/stdlib" = { workspace = true }
