@@ -1,0 +1,89 @@
+"""
+USB4105-GF-A USB-C Receptacle Module
+USB 2.0 only connector with 16-pin top mount horizontal design
+"""
+
+load("@stdlib/interfaces.zen", "Ground", "Power", "Usb2")
+load("@stdlib/units.zen", "VoltageRange")
+
+add_property("layout_path", "build/USB4105")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Tvs = Module("@stdlib/generics/Tvs.zen")
+TPD4E05U06 = Module("TPD4E05U06.zen")
+
+# USB-C connector modes
+UsbCMode = enum("host", "device", "external")
+HostCurrent = enum("default", "1.5A", "3A")
+
+# Configuration
+mode = config("mode", UsbCMode, default = UsbCMode("device"))
+host_current = config("host_current", HostCurrent, default = HostCurrent("default"), optional = True)
+
+vbus = io("VBUS", Power, default=Power("VBUS", voltage=VoltageRange("4.5 to 5.5V")))
+usb = io("USB", Usb2)
+gnd = io("GND", Ground)
+shield = io("SHIELD", Ground, optional = True, default = gnd)
+cc1 = io("CC1", Net, optional = True, default = Net("CC1"))
+cc2 = io("CC2", Net, optional = True, default = Net("CC2"))
+
+Component(
+    name = "USB_C",
+    symbol = Symbol(library = "@kicad-symbols/Connector.kicad_sym", name = "USB_C_Receptacle_USB2.0_16P"),
+    footprint = File("@kicad-footprints/Connector_USB.pretty/USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal.kicad_mod"),
+    prefix = "J",
+    pins = {
+        "VBUS": vbus,
+        "D+": usb.D.P,
+        "D-": usb.D.N,
+        "CC1": cc1,
+        "CC2": cc2,
+        "GND": gnd.NET,
+        "SHIELD": shield.NET,
+        "SBU1": Net("SBU1"),
+        "SBU2": Net("SBU2"),
+    },
+    mpn = "USB4105-GF-A",
+    manufacturer = "GCT",
+    description = "USB-C Receptacle USB2.0 16P Top Mount Horizontal",
+    properties = {
+        "connector_type": "USB-C",
+        "usb_version": "2.0",
+        "alternatives": [
+            { "mpn": "GT-USB-7010ASV", "manufacturer": "G-Switch" },
+        ],
+    },
+)
+
+# Power protection and filtering chain: VBUS_RAW -> TVS -> Ferrite -> Capacitors -> VBUS
+
+# VBUS TVS protection (5V unidirectional)
+Tvs(
+    name = "D_TVS_VBUS",
+    reverse_standoff_voltage = VoltageRange("5 to 6V"),
+    package = "DO-219AB",
+    K = vbus, # Cathode to protected line
+    A = gnd   # Anode to ground
+)
+
+if mode == UsbCMode("device"):
+    # Device mode: Rd pull-down resistors (5.1kΩ to GND)
+    Resistor(name = "R_CC1", package = "0402", value = "5.1kOhm 5%", P1 = cc1, P2 = gnd)
+    Resistor(name = "R_CC2", package = "0402", value = "5.1kOhm 5%", P1 = cc2, P2 = gnd)
+
+    # Host mode: Rp pull-up resistors based on current capability
+elif mode == UsbCMode("host"):
+    # Select Rp value based on current capability
+    rp_values = {
+        HostCurrent("default"): "56kOhm 5%",  # 500mA USB2.0, 900mA USB3.0
+        HostCurrent("1.5A"): "22kOhm 5%",  # 1.5A @ 5V
+        HostCurrent("3A"): "10kOhm 5%",  # 3A @ 5V
+    }
+    rp_value = rp_values[host_current]
+
+    Resistor(name = "R_CC1", package = "0402", value = rp_value, P1 = vbus, P2 = cc1)
+    Resistor(name = "R_CC2", package = "0402", value = rp_value, P1 = vbus, P2 = cc2)
+
+# ESD protection
+TPD4E05U06(name = "TVS", GND = gnd, D1P = usb.D.P, D1M = usb.D.N, D2P = cc1, D2M = cc2)

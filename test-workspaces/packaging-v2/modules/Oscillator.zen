@@ -1,0 +1,46 @@
+load("@stdlib/config.zen", "config_unit")
+load("@stdlib/interfaces.zen", "Ground", "Power")
+load("@stdlib/units.zen", "Frequency")
+
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+# Required
+frequency = config_unit("frequency", Frequency, default = "16MHz")
+
+_active_osc_mpn_map = {
+    "12MHz": "SG-210STF 12.0000ML0",
+    "16MHz": "SG-210STF 16.0000ML0", 
+    "24MHz": "SG-210STF 24.0000ML0",
+}
+
+VCC = io("VCC", Power)
+GND = io("GND", Ground)
+OUT = io("OUT", Net)
+EN = io("EN", Net, optional = True, default = VCC.NET)  # Enable pin (HIGH=enable, LOW=disable)
+
+Component(
+    name = "OSC",
+    prefix = "U",
+    symbol = Symbol(library = "@kicad-symbols/Oscillator.kicad_sym", name = "XO32"),
+    footprint = File("@kicad-footprints/Oscillator.pretty/Oscillator_SMD_SeikoEpson_SG210-4Pin_2.5x2.0mm.kicad_mod"),
+    pins = {
+        "EN": EN,
+        "GND": GND.NET,
+        "OUT": OUT,
+        "V+": VCC.NET,
+    },
+    mpn = _active_osc_mpn_map[str(frequency)],
+    manufacturer = "EPSON",
+    description = "XTAL OSC XO 12.0000MHZ CMOS SMD",
+    properties = {
+        "frequency": frequency,
+        "package": "4-SMD (2.5x2)",
+        "type": "XO",
+        "alternatives": [
+            {"mpn": "X1G0041710018", "manufacturer": "EPSON"},
+        ]
+    },
+)
+
+# Power supply decoupling capacitor
+Capacitor(name = "C_OSC", package = "0402", value = "100nF", P1 = VCC, P2 = GND)
