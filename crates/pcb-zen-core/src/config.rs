@@ -46,15 +46,12 @@ pub enum PcbToml {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PcbTomlV1 {
     /// Workspace configuration section
-    #[serde(default)]
     pub workspace: Option<WorkspaceConfigV1>,
 
     /// Module configuration section
-    #[serde(default)]
     pub module: Option<ModuleConfig>,
 
     /// Board configuration section
-    #[serde(default)]
     pub board: Option<BoardConfig>,
 
     /// Package aliases configuration section
@@ -64,22 +61,17 @@ pub struct PcbTomlV1 {
 
 /// V2 pcb.toml structure (new packaging system)
 ///
-/// # Example (Package with Multiple Boards)
+/// # Example (Package with Board)
 /// ```toml
 /// version = "2"
 ///
 /// [package]
 /// pcb-version = "0.3"
-/// allow = ["*@weaverobots.com"]
 ///
-/// [[board]]
+/// [board]
 /// name = "WV0002"
 /// path = "WV0002.zen"
 /// description = "Power Regulator Board"
-///
-/// [[board]]
-/// name = "WV0002-Rev2"
-/// path = "WV0002-rev2.zen"
 ///
 /// [dependencies]
 /// "github.com/diodeinc/stdlib" = "0.3.2"
@@ -98,45 +90,38 @@ pub struct PcbTomlV1 {
 /// version = "2"
 ///
 /// [workspace]
-/// name = "my-workspace"
 /// members = ["boards/*"]
-///
-/// [workspace.package]
-/// pcb-version = "0.3"
+/// allow = ["*@weaverobots.com"]
 ///
 /// [workspace.dependencies]
 /// "github.com/diodeinc/stdlib" = "0.3"
 ///
-/// [workspace.vendor]
+/// [vendor]
 /// directory = "vendor"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PcbTomlV2 {
-    /// Version identifier (must be "2")
+    /// Version identifier (must be "2" in all valid V2 configs)
     pub version: String,
 
     /// Workspace configuration section
-    #[serde(default)]
     pub workspace: Option<WorkspaceConfigV2>,
 
     /// Package configuration section
-    #[serde(default)]
     pub package: Option<PackageConfig>,
 
-    /// Board definitions
-    #[serde(default, rename = "board")]
-    pub boards: Vec<BoardDefinition>,
+    /// Board configuration section
+    pub board: Option<BoardDefinition>,
 
     /// Dependencies
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub dependencies: HashMap<String, DependencySpec>,
 
     /// Patches for local development
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub patch: HashMap<String, PatchSpec>,
 
     /// Vendor configuration
-    #[serde(default)]
     pub vendor: Option<VendorConfig>,
 }
 
@@ -158,9 +143,6 @@ pub struct WorkspaceConfigV1 {
 /// V2 Workspace configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfigV2 {
-    /// Optional workspace name
-    pub name: Option<String>,
-
     /// List of board directories/patterns (supports globs)
     #[serde(default = "default_members")]
     pub members: Vec<String>,
@@ -169,17 +151,13 @@ pub struct WorkspaceConfigV2 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
 
-    /// Workspace-level package configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package: Option<PackageConfig>,
+    /// Access control list (email patterns)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
 
     /// Workspace-level dependencies
     #[serde(default)]
     pub dependencies: HashMap<String, DependencySpec>,
-
-    /// Workspace-level vendor configuration
-    #[serde(default)]
-    pub vendor: Option<VendorConfig>,
 }
 
 /// Module configuration (V1 only)
@@ -189,9 +167,9 @@ pub struct ModuleConfig {
     pub name: String,
 }
 
-/// Board configuration (V1 only)
+/// Board configuration (used in both V1 and V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardConfig {
+pub struct Board {
     /// Board name
     pub name: String,
 
@@ -204,31 +182,18 @@ pub struct BoardConfig {
     pub description: String,
 }
 
+/// V1 board configuration (alias for backward compatibility)
+pub type BoardConfig = Board;
+
+/// V2 board definition (alias for clarity)
+pub type BoardDefinition = Board;
+
 /// V2 Package configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageConfig {
     /// Minimum compatible toolchain release series (e.g., "0.3")
     #[serde(rename = "pcb-version")]
     pub pcb_version: String,
-
-    /// Access control list (email patterns)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow: Vec<String>,
-}
-
-/// V2 Board definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardDefinition {
-    /// Board name (required)
-    pub name: String,
-
-    /// Path to the .zen file (optional if single .zen file in directory)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-
-    /// Optional description
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
 }
 
 /// V2 Dependency specification
@@ -287,7 +252,7 @@ pub struct PatchSpec {
 ///
 /// # Example (Selective Vendoring)
 /// ```toml
-/// [workspace.vendor]
+/// [vendor]
 /// directory = "vendor"
 /// match = [
 ///     "github.com/diodeinc/registry/reference/ti",
@@ -295,9 +260,9 @@ pub struct PatchSpec {
 /// ]
 /// ```
 ///
-/// # Example (Workspace - Vendor All Registry Components)
+/// # Example (Vendor All Registry Components)
 /// ```toml
-/// [workspace.vendor]
+/// [vendor]
 /// directory = "vendor"
 /// match = ["github.com/diodeinc/registry/reference"]
 /// ```
@@ -415,6 +380,26 @@ struct VersionDetector {
     version: Option<String>,
 }
 
+impl PcbTomlV2 {
+    /// Validate V2 configuration invariants
+    pub fn validate(&self) -> Result<()> {
+        let is_workspace = self.workspace.is_some();
+        let is_package = self.package.is_some();
+
+        // Must have at least one of workspace/package
+        if !is_workspace && !is_package {
+            anyhow::bail!("pcb.toml v2 must have either [workspace] or [package] section");
+        }
+
+        // [board] requires [package] to be present
+        if self.board.is_some() && !is_package {
+            anyhow::bail!("[board] section requires [package] section");
+        }
+
+        Ok(())
+    }
+}
+
 impl PcbToml {
     /// Parse a pcb.toml file from string content
     pub fn parse(content: &str) -> Result<Self> {
@@ -433,6 +418,7 @@ impl PcbToml {
                 // Parse as V2
                 let v2: PcbTomlV2 = toml::from_str(content)
                     .map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml (V2): {e}"))?;
+                v2.validate()?;
                 Ok(PcbToml::V2(v2))
             }
             Some(v) => Err(anyhow::anyhow!(
@@ -523,14 +509,36 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Pa
     };
 
     // Walk up looking for workspace
-    std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent())
-        .find(|dir| {
+    // Strategy: Prefer explicit [workspace], fall back to first V2 pcb.toml (implicit workspace)
+    let candidates: Vec<_> = std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent())
+        .filter_map(|dir| {
             let pcb_toml = dir.join("pcb.toml");
-            file_provider.exists(&pcb_toml)
-                && PcbToml::from_file(file_provider, &pcb_toml)
-                    .is_ok_and(|config| config.is_workspace())
+            if !file_provider.exists(&pcb_toml) {
+                return None;
+            }
+
+            match PcbToml::from_file(file_provider, &pcb_toml) {
+                Ok(config) => {
+                    let is_explicit_workspace = config.is_workspace();
+                    let is_v2 = matches!(config, PcbToml::V2(_));
+                    // V1 requires explicit workspace; V2 can be implicit
+                    if is_explicit_workspace || is_v2 {
+                        Some((dir.to_path_buf(), is_explicit_workspace))
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            }
         })
-        .map(|p| p.to_path_buf())
+        .collect();
+
+    // Prefer explicit workspaces, fall back to first V2 package (implicit workspace)
+    candidates
+        .iter()
+        .find(|(_, is_explicit)| *is_explicit)
+        .or_else(|| candidates.first())
+        .map(|(path, _)| path.clone())
         .unwrap_or(start_dir)
 }
 
@@ -890,17 +898,11 @@ version = "2"
 
 [package]
 pcb-version = "0.3"
-allow = ["*@weaverobots.com"]
 
-[[board]]
+[board]
 name = "WV0002"
 path = "WV0002.zen"
 description = "Power Regulator Board"
-
-[[board]]
-name = "WV0002-Rev2"
-path = "WV0002-rev2.zen"
-description = "Power Regulator Board Rev2"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
@@ -912,13 +914,11 @@ description = "Power Regulator Board Rev2"
         if let PcbToml::V2(v2) = config {
             let package = v2.package.as_ref().unwrap();
             assert_eq!(package.pcb_version, "0.3");
-            assert_eq!(package.allow, vec!["*@weaverobots.com"]);
 
-            assert_eq!(v2.boards.len(), 2);
-            assert_eq!(v2.boards[0].name, "WV0002");
-            assert_eq!(v2.boards[0].path, Some("WV0002.zen".to_string()));
-            assert_eq!(v2.boards[0].description, "Power Regulator Board");
-            assert_eq!(v2.boards[1].name, "WV0002-Rev2");
+            let board = v2.board.as_ref().unwrap();
+            assert_eq!(board.name, "WV0002");
+            assert_eq!(board.path, Some("WV0002.zen".to_string()));
+            assert_eq!(board.description, "Power Regulator Board");
         }
     }
 
@@ -928,12 +928,8 @@ description = "Power Regulator Board Rev2"
 version = "2"
 
 [workspace]
-name = "my-workspace"
 members = ["boards/*"]
-
-[workspace.package]
-pcb-version = "0.3"
-allow = ["*@mycompany.com"]
+allow = ["*@weaverobots.com"]
 
 [workspace.dependencies]
 "github.com/diodeinc/stdlib" = "0.3"
@@ -947,11 +943,8 @@ allow = ["*@mycompany.com"]
 
         if let PcbToml::V2(v2) = config {
             let workspace = v2.workspace.as_ref().unwrap();
-            assert_eq!(workspace.name, Some("my-workspace".to_string()));
-
-            let package = workspace.package.as_ref().unwrap();
-            assert_eq!(package.pcb_version, "0.3");
-            assert_eq!(package.allow, vec!["*@mycompany.com"]);
+            assert_eq!(workspace.members, vec!["boards/*"]);
+            assert_eq!(workspace.allow, vec!["*@weaverobots.com"]);
 
             assert_eq!(workspace.dependencies.len(), 2);
             assert!(workspace
@@ -968,7 +961,7 @@ version = "2"
 [package]
 pcb-version = "0.3"
 
-[[board]]
+[board]
 name = "Test"
 path = "test.zen"
 
@@ -1032,7 +1025,7 @@ version = "2"
 [package]
 pcb-version = "0.3"
 
-[[board]]
+[board]
 name = "Test"
 path = "test.zen"
 
@@ -1047,6 +1040,67 @@ path = "test.zen"
             let patch = v2.patch.get("github.com/diodeinc/stdlib").unwrap();
             assert_eq!(patch.path, "../stdlib");
         }
+    }
+
+    #[test]
+    fn test_v2_workspace_and_package_allowed() {
+        let content = r#"
+version = "2"
+
+[workspace]
+members = ["boards/*"]
+
+[package]
+pcb-version = "0.3"
+
+[board]
+name = "RootBoard"
+"#;
+
+        let result = PcbToml::parse(content);
+        assert!(result.is_ok());
+        if let Ok(PcbToml::V2(v2)) = result {
+            assert!(v2.workspace.is_some());
+            assert!(v2.package.is_some());
+            assert!(v2.board.is_some());
+        }
+    }
+
+    #[test]
+    fn test_v2_validation_neither_workspace_nor_package() {
+        let content = r#"
+version = "2"
+
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3"
+"#;
+
+        let result = PcbToml::parse(content);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must have either [workspace] or [package]"));
+    }
+
+    #[test]
+    fn test_v2_validation_board_requires_package() {
+        let content = r#"
+version = "2"
+
+[workspace]
+members = ["boards/*"]
+
+[board]
+name = "InvalidBoard"
+"#;
+
+        let result = PcbToml::parse(content);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("[board] section requires [package]"));
     }
 
     #[test]
@@ -1088,7 +1142,7 @@ version = "2"
 [package]
 pcb-version = "0.3"
 
-[[board]]
+[board]
 name = "Test"
 path = "test.zen"
 
@@ -1122,7 +1176,7 @@ version = "2"
 [package]
 pcb-version = "0.3"
 
-[[board]]
+[board]
 name = "Test"
 path = "test.zen"
 
@@ -1149,18 +1203,16 @@ path = "test.zen"
 version = "2"
 
 [workspace]
-name = "my-workspace"
 members = ["boards/*"]
 
-[workspace.vendor]
+[vendor]
 directory = "workspace-vendor"
 match = ["github.com/diodeinc/registry/reference"]
 "#;
 
         let config = PcbToml::parse(content).unwrap();
         if let PcbToml::V2(v2) = config {
-            let workspace = v2.workspace.as_ref().unwrap();
-            let vendor = workspace.vendor.as_ref().unwrap();
+            let vendor = v2.vendor.as_ref().unwrap();
             assert_eq!(vendor.directory, "workspace-vendor");
             assert_eq!(
                 vendor.match_patterns,
@@ -1183,7 +1235,7 @@ version = "2"
 [package]
 pcb-version = "0.3"
 
-[[board]]
+[board]
 name = "Test"
 path = "test.zen"
 
