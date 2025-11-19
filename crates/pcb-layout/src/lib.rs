@@ -401,12 +401,18 @@ fn patch_netclass_patterns(
     let mut pro_json: serde_json::Value = serde_json::from_str(&pro_content)
         .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
 
-    pro_json["net_settings"]["netclass_patterns"] = serde_json::json!(assignments
-        .iter()
+    // Sort netclass patterns by net name for stable output (prevent spurious diffs)
+    let mut sorted_assignments: Vec<_> = assignments.iter().collect();
+    sorted_assignments.sort_by_key(|(net_name, _)| *net_name);
+
+    let patterns: Vec<_> = sorted_assignments
+        .into_iter()
         .map(|(net_name, netclass_name)| {
             serde_json::json!({"pattern": net_name, "netclass": netclass_name})
         })
-        .collect::<Vec<_>>());
+        .collect();
+
+    pro_json["net_settings"]["netclass_patterns"] = serde_json::json!(patterns);
 
     fs::write(&pro_path, serde_json::to_string_pretty(&pro_json)?)
         .with_context(|| format!("Failed to write {}", pro_path.display()))?;
@@ -441,7 +447,7 @@ fn patch_stackup_if_needed(pcb_path: &Path, zen_stackup: &Stackup) -> Result<(),
     };
 
     if !needs_update {
-        info!("Stackup configuration matches existing PCB file, no update needed");
+        debug!("Stackup configuration matches, skipping update");
         return Ok(());
     }
 

@@ -55,19 +55,21 @@ logger = logging.getLogger("pcb")
 def natural_sort_key(text: str) -> List:
     """
     Generate a sort key for natural (human-friendly) sorting.
-    
+
     Splits a string into numeric and non-numeric parts, converting numeric
     parts to integers so that "C2" sorts before "C10".
-    
+
     Example:
         "C10" -> ['C', 10]
         "C2"  -> ['C', 2]
         "IC1.R5" -> ['IC', 1, '.R', 5]
     """
+
     def convert(part):
         return int(part) if part.isdigit() else part.lower()
-    
-    return [convert(c) for c in re.split('([0-9]+)', text)]
+
+    return [convert(c) for c in re.split("([0-9]+)", text)]
+
 
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
@@ -224,7 +226,10 @@ class JsonNetlistParser:
             # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
             value = "?"
             for key in ["mpn", "value", "Value"]:
-                if key in instance["attributes"] and "String" in instance["attributes"][key]:
+                if (
+                    key in instance["attributes"]
+                    and "String" in instance["attributes"][key]
+                ):
                     value = instance["attributes"][key]["String"]
                     break
 
@@ -297,7 +302,9 @@ class JsonNetlistParser:
                                     elif "Number" in item:
                                         array_items.append(str(item["Number"]))
                                     elif "Boolean" in item:
-                                        array_items.append("true" if item["Boolean"] else "false")
+                                        array_items.append(
+                                            "true" if item["Boolean"] else "false"
+                                        )
                                     else:
                                         # For other types, use string representation
                                         array_items.append(str(item))
@@ -1510,7 +1517,36 @@ class SetupBoard(Step):
         """Set track width list from list of width values in mm."""
         track_list = ds.m_TrackWidthList
 
-        # Clear existing list and add new values
+        # Check if list already matches desired values
+        # Note: The placeholder at index 0 may not persist in saved files,
+        # so we compare with and without it
+        actual_size = track_list.size()
+        has_placeholder = actual_size == len(values) + 1
+        exact_match = actual_size == len(values)
+
+        if has_placeholder or exact_match:
+            matches = True
+            start_idx = 1 if has_placeholder else 0
+
+            # Check placeholder if present
+            if has_placeholder and track_list[0] != 0:
+                matches = False
+
+            # Check all values
+            if matches:
+                for i, width in enumerate(values):
+                    expected_val = pcbnew.FromMM(width)
+                    actual_val = track_list[start_idx + i]
+                    if actual_val != expected_val:
+                        matches = False
+                        break
+
+            if matches:
+                logger.debug(f"Track width list unchanged ({len(values)} widths)")
+                return
+
+        # List differs, rebuild it
+        logger.info(f"Updating track width list: {len(values)} widths")
         track_list.clear()
 
         # Index 0 is reserved to "make room for the netclass value" (from KiCad source)
@@ -1520,15 +1556,36 @@ class SetupBoard(Step):
 
         for width in values:
             track_list.push_back(pcbnew.FromMM(width))
-        logger.info(
-            f"Set {track_list.size()} pre-defined track widths (including 0.0 placeholder)"
-        )
 
     def _set_via_dimensions_list(self, ds, values):
         """Set via dimensions list from list of {diameter, drill} objects."""
         via_list = ds.m_ViasDimensionsList
 
-        # Clear existing list and add new values
+        # Check if list already matches desired values
+        expected_size = len(values) + 1  # +1 for placeholder at index 0
+        if via_list.size() == expected_size:
+            # Verify placeholder and all values match
+            matches = via_list[0].m_Diameter == 0 and via_list[0].m_Drill == 0
+            for i, via_def in enumerate(values):
+                if (
+                    isinstance(via_def, dict)
+                    and "diameter" in via_def
+                    and "drill" in via_def
+                ):
+                    via_dim = via_list[i + 1]
+                    matches = matches and (
+                        via_dim.m_Diameter == pcbnew.FromMM(via_def["diameter"])
+                        and via_dim.m_Drill == pcbnew.FromMM(via_def["drill"])
+                    )
+
+            if matches:
+                logger.debug(
+                    f"Via dimensions list unchanged ({len(values)} dimensions)"
+                )
+                return
+
+        # List differs, rebuild it
+        logger.info(f"Updating via dimensions list: {len(values)} dimensions")
         via_list.clear()
 
         # Index 0 is reserved to "make room for the netclass value" (from KiCad source)
@@ -1550,9 +1607,6 @@ class SetupBoard(Step):
             drill = pcbnew.FromMM(via_def["drill"])
             via_dim = pcbnew.VIA_DIMENSION(diameter, drill)
             via_list.push_back(via_dim)
-        logger.info(
-            f"Set {via_list.size()} pre-defined via dimensions (including 0.0/0.0 placeholder)"
-        )
 
     def _set_netclasses(self, ds, values):
         """Set netclasses from list of netclass definitions."""
@@ -1562,8 +1616,57 @@ class SetupBoard(Step):
 
         netSettings = ds.m_NetSettings
 
-        # Clear existing netclasses (except default)
-        netSettings.ClearNetclasses()
+        def netclass_matches(netclass, nc_def):
+            """Check if a netclass matches the definition."""
+            checks = []
+            if "clearance" in nc_def and nc_def["clearance"] is not None:
+                checks.append(
+                    netclass.GetClearance() == pcbnew.FromMM(nc_def["clearance"])
+                )
+            if "track_width" in nc_def and nc_def["track_width"] is not None:
+                checks.append(
+                    netclass.GetTrackWidth() == pcbnew.FromMM(nc_def["track_width"])
+                )
+            if "via_diameter" in nc_def and nc_def["via_diameter"] is not None:
+                checks.append(
+                    netclass.GetViaDiameter() == pcbnew.FromMM(nc_def["via_diameter"])
+                )
+            if "via_drill" in nc_def and nc_def["via_drill"] is not None:
+                checks.append(
+                    netclass.GetViaDrill() == pcbnew.FromMM(nc_def["via_drill"])
+                )
+            if (
+                "microvia_diameter" in nc_def
+                and nc_def["microvia_diameter"] is not None
+            ):
+                checks.append(
+                    netclass.GetuViaDiameter()
+                    == pcbnew.FromMM(nc_def["microvia_diameter"])
+                )
+            if "microvia_drill" in nc_def and nc_def["microvia_drill"] is not None:
+                checks.append(
+                    netclass.GetuViaDrill() == pcbnew.FromMM(nc_def["microvia_drill"])
+                )
+            if "diff_pair_width" in nc_def and nc_def["diff_pair_width"] is not None:
+                checks.append(
+                    netclass.GetDiffPairWidth()
+                    == pcbnew.FromMM(nc_def["diff_pair_width"])
+                )
+            if "diff_pair_gap" in nc_def and nc_def["diff_pair_gap"] is not None:
+                checks.append(
+                    netclass.GetDiffPairGap() == pcbnew.FromMM(nc_def["diff_pair_gap"])
+                )
+            if (
+                "diff_pair_via_gap" in nc_def
+                and nc_def["diff_pair_via_gap"] is not None
+            ):
+                checks.append(
+                    netclass.GetDiffPairViaGap()
+                    == pcbnew.FromMM(nc_def["diff_pair_via_gap"])
+                )
+            if "priority" in nc_def and nc_def["priority"] is not None:
+                checks.append(netclass.GetPriority() == int(nc_def["priority"]))
+            return all(checks) if checks else True
 
         def apply_netclass_properties(netclass, nc_def):
             """Apply properties from definition dict to a netclass object."""
@@ -1603,6 +1706,49 @@ class SetupBoard(Step):
                         f"Failed to parse color '{nc_def['color']}' for netclass '{name}': {e}"
                     )
 
+        # Check if netclasses need updating
+        needs_update = False
+        existing_netclasses = {}
+
+        # Get existing netclasses - GetNetclasses() returns a map-like object
+        netclasses_map = netSettings.GetNetclasses()
+        for name, nc in netclasses_map.items():
+            existing_netclasses[name] = nc
+
+        # Check for differences
+        desired_names = {
+            nc_def["name"]
+            for nc_def in values
+            if isinstance(nc_def, dict) and "name" in nc_def
+        }
+        existing_names = set(existing_netclasses.keys())
+
+        # Check if sets of names differ
+        if desired_names != existing_names:
+            needs_update = True
+            logger.debug(
+                f"Netclass names differ - desired: {desired_names}, existing: {existing_names}"
+            )
+        else:
+            # Check if any netclass properties differ
+            for nc_def in values:
+                if not isinstance(nc_def, dict) or "name" not in nc_def:
+                    continue
+                name = nc_def["name"]
+                if name in existing_netclasses:
+                    if not netclass_matches(existing_netclasses[name], nc_def):
+                        needs_update = True
+                        logger.debug(f"Netclass '{name}' properties differ")
+                        break
+
+        if not needs_update:
+            logger.debug(f"Netclasses unchanged ({len(values)} netclasses)")
+            return
+
+        # Netclasses differ, rebuild them
+        logger.info(f"Updating netclasses: {len(values)} netclasses")
+        netSettings.ClearNetclasses()
+
         for nc_def in values:
             if not isinstance(nc_def, dict) or "name" not in nc_def:
                 logger.warning(f"Netclass definition must have 'name' key: {nc_def}")
@@ -1622,15 +1768,9 @@ class SetupBoard(Step):
                 # Update the actual internal default netclass (m_DefaultNetclass)
                 default_nc = netSettings.GetDefaultNetclass()
                 apply_netclass_properties(default_nc, nc_def)
-                logger.info(
-                    f"Updated internal m_DefaultNetclass with properties from 'Default' netclass"
-                )
             else:
                 # Add netclass to the collection (skip for Default since it's already there)
                 netSettings.SetNetclass(netclass.GetName(), netclass)
-                logger.info(f"Added netclass '{name}' to board")
-
-        logger.info(f"Set {len(values)} netclasses")
 
     def _apply_board_config(self):
         """Apply board configuration from JSON file to design settings."""
@@ -1668,8 +1808,17 @@ class SetupBoard(Step):
                     else:
                         logger.warning(f"Unknown custom setter: {custom_setter}")
                 else:
-                    setattr(ds, ds_attr, pcbnew.FromMM(value))
-                    logger.info(f"Set {display_name}: {value}mm")
+                    # Compare before setting to avoid unnecessary modifications
+                    current_value = getattr(ds, ds_attr)
+                    new_value = pcbnew.FromMM(value)
+
+                    if current_value != new_value:
+                        setattr(ds, ds_attr, new_value)
+                        logger.info(
+                            f"Updated {display_name}: {pcbnew.ToMM(current_value):.3f}mm -> {value}mm"
+                        )
+                    else:
+                        logger.debug(f"{display_name} unchanged: {value}mm")
 
     def _setup_title_block(self):
         """Configure the title block with variable placeholders."""
@@ -2007,66 +2156,139 @@ class ImportNetlist(Step):
                 self.state.track_footprint_removed(fp)
                 self.board.Delete(fp)
 
+        # Properties that shouldn't be added as PCB fields
+        SKIP_PROPERTIES = {"value", "reference", "symbol_name", "symbol_path"}
+
+        def _parse_bool(value: str) -> bool:
+            """Safely parse a boolean value from a property string."""
+            if value is None:
+                return False
+            return str(value).lower() == "true"
+
         def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
-            # Remove all custom fields (keep Reference, Value, Datasheet built-ins)
-            for field in fp.GetFields():
-                if (
-                    not field.IsValue()
-                    and not field.IsReference()
-                    and not field.IsDatasheet()
-                ):
-                    fp.RemoveField(field.GetName())
+            """Configure footprint metadata, only updating fields that have actually changed."""
+            changes = []
 
-            fp.SetReference(part.ref)
-            fp.SetValue(part.value)
-            fp.SetField("Path", part.sheetpath.names.split(":")[-1])
-            fp.SetFPIDAsString(part.footprint)
-            fp.SetPath(
-                pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
-            )
-            # Handle DNP property
-            dnp_prop = next((x for x in part.properties if x.name.lower() == "dnp"), None)
-            fp.SetDNP(dnp_prop is not None and dnp_prop.value.lower() == "true")
+            # Update basic fields if different
+            if fp.GetReference() != part.ref:
+                changes.append(f"Reference: {fp.GetReference()} -> {part.ref}")
+                fp.SetReference(part.ref)
 
-            # Handle skip_bom property
-            skip_bom_prop = next((x for x in part.properties if x.name.lower() == "skip_bom"), None)
-            fp.SetExcludedFromBOM(
-                skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
-            )
+            if fp.GetValue() != part.value:
+                changes.append(f"Value: {fp.GetValue()} -> {part.value}")
+                fp.SetValue(part.value)
 
-            # Handle skip_pos property
-            skip_pos_prop = next((x for x in part.properties if x.name.lower() == "skip_pos"), None)
-            fp.SetExcludedFromPosFiles(
-                skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
-            )
+            # Update FPID if different
+            if fp.GetFPIDAsString() != part.footprint:
+                changes.append(f"FPID: {fp.GetFPIDAsString()} -> {part.footprint}")
+                fp.SetFPIDAsString(part.footprint)
 
-            fp.GetFieldByName("Value").SetVisible(False)
-            fp.GetFieldByName("Path").SetVisible(False)
+            # Update KiCad path (UUID-based) if different
+            new_kiid_path = f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}"
+            current_kiid_path = fp.GetPath().AsString().lstrip("/")  # Strip leading '/'
+            if current_kiid_path != new_kiid_path:
+                changes.append(
+                    f"KiCad Path: '{current_kiid_path}' -> '{new_kiid_path}'"
+                )
+                fp.SetPath(pcbnew.KIID_PATH(new_kiid_path))
+
+            # Process all properties in a single pass
+            desired_fields = {
+                "Datasheet": "",
+                "Description": "",
+                "Path": part.sheetpath.names.split(":")[-1],
+            }  # Always include built-ins
+            new_dnp = False
+            new_skip_bom = False
+            new_skip_pos = False
 
             for prop in part.properties:
-                # Handle datasheet specially - use the built-in KiCad "Datasheet" field
-                if prop.name.lower() == "datasheet":
-                    fp.GetFieldByName("Datasheet").SetText(prop.value)
-                    fp.GetFieldByName("Datasheet").SetVisible(False)
-                # Handle description specially - use the built-in KiCad "Description" field
-                elif prop.name.lower() == "description":
-                    fp.GetFieldByName("Description").SetText(prop.value)
-                    fp.GetFieldByName("Description").SetVisible(False)
-                # Skip built-in fields, symbol metadata, and specially handled properties
-                elif prop.name.lower() not in [
-                    "value",
-                    "reference",
-                    "dnp",  # Skip the standardized dnp attribute (handled above)
-                    "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
-                    "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
-                    "symbol_name",  # Symbol metadata - not needed in PCB
-                    "symbol_path",  # Symbol metadata - not needed in PCB
-                ] and not prop.name.startswith("_"):
-                    # Convert snake_case property names to Title Case for display in KiCad
-                    # e.g., "logic_level" -> "Logic Level"
-                    display_name = prop.name.replace('_', ' ').title()
-                    fp.SetField(display_name, prop.value)
-                    fp.GetFieldByName(display_name).SetVisible(False)
+                prop_name_lower = prop.name.lower()
+
+                # Extract special boolean flags
+                if prop_name_lower == "dnp":
+                    new_dnp = _parse_bool(prop.value)
+                elif prop_name_lower == "skip_bom":
+                    new_skip_bom = _parse_bool(prop.value)
+                elif prop_name_lower == "skip_pos":
+                    new_skip_pos = _parse_bool(prop.value)
+                # Map to built-in KiCad fields
+                elif prop_name_lower == "datasheet":
+                    desired_fields["Datasheet"] = prop.value
+                elif prop_name_lower == "description":
+                    desired_fields["Description"] = prop.value
+                # Skip internal/system properties
+                elif prop_name_lower in SKIP_PROPERTIES or prop.name.startswith("_"):
+                    continue
+                # Convert all other properties to custom fields
+                else:
+                    display_name = prop.name.replace("_", " ").title()
+                    desired_fields[display_name] = prop.value
+
+            # Update flags if changed
+            if fp.IsDNP() != new_dnp:
+                changes.append(f"DNP: {fp.IsDNP()} -> {new_dnp}")
+                fp.SetDNP(new_dnp)
+
+            if fp.IsExcludedFromBOM() != new_skip_bom:
+                changes.append(
+                    f"Exclude from BOM: {fp.IsExcludedFromBOM()} -> {new_skip_bom}"
+                )
+                fp.SetExcludedFromBOM(new_skip_bom)
+
+            if fp.IsExcludedFromPosFiles() != new_skip_pos:
+                changes.append(
+                    f"Exclude from Pos: {fp.IsExcludedFromPosFiles()} -> {new_skip_pos}"
+                )
+                fp.SetExcludedFromPosFiles(new_skip_pos)
+
+            # Build map of existing fields (excluding built-ins)
+            existing_fields = {}
+            for field in fp.GetFields():
+                field_name = field.GetName()
+                if not field.IsValue() and not field.IsReference():
+                    existing_fields[field_name] = field.GetText()
+
+            # Find fields to remove (exist but not desired)
+            fields_to_remove = [
+                name for name in existing_fields if name not in desired_fields
+            ]
+            for field_name in fields_to_remove:
+                changes.append(
+                    f"Removed field: {field_name} = '{existing_fields[field_name]}'"
+                )
+                fp.RemoveField(field_name)
+
+            # Update or add fields that changed
+            for field_name, desired_value in desired_fields.items():
+                existing_value = existing_fields.get(field_name)
+                if existing_value != desired_value:
+                    if existing_value is None:
+                        changes.append(f"Added field: {field_name} = {desired_value}")
+                    else:
+                        changes.append(
+                            f"Updated field: {field_name}: {existing_value} -> {desired_value}"
+                        )
+                    fp.SetField(field_name, desired_value)
+                    # Ensure field is invisible
+                    field = fp.GetFieldByName(field_name)
+                    if field:
+                        field.SetVisible(False)
+
+            # Ensure special fields are always invisible (Path, Value)
+            for field_name in ["Path", "Value"]:
+                field = fp.GetFieldByName(field_name)
+                if field and field.IsVisible():
+                    field.SetVisible(False)
+                    changes.append(f"{field_name} field visibility: True -> False")
+
+            # Log summary
+            if changes:
+                logger.debug(f"{part.ref}: Updated {len(changes)} field(s):")
+                for change in changes:
+                    logger.debug(f"  - {change}")
+            else:
+                logger.debug(f"{part.ref}: No metadata changes detected")
 
         for fp_id in netlist_footprint_ids - board_footprint_ids:
             # Create a new footprint from the netlist.
@@ -2762,7 +2984,9 @@ class PlaceComponents(Step):
 
         # Sort by area (largest first) for better packing, then by name for determinism
         # Use natural sort for names so "C2" comes before "C10"
-        items_with_bbox.sort(key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id))
+        items_with_bbox.sort(
+            key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id)
+        )
 
         # Storage for potential placement points (as (x, y) tuples)
         # These are points where we can place the bottom-left corner of an item
@@ -2962,7 +3186,8 @@ class PlaceComponents(Step):
             # If root is a group, use its children as top-level items
             # Sort them for deterministic ordering using natural sort
             top_level_added = sorted(
-                sparse_tree.children, key=lambda item: (natural_sort_key(item.name), item.id)
+                sparse_tree.children,
+                key=lambda item: (natural_sort_key(item.name), item.id),
             )
         else:
             # If root is a single item, use it
@@ -2999,7 +3224,8 @@ class PlaceComponents(Step):
             if not item.added and isinstance(item, VirtualGroup):
                 # Sort children for deterministic traversal using natural sort
                 sorted_children = sorted(
-                    item.children, key=lambda child: (natural_sort_key(child.name), child.id)
+                    item.children,
+                    key=lambda child: (natural_sort_key(child.name), child.id),
                 )
                 for child in sorted_children:
                     collect_existing_bbox(child)

@@ -47,11 +47,22 @@ pub struct LayoutArgs {
     pub temp: bool,
 
     /// Run KiCad DRC checks after layout generation
-    #[arg(long = "drc")]
-    pub drc: bool,
+    #[arg(long = "check")]
+    pub check: bool,
+
+    /// Suppress diagnostics by kind or severity. Use 'warnings' or 'errors' for all
+    /// warnings/errors, or specific kinds like 'layout.drc.clearance'.
+    /// Supports hierarchical matching (e.g., 'layout.drc' matches 'layout.drc.clearance')
+    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
+    pub suppress: Vec<String>,
 }
 
-pub fn execute(args: LayoutArgs) -> Result<()> {
+pub fn execute(mut args: LayoutArgs) -> Result<()> {
+    // --check implies --no-open
+    if args.check {
+        args.no_open = true;
+    }
+
     // Collect .zen files to process - always recursive for directories
     let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;
 
@@ -73,7 +84,7 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
         let Some(schematic) = build(
             &zen_path,
             args.offline,
-            create_diagnostics_passes(&[]),
+            create_diagnostics_passes(&args.suppress),
             false, // don't deny warnings for layout command
             &mut has_errors,
             &mut has_warnings,
@@ -101,10 +112,14 @@ pub fn execute(args: LayoutArgs) -> Result<()> {
                 );
 
                 // Run DRC checks if requested
-                if args.drc {
+                if args.check {
                     let drc_spinner =
                         Spinner::builder(format!("{file_name}: Running DRC checks")).start();
-                    match drc::run_and_print_drc(&layout_result.pcb_file, &[]) {
+                    let result = drc_spinner.suspend(|| {
+                        drc::run_and_print_drc(&layout_result.pcb_file, &args.suppress)
+                    });
+
+                    match result {
                         Ok((had_errors, _warnings)) => {
                             drc_spinner.finish();
                             if had_errors {

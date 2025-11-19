@@ -159,7 +159,7 @@ pub fn generate_html(board_config: &BoardConfig) -> String {
     );
 
     let total_thickness = stackup
-        .thickness
+        .thickness()
         .unwrap_or_else(|| layers.iter().map(|l| l.thickness()).sum());
 
     let outer_oz = copper_thicknesses[0] / MM_PER_OZ;
