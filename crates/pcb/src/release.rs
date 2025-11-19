@@ -1305,7 +1305,6 @@ fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg(step_path.to_string_lossy())
         .arg("--no-dnp")
         .arg("--no-unspecified")
-        .arg("--include-pads")
         .arg("--include-silkscreen")
         .arg(kicad_pcb_path.to_string_lossy())
         .log_file(devnull)
