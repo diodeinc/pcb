@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod git;
 pub mod load;
 pub mod lsp;
+mod resolve_v2;
 pub mod suppression;
 
 use std::path::Path;
@@ -19,6 +20,7 @@ use pcb_zen_core::{
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
+pub use resolve_v2::maybe_resolve_v2_workspace;
 pub use starlark::errors::EvalSeverity;
 
 #[derive(Debug, Clone, Copy)]

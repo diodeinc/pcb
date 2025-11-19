@@ -93,19 +93,16 @@ Unified `[package]` section replaces `[module]` and `[board]`:
 ```toml
 [package]
 pcb-version = "0.3"
-allow = ["*@weaverobots.com"]
 
-[[board]]
+[board]
 name = "WV0002"
 path = "WV0002.zen"
 description = "Power Regulator Board"
-
-[[board]]
-name = "WV0002-Rev2"
-path = "WV0002-rev2.zen"
 ```
 
 `pcb-version` specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It is used to indicate breaking changes in the language or standard library that require a newer compiler. No package name/version in manifest - derived from repository URL and Git tag following Go's model.
+
+The optional `[board]` section specifies a `.zen` file that can be built as a standalone board with `pcb build`. Packages with or without `[board]` can be used as reusable modules via `Module()`.
 
 ### Dependencies
 
@@ -269,27 +266,29 @@ Coordinate versions across packages in monorepo:
 [workspace]
 members = ["boards/*"]
 default-board = "WV0002"
-
-[workspace.package]
 allow = ["*@weaverobots.com"]
 
 [workspace.dependencies]
 "github.com/diodeinc/stdlib" = "0.3"
 "github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
+
+[vendor]
+directory = "vendor"
+match = ["*"]
 ```
 
 Member packages inherit:
 ```toml
 [package]
-allow = { workspace = true }
+pcb-version = "0.3"
+
+[board]
+name = "WV0002"
+path = "WV0002.zen"
 
 [dependencies]
 "github.com/diodeinc/stdlib" = { workspace = true }
 "github.com/diodeinc/registry/reference/ti/tps54331" = { workspace = true }
-
-[[board]]
-name = "WV0002"
-path = "WV0002.zen"
 ```
 
 Override when needed:
@@ -347,11 +346,12 @@ Generated on first build when absent. Updated automatically when dependencies ch
 Vendoring allows checking dependencies into source control for hermetic builds (zero network dependence) or auditing.
 
 **Configuration:**
-Controlled via `[workspace.vendor]` in `pcb.toml`.
+Controlled via top-level `[vendor]` in `pcb.toml`. Typically defined at the workspace root.
 
 ```toml
-[workspace.vendor]
-# List of package prefixes to vendor. "*" vendors everything.
+[vendor]
+directory = "vendor"
+# List of package prefixes to vendor. Empty list or "*" vendors everything.
 match = ["github.com/diodeinc/registry/reference/ti"]
 ```
 
@@ -467,7 +467,6 @@ Workspace root:
 members = ["boards/*"]
 default-board = "WV0002"
 
-[workspace.package]
 allow = ["*@weaverobots.com"]
 
 [workspace.dependencies]
@@ -479,17 +478,17 @@ allow = ["*@weaverobots.com"]
 WV0002 inherits:
 ```toml
 [package]
-allow = { workspace = true }
+pcb-version = "0.3"
+
+[board]
+name = "WV0002"
+path = "WV0002.zen"
+description = "Power Regulator Board"
 
 [dependencies]
 "github.com/diodeinc/stdlib" = { workspace = true }
 "github.com/diodeinc/registry/reference/ti/tps54331" = { workspace = true }
 "github.com/diodeinc/registry/reference/analog/ltc3115" = { workspace = true }
-
-[[board]]
-name = "WV0002"
-path = "WV0002.zen"
-description = "Power Regulator Board"
 ```
 
 Load statements backward compatible (aliases work) or use full URLs:
