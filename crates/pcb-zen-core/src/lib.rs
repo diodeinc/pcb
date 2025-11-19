@@ -48,7 +48,7 @@ pub mod attrs {
 }
 
 // Re-export commonly used types
-pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
+pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfigV1 as WorkspaceConfig};
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
     DiagnosticsReport, LoadError, WithDiagnostics,
@@ -691,7 +691,7 @@ impl CoreLoadResolver {
             .into_iter()
             .map(|p| {
                 let content = self.file_provider.read_file(&p)?;
-                let toml_aliases = config::PcbToml::parse(&content)?.packages;
+                let toml_aliases = config::PcbToml::parse(&content)?.packages();
                 // Convert to AliasInfo with source path
                 let canonical_path = self.file_provider.canonicalize(&p)?;
                 let alias_info_map = toml_aliases

@@ -8,14 +8,48 @@ use walkdir::WalkDir;
 
 use crate::FileProvider;
 
-/// Complete representation of a pcb.toml configuration file
+/// Top-level pcb.toml configuration - versioned enum
+///
+/// The version is determined by a top-level `version` field in the TOML:
+/// - Missing or `version = "1"` → V1 (legacy)
+/// - `version = "2"` → V2 (new packaging system)
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum PcbToml {
+    V1(PcbTomlV1),
+    V2(PcbTomlV2),
+}
+
+/// V1 pcb.toml structure (legacy)
+///
+/// # Example (Workspace)
+/// ```toml
+/// [workspace]
+/// name = "my-workspace"
+/// members = ["boards/*"]
+/// default_board = "MainBoard"
+///
+/// [packages]
+/// stdlib = "@github/diodeinc/stdlib:v0.3.2"
+/// ```
+///
+/// # Example (Board)
+/// ```toml
+/// [board]
+/// name = "WV0002"
+/// path = "WV0002.zen"
+/// description = "Power Regulator Board"
+///
+/// [packages]
+/// stdlib = "@github/diodeinc/stdlib:v0.3.2"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PcbToml {
+pub struct PcbTomlV1 {
     /// Workspace configuration section
     #[serde(default)]
-    pub workspace: Option<WorkspaceConfig>,
+    pub workspace: Option<WorkspaceConfigV1>,
 
-    /// Module configuration section  
+    /// Module configuration section
     #[serde(default)]
     pub module: Option<ModuleConfig>,
 
@@ -28,14 +62,91 @@ pub struct PcbToml {
     pub packages: HashMap<String, String>,
 }
 
-/// Configuration for [workspace] section
+/// V2 pcb.toml structure (new packaging system)
+///
+/// # Example (Package with Multiple Boards)
+/// ```toml
+/// version = "2"
+///
+/// [package]
+/// pcb-version = "0.3"
+/// allow = ["*@weaverobots.com"]
+///
+/// [[board]]
+/// name = "WV0002"
+/// path = "WV0002.zen"
+/// description = "Power Regulator Board"
+///
+/// [[board]]
+/// name = "WV0002-Rev2"
+/// path = "WV0002-rev2.zen"
+///
+/// [dependencies]
+/// "github.com/diodeinc/stdlib" = "0.3.2"
+/// "github.com/diodeinc/registry/reference/ti/tps54331" = "1.0.0"
+///
+/// [patch]
+/// "github.com/diodeinc/stdlib" = { path = "../stdlib" }
+///
+/// [vendor]
+/// directory = "vendor"
+/// match = ["*"]
+/// ```
+///
+/// # Example (Workspace)
+/// ```toml
+/// version = "2"
+///
+/// [workspace]
+/// name = "my-workspace"
+/// members = ["boards/*"]
+///
+/// [workspace.package]
+/// pcb-version = "0.3"
+///
+/// [workspace.dependencies]
+/// "github.com/diodeinc/stdlib" = "0.3"
+///
+/// [workspace.vendor]
+/// directory = "vendor"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceConfig {
+pub struct PcbTomlV2 {
+    /// Version identifier (must be "2")
+    pub version: String,
+
+    /// Workspace configuration section
+    #[serde(default)]
+    pub workspace: Option<WorkspaceConfigV2>,
+
+    /// Package configuration section
+    #[serde(default)]
+    pub package: Option<PackageConfig>,
+
+    /// Board definitions
+    #[serde(default, rename = "board")]
+    pub boards: Vec<BoardDefinition>,
+
+    /// Dependencies
+    #[serde(default)]
+    pub dependencies: HashMap<String, DependencySpec>,
+
+    /// Patches for local development
+    #[serde(default)]
+    pub patch: HashMap<String, PatchSpec>,
+
+    /// Vendor configuration
+    #[serde(default)]
+    pub vendor: Option<VendorConfig>,
+}
+
+/// V1 Workspace configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfigV1 {
     /// Optional workspace name
     pub name: Option<String>,
 
     /// List of board directories/patterns (supports globs)
-    /// Defaults to ["boards/*"] if not specified
     #[serde(default = "default_members")]
     pub members: Vec<String>,
 
@@ -44,27 +155,206 @@ pub struct WorkspaceConfig {
     pub default_board: Option<String>,
 }
 
-/// Configuration for [module] section
+/// V2 Workspace configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfigV2 {
+    /// Optional workspace name
+    pub name: Option<String>,
+
+    /// List of board directories/patterns (supports globs)
+    #[serde(default = "default_members")]
+    pub members: Vec<String>,
+
+    /// Default board name to use
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_board: Option<String>,
+
+    /// Workspace-level package configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<PackageConfig>,
+
+    /// Workspace-level dependencies
+    #[serde(default)]
+    pub dependencies: HashMap<String, DependencySpec>,
+
+    /// Workspace-level vendor configuration
+    #[serde(default)]
+    pub vendor: Option<VendorConfig>,
+}
+
+/// Module configuration (V1 only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleConfig {
     /// Module name
     pub name: String,
 }
 
-/// Configuration for [board] section
+/// Board configuration (V1 only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardConfig {
     /// Board name
     pub name: String,
 
     /// Path to the .zen file for this board (relative to pcb.toml)
-    /// If None, defaults to the single .zen file in the directory
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 
     /// Optional description of the board
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+}
+
+/// V2 Package configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageConfig {
+    /// Minimum compatible toolchain release series (e.g., "0.3")
+    #[serde(rename = "pcb-version")]
+    pub pcb_version: String,
+
+    /// Access control list (email patterns)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+}
+
+/// V2 Board definition
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardDefinition {
+    /// Board name (required)
+    pub name: String,
+
+    /// Path to the .zen file (optional if single .zen file in directory)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
+    /// Optional description
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+/// V2 Dependency specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum DependencySpec {
+    /// Simple version string (e.g., "0.3.2", "^0.3.2", "0")
+    Version(String),
+
+    /// Detailed specification with additional options
+    Detailed(DependencyDetail),
+}
+
+/// V2 Detailed dependency specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DependencyDetail {
+    /// Specific version requirement
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// Git branch
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+
+    /// Git revision (commit hash)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+
+    /// Local path dependency
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
+    /// Inherit from workspace dependencies
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub workspace: bool,
+}
+
+/// V2 Patch specification for local development
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchSpec {
+    /// Local path to use as replacement
+    pub path: String,
+}
+
+/// V2 Vendor configuration
+///
+/// Controls which dependencies are vendored. Dependencies are always resolved
+/// from the vendor directory first if present, falling back to network fetch.
+///
+/// # Example (Vendor Everything)
+/// ```toml
+/// [vendor]
+/// directory = "vendor"
+/// match = ["*"]
+/// ```
+///
+/// # Example (Selective Vendoring)
+/// ```toml
+/// [workspace.vendor]
+/// directory = "vendor"
+/// match = [
+///     "github.com/diodeinc/registry/reference/ti",
+///     "github.com/diodeinc/stdlib"
+/// ]
+/// ```
+///
+/// # Example (Workspace - Vendor All Registry Components)
+/// ```toml
+/// [workspace.vendor]
+/// directory = "vendor"
+/// match = ["github.com/diodeinc/registry/reference"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VendorConfig {
+    /// Directory where vendored dependencies are stored
+    /// Defaults to "vendor" if not specified
+    #[serde(default = "default_vendor_directory")]
+    pub directory: String,
+
+    /// List of package prefixes to vendor
+    ///
+    /// **Default: vendor everything** (empty list = all packages)
+    ///
+    /// Examples:
+    /// - `[]` (empty/default) → vendors all dependencies
+    /// - `["*"]` → vendors all dependencies (explicit)
+    /// - `["github.com/org/repo"]` → vendors only packages matching this prefix
+    /// - `["prefix1", "prefix2"]` → vendors packages matching any prefix
+    #[serde(default, rename = "match")]
+    pub match_patterns: Vec<String>,
+}
+
+impl VendorConfig {
+    /// Check if a package should be vendored based on match patterns
+    ///
+    /// # Arguments
+    /// * `package_url` - The package URL (e.g., "github.com/diodeinc/stdlib")
+    ///
+    /// # Returns
+    /// `true` if the package matches any vendor pattern
+    pub fn should_vendor(&self, package_url: &str) -> bool {
+        // Empty patterns means vendor everything (default behavior)
+        if self.match_patterns.is_empty() {
+            return true;
+        }
+
+        // Check for wildcard
+        if self.match_patterns.contains(&"*".to_string()) {
+            return true;
+        }
+
+        // Check if package URL matches any prefix pattern
+        self.match_patterns
+            .iter()
+            .any(|pattern| package_url.starts_with(pattern))
+    }
+}
+
+/// Default vendor directory
+fn default_vendor_directory() -> String {
+    "vendor".to_string()
+}
+
+/// Helper for serde skip_serializing_if
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Board discovery information
@@ -103,7 +393,7 @@ pub struct WorkspaceInfo {
 
     /// Workspace configuration if present
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<WorkspaceConfig>,
+    pub config: Option<WorkspaceConfigV1>,
 
     /// All discovered boards
     pub boards: Vec<BoardInfo>,
@@ -118,10 +408,38 @@ fn default_members() -> Vec<String> {
     vec!["boards/*".to_string()]
 }
 
+/// Version detector for initial parsing
+#[derive(Deserialize)]
+struct VersionDetector {
+    #[serde(default)]
+    version: Option<String>,
+}
+
 impl PcbToml {
     /// Parse a pcb.toml file from string content
     pub fn parse(content: &str) -> Result<Self> {
-        toml::from_str(content).map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml: {e}"))
+        // First, detect the version
+        let detector: VersionDetector = toml::from_str(content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml version: {e}"))?;
+
+        match detector.version.as_deref() {
+            None | Some("1") => {
+                // Parse as V1
+                let v1: PcbTomlV1 = toml::from_str(content)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml (V1): {e}"))?;
+                Ok(PcbToml::V1(v1))
+            }
+            Some("2") => {
+                // Parse as V2
+                let v2: PcbTomlV2 = toml::from_str(content)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml (V2): {e}"))?;
+                Ok(PcbToml::V2(v2))
+            }
+            Some(v) => Err(anyhow::anyhow!(
+                "Unsupported pcb.toml version: {}. Supported versions: 1, 2",
+                v
+            )),
+        }
     }
 
     /// Read and parse a pcb.toml file from the filesystem
@@ -132,17 +450,50 @@ impl PcbToml {
 
     /// Check if this configuration represents a workspace
     pub fn is_workspace(&self) -> bool {
-        self.workspace.is_some()
+        match self {
+            PcbToml::V1(v1) => v1.workspace.is_some(),
+            PcbToml::V2(v2) => v2.workspace.is_some(),
+        }
     }
 
-    /// Check if this configuration represents a module
+    /// Check if this configuration represents a module (V1 only)
     pub fn is_module(&self) -> bool {
-        self.module.is_some()
+        match self {
+            PcbToml::V1(v1) => v1.module.is_some(),
+            PcbToml::V2(_) => false,
+        }
     }
 
     /// Check if this configuration represents a board
     pub fn is_board(&self) -> bool {
-        self.board.is_some()
+        match self {
+            PcbToml::V1(v1) => v1.board.is_some(),
+            PcbToml::V2(_) => false,
+        }
+    }
+
+    /// Check if this is a V2 package
+    pub fn is_package(&self) -> bool {
+        match self {
+            PcbToml::V1(_) => false,
+            PcbToml::V2(v2) => v2.package.is_some(),
+        }
+    }
+
+    /// Get the version as a string
+    pub fn version(&self) -> &str {
+        match self {
+            PcbToml::V1(_) => "1",
+            PcbToml::V2(_) => "2",
+        }
+    }
+
+    /// Get package aliases (V1 only, returns empty map for V2)
+    pub fn packages(&self) -> HashMap<String, String> {
+        match self {
+            PcbToml::V1(v1) => v1.packages.clone(),
+            PcbToml::V2(_) => HashMap::new(),
+        }
     }
 }
 
@@ -208,7 +559,7 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
 pub fn discover_boards(
     file_provider: &dyn FileProvider,
     workspace_root: &Path,
-    workspace_config: &Option<WorkspaceConfig>,
+    workspace_config: &Option<WorkspaceConfigV1>,
 ) -> Result<DiscoveryResult> {
     let member_patterns = workspace_config
         .as_ref()
@@ -278,41 +629,45 @@ pub fn discover_boards(
                 if file_provider.exists(&pcb_toml_path) {
                     match PcbToml::from_file(file_provider, &pcb_toml_path) {
                         Ok(config) => {
-                            if let Some(board_config) = config.board {
-                                visited_directories.insert(path.to_path_buf());
+                            // Handle V1 board configs
+                            if let PcbToml::V1(v1) = config {
+                                if let Some(board_config) = &v1.board {
+                                    visited_directories.insert(path.to_path_buf());
 
-                                // Determine the zen file path
-                                let zen_path = if let Some(configured_path) = board_config.path {
-                                    configured_path
-                                } else {
-                                    // Look for single .zen file in directory
-                                    match find_single_zen_file(path) {
-                                        Some(zen_file) => zen_file,
-                                        None => {
-                                            errors.push(DiscoveryError {
-                                                path: pcb_toml_path.clone(),
-                                                error: "No path specified and no single .zen file found in directory".to_string(),
-                                            });
-                                            continue;
+                                    // Determine the zen file path
+                                    let zen_path = if let Some(configured_path) = &board_config.path
+                                    {
+                                        configured_path.clone()
+                                    } else {
+                                        // Look for single .zen file in directory
+                                        match find_single_zen_file(path) {
+                                            Some(zen_file) => zen_file,
+                                            None => {
+                                                errors.push(DiscoveryError {
+                                                    path: pcb_toml_path.clone(),
+                                                    error: "No path specified and no single .zen file found in directory".to_string(),
+                                                });
+                                                continue;
+                                            }
                                         }
-                                    }
-                                };
+                                    };
 
-                                let workspace_relative_zen_path = relative_path.join(&zen_path);
-                                let board = BoardInfo {
-                                    name: board_config.name,
-                                    zen_path: workspace_relative_zen_path
-                                        .to_string_lossy()
-                                        .to_string(),
-                                    description: board_config.description,
-                                };
-                                insert_board(
-                                    &mut boards_by_name,
-                                    &mut errors,
-                                    board,
-                                    pcb_toml_path,
-                                    false,
-                                );
+                                    let workspace_relative_zen_path = relative_path.join(&zen_path);
+                                    let board = BoardInfo {
+                                        name: board_config.name.clone(),
+                                        zen_path: workspace_relative_zen_path
+                                            .to_string_lossy()
+                                            .to_string(),
+                                        description: board_config.description.clone(),
+                                    };
+                                    insert_board(
+                                        &mut boards_by_name,
+                                        &mut errors,
+                                        board,
+                                        pcb_toml_path,
+                                        false,
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
@@ -395,7 +750,11 @@ pub fn get_workspace_info(
         let pcb_toml_path = workspace_root.join("pcb.toml");
         if file_provider.exists(&pcb_toml_path) {
             match PcbToml::from_file(file_provider, &pcb_toml_path) {
-                Ok(config) => config.workspace,
+                Ok(PcbToml::V1(v1)) => v1.workspace,
+                Ok(PcbToml::V2(_v2)) => {
+                    // TODO: Handle V2 workspace config
+                    None
+                }
                 Err(_) => None,
             }
         } else {
@@ -414,7 +773,7 @@ pub fn get_workspace_info(
         }
     } else if !discovery.boards.is_empty() {
         // Create a minimal workspace config with the last board as default
-        final_config = Some(WorkspaceConfig {
+        final_config = Some(WorkspaceConfigV1 {
             name: None,
             members: default_members(),
             default_board: Some(discovery.boards.last().unwrap().name.clone()),
@@ -469,7 +828,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_workspace_config() {
+    fn test_parse_v1_workspace() {
         let content = r#"
 [workspace]
 name = "test_workspace"
@@ -482,43 +841,28 @@ kicad = "@github/diodeinc/kicad"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
+        assert!(matches!(config, PcbToml::V1(_)));
         assert!(config.is_workspace());
         assert!(!config.is_module());
         assert!(!config.is_board());
+        assert_eq!(config.version(), "1");
 
-        let workspace = config.workspace.unwrap();
-        assert_eq!(workspace.name, Some("test_workspace".to_string()));
-        assert_eq!(workspace.members, vec!["boards/*", "custom/board"]);
-        assert_eq!(workspace.default_board, Some("MainBoard".to_string()));
+        if let PcbToml::V1(v1) = config {
+            let workspace = v1.workspace.unwrap();
+            assert_eq!(workspace.name, Some("test_workspace".to_string()));
+            assert_eq!(workspace.members, vec!["boards/*", "custom/board"]);
+            assert_eq!(workspace.default_board, Some("MainBoard".to_string()));
 
-        assert_eq!(config.packages.len(), 2);
-        assert_eq!(
-            config.packages.get("stdlib"),
-            Some(&"@github/diodeinc/stdlib:v1.0.0".to_string())
-        );
+            assert_eq!(v1.packages.len(), 2);
+            assert_eq!(
+                v1.packages.get("stdlib"),
+                Some(&"@github/diodeinc/stdlib:v1.0.0".to_string())
+            );
+        }
     }
 
     #[test]
-    fn test_parse_module_config() {
-        let content = r#"
-[module]
-name = "led_module"
-
-[packages]
-kicad = "@github/custom/kicad"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_workspace());
-        assert!(config.is_module());
-        assert!(!config.is_board());
-
-        let module = config.module.unwrap();
-        assert_eq!(module.name, "led_module");
-    }
-
-    #[test]
-    fn test_parse_board_config() {
+    fn test_parse_v1_board() {
         let content = r#"
 [board]
 name = "TestBoard"
@@ -527,78 +871,337 @@ description = "A test board"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_workspace());
-        assert!(!config.is_module());
+        assert!(matches!(config, PcbToml::V1(_)));
         assert!(config.is_board());
+        assert_eq!(config.version(), "1");
 
-        let board = config.board.unwrap();
-        assert_eq!(board.name, "TestBoard");
-        assert_eq!(board.path, Some("test_board.zen".to_string()));
-        assert_eq!(board.description, "A test board");
+        if let PcbToml::V1(v1) = config {
+            let board = v1.board.unwrap();
+            assert_eq!(board.name, "TestBoard");
+            assert_eq!(board.path, Some("test_board.zen".to_string()));
+            assert_eq!(board.description, "A test board");
+        }
     }
 
     #[test]
-    fn test_parse_board_config_no_description() {
+    fn test_parse_v2_package() {
         let content = r#"
-[board]
-name = "TestBoard"
-path = "test_board.zen"
+version = "2"
+
+[package]
+pcb-version = "0.3"
+allow = ["*@weaverobots.com"]
+
+[[board]]
+name = "WV0002"
+path = "WV0002.zen"
+description = "Power Regulator Board"
+
+[[board]]
+name = "WV0002-Rev2"
+path = "WV0002-rev2.zen"
+description = "Power Regulator Board Rev2"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        let board = config.board.unwrap();
-        assert_eq!(board.description, "");
-    }
-
-    #[test]
-    fn test_parse_empty_config() {
-        let content = "";
-        let config = PcbToml::parse(content).unwrap();
+        assert!(matches!(config, PcbToml::V2(_)));
+        assert!(config.is_package());
         assert!(!config.is_workspace());
-        assert!(!config.is_module());
-        assert!(!config.is_board());
-        assert!(config.packages.is_empty());
+        assert_eq!(config.version(), "2");
+
+        if let PcbToml::V2(v2) = config {
+            let package = v2.package.as_ref().unwrap();
+            assert_eq!(package.pcb_version, "0.3");
+            assert_eq!(package.allow, vec!["*@weaverobots.com"]);
+
+            assert_eq!(v2.boards.len(), 2);
+            assert_eq!(v2.boards[0].name, "WV0002");
+            assert_eq!(v2.boards[0].path, Some("WV0002.zen".to_string()));
+            assert_eq!(v2.boards[0].description, "Power Regulator Board");
+            assert_eq!(v2.boards[1].name, "WV0002-Rev2");
+        }
     }
 
     #[test]
-    fn test_packages_only() {
+    fn test_parse_v2_workspace() {
         let content = r#"
-[packages]
-stdlib = "@github/diodeinc/stdlib:v1.0.0"
+version = "2"
+
+[workspace]
+name = "my-workspace"
+members = ["boards/*"]
+
+[workspace.package]
+pcb-version = "0.3"
+allow = ["*@mycompany.com"]
+
+[workspace.dependencies]
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/ti/tps54331" = "^1.0.0"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert_eq!(config.packages.len(), 1);
-        assert_eq!(
-            config.packages.get("stdlib"),
-            Some(&"@github/diodeinc/stdlib:v1.0.0".to_string())
-        );
+        assert!(matches!(config, PcbToml::V2(_)));
+        assert!(config.is_workspace());
+        assert_eq!(config.version(), "2");
+
+        if let PcbToml::V2(v2) = config {
+            let workspace = v2.workspace.as_ref().unwrap();
+            assert_eq!(workspace.name, Some("my-workspace".to_string()));
+
+            let package = workspace.package.as_ref().unwrap();
+            assert_eq!(package.pcb_version, "0.3");
+            assert_eq!(package.allow, vec!["*@mycompany.com"]);
+
+            assert_eq!(workspace.dependencies.len(), 2);
+            assert!(workspace
+                .dependencies
+                .contains_key("github.com/diodeinc/stdlib"));
+        }
     }
 
     #[test]
-    fn test_parse_board_config_no_path() {
+    fn test_parse_v2_dependencies() {
         let content = r#"
+version = "2"
+
+[package]
+pcb-version = "0.3"
+
+[[board]]
+name = "Test"
+path = "test.zen"
+
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3.2"
+"github.com/diodeinc/registry/reference/ti/tps54331" = { version = "^1.0.0" }
+"github.com/user/custom" = { branch = "main" }
+"github.com/user/local" = { path = "../local" }
+"github.com/user/workspace-dep" = { workspace = true }
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        if let PcbToml::V2(v2) = config {
+            assert_eq!(v2.dependencies.len(), 5);
+
+            // Test simple version string
+            match v2.dependencies.get("github.com/diodeinc/stdlib").unwrap() {
+                DependencySpec::Version(v) => assert_eq!(v, "0.3.2"),
+                _ => panic!("Expected Version variant"),
+            }
+
+            // Test detailed spec with version
+            match v2
+                .dependencies
+                .get("github.com/diodeinc/registry/reference/ti/tps54331")
+                .unwrap()
+            {
+                DependencySpec::Detailed(d) => {
+                    assert_eq!(d.version, Some("^1.0.0".to_string()));
+                }
+                _ => panic!("Expected Detailed variant"),
+            }
+
+            // Test branch spec
+            match v2.dependencies.get("github.com/user/custom").unwrap() {
+                DependencySpec::Detailed(d) => {
+                    assert_eq!(d.branch, Some("main".to_string()));
+                }
+                _ => panic!("Expected Detailed variant"),
+            }
+
+            // Test workspace inheritance
+            match v2
+                .dependencies
+                .get("github.com/user/workspace-dep")
+                .unwrap()
+            {
+                DependencySpec::Detailed(d) => {
+                    assert!(d.workspace);
+                }
+                _ => panic!("Expected Detailed variant"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_patch() {
+        let content = r#"
+version = "2"
+
+[package]
+pcb-version = "0.3"
+
+[[board]]
+name = "Test"
+path = "test.zen"
+
+[patch]
+"github.com/diodeinc/stdlib" = { path = "../stdlib" }
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        if let PcbToml::V2(v2) = config {
+            assert_eq!(v2.patch.len(), 1);
+
+            let patch = v2.patch.get("github.com/diodeinc/stdlib").unwrap();
+            assert_eq!(patch.path, "../stdlib");
+        }
+    }
+
+    #[test]
+    fn test_unsupported_version() {
+        let content = r#"
+version = "3"
+
+[package]
+pcb-version = "0.3"
+"#;
+
+        let result = PcbToml::parse(content);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported pcb.toml version: 3"));
+    }
+
+    #[test]
+    fn test_explicit_v1() {
+        let content = r#"
+version = "1"
+
 [board]
 name = "TestBoard"
-description = "A test board"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        let board = config.board.unwrap();
-        assert_eq!(board.name, "TestBoard");
-        assert_eq!(board.path, None);
-        assert_eq!(board.description, "A test board");
+        assert!(matches!(config, PcbToml::V1(_)));
+        assert_eq!(config.version(), "1");
     }
 
     #[test]
-    fn test_default_members() {
+    fn test_v2_vendor_config() {
         let content = r#"
-[workspace]
-name = "test"
+version = "2"
+
+[package]
+pcb-version = "0.3"
+
+[[board]]
+name = "Test"
+path = "test.zen"
+
+[vendor]
+directory = "my-vendor"
+match = ["github.com/diodeinc/registry/reference/ti"]
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.unwrap();
-        assert_eq!(workspace.members, vec!["boards/*"]);
+        if let PcbToml::V2(v2) = config {
+            let vendor = v2.vendor.as_ref().unwrap();
+            assert_eq!(vendor.directory, "my-vendor");
+            assert_eq!(
+                vendor.match_patterns,
+                vec!["github.com/diodeinc/registry/reference/ti"]
+            );
+
+            // Test should_vendor
+            assert!(vendor.should_vendor("github.com/diodeinc/registry/reference/ti/tps54331"));
+            assert!(!vendor.should_vendor("github.com/diodeinc/stdlib"));
+        } else {
+            panic!("Expected V2 config");
+        }
+    }
+
+    #[test]
+    fn test_v2_vendor_config_defaults() {
+        let content = r#"
+version = "2"
+
+[package]
+pcb-version = "0.3"
+
+[[board]]
+name = "Test"
+path = "test.zen"
+
+[vendor]
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        if let PcbToml::V2(v2) = config {
+            let vendor = v2.vendor.as_ref().unwrap();
+            assert_eq!(vendor.directory, "vendor"); // default
+            assert!(vendor.match_patterns.is_empty()); // default empty = vendor all
+
+            // Empty patterns should vendor everything
+            assert!(vendor.should_vendor("github.com/diodeinc/stdlib"));
+            assert!(vendor.should_vendor("github.com/any/package"));
+        } else {
+            panic!("Expected V2 config");
+        }
+    }
+
+    #[test]
+    fn test_v2_workspace_vendor_config() {
+        let content = r#"
+version = "2"
+
+[workspace]
+name = "my-workspace"
+members = ["boards/*"]
+
+[workspace.vendor]
+directory = "workspace-vendor"
+match = ["github.com/diodeinc/registry/reference"]
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        if let PcbToml::V2(v2) = config {
+            let workspace = v2.workspace.as_ref().unwrap();
+            let vendor = workspace.vendor.as_ref().unwrap();
+            assert_eq!(vendor.directory, "workspace-vendor");
+            assert_eq!(
+                vendor.match_patterns,
+                vec!["github.com/diodeinc/registry/reference"]
+            );
+
+            // Test should_vendor with workspace pattern
+            assert!(vendor.should_vendor("github.com/diodeinc/registry/reference/ti/tps54331"));
+            assert!(!vendor.should_vendor("github.com/diodeinc/stdlib"));
+        } else {
+            panic!("Expected V2 config");
+        }
+    }
+
+    #[test]
+    fn test_v2_vendor_wildcard() {
+        let content = r#"
+version = "2"
+
+[package]
+pcb-version = "0.3"
+
+[[board]]
+name = "Test"
+path = "test.zen"
+
+[vendor]
+match = ["*"]
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        if let PcbToml::V2(v2) = config {
+            let vendor = v2.vendor.as_ref().unwrap();
+            assert_eq!(vendor.match_patterns, vec!["*"]);
+
+            // Wildcard should vendor everything
+            assert!(vendor.should_vendor("github.com/diodeinc/stdlib"));
+            assert!(vendor.should_vendor("github.com/any/package"));
+            assert!(vendor.should_vendor("gitlab.com/kicad/symbols"));
+        } else {
+            panic!("Expected V2 config");
+        }
     }
 }
