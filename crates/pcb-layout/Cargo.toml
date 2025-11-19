@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 rust_decimal = { workspace = true }
 minijinja = { workspace = true }
 serde = { workspace = true }
+starlark = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

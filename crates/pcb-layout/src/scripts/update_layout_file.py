@@ -55,19 +55,21 @@ logger = logging.getLogger("pcb")
 def natural_sort_key(text: str) -> List:
     """
     Generate a sort key for natural (human-friendly) sorting.
-    
+
     Splits a string into numeric and non-numeric parts, converting numeric
     parts to integers so that "C2" sorts before "C10".
-    
+
     Example:
         "C10" -> ['C', 10]
         "C2"  -> ['C', 2]
         "IC1.R5" -> ['IC', 1, '.R', 5]
     """
+
     def convert(part):
         return int(part) if part.isdigit() else part.lower()
-    
-    return [convert(c) for c in re.split('([0-9]+)', text)]
+
+    return [convert(c) for c in re.split("([0-9]+)", text)]
+
 
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
@@ -82,6 +84,319 @@ if python_path:
 
 # Available in KiCad's Python environment.
 import pcbnew
+
+
+# Staged Change System - detect changes, then conditionally commit based on mode
+
+
+class StagedChange(ABC):
+    """Base class for a change that can be detected and optionally applied."""
+
+    @abstractmethod
+    def apply(self, board: pcbnew.BOARD) -> None:
+        pass
+
+    @abstractmethod
+    def to_json(self) -> dict:
+        pass
+
+
+class ChangeDetector:
+    """Collects all detected changes during the sync process."""
+
+    def __init__(self):
+        self.changes: List[StagedChange] = []
+
+    def add_change(self, change: StagedChange):
+        """Add a detected change to the list."""
+        self.changes.append(change)
+        logger.debug(f"Staged change: {change.__class__.__name__}")
+
+    def commit_all(self, board: pcbnew.BOARD):
+        """Apply all staged changes to the board."""
+        logger.info(f"Committing {len(self.changes)} changes...")
+        for i, change in enumerate(self.changes, 1):
+            logger.debug(
+                f"Applying change {i}/{len(self.changes)}: {change.__class__.__name__}"
+            )
+            change.apply(board)
+
+    def to_json(self, source_path: str, netlist_path: str) -> dict:
+        """Export all changes as JSON for check mode."""
+        from datetime import datetime
+
+        # Sort changes for deterministic output
+        sorted_changes = sorted(
+            [c.to_json() for c in self.changes],
+            key=lambda x: (x.get("change_type", ""), x.get("description", "")),
+        )
+
+        return {
+            "source": source_path,
+            "netlist_source": netlist_path,
+            "timestamp": datetime.now().isoformat(),
+            "change_count": len(self.changes),
+            "changes": sorted_changes,
+        }
+
+
+class AddFootprint(StagedChange):
+    def __init__(self, footprint: pcbnew.FOOTPRINT, part: Any, fp_id: str):
+        self.footprint = footprint
+        self.part = part
+        self.fp_id = fp_id
+
+    def apply(self, board: pcbnew.BOARD) -> None:
+        board.Add(self.footprint)
+
+    def to_json(self) -> dict:
+        pos = self.footprint.GetPosition()
+        hier_path = (
+            self.part.sheetpath.names.split(":")[-1]
+            if ":" in self.part.sheetpath.names
+            else self.part.sheetpath.names
+        )
+
+        items = [
+            {
+                "description": f"{self.part.ref} at {hier_path}\n    value: {self.part.value}\n    footprint: {self.part.footprint}",
+                "uuid": self.fp_id,
+                "hierarchical_path": hier_path,
+                "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0},
+            }
+        ]
+
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
+        return {
+            "change_type": "footprint_added",
+            "severity": "error",
+            "category": "",
+            "description": f"{self.part.ref} ({hier_path}) missing from board",
+            "items": sorted_items,
+        }
+
+
+class RemoveFootprint(StagedChange):
+    def __init__(self, footprint: pcbnew.FOOTPRINT, fp_id: str):
+        self.footprint = footprint
+        self.fp_id = fp_id
+        self.reference = footprint.GetReference()
+        path_field = footprint.GetFieldByName("Path")
+        self.hier_path = path_field.GetText() if path_field else None
+
+    def apply(self, board: pcbnew.BOARD) -> None:
+        board.Delete(self.footprint)
+
+    def to_json(self) -> dict:
+        pos = self.footprint.GetPosition()
+        path_desc = f" at {self.hier_path}" if self.hier_path else ""
+
+        items = [
+            {
+                "description": f"{self.reference}{path_desc}",
+                "uuid": self.fp_id,
+                "hierarchical_path": self.hier_path,
+                "pos": {"x": pos.x / 1000000.0, "y": pos.y / 1000000.0},
+            }
+        ]
+
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
+        return {
+            "change_type": "footprint_removed",
+            "severity": "error",
+            "category": "",
+            "description": f"{self.reference} ({self.hier_path or 'unknown path'}) not in netlist",
+            "items": sorted_items,
+        }
+
+
+class UpdateFootprintMetadata(StagedChange):
+    """Stage update of footprint metadata (reference, value, properties, etc.)."""
+
+    def __init__(
+        self, footprint: pcbnew.FOOTPRINT, part: Any, fp_id: str, configure_fn
+    ):
+        self.footprint = footprint
+        self.part = part
+        self.fp_id = fp_id
+        self.configure_fn = configure_fn
+        self.changes = self._detect_changes()
+
+    def _detect_changes(self) -> list[str]:
+        """Detect what metadata is different."""
+        changes = []
+
+        # Check reference
+        if self.footprint.GetReference() != self.part.ref:
+            changes.append(
+                f"reference: '{self.footprint.GetReference()}' → '{self.part.ref}'"
+            )
+
+        # Check value
+        if self.footprint.GetValue() != self.part.value:
+            changes.append(
+                f"value: '{self.footprint.GetValue()}' → '{self.part.value}'"
+            )
+
+        # Check FPID
+        if self.footprint.GetFPIDAsString() != self.part.footprint:
+            changes.append(
+                f"footprint: '{self.footprint.GetFPIDAsString()}' → '{self.part.footprint}'"
+            )
+
+        # Check DNP
+        dnp_prop = next(
+            (x for x in self.part.properties if x.name.lower() == "dnp"), None
+        )
+        expected_dnp = dnp_prop is not None and dnp_prop.value.lower() == "true"
+        if self.footprint.IsDNP() != expected_dnp:
+            changes.append(f"DNP: {self.footprint.IsDNP()} → {expected_dnp}")
+
+        # Check skip_bom
+        skip_bom_prop = next(
+            (x for x in self.part.properties if x.name.lower() == "skip_bom"), None
+        )
+        expected_skip_bom = (
+            skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
+        )
+        if self.footprint.IsExcludedFromBOM() != expected_skip_bom:
+            changes.append(
+                f"exclude_from_bom: {self.footprint.IsExcludedFromBOM()} → {expected_skip_bom}"
+            )
+
+        # Check skip_pos
+        skip_pos_prop = next(
+            (x for x in self.part.properties if x.name.lower() == "skip_pos"), None
+        )
+        expected_skip_pos = (
+            skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
+        )
+        if self.footprint.IsExcludedFromPosFiles() != expected_skip_pos:
+            changes.append(
+                f"exclude_from_pos: {self.footprint.IsExcludedFromPosFiles()} → {expected_skip_pos}"
+            )
+
+        # Get current fields (excluding built-ins we already checked)
+        current_fields = {}
+        for field in self.footprint.GetFields():
+            if (
+                not field.IsValue()
+                and not field.IsReference()
+                and field.GetName() not in ["Path"]
+            ):
+                current_fields[field.GetName()] = field.GetText()
+
+        # Track expected fields from netlist
+        expected_fields = {}
+        for prop in self.part.properties:
+            if prop.name.lower() in ["datasheet"]:
+                expected_fields["Datasheet"] = prop.value
+            elif prop.name.lower() in ["description"]:
+                expected_fields["Description"] = prop.value
+            elif prop.name.lower() not in [
+                "value",
+                "reference",
+                "dnp",
+                "skip_bom",
+                "skip_pos",
+                "symbol_name",
+                "symbol_path",
+            ] and not prop.name.startswith("_"):
+                display_name = prop.name.replace("_", " ").title()
+                expected_fields[display_name] = prop.value
+
+        # Check for changed/added fields
+        for field_name, expected_val in expected_fields.items():
+            current_val = current_fields.get(field_name, "")
+            if current_val != expected_val:
+                if current_val == "":
+                    changes.append(f"+{field_name}: '{expected_val}'")
+                else:
+                    changes.append(f"{field_name}: '{current_val}' → '{expected_val}'")
+
+        # Check for removed fields
+        for field_name in current_fields:
+            if field_name not in expected_fields and field_name not in [
+                "Datasheet",
+                "Description",
+            ]:
+                changes.append(f"-{field_name}: '{current_fields[field_name]}'")
+
+        return changes
+
+    def apply(self, board: pcbnew.BOARD) -> None:
+        self.configure_fn(self.footprint, self.part)
+
+    def to_json(self) -> dict:
+        hier_path = (
+            self.part.sheetpath.names.split(":")[-1]
+            if ":" in self.part.sheetpath.names
+            else self.part.sheetpath.names
+        )
+        changes_text = "\n    ".join(self.changes)
+
+        items = [
+            {
+                "description": f"{self.part.ref} at {hier_path}\n    {changes_text}",
+                "uuid": self.fp_id,
+                "hierarchical_path": hier_path,
+                "pos": None,
+            }
+        ]
+
+        # Sort items for deterministic output
+        sorted_items = sorted(items, key=lambda x: x.get("description", ""))
+
+        return {
+            "change_type": "footprint_metadata_updated",
+            "severity": "error",
+            "category": "",
+            "description": f"{self.part.ref} ({hier_path}) metadata out of sync",
+            "items": sorted_items,
+        }
+
+
+class SyncFootprintWithLayout(StagedChange):
+    """Sync a footprint's layout properties (position, orientation, layer) from a source footprint."""
+
+    def __init__(
+        self,
+        target_vfp: "VirtualFootprint",
+        source_vfp: "VirtualFootprint",
+        fp_name: str,
+    ):
+        self.target_vfp = target_vfp
+        self.source_vfp = source_vfp
+        self.fp_name = fp_name
+        self.changes = target_vfp.diff(source_vfp)
+
+    def apply(self, board: pcbnew.BOARD) -> None:
+        self.target_vfp.replace_with(self.source_vfp)
+
+    def to_json(self) -> dict:
+        changes_text = "\n    ".join(self.changes)
+        target_fp = self.target_vfp.kicad_footprint
+        return {
+            "change_type": "footprint_layout_updated",
+            "severity": "warning",
+            "category": "fragment",
+            "description": f"{self.fp_name} layout differs from layout fragment",
+            "items": [
+                {
+                    "description": f"{self.fp_name}\n    {changes_text}",
+                    "uuid": get_footprint_uuid(target_fp),
+                    "hierarchical_path": self.fp_name,
+                    "pos": {
+                        "x": target_fp.GetPosition().x / 1000000.0,
+                        "y": target_fp.GetPosition().y / 1000000.0,
+                    },
+                }
+            ],
+        }
 
 
 class Remapper:
@@ -117,11 +432,7 @@ class Remapper:
         return cls(moved_paths)
 
 
-####################################################################################################
 # JSON Netlist Parser
-#
-# This class parses the JSON netlist format from diode-sch.
-####################################################################################################
 
 
 class JsonNetlistParser:
@@ -224,7 +535,10 @@ class JsonNetlistParser:
             # Get value - follow the same precedence as Rust: mpn > value > Value > "?"
             value = "?"
             for key in ["mpn", "value", "Value"]:
-                if key in instance["attributes"] and "String" in instance["attributes"][key]:
+                if (
+                    key in instance["attributes"]
+                    and "String" in instance["attributes"][key]
+                ):
                     value = instance["attributes"][key]["String"]
                     break
 
@@ -297,7 +611,9 @@ class JsonNetlistParser:
                                     elif "Number" in item:
                                         array_items.append(str(item["Number"]))
                                     elif "Boolean" in item:
-                                        array_items.append("true" if item["Boolean"] else "false")
+                                        array_items.append(
+                                            "true" if item["Boolean"] else "false"
+                                        )
                                     else:
                                         # For other types, use string representation
                                         array_items.append(str(item))
@@ -377,12 +693,7 @@ class JsonNetlistParser:
         return None
 
 
-####################################################################################################
 # "Virtual DOM" for KiCad Board Items
-#
-# This provides a hierarchical representation of KiCad board items (footprints, tracks, zones, etc)
-# that allows for easier manipulation while maintaining links back to the actual KiCad objects.
-####################################################################################################
 
 
 class VirtualItemType(Enum):
@@ -622,8 +933,43 @@ class VirtualFootprint(VirtualElement):
                 target_val.SetPosition(source_val.GetPosition())
                 target_val.SetAttributes(source_val.GetAttributes())
 
+    def diff(self, source_footprint: "VirtualFootprint") -> list[str]:
+        """Return a list of differences between this footprint and a source footprint."""
+        changes = []
+
+        # Need kicad footprints to compare
+        if not self.kicad_footprint or not source_footprint.kicad_footprint:
+            return changes
+
+        target = self.kicad_footprint
+        source = source_footprint.kicad_footprint
+
+        # Position
+        target_pos = target.GetPosition()
+        source_pos = source.GetPosition()
+        if target_pos != source_pos:
+            # Convert to mm for display
+            tx, ty = target_pos.x / 1000000.0, target_pos.y / 1000000.0
+            sx, sy = source_pos.x / 1000000.0, source_pos.y / 1000000.0
+            changes.append(f"position: ({tx:.3f}, {ty:.3f}) → ({sx:.3f}, {sy:.3f})")
+
+        # Orientation
+        target_orient = target.GetOrientation()
+        source_orient = source_footprint.kicad_footprint.GetOrientation()
+        if target_orient != source_orient:
+            changes.append(
+                f"orientation: {target_orient.AsDegrees():.1f}° → {source_orient.AsDegrees():.1f}°"
+            )
+
+        # Layer
+        target_layer = target.GetLayerName()
+        source_layer = source_footprint.kicad_footprint.GetLayerName()
+        if target_layer != source_layer:
+            changes.append(f"layer: {target_layer} → {source_layer}")
+
+        return changes
+
     def render_tree(self, indent: int = 0) -> str:
-        """Render this footprint as a string."""
         prefix = "  " * indent
         status_markers = []
         if self.added:
@@ -1157,9 +1503,7 @@ def get_kicad_bbox(item: Any) -> VirtualBoundingBox:
     return VirtualBoundingBox(bb.GetLeft(), bb.GetTop(), bb.GetWidth(), bb.GetHeight())
 
 
-####################################################################################################
 # Footprint formatting helper
-####################################################################################################
 
 
 def is_kicad_lib_fp(s):
@@ -1197,12 +1541,7 @@ def format_footprint(fp_str):
     return f"{stem}:{stem}"
 
 
-####################################################################################################
 # Data Structures + Utility Functions
-#
-# Here we define some data structures that represent the footprints and layouts we'll be working
-# with.
-####################################################################################################
 
 
 def rmv_quotes(s):
@@ -1383,9 +1722,7 @@ class SyncState:
         return self.footprints.get(uuid)
 
 
-####################################################################################################
 # Step 0. Setup Board
-####################################################################################################
 
 
 class SetupBoard(Step):
@@ -1690,13 +2027,7 @@ class SetupBoard(Step):
             self._apply_board_config()
 
 
-####################################################################################################
 # Apply Moved Paths Step
-#
-# This step applies path remapping before ImportNetlist to ensure that renamed modules
-# in the schematic are properly synchronized with their existing footprints and groups
-# on the board. This prevents phantom "new" components and orphaned groups.
-####################################################################################################
 
 
 class ApplyMovedPaths(Step):
@@ -1782,12 +2113,7 @@ class ApplyMovedPaths(Step):
         return True
 
 
-####################################################################################################
 # Net Rename Mapping System
-#
-# This system tracks net name changes by comparing old and new pad assignments for existing
-# footprints, enabling analysis and eventual automatic updating of zones.
-####################################################################################################
 
 
 class NetRenameMapper:
@@ -1846,12 +2172,7 @@ class NetRenameMapper:
         }
 
 
-####################################################################################################
 # Step 1. Import Netlist
-#
-# The first step is to import the netlist, which means matching the set of footprints in the
-# netlist to the footprints on the board.
-####################################################################################################
 
 
 class ImportNetlist(Step):
@@ -1863,11 +2184,13 @@ class ImportNetlist(Step):
         board: pcbnew.BOARD,
         board_path: Path,
         netlist: JsonNetlistParser,
+        change_detector: ChangeDetector,
     ):
         self.state = state
         self.board = board
         self.board_path = board_path
         self.netlist = netlist
+        self.change_detector = change_detector
 
         # Map from footprint library name to library path.
         self.footprint_lib_map = {}
@@ -2000,12 +2323,14 @@ class ImportNetlist(Step):
         )
 
         for fp_id in board_footprint_ids - netlist_footprint_ids:
-            # Delete the footprint from the board.
+            # Stage removal of the footprint from the board.
             fp = self.board.FindFootprintByPath(pcbnew.KIID_PATH(f"{fp_id}/{fp_id}"))
             if fp:
-                logger.info(f"{fp_id} ({fp.GetReference()}): Removing from board")
+                logger.info(
+                    f"{fp_id} ({fp.GetReference()}): Staging removal from board"
+                )
                 self.state.track_footprint_removed(fp)
-                self.board.Delete(fp)
+                self.change_detector.add_change(RemoveFootprint(fp, fp_id))
 
         def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
             # Remove all custom fields (keep Reference, Value, Datasheet built-ins)
@@ -2025,17 +2350,23 @@ class ImportNetlist(Step):
                 pcbnew.KIID_PATH(f"{part.sheetpath.tstamps}/{part.sheetpath.tstamps}")
             )
             # Handle DNP property
-            dnp_prop = next((x for x in part.properties if x.name.lower() == "dnp"), None)
+            dnp_prop = next(
+                (x for x in part.properties if x.name.lower() == "dnp"), None
+            )
             fp.SetDNP(dnp_prop is not None and dnp_prop.value.lower() == "true")
 
             # Handle skip_bom property
-            skip_bom_prop = next((x for x in part.properties if x.name.lower() == "skip_bom"), None)
+            skip_bom_prop = next(
+                (x for x in part.properties if x.name.lower() == "skip_bom"), None
+            )
             fp.SetExcludedFromBOM(
                 skip_bom_prop is not None and skip_bom_prop.value.lower() == "true"
             )
 
             # Handle skip_pos property
-            skip_pos_prop = next((x for x in part.properties if x.name.lower() == "skip_pos"), None)
+            skip_pos_prop = next(
+                (x for x in part.properties if x.name.lower() == "skip_pos"), None
+            )
             fp.SetExcludedFromPosFiles(
                 skip_pos_prop is not None and skip_pos_prop.value.lower() == "true"
             )
@@ -2053,18 +2384,22 @@ class ImportNetlist(Step):
                     fp.GetFieldByName("Description").SetText(prop.value)
                     fp.GetFieldByName("Description").SetVisible(False)
                 # Skip built-in fields, symbol metadata, and specially handled properties
-                elif prop.name.lower() not in [
-                    "value",
-                    "reference",
-                    "dnp",  # Skip the standardized dnp attribute (handled above)
-                    "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
-                    "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
-                    "symbol_name",  # Symbol metadata - not needed in PCB
-                    "symbol_path",  # Symbol metadata - not needed in PCB
-                ] and not prop.name.startswith("_"):
+                elif (
+                    prop.name.lower()
+                    not in [
+                        "value",
+                        "reference",
+                        "dnp",  # Skip the standardized dnp attribute (handled above)
+                        "skip_bom",  # Skip the standardized skip_bom attribute (handled above)
+                        "skip_pos",  # Skip the standardized skip_pos attribute (handled above)
+                        "symbol_name",  # Symbol metadata - not needed in PCB
+                        "symbol_path",  # Symbol metadata - not needed in PCB
+                    ]
+                    and not prop.name.startswith("_")
+                ):
                     # Convert snake_case property names to Title Case for display in KiCad
                     # e.g., "logic_level" -> "Logic Level"
-                    display_name = prop.name.replace('_', ' ').title()
+                    display_name = prop.name.replace("_", " ").title()
                     fp.SetField(display_name, prop.value)
                     fp.GetFieldByName(display_name).SetVisible(False)
 
@@ -2073,7 +2408,7 @@ class ImportNetlist(Step):
             part = next(
                 part for part in self.netlist.parts if part.sheetpath.tstamps == fp_id
             )
-            logger.info(f"{fp_id} ({part.ref}): Adding to board")
+            logger.info(f"{fp_id} ({part.ref}): Staging addition to board")
 
             # Load footprint from library
             fp_lib, fp_name = part.footprint.split(":")
@@ -2102,10 +2437,12 @@ class ImportNetlist(Step):
                     f"Footprint '{fp_name}' not found in library '{fp_lib}'"
                 )
 
+            # Configure the footprint (but don't add to board yet)
             fp.SetParent(self.board)
             _configure_footprint(fp, part)
 
-            self.board.Add(fp)
+            # Stage the addition
+            self.change_detector.add_change(AddFootprint(fp, part, fp_id))
             self.state.track_footprint_added(fp)
 
         for fp_id in netlist_footprint_ids & board_footprint_ids:
@@ -2116,8 +2453,17 @@ class ImportNetlist(Step):
                 part for part in self.netlist.parts if part.sheetpath.tstamps == fp_id
             )
 
-            logger.info(f"{fp_id} ({part.ref}): Updating metadata")
-            _configure_footprint(fp, part)
+            # Only stage if there are actual changes
+            metadata_change = UpdateFootprintMetadata(
+                fp, part, fp_id, _configure_footprint
+            )
+            if metadata_change.changes:
+                logger.info(
+                    f"{fp_id} ({part.ref}): Staging metadata update - {len(metadata_change.changes)} changes"
+                )
+                self.change_detector.add_change(metadata_change)
+            else:
+                logger.debug(f"{fp_id} ({part.ref}): No metadata changes detected")
 
     def _sync_nets(self):
         """Sync the nets in the netlist to the board."""
@@ -2415,20 +2761,23 @@ class ImportNetlist(Step):
         self._log_virtual_dom()
 
 
-####################################################################################################
 # Step 2. Sync Layouts
-####################################################################################################
 
 
 class SyncLayouts(Step):
     """Sync layouts from layout files to groups marked as newly added."""
 
     def __init__(
-        self, state: SyncState, board: pcbnew.BOARD, netlist: JsonNetlistParser
+        self,
+        state: SyncState,
+        board: pcbnew.BOARD,
+        netlist: JsonNetlistParser,
+        change_detector: ChangeDetector,
     ):
         self.state = state
         self.board = board
         self.netlist = netlist
+        self.change_detector = change_detector
 
     def _sync_connected_item(
         self,
@@ -2489,7 +2838,17 @@ class SyncLayouts(Step):
         """Sync all elements (footprints, zones, graphics) in a group from a layout file."""
         # Load the layout file into a virtual board
         layout_board = pcbnew.LoadBoard(str(layout_file))
-        layout_vboard = build_virtual_dom_from_board(layout_board)
+
+        # Build virtual DOM from the fragment board.
+        # We ONLY need footprints here for matching. Tracks, zones, and graphics are
+        # retrieved directly from the layout_board object later, so we disable their
+        # processing in the VDOM build to save time and avoid duplication.
+        layout_vboard = build_virtual_dom_from_board(
+            layout_board,
+            include_zones=False,
+            include_graphics=False,
+            include_tracks=False,
+        )
 
         # Get all footprints in the target group (recursively)
         target_footprints = self._get_footprints_in_group(group)
@@ -2525,9 +2884,17 @@ class SyncLayouts(Step):
             if rel_path in source_by_path:
                 # Found a match - sync the footprint
                 source_fp = source_by_path[rel_path]
-                target_fp.replace_with(source_fp)
+
+                # Check for layout changes
+                change = SyncFootprintWithLayout(target_fp, source_fp, target_fp.name)
+                if change.changes:
+                    logger.info(f"  Detected layout changes for {target_fp.name}")
+                    self.change_detector.add_change(change)
+                else:
+                    logger.debug(f"  Matched and synced: {target_fp.name} (no changes)")
+                    # Even if no changes, we consider it matched
+
                 matched_pairs.append((source_fp, target_fp))
-                logger.debug(f"  Matched and synced: {target_fp.name}")
             else:
                 unmatched_target.append(target_fp.name)
                 logger.debug(f"  No match found for: {target_fp.name}")
@@ -2559,7 +2926,8 @@ class SyncLayouts(Step):
                 logger.info(f"    - {fp}")
 
         # Only sync zones and graphics if we matched at least one footprint
-        if matched_pairs:
+        # AND the group is newly added (to avoid duplicating items in existing groups)
+        if matched_pairs and group.added:
             # Build net code mapping from matched footprints
             net_code_map = build_net_code_mapping(
                 layout_board, self.board, matched_pairs
@@ -2636,6 +3004,10 @@ class SyncLayouts(Step):
                     break
 
             logger.info(f"  Marked group {group.id} as synced")
+        elif not group.added:
+            logger.debug(
+                "  Skipping non-footprint items for existing group (to avoid duplication)"
+            )
 
         # Explicitly delete the layout board to release resources (important for Windows)
         del layout_board
@@ -2676,27 +3048,24 @@ class SyncLayouts(Step):
             should_sync = False
             layout_file = None
 
-            if current.added:
-                # Check if this group has a corresponding module with layout_path
-                module = self.netlist.modules.get(current.id)
-                if module and module.layout_path:
-                    # Resolve the layout path
-                    layout_path = Path(module.layout_path)
-                    if not layout_path.is_absolute():
-                        layout_path = (
-                            Path(self.board.GetFileName()).parent / layout_path
-                        )
+            # Check if this group has a corresponding module with layout_path
+            module = self.netlist.modules.get(current.id)
+            if module and module.layout_path:
+                # Resolve the layout path
+                layout_path = Path(module.layout_path)
+                if not layout_path.is_absolute():
+                    layout_path = Path(self.board.GetFileName()).parent / layout_path
 
-                    layout_file = layout_path / "layout.kicad_pcb"
+                layout_file = layout_path / "layout.kicad_pcb"
 
-                    # Check if layout file exists
-                    if layout_file.exists():
-                        should_sync = True
-                    else:
-                        logger.warning(
-                            f"Layout file not found for {current.id} at {layout_file}. "
-                            f"Skipping layout sync for this module."
-                        )
+                # Check if layout file exists
+                if layout_file.exists():
+                    should_sync = True
+                else:
+                    logger.warning(
+                        f"Layout file not found for {current.id} at {layout_file}. "
+                        f"Skipping layout sync for this module."
+                    )
 
             if should_sync:
                 # Sync this group
@@ -2711,18 +3080,12 @@ class SyncLayouts(Step):
             else:
                 # Only add children to queue if we didn't sync this group
                 queue.extend(current.children)
-
-                if not current.added:
-                    logger.debug(f"Skipping group {current.id} - not newly added")
-                else:
-                    logger.debug(f"Skipping group {current.id} - no layout_path")
+                logger.debug(f"Skipping group {current.id} - no layout_path")
 
         logger.info(f"Completed layout sync: synced {synced_count} groups")
 
 
-####################################################################################################
 # Step 3. Place new footprints and groups
-####################################################################################################
 
 
 class PlaceComponents(Step):
@@ -2762,7 +3125,9 @@ class PlaceComponents(Step):
 
         # Sort by area (largest first) for better packing, then by name for determinism
         # Use natural sort for names so "C2" comes before "C10"
-        items_with_bbox.sort(key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id))
+        items_with_bbox.sort(
+            key=lambda item: (-item.bbox.area, natural_sort_key(item.name), item.id)
+        )
 
         # Storage for potential placement points (as (x, y) tuples)
         # These are points where we can place the bottom-left corner of an item
@@ -2962,7 +3327,8 @@ class PlaceComponents(Step):
             # If root is a group, use its children as top-level items
             # Sort them for deterministic ordering using natural sort
             top_level_added = sorted(
-                sparse_tree.children, key=lambda item: (natural_sort_key(item.name), item.id)
+                sparse_tree.children,
+                key=lambda item: (natural_sort_key(item.name), item.id),
             )
         else:
             # If root is a single item, use it
@@ -2999,7 +3365,8 @@ class PlaceComponents(Step):
             if not item.added and isinstance(item, VirtualGroup):
                 # Sort children for deterministic traversal using natural sort
                 sorted_children = sorted(
-                    item.children, key=lambda child: (natural_sort_key(child.name), child.id)
+                    item.children,
+                    key=lambda child: (natural_sort_key(child.name), child.id),
                 )
                 for child in sorted_children:
                     collect_existing_bbox(child)
@@ -3046,9 +3413,7 @@ class PlaceComponents(Step):
         logger.info("Completed hierarchical component placement")
 
 
-####################################################################################################
 # Step 4. Finalize board
-####################################################################################################
 
 
 class FinalizeBoard(Step):
@@ -3310,12 +3675,6 @@ class FinalizeBoard(Step):
         logger.info(f"Saved layout snapshot to {self.snapshot_path}")
 
     def run(self):
-        # Fill zones
-        # zone_start = time.time()
-        # filler = pcbnew.ZONE_FILLER(self.board)
-        # filler.Fill(self.board.Zones())
-        # logger.info(f"Zone filling took {time.time() - zone_start:.3f} seconds")
-
         # Export layout snapshot
         snapshot_start = time.time()
         self._export_layout_snapshot()
@@ -3415,9 +3774,7 @@ class FinalizeBoard(Step):
             print(f"FINAL CLEANUP: {', '.join(summary)} orphaned items fixed")
 
 
-####################################################################################################
 # Command-line interface
-####################################################################################################
 
 
 def main():
@@ -3464,7 +3821,23 @@ def main():
         default=True,
         help="""Apply board config (default: true).""",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="""Check mode: detect changes without applying them.""",
+    )
+    parser.add_argument(
+        "--changes-output",
+        type=str,
+        metavar="file",
+        help="""Output file for changes JSON (required in --check mode).""",
+    )
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.check and not args.changes_output:
+        logger.error("--changes-output required when --check is enabled")
+        sys.exit(1)
 
     logger.setLevel(logging.DEBUG)
 
@@ -3492,6 +3865,9 @@ def main():
     logger.info(f"Parsing JSON netlist from {args.json_input}")
     netlist = JsonNetlistParser.parse_netlist(args.json_input)
 
+    # Create change detector for staging changes
+    change_detector = ChangeDetector()
+
     if args.only_snapshot:
         steps = [
             FinalizeBoard(state, board, Path(args.snapshot) if args.snapshot else None),
@@ -3500,26 +3876,47 @@ def main():
         steps = [
             SetupBoard(state, board, args.board_config, args.sync_board_config),
             ApplyMovedPaths(state, board, schematic_data),
-            ImportNetlist(state, board, args.output, netlist),
-            SyncLayouts(state, board, netlist),
+            ImportNetlist(state, board, args.output, netlist, change_detector),
+            SyncLayouts(state, board, netlist, change_detector),
             PlaceComponents(state, board, netlist),
-            FinalizeBoard(state, board, Path(args.snapshot) if args.snapshot else None),
         ]
 
+    # Run all detection steps
     for step in steps:
         logger.info("-" * 80)
         logger.info(f"Running step: {step.__class__.__name__}")
         logger.info("-" * 80)
         step.run_with_timing()
 
-    pcbnew.SaveBoard(args.output, board)
+    # Divergence point: check mode vs normal mode
+    if args.check:
+        # Check mode: Write JSON and exit
+        change_json = change_detector.to_json(args.output, args.json_input)
+        with open(args.changes_output, "w") as f:
+            json.dump(change_json, f, indent=2)
+
+        logger.info(f"Check complete: {len(change_detector.changes)} changes detected")
+        logger.info(f"Changes written to {args.changes_output}")
+        sys.exit(0)
+    else:
+        # Normal mode: Commit changes and finalize
+        change_detector.commit_all(board)
+
+        # Run finalization step
+        finalize_step = FinalizeBoard(
+            state, board, Path(args.snapshot) if args.snapshot else None
+        )
+        logger.info("-" * 80)
+        logger.info(f"Running step: {finalize_step.__class__.__name__}")
+        logger.info("-" * 80)
+        finalize_step.run_with_timing()
+
+        pcbnew.SaveBoard(args.output, board)
 
     # Explicitly delete the board to release resources (important for Windows)
     del board
 
 
-###############################################################################
 # Main entrypoint.
-###############################################################################
 if __name__ == "__main__":
     main()

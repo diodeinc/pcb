@@ -1,0 +1,43 @@
+---
+source: crates/pcb-layout/tests/layout_check.rs
+expression: content
+---
+{
+  "change_count": 2,
+  "changes": [
+    {
+      "category": "",
+      "change_type": "footprint_added",
+      "description": "IC1 (BMI270.IC) missing from board",
+      "items": [
+        {
+          "description": "IC1 at BMI270.IC\n    value: BMI270\n    footprint: BMI270:BMI270",
+          "hierarchical_path": "BMI270.IC",
+          "pos": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "uuid": "233c70a3-0882-5e15-a03d-8be81cfdc04b"
+        }
+      ],
+      "severity": "error"
+    },
+    {
+      "category": "",
+      "change_type": "footprint_added",
+      "description": "U1 (BMI270.C.C) missing from board",
+      "items": [
+        {
+          "description": "U1 at BMI270.C.C\n    value: 0F\n    footprint: Capacitor_SMD:C_0402_1005Metric",
+          "hierarchical_path": "BMI270.C.C",
+          "pos": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "uuid": "394660df-0570-5ff9-815b-abf03e6c9830"
+        }
+      ],
+      "severity": "error"
+    }
+  ]
+}

@@ -1044,57 +1044,15 @@ expression: content
   "tracks": [
     {
       "end": {
-        "x": 151705000,
-        "y": 103550000
-      },
-      "layer": "B.Cu",
-      "locked": false,
-      "net_name": "BOARD_ONE",
-      "start": {
-        "x": 152180000,
+        "x": 146170000,
         "y": 104025000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 150605000,
-        "y": 103550000
-      },
-      "layer": "B.Cu",
-      "locked": false,
-      "net_name": "BOARD_ONE",
-      "start": {
-        "x": 151705000,
-        "y": 103550000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 152180000,
-        "y": 104025000
-      },
-      "layer": "B.Cu",
-      "locked": false,
-      "net_name": "BOARD_ONE",
-      "start": {
-        "x": 152180000,
-        "y": 105050000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 145695000,
-        "y": 103550000
       },
       "layer": "B.Cu",
       "locked": false,
       "net_name": "BOARD_ONE",
       "start": {
         "x": 146170000,
-        "y": 104025000
+        "y": 105050000
       },
       "width": 200000
     },
@@ -1114,43 +1072,15 @@ expression: content
     },
     {
       "end": {
-        "x": 146170000,
-        "y": 104025000
+        "x": 151705000,
+        "y": 103550000
       },
       "layer": "B.Cu",
       "locked": false,
       "net_name": "BOARD_ONE",
       "start": {
-        "x": 146170000,
-        "y": 105050000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 149605000,
-        "y": 103550000
-      },
-      "layer": "F.Cu",
-      "locked": false,
-      "net_name": "BOARD_ONE",
-      "start": {
-        "x": 149180000,
-        "y": 103975000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 149180000,
-        "y": 103975000
-      },
-      "layer": "F.Cu",
-      "locked": false,
-      "net_name": "BOARD_ONE",
-      "start": {
-        "x": 149180000,
-        "y": 105050000
+        "x": 152180000,
+        "y": 104025000
       },
       "width": 200000
     },
@@ -1159,12 +1089,40 @@ expression: content
         "x": 150605000,
         "y": 103550000
       },
-      "layer": "F.Cu",
+      "layer": "B.Cu",
       "locked": false,
       "net_name": "BOARD_ONE",
       "start": {
-        "x": 149605000,
+        "x": 151705000,
         "y": 103550000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 145695000,
+        "y": 103550000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_ONE",
+      "start": {
+        "x": 146170000,
+        "y": 104025000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 152180000,
+        "y": 104025000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_ONE",
+      "start": {
+        "x": 152180000,
+        "y": 105050000
       },
       "width": 200000
     },
@@ -1198,6 +1156,34 @@ expression: content
     },
     {
       "end": {
+        "x": 149180000,
+        "y": 103975000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_ONE",
+      "start": {
+        "x": 149180000,
+        "y": 105050000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 149605000,
+        "y": 103550000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_ONE",
+      "start": {
+        "x": 149180000,
+        "y": 103975000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
         "x": 144595000,
         "y": 103550000
       },
@@ -1207,6 +1193,48 @@ expression: content
       "start": {
         "x": 143595000,
         "y": 103550000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 150605000,
+        "y": 103550000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_ONE",
+      "start": {
+        "x": 149605000,
+        "y": 103550000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 153405000,
+        "y": 106450000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_TWO",
+      "start": {
+        "x": 153830000,
+        "y": 106025000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 147395000,
+        "y": 106450000
+      },
+      "layer": "B.Cu",
+      "locked": false,
+      "net_name": "BOARD_TWO",
+      "start": {
+        "x": 147820000,
+        "y": 106025000
       },
       "width": 200000
     },
@@ -1226,29 +1254,15 @@ expression: content
     },
     {
       "end": {
-        "x": 153830000,
+        "x": 147820000,
         "y": 106025000
       },
       "layer": "B.Cu",
       "locked": false,
       "net_name": "BOARD_TWO",
       "start": {
-        "x": 153830000,
+        "x": 147820000,
         "y": 105050000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 153405000,
-        "y": 106450000
-      },
-      "layer": "B.Cu",
-      "locked": false,
-      "net_name": "BOARD_TWO",
-      "start": {
-        "x": 153830000,
-        "y": 106025000
       },
       "width": 200000
     },
@@ -1268,29 +1282,15 @@ expression: content
     },
     {
       "end": {
-        "x": 147820000,
+        "x": 153830000,
         "y": 106025000
       },
       "layer": "B.Cu",
       "locked": false,
       "net_name": "BOARD_TWO",
       "start": {
-        "x": 147820000,
+        "x": 153830000,
         "y": 105050000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
-        "x": 147395000,
-        "y": 106450000
-      },
-      "layer": "B.Cu",
-      "locked": false,
-      "net_name": "BOARD_TWO",
-      "start": {
-        "x": 147820000,
-        "y": 106025000
       },
       "width": 200000
     },
@@ -1352,20 +1352,6 @@ expression: content
     },
     {
       "end": {
-        "x": 145195000,
-        "y": 106450000
-      },
-      "layer": "F.Cu",
-      "locked": false,
-      "net_name": "BOARD_TWO",
-      "start": {
-        "x": 144820000,
-        "y": 106075000
-      },
-      "width": 200000
-    },
-    {
-      "end": {
         "x": 144820000,
         "y": 106075000
       },
@@ -1375,6 +1361,20 @@ expression: content
       "start": {
         "x": 144820000,
         "y": 105050000
+      },
+      "width": 200000
+    },
+    {
+      "end": {
+        "x": 145195000,
+        "y": 106450000
+      },
+      "layer": "F.Cu",
+      "locked": false,
+      "net_name": "BOARD_TWO",
+      "start": {
+        "x": 144820000,
+        "y": 106075000
       },
       "width": 200000
     }
