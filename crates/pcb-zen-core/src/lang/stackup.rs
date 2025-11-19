@@ -423,9 +423,6 @@ pub enum StackupError {
     #[error("Stackup layers must have symmetric structure when symmetric=true")]
     LayersNotSymmetric,
 
-    #[error("Total layer thickness {actual:.3}mm does not match specified thickness {expected:.3}mm (tolerance 10%)")]
-    ThicknessMismatch { actual: f64, expected: f64 },
-
     #[error("Dielectric layer {index} references unknown material '{material}'")]
     UnknownMaterial { index: usize, material: String },
 
@@ -1153,36 +1150,6 @@ mod tests {
         assert!(matches!(
             stackup.validate(),
             Err(StackupError::EvenLayerCount(4))
-        ));
-    }
-
-    #[test]
-    fn test_thickness_mismatch() {
-        let stackup = Stackup {
-            materials: None,
-            layers: Some(vec![
-                Layer::Copper {
-                    thickness: 0.035,
-                    role: CopperRole::Signal,
-                },
-                Layer::Dielectric {
-                    thickness: 1.0,
-                    material: "FR4".to_string(),
-                    form: DielectricForm::Core,
-                },
-                Layer::Copper {
-                    thickness: 0.035,
-                    role: CopperRole::Signal,
-                },
-            ]),
-            silk_screen_color: None,
-            solder_mask_color: None,
-            copper_finish: None,
-        };
-
-        assert!(matches!(
-            stackup.validate(),
-            Err(StackupError::ThicknessMismatch { .. })
         ));
     }
 

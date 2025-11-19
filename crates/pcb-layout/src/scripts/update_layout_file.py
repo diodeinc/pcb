@@ -2196,6 +2196,7 @@ class ImportNetlist(Step):
             desired_fields = {
                 "Datasheet": "",
                 "Description": "",
+                "Path": part.sheetpath.names.split(":")[-1],
             }  # Always include built-ins
             new_dnp = False
             new_skip_bom = False
@@ -2241,15 +2242,11 @@ class ImportNetlist(Step):
                 )
                 fp.SetExcludedFromPosFiles(new_skip_pos)
 
-            # Build map of existing fields (excluding built-ins and Path)
+            # Build map of existing fields (excluding built-ins)
             existing_fields = {}
             for field in fp.GetFields():
                 field_name = field.GetName()
-                if (
-                    not field.IsValue()
-                    and not field.IsReference()
-                    and field_name != "Path"
-                ):
+                if not field.IsValue() and not field.IsReference():
                     existing_fields[field_name] = field.GetText()
 
             # Find fields to remove (exist but not desired)
