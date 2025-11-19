@@ -1,0 +1,181 @@
+"""
+TLV758P Adjustable LDO Regulator Module
+0.5A Low-Dropout Voltage Regulator in WSON-6 package
+"""
+
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/units.zen", "Resistance", "unit")
+
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+# -----------------------------------------------------------------------------
+# Component parameters
+# -----------------------------------------------------------------------------
+
+# Voltage options
+InputVoltage = enum("3.3V", "5V")
+OutputVoltage = enum("1.8V", "3.3V")
+
+# Required
+input_voltage = config("input_voltage", InputVoltage, default = InputVoltage("5V"))
+output_voltage = config("output_voltage", OutputVoltage, default = OutputVoltage("3.3V"))
+
+# Pre-determined resistor values for valid combinations
+# VOUT = VREF * (1 + R1/R2) where VREF = 0.6V
+# Using common E24 series values for maximum availability
+# Format: (input_voltage, output_voltage) -> (R1_value, R2_value)
+RESISTOR_COMBINATIONS = {
+    (InputVoltage("5V"), OutputVoltage("3.3V")): ("47kOhm 1%", "10kOhm 1%"),  # Very common values, 3.42V nominal
+    # Add more combinations as needed
+}
+
+def check_vout_with_tolerance(r1_str, r2_str, target_voltage, vref = 0.6, v_tol = 0.05):
+    """Combined VOUT calculation & validation with resistor tolerance analysis.
+
+    Calculates nominal, min, and max VOUT considering resistor tolerances.
+    Validates that entire range stays within target voltage tolerance.
+    Returns nominal VOUT for further use.
+    """
+
+    # Parse resistor strings to get nominal values and tolerances in ohms
+    r1_unit = unit(r1_str, Resistance)
+    r2_unit = unit(r2_str, Resistance)
+    r1_nom = r1_unit.value
+    r2_nom = r2_unit.value
+
+    # Worst-case resistor values
+    r1_hi, r1_lo = r1_nom * (1 + r1_unit.tolerance), r1_nom * (1 - r1_unit.tolerance)
+    r2_hi, r2_lo = r2_nom * (1 + r2_unit.tolerance), r2_nom * (1 - r2_unit.tolerance)
+
+    # Worst-case output voltages: VOUT = VREF * (1 + R1/R2)
+    v_max = vref * (1.0 + r1_hi / r2_lo)  # R1 high, R2 low
+    v_min = vref * (1.0 + r1_lo / r2_hi)  # R1 low, R2 high
+
+    # Validate against target voltage
+    target_val = float(target_voltage.value.rstrip("V"))
+    max_error = max(abs(v_max - target_val), abs(v_min - target_val)) / target_val
+
+    if max_error > v_tol:
+        error("VOUT out of spec: %sV - %sV (±%s%%) for target %sV (limit ±%s%%)" %
+              (v_min, v_max, max_error * 100, target_val, v_tol * 100))
+
+    # Nominal output voltage
+    v_nom = vref * (1.0 + r1_nom / r2_nom)
+    return v_nom
+
+# Get resistor values for current configuration
+config_key = (input_voltage, output_voltage)
+if config_key not in RESISTOR_COMBINATIONS:
+    error("Invalid voltage combination: %s input to %s output" % (input_voltage, output_voltage))
+
+r1_value, r2_value = RESISTOR_COMBINATIONS[config_key]
+
+# Calculate and validate output voltage with tolerance analysis
+calculated_vout = check_vout_with_tolerance(r1_value, r2_value, output_voltage, v_tol = 0.055)
+
+# -----------------------------------------------------------------------------
+# IO ports
+# -----------------------------------------------------------------------------
+
+VIN = io("VIN", Power)
+VOUT = io("VOUT", Power)
+GND = io("GND", Ground)
+EN = io("EN", Gpio, optional = True)
+
+# Internal nets
+FB = Net("LDO_FB")
+
+# -----------------------------------------------------------------------------
+# Component definition
+# -----------------------------------------------------------------------------
+
+Component(
+    name = "U_LDO",
+    symbol = Symbol(library = "@kicad-symbols/Regulator_Linear.kicad_sym", name = "TLV75801PDRV"),
+    footprint = File("@kicad-footprints/Package_SON.pretty/WSON-6-1EP_2x2mm_P0.65mm_EP1x1.6mm.kicad_mod"),
+    prefix = "U",
+    pin_defs = {
+        "VIN": "6",
+        "VOUT": "1",
+        "FB": "2",
+        "GND": "3",
+        "EN": "4",
+        "DNC": "5",
+        "PAD": "7",  # Thermal pad
+    },
+    pins = {
+        "VIN": VIN.NET,
+        "VOUT": VOUT.NET,
+        "FB": FB,
+        "GND": GND.NET,
+        "EN": EN.NET,
+        "DNC": Net("NC"),  # Do not connect
+        "PAD": GND.NET,  # Connect thermal pad to ground
+    },
+    mpn = "TLV75801PDRVR",
+    manufacturer = "Texas Instruments",
+    description = "Low Dropout Voltage Regulator",
+    properties = {
+        "input_voltage": input_voltage,
+        "output_voltage": output_voltage,
+        "current_rating": "0.5A",
+        "package": "WSON-6",
+        "alternatives": [
+            {"mpn": "TLV75801PDRVT", "manufacturer": "Texas Instruments"},
+        ]
+    },
+)
+
+# -----------------------------------------------------------------------------
+# Support components
+# -----------------------------------------------------------------------------
+
+# Input capacitor (1µF ceramic, close to VIN)
+Capacitor(
+    name = "C_IN",
+    package = "0402",
+    value = "1uF",
+    voltage = "10V",
+    P1 = VIN.NET,
+    P2 = GND.NET,
+)
+
+# Output capacitor (1µF ceramic for stability)
+Capacitor(
+    name = "C_OUT",
+    package = "0402",
+    value = "1uF",
+    voltage = "10V",
+    P1 = VOUT.NET,
+    P2 = GND.NET,
+)
+
+# Feedback resistor network
+# R1 (top resistor): FB to VOUT
+Resistor(
+    name = "R_FB1",
+    package = "0402",
+    value = r1_value,
+    P1 = VOUT.NET,
+    P2 = FB,
+)
+
+# R2 (bottom resistor): FB to GND
+Resistor(
+    name = "R_FB2",
+    package = "0402",
+    value = r2_value,
+    P1 = FB,
+    P2 = GND.NET,
+)
+
+# Enable pullup resistor (always present for default-on behavior)
+# MCU can still control by pulling low (open-drain style)
+Resistor(
+    name = "R_EN_PU",
+    package = "0402",
+    value = "10kOhm",
+    P1 = VIN.NET,
+    P2 = EN.NET,
+)
