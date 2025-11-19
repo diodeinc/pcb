@@ -17,11 +17,14 @@ mod ipc2581;
 mod layout;
 mod lsp;
 mod mcp;
+mod migrate;
 mod open;
 mod release;
+mod self_update;
 mod sim;
 mod tag;
 mod test;
+mod update;
 mod upgrade;
 mod vendor;
 mod workspace;
@@ -52,9 +55,19 @@ enum Commands {
     #[command(alias = "t")]
     Test(test::TestArgs),
 
-    /// Upgrade PCB projects
-    #[command(alias = "u")]
+    /// Migrate PCB projects
+    #[command(alias = "m")]
+    Migrate(migrate::MigrateArgs),
+
+    /// Upgrade PCB projects (reserved)
     Upgrade(upgrade::UpgradeArgs),
+
+    /// Update board designs (reserved)
+    Update(update::UpdateArgs),
+
+    /// Update the pcb tool itself
+    #[command(name = "self")]
+    SelfUpdate(self_update::SelfUpdateArgs),
 
     /// Generate Bill of Materials (BOM)
     Bom(bom::BomArgs),
@@ -132,7 +145,10 @@ fn main() -> anyhow::Result<()> {
         Commands::Auth(args) => api::execute_auth(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
+        Commands::Migrate(args) => migrate::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
+        Commands::Update(args) => update::execute(args),
+        Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
         Commands::Layout(args) => layout::execute(args),
@@ -195,7 +211,7 @@ fn main() -> anyhow::Result<()> {
 fn is_update_command(command: &Commands) -> bool {
     matches!(
         command,
-        Commands::External(args) if args.first().map(|s| s.to_string_lossy() == "update").unwrap_or(false)
+        Commands::Update(_) | Commands::SelfUpdate(_) | Commands::Upgrade(_)
     )
 }
 
@@ -204,7 +220,7 @@ fn check_and_update() {
     if let Ok(updater) = updater.load_receipt() {
         if let Ok(true) = updater.is_update_needed_sync() {
             eprintln!("{}", "A new version of pcb is available!".blue().bold());
-            eprintln!("Run {} to update.", "pcb update".yellow().bold());
+            eprintln!("Run {} to update.", "pcb self update".yellow().bold());
         }
     }
 }
