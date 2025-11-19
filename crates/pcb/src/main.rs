@@ -17,6 +17,7 @@ mod ipc2581;
 mod layout;
 mod lsp;
 mod mcp;
+mod migrate;
 mod open;
 mod release;
 mod self_update;
@@ -54,8 +55,11 @@ enum Commands {
     #[command(alias = "t")]
     Test(test::TestArgs),
 
-    /// Upgrade PCB projects
-    #[command(alias = "u")]
+    /// Migrate PCB projects
+    #[command(alias = "m")]
+    Migrate(migrate::MigrateArgs),
+
+    /// Upgrade PCB projects (reserved)
     Upgrade(upgrade::UpgradeArgs),
 
     /// Update board designs (reserved)
@@ -141,6 +145,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Auth(args) => api::execute_auth(args),
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
+        Commands::Migrate(args) => migrate::execute(args),
         Commands::Upgrade(args) => upgrade::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
@@ -204,7 +209,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn is_update_command(command: &Commands) -> bool {
-    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
+    matches!(
+        command,
+        Commands::Update(_) | Commands::SelfUpdate(_) | Commands::Upgrade(_)
+    )
 }
 
 fn check_and_update() {

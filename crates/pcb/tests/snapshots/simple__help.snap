@@ -14,7 +14,10 @@ Commands:
   auth     Manage authentication
   build    Build PCB projects
   test     Run tests in .zen files
-  upgrade  Upgrade PCB projects
+  migrate  Migrate PCB projects
+  upgrade  Upgrade PCB projects (reserved)
+  update   Update board designs (reserved)
+  self     Update the pcb tool itself
   bom      Generate Bill of Materials (BOM)
   info     Display workspace and board information
   layout   Layout PCB designs
