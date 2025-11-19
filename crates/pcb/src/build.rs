@@ -151,6 +151,9 @@ pub fn build(
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
+    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    pcb_zen::maybe_resolve_v2_workspace(&args.paths)?;
+
     // Process .zen files using shared walker - always recursive for directories
     let zen_files = file_walker::collect_zen_files(&args.paths, false)?;
 
