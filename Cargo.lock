@@ -3293,6 +3293,7 @@ dependencies = [
  "anyhow",
  "argfile",
  "ariadne",
+ "chrono",
  "clap",
  "debugserver-types",
  "derive_more",
