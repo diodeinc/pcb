@@ -380,9 +380,10 @@ Deterministic USTAR tarball for cryptographic verification:
 - Relative paths, forward slashes, lexicographic order
 - Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
 - File mode: 0644, directory mode: 0755
+- PAX extensions for long paths (KiCad footprints exceed POSIX tar limits)
 - End with two 512-byte zero blocks
 
-Generation: checkout at tag, extract package path if nested, filter `.git` and ignored files, create normalized tarball. SHA-256 hash of tarball is content identifier. Identical package content produces identical hash across platforms.
+Generation: checkout at tag, extract package path if nested, filter `.git` and ignored files, create normalized tarball. BLAKE3 hash of tarball is content identifier. Identical package content produces identical hash across platforms. BLAKE3 chosen for superior performance (parallel hashing, SIMD) and security over SHA-256.
 
 ### Lockfile
 

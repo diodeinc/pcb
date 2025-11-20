@@ -3,7 +3,6 @@ use globset::{Glob, GlobSetBuilder};
 use pcb_zen_core::config::{find_workspace_root, DependencySpec, LockEntry, Lockfile, PcbToml};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -322,6 +321,15 @@ fn resolve_dependencies(
     // Phase 3: Fetch full repository contents for the build set
     println!("\nPhase 3: Fetching full repository contents");
     fetch_full_contents(workspace_root, &build_set)?;
+
+    // Phase 4: Generate lockfile with cryptographic hashes
+    println!("\nPhase 4: Generating lockfile");
+    let lockfile = generate_lockfile(&build_set)?;
+
+    // Write lockfile to disk
+    let lockfile_path = workspace_root.join("pcb.sum");
+    std::fs::write(&lockfile_path, lockfile.to_string())?;
+    println!("  Written to {}", lockfile_path.display());
 
     println!("\nV2 dependency resolution complete");
     std::process::exit(0);
@@ -992,88 +1000,133 @@ fn discover_packages(
     Ok(packages)
 }
 
+/// Create a canonical, deterministic tar archive from a directory
+///
+/// Rules from packaging.md:
+/// - Regular files and directories only (no symlinks, devices)
+/// - Relative paths, forward slashes, lexicographic order
+/// - Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
+/// - File mode: 0644, directory mode: 0755
+/// - End with two 512-byte zero blocks
+/// - Filter .git and ignored files
+fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
+    use std::fs;
+    use tar::{Builder, Header};
+
+    let mut builder = Builder::new(writer);
+
+    // Use PAX format for long path support (KiCad footprints have very long paths)
+    builder.mode(tar::HeaderMode::Deterministic);
+
+    // Collect all files and directories, sorted lexicographically
+    let mut entries = Vec::new();
+    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+
+        // Skip .git directories
+        if path.components().any(|c| c.as_os_str() == ".git") {
+            continue;
+        }
+
+        // Get relative path
+        let rel_path = path.strip_prefix(dir).unwrap();
+        if rel_path == Path::new("") {
+            continue; // Skip root
+        }
+
+        entries.push((rel_path.to_path_buf(), entry.file_type()));
+    }
+
+    // Sort lexicographically
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Add entries to tar
+    for (rel_path, file_type) in entries {
+        let full_path = dir.join(&rel_path);
+        let path_str = rel_path.to_str().unwrap().replace('\\', "/");
+
+        if file_type.is_dir() {
+            // Directory entry - use append_path_with_contents for automatic long path handling
+            let mut header = Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_mtime(0);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_username("")?;
+            header.set_groupname("")?;
+            header.set_entry_type(tar::EntryType::Directory);
+
+            // Use append_data which handles long paths via PAX extensions
+            builder.append_data(&mut header, &path_str, &[][..])?;
+        } else if file_type.is_file() {
+            // Regular file - use append_data for automatic long path handling
+            let content = fs::read(&full_path)?;
+            let mut header = Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_mtime(0);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_username("")?;
+            header.set_groupname("")?;
+            header.set_entry_type(tar::EntryType::Regular);
+
+            // Use append_data which handles long paths via PAX extensions
+            builder.append_data(&mut header, &path_str, &content[..])?;
+        }
+        // Skip symlinks and other special files
+    }
+
+    // Finish tar (adds two 512-byte zero blocks)
+    builder.finish()?;
+
+    Ok(())
+}
+
 /// Compute content hash for a Git repository at a specific version
 ///
-/// Uses git archive to get deterministic tarball, then SHA-256 hash.
-/// Format: h1:<base64-encoded-sha256>
+/// Creates canonical USTAR tarball from directory, streams to BLAKE3 hasher.
+/// Format: h1:<base64-encoded-blake3>
 fn compute_content_hash(module_path: &str, version: &Version) -> Result<String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    use std::process::{Command, Stdio};
 
-    let git_url = format!("https://{}.git", module_path);
-    let version_ref = format!("v{}", version);
-
-    // Use git archive through a temp clone to get deterministic content
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let temp_clone = home
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let cache_dir = home
         .join(".pcb")
         .join("cache")
-        .join("temp")
-        .join(module_path);
+        .join(module_path)
+        .join(version.to_string());
 
-    // Ensure temp clone exists (reuse if present)
-    if !temp_clone.join(".git").exists() {
-        std::fs::create_dir_all(temp_clone.parent().unwrap())?;
-        Command::new("git")
-            .arg("clone")
-            .arg("--bare")
-            .arg("--filter=blob:none")
-            .arg(&git_url)
-            .arg(&temp_clone)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-    }
-
-    // Fetch the specific tag/version
-    Command::new("git")
-        .arg("-C")
-        .arg(&temp_clone)
-        .arg("fetch")
-        .arg("origin")
-        .arg(&version_ref)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-
-    // Create deterministic archive (sorted, no timestamps)
-    let archive_output = Command::new("git")
-        .arg("-C")
-        .arg(&temp_clone)
-        .arg("archive")
-        .arg("--format=tar")
-        .arg(&version_ref)
-        .output()?;
-
-    if !archive_output.status.success() {
+    if !cache_dir.exists() {
         anyhow::bail!(
-            "Failed to create archive for {}@{}",
+            "Cache directory not found for {}@{}: {}",
             module_path,
-            version
+            version,
+            cache_dir.display()
         );
     }
 
-    // Hash the archive
-    let mut hasher = Sha256::new();
-    hasher.update(&archive_output.stdout);
+    // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
+    let mut hasher = blake3::Hasher::new();
+    create_canonical_tar(&cache_dir, &mut hasher)?;
     let hash = hasher.finalize();
 
-    Ok(format!("h1:{}", STANDARD.encode(hash)))
+    Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }
 
 /// Compute manifest hash for a pcb.toml file
 ///
-/// Format: h1:<base64-encoded-sha256>
+/// Format: h1:<base64-encoded-blake3>
 fn compute_manifest_hash(manifest_content: &str) -> String {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
-    let mut hasher = Sha256::new();
-    hasher.update(manifest_content.as_bytes());
-    let hash = hasher.finalize();
+    let hash = blake3::hash(manifest_content.as_bytes());
 
-    format!("h1:{}", STANDARD.encode(hash))
+    format!("h1:{}", STANDARD.encode(hash.as_bytes()))
 }
 
 /// Fetch full repository contents for all dependencies in the build set
@@ -1081,7 +1134,8 @@ fn fetch_full_contents(
     _workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
 ) -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     println!("  Fetching {} dependencies...", build_set.len());
 
     for (line, version) in build_set {
@@ -1100,7 +1154,7 @@ fn fetch_full_contents(
         println!("    {}@v{}...", line.path, version);
 
         let is_asset_package = cache_dir.join(".no-manifest").exists();
-        
+
         // Remove Phase 1's partial clone and do fresh full shallow clone
         if cache_dir.exists() {
             std::fs::remove_dir_all(&cache_dir)?;
@@ -1123,21 +1177,24 @@ fn fetch_full_contents(
 fn clone_full_shallow(cache_dir: &Path, module_path: &str, version_str: &str) -> Result<()> {
     let git_url = format!("https://{}.git", module_path);
     let is_pseudo_version = version_str.contains("-0.");
-    
-    let cache_str = cache_dir.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
+
+    let cache_str = cache_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
 
     if is_pseudo_version {
         // Pseudo-versions: clone repo, fetch commit, checkout
         let commit = version_str.rsplit('-').next().unwrap();
-        
+
         run_git(&["clone", "--no-checkout", &git_url, cache_str])?;
         run_git_in(&["fetch", "--depth=1", "origin", commit], cache_dir)?;
         run_git_in(&["checkout", commit], cache_dir)?;
     } else {
         // Regular versions: try v-prefix, fallback to no prefix
         let v_tag = format!("v{}", version_str);
-        if !try_clone_branch(&git_url, &v_tag, cache_str)? 
-            && !try_clone_branch(&git_url, version_str, cache_str)? {
+        if !try_clone_branch(&git_url, &v_tag, cache_str)?
+            && !try_clone_branch(&git_url, version_str, cache_str)?
+        {
             anyhow::bail!("Failed to clone {}@{}", module_path, version_str);
         }
     }
@@ -1199,8 +1256,8 @@ fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockf
 
         // Fetch manifest to compute manifest hash
         // Reuse cache from resolution phase
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+        let home =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
         let cache_dir = home
             .join(".pcb")
             .join("cache")
