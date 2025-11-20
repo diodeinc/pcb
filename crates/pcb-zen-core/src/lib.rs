@@ -5,8 +5,6 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use semver::Version;
-
 pub mod config;
 pub mod convert;
 pub mod diagnostics;
