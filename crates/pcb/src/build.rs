@@ -39,8 +39,8 @@ pub fn create_diagnostics_passes(
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
 pub struct BuildArgs {
-    /// One or more .zen files or directories containing .zen files to build.
-    /// When omitted, all .zen files in the current directory tree are built.
+    /// One or more .zen files or directories to build.
+    /// When omitted, builds the current directory.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
@@ -174,6 +174,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             file_walker::collect_zen_files(&package_dirs, false)?
         }
     } else {
+        // V1 mode: collect zen files from the given paths (or current dir)
         file_walker::collect_zen_files(&args.paths, false)?
     };
 

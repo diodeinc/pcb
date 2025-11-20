@@ -278,15 +278,8 @@ fn expose_alias_symlink(
 
 /// Default implementation of RemoteFetcher that handles downloading and caching
 /// remote resources (GitHub repos, GitLab repos, packages).
-#[derive(Debug)]
-pub struct DefaultRemoteFetcher {
-}
-
-impl Default for DefaultRemoteFetcher {
-    fn default() -> Self {
-        Self {}
-    }
-}
+#[derive(Debug, Default)]
+pub struct DefaultRemoteFetcher {}
 
 impl pcb_zen_core::RemoteFetcher for DefaultRemoteFetcher {
     fn fetch_remote(
