@@ -157,22 +157,19 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let v2_result = pcb_zen::maybe_resolve_v2_workspace(&args.paths)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = if let Some(ref result) = v2_result {
-        if result.packages.is_empty() {
-            eprintln!("Warning: No packages found in V2 workspace.");
-            Vec::new()
+    let zen_files = if v2_result.is_some() {
+        // Canonicalize input paths (or use current dir if empty)
+        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
+            vec![std::env::current_dir()?]
         } else {
-            println!(
-                "V2 Build: Building .zen files from {} workspace packages",
-                result.packages.len()
-            );
-            let package_dirs: Vec<PathBuf> = result
-                .packages
+            args.paths
                 .iter()
-                .filter_map(|p| p.parent().map(|parent| parent.to_path_buf()))
-                .collect();
-            file_walker::collect_zen_files(&package_dirs, false)?
-        }
+                .map(|p| p.canonicalize())
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        // For V2: collect from search paths directly (includes workspace members AND local deps)
+        file_walker::collect_zen_files(&search_paths, false)?
     } else {
         // V1 mode: collect zen files from the given paths (or current dir)
         file_walker::collect_zen_files(&args.paths, false)?
