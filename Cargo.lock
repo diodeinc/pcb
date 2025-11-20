@@ -3404,6 +3404,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rust_decimal",
+ "semver",
  "serde",
  "serde_json",
  "smallvec",

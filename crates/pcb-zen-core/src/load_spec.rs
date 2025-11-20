@@ -141,22 +141,15 @@ impl LoadSpec {
         }
     }
 
-    /// Generate a structured remote reference for this LoadSpec.
-    pub fn remote_ref(&self) -> Option<crate::RemoteRef> {
+    /// Get the package URL for this spec (e.g. "github.com/user/repo")
+    ///
+    /// This returns the canonical package identifier used in V2 resolution maps.
+    /// It ignores the version/tag and internal path.
+    pub fn package_url(&self) -> Option<String> {
         match self {
-            LoadSpec::Github {
-                user, repo, rev, ..
-            } => Some(crate::RemoteRef::GitHub {
-                user: user.clone(),
-                repo: repo.clone(),
-                rev: rev.clone(),
-            }),
-            LoadSpec::Gitlab {
-                project_path, rev, ..
-            } => Some(crate::RemoteRef::GitLab {
-                project_path: project_path.clone(),
-                rev: rev.clone(),
-            }),
+            LoadSpec::Github { user, repo, .. } => Some(format!("github.com/{}/{}", user, repo)),
+            LoadSpec::Gitlab { project_path, .. } => Some(format!("gitlab.com/{}", project_path)),
+            LoadSpec::Package { package, .. } => Some(package.clone()),
             _ => None,
         }
     }
@@ -242,6 +235,26 @@ impl LoadSpec {
     /// The function does not touch the filesystem – it only performs syntactic
     /// parsing.
     pub fn parse(s: &str) -> Option<LoadSpec> {
+        if let Some(rest) = s.strip_prefix("github.com/") {
+            // V2 GitHub style: github.com/user/repo/path...
+            // Assumes standard user/repo structure (2 components)
+            let mut parts = rest.splitn(3, '/');
+            let user = parts.next().unwrap_or("").to_string();
+            let repo = parts.next().unwrap_or("").to_string();
+            let path_str = parts.next().unwrap_or("");
+
+            if user.is_empty() || repo.is_empty() {
+                return None;
+            }
+
+            return Some(LoadSpec::Github {
+                user,
+                repo,
+                rev: DEFAULT_GITHUB_REV.to_string(),
+                path: PathBuf::from(path_str),
+            });
+        }
+
         if let Some(rest) = s.strip_prefix("@github/") {
             // GitHub: @github/user/repo:rev/path  (must come before generic "@pkg" handling)
             let mut user_repo_rev_and_path = rest.splitn(3, '/');

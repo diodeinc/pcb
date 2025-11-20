@@ -30,20 +30,6 @@ impl LspFilterPass {
 
 impl DiagnosticsPass for LspFilterPass {
     fn apply(&self, diagnostics: &mut Diagnostics) {
-        let vendor_dir = self.workspace_root.join("vendor");
-
-        diagnostics.diagnostics.retain(|diag| {
-            let innermost = diag.innermost();
-
-            // Check if innermost has unstable ref error and is external
-            innermost
-                .downcast_error_ref::<crate::UnstableRefError>()
-                .map(|_| {
-                    let path = Path::new(&innermost.path);
-                    path.starts_with(&self.workspace_root) && !path.starts_with(&vendor_dir)
-                })
-                .unwrap_or(true) // Keep non-unstable-ref diagnostics
-        });
     }
 }
 

@@ -5,6 +5,8 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
+use semver::Version;
+
 pub mod config;
 pub mod convert;
 pub mod diagnostics;
@@ -14,7 +16,6 @@ pub mod lang;
 pub mod load_spec;
 mod moved;
 pub mod passes;
-pub mod warnings;
 
 /// Attribute, net, and record field constants used across the core
 pub mod attrs {
@@ -53,7 +54,7 @@ pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
     DiagnosticsReport, LoadError, WithDiagnostics,
 };
-pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
+pub use lang::error::SuppressedDiagnostics;
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use load_spec::LoadSpec;
 pub use passes::{
@@ -258,9 +259,6 @@ pub trait RemoteFetcher: Send + Sync {
         spec: &LoadSpec,
         workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error>;
-
-    /// Lookup metadata for a previously fetched remote ref, if cached.
-    fn remote_ref_meta(&self, remote_ref: &RemoteRef) -> Option<RemoteRefMeta>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -277,70 +275,6 @@ impl RemoteFetcher for NoopRemoteFetcher {
             Run 'pcb vendor' to download dependencies locally.",
             spec
         ))
-    }
-
-    fn remote_ref_meta(&self, _remote_ref: &RemoteRef) -> Option<RemoteRefMeta> {
-        None
-    }
-}
-
-/// Abstraction for resolving load() paths to file contents
-/// Kind of a resolved Git reference after fetching
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefKind {
-    Tag,
-    Commit,
-    Unstable,
-}
-
-/// Remote reference identifier with structured information
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RemoteRef {
-    GitHub {
-        user: String,
-        repo: String,
-        rev: String,
-    },
-    GitLab {
-        project_path: String,
-        rev: String,
-    },
-}
-
-impl RemoteRef {
-    /// Get the canonical repository URL for this remote reference
-    pub fn repo_url(&self) -> Option<String> {
-        match self {
-            RemoteRef::GitHub { user, repo, .. } => {
-                Some(format!("https://github.com/{user}/{repo}"))
-            }
-            RemoteRef::GitLab { project_path, .. } => {
-                Some(format!("https://gitlab.com/{project_path}"))
-            }
-        }
-    }
-
-    pub fn rev(&self) -> &str {
-        match self {
-            RemoteRef::GitHub { rev, .. } | RemoteRef::GitLab { rev, .. } => rev,
-        }
-    }
-}
-
-/// Metadata about a resolved remote reference
-#[derive(Debug, Clone)]
-pub struct RemoteRefMeta {
-    /// Full 40-character SHA-1 commit id
-    pub commit_sha1: String,
-    /// Full SHA-256 commit id when repository uses SHA-256 object format
-    pub commit_sha256: Option<String>,
-    /// Classification of the ref
-    pub kind: RefKind,
-}
-
-impl RemoteRefMeta {
-    pub fn stable(&self) -> bool {
-        matches!(self.kind, RefKind::Tag | RefKind::Commit)
     }
 }
 
@@ -472,12 +406,6 @@ pub trait LoadResolver: Send + Sync + Any {
     /// Returns the resolved absolute path that should be loaded.
     fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error>;
 
-    /// Return the remote ref for a resolved path, if available.
-    fn remote_ref(&self, _path: &Path) -> Option<RemoteRef>;
-
-    /// Return stored metadata for a previously fetched remote ref, if available.
-    fn remote_ref_meta(&self, _remote_ref: &RemoteRef) -> Option<RemoteRefMeta>;
-
     /// Manually track a file. Useful for entrypoints.
     fn track_file(&self, path: &Path);
 
@@ -552,6 +480,9 @@ pub struct CoreLoadResolver {
     remote_fetcher: Arc<dyn RemoteFetcher>,
     workspace_root: PathBuf,
     use_vendor_dir: bool,
+    /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
+    /// If set, this resolver operates in V2 mode.
+    v2_package_resolutions: Option<HashMap<PathBuf, HashMap<String, PathBuf>>>,
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
@@ -566,6 +497,7 @@ impl CoreLoadResolver {
         remote_fetcher: Arc<dyn RemoteFetcher>,
         workspace_root: PathBuf,
         use_vendor_dir: bool,
+        v2_package_resolutions: Option<HashMap<PathBuf, HashMap<String, PathBuf>>>,
     ) -> Self {
         // Canonicalize workspace root once to avoid path comparison issues
         let workspace_root = file_provider
@@ -578,6 +510,7 @@ impl CoreLoadResolver {
             workspace_root,
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
             use_vendor_dir,
+            v2_package_resolutions,
             alias_cache: RwLock::new(HashMap::new()),
         }
     }
@@ -595,6 +528,7 @@ impl CoreLoadResolver {
             remote_fetcher,
             workspace_root,
             use_vendor_dir,
+            None,
         )
     }
 
@@ -812,15 +746,105 @@ impl CoreLoadResolver {
         Ok(())
     }
 
+    /// Find the package root for a given file by walking up directories
+    fn find_package_root_for_file(
+        &self,
+        file: &Path,
+        package_resolutions: &HashMap<PathBuf, HashMap<String, PathBuf>>,
+    ) -> Option<PathBuf> {
+        let mut current = file.parent();
+        while let Some(dir) = current {
+            if package_resolutions.contains_key(dir) {
+                return Some(dir.to_path_buf());
+            }
+            current = dir.parent();
+        }
+        None
+    }
+
+    /// Try to resolve a remote spec using V2 resolution logic
+    fn try_resolve_v2(&self, context: &ResolveContext) -> Result<Option<PathBuf>, anyhow::Error> {
+        let Some(package_resolutions) = &self.v2_package_resolutions else {
+            // Not in V2 mode, let caller fall back to V1
+            return Ok(None);
+        };
+
+        let spec = context.latest_spec();
+        // Only handle specs that have a package URL (Github, Gitlab, Package)
+        let Some(url) = spec.package_url() else {
+            // Non-remote specs are not handled here
+            return Ok(None);
+        };
+
+        // 1. Find the package root for the current file (Who is asking?)
+        let Some(package_root) =
+            self.find_package_root_for_file(&context.current_file, package_resolutions)
+        else {
+            // In V2 mode, this is an error: remote deps must come from known packages
+            anyhow::bail!(
+                "V2 Resolution Error: File '{}' is not part of any V2 package in this workspace.\n  \
+                 Remote dependency '{}' can only be used from V2 packages with pcb.toml.",
+                context.current_file.display(),
+                url,
+            );
+        };
+
+        let resolved_map = package_resolutions
+            .get(&package_root)
+            .expect("package_resolutions map is out of sync");
+
+        // 2. Look up the dependency in that package's resolution map
+        if let Some(root_path) = resolved_map.get(&url) {
+            let internal_path = spec.path();
+            let full_path = root_path.join(internal_path);
+
+            if self.file_provider.exists(&full_path) {
+                self.insert_load_spec(full_path.clone(), spec.clone());
+                return Ok(Some(full_path));
+            } else {
+                anyhow::bail!(
+                    "V2 Resolution Error: File not found in package {}: {}\n  Package root: {}",
+                    url,
+                    internal_path.display(),
+                    root_path.display()
+                );
+            }
+        }
+
+        // 3. Dependency not found in map -> Error (Strict V2)
+        anyhow::bail!(
+            "V2 Resolution Error: Dependency '{}' is not declared in [dependencies] of package at '{}'.\n  Add it to pcb.toml.",
+            url,
+            package_root.display()
+        );
+    }
+
     /// Resolve remote specs (Package/Github/Gitlab)
     fn resolve_remote_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
         let resolved_spec = context.latest_spec().clone();
+
+        // If we're in V2 mode, resolution must come from the precomputed map.
+        if self.v2_package_resolutions.is_some() {
+            if let Some(path) = self.try_resolve_v2(context)? {
+                return Ok(path);
+            }
+
+            // Defensive: in V2 mode, try_resolve_v2 should either return Some or error.
+            anyhow::bail!(
+                "V2 Resolution Error: failed to resolve {:?} from precomputed dependency graph",
+                resolved_spec
+            );
+        }
+
+        // Legacy (V1) resolution path:
+
         // First try vendor directory if available
         if self.use_vendor_dir {
             if let Ok(vendor_path) = self.try_resolve_from_vendor(&resolved_spec) {
                 return Ok(vendor_path);
             }
         }
+
         let resolved_path = self
             .remote_fetcher
             .fetch_remote(&resolved_spec, &self.workspace_root)?;
@@ -901,14 +925,6 @@ impl LoadResolver for CoreLoadResolver {
         }
 
         Ok(resolved_path)
-    }
-
-    fn remote_ref(&self, path: &Path) -> Option<RemoteRef> {
-        self.get_load_spec(path).and_then(|s| s.remote_ref())
-    }
-
-    fn remote_ref_meta(&self, remote_ref: &RemoteRef) -> Option<RemoteRefMeta> {
-        self.remote_fetcher.remote_ref_meta(remote_ref)
     }
 
     fn track_file(&self, path: &Path) {

@@ -55,6 +55,7 @@ fn create_standard_load_resolver(
         remote_fetcher,
         workspace_root.to_path_buf(),
         true,
+        None,
     ))
 }
 

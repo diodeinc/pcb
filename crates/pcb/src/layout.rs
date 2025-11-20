@@ -88,6 +88,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             false, // don't deny warnings for layout command
             &mut has_errors,
             &mut has_warnings,
+            None,
         ) else {
             continue;
         };

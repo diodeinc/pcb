@@ -1369,14 +1369,6 @@ impl EvalContext {
         }
 
         let span = span.or_else(|| self.resolve_load_span(path));
-        if let Some(warning_diag) = crate::warnings::check_and_create_unstable_ref_warning(
-            load_resolver.as_ref(),
-            current_file,
-            &resolve_context,
-            span,
-        ) {
-            self.add_diagnostic(warning_diag);
-        }
 
         if file_provider.is_directory(&canonical_path) {
             return Err(starlark::Error::new_other(anyhow::anyhow!(
