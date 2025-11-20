@@ -92,12 +92,14 @@ fn resolve_dependencies(
     println!("V2 Dependency Resolution");
     println!("Workspace root: {}", workspace_root.display());
 
-    // Load existing lockfile if present
+    // Load existing lockfile if present - used for preseeding and verification
     let lockfile_path = workspace_root.join("pcb.sum");
-    let _existing_lockfile = if lockfile_path.exists() {
+    let existing_lockfile = if lockfile_path.exists() {
         println!("Loading pcb.sum...");
         let content = std::fs::read_to_string(&lockfile_path)?;
-        Some(Lockfile::parse(&content)?)
+        let lockfile = Lockfile::parse(&content)?;
+        println!("  Loaded lockfile");
+        Some(lockfile)
     } else {
         println!("No pcb.sum found (will be created)");
         None
@@ -160,6 +162,28 @@ fn resolve_dependencies(
         HashMap::new();
 
     println!("\nPhase 0: Seed from workspace dependencies");
+
+    // Preseed from pcb.sum to skip sequential discovery
+    if let Some(ref lockfile) = existing_lockfile {
+        println!("  Preseeding from pcb.sum...");
+        let mut preseed_count = 0;
+        // Collect all unique module paths from lockfile
+        let mut seen_modules = HashSet::new();
+        for entry in lockfile.iter() {
+            if seen_modules.insert(entry.module_path.clone()) {
+                if let Ok(version) = Version::parse(&entry.version) {
+                    let line = ModuleLine::new(entry.module_path.clone(), &version);
+                    // Tentatively select this version (MVS may upgrade later)
+                    if !selected.contains_key(&line) {
+                        selected.insert(line.clone(), version);
+                        work_queue.push_back(line);
+                        preseed_count += 1;
+                    }
+                }
+            }
+        }
+        println!("  Preseeded {} modules from lockfile", preseed_count);
+    }
     println!();
 
     // Resolve dependencies per-package
@@ -218,7 +242,7 @@ fn resolve_dependencies(
             }
 
             // Resolve to concrete version (handles branches/revs)
-            match resolve_to_version(workspace_root, &dep.url, &dep.spec) {
+            match resolve_to_version(&dep.url, &dep.spec, existing_lockfile.as_ref()) {
                 Ok(version) => {
                     println!("      - {}@v{}", dep.url, version);
                     add_requirement(
@@ -273,7 +297,7 @@ fn resolve_dependencies(
                         continue;
                     }
 
-                    match resolve_to_version(workspace_root, dep_path, dep_spec) {
+                    match resolve_to_version(dep_path, dep_spec, existing_lockfile.as_ref()) {
                         Ok(dep_version) => {
                             println!("        requires {}@v{}", dep_path, dep_version);
                             add_requirement(
@@ -321,11 +345,11 @@ fn resolve_dependencies(
 
     // Phase 3: Fetch full repository contents for the build set
     println!("\nPhase 3: Fetching full repository contents");
-    fetch_full_contents(workspace_root, &build_set)?;
+    fetch_full_contents(workspace_root, &build_set, existing_lockfile.as_ref())?;
 
-    // Phase 4: Generate lockfile with cryptographic hashes
-    println!("\nPhase 4: Generating lockfile");
-    let lockfile = generate_lockfile(&build_set)?;
+    // Phase 4: Update lockfile with cryptographic hashes
+    println!("\nPhase 4: Updating lockfile");
+    let lockfile = update_lockfile(existing_lockfile, &build_set)?;
 
     // Write lockfile to disk
     let lockfile_path = workspace_root.join("pcb.sum");
@@ -338,16 +362,15 @@ fn resolve_dependencies(
 
 /// Collect dependencies for a single package, resolving workspace inheritance and transitive deps
 fn collect_package_dependencies(
-    package_root: &Path,
+    _package_root: &Path,
     package_deps: &HashMap<String, DependencySpec>,
     workspace_deps: &HashMap<String, DependencySpec>,
     workspace_root: &Path,
 ) -> Result<Vec<UnresolvedDep>> {
     let mut deps = Vec::new();
-    let mut visited = HashMap::new();
+    let mut visited = HashSet::new();
 
     collect_deps_recursive(
-        package_root,
         package_deps,
         workspace_deps,
         workspace_root,
@@ -360,12 +383,11 @@ fn collect_package_dependencies(
 
 /// Recursively collect dependencies, handling transitive local path dependencies
 fn collect_deps_recursive(
-    _current_package_root: &Path,
     current_deps: &HashMap<String, DependencySpec>,
     workspace_deps: &HashMap<String, DependencySpec>,
     workspace_root: &Path,
     deps: &mut Vec<UnresolvedDep>,
-    visited: &mut HashMap<String, ()>,
+    visited: &mut HashSet<String>,
 ) -> Result<()> {
     for (url, spec) in current_deps {
         // Resolve workspace inheritance
@@ -420,10 +442,9 @@ fn collect_deps_recursive(
         });
 
         // Avoid infinite loops
-        if visited.contains_key(url) {
+        if !visited.insert(url.clone()) {
             continue;
         }
-        visited.insert(url.clone(), ());
 
         // Recursively resolve transitive dependencies
         let dep_pcb_toml = resolved_path.join("pcb.toml");
@@ -431,7 +452,6 @@ fn collect_deps_recursive(
             let file_provider = DefaultFileProvider::new();
             if let Ok(PcbToml::V2(dep_config)) = PcbToml::from_file(&file_provider, &dep_pcb_toml) {
                 collect_deps_recursive(
-                    &resolved_path,
                     &dep_config.dependencies,
                     workspace_deps,
                     workspace_root,
@@ -445,12 +465,18 @@ fn collect_deps_recursive(
     Ok(())
 }
 
-/// Merge multiple resolved dependency graphs by taking union
-/// Check if a dependency spec is non-version (path/branch/rev)
+/// Check if a dependency spec is a local path dependency
+///
+/// Branch/rev deps are resolved to concrete versions in Phase 0/1 and stored in `selected`,
+/// so they should participate in the build closure like regular version deps.
+/// Only true local path deps should be excluded from remote fetching.
 fn is_non_version_dep(spec: &DependencySpec) -> bool {
     match spec {
         DependencySpec::Detailed(detail) => {
-            detail.path.is_some() || detail.branch.is_some() || detail.rev.is_some()
+            // Only skip true local path deps. Branch/rev are resolved to
+            // concrete versions in `selected`, so they should participate
+            // in the build closure.
+            detail.path.is_some()
         }
         DependencySpec::Version(_) => false,
     }
@@ -460,21 +486,6 @@ fn is_non_version_dep(spec: &DependencySpec) -> bool {
 ///
 /// This is used in Phase 2 build closure to reconstruct ModuleLines.
 /// For branches/revs, returns a placeholder - the actual version comes from the selected map.
-fn extract_version(spec: &DependencySpec) -> Result<Version> {
-    match spec {
-        DependencySpec::Version(v) => parse_version_string(v),
-        DependencySpec::Detailed(detail) => {
-            if let Some(version) = &detail.version {
-                parse_version_string(version)
-            } else {
-                // For branches/revs/paths, return placeholder
-                // Phase 2 uses this just to construct ModuleLine, then looks up selected version
-                Ok(Version::new(0, 0, 0))
-            }
-        }
-    }
-}
-
 /// Parse version string, handling different formats
 fn parse_version_string(s: &str) -> Result<Version> {
     let s = s.trim_start_matches('^').trim_start_matches('v');
@@ -517,9 +528,6 @@ fn fetch_manifest(
         return read_manifest_from_path(&patched_toml, module_path);
     }
 
-    // Construct Git URL from module path
-    let git_url = format!("https://{}.git", module_path);
-
     // Determine if this is a pseudo-version or regular tag
     let is_pseudo_version = version.pre.starts_with("0.");
     let ref_spec = if is_pseudo_version {
@@ -543,35 +551,34 @@ fn fetch_manifest(
     // Check if we've already processed this version
     let pcb_toml_path = checkout_dir.join("pcb.toml");
     let marker_path = checkout_dir.join(".no-manifest");
+    let cache_marker = checkout_dir.join(".pcbcache");
 
-    if pcb_toml_path.exists() {
-        // Successfully cached with manifest
+    // Prefer using cached manifest if available (skip git operations)
+    if pcb_toml_path.exists() && (cache_marker.exists() || marker_path.exists()) {
+        // Successfully cached with manifest OR asset package
+        println!("        Using cached manifest");
         return read_manifest_from_path(&pcb_toml_path, module_path);
     }
 
     if marker_path.exists() {
         // Already tried, no V2 manifest (asset package or V1)
+        println!("        Cached (no manifest)");
         return Ok(HashMap::new());
     }
 
-    // Simple approach: clone with --filter=blob:none, then extract just pcb.toml using git show
-    println!("        Cloning {} (blob-filtered)", git_url);
+    // Clone with --filter=blob:none, then extract just pcb.toml using git show
+    println!("        Cloning (blob-filtered)");
 
-    // Clone with blob filtering, no checkout
-    let clone_status = Command::new("git")
-        .arg("clone")
-        .arg("--filter=blob:none")
-        .arg("--no-checkout")
-        .arg(&git_url)
-        .arg(&checkout_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if !clone_status.success() {
+    if git_clone_with_fallback(
+        module_path,
+        &["--filter=blob:none", "--no-checkout"],
+        &checkout_dir,
+    )
+    .is_err()
+    {
         let marker_path = checkout_dir.join(".no-manifest");
-        fs::create_dir_all(checkout_dir)?;
-        let _ = fs::write(&marker_path, "Failed to clone\n");
+        fs::create_dir_all(&checkout_dir)?;
+        let _ = fs::write(&marker_path, "Failed to clone (tried HTTPS and SSH)\n");
         return Ok(HashMap::new());
     }
 
@@ -650,6 +657,8 @@ fn read_manifest_from_path(
 }
 
 /// Build the final dependency closure using selected versions
+///
+/// DFS from workspace package dependencies using selected versions.
 fn build_closure(
     packages: &[(PathBuf, PcbToml)],
     workspace_deps: &HashMap<String, DependencySpec>,
@@ -660,7 +669,16 @@ fn build_closure(
     let mut build_set = HashSet::new();
     let mut stack = Vec::new();
 
-    // Seed from workspace packages' remote dependencies
+    // Build index: module_path → ModuleLine for fast lookups
+    let mut line_by_path: HashMap<String, Vec<ModuleLine>> = HashMap::new();
+    for line in selected.keys() {
+        line_by_path
+            .entry(line.path.clone())
+            .or_default()
+            .push(line.clone());
+    }
+
+    // Seed DFS from all package dependencies
     for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
 
@@ -673,9 +691,9 @@ fn build_closure(
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {
-                if let Ok(version) = extract_version(&dep.spec) {
-                    let line = ModuleLine::new(dep.url, &version);
-                    stack.push(line);
+                // Find selected ModuleLine(s) for this path
+                if let Some(lines) = line_by_path.get(&dep.url) {
+                    stack.extend(lines.iter().cloned());
                 }
             }
         }
@@ -685,7 +703,7 @@ fn build_closure(
     while let Some(line) = stack.pop() {
         let version = match selected.get(&line) {
             Some(v) => v.clone(),
-            None => continue, // Not in selected set
+            None => continue,
         };
 
         if build_set.contains(&(line.clone(), version.clone())) {
@@ -694,13 +712,12 @@ fn build_closure(
 
         build_set.insert((line.clone(), version.clone()));
 
-        // Add dependencies of this module
+        // Follow transitive dependencies via selected versions
         if let Some(deps) = manifest_cache.get(&(line.clone(), version)) {
             for (dep_path, dep_spec) in deps {
                 if !is_non_version_dep(dep_spec) {
-                    if let Ok(dep_version) = extract_version(dep_spec) {
-                        let dep_line = ModuleLine::new(dep_path.clone(), &dep_version);
-                        stack.push(dep_line);
+                    if let Some(lines) = line_by_path.get(dep_path) {
+                        stack.extend(lines.iter().cloned());
                     }
                 }
             }
@@ -714,12 +731,12 @@ fn build_closure(
 ///
 /// Handles:
 /// - Exact versions: "0.3.2" → v0.3.2
-/// - Branches: { branch = "main" } → pseudo-version
-/// - Revisions: { rev = "abcd1234" } → pseudo-version
+/// - Branches: { branch = "main" } → pseudo-version (uses lockfile if available)
+/// - Revisions: { rev = "abcd1234" } → pseudo-version (uses lockfile if available)
 fn resolve_to_version(
-    workspace_root: &Path,
     module_path: &str,
     spec: &DependencySpec,
+    lockfile: Option<&Lockfile>,
 ) -> Result<Version> {
     match spec {
         DependencySpec::Version(v) => parse_version_string(v),
@@ -727,13 +744,30 @@ fn resolve_to_version(
             if let Some(version) = &detail.version {
                 parse_version_string(version)
             } else if let Some(branch) = &detail.branch {
-                // Resolve branch to pseudo-version
-                resolve_branch_to_pseudo_version(workspace_root, module_path, branch)
+                // Use locked pseudo-version if available (skip git ls-remote)
+                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
+                    if let Ok(locked_version) = Version::parse(&entry.version) {
+                        if locked_version.pre.starts_with("0.") {
+                            // It's a pseudo-version, use it
+                            println!("        Using locked v{} (from pcb.sum)", locked_version);
+                            return Ok(locked_version);
+                        }
+                    }
+                }
+                resolve_branch_to_pseudo_version(module_path, branch)
             } else if let Some(rev) = &detail.rev {
-                // Resolve revision to pseudo-version
-                resolve_rev_to_pseudo_version(workspace_root, module_path, rev)
+                // Use locked pseudo-version if available (skip git ls-remote)
+                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
+                    if let Ok(locked_version) = Version::parse(&entry.version) {
+                        if locked_version.pre.starts_with("0.") {
+                            // It's a pseudo-version, use it
+                            println!("        Using locked v{} (from pcb.sum)", locked_version);
+                            return Ok(locked_version);
+                        }
+                    }
+                }
+                resolve_rev_to_pseudo_version(module_path, rev)
             } else {
-                // Path dependencies shouldn't reach here
                 anyhow::bail!("Dependency has no version, branch, or rev")
             }
         }
@@ -741,55 +775,28 @@ fn resolve_to_version(
 }
 
 /// Resolve a Git branch to a pseudo-version
-fn resolve_branch_to_pseudo_version(
-    _workspace_root: &Path,
-    module_path: &str,
-    branch: &str,
-) -> Result<Version> {
-    use std::process::Command;
-
-    let git_url = format!("https://{}.git", module_path);
-
+fn resolve_branch_to_pseudo_version(module_path: &str, branch: &str) -> Result<Version> {
     println!(
         "        Resolving branch '{}' for {}...",
         branch, module_path
     );
 
-    // Use git ls-remote to get branch commit without cloning
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg(&git_url)
-        .arg(format!("refs/heads/{}", branch))
-        .output()?;
+    let refspec = format!("refs/heads/{}", branch);
+    let (commit, git_url) = git_ls_remote_with_fallback(module_path, &refspec)?;
 
-    if !output.status.success() {
-        anyhow::bail!("Failed to resolve branch {} for {}", branch, module_path);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let commit = stdout
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().next())
-        .ok_or_else(|| anyhow::anyhow!("Branch {} not found in {}", branch, module_path))?;
-
-    generate_pseudo_version_for_commit(module_path, commit, &git_url)
+    generate_pseudo_version_for_commit(module_path, &commit, &git_url)
 }
 
 /// Resolve a Git revision to a pseudo-version
-fn resolve_rev_to_pseudo_version(
-    _workspace_root: &Path,
-    module_path: &str,
-    rev: &str,
-) -> Result<Version> {
-    let git_url = format!("https://{}.git", module_path);
-
+fn resolve_rev_to_pseudo_version(module_path: &str, rev: &str) -> Result<Version> {
     println!(
         "        Resolving rev '{}' for {}...",
         &rev[..8.min(rev.len())],
         module_path
     );
 
+    // For revisions, just use HTTPS (SSH wouldn't help for commit lookup)
+    let git_url = format!("https://{}.git", module_path);
     generate_pseudo_version_for_commit(module_path, rev, &git_url)
 }
 
@@ -1130,10 +1137,12 @@ fn compute_manifest_hash(manifest_content: &str) -> String {
 
 /// Fetch full repository contents for all dependencies in the build set
 ///
-/// Computes content and manifest hashes and stores them in .pcbcache marker
+/// Computes content and manifest hashes and stores them in .pcbcache marker.
+/// If lockfile is provided, verifies cached content against locked hashes.
 fn fetch_full_contents(
     _workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
+    lockfile: Option<&Lockfile>,
 ) -> Result<()> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -1148,9 +1157,58 @@ fn fetch_full_contents(
 
         let cache_marker = cache_dir.join(".pcbcache");
 
-        // Skip if already fully fetched and hashed
+        // Check if already cached
         if cache_marker.exists() {
-            println!("    {}@v{} (cached)", line.path, version);
+            // Verify cache integrity against lockfile if available
+            if let Some(lf) = lockfile {
+                if let Some(locked_entry) = lf.get(&line.path, &version.to_string()) {
+                    // Read cached hashes
+                    let marker_content = std::fs::read_to_string(&cache_marker)?;
+                    let mut lines_iter = marker_content.lines();
+                    let cached_content_hash = lines_iter.next().unwrap_or("");
+                    let cached_manifest_hash = lines_iter.next();
+
+                    // Verify content hash
+                    if cached_content_hash != locked_entry.content_hash {
+                        println!(
+                            "    {}@v{} (cache mismatch, re-fetching)",
+                            line.path, version
+                        );
+                        std::fs::remove_dir_all(&cache_dir)?;
+                        // Will re-fetch below
+                    } else if let (Some(cached_mh), Some(locked_mh)) =
+                        (cached_manifest_hash, &locked_entry.manifest_hash)
+                    {
+                        // Verify manifest hash if both exist
+                        if cached_mh != locked_mh {
+                            println!(
+                                "    {}@v{} (manifest mismatch, re-fetching)",
+                                line.path, version
+                            );
+                            std::fs::remove_dir_all(&cache_dir)?;
+                            // Will re-fetch below
+                        } else {
+                            println!("    {}@v{} (cached, verified)", line.path, version);
+                            continue;
+                        }
+                    } else {
+                        println!("    {}@v{} (cached, verified)", line.path, version);
+                        continue;
+                    }
+                } else {
+                    // Not in lockfile, trust cache
+                    println!("    {}@v{} (cached)", line.path, version);
+                    continue;
+                }
+            } else {
+                // No lockfile, trust cache
+                println!("    {}@v{} (cached)", line.path, version);
+                continue;
+            }
+        }
+
+        // Re-check if marker still doesn't exist (might have been deleted above)
+        if cache_marker.exists() {
             continue;
         }
 
@@ -1198,44 +1256,49 @@ fn fetch_full_contents(
 
 /// Clone full repository at specific version using shallow clone
 fn clone_full_shallow(cache_dir: &Path, module_path: &str, version_str: &str) -> Result<()> {
-    let git_url = format!("https://{}.git", module_path);
     let is_pseudo_version = version_str.contains("-0.");
-
-    let cache_str = cache_dir
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
 
     if is_pseudo_version {
         // Pseudo-versions: clone repo, fetch commit, checkout
         let commit = version_str.rsplit('-').next().unwrap();
 
-        run_git(&["clone", "--no-checkout", &git_url, cache_str])?;
+        git_clone_with_fallback(module_path, &["--no-checkout"], cache_dir)?;
         run_git_in(&["fetch", "--depth=1", "origin", commit], cache_dir)?;
         run_git_in(&["checkout", commit], cache_dir)?;
     } else {
-        // Regular versions: try v-prefix, fallback to no prefix
+        // Regular versions: try v-prefix first, fallback to no prefix
         let v_tag = format!("v{}", version_str);
-        if !try_clone_branch(&git_url, &v_tag, cache_str)?
-            && !try_clone_branch(&git_url, version_str, cache_str)?
+
+        if git_clone_with_fallback(module_path, &["--depth=1", "--branch", &v_tag], cache_dir)
+            .is_err()
         {
-            anyhow::bail!("Failed to clone {}@{}", module_path, version_str);
+            // Try without v-prefix
+            git_clone_with_fallback(
+                module_path,
+                &["--depth=1", "--branch", version_str],
+                cache_dir,
+            )?;
         }
     }
 
     Ok(())
 }
 
-fn run_git(args: &[&str]) -> Result<()> {
-    use std::process::Command;
-    let status = Command::new("git")
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("git command failed: git {}", args.join(" "));
+/// Convert module path to SSH URL format
+///
+/// Examples:
+/// - github.com/user/repo → git@github.com:user/repo.git
+/// - gitlab.com/user/repo → git@gitlab.com:user/repo.git
+fn format_ssh_url(module_path: &str) -> String {
+    let parts: Vec<&str> = module_path.splitn(2, '/').collect();
+    if parts.len() == 2 {
+        let host = parts[0];
+        let path = parts[1];
+        format!("git@{}:{}.git", host, path)
+    } else {
+        // Fallback to HTTPS format if parsing fails
+        format!("https://{}.git", module_path)
     }
-    Ok(())
 }
 
 fn run_git_in(args: &[&str], dir: &Path) -> Result<()> {
@@ -1252,25 +1315,122 @@ fn run_git_in(args: &[&str], dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn try_clone_branch(url: &str, branch: &str, dest: &str) -> Result<bool> {
+/// Execute git ls-remote with HTTPS→SSH fallback
+///
+/// Returns (commit_hash, git_url_used)
+fn git_ls_remote_with_fallback(module_path: &str, refspec: &str) -> Result<(String, String)> {
     use std::process::Command;
+
+    let https_url = format!("https://{}.git", module_path);
+    let ssh_url = format_ssh_url(module_path);
+
+    // Try HTTPS first
+    let output = Command::new("git")
+        .arg("ls-remote")
+        .arg(&https_url)
+        .arg(refspec)
+        .output()?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let commit = stdout
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().next())
+            .ok_or_else(|| anyhow::anyhow!("Ref {} not found in {}", refspec, module_path))?;
+        return Ok((commit.to_string(), https_url));
+    }
+
+    // Fallback to SSH
+    let output = Command::new("git")
+        .arg("ls-remote")
+        .arg(&ssh_url)
+        .arg(refspec)
+        .output()?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "Failed to ls-remote {} for {} (tried HTTPS and SSH)",
+            refspec,
+            module_path
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let commit = stdout
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .ok_or_else(|| anyhow::anyhow!("Ref {} not found in {}", refspec, module_path))?;
+    Ok((commit.to_string(), ssh_url))
+}
+
+/// Clone git repository with HTTPS→SSH fallback
+fn git_clone_with_fallback(module_path: &str, args: &[&str], dest: &Path) -> Result<()> {
+    use std::process::Command;
+
+    let https_url = format!("https://{}.git", module_path);
+    let ssh_url = format_ssh_url(module_path);
+    let dest_str = dest
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
+
+    // Try HTTPS first
+    let mut clone_args = vec!["clone"];
+    clone_args.extend_from_slice(args);
+    clone_args.push(&https_url);
+    clone_args.push(dest_str);
+
+    let https_result = Command::new("git")
+        .args(&clone_args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    if let Ok(status) = https_result {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    // Fallback to SSH - rebuild args with SSH URL
+    let mut ssh_args = vec!["clone"];
+    ssh_args.extend_from_slice(args);
+    ssh_args.push(&ssh_url);
+    ssh_args.push(dest_str);
+
     let status = Command::new("git")
-        .args(["clone", "--depth=1", "--branch", branch, url, dest])
+        .args(&ssh_args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;
-    Ok(status.success())
+
+    if !status.success() {
+        anyhow::bail!("Failed to clone {} (tried HTTPS and SSH)", module_path);
+    }
+
+    Ok(())
 }
 
-/// Generate lockfile from build set
+/// Update lockfile from build set
 ///
-/// Reads hashes from .pcbcache markers (computed during Phase 3 fetch).
-fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockfile> {
-    let mut lockfile = Lockfile::default();
+/// Merges with existing lockfile (Go's model): keeps old entries and adds/updates new ones.
+/// This allows switching branches without losing checksums and enables historical verification.
+/// Use `pcb tidy` (future) to remove unused entries.
+fn update_lockfile(
+    existing_lockfile: Option<Lockfile>,
+    build_set: &HashSet<(ModuleLine, Version)>,
+) -> Result<Lockfile> {
+    // Start with existing lockfile or create new one
+    let mut lockfile = existing_lockfile.unwrap_or_default();
+
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
 
     println!("  Reading hashes for {} dependencies...", build_set.len());
+
+    let mut updated_count = 0;
+    let mut added_count = 0;
 
     for (line, version) in build_set {
         let cache_dir = home
@@ -1293,6 +1453,9 @@ fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockf
             .to_string();
         let manifest_hash = lines.next().map(|s| s.to_string());
 
+        // Check if this is a new entry or update
+        let is_new = lockfile.get(&line.path, &version.to_string()).is_none();
+
         lockfile.insert(LockEntry {
             module_path: line.path.clone(),
             version: version.to_string(),
@@ -1300,7 +1463,20 @@ fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockf
             manifest_hash,
         });
 
-        println!("    {}@v{}", line.path, version);
+        if is_new {
+            added_count += 1;
+            println!("    {}@v{} (added)", line.path, version);
+        } else {
+            updated_count += 1;
+            println!("    {}@v{} (verified)", line.path, version);
+        }
+    }
+
+    if added_count > 0 || updated_count > 0 {
+        println!(
+            "  Summary: {} added, {} verified",
+            added_count, updated_count
+        );
     }
 
     Ok(lockfile)
