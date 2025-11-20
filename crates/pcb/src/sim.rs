@@ -57,6 +57,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
         false,
         &mut has_errors,
         &mut has_warnings,
+        None,
     ) else {
         if has_errors {
             anyhow::bail!("Build failed with errors");
