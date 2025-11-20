@@ -152,10 +152,28 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    pcb_zen::maybe_resolve_v2_workspace(&args.paths)?;
+    let v2_result = pcb_zen::maybe_resolve_v2_workspace(&args.paths)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = file_walker::collect_zen_files(&args.paths, false)?;
+    let zen_files = if let Some(result) = v2_result {
+        if result.packages.is_empty() {
+            eprintln!("Warning: No packages found in V2 workspace.");
+            Vec::new()
+        } else {
+            println!(
+                "V2 Build: Building .zen files from {} workspace packages",
+                result.packages.len()
+            );
+            let package_dirs: Vec<PathBuf> = result
+                .packages
+                .iter()
+                .filter_map(|p| p.parent().map(|parent| parent.to_path_buf()))
+                .collect();
+            file_walker::collect_zen_files(&package_dirs, false)?
+        }
+    } else {
+        file_walker::collect_zen_files(&args.paths, false)?
+    };
 
     if zen_files.is_empty() {
         let cwd = std::env::current_dir()?;

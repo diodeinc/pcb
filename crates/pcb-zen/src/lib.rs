@@ -20,7 +20,7 @@ use pcb_zen_core::{
 
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
-pub use resolve_v2::maybe_resolve_v2_workspace;
+pub use resolve_v2::{maybe_resolve_v2_workspace, ResolutionResult};
 pub use starlark::errors::EvalSeverity;
 
 #[derive(Debug, Clone, Copy)]

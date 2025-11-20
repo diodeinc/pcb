@@ -39,11 +39,18 @@ struct UnresolvedDep {
     spec: DependencySpec,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolutionResult {
+    pub workspace_root: PathBuf,
+    pub resolved_deps: Vec<(String, Version)>,
+    pub packages: Vec<PathBuf>,
+}
+
 /// Check if the input paths are in a V2 workspace and run dependency resolution if needed
 ///
 /// This is called once per `pcb build` invocation (workspace-first architecture).
 /// For V2 workspaces, it runs dependency resolution before any .zen file discovery.
-pub fn maybe_resolve_v2_workspace(paths: &[PathBuf]) -> Result<()> {
+pub fn maybe_resolve_v2_workspace(paths: &[PathBuf]) -> Result<Option<ResolutionResult>> {
     let input_path = if paths.is_empty() {
         std::env::current_dir()?
     } else {
@@ -55,15 +62,19 @@ pub fn maybe_resolve_v2_workspace(paths: &[PathBuf]) -> Result<()> {
 
     let pcb_toml_path = workspace_root.join("pcb.toml");
     if !file_provider.exists(&pcb_toml_path) {
-        return Ok(());
+        return Ok(None);
     }
 
     let config = PcbToml::from_file(&*file_provider, &pcb_toml_path)?;
     if let PcbToml::V2(_) = config {
-        resolve_dependencies(&*file_provider, &workspace_root, &config)?;
+        return Ok(Some(resolve_dependencies(
+            &*file_provider,
+            &workspace_root,
+            &config,
+        )?));
     }
 
-    Ok(())
+    Ok(None)
 }
 
 /// V2 dependency resolution
@@ -74,7 +85,7 @@ fn resolve_dependencies(
     file_provider: &dyn FileProvider,
     workspace_root: &Path,
     config: &PcbToml,
-) -> Result<()> {
+) -> Result<ResolutionResult> {
     let PcbToml::V2(v2) = config else {
         unreachable!("resolve_dependencies called on non-V2 config");
     };
@@ -357,7 +368,18 @@ fn resolve_dependencies(
     println!("  Written to {}", lockfile_path.display());
 
     println!("\nV2 dependency resolution complete");
-    std::process::exit(0);
+
+    let package_paths = packages.iter().map(|(path, _)| path.clone()).collect();
+    let resolved_deps = selected
+        .into_iter()
+        .map(|(line, version)| (line.path, version))
+        .collect();
+
+    Ok(ResolutionResult {
+        workspace_root: workspace_root.to_path_buf(),
+        resolved_deps,
+        packages: package_paths,
+    })
 }
 
 /// Collect dependencies for a single package, resolving workspace inheritance and transitive deps
