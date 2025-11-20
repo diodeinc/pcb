@@ -360,6 +360,82 @@ impl Lockfile {
     }
 }
 
+impl PcbToml {
+    /// Convert to V2 configuration
+    ///
+    /// Upgrades V1 configuration to V2, converting [packages] to [dependencies]
+    /// and normalizing structure.
+    pub fn to_v2(self) -> Result<PcbTomlV2> {
+        match self {
+            PcbToml::V2(v2) => Ok(v2),
+            PcbToml::V1(v1) => {
+                let mut dependencies = HashMap::new();
+
+                // Convert V1 packages to V2 dependencies
+                for (_alias, spec_str) in v1.packages {
+                    if let Some(load_spec) = crate::LoadSpec::parse(&spec_str) {
+                        match load_spec {
+                            crate::LoadSpec::Github {
+                                user,
+                                repo,
+                                rev,
+                                path: _,
+                            } => {
+                                let url = format!("github.com/{}/{}", user, repo);
+                                // In V2, dependencies are usually version strings.
+                                // If rev is HEAD/latest, we might want "*" or something?
+                                // But V1 specs usually have specific versions.
+                                dependencies.insert(url, DependencySpec::Version(rev));
+                            }
+                            crate::LoadSpec::Gitlab {
+                                project_path,
+                                rev,
+                                path: _,
+                            } => {
+                                let url = format!("gitlab.com/{}", project_path);
+                                dependencies.insert(url, DependencySpec::Version(rev));
+                            }
+                            crate::LoadSpec::Path { .. } => {
+                                // Local path dependencies in V1 cannot be easily converted to V2
+                                // URL-based dependencies without additional context.
+                                // For now, we skip them.
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Convert Workspace
+                let workspace = v1.workspace.map(|w| WorkspaceConfigV2 {
+                    members: w.members,
+                    default_board: w.default_board,
+                    allow: vec![],
+                    dependencies: HashMap::new(),
+                });
+
+                // Create Package section if it's a module or board
+                let package = if v1.module.is_some() || v1.board.is_some() {
+                    Some(PackageConfig {
+                        pcb_version: "0.3".to_string(),
+                    })
+                } else {
+                    None
+                };
+
+                Ok(PcbTomlV2 {
+                    version: "2".to_string(),
+                    workspace,
+                    package,
+                    board: v1.board,
+                    dependencies,
+                    patch: HashMap::new(),
+                    vendor: None,
+                })
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for Lockfile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut lines = Vec::new();
