@@ -1339,6 +1339,21 @@ fn discover_packages(
     Ok(packages)
 }
 
+/// Check if a directory is a package root (has pcb.toml with [package])
+fn is_package_dir(dir: &Path) -> bool {
+    let pcb_toml = dir.join("pcb.toml");
+    if !pcb_toml.is_file() {
+        return false;
+    }
+
+    let file_provider = DefaultFileProvider::new();
+    if let Ok(config) = PcbToml::from_file(&file_provider, &pcb_toml) {
+        matches!(config, PcbToml::V2(ref v2) if v2.package.is_some())
+    } else {
+        false
+    }
+}
+
 /// Create a canonical, deterministic tar archive from a directory
 ///
 /// Rules from packaging.md:
@@ -1348,6 +1363,7 @@ fn discover_packages(
 /// - File mode: 0644, directory mode: 0755
 /// - End with two 512-byte zero blocks
 /// - Respect .gitignore and filter internal marker files
+/// - Exclude nested packages (subdirs with pcb.toml + [package])
 pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
     use std::fs;
     use tar::{Builder, Header};
@@ -1360,18 +1376,32 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
     // Collect all files and directories, sorted lexicographically
     // Use ignore crate to respect .gitignore
     let mut entries = Vec::new();
+    let package_root = dir.to_path_buf(); // Clone for closure
     for result in WalkBuilder::new(dir)
         .hidden(false) // Don't skip hidden files (we want .zen files if hidden)
         .git_ignore(true) // Respect .gitignore
         .git_global(false) // Don't use global gitignore
         .git_exclude(true) // Respect .git/info/exclude
-        .filter_entry(|entry| {
+        .filter_entry(move |entry| {
+            let path = entry.path();
+
             // Filter out .git directory entirely (don't descend into it)
             if let Some(file_name) = entry.file_name().to_str() {
-                file_name != ".git"
-            } else {
-                true
+                if file_name == ".git" {
+                    return false;
+                }
             }
+
+            // Prune nested packages: if this is a directory with pcb.toml + [package],
+            // and it's not the root we're packaging, exclude it and its entire subtree
+            if entry.file_type().is_some_and(|ft| ft.is_dir())
+                && path != package_root
+                && is_package_dir(path)
+            {
+                return false; // Prune this entire subtree
+            }
+
+            true
         })
         .build()
     {
