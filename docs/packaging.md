@@ -119,9 +119,11 @@ Version formats:
 - Major+minor: `"0.3"` (latest 0.3.x)
 - Major: `"0"` (latest 0.x.x)
 - Caret: `"^0.3.2"` (≥0.3.2, <0.4.0)
-- Branch: `{ branch = "main" }`
-- Revision: `{ rev = "a1b2c3d4" }`
+- Branch: `{ branch = "main" }` (resolves to pseudo-version)
+- Revision: `{ rev = "a1b2c3d4" }` (resolves to pseudo-version)
 - Path: `{ path = "../local" }`
+
+**Pseudo-Versions:** Branches and revisions are resolved to pseudo-versions with commit hashes for reproducibility. Format: `v<base>-0.<timestamp>-<commit>` where base is the latest reachable Git tag incremented by one patch version. Example: commit after `v0.3.14` becomes `v0.3.15-0.20251120004415-137e2dcabc28`. Pseudo-versions participate in MVS and can win over older tags.
 
 Full URLs eliminate ambiguity. No confusion about package origin.
 
@@ -172,26 +174,71 @@ Tags: `v0.3.2`. Breaking changes in any part of stdlib require a major version b
 
 ### Dependency Resolution
 
-Semantic versioning with Minimal Version Selection within major versions. Multiple major versions allowed to coexist.
+Semantic versioning with Minimal Version Selection within semver families. Multiple families allowed to coexist.
 
-Algorithm:
-1. Parse all `pcb.toml` files recursively
-2. Group by `(url, major_version)` tuples
-3. Select max version per group
+**Semver Families:** For 0.x versions, the minor version acts as the major version:
+- `0.2.x` and `0.3.x` are different families (breaking changes)
+- For `1.x+`, standard major version grouping
 
-Example from weave:
+**Algorithm:**
+
+**Phase 0 - Seed from Workspace:**
+- Discover workspace member packages
+- Collect direct dependencies from all members
+- Resolve branches/revs to pseudo-versions (requires Git operations)
+- Seed MVS state: for each dependency, track highest version seen per semver family
+- Output: `selected[ModuleLine]` map and work queue of modules to fetch
+
+**Phase 1 - Discovery + MVS Fixed Point:**
+- Process work queue: fetch manifest (pcb.toml) for each module at its selected version
+- Use sparse Git checkout (only pcb.toml downloaded for efficiency)
+- Add transitive dependencies to MVS state
+- Monotonically upgrade versions (never downgrade)
+- Repeat until work queue empty (fixed point reached)
+- Property: Versions only increase, no backtracking
+
+**Phase 2 - Build Closure:**
+- Phase 1 may fetch obsolete versions during iteration
+- DFS from workspace roots using **only** final selected versions
+- Computes actual build set (filters out superseded manifests)
+- Output: Final set of dependencies needed for build
+
+**Precedence Order:**
+For each module path, version selection follows:
+1. Workspace `[patch]` (ultimate authority - applied during graph construction)
+2. Lockfile pin (future - stores resolved pseudo-versions)
+3. Workspace/member requirements
+4. Transitive requirements (lowest priority)
+
+**Example:**
 ```
-Workspace: stdlib@0.2.8
-WV0001:    stdlib@0.2.13
-WV0002:    stdlib@0.3.2
-WV0003:    stdlib@0.3.1
+Workspace members:
+  WV0001: stdlib = "0.2.13"
+  WV0002: stdlib = "0.3.2", ti/tps54331 = "1.0.0"
+  WV0003: stdlib = "0.3.1"
+
+Phase 0 - Seed:
+  selected[("stdlib", "v0.2")] = 0.2.13
+  selected[("stdlib", "v0.3")] = 0.3.2    (0.3.1 < 0.3.2, not added)
+  selected[("ti/tps54331", "v1")] = 1.0.0
+  workQ = [("stdlib", "v0.2"), ("stdlib", "v0.3"), ("ti/tps54331", "v1")]
+
+Phase 1 - Discovery:
+  Fetch stdlib@0.2.13: no remote deps
+  Fetch stdlib@0.3.2: no remote deps  
+  Fetch ti/tps54331@1.0.0: requires stdlib = "0.3.0"
+    → selected[("stdlib", "v0.3")] = 0.3.2 (already higher, no upgrade)
+  Fixed point reached
+
+Phase 2 - Build Closure:
+  buildSet = { stdlib@0.2.13, stdlib@0.3.2, ti/tps54331@1.0.0 }
+
+Final: Both stdlib@0.2.13 and stdlib@0.3.2 in build (different families)
 ```
 
-Groups: `0.2.x` → select `0.2.13`, `0.3.x` → select `0.3.2`. Final build includes both `stdlib@0.2.13` and `stdlib@0.3.2`.
+Deterministic and predictable. Manually computable by finding max in each semver family. Pseudo-versions from branches participate in MVS and can win over tags.
 
-Deterministic and predictable. Manually computable by finding max in each major version group.
-
-Semver compatibility guarantees justify simple greedy selection. Within major version, later releases are backward compatible. Major version bumps are breaking changes, so `1.8.0` can't satisfy `2.0.0` requirement.
+Semver compatibility guarantees justify simple greedy selection. Within a family, later releases are backward compatible. Major version bumps (or 0.x minor bumps) are breaking changes.
 
 ### Load Syntax
 
@@ -302,18 +349,29 @@ Solves version coordination visible in current weave where different boards use 
 
 ### Patches
 
-Local development across repos without modifying configs or creating temp tags:
+Patches provide Go-style `replace` semantics for local development. They override module sources **during graph construction** (not after MVS), allowing the patched module's dependencies to participate in resolution.
+
+**Scope:** Workspace root only. Patches in package-level pcb.toml files are forbidden.
 
 ```toml
 [workspace]
 members = ["boards/*"]
 
 [patch]
+# Local path override (most common)
 "github.com/diodeinc/stdlib" = { path = "../stdlib" }
-"github.com/diodeinc/registry/reference/ti/tps54331" = { path = "../registry-ti-local" }
+
+# Git revision override
+"github.com/diodeinc/registry/reference/ti/tps54331" = { git = "https://github.com/me/fork", rev = "abcd1234" }
 ```
 
-Workspace-root only. Affects all members. Redirects resolution temporarily. Different from path dependencies - patches override existing declarations, path deps are permanent intra-workspace references.
+**Semantics:**
+- Patches are applied **during graph construction**, before MVS completes
+- The patched module's `pcb.toml` is loaded, and its dependencies feed into MVS
+- Version identity remains (e.g., stdlib@0.3.13), but code comes from patched source
+- Ultimate authority: patches override all version constraints
+
+**Use case:** Develop changes spanning multiple repos without creating temporary tags or modifying lockfiles. Remove patches when done to return to normal resolution.
 
 ### Canonical Package Format
 
@@ -328,16 +386,17 @@ Generation: checkout at tag, extract package path if nested, filter `.git` and i
 
 ### Lockfile
 
-`pcb.sum` records cryptographic hashes:
+`pcb.sum` records cryptographic hashes and resolved pseudo-versions:
 ```
 github.com/diodeinc/stdlib v0.3.2 h1:abc123...
 github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:def456...
 github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0 h1:ghi789...
 github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0/pcb.toml h1:jkl012...
 gitlab.com/kicad/libraries/kicad-symbols v7.0.0 h1:xyz789...
+github.com/diodeinc/stdlib v0.3.15-0.20251120004415-137e2dcabc28 h1:pseudo123...
 ```
 
-Two lines per standard dependency: full content hash and manifest-only hash. Asset packages (no `pcb.toml`) have only the content hash line. Manifest hash enables lightweight verification - fetch manifests, verify hashes, reconstruct graph, check if lockfile valid before downloading full content.
+Two lines per standard dependency: full content hash and manifest-only hash. Asset packages (no `pcb.toml`) have only the content hash line. Pseudo-versions from branches/revs are stored with their resolved commit hashes for reproducibility. Manifest hash enables lightweight verification - fetch manifests, verify hashes, reconstruct graph, check if lockfile valid before downloading full content.
 
 Generated on first build when absent. Updated automatically when dependencies change. Hash mismatch fails build with security warning. Must be committed to version control. `pcb.sum` is per-workspace and resides at the workspace root.
 
@@ -699,34 +758,81 @@ Build includes both `stdlib@0.3.x` and `stdlib@1.0.x`. WV0002 uses new API, othe
 
 ### Resolution Phase
 
-Runs before evaluation:
-1. Parse all `pcb.toml` files
-2. Build complete dependency graph
-3. Group by `(url, major_version)`
-4. Select max version per group (MVS)
-5. Verify against `pcb.sum`
-6. Fetch missing packages
-7. Compute canonical hashes
-8. Update `pcb.sum`
+Three-phase algorithm runs before evaluation:
 
-Enables parallel fetching, reproducible builds.
+**Phase 0 - Seed:**
+1. Discover workspace member packages
+2. Collect all direct dependencies
+3. Resolve branches/revs to pseudo-versions via `git ls-remote`
+4. Initialize MVS state with workspace and member requirements
+5. Apply workspace `[patch]` overrides during seeding
+
+**Phase 1 - Discovery (Fixed Point):**
+1. Pop module from work queue
+2. Check if already cached
+3. Fetch manifest (sparse checkout: pcb.toml only)
+4. Add transitive dependencies to MVS state
+5. Monotonically upgrade versions (never downgrade)
+6. Repeat until work queue empty
+7. Property: Each module line upgraded at most once per new requirement
+
+**Phase 2 - Build Closure:**
+1. DFS from workspace roots using final selected versions only
+2. Filters out manifests from obsolete versions fetched during Phase 1
+3. Produces minimal set of dependencies actually needed
+
+**Properties:**
+- Deterministic (same workspace + Git state = same result)
+- Monotonic (versions only increase)
+- No backtracking or SAT solving
+- Patches applied during graph construction (patched deps participate in MVS)
 
 ### Git Operations
 
-Cache structure:
+**Cache structure:**
 ```
-~/.cache/pcb/git/
-  github.com/
-    diodeinc/
-      stdlib/
-        v0.3.2/
-        v0.3.4/
-      registry/
-        ti/v1.0.0/
-        analog/v1.5.0/
+~/.pcb/cache/
+  github.com/diodeinc/stdlib/
+    0.3.2/
+      .git/
+      pcb.toml              # Sparse checkout (manifest only)
+    0.3.15-0.20251120004415-137e2dcabc28/
+      .git/
+      pcb.toml              # Pseudo-version from branch
+      .no-manifest          # Sentinel for V1/asset packages
+  temp/
+    github.com/diodeinc/stdlib/
+      # Bare clone for pseudo-version generation (git describe)
 ```
 
-Shallow clones where possible. Sparse checkouts for monorepo packages (fetch only relevant subdirectory). Conservative cache invalidation - once verified, packages trusted.
+**Sparse Checkout Implementation:**
+```bash
+git init
+git remote add origin <url>
+git config core.sparseCheckout true
+echo "pcb.toml" > .git/info/sparse-checkout
+git fetch --depth=1 origin <tag>
+git checkout FETCH_HEAD
+```
+
+**Pseudo-Version Generation:**
+```bash
+# Resolve branch to commit
+git ls-remote <url> refs/heads/<branch>
+
+# Find latest tag reachable from commit
+git describe --tags --abbrev=0 <commit>
+
+# Format: v<base+1>-0.<timestamp>-<commit_short>
+# Example: v0.3.15-0.20251120004415-137e2dcabc28
+```
+
+**Optimizations:**
+- Sparse checkout: only `pcb.toml` fetched (not full repo)
+- Shallow clones: `--depth=1` for minimal transfer
+- Sentinel markers: `.no-manifest` prevents re-fetching asset packages/V1 manifests
+- Shared bare repos: `temp/` clones reused for all branches/revs of same module
+- Manifest cache: Phase 1 skips already-fetched (line, version) pairs
 
 ### Load Resolution
 
