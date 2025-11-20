@@ -346,6 +346,18 @@ impl Lockfile {
         let key = (entry.module_path.clone(), entry.version.clone());
         self.entries.insert(key, entry);
     }
+
+    /// Iterate over all lock entries
+    pub fn iter(&self) -> impl Iterator<Item = &LockEntry> {
+        self.entries.values()
+    }
+
+    /// Find any locked version for a module path
+    ///
+    /// Returns the first entry found for the given module path (useful for branch/rev lookups).
+    pub fn find_by_path(&self, module_path: &str) -> Option<&LockEntry> {
+        self.entries.values().find(|e| e.module_path == module_path)
+    }
 }
 
 impl std::fmt::Display for Lockfile {
