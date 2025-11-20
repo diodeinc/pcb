@@ -3331,6 +3331,7 @@ dependencies = [
  "flate2",
  "fslock",
  "globset",
+ "ignore",
  "insta",
  "itertools 0.13.0",
  "jiff",

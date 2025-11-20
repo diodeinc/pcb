@@ -1,5 +1,6 @@
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
+use ignore::WalkBuilder;
 use pcb_zen_core::config::{find_workspace_root, DependencySpec, LockEntry, Lockfile, PcbToml};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
@@ -1008,7 +1009,7 @@ fn discover_packages(
 /// - Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
 /// - File mode: 0644, directory mode: 0755
 /// - End with two 512-byte zero blocks
-/// - Filter .git and ignored files
+/// - Respect .gitignore and filter internal marker files
 fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
     use std::fs;
     use tar::{Builder, Header};
@@ -1019,22 +1020,37 @@ fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> 
     builder.mode(tar::HeaderMode::Deterministic);
 
     // Collect all files and directories, sorted lexicographically
+    // Use ignore crate to respect .gitignore
     let mut entries = Vec::new();
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    for result in WalkBuilder::new(dir)
+        .hidden(false) // Don't skip hidden files (we want .zen files if hidden)
+        .git_ignore(true) // Respect .gitignore
+        .git_global(false) // Don't use global gitignore
+        .git_exclude(true) // Respect .git/info/exclude
+        .build()
+    {
+        let entry = result?;
         let path = entry.path();
 
-        // Skip .git directories
-        if path.components().any(|c| c.as_os_str() == ".git") {
-            continue;
+        // Skip internal marker files (.no-manifest, .full-checkout, .pcbcache)
+        if let Some(file_name) = path.file_name() {
+            let name = file_name.to_str().unwrap_or("");
+            if name == ".no-manifest" || name == ".full-checkout" || name == ".pcbcache" {
+                continue;
+            }
         }
 
         // Get relative path
-        let rel_path = path.strip_prefix(dir).unwrap();
+        let rel_path = match path.strip_prefix(dir) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
         if rel_path == Path::new("") {
             continue; // Skip root
         }
 
-        entries.push((rel_path.to_path_buf(), entry.file_type()));
+        let file_type = entry.file_type().unwrap();
+        entries.push((rel_path.to_path_buf(), file_type));
     }
 
     // Sort lexicographically
@@ -1084,34 +1100,17 @@ fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> 
     Ok(())
 }
 
-/// Compute content hash for a Git repository at a specific version
+/// Compute content hash from a directory
 ///
 /// Creates canonical USTAR tarball from directory, streams to BLAKE3 hasher.
 /// Format: h1:<base64-encoded-blake3>
-fn compute_content_hash(module_path: &str, version: &Version) -> Result<String> {
+fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let cache_dir = home
-        .join(".pcb")
-        .join("cache")
-        .join(module_path)
-        .join(version.to_string());
-
-    if !cache_dir.exists() {
-        anyhow::bail!(
-            "Cache directory not found for {}@{}: {}",
-            module_path,
-            version,
-            cache_dir.display()
-        );
-    }
-
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(&cache_dir, &mut hasher)?;
+    create_canonical_tar(cache_dir, &mut hasher)?;
     let hash = hasher.finalize();
 
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
@@ -1130,6 +1129,8 @@ fn compute_manifest_hash(manifest_content: &str) -> String {
 }
 
 /// Fetch full repository contents for all dependencies in the build set
+///
+/// Computes content and manifest hashes and stores them in .pcbcache marker
 fn fetch_full_contents(
     _workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
@@ -1145,8 +1146,10 @@ fn fetch_full_contents(
             .join(&line.path)
             .join(version.to_string());
 
-        // Skip if already fully fetched
-        if cache_dir.join(".full-checkout").exists() {
+        let cache_marker = cache_dir.join(".pcbcache");
+
+        // Skip if already fully fetched and hashed
+        if cache_marker.exists() {
             println!("    {}@v{} (cached)", line.path, version);
             continue;
         }
@@ -1161,13 +1164,33 @@ fn fetch_full_contents(
         }
         clone_full_shallow(&cache_dir, &line.path, &version.to_string())?;
 
-        // Mark complete and restore markers
-        std::fs::write(cache_dir.join(".full-checkout"), "")?;
+        // Compute hashes immediately after fetch
+        print!("      Computing hashes... ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let content_hash = compute_content_hash_from_dir(&cache_dir)?;
+        let manifest_hash = if cache_dir.join("pcb.toml").exists() {
+            let manifest_content = std::fs::read_to_string(cache_dir.join("pcb.toml"))?;
+            Some(compute_manifest_hash(&manifest_content))
+        } else {
+            None
+        };
+
+        // Write cache marker with hashes
+        // Format: content_hash\nmanifest_hash (or just content_hash if no manifest)
+        let marker_content = if let Some(mh) = &manifest_hash {
+            format!("{}\n{}\n", content_hash, mh)
+        } else {
+            format!("{}\n", content_hash)
+        };
+        std::fs::write(&cache_marker, marker_content)?;
+
+        // Restore asset package marker if needed
         if is_asset_package {
             std::fs::write(cache_dir.join(".no-manifest"), "")?;
         }
 
-        println!("      Fetched {}@v{}", line.path, version);
+        println!("done");
     }
 
     Ok(())
@@ -1241,37 +1264,34 @@ fn try_clone_branch(url: &str, branch: &str, dest: &str) -> Result<bool> {
 
 /// Generate lockfile from build set
 ///
-/// Computes content and manifest hashes for all dependencies.
+/// Reads hashes from .pcbcache markers (computed during Phase 3 fetch).
 fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockfile> {
     let mut lockfile = Lockfile::default();
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
 
-    println!("  Computing hashes for {} dependencies...", build_set.len());
+    println!("  Reading hashes for {} dependencies...", build_set.len());
 
     for (line, version) in build_set {
-        print!("    {}@v{}... ", line.path, version);
-        std::io::Write::flush(&mut std::io::stdout())?;
-
-        // Compute content hash
-        let content_hash = compute_content_hash(&line.path, version)?;
-
-        // Fetch manifest to compute manifest hash
-        // Reuse cache from resolution phase
-        let home =
-            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
         let cache_dir = home
             .join(".pcb")
             .join("cache")
             .join(&line.path)
             .join(version.to_string());
 
-        let manifest_path = cache_dir.join("pcb.toml");
-        let manifest_hash = if manifest_path.exists() {
-            let manifest_content = std::fs::read_to_string(&manifest_path)?;
-            Some(compute_manifest_hash(&manifest_content))
-        } else {
-            // Asset package without pcb.toml
-            None
-        };
+        let cache_marker = cache_dir.join(".pcbcache");
+
+        // Read hashes from cache marker
+        let marker_content = std::fs::read_to_string(&cache_marker).map_err(|e| {
+            anyhow::anyhow!("Missing cache marker for {}@{}: {}", line.path, version, e)
+        })?;
+
+        let mut lines = marker_content.lines();
+        let content_hash = lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid cache marker format: missing content hash"))?
+            .to_string();
+        let manifest_hash = lines.next().map(|s| s.to_string());
 
         lockfile.insert(LockEntry {
             module_path: line.path.clone(),
@@ -1280,7 +1300,7 @@ fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockf
             manifest_hash,
         });
 
-        println!("done");
+        println!("    {}@v{}", line.path, version);
     }
 
     Ok(lockfile)
