@@ -2307,7 +2307,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3293,7 +3293,6 @@ dependencies = [
  "anyhow",
  "argfile",
  "ariadne",
- "chrono",
  "clap",
  "debugserver-types",
  "derive_more",
@@ -3306,6 +3305,7 @@ dependencies = [
  "globset",
  "insta",
  "itertools 0.13.0",
+ "jiff",
  "log",
  "lsp-server",
  "lsp-types",

@@ -494,7 +494,20 @@ fn fetch_manifest(
 
     // Construct Git URL from module path
     let git_url = format!("https://{}.git", module_path);
-    let version_tag = format!("v{}", version);
+
+    // Determine if this is a pseudo-version or regular tag
+    let is_pseudo_version = version.pre.starts_with("0.");
+    let ref_spec = if is_pseudo_version {
+        // Extract commit hash from pseudo-version (last segment after final -)
+        let version_str = version.to_string();
+        version_str
+            .split('-')
+            .next_back()
+            .unwrap_or("HEAD")
+            .to_string()
+    } else {
+        format!("v{}", version)
+    };
 
     // Cache directory: ~/.pcb/cache/{module_path}/{version}/
     let home =
@@ -516,81 +529,64 @@ fn fetch_manifest(
         return Ok(HashMap::new());
     }
 
-    // Create checkout directory
-    fs::create_dir_all(&checkout_dir)?;
+    // Simple approach: clone with --filter=blob:none, then extract just pcb.toml using git show
+    println!("        Cloning {} (blob-filtered)", git_url);
 
-    // Initialize sparse checkout
-    println!("        Cloning {} (sparse)", git_url);
-
-    // git init
-    Command::new("git")
-        .arg("init")
-        .current_dir(&checkout_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    // git remote add origin
-    Command::new("git")
-        .arg("remote")
-        .arg("add")
-        .arg("origin")
+    // Clone with blob filtering, no checkout
+    let clone_status = Command::new("git")
+        .arg("clone")
+        .arg("--filter=blob:none")
+        .arg("--no-checkout")
         .arg(&git_url)
-        .current_dir(&checkout_dir)
+        .arg(&checkout_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;
 
-    // Enable sparse checkout
-    Command::new("git")
-        .arg("config")
-        .arg("core.sparseCheckout")
-        .arg("true")
-        .current_dir(&checkout_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    // Create sparse-checkout file with only pcb.toml
-    let sparse_checkout_file = checkout_dir
-        .join(".git")
-        .join("info")
-        .join("sparse-checkout");
-    fs::create_dir_all(sparse_checkout_file.parent().unwrap())?;
-    fs::write(&sparse_checkout_file, "pcb.toml\n")?;
-
-    // git fetch --depth=1 origin tag
-    let fetch_status = Command::new("git")
-        .arg("fetch")
-        .arg("--depth=1")
-        .arg("origin")
-        .arg(&version_tag)
-        .current_dir(&checkout_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if !fetch_status.success() {
-        // Fetch failed - create marker and return empty
+    if !clone_status.success() {
         let marker_path = checkout_dir.join(".no-manifest");
-        let _ = fs::write(&marker_path, "Failed to fetch tag\n");
+        fs::create_dir_all(checkout_dir)?;
+        let _ = fs::write(&marker_path, "Failed to clone\n");
         return Ok(HashMap::new());
     }
 
-    // git checkout FETCH_HEAD
-    let checkout_status = Command::new("git")
-        .arg("checkout")
-        .arg("FETCH_HEAD")
-        .current_dir(&checkout_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
+    // For pseudo-versions, fetch the specific commit
+    if is_pseudo_version {
+        let fetch_status = Command::new("git")
+            .arg("fetch")
+            .arg("--depth=1")
+            .arg("origin")
+            .arg(&ref_spec)
+            .current_dir(&checkout_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
 
-    if !checkout_status.success() {
-        // Checkout failed - create marker and return empty
-        let marker_path = checkout_dir.join(".no-manifest");
-        let _ = fs::write(&marker_path, "Failed to fetch/checkout\n");
-        return Ok(HashMap::new());
+        if !fetch_status.success() {
+            let marker_path = checkout_dir.join(".no-manifest");
+            let _ = fs::write(&marker_path, "Failed to fetch commit\n");
+            return Ok(HashMap::new());
+        }
+    }
+
+    // Extract just pcb.toml using git show (doesn't require full checkout)
+    let show_output = Command::new("git")
+        .arg("show")
+        .arg(format!("{}:pcb.toml", ref_spec))
+        .current_dir(&checkout_dir)
+        .output();
+
+    match show_output {
+        Ok(output) if output.status.success() => {
+            // Write pcb.toml to disk
+            fs::write(&pcb_toml_path, &output.stdout)?;
+        }
+        _ => {
+            // No pcb.toml at this ref (asset package)
+            let marker_path = checkout_dir.join(".no-manifest");
+            let _ = fs::write(&marker_path, "No pcb.toml in repository\n");
+            return Ok(HashMap::new());
+        }
     }
 
     // Read the manifest
@@ -781,7 +777,6 @@ fn generate_pseudo_version_for_commit(
     commit: &str,
     git_url: &str,
 ) -> Result<Version> {
-    use chrono::Utc;
     use std::process::Command;
 
     // Get a minimal clone to inspect the commit
@@ -862,20 +857,30 @@ fn generate_pseudo_version_for_commit(
         String::from_utf8_lossy(&timestamp_output.stdout)
             .trim()
             .parse::<i64>()
-            .unwrap_or(0)
+            .unwrap_or_else(|_| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64
+            })
     } else {
-        Utc::now().timestamp()
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
     };
 
-    let datetime = chrono::DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
-    let timestamp_str = datetime.format("%Y%m%d%H%M%S").to_string();
+    // Format timestamp as YYYYMMDDhhmmss using jiff
+    let dt = jiff::Timestamp::from_second(timestamp)?;
+    let timestamp_str = dt.strftime("%Y%m%d%H%M%S").to_string();
 
-    let commit_short = &commit[..12.min(commit.len())];
+    // Use full commit hash (40 chars) in pseudo-version for reliable fetching
+    let commit_hash = &commit[..commit.len().min(40)];
 
     // Build pseudo-version string: v<major>.<minor>.<patch+1>-0.<timestamp>-<commit>
     let pseudo_str = format!(
         "{}.{}.{}-0.{}-{}",
-        pseudo_base.major, pseudo_base.minor, pseudo_base.patch, timestamp_str, commit_short
+        pseudo_base.major, pseudo_base.minor, pseudo_base.patch, timestamp_str, commit_hash
     );
 
     Version::parse(&pseudo_str)
