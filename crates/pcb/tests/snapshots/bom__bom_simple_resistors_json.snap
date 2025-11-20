@@ -2,7 +2,7 @@
 source: crates/pcb/tests/bom.rs
 expression: output
 ---
-Command: pcb bom boards/SimpleResistors.zen -r bom_rules.json -f json
+Command: pcb bom boards/SimpleResistors.zen -r bom_rules.json -f json --offline
 Exit Code: 0
 
 --- STDOUT ---

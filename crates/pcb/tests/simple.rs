@@ -159,7 +159,10 @@ fn test_pcb_release_simple_workspace() {
     // Test BOM first
     assert_snapshot!(
         "simple_workspace_bom",
-        sb.snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "json"])
+        sb.snapshot_run(
+            "pcb",
+            ["bom", "boards/TestBoard.zen", "-f", "json", "--offline"]
+        )
     );
 
     // Test release (suppress DRC errors/warnings expected in minimal test boards)

@@ -1,9 +1,8 @@
 ---
 source: crates/pcb/tests/bom.rs
-assertion_line: 435
 expression: output
 ---
-Command: pcb bom boards/DnpBoard.zen -f json
+Command: pcb bom boards/DnpBoard.zen -f json --offline
 Exit Code: 0
 
 --- STDOUT ---

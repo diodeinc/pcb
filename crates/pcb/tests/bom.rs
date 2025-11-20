@@ -285,7 +285,10 @@ fn test_bom_json_format() {
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/TestBoard.zen", "-f", "json", "--offline"],
+        );
     assert_snapshot!("bom_json", output);
 }
 
@@ -296,7 +299,10 @@ fn test_bom_table_format() {
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "-f", "table"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/TestBoard.zen", "-f", "table", "--offline"],
+        );
     assert_snapshot!("bom_table", output);
 }
 
@@ -307,7 +313,7 @@ fn test_bom_default_format() {
         .seed_kicad(&["9.0.0"])
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen"]);
+        .snapshot_run("pcb", ["bom", "boards/TestBoard.zen", "--offline"]);
     assert_snapshot!("bom_default", output);
 }
 
@@ -327,6 +333,7 @@ fn test_bom_simple_resistors() {
                 "bom_rules.json",
                 "-f",
                 "json",
+                "--offline",
             ],
         );
     assert_snapshot!("bom_simple_resistors_json", output);
@@ -348,6 +355,7 @@ fn test_bom_simple_resistors_table() {
                 "bom_rules.json",
                 "-f",
                 "table",
+                "--offline",
             ],
         );
     assert_snapshot!("bom_simple_resistors_table", output);
@@ -359,7 +367,10 @@ fn test_bom_capacitors_with_dielectric() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/Capacitors.zen", "-f", "json", "--offline"],
+        );
     assert_snapshot!("bom_capacitors_json", output);
 }
 
@@ -369,7 +380,10 @@ fn test_bom_capacitors_table() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/Capacitors.zen", "-f", "table"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/Capacitors.zen", "-f", "table", "--offline"],
+        );
     assert_snapshot!("bom_capacitors_table", output);
 }
 
@@ -398,7 +412,7 @@ fn test_bom_kicad_fallback_json() {
         .write("layout/layout.kicad_sch", kicad_sch)
         .write("layout/layout.kicad_pcb", kicad_pcb)
         .write("layout/layout.kicad_pro", kicad_pro)
-        .snapshot_run("pcb", ["bom", "kicad-bom.zen", "-f", "json"]);
+        .snapshot_run("pcb", ["bom", "kicad-bom.zen", "-f", "json", "--offline"]);
     assert_snapshot!("bom_kicad_fallback_json", output);
 }
 
@@ -409,7 +423,10 @@ fn test_bom_skip_bom_filtering() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/SkipBom.zen", "-f", "json", "--offline"],
+        );
     assert_snapshot!("bom_skip_bom_json", output);
 }
 
@@ -420,7 +437,10 @@ fn test_bom_skip_bom_filtering_table() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/SkipBom.zen", "-f", "table"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/SkipBom.zen", "-f", "table", "--offline"],
+        );
     assert_snapshot!("bom_skip_bom_table", output);
 }
 
@@ -431,7 +451,10 @@ fn test_bom_dnp_components() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/DnpBoard.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/DnpBoard.zen", "-f", "json", "--offline"],
+        );
     assert_snapshot!("bom_dnp_json", output);
 }
 
@@ -442,6 +465,9 @@ fn test_bom_module_dnp_propagation() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
-        .snapshot_run("pcb", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcb",
+            ["bom", "boards/ModuleDnp.zen", "-f", "json", "--offline"],
+        );
     assert_snapshot!("bom_module_dnp_json", output);
 }
