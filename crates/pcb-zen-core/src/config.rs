@@ -158,6 +158,10 @@ pub struct WorkspaceConfigV2 {
     /// Workspace-level dependencies
     #[serde(default)]
     pub dependencies: HashMap<String, DependencySpec>,
+
+    /// Workspace-level package aliases (overrides defaults)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub aliases: HashMap<String, String>,
 }
 
 /// Module configuration (V1 only)
@@ -411,6 +415,7 @@ impl PcbToml {
                     default_board: w.default_board,
                     allow: vec![],
                     dependencies: HashMap::new(),
+                    aliases: HashMap::new(),
                 });
 
                 // Create Package section if it's a module or board
@@ -704,11 +709,17 @@ impl PcbToml {
         }
     }
 
-    /// Get package aliases (V1 only, returns empty map for V2)
+    /// Get package aliases
     pub fn packages(&self) -> HashMap<String, String> {
         match self {
             PcbToml::V1(v1) => v1.packages.clone(),
-            PcbToml::V2(_) => HashMap::new(),
+            PcbToml::V2(v2) => {
+                if let Some(workspace) = &v2.workspace {
+                    workspace.aliases.clone()
+                } else {
+                    HashMap::new()
+                }
+            }
         }
     }
 }

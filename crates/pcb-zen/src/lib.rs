@@ -23,10 +23,11 @@ pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve_v2::{maybe_resolve_v2_workspace, ResolutionResult};
 pub use starlark::errors::EvalSeverity;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EvalConfig {
     pub offline: bool,
     pub use_vendor: bool,
+    pub resolution_result: Option<ResolutionResult>,
 }
 
 impl Default for EvalConfig {
@@ -34,6 +35,7 @@ impl Default for EvalConfig {
         Self {
             offline: false,
             use_vendor: true,
+            resolution_result: None,
         }
     }
 }
@@ -53,11 +55,17 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
         Arc::new(DefaultRemoteFetcher::default())
     };
 
+    let (use_vendor, v2_resolutions) = match cfg.resolution_result {
+        Some(res) => (false, Some(res.package_resolutions)),
+        None => (cfg.use_vendor, None),
+    };
+
     let load_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
         workspace_root.to_path_buf(),
-        cfg.use_vendor,
+        use_vendor,
+        v2_resolutions,
     ));
 
     // Track workspace-level pcb.toml if present for dependency awareness

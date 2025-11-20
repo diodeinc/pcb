@@ -77,6 +77,7 @@ pub fn build(
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
+    resolution_result: Option<pcb_zen::ResolutionResult>,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -87,6 +88,7 @@ pub fn build(
         zen_path,
         pcb_zen::EvalConfig {
             offline,
+            resolution_result,
             ..Default::default()
         },
     );
@@ -155,7 +157,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let v2_result = pcb_zen::maybe_resolve_v2_workspace(&args.paths)?;
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = if let Some(result) = v2_result {
+    let zen_files = if let Some(ref result) = v2_result {
         if result.packages.is_empty() {
             eprintln!("Warning: No packages found in V2 workspace.");
             Vec::new()
@@ -195,6 +197,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
+            v2_result.clone(),
         ) else {
             continue;
         };
