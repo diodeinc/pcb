@@ -53,6 +53,9 @@ md5 = { workspace = true }
 fslock = { workspace = true }
 semver = { workspace = true }
 jiff = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+rayon = { workspace = true }
 
 pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }

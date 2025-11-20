@@ -1,8 +1,9 @@
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
-use pcb_zen_core::config::{find_workspace_root, DependencySpec, PcbToml};
+use pcb_zen_core::config::{find_workspace_root, DependencySpec, LockEntry, Lockfile, PcbToml};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,6 +91,17 @@ fn resolve_dependencies(
 
     println!("V2 Dependency Resolution");
     println!("Workspace root: {}", workspace_root.display());
+
+    // Load existing lockfile if present
+    let lockfile_path = workspace_root.join("pcb.sum");
+    let _existing_lockfile = if lockfile_path.exists() {
+        println!("Loading pcb.sum...");
+        let content = std::fs::read_to_string(&lockfile_path)?;
+        Some(Lockfile::parse(&content)?)
+    } else {
+        println!("No pcb.sum found (will be created)");
+        None
+    };
 
     // Discover member packages
     let member_patterns = v2
@@ -306,6 +318,10 @@ fn resolve_dependencies(
             println!("  {}@v{} ({})", line.path, version, line.family);
         }
     }
+
+    // Phase 3: Fetch full repository contents for the build set
+    println!("\nPhase 3: Fetching full repository contents");
+    fetch_full_contents(workspace_root, &build_set)?;
 
     println!("\nV2 dependency resolution complete");
     std::process::exit(0);
@@ -974,4 +990,241 @@ fn discover_packages(
     }
 
     Ok(packages)
+}
+
+/// Compute content hash for a Git repository at a specific version
+///
+/// Uses git archive to get deterministic tarball, then SHA-256 hash.
+/// Format: h1:<base64-encoded-sha256>
+fn compute_content_hash(module_path: &str, version: &Version) -> Result<String> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use std::process::{Command, Stdio};
+
+    let git_url = format!("https://{}.git", module_path);
+    let version_ref = format!("v{}", version);
+
+    // Use git archive through a temp clone to get deterministic content
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let temp_clone = home
+        .join(".pcb")
+        .join("cache")
+        .join("temp")
+        .join(module_path);
+
+    // Ensure temp clone exists (reuse if present)
+    if !temp_clone.join(".git").exists() {
+        std::fs::create_dir_all(temp_clone.parent().unwrap())?;
+        Command::new("git")
+            .arg("clone")
+            .arg("--bare")
+            .arg("--filter=blob:none")
+            .arg(&git_url)
+            .arg(&temp_clone)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+    }
+
+    // Fetch the specific tag/version
+    Command::new("git")
+        .arg("-C")
+        .arg(&temp_clone)
+        .arg("fetch")
+        .arg("origin")
+        .arg(&version_ref)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+
+    // Create deterministic archive (sorted, no timestamps)
+    let archive_output = Command::new("git")
+        .arg("-C")
+        .arg(&temp_clone)
+        .arg("archive")
+        .arg("--format=tar")
+        .arg(&version_ref)
+        .output()?;
+
+    if !archive_output.status.success() {
+        anyhow::bail!(
+            "Failed to create archive for {}@{}",
+            module_path,
+            version
+        );
+    }
+
+    // Hash the archive
+    let mut hasher = Sha256::new();
+    hasher.update(&archive_output.stdout);
+    let hash = hasher.finalize();
+
+    Ok(format!("h1:{}", STANDARD.encode(hash)))
+}
+
+/// Compute manifest hash for a pcb.toml file
+///
+/// Format: h1:<base64-encoded-sha256>
+fn compute_manifest_hash(manifest_content: &str) -> String {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let mut hasher = Sha256::new();
+    hasher.update(manifest_content.as_bytes());
+    let hash = hasher.finalize();
+
+    format!("h1:{}", STANDARD.encode(hash))
+}
+
+/// Fetch full repository contents for all dependencies in the build set
+fn fetch_full_contents(
+    _workspace_root: &Path,
+    build_set: &HashSet<(ModuleLine, Version)>,
+) -> Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    println!("  Fetching {} dependencies...", build_set.len());
+
+    for (line, version) in build_set {
+        let cache_dir = home
+            .join(".pcb")
+            .join("cache")
+            .join(&line.path)
+            .join(version.to_string());
+
+        // Skip if already fully fetched
+        if cache_dir.join(".full-checkout").exists() {
+            println!("    {}@v{} (cached)", line.path, version);
+            continue;
+        }
+
+        println!("    {}@v{}...", line.path, version);
+
+        let is_asset_package = cache_dir.join(".no-manifest").exists();
+        
+        // Remove Phase 1's partial clone and do fresh full shallow clone
+        if cache_dir.exists() {
+            std::fs::remove_dir_all(&cache_dir)?;
+        }
+        clone_full_shallow(&cache_dir, &line.path, &version.to_string())?;
+
+        // Mark complete and restore markers
+        std::fs::write(cache_dir.join(".full-checkout"), "")?;
+        if is_asset_package {
+            std::fs::write(cache_dir.join(".no-manifest"), "")?;
+        }
+
+        println!("      Fetched {}@v{}", line.path, version);
+    }
+
+    Ok(())
+}
+
+/// Clone full repository at specific version using shallow clone
+fn clone_full_shallow(cache_dir: &Path, module_path: &str, version_str: &str) -> Result<()> {
+    let git_url = format!("https://{}.git", module_path);
+    let is_pseudo_version = version_str.contains("-0.");
+    
+    let cache_str = cache_dir.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
+
+    if is_pseudo_version {
+        // Pseudo-versions: clone repo, fetch commit, checkout
+        let commit = version_str.rsplit('-').next().unwrap();
+        
+        run_git(&["clone", "--no-checkout", &git_url, cache_str])?;
+        run_git_in(&["fetch", "--depth=1", "origin", commit], cache_dir)?;
+        run_git_in(&["checkout", commit], cache_dir)?;
+    } else {
+        // Regular versions: try v-prefix, fallback to no prefix
+        let v_tag = format!("v{}", version_str);
+        if !try_clone_branch(&git_url, &v_tag, cache_str)? 
+            && !try_clone_branch(&git_url, version_str, cache_str)? {
+            anyhow::bail!("Failed to clone {}@{}", module_path, version_str);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_git(args: &[&str]) -> Result<()> {
+    use std::process::Command;
+    let status = Command::new("git")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("git command failed: git {}", args.join(" "));
+    }
+    Ok(())
+}
+
+fn run_git_in(args: &[&str], dir: &Path) -> Result<()> {
+    use std::process::Command;
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("git command failed: git {}", args.join(" "));
+    }
+    Ok(())
+}
+
+fn try_clone_branch(url: &str, branch: &str, dest: &str) -> Result<bool> {
+    use std::process::Command;
+    let status = Command::new("git")
+        .args(["clone", "--depth=1", "--branch", branch, url, dest])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    Ok(status.success())
+}
+
+/// Generate lockfile from build set
+///
+/// Computes content and manifest hashes for all dependencies.
+fn generate_lockfile(build_set: &HashSet<(ModuleLine, Version)>) -> Result<Lockfile> {
+    let mut lockfile = Lockfile::default();
+
+    println!("  Computing hashes for {} dependencies...", build_set.len());
+
+    for (line, version) in build_set {
+        print!("    {}@v{}... ", line.path, version);
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        // Compute content hash
+        let content_hash = compute_content_hash(&line.path, version)?;
+
+        // Fetch manifest to compute manifest hash
+        // Reuse cache from resolution phase
+        let home = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+        let cache_dir = home
+            .join(".pcb")
+            .join("cache")
+            .join(&line.path)
+            .join(version.to_string());
+
+        let manifest_path = cache_dir.join("pcb.toml");
+        let manifest_hash = if manifest_path.exists() {
+            let manifest_content = std::fs::read_to_string(&manifest_path)?;
+            Some(compute_manifest_hash(&manifest_content))
+        } else {
+            // Asset package without pcb.toml
+            None
+        };
+
+        lockfile.insert(LockEntry {
+            module_path: line.path.clone(),
+            version: version.to_string(),
+            content_hash,
+            manifest_hash,
+        });
+
+        println!("done");
+    }
+
+    Ok(lockfile)
 }

@@ -3294,6 +3294,7 @@ dependencies = [
  "anyhow",
  "argfile",
  "ariadne",
+ "base64",
  "clap",
  "debugserver-types",
  "derive_more",
@@ -3320,6 +3321,7 @@ dependencies = [
  "pcb-starlark-lsp",
  "pcb-ui",
  "pcb-zen-core",
+ "rayon",
  "regex",
  "reqwest",
  "semver",
@@ -3327,6 +3329,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "sha2",
  "starlark",
  "starlark_derive",
  "starlark_map",
@@ -3819,6 +3822,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.3",
+]
+
+[[package]]
+name = "rayon"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
 ]
 
 [[package]]
