@@ -182,26 +182,11 @@ Semantic versioning with Minimal Version Selection within semver families. Multi
 
 **Algorithm:**
 
-**Phase 0 - Seed from Workspace:**
-- Discover workspace member packages
-- Collect direct dependencies from all members
-- Resolve branches/revs to pseudo-versions (requires Git operations)
-- Seed MVS state: for each dependency, track highest version seen per semver family
-- Output: `selected[ModuleLine]` map and work queue of modules to fetch
-
-**Phase 1 - Discovery + MVS Fixed Point:**
-- Process work queue: fetch manifest (pcb.toml) for each module at its selected version
-- Use sparse Git checkout (only pcb.toml downloaded for efficiency)
-- Add transitive dependencies to MVS state
-- Monotonically upgrade versions (never downgrade)
-- Repeat until work queue empty (fixed point reached)
-- Property: Versions only increase, no backtracking
-
-**Phase 2 - Build Closure:**
-- Phase 1 may fetch obsolete versions during iteration
-- DFS from workspace roots using **only** final selected versions
-- Computes actual build set (filters out superseded manifests)
-- Output: Final set of dependencies needed for build
+1. **Seed:** Discover members, preseed from lockfile, resolve branches/revs to pseudo-versions, initialize MVS state
+2. **Discovery:** Iteratively fetch manifests (blob-filtered clones), add transitive deps, monotonically upgrade versions until fixed point
+3. **Build Closure:** DFS from workspace roots using final selected versions (filters Phase 1 obsolete fetches)
+4. **Fetch:** Download full repos (shallow clones), compute hashes, create `.pcbcache` markers
+5. **Lock:** Merge hashes into `pcb.sum` (accumulate, never delete)
 
 **Precedence Order:**
 For each module path, version selection follows:
@@ -375,31 +360,19 @@ members = ["boards/*"]
 
 ### Canonical Package Format
 
-Deterministic USTAR tarball for cryptographic verification:
-- Regular files and directories only (no symlinks, devices)
-- Relative paths, forward slashes, lexicographic order
-- Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
-- File mode: 0644, directory mode: 0755
-- PAX extensions for long paths (KiCad footprints exceed POSIX tar limits)
-- End with two 512-byte zero blocks
+Deterministic GNU tar with normalized metadata (mtime=0, uid=0, gid=0, mode 0644/0755), lexicographic ordering, PAX extensions for long paths. Filters `.git` and internal markers (`.pcbcache`, `.no-manifest`). Respects `.gitignore`. Streamed directly to BLAKE3 hasher (no buffering). Same commit produces identical hash regardless of remote.
 
-Generation: checkout at tag, extract package path if nested, filter `.git` and ignored files, create normalized tarball. BLAKE3 hash of tarball is content identifier. Identical package content produces identical hash across platforms. BLAKE3 chosen for superior performance (parallel hashing, SIMD) and security over SHA-256.
+Debug: `pcb package <dir> [-o output.tar]`
 
 ### Lockfile
 
-`pcb.sum` records cryptographic hashes and resolved pseudo-versions:
+`pcb.sum` uses Go's format (accumulate, never auto-delete):
 ```
-github.com/diodeinc/stdlib v0.3.2 h1:abc123...
-github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:def456...
-github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0 h1:ghi789...
-github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0/pcb.toml h1:jkl012...
-gitlab.com/kicad/libraries/kicad-symbols v7.0.0 h1:xyz789...
-github.com/diodeinc/stdlib v0.3.15-0.20251120004415-137e2dcabc28 h1:pseudo123...
+github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
+github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
 ```
 
-Two lines per standard dependency: full content hash and manifest-only hash. Asset packages (no `pcb.toml`) have only the content hash line. Pseudo-versions from branches/revs are stored with their resolved commit hashes for reproducibility. Manifest hash enables lightweight verification - fetch manifests, verify hashes, reconstruct graph, check if lockfile valid before downloading full content.
-
-Generated on first build when absent. Updated automatically when dependencies change. Hash mismatch fails build with security warning. Must be committed to version control. `pcb.sum` is per-workspace and resides at the workspace root.
+Two lines per dependency: content hash (canonical tar) and manifest hash (pcb.toml). Asset packages get content hash only. Pseudo-versions include full commit hash. Cache markers (`~/.pcb/cache/{path}/{version}/.pcbcache`) avoid re-hashing. Generated on first build, merged on updates, verified on subsequent builds. Commit to version control.
 
 ### Vendoring
 
@@ -759,81 +732,24 @@ Build includes both `stdlib@0.3.x` and `stdlib@1.0.x`. WV0002 uses new API, othe
 
 ### Resolution Phase
 
-Three-phase algorithm runs before evaluation:
+1. **Seed:** Discover members → preseed from lockfile → resolve branches/revs → initialize MVS
+2. **Discovery:** Fetch manifests (blob-filtered) → add transitive deps → upgrade versions → repeat until fixed point
+3. **Build Closure:** DFS from workspace roots using final versions (filter obsolete)
+4. **Fetch:** Download full repos (shallow) → hash → cache markers
+5. **Lock:** Merge hashes into pcb.sum
 
-**Phase 0 - Seed:**
-1. Discover workspace member packages
-2. Collect all direct dependencies
-3. Resolve branches/revs to pseudo-versions via `git ls-remote`
-4. Initialize MVS state with workspace and member requirements
-5. Apply workspace `[patch]` overrides during seeding
-
-**Phase 1 - Discovery (Fixed Point):**
-1. Pop module from work queue
-2. Check if already cached
-3. Fetch manifest (sparse checkout: pcb.toml only)
-4. Add transitive dependencies to MVS state
-5. Monotonically upgrade versions (never downgrade)
-6. Repeat until work queue empty
-7. Property: Each module line upgraded at most once per new requirement
-
-**Phase 2 - Build Closure:**
-1. DFS from workspace roots using final selected versions only
-2. Filters out manifests from obsolete versions fetched during Phase 1
-3. Produces minimal set of dependencies actually needed
-
-**Properties:**
-- Deterministic (same workspace + Git state = same result)
-- Monotonic (versions only increase)
-- No backtracking or SAT solving
-- Patches applied during graph construction (patched deps participate in MVS)
+Deterministic, monotonic, no backtracking. Patches participate in MVS. Incremental via lockfile/cache.
 
 ### Git Operations
 
-**Cache structure:**
-```
-~/.pcb/cache/
-  github.com/diodeinc/stdlib/
-    0.3.2/
-      .git/
-      pcb.toml              # Sparse checkout (manifest only)
-    0.3.15-0.20251120004415-137e2dcabc28/
-      .git/
-      pcb.toml              # Pseudo-version from branch
-      .no-manifest          # Sentinel for V1/asset packages
-  temp/
-    github.com/diodeinc/stdlib/
-      # Bare clone for pseudo-version generation (git describe)
-```
+Cache: `~/.pcb/cache/{path}/{version}/` contains working tree + `.pcbcache` (hashes). Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
 
-**Sparse Checkout Implementation:**
-```bash
-git init
-git remote add origin <url>
-git config core.sparseCheckout true
-echo "pcb.toml" > .git/info/sparse-checkout
-git fetch --depth=1 origin <tag>
-git checkout FETCH_HEAD
-```
+**Manifest fetch:** `git clone --filter=blob:none --depth=1` (metadata + pcb.toml only)  
+**Full fetch:** Fresh shallow clone  
+**Pseudo-versions:** `git ls-remote` → `git describe` → `v<base+1>-0.<timestamp>-<commit>` (40-char hash)  
+**Auth:** HTTPS with SSH fallback
 
-**Pseudo-Version Generation:**
-```bash
-# Resolve branch to commit
-git ls-remote <url> refs/heads/<branch>
-
-# Find latest tag reachable from commit
-git describe --tags --abbrev=0 <commit>
-
-# Format: v<base+1>-0.<timestamp>-<commit_short>
-# Example: v0.3.15-0.20251120004415-137e2dcabc28
-```
-
-**Optimizations:**
-- Sparse checkout: only `pcb.toml` fetched (not full repo)
-- Shallow clones: `--depth=1` for minimal transfer
-- Sentinel markers: `.no-manifest` prevents re-fetching asset packages/V1 manifests
-- Shared bare repos: `temp/` clones reused for all branches/revs of same module
-- Manifest cache: Phase 1 skips already-fetched (line, version) pairs
+Optimizations: blob-filtered clones, .pcbcache markers (skip re-hash), lockfile preseeding (skip git ls-remote), manifest caching.
 
 ### Load Resolution
 

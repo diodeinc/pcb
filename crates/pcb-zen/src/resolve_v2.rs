@@ -1017,7 +1017,7 @@ fn discover_packages(
 /// - File mode: 0644, directory mode: 0755
 /// - End with two 512-byte zero blocks
 /// - Respect .gitignore and filter internal marker files
-fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
+pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
     use std::fs;
     use tar::{Builder, Header};
 
@@ -1034,6 +1034,14 @@ fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> 
         .git_ignore(true) // Respect .gitignore
         .git_global(false) // Don't use global gitignore
         .git_exclude(true) // Respect .git/info/exclude
+        .filter_entry(|entry| {
+            // Filter out .git directory entirely (don't descend into it)
+            if let Some(file_name) = entry.file_name().to_str() {
+                file_name != ".git"
+            } else {
+                true
+            }
+        })
         .build()
     {
         let entry = result?;

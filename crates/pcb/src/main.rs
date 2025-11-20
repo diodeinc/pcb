@@ -19,6 +19,7 @@ mod lsp;
 mod mcp;
 mod migrate;
 mod open;
+mod package;
 mod release;
 mod self_update;
 mod sim;
@@ -119,6 +120,9 @@ enum Commands {
     /// IPC-2581 parser and inspection tool
     Ipc2581(ipc2581::Ipc2581Args),
 
+    /// Create canonical tar package and compute hash (debug tool)
+    Package(package::PackageArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -166,6 +170,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Sim(args) => sim::execute(args),
         Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
+        Commands::Package(args) => package::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");
