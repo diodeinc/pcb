@@ -6,7 +6,7 @@ use pcb_zen_core::config::{
 };
 use pcb_zen_core::{DefaultFileProvider, FileProvider, LoadSpec};
 use semver::Version;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
@@ -45,7 +45,8 @@ struct UnresolvedDep {
 pub struct ResolutionResult {
     pub workspace_root: PathBuf,
     /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
-    pub package_resolutions: HashMap<PathBuf, HashMap<String, PathBuf>>,
+    /// Uses BTreeMap for deterministic ordering (enables longest prefix matching)
+    pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     pub packages: Vec<PathBuf>,
 }
 
@@ -251,7 +252,9 @@ fn resolve_dependencies(
             // Skip local path dependencies (handled separately)
             if let DependencySpec::Detailed(detail) = &dep.spec {
                 if let Some(path_str) = &detail.path {
-                    let abs_path = workspace_root.join(path_str);
+                    // Resolve path relative to this package's directory, not workspace root
+                    let package_dir = pcb_toml_path.parent().unwrap();
+                    let abs_path = package_dir.join(path_str).canonicalize()?;
                     println!("      - {} → {} (local path)", dep.url, path_str);
                     local_path_deps.insert(dep.url.clone(), abs_path);
                     continue;
@@ -413,7 +416,7 @@ fn build_resolution_map(
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
     local_path_deps: &HashMap<String, PathBuf>,
     workspace_deps: &HashMap<String, DependencySpec>,
-) -> Result<HashMap<PathBuf, HashMap<String, PathBuf>>> {
+) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Helper to compute absolute path for a module line
     let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
         if let Some(patch) = patches.get(&line.path) {
@@ -439,10 +442,10 @@ fn build_resolution_map(
 
     // Resolve dependency -> path
     let resolve = |url: &str, spec: &DependencySpec| -> Option<PathBuf> {
-        // Local path
+        // Local path - use precomputed path from local_path_deps
         if let DependencySpec::Detailed(d) = spec {
-            if let Some(p) = &d.path {
-                return Some(workspace_root.join(p));
+            if d.path.is_some() {
+                return local_path_deps.get(url).cloned();
             }
         }
 
@@ -482,11 +485,11 @@ fn build_resolution_map(
             .or_else(|| local_path_deps.get(&url).cloned())
     };
 
-    // Build deps map for a package
+    // Build deps map for a package (BTreeMap for deterministic ordering)
     let build_map = |pkg_deps: &HashMap<String, DependencySpec>,
                      ws_aliases: Option<&HashMap<String, String>>|
-     -> HashMap<String, PathBuf> {
-        let mut map = HashMap::new();
+     -> BTreeMap<String, PathBuf> {
+        let mut map = BTreeMap::new();
 
         // Aliases
         if let Some(aliases) = ws_aliases {
@@ -539,10 +542,10 @@ fn build_resolution_map(
         }
     }
 
-    // Transitive deps
+    // Transitive deps: each remote package gets its own resolution map
+    // This ensures MVS-selected versions are used for all transitive loads
     for (line, version) in selected {
         let abs_path = get_abs_path(line, version);
-
         if let Some(deps) = manifest_cache.get(&(line.clone(), version.clone())) {
             results.insert(abs_path, build_map(deps, None));
         }

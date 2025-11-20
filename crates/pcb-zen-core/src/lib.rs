@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
@@ -478,9 +478,10 @@ pub struct CoreLoadResolver {
     remote_fetcher: Arc<dyn RemoteFetcher>,
     workspace_root: PathBuf,
     use_vendor_dir: bool,
-    /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
-    /// If set, this resolver operates in V2 mode.
-    v2_package_resolutions: Option<HashMap<PathBuf, HashMap<String, PathBuf>>>,
+    /// V2 resolution map: Package Root -> Import URL -> Resolved Path
+    /// Contains workspace packages AND transitive remote deps
+    /// BTreeMap enables longest prefix matching for nested package paths
+    v2_package_resolutions: Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>>,
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
@@ -495,7 +496,7 @@ impl CoreLoadResolver {
         remote_fetcher: Arc<dyn RemoteFetcher>,
         workspace_root: PathBuf,
         use_vendor_dir: bool,
-        v2_package_resolutions: Option<HashMap<PathBuf, HashMap<String, PathBuf>>>,
+        v2_package_resolutions: Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>>,
     ) -> Self {
         // Canonicalize workspace root once to avoid path comparison issues
         let workspace_root = file_provider
@@ -694,7 +695,7 @@ impl CoreLoadResolver {
             .insert(resolved_path, spec);
     }
 
-    /// Handle remote relative path resolution
+    /// Handle remote relative path resolution (V1 only)
     /// Pushes resolved specs directly to the context's spec history if applicable
     fn handle_remote_relative_paths(&self, context: &mut ResolveContext) -> anyhow::Result<()> {
         // Only proceed if the current file is actually from a remote spec
@@ -748,7 +749,7 @@ impl CoreLoadResolver {
     fn find_package_root_for_file(
         &self,
         file: &Path,
-        package_resolutions: &HashMap<PathBuf, HashMap<String, PathBuf>>,
+        package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     ) -> Option<PathBuf> {
         let mut current = file.parent();
         while let Some(dir) = current {
@@ -760,81 +761,97 @@ impl CoreLoadResolver {
         None
     }
 
-    /// Try to resolve a remote spec using V2 resolution logic
-    fn try_resolve_v2(&self, context: &ResolveContext) -> Result<Option<PathBuf>, anyhow::Error> {
-        let Some(package_resolutions) = &self.v2_package_resolutions else {
-            // Not in V2 mode, let caller fall back to V1
-            return Ok(None);
-        };
-
+    /// V2 remote resolution: longest prefix match against package's declared deps
+    fn try_resolve_v2_workspace(
+        &self,
+        context: &ResolveContext,
+        package_root: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
         let spec = context.latest_spec();
-        // Only handle specs that have a package URL (Github, Gitlab, Package)
-        let Some(url) = spec.package_url() else {
-            // Non-remote specs are not handled here
-            return Ok(None);
+
+        // Build full URL from spec
+        let (base, path) = match spec {
+            LoadSpec::Github {
+                user, repo, path, ..
+            } => (format!("github.com/{}/{}", user, repo), path),
+            LoadSpec::Gitlab {
+                project_path, path, ..
+            } => (format!("gitlab.com/{}", project_path), path),
+            LoadSpec::Package { package, path, .. } => (package.clone(), path),
+            _ => unreachable!(),
         };
 
-        // 1. Find the package root for the current file (Who is asking?)
-        let Some(package_root) =
-            self.find_package_root_for_file(&context.current_file, package_resolutions)
-        else {
-            // In V2 mode, this is an error: remote deps must come from known packages
-            anyhow::bail!(
-                "V2 Resolution Error: File '{}' is not part of any V2 package in this workspace.\n  \
-                 Remote dependency '{}' can only be used from V2 packages with pcb.toml.",
-                context.current_file.display(),
-                url,
-            );
-        };
-
-        let resolved_map = package_resolutions
-            .get(&package_root)
-            .expect("package_resolutions map is out of sync");
-
-        // 2. Look up the dependency in that package's resolution map
-        if let Some(root_path) = resolved_map.get(&url) {
-            let internal_path = spec.path();
-            let full_path = root_path.join(internal_path);
-
-            if self.file_provider.exists(&full_path) {
-                self.insert_load_spec(full_path.clone(), spec.clone());
-                return Ok(Some(full_path));
-            } else {
-                anyhow::bail!(
-                    "V2 Resolution Error: File not found in package {}: {}\n  Package root: {}",
-                    url,
-                    internal_path.display(),
-                    root_path.display()
-                );
+        let mut full_url = base;
+        for component in path.components() {
+            if let std::path::Component::Normal(part) = component {
+                full_url.push('/');
+                full_url.push_str(&part.to_string_lossy());
             }
         }
 
-        // 3. Dependency not found in map -> Error (Strict V2)
-        anyhow::bail!(
-            "V2 Resolution Error: Dependency '{}' is not declared in [dependencies] of package at '{}'.\n  Add it to pcb.toml.",
-            url,
-            package_root.display()
-        );
+        let resolved_map = self
+            .v2_package_resolutions
+            .as_ref()
+            .unwrap()
+            .get(package_root)
+            .expect("package_resolutions out of sync");
+
+        // Longest prefix match
+        let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
+            full_url.starts_with(dep_url.as_str())
+                && (full_url.len() == dep_url.len()
+                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
+        });
+
+        let Some((matched_dep, root_path)) = best_match else {
+            anyhow::bail!(
+                "Dependency '{}' not declared in [dependencies]",
+                full_url.split('/').take(3).collect::<Vec<_>>().join("/")
+            );
+        };
+
+        let relative_path = full_url
+            .strip_prefix(matched_dep.as_str())
+            .and_then(|s| s.strip_prefix('/'))
+            .unwrap_or("");
+
+        let full_path = if relative_path.is_empty() {
+            root_path.clone()
+        } else {
+            root_path.join(relative_path)
+        };
+
+        if !self.file_provider.exists(&full_path) {
+            anyhow::bail!("File not found: {}", relative_path);
+        }
+
+        self.insert_load_spec(full_path.clone(), spec.clone());
+        Ok(full_path)
     }
 
-    /// Resolve remote specs (Package/Github/Gitlab)
-    fn resolve_remote_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
-        let resolved_spec = context.latest_spec().clone();
+    /// V2 external resolution: fetch remote without package boundary checks
+    fn try_resolve_v2_external(&self, context: &ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        let spec = context.latest_spec();
 
-        // If we're in V2 mode, resolution must come from the precomputed map.
-        if self.v2_package_resolutions.is_some() {
-            if let Some(path) = self.try_resolve_v2(context)? {
-                return Ok(path);
+        if self.use_vendor_dir {
+            if let Ok(vendor_path) = self.try_resolve_from_vendor(spec) {
+                self.insert_load_spec(vendor_path.clone(), spec.clone());
+                return Ok(vendor_path);
             }
-
-            // Defensive: in V2 mode, try_resolve_v2 should either return Some or error.
-            anyhow::bail!(
-                "V2 Resolution Error: failed to resolve {:?} from precomputed dependency graph",
-                resolved_spec
-            );
         }
 
-        // Legacy (V1) resolution path:
+        let resolved_path = self
+            .remote_fetcher
+            .fetch_remote(spec, &self.workspace_root)?;
+        let resolved_path = context.file_provider.canonicalize(&resolved_path)?;
+
+        self.insert_load_spec(resolved_path.clone(), spec.clone());
+        Ok(resolved_path)
+    }
+
+    /// Resolve remote specs - V1 only (V2 uses try_resolve_v2 directly)
+    fn resolve_remote_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
+        let resolved_spec = context.latest_spec().clone();
 
         // First try vendor directory if available
         if self.use_vendor_dir {
@@ -854,7 +871,7 @@ impl CoreLoadResolver {
         Ok(resolved_path)
     }
 
-    /// Resolve local specs (Path/WorkspacePath)
+    /// Resolve local specs - V1 logic (workspace-relative and absolute paths allowed)
     fn resolve_local_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
         let mut resolved_spec = context.latest_spec().clone();
         let effective_workspace_root = self.get_effective_workspace_root(context)?;
@@ -870,7 +887,6 @@ impl CoreLoadResolver {
                 } else if path.is_absolute() {
                     path.clone()
                 } else {
-                    // Regular relative paths are resolved from current file's directory
                     let current_dir = context.current_file.parent().unwrap();
                     let path = &current_dir.join(&*path);
                     context.file_provider.canonicalize(path)?
@@ -880,9 +896,90 @@ impl CoreLoadResolver {
             _ => unreachable!(),
         };
 
-        // Verify the path exists
         let resolved_path = resolved_spec.path().clone();
         self.insert_load_spec(resolved_path.clone(), resolved_spec);
+        Ok(resolved_path)
+    }
+
+    /// V2 workspace local resolution: strict hermetic boundaries
+    fn resolve_local_spec_v2(
+        &self,
+        context: &mut ResolveContext,
+        resolved_spec: &mut LoadSpec,
+        pkg_root: PathBuf,
+    ) -> anyhow::Result<PathBuf> {
+        let LoadSpec::Path {
+            path,
+            workspace_relative,
+            ..
+        } = resolved_spec
+        else {
+            unreachable!()
+        };
+
+        if *workspace_relative {
+            anyhow::bail!("Workspace-relative paths not allowed in V2");
+        }
+
+        if path.is_absolute() {
+            anyhow::bail!("Absolute paths not allowed in V2");
+        }
+
+        let current_dir = context.current_file.parent().unwrap();
+        let candidate = normalize_path(&current_dir.join(&*path));
+
+        if !candidate.starts_with(&pkg_root) {
+            anyhow::bail!(
+                "Import '{}' escapes package boundary at {}",
+                path.display(),
+                pkg_root.display()
+            );
+        }
+
+        *path = candidate.clone();
+        self.insert_load_spec(candidate.clone(), resolved_spec.clone());
+        Ok(candidate)
+    }
+
+    /// V2 resolution: MVS versions for all packages, boundaries only for workspace
+    fn resolve_v2(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        self.resolve_alias_spec(context)?;
+
+        let pkg_root = self
+            .v2_package_resolutions
+            .as_ref()
+            .and_then(|m| self.find_package_root_for_file(&context.current_file, m));
+        let in_workspace = pkg_root
+            .as_ref()
+            .is_some_and(|r| r.starts_with(&self.workspace_root));
+
+        let resolved_path = match context.latest_spec() {
+            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } | LoadSpec::Package { .. } => {
+                match pkg_root {
+                    Some(root) => self.try_resolve_v2_workspace(context, &root)?,
+                    None => self.try_resolve_v2_external(context)?,
+                }
+            }
+            LoadSpec::Path { .. } if in_workspace => {
+                let mut spec = context.latest_spec().clone();
+                self.resolve_local_spec_v2(context, &mut spec, pkg_root.unwrap())?
+            }
+            LoadSpec::Path { .. } => self.resolve_local_spec(context)?,
+        };
+
+        if !context.file_provider.exists(&resolved_path)
+            && !context.original_spec().allow_not_exist()
+        {
+            return Err(anyhow::anyhow!(
+                "File not found: {}",
+                resolved_path.display()
+            ));
+        }
+
+        if context.file_provider.exists(&resolved_path) {
+            validate_path_case(context.file_provider, &resolved_path)?;
+        }
+
         Ok(resolved_path)
     }
 }
@@ -893,6 +990,12 @@ impl LoadResolver for CoreLoadResolver {
     }
 
     fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // V2 mode: use simplified, separate resolution path
+        if self.v2_package_resolutions.is_some() {
+            return self.resolve_v2(context);
+        }
+
+        // V1 mode: legacy resolution with remote relative paths and workspace complexity
         // Handle remote relative paths
         self.handle_remote_relative_paths(context)?;
         // Resolve aliases

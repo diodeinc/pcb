@@ -12,10 +12,10 @@ Board(
 # - Add polyfuse on VBUS (0.75A): Protects USB host if target shorts 3.3V rail
 # - Add ferrite bead for analog 3.3V rail: Reduces digital switching noise on sensitive circuits
 
-RP2040 = Module("../../modules/RP2040.zen")
-USB4105 = Module("../../modules/USB4105.zen")
-TLV758P = Module("../../modules/TLV758P.zen")
-Led = Module("../../modules/Led.zen")
+RP2040 = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/RP2040.zen")
+USB4105 = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/USB4105.zen")
+TLV758P = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/TLV758P.zen")
+Led = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/Led.zen")
 
 PinHeader = Module("@stdlib/kicad/PinHeader.zen")
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
@@ -127,7 +127,7 @@ Component(
     name = "LOGO",
     description = "Diode Logo",
     prefix = "TP",
-    footprint = File("../../components/logo/eda/logo.kicad_mod"),
+    footprint = File("github.com/diodeinc/pcb/test-workspaces/packaging-v2/components/logo/eda/logo.kicad_mod"),
     pin_defs = {},
     pins = {},
     dnp = True,
