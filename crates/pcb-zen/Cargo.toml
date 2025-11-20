@@ -51,6 +51,7 @@ zip = { workspace = true }
 tempfile = { workspace = true }
 md5 = { workspace = true }
 fslock = { workspace = true }
+semver = { workspace = true }
 
 pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }

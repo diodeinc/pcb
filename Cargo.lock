@@ -3321,6 +3321,7 @@ dependencies = [
  "pcb-zen-core",
  "regex",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
