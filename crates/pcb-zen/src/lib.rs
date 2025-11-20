@@ -4,7 +4,7 @@ pub mod diagnostics;
 pub mod git;
 pub mod load;
 pub mod lsp;
-mod resolve_v2;
+pub mod resolve_v2;
 pub mod suppression;
 
 use std::path::Path;

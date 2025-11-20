@@ -1,8 +1,8 @@
-github.com/akhilles/stdlib 0.3.16-0.20251120004415-137e2dcabc2897bc5d8e921c598cace941f29b52 h1:RoJTQJCY4PCs3dnNM4+7jU2qcK2vU4XfAT9EZiqBiag=
+github.com/akhilles/stdlib 0.3.16-0.20251120004415-137e2dcabc2897bc5d8e921c598cace941f29b52 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
 github.com/akhilles/stdlib 0.3.16-0.20251120004415-137e2dcabc2897bc5d8e921c598cace941f29b52/pcb.toml h1:a0KqGdV6NpSTeBNWKePT/TPU70/pHlp0Dd0ObZ9L7jg=
-github.com/diodeinc/registry 0.3.12 h1:3fcXuf9jJF6rgQbWW1+bvuBAX2s5AIN1A72el/w2Eek=
+github.com/diodeinc/registry 0.3.12 h1:9j1jrOVkOhP8riL0Omf4ykShEQ/nQyTzzS+sVIKQ5b4=
 github.com/diodeinc/registry 0.3.12/pcb.toml h1:SpCtujJnRgyNq0n8ht4oIM5cNaymO+5Nsk2P28sXFG0=
-github.com/diodeinc/stdlib 0.3.15-0.20251120004415-137e2dcabc2897bc5d8e921c598cace941f29b52 h1:dmg5pjWKIrwkZLyB3/LliBkItRpAhgJOht+6dhgg3e0=
+github.com/diodeinc/stdlib 0.3.15-0.20251120004415-137e2dcabc2897bc5d8e921c598cace941f29b52 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
 github.com/diodeinc/stdlib 0.3.15-0.20251120004415-137e2dcabc2897bc5d8e921c598cace941f29b52/pcb.toml h1:a0KqGdV6NpSTeBNWKePT/TPU70/pHlp0Dd0ObZ9L7jg=
-gitlab.com/kicad/libraries/kicad-footprints 9.0.3 h1:gKDZmpYkrl6wrPkCSs7+8OTJggUOJf3PkVOsjOcFA0Q=
-gitlab.com/kicad/libraries/kicad-symbols 9.0.0 h1:KJAOM134lXKAxhmFa91HMe3OeBirIXSC9fYFSaad0fo=
+gitlab.com/kicad/libraries/kicad-footprints 9.0.3 h1:wkl/K8JzwqbJeLmV2mJ05nsUjKr2pbJp1j3nmKOpJaE=
+gitlab.com/kicad/libraries/kicad-symbols 9.0.0 h1:WTneHdd1tsezQJXIE+TTwHOGZEmZ97bqJlrtM7y1EOs=
