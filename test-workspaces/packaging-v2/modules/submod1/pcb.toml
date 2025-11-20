@@ -4,4 +4,7 @@ version = "2"
 pcb-version = "0.2"
 
 [dependencies]
-"github.com/diodeinc/stdlib" = "0.3.11"
+"github.com/diodeinc/stdlib" = { branch = "v2" }
+"github.com/diodeinc/registry" = { version = "0.3.12" }
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

@@ -3,35 +3,39 @@ use globset::{Glob, GlobSetBuilder};
 use pcb_zen_core::config::{find_workspace_root, DependencySpec, PcbToml};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
+
+/// Module line identifier for MVS grouping
+///
+/// A module line represents a semver family:
+/// - For v0.x: family is "v0.<minor>" (e.g., v0.2, v0.3 are different families)
+/// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ModuleLine {
+    path: String,   // e.g., "github.com/diodeinc/stdlib"
+    family: String, // e.g., "v0.3" or "v1"
+}
+
+impl ModuleLine {
+    fn new(path: String, version: &Version) -> Self {
+        let family = if version.major == 0 {
+            format!("v0.{}", version.minor)
+        } else {
+            format!("v{}", version.major)
+        };
+
+        ModuleLine { path, family }
+    }
+}
 
 /// Dependency entry before resolution
 #[derive(Debug, Clone)]
 struct UnresolvedDep {
     url: String,
     spec: DependencySpec,
-    source: String, // For error messages
-}
-
-/// Resolved dependency with concrete version
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct ResolvedDep {
-    url: String,
-    version: Version,
-    source: DependencySource,
-}
-
-#[derive(Debug, Clone)]
-enum DependencySource {
-    Version(Version),
-    Branch(String),
-    Revision(String),
-    Path(PathBuf),
-    Patch(PathBuf),
 }
 
 /// Check if the input paths are in a V2 workspace and run dependency resolution if needed
@@ -74,8 +78,18 @@ fn resolve_dependencies(
         unreachable!("resolve_dependencies called on non-V2 config");
     };
 
-    println!("🔍 V2 Dependency Resolution");
-    println!("  Workspace root: {}", workspace_root.display());
+    // Validate that patches are only at workspace root
+    if !v2.patch.is_empty() && v2.workspace.is_none() {
+        anyhow::bail!(
+            "[patch] section is only allowed at workspace root\n  \
+            Found in non-workspace pcb.toml at: {}\n  \
+            Move [patch] to workspace root or remove it.",
+            workspace_root.join("pcb.toml").display()
+        );
+    }
+
+    println!("V2 Dependency Resolution");
+    println!("Workspace root: {}", workspace_root.display());
 
     // Discover member packages
     let member_patterns = v2
@@ -87,16 +101,16 @@ fn resolve_dependencies(
 
     // Display workspace type
     if v2.workspace.is_some() {
-        println!("  Type: Explicit workspace");
+        println!("Type: Explicit workspace");
         if !member_patterns.is_empty() {
-            println!("  Member patterns: {:?}", member_patterns);
+            println!("Member patterns: {:?}", member_patterns);
         }
     } else {
-        println!("  Type: Standalone package (implicit workspace)");
+        println!("Type: Standalone package (implicit workspace)");
     }
 
     // Display discovered packages
-    println!("\n📦 Discovered {} package(s):", packages.len());
+    println!("\nDiscovered {} package(s):", packages.len());
     for (pcb_toml_path, config) in &packages {
         let PcbToml::V2(v2) = config else { continue };
 
@@ -127,9 +141,17 @@ fn resolve_dependencies(
 
     let patches = v2.patch.clone();
 
+    // MVS state
+    let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
+    let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
+    let mut manifest_cache: HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>> =
+        HashMap::new();
+
+    println!("\nPhase 0: Seed from workspace dependencies");
+    println!();
+
     // Resolve dependencies per-package
-    println!("\n🔗 Per-Package Dependency Resolution:");
-    let mut all_package_deps = Vec::new();
+    println!("Per-Package Dependency Resolution:");
 
     for (pcb_toml_path, config) in &packages {
         let PcbToml::V2(v2) = config else { continue };
@@ -139,6 +161,18 @@ fn resolve_dependencies(
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "unknown".into());
+
+        // Validate no patches in member packages
+        if !v2.patch.is_empty() {
+            anyhow::bail!(
+                "[patch] section is only allowed at workspace root\n  \
+                Found in package: {}\n  \
+                Location: {}\n  \
+                Move [patch] to workspace root.",
+                package_name,
+                pcb_toml_path.display()
+            );
+        }
 
         println!("\n  Package: {}", package_name);
 
@@ -155,68 +189,125 @@ fn resolve_dependencies(
             continue;
         }
 
-        println!(
-            "    Collected {} unresolved dependencies",
-            package_deps.len()
-        );
+        println!("    Seeding {} dependencies into MVS:", package_deps.len());
+
+        // Seed MVS state from this package's dependencies
         for dep in &package_deps {
-            println!("      - {}", dep.url);
-        }
-
-        // Apply MVS per-package
-        let resolved = apply_mvs(&package_deps)?;
-
-        println!("    Resolved {} dependencies:", resolved.len());
-        for dep in &resolved {
-            match &dep.source {
-                DependencySource::Version(v) => {
-                    println!("      - {}@v{}", dep.url, v);
+            // Skip local path dependencies (handled separately)
+            if let DependencySpec::Detailed(detail) = &dep.spec {
+                if detail.path.is_some() {
+                    println!(
+                        "      - {} → {} (local path)",
+                        dep.url,
+                        detail.path.as_ref().unwrap()
+                    );
+                    continue;
                 }
-                DependencySource::Branch(b) => {
-                    println!("      - {}@{}", dep.url, b);
+            }
+
+            // Resolve to concrete version (handles branches/revs)
+            match resolve_to_version(workspace_root, &dep.url, &dep.spec) {
+                Ok(version) => {
+                    println!("      - {}@v{}", dep.url, version);
+                    add_requirement(
+                        dep.url.clone(),
+                        version,
+                        &mut selected,
+                        &mut work_queue,
+                        &patches,
+                    );
                 }
-                DependencySource::Revision(r) => {
-                    println!("      - {}@{}", dep.url, &r[..8.min(r.len())]);
+                Err(e) => {
+                    eprintln!("      Warning: Failed to resolve {}: {}", dep.url, e);
                 }
-                DependencySource::Path(p) => {
-                    println!("      - {} → {}", dep.url, p.display());
-                }
-                DependencySource::Patch(_) => unreachable!("Patches applied later"),
-            }
-        }
-
-        all_package_deps.extend(resolved);
-    }
-
-    // Merge all package dependency graphs (union)
-    let merged_deps = merge_dependency_graphs(all_package_deps);
-
-    // Apply patches at workspace level
-    let final_deps = apply_patches(merged_deps, &patches);
-
-    println!("\n✨ Workspace Dependency Graph (merged):");
-    println!("  Total unique dependencies: {}", final_deps.len());
-    for dep in &final_deps {
-        match &dep.source {
-            DependencySource::Version(v) => {
-                println!("  - {}@v{}", dep.url, v);
-            }
-            DependencySource::Branch(b) => {
-                println!("  - {}@{}", dep.url, b);
-            }
-            DependencySource::Revision(r) => {
-                println!("  - {}@{}", dep.url, &r[..8.min(r.len())]);
-            }
-            DependencySource::Path(p) => {
-                println!("  - {} → {}", dep.url, p.display());
-            }
-            DependencySource::Patch(p) => {
-                println!("  - {} → {} (patched)", dep.url, p.display());
             }
         }
     }
 
-    println!("\n✅ V2 dependency resolution complete (stub - exiting for now)");
+    println!("\nPhase 1: Discovery + MVS fixed point");
+    println!("Initial work queue: {} modules", work_queue.len());
+    println!();
+
+    // Phase 1: Iteratively fetch manifests and discover transitive dependencies
+    let mut iterations = 0;
+    while let Some(line) = work_queue.pop_front() {
+        iterations += 1;
+        let version = selected[&line].clone();
+
+        // Check if we already fetched this exact version
+        if manifest_cache.contains_key(&(line.clone(), version.clone())) {
+            continue;
+        }
+
+        println!(
+            "  [{}] Fetching {}@v{} ({})",
+            iterations, line.path, version, line.family
+        );
+
+        // Fetch the manifest for this version (patches applied inside)
+        match fetch_manifest(workspace_root, &line.path, &version, &patches) {
+            Ok(deps) => {
+                if !deps.is_empty() {
+                    println!("      Found {} dependencies", deps.len());
+                }
+
+                // Cache the manifest
+                manifest_cache.insert((line.clone(), version.clone()), deps.clone());
+
+                // Add requirements from this manifest
+                for (dep_path, dep_spec) in &deps {
+                    // Skip local path dependencies
+                    if is_non_version_dep(dep_spec) {
+                        continue;
+                    }
+
+                    match resolve_to_version(workspace_root, dep_path, dep_spec) {
+                        Ok(dep_version) => {
+                            println!("        requires {}@v{}", dep_path, dep_version);
+                            add_requirement(
+                                dep_path.clone(),
+                                dep_version,
+                                &mut selected,
+                                &mut work_queue,
+                                &patches,
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("        Warning: Failed to resolve {}: {}", dep_path, e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("      Warning: {}", e);
+            }
+        }
+    }
+
+    println!("\nFixed point reached after {} iterations", iterations);
+
+    println!("\nPhase 2: Build closure");
+    println!();
+
+    // Phase 2: Build the final dependency set using only selected versions
+    let build_set = build_closure(
+        &packages,
+        &workspace_deps,
+        workspace_root,
+        &selected,
+        &manifest_cache,
+    )?;
+
+    println!("Build set: {} dependencies", build_set.len());
+
+    println!("\nFinal Resolved Dependencies:");
+    for (line, version) in &selected {
+        if build_set.contains(&(line.clone(), version.clone())) {
+            println!("  {}@v{} ({})", line.path, version, line.family);
+        }
+    }
+
+    println!("\nV2 dependency resolution complete");
     std::process::exit(0);
 }
 
@@ -244,7 +335,7 @@ fn collect_package_dependencies(
 
 /// Recursively collect dependencies, handling transitive local path dependencies
 fn collect_deps_recursive(
-    current_package_root: &Path,
+    _current_package_root: &Path,
     current_deps: &HashMap<String, DependencySpec>,
     workspace_deps: &HashMap<String, DependencySpec>,
     workspace_root: &Path,
@@ -278,7 +369,6 @@ fn collect_deps_recursive(
                 deps.push(UnresolvedDep {
                     url: url.clone(),
                     spec: resolved_spec,
-                    source: current_package_root.display().to_string(),
                 });
                 continue;
             }
@@ -302,7 +392,6 @@ fn collect_deps_recursive(
         deps.push(UnresolvedDep {
             url: url.clone(),
             spec: resolved_spec,
-            source: current_package_root.display().to_string(),
         });
 
         // Avoid infinite loops
@@ -332,123 +421,6 @@ fn collect_deps_recursive(
 }
 
 /// Merge multiple resolved dependency graphs by taking union
-fn merge_dependency_graphs(graphs: Vec<ResolvedDep>) -> Vec<ResolvedDep> {
-    let mut merged: HashMap<(String, Version), ResolvedDep> = HashMap::new();
-
-    for dep in graphs {
-        let key = (dep.url.clone(), dep.version.clone());
-        merged.entry(key).or_insert(dep);
-    }
-
-    merged.into_values().collect()
-}
-
-/// Apply Minimal Version Selection algorithm
-///
-/// Groups dependencies by (url, semver_family) and selects maximum version per group.
-/// Multiple semver families can coexist.
-///
-/// **Semver 0.x handling**: For 0.x versions, the minor version acts as the major version:
-/// - 0.1.x and 0.2.x are incompatible (different families)
-/// - 0.3.11 and 0.3.13 are compatible (same 0.3.x family, MVS selects 0.3.13)
-/// - For 1.x+, only the major version matters
-///
-/// Path/branch/rev dependencies are kept separate (don't participate in MVS).
-fn apply_mvs(deps: &[UnresolvedDep]) -> Result<Vec<ResolvedDep>> {
-    let mut resolved = Vec::new();
-
-    // Separate version deps from non-version deps (path/branch/rev)
-    let mut version_deps = Vec::new();
-    let mut non_version_deps = Vec::new();
-
-    for dep in deps {
-        if is_non_version_dep(&dep.spec) {
-            non_version_deps.push(dep);
-        } else {
-            version_deps.push(dep);
-        }
-    }
-
-    // Handle non-version deps first (just pass through, no MVS)
-    for dep in non_version_deps {
-        let source = match &dep.spec {
-            DependencySpec::Detailed(detail) => {
-                if let Some(path) = &detail.path {
-                    DependencySource::Path(PathBuf::from(path))
-                } else if let Some(branch) = &detail.branch {
-                    DependencySource::Branch(branch.clone())
-                } else if let Some(rev) = &detail.rev {
-                    DependencySource::Revision(rev.clone())
-                } else {
-                    unreachable!()
-                }
-            }
-            _ => unreachable!(),
-        };
-
-        resolved.push(ResolvedDep {
-            url: dep.url.clone(),
-            version: Version::new(0, 0, 0), // Placeholder for non-version deps
-            source,
-        });
-    }
-
-    // Group version deps by (url, semver_group)
-    // For 0.x versions, minor acts as major (0.1.x and 0.2.x are incompatible)
-    // For 1.x+, major is the grouping key
-    let mut groups: HashMap<(String, u64, u64), Vec<&UnresolvedDep>> = HashMap::new();
-
-    for dep in version_deps {
-        let version = extract_version(&dep.spec)?;
-        let group_key = if version.major == 0 {
-            (version.major, version.minor) // 0.x: group by minor
-        } else {
-            (version.major, 0) // 1.x+: group by major only
-        };
-
-        groups
-            .entry((dep.url.clone(), group_key.0, group_key.1))
-            .or_insert_with(Vec::new)
-            .push(dep);
-    }
-
-    // Select max version per group
-    for ((url, _major, _minor), group_deps) in groups {
-        // Find max version in this group
-        let mut max_version = Version::new(0, 0, 0);
-        let mut max_dep = None;
-
-        for dep in group_deps {
-            let version = extract_version(&dep.spec)?;
-            if version > max_version {
-                max_version = version.clone();
-                max_dep = Some(dep);
-            }
-        }
-
-        if let Some(dep) = max_dep {
-            let source = match &dep.spec {
-                DependencySpec::Version(v) => DependencySource::Version(parse_version_string(v)?),
-                DependencySpec::Detailed(detail) => {
-                    if let Some(version) = &detail.version {
-                        DependencySource::Version(parse_version_string(version)?)
-                    } else {
-                        unreachable!("Version dep without version field")
-                    }
-                }
-            };
-
-            resolved.push(ResolvedDep {
-                url: url.clone(),
-                version: max_version,
-                source,
-            });
-        }
-    }
-
-    Ok(resolved)
-}
-
 /// Check if a dependency spec is non-version (path/branch/rev)
 fn is_non_version_dep(spec: &DependencySpec) -> bool {
     match spec {
@@ -459,7 +431,10 @@ fn is_non_version_dep(spec: &DependencySpec) -> bool {
     }
 }
 
-/// Extract version from dependency spec for MVS grouping
+/// Extract version from dependency spec (simple parser, doesn't resolve branches)
+///
+/// This is used in Phase 2 build closure to reconstruct ModuleLines.
+/// For branches/revs, returns a placeholder - the actual version comes from the selected map.
 fn extract_version(spec: &DependencySpec) -> Result<Version> {
     match spec {
         DependencySpec::Version(v) => parse_version_string(v),
@@ -467,7 +442,8 @@ fn extract_version(spec: &DependencySpec) -> Result<Version> {
             if let Some(version) = &detail.version {
                 parse_version_string(version)
             } else {
-                // Non-version dependencies default to 0.0.0 for grouping
+                // For branches/revs/paths, return placeholder
+                // Phase 2 uses this just to construct ModuleLine, then looks up selected version
                 Ok(Version::new(0, 0, 0))
             }
         }
@@ -492,17 +468,459 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
-/// Apply patch overrides
-fn apply_patches(
-    mut resolved: Vec<ResolvedDep>,
+/// Fetch a manifest (pcb.toml dependencies) from Git using sparse checkout
+fn fetch_manifest(
+    workspace_root: &Path,
+    module_path: &str,
+    version: &Version,
     patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
-) -> Vec<ResolvedDep> {
-    for dep in &mut resolved {
-        if let Some(patch) = patches.get(&dep.url) {
-            dep.source = DependencySource::Patch(PathBuf::from(&patch.path));
+) -> Result<HashMap<String, DependencySpec>> {
+    use std::fs;
+    use std::process::Command;
+
+    // Check if this module is patched with a local path
+    if let Some(patch) = patches.get(module_path) {
+        let patched_path = workspace_root.join(&patch.path);
+        let patched_toml = patched_path.join("pcb.toml");
+
+        println!("      Using patched source: {}", patch.path);
+
+        if !patched_toml.exists() {
+            anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
+        }
+
+        return read_manifest_from_path(&patched_toml, module_path);
+    }
+
+    // Construct Git URL from module path
+    let git_url = format!("https://{}.git", module_path);
+    let version_tag = format!("v{}", version);
+
+    // Cache directory: ~/.pcb/cache/{module_path}/{version}/
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let cache_base = home.join(".pcb").join("cache");
+    let checkout_dir = cache_base.join(module_path).join(version.to_string());
+
+    // Check if we've already processed this version
+    let pcb_toml_path = checkout_dir.join("pcb.toml");
+    let marker_path = checkout_dir.join(".no-manifest");
+
+    if pcb_toml_path.exists() {
+        // Successfully cached with manifest
+        return read_manifest_from_path(&pcb_toml_path, module_path);
+    }
+
+    if marker_path.exists() {
+        // Already tried, no V2 manifest (asset package or V1)
+        return Ok(HashMap::new());
+    }
+
+    // Create checkout directory
+    fs::create_dir_all(&checkout_dir)?;
+
+    // Initialize sparse checkout
+    println!("        Cloning {} (sparse)", git_url);
+
+    // git init
+    Command::new("git")
+        .arg("init")
+        .current_dir(&checkout_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    // git remote add origin
+    Command::new("git")
+        .arg("remote")
+        .arg("add")
+        .arg("origin")
+        .arg(&git_url)
+        .current_dir(&checkout_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    // Enable sparse checkout
+    Command::new("git")
+        .arg("config")
+        .arg("core.sparseCheckout")
+        .arg("true")
+        .current_dir(&checkout_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    // Create sparse-checkout file with only pcb.toml
+    let sparse_checkout_file = checkout_dir
+        .join(".git")
+        .join("info")
+        .join("sparse-checkout");
+    fs::create_dir_all(sparse_checkout_file.parent().unwrap())?;
+    fs::write(&sparse_checkout_file, "pcb.toml\n")?;
+
+    // git fetch --depth=1 origin tag
+    let fetch_status = Command::new("git")
+        .arg("fetch")
+        .arg("--depth=1")
+        .arg("origin")
+        .arg(&version_tag)
+        .current_dir(&checkout_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if !fetch_status.success() {
+        // Fetch failed - create marker and return empty
+        let marker_path = checkout_dir.join(".no-manifest");
+        let _ = fs::write(&marker_path, "Failed to fetch tag\n");
+        return Ok(HashMap::new());
+    }
+
+    // git checkout FETCH_HEAD
+    let checkout_status = Command::new("git")
+        .arg("checkout")
+        .arg("FETCH_HEAD")
+        .current_dir(&checkout_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if !checkout_status.success() {
+        // Checkout failed - create marker and return empty
+        let marker_path = checkout_dir.join(".no-manifest");
+        let _ = fs::write(&marker_path, "Failed to fetch/checkout\n");
+        return Ok(HashMap::new());
+    }
+
+    // Read the manifest
+    read_manifest_from_path(&pcb_toml_path, module_path)
+}
+
+/// Read and parse a pcb.toml manifest
+fn read_manifest_from_path(
+    pcb_toml_path: &Path,
+    _module_path: &str,
+) -> Result<HashMap<String, DependencySpec>> {
+    use std::fs;
+
+    // Check if pcb.toml exists (asset packages don't have manifests)
+    if !pcb_toml_path.exists() {
+        // Asset package (e.g., KiCad symbols/footprints) - no dependencies
+        // Create marker to avoid re-fetching
+        let marker_path = pcb_toml_path.parent().unwrap().join(".no-manifest");
+        let _ = fs::write(&marker_path, "Asset package - no V2 manifest\n");
+        return Ok(HashMap::new());
+    }
+
+    let file_provider = DefaultFileProvider::new();
+    let config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
+
+    match config {
+        PcbToml::V2(v2) => Ok(v2.dependencies),
+        PcbToml::V1(_) => {
+            // V1 manifest - treat as asset package for now (no transitive deps)
+            // Create marker to avoid re-parsing
+            let marker_path = pcb_toml_path.parent().unwrap().join(".no-manifest");
+            let _ = fs::write(&marker_path, "V1 manifest - no transitive dependencies\n");
+            Ok(HashMap::new())
         }
     }
-    resolved
+}
+
+/// Build the final dependency closure using selected versions
+fn build_closure(
+    packages: &[(PathBuf, PcbToml)],
+    workspace_deps: &HashMap<String, DependencySpec>,
+    workspace_root: &Path,
+    selected: &HashMap<ModuleLine, Version>,
+    manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+) -> Result<HashSet<(ModuleLine, Version)>> {
+    let mut build_set = HashSet::new();
+    let mut stack = Vec::new();
+
+    // Seed from workspace packages' remote dependencies
+    for (pcb_toml_path, config) in packages {
+        let PcbToml::V2(v2) = config else { continue };
+
+        let package_deps = collect_package_dependencies(
+            pcb_toml_path.parent().unwrap(),
+            &v2.dependencies,
+            workspace_deps,
+            workspace_root,
+        )?;
+
+        for dep in package_deps {
+            if !is_non_version_dep(&dep.spec) {
+                if let Ok(version) = extract_version(&dep.spec) {
+                    let line = ModuleLine::new(dep.url, &version);
+                    stack.push(line);
+                }
+            }
+        }
+    }
+
+    // DFS using final selected versions
+    while let Some(line) = stack.pop() {
+        let version = match selected.get(&line) {
+            Some(v) => v.clone(),
+            None => continue, // Not in selected set
+        };
+
+        if build_set.contains(&(line.clone(), version.clone())) {
+            continue;
+        }
+
+        build_set.insert((line.clone(), version.clone()));
+
+        // Add dependencies of this module
+        if let Some(deps) = manifest_cache.get(&(line.clone(), version)) {
+            for (dep_path, dep_spec) in deps {
+                if !is_non_version_dep(dep_spec) {
+                    if let Ok(dep_version) = extract_version(dep_spec) {
+                        let dep_line = ModuleLine::new(dep_path.clone(), &dep_version);
+                        stack.push(dep_line);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(build_set)
+}
+
+/// Resolve a dependency spec to a concrete version
+///
+/// Handles:
+/// - Exact versions: "0.3.2" → v0.3.2
+/// - Branches: { branch = "main" } → pseudo-version
+/// - Revisions: { rev = "abcd1234" } → pseudo-version
+fn resolve_to_version(
+    workspace_root: &Path,
+    module_path: &str,
+    spec: &DependencySpec,
+) -> Result<Version> {
+    match spec {
+        DependencySpec::Version(v) => parse_version_string(v),
+        DependencySpec::Detailed(detail) => {
+            if let Some(version) = &detail.version {
+                parse_version_string(version)
+            } else if let Some(branch) = &detail.branch {
+                // Resolve branch to pseudo-version
+                resolve_branch_to_pseudo_version(workspace_root, module_path, branch)
+            } else if let Some(rev) = &detail.rev {
+                // Resolve revision to pseudo-version
+                resolve_rev_to_pseudo_version(workspace_root, module_path, rev)
+            } else {
+                // Path dependencies shouldn't reach here
+                anyhow::bail!("Dependency has no version, branch, or rev")
+            }
+        }
+    }
+}
+
+/// Resolve a Git branch to a pseudo-version
+fn resolve_branch_to_pseudo_version(
+    _workspace_root: &Path,
+    module_path: &str,
+    branch: &str,
+) -> Result<Version> {
+    use std::process::Command;
+
+    let git_url = format!("https://{}.git", module_path);
+
+    println!(
+        "        Resolving branch '{}' for {}...",
+        branch, module_path
+    );
+
+    // Use git ls-remote to get branch commit without cloning
+    let output = Command::new("git")
+        .arg("ls-remote")
+        .arg(&git_url)
+        .arg(format!("refs/heads/{}", branch))
+        .output()?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to resolve branch {} for {}", branch, module_path);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let commit = stdout
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .ok_or_else(|| anyhow::anyhow!("Branch {} not found in {}", branch, module_path))?;
+
+    generate_pseudo_version_for_commit(module_path, commit, &git_url)
+}
+
+/// Resolve a Git revision to a pseudo-version
+fn resolve_rev_to_pseudo_version(
+    _workspace_root: &Path,
+    module_path: &str,
+    rev: &str,
+) -> Result<Version> {
+    let git_url = format!("https://{}.git", module_path);
+
+    println!(
+        "        Resolving rev '{}' for {}...",
+        &rev[..8.min(rev.len())],
+        module_path
+    );
+
+    generate_pseudo_version_for_commit(module_path, rev, &git_url)
+}
+
+/// Generate a pseudo-version for a Git commit
+///
+/// Format: v<base>-0.<timestamp>-<commit_short>
+/// Base version is derived from latest reachable tag, or v0.0.0 if none
+fn generate_pseudo_version_for_commit(
+    module_path: &str,
+    commit: &str,
+    git_url: &str,
+) -> Result<Version> {
+    use chrono::Utc;
+    use std::process::Command;
+
+    // Get a minimal clone to inspect the commit
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let temp_clone = home
+        .join(".pcb")
+        .join("cache")
+        .join("temp")
+        .join(module_path);
+
+    std::fs::create_dir_all(temp_clone.parent().unwrap())?;
+
+    // Clone if needed (shallow)
+    if !temp_clone.join(".git").exists() {
+        Command::new("git")
+            .arg("clone")
+            .arg("--bare")
+            .arg("--filter=blob:none")
+            .arg(git_url)
+            .arg(&temp_clone)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+    } else {
+        // Fetch updates
+        Command::new("git")
+            .arg("-C")
+            .arg(&temp_clone)
+            .arg("fetch")
+            .arg("origin")
+            .arg("--tags")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+    }
+
+    // Find latest tag reachable from this commit
+    let describe_output = Command::new("git")
+        .arg("-C")
+        .arg(&temp_clone)
+        .arg("describe")
+        .arg("--tags")
+        .arg("--abbrev=0")
+        .arg(commit)
+        .output();
+
+    let base_version = if let Ok(output) = describe_output {
+        if output.status.success() {
+            let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // Parse tag (remove leading v)
+            parse_version_string(&tag).unwrap_or_else(|_| Version::new(0, 0, 0))
+        } else {
+            Version::new(0, 0, 0)
+        }
+    } else {
+        Version::new(0, 0, 0)
+    };
+
+    // Increment patch version
+    let pseudo_base = Version::new(
+        base_version.major,
+        base_version.minor,
+        base_version.patch + 1,
+    );
+
+    // Get commit timestamp
+    let timestamp_output = Command::new("git")
+        .arg("-C")
+        .arg(&temp_clone)
+        .arg("show")
+        .arg("-s")
+        .arg("--format=%ct")
+        .arg(commit)
+        .output()?;
+
+    let timestamp = if timestamp_output.status.success() {
+        String::from_utf8_lossy(&timestamp_output.stdout)
+            .trim()
+            .parse::<i64>()
+            .unwrap_or(0)
+    } else {
+        Utc::now().timestamp()
+    };
+
+    let datetime = chrono::DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+    let timestamp_str = datetime.format("%Y%m%d%H%M%S").to_string();
+
+    let commit_short = &commit[..12.min(commit.len())];
+
+    // Build pseudo-version string: v<major>.<minor>.<patch+1>-0.<timestamp>-<commit>
+    let pseudo_str = format!(
+        "{}.{}.{}-0.{}-{}",
+        pseudo_base.major, pseudo_base.minor, pseudo_base.patch, timestamp_str, commit_short
+    );
+
+    Version::parse(&pseudo_str)
+        .map_err(|e| anyhow::anyhow!("Failed to parse pseudo-version {}: {}", pseudo_str, e))
+}
+
+/// Add a requirement to the MVS state (monotonic upgrade)
+///
+/// Patches are checked here - they override version selection with ultimate authority.
+fn add_requirement(
+    path: String,
+    version: Version,
+    selected: &mut HashMap<ModuleLine, Version>,
+    work_queue: &mut VecDeque<ModuleLine>,
+    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+) {
+    // Check if this module is patched
+    let (final_version, is_patched) = if patches.contains_key(&path) {
+        // Patch overrides version selection
+        // For local path patches, use the requested version as identity
+        // (the path is just where we get the code from)
+        (version, true)
+    } else {
+        (version, false)
+    };
+
+    let line = ModuleLine::new(path.clone(), &final_version);
+
+    let needs_update = match selected.get(&line) {
+        None => true,
+        Some(current) => final_version > *current,
+    };
+
+    if needs_update {
+        let action = if selected.contains_key(&line) {
+            "Upgrading"
+        } else {
+            "Adding"
+        };
+        let suffix = if is_patched { " (patched)" } else { "" };
+        println!("  → {} {}@v{}{}", action, path, final_version, suffix);
+
+        selected.insert(line.clone(), final_version);
+        work_queue.push_back(line);
+    }
 }
 
 /// Discover V2 packages matching glob patterns
