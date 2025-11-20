@@ -238,6 +238,143 @@ pub struct PatchSpec {
     pub path: String,
 }
 
+/// V2 Lockfile entry
+///
+/// Stores resolved version and cryptographic hashes for a dependency.
+/// Format mirrors Go's go.sum with separate content and manifest hashes.
+///
+/// # Example
+/// ```
+/// github.com/diodeinc/stdlib v0.3.2 h1:abc123...
+/// github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:def456...
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockEntry {
+    /// Module path (e.g., "github.com/diodeinc/stdlib")
+    pub module_path: String,
+    
+    /// Resolved version (may be pseudo-version for branches)
+    pub version: String,
+    
+    /// Content hash (h1: prefix + base64-encoded SHA-256)
+    pub content_hash: String,
+    
+    /// Manifest hash (h1: prefix + base64-encoded SHA-256)
+    /// None for asset packages without pcb.toml
+    pub manifest_hash: Option<String>,
+}
+
+/// V2 Lockfile (pcb.sum)
+///
+/// Stores resolved versions and cryptographic hashes for reproducible builds.
+/// Automatically updated when dependencies change.
+#[derive(Debug, Clone, Default)]
+pub struct Lockfile {
+    /// Map from (module_path, version) to lock entry
+    pub entries: HashMap<(String, String), LockEntry>,
+}
+
+impl Lockfile {
+    /// Parse pcb.sum file
+    ///
+    /// Format:
+    /// ```
+    /// module_path version h1:hash
+    /// module_path version/pcb.toml h1:hash
+    /// ```
+    pub fn parse(content: &str) -> Result<Self> {
+        let mut entries = HashMap::new();
+        
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() != 3 {
+                anyhow::bail!("Invalid lockfile line: {}", line);
+            }
+            
+            let module_path = parts[0];
+            let version_part = parts[1];
+            let hash = parts[2];
+            
+            if !hash.starts_with("h1:") {
+                anyhow::bail!("Invalid hash format (expected h1:): {}", hash);
+            }
+            
+            // Check if this is a manifest hash line (ends with /pcb.toml)
+            if let Some(version) = version_part.strip_suffix("/pcb.toml") {
+                // Update existing entry with manifest hash
+                let key = (module_path.to_string(), version.to_string());
+                entries.entry(key.clone()).or_insert_with(|| LockEntry {
+                    module_path: module_path.to_string(),
+                    version: version.to_string(),
+                    content_hash: String::new(),
+                    manifest_hash: None,
+                }).manifest_hash = Some(hash.to_string());
+            } else {
+                // Content hash line
+                let key = (module_path.to_string(), version_part.to_string());
+                entries.entry(key.clone()).or_insert_with(|| LockEntry {
+                    module_path: module_path.to_string(),
+                    version: version_part.to_string(),
+                    content_hash: String::new(),
+                    manifest_hash: None,
+                }).content_hash = hash.to_string();
+            }
+        }
+        
+        Ok(Lockfile { entries })
+    }
+    
+    /// Serialize to pcb.sum format
+    pub fn to_string(&self) -> String {
+        let mut lines = Vec::new();
+        
+        // Sort entries for deterministic output
+        let mut sorted: Vec<_> = self.entries.values().collect();
+        sorted.sort_by(|a, b| {
+            a.module_path.cmp(&b.module_path)
+                .then(a.version.cmp(&b.version))
+        });
+        
+        for entry in sorted {
+            // Content hash line
+            lines.push(format!(
+                "{} {} {}",
+                entry.module_path,
+                entry.version,
+                entry.content_hash
+            ));
+            
+            // Manifest hash line (if present)
+            if let Some(manifest_hash) = &entry.manifest_hash {
+                lines.push(format!(
+                    "{} {}/pcb.toml {}",
+                    entry.module_path,
+                    entry.version,
+                    manifest_hash
+                ));
+            }
+        }
+        
+        lines.join("\n") + "\n"
+    }
+    
+    /// Get lock entry for a module
+    pub fn get(&self, module_path: &str, version: &str) -> Option<&LockEntry> {
+        self.entries.get(&(module_path.to_string(), version.to_string()))
+    }
+    
+    /// Insert or update lock entry
+    pub fn insert(&mut self, entry: LockEntry) {
+        let key = (entry.module_path.clone(), entry.version.clone());
+        self.entries.insert(key, entry);
+    }
+}
+
 /// V2 Vendor configuration
 ///
 /// Controls which dependencies are vendored. Dependencies are always resolved
