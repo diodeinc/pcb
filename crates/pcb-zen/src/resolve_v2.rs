@@ -644,13 +644,16 @@ fn read_manifest_from_path(
     let file_provider = DefaultFileProvider::new();
     let config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
 
-    match config {
-        PcbToml::V2(v2) => Ok(v2.dependencies),
-        PcbToml::V1(_) => {
-            // V1 manifest - treat as asset package for now (no transitive deps)
+    match config.to_v2() {
+        Ok(v2) => Ok(v2.dependencies),
+        Err(e) => {
+            // Failed to convert to V2 - treat as asset package
             // Create marker to avoid re-parsing
             let marker_path = pcb_toml_path.parent().unwrap().join(".no-manifest");
-            let _ = fs::write(&marker_path, "V1 manifest - no transitive dependencies\n");
+            let _ = fs::write(
+                &marker_path,
+                format!("Failed to parse/convert manifest: {}\n", e),
+            );
             Ok(HashMap::new())
         }
     }
