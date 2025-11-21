@@ -9,7 +9,31 @@ use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use thiserror::Error;
 use walkdir::WalkDir;
+
+/// Path dependency validation errors
+#[derive(Debug, Error)]
+enum PathDepError {
+    #[error("Path dependency '{url}' must specify a version\n  Example: {{ path = \"{path}\", version = \"1.0.0\" }}")]
+    MissingVersion { url: String, path: String },
+
+    #[error("Path dependency '{url}' points to V1 package\n  Location: {location}\n  Path dependencies require V2 packages")]
+    V1Package { url: String, location: PathBuf },
+
+    #[error("Path dependency '{url}' missing [package] section\n  Location: {location}")]
+    MissingPackageSection { url: String, location: PathBuf },
+
+    #[error("Path dependency '{url}' missing package.path field\n  Location: {location}\n  Add: path = \"{url}\"")]
+    MissingPackagePath { url: String, location: PathBuf },
+
+    #[error("Path dependency key mismatch:\n  Dependency: '{dep_key}'\n  Declared:   '{pkg_path}'\n  Location:   {location}")]
+    PathMismatch {
+        dep_key: String,
+        pkg_path: String,
+        location: PathBuf,
+    },
+}
 
 /// Module line identifier for MVS grouping
 ///
@@ -549,9 +573,17 @@ fn collect_deps_recursive(
         }
 
         // Check if it's a local path dependency
-        let local_path = match spec {
+        let (local_path, _expected_version) = match spec {
             DependencySpec::Detailed(detail) if detail.path.is_some() => {
-                detail.path.as_ref().unwrap()
+                let path = detail.path.as_ref().unwrap();
+                if detail.version.is_none() {
+                    return Err(PathDepError::MissingVersion {
+                        url: url.clone(),
+                        path: path.clone(),
+                    }
+                    .into());
+                }
+                (path, detail.version.as_ref())
             }
             _ => {
                 // Not a local path dep, just add it
@@ -588,12 +620,52 @@ fn collect_deps_recursive(
 
         // Recursively resolve transitive dependencies
         let dep_pcb_toml = resolved_path.join("pcb.toml");
-        if dep_pcb_toml.exists() {
-            let file_provider = DefaultFileProvider::new();
-            if let Ok(PcbToml::V2(dep_config)) = PcbToml::from_file(&file_provider, &dep_pcb_toml) {
-                collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
-            }
+        if !dep_pcb_toml.exists() {
+            continue;
         }
+
+        let file_provider = DefaultFileProvider::new();
+        let dep_config = match PcbToml::from_file(&file_provider, &dep_pcb_toml) {
+            Ok(PcbToml::V2(config)) => config,
+            Ok(PcbToml::V1(_)) => {
+                return Err(PathDepError::V1Package {
+                    url: url.clone(),
+                    location: dep_pcb_toml.clone(),
+                }
+                .into());
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Validate package.path is present and matches dependency key
+        let package_config =
+            dep_config
+                .package
+                .as_ref()
+                .ok_or_else(|| PathDepError::MissingPackageSection {
+                    url: url.clone(),
+                    location: dep_pcb_toml.clone(),
+                })?;
+
+        let declared_path =
+            package_config
+                .path
+                .as_ref()
+                .ok_or_else(|| PathDepError::MissingPackagePath {
+                    url: url.clone(),
+                    location: dep_pcb_toml.clone(),
+                })?;
+
+        if declared_path != url {
+            return Err(PathDepError::PathMismatch {
+                dep_key: url.clone(),
+                pkg_path: declared_path.clone(),
+                location: dep_pcb_toml.clone(),
+            }
+            .into());
+        }
+
+        collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
     }
 
     Ok(())
