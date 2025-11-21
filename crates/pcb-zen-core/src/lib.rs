@@ -822,7 +822,12 @@ impl CoreLoadResolver {
         };
 
         if !self.file_provider.exists(&full_path) {
-            anyhow::bail!("File not found: {}", relative_path);
+            anyhow::bail!(
+                "File not found: {} (resolved to: {}, dep root: {})",
+                relative_path,
+                full_path.display(),
+                root_path.display()
+            );
         }
 
         self.insert_load_spec(full_path.clone(), spec.clone());
