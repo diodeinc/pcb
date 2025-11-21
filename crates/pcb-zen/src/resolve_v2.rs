@@ -191,6 +191,19 @@ fn resolve_dependencies(
         }
     }
 
+    // Build workspace members index: package.path -> (dir, config)
+    let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)> =
+        HashMap::new();
+    for (pcb_toml_path, config) in &packages {
+        let PcbToml::V2(v2) = config else { continue };
+        if let Some(pkg) = &v2.package {
+            if let Some(path) = &pkg.path {
+                let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
+                workspace_members.insert(path.clone(), (package_dir, v2.clone()));
+            }
+        }
+    }
+
     let patches = v2.patch.clone();
 
     // MVS state
@@ -251,7 +264,7 @@ fn resolve_dependencies(
         println!("\n  Package: {}", package_name);
 
         // Collect this package's dependencies
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_root)?;
 
         if package_deps.is_empty() {
             println!("    No dependencies");
@@ -309,8 +322,14 @@ fn resolve_dependencies(
             iterations, line.path, version, line.family
         );
 
-        // Fetch the manifest for this version (patches applied inside)
-        match fetch_manifest(workspace_root, &line.path, &version, &patches) {
+        // Fetch the manifest for this version (workspace members + patches applied inside)
+        match fetch_manifest(
+            workspace_root,
+            &line.path,
+            &version,
+            &patches,
+            &workspace_members,
+        ) {
             Ok(deps) => {
                 if !deps.is_empty() {
                     println!("      Found {} dependencies", deps.len());
@@ -355,7 +374,13 @@ fn resolve_dependencies(
     println!();
 
     // Phase 2: Build the final dependency set using only selected versions
-    let build_set = build_closure(&packages, &selected, &manifest_cache)?;
+    let build_set = build_closure(
+        &packages,
+        &selected,
+        &manifest_cache,
+        &workspace_members,
+        workspace_root,
+    )?;
 
     println!("Build set: {} dependencies", build_set.len());
 
@@ -382,15 +407,16 @@ fn resolve_dependencies(
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
 
-    let package_resolutions = build_resolution_map(
+    let package_resolutions = build_resolution_map(&ResolutionContext {
         workspace_root,
-        &home,
-        config,
-        &packages,
-        &selected,
-        &patches,
-        &manifest_cache,
-    )?;
+        home_dir: &home,
+        root_config: config,
+        packages: &packages,
+        selected: &selected,
+        patches: &patches,
+        manifest_cache: &manifest_cache,
+        workspace_members: &workspace_members,
+    })?;
 
     Ok(ResolutionResult {
         workspace_root: workspace_root.to_path_buf(),
@@ -399,32 +425,43 @@ fn resolve_dependencies(
     })
 }
 
+/// Resolution context for building load maps
+struct ResolutionContext<'a> {
+    workspace_root: &'a Path,
+    home_dir: &'a Path,
+    root_config: &'a PcbToml,
+    packages: &'a [(PathBuf, PcbToml)],
+    selected: &'a HashMap<ModuleLine, Version>,
+    patches: &'a HashMap<String, PatchSpec>,
+    manifest_cache: &'a HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+    workspace_members: &'a HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
+}
+
 /// Build the per-package resolution map
 fn build_resolution_map(
-    workspace_root: &Path,
-    home_dir: &Path,
-    root_config: &PcbToml,
-    packages: &[(PathBuf, PcbToml)],
-    selected: &HashMap<ModuleLine, Version>,
-    patches: &HashMap<String, PatchSpec>,
-    manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+    ctx: &ResolutionContext,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Helper to compute absolute path for a module line
-    let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
-        if let Some(patch) = patches.get(&line.path) {
-            workspace_root.join(&patch.path)
-        } else {
-            home_dir
-                .join(".pcb")
-                .join("cache")
-                .join(&line.path)
-                .join(version.to_string())
+    let get_abs_path = |line: &ModuleLine, _version: &Version| -> PathBuf {
+        // 1. Check workspace members first
+        if let Some((member_dir, _)) = ctx.workspace_members.get(&line.path) {
+            return member_dir.clone();
         }
+        // 2. Check patches
+        if let Some(patch) = ctx.patches.get(&line.path) {
+            return ctx.workspace_root.join(&patch.path);
+        }
+        // 3. Fall back to cache
+        ctx.home_dir
+            .join(".pcb")
+            .join("cache")
+            .join(&line.path)
+            .join(_version.to_string())
     };
 
     // Build lookup: url -> family -> path
     let mut url_to_families: HashMap<String, HashMap<String, PathBuf>> = HashMap::new();
-    for (line, version) in selected {
+    for (line, version) in ctx.selected {
         let abs_path = get_abs_path(line, version);
         url_to_families
             .entry(line.path.clone())
@@ -467,7 +504,7 @@ fn build_resolution_map(
     let resolve_alias = |target: &str| -> Option<PathBuf> {
         let spec = LoadSpec::parse(target)?;
         match spec {
-            LoadSpec::Path { path, .. } => Some(workspace_root.join(path)),
+            LoadSpec::Path { path, .. } => Some(ctx.workspace_root.join(path)),
             LoadSpec::Github { user, repo, .. } => {
                 let url = format!("github.com/{}/{}", user, repo);
                 url_to_families
@@ -513,18 +550,18 @@ fn build_resolution_map(
     let mut results = HashMap::new();
 
     // Workspace root
-    if let PcbToml::V2(v2) = root_config {
+    if let PcbToml::V2(v2) = ctx.root_config {
         let aliases = v2.workspace.as_ref().map(|w| &w.aliases);
         results.insert(
-            workspace_root.to_path_buf(),
-            build_map(workspace_root, &v2.dependencies, aliases),
+            ctx.workspace_root.to_path_buf(),
+            build_map(ctx.workspace_root, &v2.dependencies, aliases),
         );
     }
 
     // Member packages
-    for (pkg_path, config) in packages {
+    for (pkg_path, config) in ctx.packages {
         if let PcbToml::V2(v2) = config {
-            if let PcbToml::V2(root) = root_config {
+            if let PcbToml::V2(root) = ctx.root_config {
                 let aliases = root.workspace.as_ref().map(|w| &w.aliases);
                 let pkg_dir = pkg_path.parent().unwrap();
                 results.insert(
@@ -537,9 +574,9 @@ fn build_resolution_map(
 
     // Transitive deps: each remote package gets its own resolution map
     // This ensures MVS-selected versions are used for all transitive loads
-    for (line, version) in selected {
+    for (line, version) in ctx.selected {
         let abs_path = get_abs_path(line, version);
-        if let Some(deps) = manifest_cache.get(&(line.clone(), version.clone())) {
+        if let Some(deps) = ctx.manifest_cache.get(&(line.clone(), version.clone())) {
             results.insert(abs_path.clone(), build_map(&abs_path, deps, None));
         }
     }
@@ -551,11 +588,17 @@ fn build_resolution_map(
 fn collect_package_dependencies(
     pcb_toml_path: &Path,
     v2_config: &pcb_zen_core::config::PcbTomlV2,
+    workspace_root: &Path,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(&v2_config.dependencies, package_dir, &mut deps)?;
+    collect_deps_recursive(
+        &v2_config.dependencies,
+        package_dir,
+        workspace_root,
+        &mut deps,
+    )?;
 
     Ok(deps.into_values().collect())
 }
@@ -564,6 +607,7 @@ fn collect_package_dependencies(
 fn collect_deps_recursive(
     current_deps: &HashMap<String, DependencySpec>,
     package_dir: &Path,
+    workspace_root: &Path,
     deps: &mut HashMap<String, UnresolvedDep>,
 ) -> Result<()> {
     for (url, spec) in current_deps {
@@ -606,6 +650,20 @@ fn collect_deps_recursive(
                 "Local path dependency '{}' not found at {}",
                 url,
                 resolved_path.display()
+            );
+        }
+
+        // Check if path points inside workspace
+        if let Ok(rel_path) = resolved_path.strip_prefix(workspace_root) {
+            anyhow::bail!(
+                "Path dependency '{}' points inside workspace\n  \
+                Path: {}\n  \
+                Workspace members are automatically resolved - remove the 'path' field.\n  \
+                Use: \"{}\" = \"{}\"",
+                url,
+                rel_path.display(),
+                url,
+                _expected_version.unwrap_or(&"0.1".to_string())
             );
         }
 
@@ -665,7 +723,12 @@ fn collect_deps_recursive(
             .into());
         }
 
-        collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
+        collect_deps_recursive(
+            &dep_config.dependencies,
+            &resolved_path,
+            workspace_root,
+            deps,
+        )?;
     }
 
     Ok(())
@@ -716,10 +779,17 @@ fn fetch_manifest(
     module_path: &str,
     version: &Version,
     patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
 ) -> Result<HashMap<String, DependencySpec>> {
     use std::fs;
 
-    // Check if this module is patched with a local path
+    // 1. Workspace member override (highest priority)
+    if let Some((_member_dir, member_v2)) = workspace_members.get(module_path) {
+        println!("      Using workspace member: {}", module_path);
+        return Ok(member_v2.dependencies.clone());
+    }
+
+    // 2. Check if this module is patched with a local path
     if let Some(patch) = patches.get(module_path) {
         let patched_path = workspace_root.join(&patch.path);
         let patched_toml = patched_path.join("pcb.toml");
@@ -907,7 +977,7 @@ fn print_dependency_tree(
     // Package dependencies
     for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_root)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec)
@@ -949,13 +1019,19 @@ fn build_closure(
     packages: &[(PathBuf, PcbToml)],
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
+    workspace_root: &Path,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
     let mut build_set = HashSet::new();
     let mut stack = Vec::new();
 
-    // Build index: module_path → ModuleLine for fast lookups
+    // Build index: module_path → ModuleLine for fast lookups (excluding workspace members)
     let mut line_by_path: HashMap<String, Vec<ModuleLine>> = HashMap::new();
     for line in selected.keys() {
+        // Skip workspace members - they don't need to be fetched
+        if workspace_members.contains_key(&line.path) {
+            continue;
+        }
         line_by_path
             .entry(line.path.clone())
             .or_default()
@@ -966,7 +1042,7 @@ fn build_closure(
     for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
 
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_root)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {
