@@ -3,9 +3,6 @@ version = "2"
 [workspace]
 allow = ["*"]
 
-[workspace.aliases]
-stdlib = "github.com/akhilles/stdlib"
-
 [package]
 path = "github.com/diodeinc/pcb/test-workspaces/packaging-v2"
 pcb-version = "0.2"

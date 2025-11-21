@@ -1,8 +1,8 @@
-load("@stdlib/config.zen", "config_unit")
-load("@stdlib/interfaces.zen", "Ground", "Power")
-load("@stdlib/units.zen", "Frequency")
+load("github.com/akhilles/stdlib/config.zen", "config_unit")
+load("github.com/akhilles/stdlib/interfaces.zen", "Ground", "Power")
+load("github.com/akhilles/stdlib/units.zen", "Frequency")
 
-Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Capacitor = Module("github.com/akhilles/stdlib/generics/Capacitor.zen")
 
 # Required
 frequency = config_unit("frequency", Frequency, default = "16MHz")
@@ -21,8 +21,8 @@ EN = io("EN", Net, optional = True, default = VCC.NET)  # Enable pin (HIGH=enabl
 Component(
     name = "OSC",
     prefix = "U",
-    symbol = Symbol(library = "@kicad-symbols/Oscillator.kicad_sym", name = "XO32"),
-    footprint = File("@kicad-footprints/Oscillator.pretty/Oscillator_SMD_SeikoEpson_SG210-4Pin_2.5x2.0mm.kicad_mod"),
+    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/Oscillator.kicad_sym", name = "XO32"),
+    footprint = File("gitlab.com/kicad/libraries/kicad-footprints/Oscillator.pretty/Oscillator_SMD_SeikoEpson_SG210-4Pin_2.5x2.0mm.kicad_mod"),
     pins = {
         "EN": EN,
         "GND": GND.NET,
