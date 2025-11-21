@@ -4,7 +4,4 @@ version = "2"
 pcb-version = "0.2"
 
 [dependencies]
-"github.com/akhilles/stdlib" = { version = "0.3.16" }
-"github.com/akhilles/registry" = { version = "0.3.12" }
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.0"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"github.com/akhilles/stdlib" = "0.4"
