@@ -61,7 +61,7 @@ fn to_sch_alternative(alt: &Alternative) -> pcb_sch::Alternative {
     }
 }
 
-pub fn execute(file: &Path, format: OutputFormat, _availability: bool) -> Result<()> {
+pub fn execute(file: &Path, format: OutputFormat, _offline: bool) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let accessor = IpcAccessor::new(&ipc);
@@ -71,7 +71,7 @@ pub fn execute(file: &Path, format: OutputFormat, _availability: bool) -> Result
     let mut bom = extract_bom_from_ipc(&accessor)?;
 
     #[cfg(feature = "api")]
-    if _availability {
+    if !_offline {
         use pcb_ui::prelude::*;
         let file_name = file.file_name().unwrap_or_default().to_string_lossy();
         let spinner = Spinner::builder(format!("{file_name}: Fetching availability")).start();

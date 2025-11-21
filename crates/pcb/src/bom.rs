@@ -75,10 +75,10 @@ pub struct BomArgs {
     #[arg(short = 'r', long = "rules", value_hint = clap::ValueHint::FilePath)]
     pub rules: Option<PathBuf>,
 
-    /// Fetch part availability and pricing from Diode API
+    /// Run in offline mode without fetching part availability
     #[cfg(feature = "api")]
     #[arg(long)]
-    pub availability: bool,
+    pub offline: bool,
 }
 
 pub fn execute(args: BomArgs) -> Result<()> {
@@ -118,7 +118,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     bom = bom.filter_excluded();
 
     #[cfg(feature = "api")]
-    if args.availability {
+    if !args.offline {
         spinner.set_message(format!("{file_name}: Fetching availability"));
         let token = pcb_diode_api::auth::get_valid_token()
             .context("Not authenticated. Run `pcb auth login` to authenticate.")?;

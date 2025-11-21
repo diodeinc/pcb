@@ -28,10 +28,10 @@ enum Commands {
         file: PathBuf,
         #[arg(short, long, default_value = "text")]
         format: OutputFormat,
-        /// Fetch part availability and pricing from Diode API
+        /// Run in offline mode without fetching part availability
         #[cfg(feature = "api")]
         #[arg(long)]
-        availability: bool,
+        offline: bool,
     },
     /// Edit IPC-2581 data
     Edit {
@@ -79,15 +79,15 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             format,
             #[cfg(feature = "api")]
-            availability,
+            offline,
         } => commands::bom::execute(&file, format, {
             #[cfg(feature = "api")]
             {
-                availability
+                offline
             }
             #[cfg(not(feature = "api"))]
             {
-                false
+                true
             }
         }),
         Commands::Edit { command } => match command {

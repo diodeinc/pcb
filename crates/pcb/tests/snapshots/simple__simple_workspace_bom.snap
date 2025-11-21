@@ -1,8 +1,8 @@
 ---
 source: crates/pcb/tests/simple.rs
-expression: "sb.snapshot_run(\"pcb\", [\"bom\", \"boards/TestBoard.zen\", \"-f\", \"json\"])"
+expression: "sb.snapshot_run(\"pcb\",\n[\"bom\", \"boards/TestBoard.zen\", \"-f\", \"json\", \"--offline\"])"
 ---
-Command: pcb bom boards/TestBoard.zen -f json
+Command: pcb bom boards/TestBoard.zen -f json --offline
 Exit Code: 0
 
 --- STDOUT ---
