@@ -6,15 +6,10 @@ allow = ["*"]
 [workspace.aliases]
 stdlib = "github.com/akhilles/stdlib"
 
-[workspace.dependencies]
-"github.com/akhilles/stdlib" = "0.3.17"
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
-
 [package]
 pcb-version = "0.2"
 
 [dependencies]
-"github.com/akhilles/stdlib" = { workspace = true }
-"gitlab.com/kicad/libraries/kicad-symbols" = { workspace = true }
-"gitlab.com/kicad/libraries/kicad-footprints" = { workspace = true }
+"github.com/akhilles/stdlib" = "0.4"
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
