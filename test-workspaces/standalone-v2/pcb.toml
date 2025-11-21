@@ -8,4 +8,4 @@ name = "StandaloneBoard"
 path = "board.zen"
 
 [dependencies]
-"github.com/akhilles/stdlib" = "0.4"
+"github.com/akhilles/stdlib" = "0.4.2"
