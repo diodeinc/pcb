@@ -46,7 +46,7 @@ pub enum PcbToml {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PcbTomlV1 {
     /// Workspace configuration section
-    pub workspace: Option<WorkspaceConfigV1>,
+    pub workspace: Option<WorkspaceConfig>,
 
     /// Module configuration section
     pub module: Option<ModuleConfig>,
@@ -57,6 +57,9 @@ pub struct PcbTomlV1 {
     /// Package aliases configuration section
     #[serde(default)]
     pub packages: HashMap<String, String>,
+
+    /// Access control configuration section
+    pub access: Option<AccessConfig>,
 }
 
 /// V2 pcb.toml structure (new packaging system)
@@ -91,6 +94,8 @@ pub struct PcbTomlV1 {
 ///
 /// [workspace]
 /// members = ["boards/*"]
+///
+/// [access]
 /// allow = ["*@weaverobots.com"]
 ///
 /// [vendor]
@@ -102,7 +107,7 @@ pub struct PcbTomlV2 {
     pub version: String,
 
     /// Workspace configuration section
-    pub workspace: Option<WorkspaceConfigV2>,
+    pub workspace: Option<WorkspaceConfig>,
 
     /// Package configuration section
     pub package: Option<PackageConfig>,
@@ -120,12 +125,16 @@ pub struct PcbTomlV2 {
 
     /// Vendor configuration
     pub vendor: Option<VendorConfig>,
+
+    /// Access control configuration section
+    pub access: Option<AccessConfig>,
 }
 
-/// V1 Workspace configuration
+/// Workspace configuration (shared by V1 and V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceConfigV1 {
-    /// Optional workspace name
+pub struct WorkspaceConfig {
+    /// Optional workspace name (V1 only, ignored in V2)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
     /// List of board directories/patterns (supports globs)
@@ -137,24 +146,12 @@ pub struct WorkspaceConfigV1 {
     pub default_board: Option<String>,
 }
 
-/// V2 Workspace configuration
+/// Access control configuration (shared by V1 and V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceConfigV2 {
-    /// List of board directories/patterns (supports globs)
-    #[serde(default = "default_members")]
-    pub members: Vec<String>,
-
-    /// Default board name to use
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_board: Option<String>,
-
+pub struct AccessConfig {
     /// Access control list (email patterns)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
-
-    /// Workspace-level package aliases (overrides defaults)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub aliases: HashMap<String, String>,
 }
 
 /// Module configuration (V1 only)
@@ -403,13 +400,8 @@ impl PcbToml {
                     }
                 }
 
-                // Convert Workspace
-                let workspace = v1.workspace.map(|w| WorkspaceConfigV2 {
-                    members: w.members,
-                    default_board: w.default_board,
-                    allow: vec![],
-                    aliases: HashMap::new(),
-                });
+                // Convert Workspace (already same struct, just pass through)
+                let workspace = v1.workspace;
 
                 // Create Package section if it's a module or board
                 let package = if v1.module.is_some() || v1.board.is_some() {
@@ -429,6 +421,7 @@ impl PcbToml {
                     dependencies,
                     patch: HashMap::new(),
                     vendor: None,
+                    access: v1.access,
                 })
             }
         }
@@ -582,7 +575,7 @@ pub struct WorkspaceInfo {
 
     /// Workspace configuration if present
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<WorkspaceConfigV1>,
+    pub config: Option<WorkspaceConfig>,
 
     /// All discovered boards
     pub boards: Vec<BoardInfo>,
@@ -698,17 +691,11 @@ impl PcbToml {
         }
     }
 
-    /// Get package aliases
+    /// Get package aliases (V1 only - V2 does not support aliases)
     pub fn packages(&self) -> HashMap<String, String> {
         match self {
             PcbToml::V1(v1) => v1.packages.clone(),
-            PcbToml::V2(v2) => {
-                if let Some(workspace) = &v2.workspace {
-                    workspace.aliases.clone()
-                } else {
-                    HashMap::new()
-                }
-            }
+            PcbToml::V2(_) => HashMap::new(), // V2 does not support aliases
         }
     }
 }
@@ -797,7 +784,7 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
 pub fn discover_boards(
     file_provider: &dyn FileProvider,
     workspace_root: &Path,
-    workspace_config: &Option<WorkspaceConfigV1>,
+    workspace_config: &Option<WorkspaceConfig>,
 ) -> Result<DiscoveryResult> {
     let member_patterns = workspace_config
         .as_ref()
@@ -1011,7 +998,7 @@ pub fn get_workspace_info(
         }
     } else if !discovery.boards.is_empty() {
         // Create a minimal workspace config with the last board as default
-        final_config = Some(WorkspaceConfigV1 {
+        final_config = Some(WorkspaceConfig {
             name: None,
             members: default_members(),
             default_board: Some(discovery.boards.last().unwrap().name.clone()),
