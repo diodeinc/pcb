@@ -182,9 +182,6 @@ fn resolve_dependencies(
     let mut manifest_cache: HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>> =
         HashMap::new();
 
-    // Map of local path dependencies (url -> absolute path)
-    let mut local_path_deps: HashMap<String, PathBuf> = HashMap::new();
-
     println!("\nPhase 0: Seed from workspace dependencies");
 
     // Preseed from pcb.sum to skip sequential discovery
@@ -237,8 +234,7 @@ fn resolve_dependencies(
         println!("\n  Package: {}", package_name);
 
         // Collect this package's dependencies
-        let package_deps =
-            collect_package_dependencies(&v2.dependencies, &workspace_deps, workspace_root)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2, &workspace_deps)?;
 
         if package_deps.is_empty() {
             println!("    No dependencies");
@@ -249,14 +245,10 @@ fn resolve_dependencies(
 
         // Seed MVS state from this package's dependencies
         for dep in &package_deps {
-            // Skip local path dependencies (handled separately)
+            // Skip local path dependencies (resolved per-package in build_resolution_map)
             if let DependencySpec::Detailed(detail) = &dep.spec {
-                if let Some(path_str) = &detail.path {
-                    // Resolve path relative to this package's directory, not workspace root
-                    let package_dir = pcb_toml_path.parent().unwrap();
-                    let abs_path = package_dir.join(path_str).canonicalize()?;
-                    println!("      - {} → {} (local path)", dep.url, path_str);
-                    local_path_deps.insert(dep.url.clone(), abs_path);
+                if detail.path.is_some() {
+                    println!("      - {} (local path)", dep.url);
                     continue;
                 }
             }
@@ -346,13 +338,7 @@ fn resolve_dependencies(
     println!();
 
     // Phase 2: Build the final dependency set using only selected versions
-    let build_set = build_closure(
-        &packages,
-        &workspace_deps,
-        workspace_root,
-        &selected,
-        &manifest_cache,
-    )?;
+    let build_set = build_closure(&packages, &workspace_deps, &selected, &manifest_cache)?;
 
     println!("Build set: {} dependencies", build_set.len());
 
@@ -393,7 +379,6 @@ fn resolve_dependencies(
         &selected,
         &patches,
         &manifest_cache,
-        &local_path_deps,
         &workspace_deps,
     )?;
 
@@ -414,7 +399,6 @@ fn build_resolution_map(
     selected: &HashMap<ModuleLine, Version>,
     patches: &HashMap<String, PatchSpec>,
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
-    local_path_deps: &HashMap<String, PathBuf>,
     workspace_deps: &HashMap<String, DependencySpec>,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Helper to compute absolute path for a module line
@@ -440,12 +424,12 @@ fn build_resolution_map(
             .insert(line.family.clone(), abs_path);
     }
 
-    // Resolve dependency -> path
-    let resolve = |url: &str, spec: &DependencySpec| -> Option<PathBuf> {
-        // Local path - use precomputed path from local_path_deps
+    // Resolve dependency -> path (with per-package base directory)
+    let resolve = |base_dir: &Path, url: &str, spec: &DependencySpec| -> Option<PathBuf> {
+        // Local path - resolve relative to base_dir
         if let DependencySpec::Detailed(d) = spec {
-            if d.path.is_some() {
-                return local_path_deps.get(url).cloned();
+            if let Some(path_str) = &d.path {
+                return Some(base_dir.join(path_str));
             }
         }
 
@@ -474,19 +458,27 @@ fn build_resolution_map(
     // Resolve alias -> path
     let resolve_alias = |target: &str| -> Option<PathBuf> {
         let spec = LoadSpec::parse(target)?;
-        let url = match spec {
-            LoadSpec::Github { user, repo, .. } => format!("github.com/{}/{}", user, repo),
-            LoadSpec::Gitlab { project_path, .. } => format!("gitlab.com/{}", project_path),
-            _ => return None,
-        };
-        url_to_families
-            .get(&url)
-            .and_then(|f| f.values().next().cloned())
-            .or_else(|| local_path_deps.get(&url).cloned())
+        match spec {
+            LoadSpec::Path { path, .. } => Some(workspace_root.join(path)),
+            LoadSpec::Github { user, repo, .. } => {
+                let url = format!("github.com/{}/{}", user, repo);
+                url_to_families
+                    .get(&url)
+                    .and_then(|f| f.values().next().cloned())
+            }
+            LoadSpec::Gitlab { project_path, .. } => {
+                let url = format!("gitlab.com/{}", project_path);
+                url_to_families
+                    .get(&url)
+                    .and_then(|f| f.values().next().cloned())
+            }
+            _ => None,
+        }
     };
 
-    // Build deps map for a package (BTreeMap for deterministic ordering)
-    let build_map = |pkg_deps: &HashMap<String, DependencySpec>,
+    // Build deps map for a package with base directory for local path resolution
+    let build_map = |base_dir: &Path,
+                     pkg_deps: &HashMap<String, DependencySpec>,
                      ws_aliases: Option<&HashMap<String, String>>|
      -> BTreeMap<String, PathBuf> {
         let mut map = BTreeMap::new();
@@ -500,17 +492,17 @@ fn build_resolution_map(
             }
         }
 
-        // Package deps
+        // Package deps - resolve local paths relative to base_dir
         for (url, spec) in pkg_deps {
-            if let Some(path) = resolve(url, spec) {
+            if let Some(path) = resolve(base_dir, url, spec) {
                 map.insert(url.clone(), path);
             }
         }
 
-        // Workspace deps (if not overridden)
+        // Workspace deps - resolve local paths relative to workspace_root
         for (url, spec) in workspace_deps {
             if !map.contains_key(url) {
-                if let Some(path) = resolve(url, spec) {
+                if let Some(path) = resolve(workspace_root, url, spec) {
                     map.insert(url.clone(), path);
                 }
             }
@@ -526,7 +518,10 @@ fn build_resolution_map(
         let mut all_deps = workspace_deps.clone();
         all_deps.extend(v2.dependencies.clone());
         let aliases = v2.workspace.as_ref().map(|w| &w.aliases);
-        results.insert(workspace_root.to_path_buf(), build_map(&all_deps, aliases));
+        results.insert(
+            workspace_root.to_path_buf(),
+            build_map(workspace_root, &all_deps, aliases),
+        );
     }
 
     // Member packages
@@ -534,9 +529,10 @@ fn build_resolution_map(
         if let PcbToml::V2(v2) = config {
             if let PcbToml::V2(root) = root_config {
                 let aliases = root.workspace.as_ref().map(|w| &w.aliases);
+                let pkg_dir = pkg_path.parent().unwrap();
                 results.insert(
-                    pkg_path.parent().unwrap().to_path_buf(),
-                    build_map(&v2.dependencies, aliases),
+                    pkg_dir.to_path_buf(),
+                    build_map(pkg_dir, &v2.dependencies, aliases),
                 );
             }
         }
@@ -547,26 +543,27 @@ fn build_resolution_map(
     for (line, version) in selected {
         let abs_path = get_abs_path(line, version);
         if let Some(deps) = manifest_cache.get(&(line.clone(), version.clone())) {
-            results.insert(abs_path, build_map(deps, None));
+            results.insert(abs_path.clone(), build_map(&abs_path, deps, None));
         }
     }
 
     Ok(results)
 }
 
-/// Collect dependencies for a single package, resolving workspace inheritance and transitive deps
+/// Collect dependencies for a package, resolving workspace inheritance and transitive deps
 fn collect_package_dependencies(
-    package_deps: &HashMap<String, DependencySpec>,
+    pcb_toml_path: &Path,
+    v2_config: &pcb_zen_core::config::PcbTomlV2,
     workspace_deps: &HashMap<String, DependencySpec>,
-    workspace_root: &Path,
 ) -> Result<Vec<UnresolvedDep>> {
+    let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = Vec::new();
     let mut visited = HashSet::new();
 
     collect_deps_recursive(
-        package_deps,
+        &v2_config.dependencies,
         workspace_deps,
-        workspace_root,
+        package_dir,
         &mut deps,
         &mut visited,
     )?;
@@ -578,7 +575,7 @@ fn collect_package_dependencies(
 fn collect_deps_recursive(
     current_deps: &HashMap<String, DependencySpec>,
     workspace_deps: &HashMap<String, DependencySpec>,
-    workspace_root: &Path,
+    package_dir: &Path,
     deps: &mut Vec<UnresolvedDep>,
     visited: &mut HashSet<String>,
 ) -> Result<()> {
@@ -614,17 +611,14 @@ fn collect_deps_recursive(
             }
         };
 
-        // Resolve local path relative to workspace root (like Cargo)
-        let resolved_path = workspace_root.join(local_path);
+        // Resolve local path relative to package directory
+        let resolved_path = package_dir.join(local_path);
 
-        // Validate path exists
         if !resolved_path.exists() {
             anyhow::bail!(
-                "Local path dependency '{}' not found at {} (path '{}' is relative to workspace root {})",
+                "Local path dependency '{}' not found at {}",
                 url,
-                resolved_path.display(),
-                local_path,
-                workspace_root.display()
+                resolved_path.display()
             );
         }
 
@@ -647,7 +641,7 @@ fn collect_deps_recursive(
                 collect_deps_recursive(
                     &dep_config.dependencies,
                     workspace_deps,
-                    workspace_root,
+                    &resolved_path,
                     deps,
                     visited,
                 )?;
@@ -956,10 +950,9 @@ fn print_dependency_tree(
     }
 
     // Package dependencies (that aren't in workspace)
-    for (_pcb_toml_path, config) in packages {
+    for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
-        let package_deps =
-            collect_package_dependencies(&v2.dependencies, workspace_deps, workspace_root)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_deps)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec)
@@ -1000,7 +993,6 @@ fn print_dependency_tree(
 fn build_closure(
     packages: &[(PathBuf, PcbToml)],
     workspace_deps: &HashMap<String, DependencySpec>,
-    workspace_root: &Path,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
@@ -1017,11 +1009,10 @@ fn build_closure(
     }
 
     // Seed DFS from all package dependencies
-    for (_pcb_toml_path, config) in packages {
+    for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
 
-        let package_deps =
-            collect_package_dependencies(&v2.dependencies, workspace_deps, workspace_root)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_deps)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {
