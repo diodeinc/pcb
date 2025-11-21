@@ -167,13 +167,6 @@ fn resolve_dependencies(
         }
     }
 
-    let workspace_deps = v2
-        .workspace
-        .as_ref()
-        .map(|w| &w.dependencies)
-        .cloned()
-        .unwrap_or_default();
-
     let patches = v2.patch.clone();
 
     // MVS state
@@ -234,7 +227,7 @@ fn resolve_dependencies(
         println!("\n  Package: {}", package_name);
 
         // Collect this package's dependencies
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2, &workspace_deps)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2)?;
 
         if package_deps.is_empty() {
             println!("    No dependencies");
@@ -338,18 +331,12 @@ fn resolve_dependencies(
     println!();
 
     // Phase 2: Build the final dependency set using only selected versions
-    let build_set = build_closure(&packages, &workspace_deps, &selected, &manifest_cache)?;
+    let build_set = build_closure(&packages, &selected, &manifest_cache)?;
 
     println!("Build set: {} dependencies", build_set.len());
 
     // Print dependency tree
-    print_dependency_tree(
-        &packages,
-        &workspace_deps,
-        workspace_root,
-        &build_set,
-        &manifest_cache,
-    )?;
+    print_dependency_tree(&packages, workspace_root, &build_set, &manifest_cache)?;
 
     // Phase 3: Fetch full repository contents for the build set
     println!("\nPhase 3: Fetching full repository contents");
@@ -379,7 +366,6 @@ fn resolve_dependencies(
         &selected,
         &patches,
         &manifest_cache,
-        &workspace_deps,
     )?;
 
     Ok(ResolutionResult {
@@ -390,7 +376,6 @@ fn resolve_dependencies(
 }
 
 /// Build the per-package resolution map
-#[allow(clippy::too_many_arguments)]
 fn build_resolution_map(
     workspace_root: &Path,
     home_dir: &Path,
@@ -399,7 +384,6 @@ fn build_resolution_map(
     selected: &HashMap<ModuleLine, Version>,
     patches: &HashMap<String, PatchSpec>,
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
-    workspace_deps: &HashMap<String, DependencySpec>,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Helper to compute absolute path for a module line
     let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
@@ -499,15 +483,6 @@ fn build_resolution_map(
             }
         }
 
-        // Workspace deps - resolve local paths relative to workspace_root
-        for (url, spec) in workspace_deps {
-            if !map.contains_key(url) {
-                if let Some(path) = resolve(workspace_root, url, spec) {
-                    map.insert(url.clone(), path);
-                }
-            }
-        }
-
         map
     };
 
@@ -515,12 +490,10 @@ fn build_resolution_map(
 
     // Workspace root
     if let PcbToml::V2(v2) = root_config {
-        let mut all_deps = workspace_deps.clone();
-        all_deps.extend(v2.dependencies.clone());
         let aliases = v2.workspace.as_ref().map(|w| &w.aliases);
         results.insert(
             workspace_root.to_path_buf(),
-            build_map(workspace_root, &all_deps, aliases),
+            build_map(workspace_root, &v2.dependencies, aliases),
         );
     }
 
@@ -550,21 +523,15 @@ fn build_resolution_map(
     Ok(results)
 }
 
-/// Collect dependencies for a package, resolving workspace inheritance and transitive deps
+/// Collect dependencies for a package and transitive local deps
 fn collect_package_dependencies(
     pcb_toml_path: &Path,
     v2_config: &pcb_zen_core::config::PcbTomlV2,
-    workspace_deps: &HashMap<String, DependencySpec>,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(
-        &v2_config.dependencies,
-        workspace_deps,
-        package_dir,
-        &mut deps,
-    )?;
+    collect_deps_recursive(&v2_config.dependencies, package_dir, &mut deps)?;
 
     Ok(deps.into_values().collect())
 }
@@ -572,7 +539,6 @@ fn collect_package_dependencies(
 /// Recursively collect dependencies, handling transitive local path dependencies
 fn collect_deps_recursive(
     current_deps: &HashMap<String, DependencySpec>,
-    workspace_deps: &HashMap<String, DependencySpec>,
     package_dir: &Path,
     deps: &mut HashMap<String, UnresolvedDep>,
 ) -> Result<()> {
@@ -582,24 +548,8 @@ fn collect_deps_recursive(
             continue;
         }
 
-        // Resolve workspace inheritance
-        let resolved_spec = match spec {
-            DependencySpec::Detailed(detail) if detail.workspace => {
-                workspace_deps
-                    .get(url)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Package inherits dependency {} from workspace, but it's not defined in [workspace.dependencies]",
-                            url
-                        )
-                    })?
-                    .clone()
-            }
-            other => other.clone(),
-        };
-
         // Check if it's a local path dependency
-        let local_path = match &resolved_spec {
+        let local_path = match spec {
             DependencySpec::Detailed(detail) if detail.path.is_some() => {
                 detail.path.as_ref().unwrap()
             }
@@ -609,7 +559,7 @@ fn collect_deps_recursive(
                     url.clone(),
                     UnresolvedDep {
                         url: url.clone(),
-                        spec: resolved_spec,
+                        spec: spec.clone(),
                     },
                 );
                 continue;
@@ -632,7 +582,7 @@ fn collect_deps_recursive(
             url.clone(),
             UnresolvedDep {
                 url: url.clone(),
-                spec: resolved_spec,
+                spec: spec.clone(),
             },
         );
 
@@ -641,12 +591,7 @@ fn collect_deps_recursive(
         if dep_pcb_toml.exists() {
             let file_provider = DefaultFileProvider::new();
             if let Ok(PcbToml::V2(dep_config)) = PcbToml::from_file(&file_provider, &dep_pcb_toml) {
-                collect_deps_recursive(
-                    &dep_config.dependencies,
-                    workspace_deps,
-                    &resolved_path,
-                    deps,
-                )?;
+                collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
             }
         }
     }
@@ -795,7 +740,6 @@ fn read_manifest_from_path(
 /// Print a tree view of the dependency graph (cargo tree style)
 fn print_dependency_tree(
     packages: &[(PathBuf, PcbToml)],
-    workspace_deps: &HashMap<String, DependencySpec>,
     workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
@@ -885,20 +829,13 @@ fn print_dependency_tree(
         .and_then(|n| n.to_str())
         .unwrap_or("workspace");
 
-    // Collect all root dependencies (workspace + packages)
+    // Collect all root dependencies from packages
     let mut all_roots = Vec::new();
 
-    // Workspace dependencies
-    for (url, spec) in workspace_deps {
-        if !is_non_version_dep(spec) && build_map.contains_key(url) {
-            all_roots.push(url.clone());
-        }
-    }
-
-    // Package dependencies (that aren't in workspace)
+    // Package dependencies
     for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_deps)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec)
@@ -938,7 +875,6 @@ fn print_dependency_tree(
 /// DFS from workspace package dependencies using selected versions.
 fn build_closure(
     packages: &[(PathBuf, PcbToml)],
-    workspace_deps: &HashMap<String, DependencySpec>,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
@@ -958,7 +894,7 @@ fn build_closure(
     for (pcb_toml_path, config) in packages {
         let PcbToml::V2(v2) = config else { continue };
 
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_deps)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, v2)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {

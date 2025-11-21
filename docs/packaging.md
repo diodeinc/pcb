@@ -292,7 +292,7 @@ This enables a "code-first" workflow where manifests are managed primarily by th
 
 ### Workspace
 
-Coordinate versions across packages in monorepo:
+Coordinate packages in monorepo:
 
 ```toml
 [workspace]
@@ -300,16 +300,12 @@ members = ["boards/*"]
 default-board = "WV0002"
 allow = ["*@weaverobots.com"]
 
-[workspace.dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
-"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
-
 [vendor]
 directory = "vendor"
 match = ["*"]
 ```
 
-Member packages inherit:
+Each member package declares its own dependencies:
 ```toml
 [package]
 pcb-version = "0.3"
@@ -319,18 +315,11 @@ name = "WV0002"
 path = "WV0002.zen"
 
 [dependencies]
-"github.com/diodeinc/stdlib" = { workspace = true }
-"github.com/diodeinc/registry/reference/ti/tps54331" = { workspace = true }
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
 ```
 
-Override when needed:
-```toml
-[dependencies]
-"github.com/diodeinc/stdlib" = { workspace = true }
-"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0.2"  # Override
-```
-
-Solves version coordination visible in current weave where different boards use incompatible versions with no central policy.
+MVS automatically coordinates versions across the workspace. If WV0002 depends on `stdlib@0.3.2` and WV0003 depends on `stdlib@0.3.4`, MVS selects `0.3.4` (highest within the v0.3 family) for both.
 
 ### Patches
 
@@ -501,14 +490,9 @@ members = ["boards/*"]
 default-board = "WV0002"
 
 allow = ["*@weaverobots.com"]
-
-[workspace.dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
-"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
-"github.com/diodeinc/registry/reference/analog/ltc3115" = "1.5"
 ```
 
-WV0002 inherits:
+WV0002 declares dependencies:
 ```toml
 [package]
 pcb-version = "0.3"
@@ -519,9 +503,9 @@ path = "WV0002.zen"
 description = "Power Regulator Board"
 
 [dependencies]
-"github.com/diodeinc/stdlib" = { workspace = true }
-"github.com/diodeinc/registry/reference/ti/tps54331" = { workspace = true }
-"github.com/diodeinc/registry/reference/analog/ltc3115" = { workspace = true }
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
+"github.com/diodeinc/registry/reference/analog/ltc3115" = "1.5"
 ```
 
 Load statements backward compatible (aliases work) or use full URLs:
@@ -666,9 +650,9 @@ $ cd boards/WV0002
 $ cat >> pcb.toml << 'EOF'
 
 [dependencies]
-"github.com/diodeinc/stdlib" = { workspace = true }
-"github.com/diodeinc/registry/reference/ti/tps54331" = { workspace = true }
-"github.com/diodeinc/registry/reference/analog/ltc3115" = { workspace = true }
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
+"github.com/diodeinc/registry/reference/analog/ltc3115" = "1.5"
 "github.com/externalorg/custom-sensors" = "1.0"
 EOF
 
@@ -692,16 +676,16 @@ New dependency and hash added to `pcb.sum`. Commit both files.
 Gradual migration when stdlib releases breaking v1.0.0:
 
 ```toml
-# Workspace default
-[workspace.dependencies]
+# WV0001 (unmigrated)
+[dependencies]
 "github.com/diodeinc/stdlib" = "0.3"
 
-# WV0002 migrated
+# WV0002 (migrated)
 [dependencies]
 "github.com/diodeinc/stdlib" = "1.0"
 ```
 
-Build includes both `stdlib@0.3.x` and `stdlib@1.0.x`. WV0002 uses new API, other boards use old. Migrate board-by-board over weeks/months.
+Build includes both `stdlib@0.3.x` and `stdlib@1.0.x`. WV0002 uses new API, WV0001 uses old. MVS resolves each family independently. Migrate board-by-board over weeks/months.
 
 ## Design Comparisons
 
@@ -720,11 +704,12 @@ Build includes both `stdlib@0.3.x` and `stdlib@1.0.x`. WV0002 uses new API, othe
 ### Cargo
 
 **Adopted:**
-- Manifest structure (`[package]`, `[[board]]` like `[[bin]]`)
-- Workspace with `{ workspace = true }` inheritance
+- Manifest structure (`[package]`, `[board]` like `[[bin]]`)
+- Workspace for monorepo coordination
 - `[patch]` for local development
 
 **Diverged:**
+- No dependency inheritance (each package declares its own deps, MVS coordinates versions)
 - MVS instead of constraint solver (simpler, sufficient for smaller ecosystem)
 - Git-based, no registry
 
@@ -742,14 +727,37 @@ Deterministic, monotonic, no backtracking. Patches participate in MVS. Increment
 
 ### Git Operations
 
-Cache: `~/.pcb/cache/{path}/{version}/` contains working tree + `.pcbcache` (hashes). Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
+**Cache Structure:** `~/.pcb/cache/{full-module-path}/{version}/` contains package contents directly at root (no nested path redundancy) + `.pcbcache` marker for hash verification. Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
 
-**Manifest fetch:** `git clone --filter=blob:none --depth=1` (metadata + pcb.toml only)  
-**Full fetch:** Fresh shallow clone  
-**Pseudo-versions:** `git ls-remote` → `git describe` → `v<base+1>-0.<timestamp>-<commit>` (40-char hash)  
-**Auth:** HTTPS with SSH fallback
+Examples:
+- Root package: `~/.pcb/cache/github.com/diodeinc/stdlib/v0.3.2/`
+- Nested package: `~/.pcb/cache/github.com/diodeinc/registry/components/2N7002/v1.0.0/`
 
-Optimizations: blob-filtered clones, .pcbcache markers (skip re-hash), lockfile preseeding (skip git ls-remote), manifest caching.
+**Repository Boundary Detection:**
+- **GitHub:** 3-segment split: `github.com/user/repo` is the repository, everything after is subpath
+  - Example: `github.com/diodeinc/registry/components/2N7002` → repo: `github.com/diodeinc/registry`, subpath: `components/2N7002`
+- **GitLab:** Entire path is the repository (supports nested groups natively)
+  - Example: `gitlab.com/kicad/libraries/kicad-symbols` → repo: `gitlab.com/kicad/libraries/kicad-symbols`
+
+**Tag Resolution:** 
+- Root packages: `refs/tags/v{version}` (e.g., `v0.3.2`)
+- Nested packages: `refs/tags/{subpath}/v{version}` (e.g., `components/2N7002/v1.0.0`)
+- Fallback for non-prefixed tags: tries `refs/tags/{version}` or `refs/tags/{subpath}/{version}` (KiCad compatibility)
+
+**Sparse-Checkout for Nested Packages:**
+1. Clone with `--filter=blob:none` (promisor remote with `remote.origin.promisor=true`)
+2. Configure sparse-checkout to fetch only the subpath
+3. Use `git reset --hard FETCH_HEAD` to materialize blobs (required for filtered clones)
+4. Move contents from `subpath_dir/` to cache root, delete empty parent dirs (eliminates path redundancy)
+
+**Fetch Strategy:**
+1. Try HTTPS with v-prefixed tag
+2. On failure, switch remote to SSH and retry
+3. If SSH fails and not a pseudo-version, try without v-prefix (handles KiCad-style tags)
+
+**Pseudo-versions:** `git ls-remote` → `git describe` → `v<base+1>-0.<timestamp>-<commit>` (40-char hash)
+
+**Optimizations:** Sparse-checkout (bandwidth), .pcbcache markers (skip re-hash), lockfile preseeding (skip git ls-remote), .no-manifest markers (skip asset package re-fetch)
 
 ### Load Resolution
 
@@ -786,14 +794,13 @@ Detected dependencies:
   stdlib: v0.2.13, v0.3.1, v0.3.2
   registry: v0.1.28, v0.3.1, v0.3.8
 
-Proposed workspace dependencies:
-  "github.com/diodeinc/stdlib" = "0.3"  (satisfies 0.3.x boards)
-  "github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
-  "github.com/diodeinc/registry/reference/analog/ltc3115" = "1.5"
-  "github.com/diodeinc/registry/..." = "..."
+Updating board pcb.toml files with detected dependencies...
+  WV0002: stdlib@0.3.2, registry/ti/tps54331@1.0, ...
+  WV0003: stdlib@0.3.1, registry/analog/ltc3115@1.5, ...
 
 Board WV0001 uses stdlib@0.2.13 (incompatible with 0.3)
 Keep multiple major versions in build? [Y/n]: y
+  WV0001: stdlib@0.2.13 (separate family)
 
 Generating new pcb.toml files...
 Rewriting load statements (optional)...
