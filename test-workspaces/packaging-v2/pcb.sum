@@ -1,8 +1,6 @@
-github.com/akhilles/registry 0.3.12 h1:9j1jrOVkOhP8riL0Omf4ykShEQ/nQyTzzS+sVIKQ5b4=
-github.com/akhilles/registry 0.3.12/pcb.toml h1:SpCtujJnRgyNq0n8ht4oIM5cNaymO+5Nsk2P28sXFG0=
-github.com/akhilles/stdlib 0.3.17 h1:ox6qMcPYEBO31Ujp+92Wy8BvFc0HXS3mWE3G9hW4HsI=
-github.com/akhilles/stdlib 0.3.17/pcb.toml h1:OUhsZrzKu/3mnzFCFkyfL3vwZmAmGRzzOjQWq8+qclY=
-github.com/diodeinc/stdlib 0.3.13 h1:zAldSGOIOtSEjBbEsOKSuNq66vXG0ADc8/Y3lxqSHlY=
-github.com/diodeinc/stdlib 0.3.13/pcb.toml h1:Kc/bVfk1eomRPJmbmGSy87K+hPCSF/oAiA9oMX2V9A8=
+github.com/akhilles/registry/components/2N7002 0.2.0 h1:CsOppjwfKLLtAPntD8lsRTrOgjqaiGQA1fXG1ZaDOwg=
+github.com/akhilles/registry/components/2N7002 0.2.0/pcb.toml h1:GNGZxotD1s568pt0YjGNaS65ctEi96b91cWwCLHR774=
+github.com/akhilles/stdlib 0.4.0 h1:lAersmzlAaxh/1uXS5uT2tzAC8+9bC7Wfp0yaXwxe3k=
+github.com/akhilles/stdlib 0.4.0/pcb.toml h1:OUhsZrzKu/3mnzFCFkyfL3vwZmAmGRzzOjQWq8+qclY=
 gitlab.com/kicad/libraries/kicad-footprints 9.0.3 h1:wkl/K8JzwqbJeLmV2mJ05nsUjKr2pbJp1j3nmKOpJaE=
 gitlab.com/kicad/libraries/kicad-symbols 9.0.3 h1:wD39eYg6/gvNo7yrLgxAGwSLglSQbUo7qMrZ29jaD60=

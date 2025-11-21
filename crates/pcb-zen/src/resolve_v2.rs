@@ -557,18 +557,16 @@ fn collect_package_dependencies(
     workspace_deps: &HashMap<String, DependencySpec>,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
-    let mut deps = Vec::new();
-    let mut visited = HashSet::new();
+    let mut deps = HashMap::new();
 
     collect_deps_recursive(
         &v2_config.dependencies,
         workspace_deps,
         package_dir,
         &mut deps,
-        &mut visited,
     )?;
 
-    Ok(deps)
+    Ok(deps.into_values().collect())
 }
 
 /// Recursively collect dependencies, handling transitive local path dependencies
@@ -576,10 +574,14 @@ fn collect_deps_recursive(
     current_deps: &HashMap<String, DependencySpec>,
     workspace_deps: &HashMap<String, DependencySpec>,
     package_dir: &Path,
-    deps: &mut Vec<UnresolvedDep>,
-    visited: &mut HashSet<String>,
+    deps: &mut HashMap<String, UnresolvedDep>,
 ) -> Result<()> {
     for (url, spec) in current_deps {
+        // Skip if already seen
+        if deps.contains_key(url) {
+            continue;
+        }
+
         // Resolve workspace inheritance
         let resolved_spec = match spec {
             DependencySpec::Detailed(detail) if detail.workspace => {
@@ -603,10 +605,13 @@ fn collect_deps_recursive(
             }
             _ => {
                 // Not a local path dep, just add it
-                deps.push(UnresolvedDep {
-                    url: url.clone(),
-                    spec: resolved_spec,
-                });
+                deps.insert(
+                    url.clone(),
+                    UnresolvedDep {
+                        url: url.clone(),
+                        spec: resolved_spec,
+                    },
+                );
                 continue;
             }
         };
@@ -622,16 +627,14 @@ fn collect_deps_recursive(
             );
         }
 
-        // Add this dep
-        deps.push(UnresolvedDep {
-            url: url.clone(),
-            spec: resolved_spec,
-        });
-
-        // Avoid infinite loops
-        if !visited.insert(url.clone()) {
-            continue;
-        }
+        // Add this local path dep
+        deps.insert(
+            url.clone(),
+            UnresolvedDep {
+                url: url.clone(),
+                spec: resolved_spec,
+            },
+        );
 
         // Recursively resolve transitive dependencies
         let dep_pcb_toml = resolved_path.join("pcb.toml");
@@ -643,7 +646,6 @@ fn collect_deps_recursive(
                     workspace_deps,
                     &resolved_path,
                     deps,
-                    visited,
                 )?;
             }
         }
@@ -699,7 +701,6 @@ fn fetch_manifest(
     patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
 ) -> Result<HashMap<String, DependencySpec>> {
     use std::fs;
-    use std::process::Command;
 
     // Check if this module is patched with a local path
     if let Some(patch) = patches.get(module_path) {
@@ -715,20 +716,6 @@ fn fetch_manifest(
         return read_manifest_from_path(&patched_toml, module_path);
     }
 
-    // Determine if this is a pseudo-version or regular tag
-    let is_pseudo_version = version.pre.starts_with("0.");
-    let ref_spec = if is_pseudo_version {
-        // Extract commit hash from pseudo-version (last segment after final -)
-        let version_str = version.to_string();
-        version_str
-            .split('-')
-            .next_back()
-            .unwrap_or("HEAD")
-            .to_string()
-    } else {
-        format!("v{}", version)
-    };
-
     // Cache directory: ~/.pcb/cache/{module_path}/{version}/
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -736,16 +723,7 @@ fn fetch_manifest(
     let checkout_dir = cache_base.join(module_path).join(version.to_string());
 
     // Check if we've already processed this version
-    let pcb_toml_path = checkout_dir.join("pcb.toml");
     let marker_path = checkout_dir.join(".no-manifest");
-    let cache_marker = checkout_dir.join(".pcbcache");
-
-    // Prefer using cached manifest if available (skip git operations)
-    if pcb_toml_path.exists() && (cache_marker.exists() || marker_path.exists()) {
-        // Successfully cached with manifest OR asset package
-        println!("        Using cached manifest");
-        return read_manifest_from_path(&pcb_toml_path, module_path);
-    }
 
     if marker_path.exists() {
         // Already tried, no V2 manifest (asset package or V1)
@@ -753,59 +731,27 @@ fn fetch_manifest(
         return Ok(HashMap::new());
     }
 
-    // Clone with --filter=blob:none, then extract just pcb.toml using git show
-    println!("        Cloning (blob-filtered)");
+    // Use sparse checkout to fetch the module (shared with Phase 3)
+    println!("        Cloning (sparse checkout)");
 
-    if git_clone_with_fallback(
-        module_path,
-        &["--filter=blob:none", "--no-checkout"],
-        &checkout_dir,
-    )
-    .is_err()
-    {
-        let marker_path = checkout_dir.join(".no-manifest");
-        fs::create_dir_all(&checkout_dir)?;
-        let _ = fs::write(&marker_path, "Failed to clone (tried HTTPS and SSH)\n");
+    let package_root =
+        match ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string()) {
+            Ok(root) => root,
+            Err(e) => {
+                // Failed to fetch - mark as asset package
+                let _ = fs::create_dir_all(&checkout_dir);
+                let _ = fs::write(&marker_path, format!("Failed to fetch: {}\n", e));
+                return Ok(HashMap::new());
+            }
+        };
+
+    let pcb_toml_path = package_root.join("pcb.toml");
+
+    // Check if manifest exists
+    if !pcb_toml_path.exists() {
+        // Asset package (no pcb.toml)
+        let _ = fs::write(&marker_path, "No pcb.toml in repository\n");
         return Ok(HashMap::new());
-    }
-
-    // For pseudo-versions, fetch the specific commit
-    if is_pseudo_version {
-        let fetch_status = Command::new("git")
-            .arg("fetch")
-            .arg("--depth=1")
-            .arg("origin")
-            .arg(&ref_spec)
-            .current_dir(&checkout_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?;
-
-        if !fetch_status.success() {
-            let marker_path = checkout_dir.join(".no-manifest");
-            let _ = fs::write(&marker_path, "Failed to fetch commit\n");
-            return Ok(HashMap::new());
-        }
-    }
-
-    // Extract just pcb.toml using git show (doesn't require full checkout)
-    let show_output = Command::new("git")
-        .arg("show")
-        .arg(format!("{}:pcb.toml", ref_spec))
-        .current_dir(&checkout_dir)
-        .output();
-
-    match show_output {
-        Ok(output) if output.status.success() => {
-            // Write pcb.toml to disk
-            fs::write(&pcb_toml_path, &output.stdout)?;
-        }
-        _ => {
-            // No pcb.toml at this ref (asset package)
-            let marker_path = checkout_dir.join(".no-manifest");
-            let _ = fs::write(&marker_path, "No pcb.toml in repository\n");
-            return Ok(HashMap::new());
-        }
     }
 
     // Read the manifest
@@ -1579,19 +1525,16 @@ fn fetch_full_contents(
 
         let is_asset_package = cache_dir.join(".no-manifest").exists();
 
-        // Remove Phase 1's partial clone and do fresh full shallow clone
-        if cache_dir.exists() {
-            std::fs::remove_dir_all(&cache_dir)?;
-        }
-        clone_full_shallow(&cache_dir, &line.path, &version.to_string())?;
+        // Ensure sparse-checkout working tree (reuses Phase 1 clone if already done)
+        let package_root = ensure_sparse_checkout(&cache_dir, &line.path, &version.to_string())?;
 
         // Compute hashes immediately after fetch
         print!("      Computing hashes... ");
         std::io::Write::flush(&mut std::io::stdout())?;
 
-        let content_hash = compute_content_hash_from_dir(&cache_dir)?;
-        let manifest_hash = if cache_dir.join("pcb.toml").exists() {
-            let manifest_content = std::fs::read_to_string(cache_dir.join("pcb.toml"))?;
+        let content_hash = compute_content_hash_from_dir(&package_root)?;
+        let manifest_hash = if package_root.join("pcb.toml").exists() {
+            let manifest_content = std::fs::read_to_string(package_root.join("pcb.toml"))?;
             Some(compute_manifest_hash(&manifest_content))
         } else {
             None
@@ -1617,34 +1560,193 @@ fn fetch_full_contents(
     Ok(())
 }
 
-/// Clone full repository at specific version using shallow clone
-fn clone_full_shallow(cache_dir: &Path, module_path: &str, version_str: &str) -> Result<()> {
+/// Ensure sparse-checkout working tree for a module at specific version
+///
+/// Uses Git sparse-checkout to only materialize the subdirectory for nested packages.
+///
+/// Cache structure:
+/// - Root packages: `~/.pcb/cache/github.com/user/repo/{version}/` (package root = cache dir)
+/// - Nested packages: `~/.pcb/cache/github.com/user/repo/components/part/{version}/` (package root = cache dir, contents moved up)
+///
+/// Returns the package root path (where pcb.toml lives)
+fn ensure_sparse_checkout(
+    checkout_dir: &Path,
+    module_path: &str,
+    version_str: &str,
+) -> Result<PathBuf> {
+    let (repo_url, subpath) = split_repo_and_subpath(module_path);
     let is_pseudo_version = version_str.contains("-0.");
 
-    if is_pseudo_version {
-        // Pseudo-versions: clone repo, fetch commit, checkout
-        let commit = version_str.rsplit('-').next().unwrap();
-
-        git_clone_with_fallback(module_path, &["--no-checkout"], cache_dir)?;
-        run_git_in(&["fetch", "--depth=1", "origin", commit], cache_dir)?;
-        run_git_in(&["checkout", commit], cache_dir)?;
+    // Construct ref_spec (tag name or commit hash)
+    let ref_spec = if is_pseudo_version {
+        // Extract commit hash from pseudo-version (last segment after final -)
+        version_str.rsplit('-').next().unwrap().to_string()
     } else {
-        // Regular versions: try v-prefix first, fallback to no prefix
-        let v_tag = format!("v{}", version_str);
+        // Regular version: construct tag with subpath prefix
+        if subpath.is_empty() {
+            format!("v{}", version_str)
+        } else {
+            format!("{}/v{}", subpath, version_str)
+        }
+    };
 
-        if git_clone_with_fallback(module_path, &["--depth=1", "--branch", &v_tag], cache_dir)
-            .is_err()
-        {
-            // Try without v-prefix
-            git_clone_with_fallback(
-                module_path,
-                &["--depth=1", "--branch", version_str],
-                cache_dir,
-            )?;
+    // If .git already exists, assume checkout is done (cache hit)
+    // Package root is always checkout_dir (nested packages already moved up)
+    if checkout_dir.join(".git").exists() {
+        return Ok(checkout_dir.to_path_buf());
+    }
+
+    // Initialize Git repo
+    std::fs::create_dir_all(checkout_dir)?;
+    run_git_in(&["init"], checkout_dir)?;
+
+    // Add remote (ignore errors if already exists)
+    let https_url = format!("https://{}.git", repo_url);
+    let _ = run_git_in(&["remote", "add", "origin", &https_url], checkout_dir);
+
+    // Configure as promisor remote for partial clone (required for --filter=blob:none to work)
+    run_git_in(&["config", "remote.origin.promisor", "true"], checkout_dir)?;
+    run_git_in(
+        &["config", "remote.origin.partialclonefilter", "blob:none"],
+        checkout_dir,
+    )?;
+
+    // Try HTTPS fetch, fallback to SSH if needed, fallback to no-v-prefix
+    let ssh_url = format_ssh_url(repo_url);
+    let tag_ref = if is_pseudo_version {
+        ref_spec.clone()
+    } else {
+        format!("refs/tags/{}", ref_spec)
+    };
+
+    let fetch_args = vec![
+        "fetch",
+        "--depth=1",
+        "--filter=blob:none",
+        "origin",
+        &tag_ref,
+    ];
+
+    let mut fetch_succeeded = false;
+
+    // Try HTTPS first
+    let fetch_result = std::process::Command::new("git")
+        .args(&fetch_args)
+        .current_dir(checkout_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    if let Ok(status) = fetch_result {
+        if status.success() {
+            fetch_succeeded = true;
         }
     }
 
-    Ok(())
+    // Try SSH if HTTPS failed
+    if !fetch_succeeded {
+        run_git_in(&["remote", "set-url", "origin", &ssh_url], checkout_dir)?;
+        if run_git_in(&fetch_args, checkout_dir).is_ok() {
+            fetch_succeeded = true;
+        }
+    }
+
+    // Try without v-prefix if both HTTPS and SSH with v-prefix failed
+    if !fetch_succeeded && !is_pseudo_version {
+        let tag_ref_no_v = if subpath.is_empty() {
+            format!("refs/tags/{}", version_str)
+        } else {
+            format!("refs/tags/{}/{}", subpath, version_str)
+        };
+        let fetch_args_no_v = vec![
+            "fetch",
+            "--depth=1",
+            "--filter=blob:none",
+            "origin",
+            &tag_ref_no_v,
+        ];
+        run_git_in(&fetch_args_no_v, checkout_dir)?;
+    }
+
+    // Configure sparse-checkout for nested packages (fetch only the subpath)
+    if !subpath.is_empty() {
+        run_git_in(&["sparse-checkout", "init", "--cone"], checkout_dir)?;
+        run_git_in(&["sparse-checkout", "set", subpath], checkout_dir)?;
+    }
+
+    // Checkout and materialize the fetched ref
+    run_git_in(&["reset", "--hard", "FETCH_HEAD"], checkout_dir)?;
+
+    // For nested packages: move subpath contents to cache root to eliminate path redundancy
+    if !subpath.is_empty() {
+        let subpath_dir = checkout_dir.join(subpath);
+        if !subpath_dir.exists() {
+            anyhow::bail!(
+                "Subpath '{}' not found in {} at {}",
+                subpath,
+                repo_url,
+                version_str
+            );
+        }
+
+        // Move all contents from subpath_dir to checkout_dir
+        for entry in std::fs::read_dir(&subpath_dir)? {
+            let entry = entry?;
+            std::fs::rename(entry.path(), checkout_dir.join(entry.file_name()))?;
+        }
+
+        // Remove now-empty subpath directories
+        std::fs::remove_dir_all(subpath_dir.parent().unwrap_or(&subpath_dir))?;
+    }
+
+    Ok(checkout_dir.to_path_buf())
+}
+
+/// Extract repository boundary and subpath from module path
+///
+/// Go convention: host/user/repo is the repository boundary
+/// For GitHub: github.com/user/repo
+/// For GitLab: gitlab.com/user/project (or nested groups: gitlab.com/group/subgroup/project)
+///
+/// Returns (repo_url, subpath)
+/// Examples:
+/// - github.com/diodeinc/registry → ("github.com/diodeinc/registry", "")
+/// - github.com/diodeinc/registry/components/2N7002 → ("github.com/diodeinc/registry", "components/2N7002")
+/// - gitlab.com/kicad/libraries/kicad-symbols → ("gitlab.com/kicad/libraries/kicad-symbols", "")
+fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
+    let parts: Vec<&str> = module_path.split('/').collect();
+
+    if parts.is_empty() {
+        return (module_path, "");
+    }
+
+    let host = parts[0];
+
+    // For GitHub only: repository is host/user/repo (first 3 segments), everything after is subpath
+    // For GitLab: support nested groups, so treat entire path as repo (no subpath support for now)
+    if host == "github.com" {
+        if parts.len() <= 3 {
+            // No subpath (just host/user/repo or less)
+            return (module_path, "");
+        }
+
+        // Split at the 3rd slash: host/user/repo | subpath
+        let repo_boundary = parts[..3].join("/");
+
+        // Return borrowed slices by finding the boundary position in the original string
+        let boundary_len = repo_boundary.len();
+        let repo_url = &module_path[..boundary_len];
+        let subpath_str = if boundary_len < module_path.len() {
+            &module_path[boundary_len + 1..] // Skip the '/' separator
+        } else {
+            ""
+        };
+
+        (repo_url, subpath_str)
+    } else {
+        // GitLab and other hosts: treat entire path as repo (GitLab supports nested groups)
+        (module_path, "")
+    }
 }
 
 /// Convert module path to SSH URL format
@@ -1684,8 +1786,9 @@ fn run_git_in(args: &[&str], dir: &Path) -> Result<()> {
 fn git_ls_remote_with_fallback(module_path: &str, refspec: &str) -> Result<(String, String)> {
     use std::process::Command;
 
-    let https_url = format!("https://{}.git", module_path);
-    let ssh_url = format_ssh_url(module_path);
+    let (repo_url, _) = split_repo_and_subpath(module_path);
+    let https_url = format!("https://{}.git", repo_url);
+    let ssh_url = format_ssh_url(repo_url);
 
     // Try HTTPS first
     let output = Command::new("git")
@@ -1729,52 +1832,6 @@ fn git_ls_remote_with_fallback(module_path: &str, refspec: &str) -> Result<(Stri
 }
 
 /// Clone git repository with HTTPS→SSH fallback
-fn git_clone_with_fallback(module_path: &str, args: &[&str], dest: &Path) -> Result<()> {
-    use std::process::Command;
-
-    let https_url = format!("https://{}.git", module_path);
-    let ssh_url = format_ssh_url(module_path);
-    let dest_str = dest
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
-
-    // Try HTTPS first
-    let mut clone_args = vec!["clone"];
-    clone_args.extend_from_slice(args);
-    clone_args.push(&https_url);
-    clone_args.push(dest_str);
-
-    let https_result = Command::new("git")
-        .args(&clone_args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    if let Ok(status) = https_result {
-        if status.success() {
-            return Ok(());
-        }
-    }
-
-    // Fallback to SSH - rebuild args with SSH URL
-    let mut ssh_args = vec!["clone"];
-    ssh_args.extend_from_slice(args);
-    ssh_args.push(&ssh_url);
-    ssh_args.push(dest_str);
-
-    let status = Command::new("git")
-        .args(&ssh_args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if !status.success() {
-        anyhow::bail!("Failed to clone {} (tried HTTPS and SSH)", module_path);
-    }
-
-    Ok(())
-}
-
 /// Update lockfile from build set
 ///
 /// Merges with existing lockfile (Go's model): keeps old entries and adds/updates new ones.
