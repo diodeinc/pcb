@@ -1,6 +1,6 @@
-load("@stdlib/interfaces.zen", "Analog", "Gpio", "Ground", "Power", "Swd", "Uart", "Usb2")
-load("@stdlib/board_config.zen", "Board")
-load("@stdlib/units.zen", "Voltage", "VoltageRange")
+load("github.com/akhilles/stdlib/interfaces.zen", "Analog", "Gpio", "Ground", "Power", "Swd", "Uart", "Usb2")
+load("github.com/akhilles/stdlib/board_config.zen", "Board")
+load("github.com/akhilles/stdlib/units.zen", "Voltage", "VoltageRange")
 
 Board(
     name = "DM0002",
@@ -17,10 +17,10 @@ USB4105 = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/U
 TLV758P = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/TLV758P.zen")
 Led = Module("github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/Led.zen")
 
-PinHeader = Module("@stdlib/kicad/PinHeader.zen")
-Capacitor = Module("@stdlib/generics/Capacitor.zen")
-TestPoint = Module("@stdlib/generics/TestPoint.zen")
-Resistor = Module("@stdlib/generics/Resistor.zen")
+PinHeader = Module("github.com/akhilles/stdlib/kicad/PinHeader.zen")
+Capacitor = Module("github.com/akhilles/stdlib/generics/Capacitor.zen")
+TestPoint = Module("github.com/akhilles/stdlib/generics/TestPoint.zen")
+Resistor = Module("github.com/akhilles/stdlib/generics/Resistor.zen")
 
 # Power rails
 vbus_5v0 = Power("VBUS_5V0", voltage=VoltageRange("4.5 to 5.5V"))
