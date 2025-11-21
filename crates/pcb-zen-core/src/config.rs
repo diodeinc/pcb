@@ -115,9 +115,14 @@ pub struct PcbTomlV2 {
     /// Board configuration section
     pub board: Option<BoardDefinition>,
 
-    /// Dependencies
+    /// Dependencies (code packages with pcb.toml)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub dependencies: HashMap<String, DependencySpec>,
+
+    /// Assets (repositories without pcb.toml, e.g., KiCad libraries)
+    /// No semver coalescing, no transitive deps - each ref is isolated
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub assets: HashMap<String, AssetDependencySpec>,
 
     /// Patches for local development
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -231,6 +236,39 @@ pub struct DependencyDetail {
 pub struct PatchSpec {
     /// Local path to use as replacement
     pub path: String,
+}
+
+/// V2 Asset dependency specification
+///
+/// Asset dependencies are Git repositories without pcb.toml manifests (e.g., KiCad libraries).
+/// They are leaf nodes - no transitive dependencies, no semver coalescing.
+/// Each ref/tag is treated as isolated (no MVS participation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AssetDependencySpec {
+    /// Simple ref string - used literally as git tag/branch (no v-prefix logic)
+    /// Examples: "v7.0.0", "2024-09-release", "kicad-7.0.0"
+    Ref(String),
+
+    /// Detailed specification with branch/rev support
+    Detailed(AssetDependencyDetail),
+}
+
+/// V2 Detailed asset dependency specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetDependencyDetail {
+    /// Git ref (tag/branch) - used literally, no semver parsing or v-prefix fallback
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// Git branch - resolved to commit hash in lockfile
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+
+    /// Git revision (commit hash)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    // Note: No `path` field - local asset development uses [patch], not inline path
 }
 
 /// V2 Lockfile entry
@@ -419,6 +457,7 @@ impl PcbToml {
                     package,
                     board: v1.board,
                     dependencies,
+                    assets: HashMap::new(),
                     patch: HashMap::new(),
                     vendor: None,
                     access: v1.access,

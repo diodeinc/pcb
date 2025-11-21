@@ -47,7 +47,9 @@ pub mod attrs {
 }
 
 // Re-export commonly used types
-pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
+pub use config::{
+    AssetDependencyDetail, AssetDependencySpec, BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig,
+};
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
     DiagnosticsReport, LoadError, WithDiagnostics,
