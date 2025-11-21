@@ -1,6 +1,7 @@
 version = "2"
 
 [package]
+path = "github.com/diodeinc/pcb/test-workspaces/packaging-v2/boards/DM0002"
 pcb-version = "0.2"
 
 [board]
@@ -10,4 +11,4 @@ description = "Diode Probe (RP2040 CMSIS-DAP)"
 [dependencies]
 "github.com/akhilles/stdlib" = "0.4"
 "github.com/akhilles/registry/components/2N7002" = "0.2.0"
-"github.com/diodeinc/pcb/test-workspaces/packaging-v2" = { path = "../.." }
+"github.com/diodeinc/pcb/test-workspaces/packaging-v2" = { path = "../..", version = "0.1.0" }
