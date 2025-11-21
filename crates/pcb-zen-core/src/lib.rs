@@ -47,7 +47,7 @@ pub mod attrs {
 }
 
 // Re-export commonly used types
-pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfigV1 as WorkspaceConfig};
+pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
     DiagnosticsReport, LoadError, WithDiagnostics,
@@ -834,27 +834,7 @@ impl CoreLoadResolver {
         Ok(full_path)
     }
 
-    /// V2 external resolution: fetch remote without package boundary checks
-    fn try_resolve_v2_external(&self, context: &ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        let spec = context.latest_spec();
-
-        if self.use_vendor_dir {
-            if let Ok(vendor_path) = self.try_resolve_from_vendor(spec) {
-                self.insert_load_spec(vendor_path.clone(), spec.clone());
-                return Ok(vendor_path);
-            }
-        }
-
-        let resolved_path = self
-            .remote_fetcher
-            .fetch_remote(spec, &self.workspace_root)?;
-        let resolved_path = context.file_provider.canonicalize(&resolved_path)?;
-
-        self.insert_load_spec(resolved_path.clone(), spec.clone());
-        Ok(resolved_path)
-    }
-
-    /// Resolve remote specs - V1 only (V2 uses try_resolve_v2 directly)
+    /// Resolve remote specs - V1 only
     fn resolve_remote_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
         let resolved_spec = context.latest_spec().clone();
 
@@ -906,72 +886,28 @@ impl CoreLoadResolver {
         Ok(resolved_path)
     }
 
-    /// V2 workspace local resolution: strict hermetic boundaries
-    fn resolve_local_spec_v2(
-        &self,
-        context: &mut ResolveContext,
-        resolved_spec: &mut LoadSpec,
-        pkg_root: PathBuf,
-    ) -> anyhow::Result<PathBuf> {
-        let LoadSpec::Path {
-            path,
-            workspace_relative,
-            ..
-        } = resolved_spec
-        else {
-            unreachable!()
-        };
-
-        if *workspace_relative {
-            anyhow::bail!("Workspace-relative paths not allowed in V2");
-        }
-
-        if path.is_absolute() {
-            anyhow::bail!("Absolute paths not allowed in V2");
-        }
-
-        let current_dir = context.current_file.parent().unwrap();
-        let candidate = normalize_path(&current_dir.join(&*path));
-
-        if !candidate.starts_with(&pkg_root) {
+    /// V2 resolution: No aliases, only URLs and relative paths
+    ///
+    /// V2 supports two load patterns:
+    /// 1. Canonical URLs: load("github.com/user/repo/path.zen") - looked up in resolution map
+    /// 2. Relative paths: load("./utils.zen") - resolved relative to current file with boundary checks
+    fn resolve_v2(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // V2 does not support aliases - reject LoadSpec::Package immediately
+        if matches!(context.latest_spec(), LoadSpec::Package { .. }) {
             anyhow::bail!(
-                "Import '{}' escapes package boundary at {}",
-                path.display(),
-                pkg_root.display()
+                "V2 does not support '@' imports. Use 'github.com/.../path.zen' or relative paths."
             );
         }
 
-        *path = candidate.clone();
-        self.insert_load_spec(candidate.clone(), resolved_spec.clone());
-        Ok(candidate)
-    }
-
-    /// V2 resolution: MVS versions for all packages, boundaries only for workspace
-    fn resolve_v2(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        self.resolve_alias_spec(context)?;
-
-        let pkg_root = self
-            .v2_package_resolutions
-            .as_ref()
-            .and_then(|m| self.find_package_root_for_file(&context.current_file, m));
-        let in_workspace = pkg_root
-            .as_ref()
-            .is_some_and(|r| r.starts_with(&self.workspace_root));
-
         let resolved_path = match context.latest_spec() {
-            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } | LoadSpec::Package { .. } => {
-                match pkg_root {
-                    Some(root) => self.try_resolve_v2_workspace(context, &root)?,
-                    None => self.try_resolve_v2_external(context)?,
-                }
-            }
-            LoadSpec::Path { .. } if in_workspace => {
-                let mut spec = context.latest_spec().clone();
-                self.resolve_local_spec_v2(context, &mut spec, pkg_root.unwrap())?
-            }
-            LoadSpec::Path { .. } => self.resolve_local_spec(context)?,
+            // URL loads: github.com/... or gitlab.com/...
+            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self.resolve_v2_url(context)?,
+            // Relative path loads: ./utils.zen or ../sibling.zen
+            LoadSpec::Path { .. } => self.resolve_v2_relative(context)?,
+            LoadSpec::Package { .. } => unreachable!("Package checked above"),
         };
 
+        // Validate existence
         if !context.file_provider.exists(&resolved_path)
             && !context.original_spec().allow_not_exist()
         {
@@ -981,11 +917,72 @@ impl CoreLoadResolver {
             ));
         }
 
+        // Case sensitivity validation
         if context.file_provider.exists(&resolved_path) {
             validate_path_case(context.file_provider, &resolved_path)?;
         }
 
         Ok(resolved_path)
+    }
+
+    /// V2 URL resolution: translate canonical URL to cache path using resolution map
+    fn resolve_v2_url(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // Find which package the current file belongs to
+        let package_root = self
+            .v2_package_resolutions
+            .as_ref()
+            .and_then(|m| self.find_package_root_for_file(&context.current_file, m))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Internal error: current file not in any V2 package: {}",
+                    context.current_file.display()
+                )
+            })?;
+
+        // Use existing try_resolve_v2_workspace which does longest-prefix matching
+        self.try_resolve_v2_workspace(context, &package_root)
+    }
+
+    /// V2 relative path resolution: resolve relative to current file with boundary enforcement
+    fn resolve_v2_relative(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        let LoadSpec::Path { path, .. } = context.latest_spec() else {
+            unreachable!("resolve_v2_relative called on non-Path spec");
+        };
+
+        // Find package root for boundary enforcement
+        let package_root = self
+            .v2_package_resolutions
+            .as_ref()
+            .and_then(|m| self.find_package_root_for_file(&context.current_file, m))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Internal error: current file not in any V2 package: {}",
+                    context.current_file.display()
+                )
+            })?;
+
+        // Resolve relative to current file's directory
+        let current_dir = context
+            .current_file
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
+
+        let resolved_path = current_dir.join(path);
+
+        // Canonicalize both paths for boundary check
+        let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
+        let canonical_root = context.file_provider.canonicalize(&package_root)?;
+
+        // Enforce package boundary: resolved path must stay within package root
+        if !canonical_resolved.starts_with(&canonical_root) {
+            anyhow::bail!(
+                "Cannot load outside package boundary: '{}' would escape package root '{}'",
+                path.display(),
+                package_root.display()
+            );
+        }
+
+        Ok(canonical_resolved)
     }
 }
 

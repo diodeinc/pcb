@@ -4,7 +4,7 @@ use ignore::WalkBuilder;
 use pcb_zen_core::config::{
     find_workspace_root, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
-use pcb_zen_core::{DefaultFileProvider, FileProvider, LoadSpec};
+use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -500,42 +500,12 @@ fn build_resolution_map(
         })
     };
 
-    // Resolve alias -> path
-    let resolve_alias = |target: &str| -> Option<PathBuf> {
-        let spec = LoadSpec::parse(target)?;
-        match spec {
-            LoadSpec::Path { path, .. } => Some(ctx.workspace_root.join(path)),
-            LoadSpec::Github { user, repo, .. } => {
-                let url = format!("github.com/{}/{}", user, repo);
-                url_to_families
-                    .get(&url)
-                    .and_then(|f| f.values().next().cloned())
-            }
-            LoadSpec::Gitlab { project_path, .. } => {
-                let url = format!("gitlab.com/{}", project_path);
-                url_to_families
-                    .get(&url)
-                    .and_then(|f| f.values().next().cloned())
-            }
-            _ => None,
-        }
-    };
-
     // Build deps map for a package with base directory for local path resolution
+    // V2 does not support aliases - only canonical URL dependencies
     let build_map = |base_dir: &Path,
-                     pkg_deps: &HashMap<String, DependencySpec>,
-                     ws_aliases: Option<&HashMap<String, String>>|
+                     pkg_deps: &HashMap<String, DependencySpec>|
      -> BTreeMap<String, PathBuf> {
         let mut map = BTreeMap::new();
-
-        // Aliases
-        if let Some(aliases) = ws_aliases {
-            for (alias, target) in aliases {
-                if let Some(path) = resolve_alias(target) {
-                    map.insert(alias.clone(), path);
-                }
-            }
-        }
 
         // Package deps - resolve local paths relative to base_dir
         for (url, spec) in pkg_deps {
@@ -551,24 +521,17 @@ fn build_resolution_map(
 
     // Workspace root
     if let PcbToml::V2(v2) = ctx.root_config {
-        let aliases = v2.workspace.as_ref().map(|w| &w.aliases);
         results.insert(
             ctx.workspace_root.to_path_buf(),
-            build_map(ctx.workspace_root, &v2.dependencies, aliases),
+            build_map(ctx.workspace_root, &v2.dependencies),
         );
     }
 
     // Member packages
     for (pkg_path, config) in ctx.packages {
         if let PcbToml::V2(v2) = config {
-            if let PcbToml::V2(root) = ctx.root_config {
-                let aliases = root.workspace.as_ref().map(|w| &w.aliases);
-                let pkg_dir = pkg_path.parent().unwrap();
-                results.insert(
-                    pkg_dir.to_path_buf(),
-                    build_map(pkg_dir, &v2.dependencies, aliases),
-                );
-            }
+            let pkg_dir = pkg_path.parent().unwrap();
+            results.insert(pkg_dir.to_path_buf(), build_map(pkg_dir, &v2.dependencies));
         }
     }
 
@@ -577,7 +540,7 @@ fn build_resolution_map(
     for (line, version) in ctx.selected {
         let abs_path = get_abs_path(line, version);
         if let Some(deps) = ctx.manifest_cache.get(&(line.clone(), version.clone())) {
-            results.insert(abs_path.clone(), build_map(&abs_path, deps, None));
+            results.insert(abs_path.clone(), build_map(&abs_path, deps));
         }
     }
 
