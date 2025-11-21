@@ -65,6 +65,24 @@ struct UnresolvedDep {
     spec: DependencySpec,
 }
 
+/// Package manifest for a code package (dependencies + declared assets)
+///
+/// Only constructed from V2 pcb.toml files. Asset repositories themselves never have manifests.
+#[derive(Clone, Debug)]
+struct PackageManifest {
+    dependencies: HashMap<String, DependencySpec>,
+    assets: HashMap<String, pcb_zen_core::AssetDependencySpec>,
+}
+
+impl PackageManifest {
+    fn from_v2(v2: &pcb_zen_core::config::PcbTomlV2) -> Self {
+        PackageManifest {
+            dependencies: v2.dependencies.clone(),
+            assets: v2.assets.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolutionResult {
     pub workspace_root: PathBuf,
@@ -209,8 +227,7 @@ fn resolve_dependencies(
     // MVS state
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
-    let mut manifest_cache: HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>> =
-        HashMap::new();
+    let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
 
     println!("\nPhase 0: Seed from workspace dependencies");
 
@@ -330,16 +347,16 @@ fn resolve_dependencies(
             &patches,
             &workspace_members,
         ) {
-            Ok(deps) => {
-                if !deps.is_empty() {
-                    println!("      Found {} dependencies", deps.len());
+            Ok(manifest) => {
+                if !manifest.dependencies.is_empty() {
+                    println!("      Found {} dependencies", manifest.dependencies.len());
                 }
 
                 // Cache the manifest
-                manifest_cache.insert((line.clone(), version.clone()), deps.clone());
+                manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
                 // Add requirements from this manifest
-                for (dep_path, dep_spec) in &deps {
+                for (dep_path, dep_spec) in &manifest.dependencies {
                     // Skip local path dependencies
                     if is_non_version_dep(dep_spec) {
                         continue;
@@ -387,6 +404,21 @@ fn resolve_dependencies(
     // Print dependency tree
     print_dependency_tree(&packages, workspace_root, &build_set, &manifest_cache)?;
 
+    // Phase 2.5: Collect and fetch assets
+    println!("\nPhase 2.5: Fetching assets");
+    let asset_set = collect_and_fetch_assets(
+        &packages,
+        &manifest_cache,
+        &selected,
+        workspace_root,
+        &patches,
+    )?;
+    if !asset_set.is_empty() {
+        println!("Fetched {} assets", asset_set.len());
+    } else {
+        println!("No assets");
+    }
+
     // Phase 3: Fetch full repository contents for the build set
     println!("\nPhase 3: Fetching full repository contents");
     fetch_full_contents(workspace_root, &build_set, existing_lockfile.as_ref())?;
@@ -433,7 +465,7 @@ struct ResolutionContext<'a> {
     packages: &'a [(PathBuf, PcbToml)],
     selected: &'a HashMap<ModuleLine, Version>,
     patches: &'a HashMap<String, PatchSpec>,
-    manifest_cache: &'a HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+    manifest_cache: &'a HashMap<(ModuleLine, Version), PackageManifest>,
     workspace_members: &'a HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
 }
 
@@ -500,16 +532,43 @@ fn build_resolution_map(
         })
     };
 
+    // Resolve asset dependency to cache path
+    // Must match fetch_asset_repo() cache layout
+    let resolve_asset =
+        |url: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<PathBuf> {
+            // Check patch first
+            if let Some(patch) = ctx.patches.get(url) {
+                return Ok(ctx.workspace_root.join(&patch.path));
+            }
+
+            // Cache path: ~/.pcb/cache/{url}/{ref}/
+            let ref_str = extract_asset_ref(asset_spec)?;
+            Ok(ctx
+                .home_dir
+                .join(".pcb")
+                .join("cache")
+                .join(url)
+                .join(ref_str))
+        };
+
     // Build deps map for a package with base directory for local path resolution
     // V2 does not support aliases - only canonical URL dependencies
     let build_map = |base_dir: &Path,
-                     pkg_deps: &HashMap<String, DependencySpec>|
+                     pkg_deps: &HashMap<String, DependencySpec>,
+                     pkg_assets: &HashMap<String, pcb_zen_core::AssetDependencySpec>|
      -> BTreeMap<String, PathBuf> {
         let mut map = BTreeMap::new();
 
         // Package deps - resolve local paths relative to base_dir
         for (url, spec) in pkg_deps {
             if let Some(path) = resolve(base_dir, url, spec) {
+                map.insert(url.clone(), path);
+            }
+        }
+
+        // Asset deps - resolve to cache paths
+        for (url, asset_spec) in pkg_assets {
+            if let Ok(path) = resolve_asset(url, asset_spec) {
                 map.insert(url.clone(), path);
             }
         }
@@ -523,7 +582,7 @@ fn build_resolution_map(
     if let PcbToml::V2(v2) = ctx.root_config {
         results.insert(
             ctx.workspace_root.to_path_buf(),
-            build_map(ctx.workspace_root, &v2.dependencies),
+            build_map(ctx.workspace_root, &v2.dependencies, &v2.assets),
         );
     }
 
@@ -531,16 +590,23 @@ fn build_resolution_map(
     for (pkg_path, config) in ctx.packages {
         if let PcbToml::V2(v2) = config {
             let pkg_dir = pkg_path.parent().unwrap();
-            results.insert(pkg_dir.to_path_buf(), build_map(pkg_dir, &v2.dependencies));
+            results.insert(
+                pkg_dir.to_path_buf(),
+                build_map(pkg_dir, &v2.dependencies, &v2.assets),
+            );
         }
     }
 
     // Transitive deps: each remote package gets its own resolution map
     // This ensures MVS-selected versions are used for all transitive loads
+    // Assets come from the cached manifest (no duplicate file I/O)
     for (line, version) in ctx.selected {
         let abs_path = get_abs_path(line, version);
-        if let Some(deps) = ctx.manifest_cache.get(&(line.clone(), version.clone())) {
-            results.insert(abs_path.clone(), build_map(&abs_path, deps));
+        if let Some(manifest) = ctx.manifest_cache.get(&(line.clone(), version.clone())) {
+            results.insert(
+                abs_path.clone(),
+                build_map(&abs_path, &manifest.dependencies, &manifest.assets),
+            );
         }
     }
 
@@ -736,20 +802,121 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
-/// Fetch a manifest (pcb.toml dependencies) from Git using sparse checkout
+/// Extract ref string from AssetDependencySpec
+///
+/// Returns an error if the spec doesn't specify a version, branch, or rev (including HEAD)
+fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String> {
+    use pcb_zen_core::AssetDependencySpec;
+
+    match spec {
+        AssetDependencySpec::Ref(r) => {
+            if r == "HEAD" {
+                anyhow::bail!(
+                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
+                );
+            }
+            Ok(r.clone())
+        }
+        AssetDependencySpec::Detailed(detail) => {
+            let ref_str = detail
+                .version
+                .clone()
+                .or_else(|| detail.branch.clone())
+                .or_else(|| detail.rev.clone())
+                .ok_or_else(|| anyhow::anyhow!("Asset must specify version, branch, or rev"))?;
+
+            if ref_str == "HEAD" {
+                anyhow::bail!(
+                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
+                );
+            }
+            Ok(ref_str)
+        }
+    }
+}
+
+/// Collect and fetch all assets from workspace packages and transitive manifests
+///
+/// Returns set of (module_path, ref) for all fetched assets
+fn collect_and_fetch_assets(
+    packages: &[(PathBuf, PcbToml)],
+    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
+    selected: &HashMap<ModuleLine, Version>,
+    workspace_root: &Path,
+    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+) -> Result<HashSet<(String, String)>> {
+    let mut asset_set = HashSet::new();
+    let mut seen_assets: HashSet<(String, String)> = HashSet::new();
+
+    // Helper to fetch an asset if not already seen
+    let mut fetch_if_needed =
+        |module_path: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<()> {
+            let ref_str = extract_asset_ref(asset_spec)?;
+
+            // Skip if already processed
+            if !seen_assets.insert((module_path.to_string(), ref_str.clone())) {
+                return Ok(());
+            }
+
+            println!("      Fetching {}@{}", module_path, ref_str);
+
+            // Fetch the asset repo
+            fetch_asset_repo(workspace_root, module_path, &ref_str, patches)?;
+            asset_set.insert((module_path.to_string(), ref_str));
+            Ok(())
+        };
+
+    // 1. Collect assets from workspace and member packages
+    for (pcb_toml_path, config) in packages {
+        let PcbToml::V2(v2) = config else { continue };
+
+        if v2.assets.is_empty() {
+            continue;
+        }
+
+        let package_name = pcb_toml_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".into());
+
+        println!("\n  Package: {}", package_name);
+        println!("    {} assets", v2.assets.len());
+
+        for (module_path, asset_spec) in &v2.assets {
+            fetch_if_needed(module_path, asset_spec)?;
+        }
+    }
+
+    // 2. Collect assets from transitive packages (via manifest cache)
+    for (line, version) in selected {
+        if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
+            if !manifest.assets.is_empty() {
+                println!("\n  Transitive: {}", line.path);
+                println!("    {} assets", manifest.assets.len());
+
+                for (module_path, asset_spec) in &manifest.assets {
+                    fetch_if_needed(module_path, asset_spec)?;
+                }
+            }
+        }
+    }
+
+    Ok(asset_set)
+}
+
+/// Fetch a manifest (both dependencies and assets) from Git using sparse checkout
 fn fetch_manifest(
     workspace_root: &Path,
     module_path: &str,
     version: &Version,
     patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
     workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
-) -> Result<HashMap<String, DependencySpec>> {
-    use std::fs;
-
+) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
     if let Some((_member_dir, member_v2)) = workspace_members.get(module_path) {
         println!("      Using workspace member: {}", module_path);
-        return Ok(member_v2.dependencies.clone());
+        return Ok(PackageManifest::from_v2(member_v2));
     }
 
     // 2. Check if this module is patched with a local path
@@ -772,74 +939,119 @@ fn fetch_manifest(
     let cache_base = home.join(".pcb").join("cache");
     let checkout_dir = cache_base.join(module_path).join(version.to_string());
 
-    // Check if we've already processed this version
-    let marker_path = checkout_dir.join(".no-manifest");
-
-    if marker_path.exists() {
-        // Already tried, no V2 manifest (asset package or V1)
-        println!("        Cached (no manifest)");
-        return Ok(HashMap::new());
-    }
-
     // Use sparse checkout to fetch the module (shared with Phase 3)
     println!("        Cloning (sparse checkout)");
 
-    let package_root =
-        match ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string()) {
-            Ok(root) => root,
-            Err(e) => {
-                // Failed to fetch - mark as asset package
-                let _ = fs::create_dir_all(&checkout_dir);
-                let _ = fs::write(&marker_path, format!("Failed to fetch: {}\n", e));
-                return Ok(HashMap::new());
-            }
-        };
-
+    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string())?;
     let pcb_toml_path = package_root.join("pcb.toml");
-
-    // Check if manifest exists
-    if !pcb_toml_path.exists() {
-        // Asset package (no pcb.toml)
-        let _ = fs::write(&marker_path, "No pcb.toml in repository\n");
-        return Ok(HashMap::new());
-    }
 
     // Read the manifest
     read_manifest_from_path(&pcb_toml_path, module_path)
 }
 
-/// Read and parse a pcb.toml manifest
-fn read_manifest_from_path(
-    pcb_toml_path: &Path,
-    _module_path: &str,
-) -> Result<HashMap<String, DependencySpec>> {
-    use std::fs;
-
-    // Check if pcb.toml exists (asset packages don't have manifests)
+/// Read and parse a pcb.toml manifest (both dependencies and assets)
+fn read_manifest_from_path(pcb_toml_path: &Path, _module_path: &str) -> Result<PackageManifest> {
+    // Check if pcb.toml exists (code packages must have manifests in V2)
     if !pcb_toml_path.exists() {
-        // Asset package (e.g., KiCad symbols/footprints) - no dependencies
-        // Create marker to avoid re-fetching
-        let marker_path = pcb_toml_path.parent().unwrap().join(".no-manifest");
-        let _ = fs::write(&marker_path, "Asset package - no V2 manifest\n");
-        return Ok(HashMap::new());
+        anyhow::bail!(
+            "Code dependency missing pcb.toml manifest\n  \
+            If this is an asset repository (e.g., KiCad libraries), declare it under [assets] instead."
+        );
     }
 
     let file_provider = DefaultFileProvider::new();
     let config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
 
-    match config.to_v2() {
-        Ok(v2) => Ok(v2.dependencies),
-        Err(e) => {
-            // Failed to convert to V2 - treat as asset package
-            // Create marker to avoid re-parsing
-            let marker_path = pcb_toml_path.parent().unwrap().join(".no-manifest");
-            let _ = fs::write(
-                &marker_path,
-                format!("Failed to parse/convert manifest: {}\n", e),
+    match config {
+        PcbToml::V2(v2) => Ok(PackageManifest::from_v2(&v2)),
+        PcbToml::V1(_) => {
+            // V1 packages don't have assets
+            anyhow::bail!(
+                "Failed to parse pcb.toml as V2 manifest\n  \
+                If this is an asset repository, declare it under [assets] instead."
             );
-            Ok(HashMap::new())
         }
     }
+}
+
+/// Fetch an asset repository (no pcb.toml, leaf node, no transitive deps)
+///
+/// Assets:
+/// - Must NOT have a pcb.toml manifest
+/// - Are leaf nodes (no transitive dependencies)
+/// - Don't participate in MVS (each ref is isolated)
+/// - Version/ref used literally as git tag (no v-prefix logic)
+fn fetch_asset_repo(
+    workspace_root: &Path,
+    module_path: &str,
+    ref_str: &str,
+    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+) -> Result<PathBuf> {
+    use std::fs;
+
+    // 1. Check if this module is patched with a local path
+    if let Some(patch) = patches.get(module_path) {
+        let patched_path = workspace_root.join(&patch.path);
+        let patched_toml = patched_path.join("pcb.toml");
+
+        println!("      Using patched source: {}", patch.path);
+
+        // Verify patch path exists
+        if !patched_path.exists() {
+            anyhow::bail!(
+                "Asset '{}' is patched to a non-existent path\n  \
+                Patch path: {}",
+                module_path,
+                patched_path.display()
+            );
+        }
+
+        // Verify patch target does NOT have pcb.toml (asset constraint)
+        if patched_toml.exists() {
+            anyhow::bail!(
+                "Asset '{}' is patched to a path with pcb.toml\n  \
+                Patch path: {}\n  \
+                Assets must not have manifests. Declare this under [dependencies] instead.",
+                module_path,
+                patched_path.display()
+            );
+        }
+
+        return Ok(patched_path);
+    }
+
+    // Cache directory: ~/.pcb/cache/{module_path}/{ref}/
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let cache_base = home.join(".pcb").join("cache");
+    let checkout_dir = cache_base.join(module_path).join(ref_str);
+
+    // Check if already fetched
+    if checkout_dir.exists() && checkout_dir.join(".pcbcache").exists() {
+        println!("        Cached");
+        return Ok(checkout_dir);
+    }
+
+    // Use sparse checkout to fetch the asset repo
+    println!("        Cloning (sparse checkout)");
+
+    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str)?;
+
+    // Verify no pcb.toml exists (strict asset constraint)
+    let pcb_toml_path = package_root.join("pcb.toml");
+    if pcb_toml_path.exists() {
+        // Clean up the checkout
+        let _ = fs::remove_dir_all(&checkout_dir);
+        anyhow::bail!(
+            "Asset '{}' has a pcb.toml manifest\n  \
+            Location: {}\n  \
+            Assets must not have manifests. Declare this under [dependencies] instead.",
+            module_path,
+            pcb_toml_path.display()
+        );
+    }
+
+    Ok(package_root)
 }
 
 /// Print a tree view of the dependency graph (cargo tree style)
@@ -847,7 +1059,7 @@ fn print_dependency_tree(
     packages: &[(PathBuf, PcbToml)],
     workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
-    manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
 ) -> Result<()> {
     println!();
 
@@ -874,7 +1086,7 @@ fn print_dependency_tree(
     fn print_dep(
         url: &str,
         build_map: &HashMap<String, (ModuleLine, Version)>,
-        manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+        manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
         printed: &mut HashSet<String>,
         prefix: &str,
         is_last: bool,
@@ -900,9 +1112,10 @@ fn print_dependency_tree(
             }
 
             // Print transitive dependencies
-            if let Some(deps) = manifest_cache.get(&(line.clone(), version.clone())) {
+            if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
                 let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                let mut dep_list: Vec<_> = deps
+                let mut dep_list: Vec<_> = manifest
+                    .dependencies
                     .iter()
                     .filter(|(dep_url, spec)| {
                         !is_non_version_dep(spec) && build_map.contains_key(*dep_url)
@@ -981,7 +1194,7 @@ fn print_dependency_tree(
 fn build_closure(
     packages: &[(PathBuf, PcbToml)],
     selected: &HashMap<ModuleLine, Version>,
-    manifest_cache: &HashMap<(ModuleLine, Version), HashMap<String, DependencySpec>>,
+    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
     workspace_root: &Path,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
@@ -1031,8 +1244,8 @@ fn build_closure(
         build_set.insert((line.clone(), version.clone()));
 
         // Follow transitive dependencies via selected versions
-        if let Some(deps) = manifest_cache.get(&(line.clone(), version)) {
-            for (dep_path, dep_spec) in deps {
+        if let Some(manifest) = manifest_cache.get(&(line.clone(), version)) {
+            for (dep_path, dep_spec) in &manifest.dependencies {
                 if !is_non_version_dep(dep_spec) {
                     if let Some(lines) = line_by_path.get(dep_path) {
                         stack.extend(lines.iter().cloned());
@@ -1395,10 +1608,10 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
         let entry = result?;
         let path = entry.path();
 
-        // Skip internal marker files (.no-manifest, .full-checkout, .pcbcache)
+        // Skip internal marker files (.full-checkout, .pcbcache)
         if let Some(file_name) = path.file_name() {
             let name = file_name.to_str().unwrap_or("");
-            if name == ".no-manifest" || name == ".full-checkout" || name == ".pcbcache" {
+            if name == ".full-checkout" || name == ".pcbcache" {
                 continue;
             }
         }
@@ -1570,8 +1783,6 @@ fn fetch_full_contents(
 
         println!("    {}@v{}...", line.path, version);
 
-        let is_asset_package = cache_dir.join(".no-manifest").exists();
-
         // Ensure sparse-checkout working tree (reuses Phase 1 clone if already done)
         let package_root = ensure_sparse_checkout(&cache_dir, &line.path, &version.to_string())?;
 
@@ -1580,26 +1791,23 @@ fn fetch_full_contents(
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let content_hash = compute_content_hash_from_dir(&package_root)?;
-        let manifest_hash = if package_root.join("pcb.toml").exists() {
-            let manifest_content = std::fs::read_to_string(package_root.join("pcb.toml"))?;
-            Some(compute_manifest_hash(&manifest_content))
-        } else {
-            None
-        };
 
-        // Write cache marker with hashes
-        // Format: content_hash\nmanifest_hash (or just content_hash if no manifest)
-        let marker_content = if let Some(mh) = &manifest_hash {
-            format!("{}\n{}\n", content_hash, mh)
-        } else {
-            format!("{}\n", content_hash)
-        };
-        std::fs::write(&cache_marker, marker_content)?;
-
-        // Restore asset package marker if needed
-        if is_asset_package {
-            std::fs::write(cache_dir.join(".no-manifest"), "")?;
+        // Code dependencies must have pcb.toml
+        let pcb_toml_path = package_root.join("pcb.toml");
+        if !pcb_toml_path.exists() {
+            anyhow::bail!(
+                "Code dependency '{}' missing pcb.toml\n  \
+                If this is an asset repository, declare it under [assets] instead.",
+                line.path
+            );
         }
+
+        let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
+        let manifest_hash = compute_manifest_hash(&manifest_content);
+
+        // Write cache marker with both hashes
+        let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
+        std::fs::write(&cache_marker, marker_content)?;
 
         println!("done");
     }
@@ -1693,26 +1901,7 @@ fn ensure_sparse_checkout(
     // Try SSH if HTTPS failed
     if !fetch_succeeded {
         run_git_in(&["remote", "set-url", "origin", &ssh_url], checkout_dir)?;
-        if run_git_in(&fetch_args, checkout_dir).is_ok() {
-            fetch_succeeded = true;
-        }
-    }
-
-    // Try without v-prefix if both HTTPS and SSH with v-prefix failed
-    if !fetch_succeeded && !is_pseudo_version {
-        let tag_ref_no_v = if subpath.is_empty() {
-            format!("refs/tags/{}", version_str)
-        } else {
-            format!("refs/tags/{}/{}", subpath, version_str)
-        };
-        let fetch_args_no_v = vec![
-            "fetch",
-            "--depth=1",
-            "--filter=blob:none",
-            "origin",
-            &tag_ref_no_v,
-        ];
-        run_git_in(&fetch_args_no_v, checkout_dir)?;
+        run_git_in(&fetch_args, checkout_dir)?;
     }
 
     // Configure sparse-checkout for nested packages (fetch only the subpath)

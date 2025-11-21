@@ -154,14 +154,27 @@ Full URLs eliminate ambiguity. No confusion about package origin.
 
 Dependencies that contain only assets (e.g., KiCad symbols, footprints, 3D models) and lack a `pcb.toml` manifest are supported as **Asset Packages**.
 
-*   **Declaration:** Declared in `[dependencies]` like any other package.
-*   **Resolution:** Treated as leaf nodes in the dependency graph (cannot have transitive dependencies).
+Asset packages are declared in a separate `[assets]` section to make the distinction explicit:
+
+*   **Declaration:** Must be declared in `[assets]` (not `[dependencies]`).
+*   **Validation:** System enforces that assets do NOT have `pcb.toml` manifests.
+*   **Resolution:** Leaf nodes - no transitive dependencies, no MVS participation.
+*   **Versioning:** Version/ref string used literally as git tag (no v-prefix logic or semver parsing).
 *   **Lockfile:** `pcb.sum` records only the content hash. The manifest hash line is omitted.
 
 ```toml
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "v7.0.0"
+"github.com/diodeinc/stdlib" = "0.3.2"
+
+[assets]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 ```
+
+Supported formats:
+- Simple ref: `"9.0.3"` (used as-is, no v-prefix added)
+- Branch: `{ branch = "main" }` (resolved to commit hash in lockfile)
+- Revision: `{ rev = "a1b2c3d4" }` (commit hash)
 
 ### Git Tag Convention
 
