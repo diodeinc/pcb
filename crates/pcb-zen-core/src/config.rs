@@ -188,6 +188,11 @@ pub type BoardDefinition = Board;
 /// V2 Package configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageConfig {
+    /// Package import path (e.g., "github.com/diodeinc/stdlib")
+    /// Required for publishable packages, optional for local-only packages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
     /// Minimum compatible toolchain release series (e.g., "0.3")
     #[serde(rename = "pcb-version")]
     pub pcb_version: String,
@@ -409,6 +414,7 @@ impl PcbToml {
                 // Create Package section if it's a module or board
                 let package = if v1.module.is_some() || v1.board.is_some() {
                     Some(PackageConfig {
+                        path: None, // V1->V2 conversion doesn't have package path
                         pcb_version: "0.3".to_string(),
                     })
                 } else {
@@ -1216,7 +1222,6 @@ path = "test.zen"
                 }
                 _ => panic!("Expected Detailed variant"),
             }
-
         }
     }
 

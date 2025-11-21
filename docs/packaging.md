@@ -92,6 +92,7 @@ Unified `[package]` section replaces `[module]` and `[board]`:
 
 ```toml
 [package]
+path = "github.com/diodeinc/boards/WV0002"
 pcb-version = "0.3"
 
 [board]
@@ -100,7 +101,11 @@ path = "WV0002.zen"
 description = "Power Regulator Board"
 ```
 
-`pcb-version` specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It is used to indicate breaking changes in the language or standard library that require a newer compiler. No package name/version in manifest - derived from repository URL and Git tag following Go's model.
+**`package.path`** specifies the canonical import path for this package (e.g., `github.com/diodeinc/stdlib` or `github.com/diodeinc/registry/reference/ti/tps54331`). Following Go's model, the import path identifies the package in the global namespace. This field is **required for publishable packages** but optional for local-only packages (those used only within a workspace and never tagged).
+
+**`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It is used to indicate breaking changes in the language or standard library that require a newer compiler.
+
+The package **version** itself is not in the manifest - it is derived from the Git tag, following Go's decentralized model where version control is the source of truth.
 
 The optional `[board]` section specifies a `.zen` file that can be built as a standalone board with `pcb build`. Packages with or without `[board]` can be used as reusable modules via `Module()`.
 
@@ -121,7 +126,7 @@ Version formats:
 - Caret: `"^0.3.2"` (≥0.3.2, <0.4.0)
 - Branch: `{ branch = "main" }` (resolves to pseudo-version)
 - Revision: `{ rev = "a1b2c3d4" }` (resolves to pseudo-version)
-- Path: `{ path = "../local" }`
+- Path: `{ path = "../local", version = "0.3.2" }` (local path with version for publishing)
 
 **Pseudo-Versions:** Branches and revisions are resolved to pseudo-versions with commit hashes for reproducibility. Format: `v<base>-0.<timestamp>-<commit>` where base is the latest reachable Git tag incremented by one patch version. Example: commit after `v0.3.14` becomes `v0.3.15-0.20251120004415-137e2dcabc28`. Pseudo-versions participate in MVS and can win over older tags.
 

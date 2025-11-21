@@ -1,6 +1,7 @@
 version = "2"
 
 [package]
+path = "github.com/diodeinc/pcb/test-workspaces/packaging-v2/modules/submod1"
 pcb-version = "0.2"
 
 [dependencies]
