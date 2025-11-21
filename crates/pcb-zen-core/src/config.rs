@@ -93,9 +93,6 @@ pub struct PcbTomlV1 {
 /// members = ["boards/*"]
 /// allow = ["*@weaverobots.com"]
 ///
-/// [workspace.dependencies]
-/// "github.com/diodeinc/stdlib" = "0.3"
-///
 /// [vendor]
 /// directory = "vendor"
 /// ```
@@ -154,10 +151,6 @@ pub struct WorkspaceConfigV2 {
     /// Access control list (email patterns)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
-
-    /// Workspace-level dependencies
-    #[serde(default)]
-    pub dependencies: HashMap<String, DependencySpec>,
 
     /// Workspace-level package aliases (overrides defaults)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -229,10 +222,6 @@ pub struct DependencyDetail {
     /// Local path dependency
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-
-    /// Inherit from workspace dependencies
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub workspace: bool,
 }
 
 /// V2 Patch specification for local development
@@ -414,7 +403,6 @@ impl PcbToml {
                     members: w.members,
                     default_board: w.default_board,
                     allow: vec![],
-                    dependencies: HashMap::new(),
                     aliases: HashMap::new(),
                 });
 
@@ -550,11 +538,6 @@ impl VendorConfig {
 /// Default vendor directory
 fn default_vendor_directory() -> String {
     "vendor".to_string()
-}
-
-/// Helper for serde skip_serializing_if
-fn is_false(b: &bool) -> bool {
-    !*b
 }
 
 /// Board discovery information
@@ -1171,10 +1154,6 @@ version = "2"
 [workspace]
 members = ["boards/*"]
 allow = ["*@weaverobots.com"]
-
-[workspace.dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
-"github.com/diodeinc/registry/reference/ti/tps54331" = "^1.0.0"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
@@ -1186,11 +1165,6 @@ allow = ["*@weaverobots.com"]
             let workspace = v2.workspace.as_ref().unwrap();
             assert_eq!(workspace.members, vec!["boards/*"]);
             assert_eq!(workspace.allow, vec!["*@weaverobots.com"]);
-
-            assert_eq!(workspace.dependencies.len(), 2);
-            assert!(workspace
-                .dependencies
-                .contains_key("github.com/diodeinc/stdlib"));
         }
     }
 
@@ -1211,12 +1185,11 @@ path = "test.zen"
 "github.com/diodeinc/registry/reference/ti/tps54331" = { version = "^1.0.0" }
 "github.com/user/custom" = { branch = "main" }
 "github.com/user/local" = { path = "../local" }
-"github.com/user/workspace-dep" = { workspace = true }
 "#;
 
         let config = PcbToml::parse(content).unwrap();
         if let PcbToml::V2(v2) = config {
-            assert_eq!(v2.dependencies.len(), 5);
+            assert_eq!(v2.dependencies.len(), 4);
 
             // Test simple version string
             match v2.dependencies.get("github.com/diodeinc/stdlib").unwrap() {
@@ -1244,17 +1217,6 @@ path = "test.zen"
                 _ => panic!("Expected Detailed variant"),
             }
 
-            // Test workspace inheritance
-            match v2
-                .dependencies
-                .get("github.com/user/workspace-dep")
-                .unwrap()
-            {
-                DependencySpec::Detailed(d) => {
-                    assert!(d.workspace);
-                }
-                _ => panic!("Expected Detailed variant"),
-            }
         }
     }
 
