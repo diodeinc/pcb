@@ -126,7 +126,25 @@ Version formats:
 - Caret: `"^0.3.2"` (≥0.3.2, <0.4.0)
 - Branch: `{ branch = "main" }` (resolves to pseudo-version)
 - Revision: `{ rev = "a1b2c3d4" }` (resolves to pseudo-version)
-- Path: `{ path = "../local", version = "0.3.2" }` (local path with version for publishing)
+- Path: `{ path = "../external-lib", version = "0.3.2" }` (for external local development only)
+
+**Workspace Member Resolution:**
+
+Dependencies whose URL matches a workspace member's `package.path` automatically use the local workspace package instead of fetching from Git. This means:
+
+- **No `path` needed for workspace-internal dependencies** - just declare the normal dependency:
+  ```toml
+  [dependencies]
+  "github.com/myorg/workspace-package" = "0.3"
+  ```
+  
+- **Workspace members always shadow Git** - if the package is in the workspace, it's always used regardless of version
+
+- **Path dependencies are for external local development** - use them only when developing a package outside the workspace:
+  ```toml
+  [dependencies]
+  "github.com/external/stdlib" = { path = "../stdlib", version = "0.3.2" }
+  ```
 
 **Pseudo-Versions:** Branches and revisions are resolved to pseudo-versions with commit hashes for reproducibility. Format: `v<base>-0.<timestamp>-<commit>` where base is the latest reachable Git tag incremented by one patch version. Example: commit after `v0.3.14` becomes `v0.3.15-0.20251120004415-137e2dcabc28`. Pseudo-versions participate in MVS and can win over older tags.
 
