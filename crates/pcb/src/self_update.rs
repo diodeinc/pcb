@@ -1,20 +1,33 @@
-use clap::Args;
+use clap::{Args, Subcommand};
 use std::process::Command;
 
 #[derive(Args)]
-pub struct SelfUpdateArgs {}
+pub struct SelfUpdateArgs {
+    #[command(subcommand)]
+    command: SelfUpdateCommands,
+}
 
-pub fn execute(_args: SelfUpdateArgs) -> anyhow::Result<()> {
-    // Execute the pcb-update program
-    let status = Command::new("pcb-update").status()?;
+#[derive(Subcommand)]
+enum SelfUpdateCommands {
+    /// Update the pcb tool to the latest version
+    Update,
+}
 
-    // Forward the exit status
-    if !status.success() {
-        match status.code() {
-            Some(code) => std::process::exit(code),
-            None => anyhow::bail!("pcb-update terminated by signal"),
+pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
+    match args.command {
+        SelfUpdateCommands::Update => {
+            // Execute the pcb-update program
+            let status = Command::new("pcb-update").status()?;
+
+            // Forward the exit status
+            if !status.success() {
+                match status.code() {
+                    Some(code) => std::process::exit(code),
+                    None => anyhow::bail!("pcb-update terminated by signal"),
+                }
+            }
+
+            Ok(())
         }
     }
-
-    Ok(())
 }
