@@ -235,9 +235,14 @@ fn resolve_dependencies(
     if let Some(ref lockfile) = existing_lockfile {
         println!("  Preseeding from pcb.sum...");
         let mut preseed_count = 0;
-        // Collect all unique module paths from lockfile
+        // Collect all unique module paths from lockfile (skip assets)
         let mut seen_modules = HashSet::new();
         for entry in lockfile.iter() {
+            // Skip asset entries (no manifest hash)
+            if entry.manifest_hash.is_none() {
+                continue;
+            }
+
             if seen_modules.insert(entry.module_path.clone()) {
                 if let Ok(version) = Version::parse(&entry.version) {
                     let line = ModuleLine::new(entry.module_path.clone(), &version);
@@ -802,6 +807,80 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
+/// Cache decision for dependency fetching
+enum CacheDecision {
+    Fetch,
+    Use,
+}
+
+/// Decide whether to fetch or use cached dependency
+fn decide_cache_usage(
+    cache_dir: &Path,
+    cache_marker: &Path,
+    lockfile: Option<&Lockfile>,
+    module_path: &str,
+    version: &Version,
+) -> Result<CacheDecision> {
+    // No cache marker -> fetch
+    if !cache_marker.exists() {
+        return Ok(CacheDecision::Fetch);
+    }
+
+    // No lockfile -> trust cache
+    let Some(lockfile) = lockfile else {
+        println!("    {}@v{} (cached)", module_path, version);
+        return Ok(CacheDecision::Use);
+    };
+
+    // Lockfile present but no entry -> trust cache
+    let Some(locked_entry) = lockfile.get(module_path, &version.to_string()) else {
+        println!("    {}@v{} (cached)", module_path, version);
+        return Ok(CacheDecision::Use);
+    };
+
+    // Verify hashes against lockfile
+    let marker_content = std::fs::read_to_string(cache_marker)?;
+    let mut lines = marker_content.lines();
+    let cached_content = lines.next().unwrap_or("");
+    let cached_manifest = lines.next();
+
+    if cached_content != locked_entry.content_hash {
+        println!(
+            "    {}@v{} (cache mismatch, re-fetching)",
+            module_path, version
+        );
+        std::fs::remove_dir_all(cache_dir)?;
+        return Ok(CacheDecision::Fetch);
+    }
+
+    if let (Some(cm), Some(lm)) = (cached_manifest, &locked_entry.manifest_hash) {
+        if cm != lm {
+            println!(
+                "    {}@v{} (manifest mismatch, re-fetching)",
+                module_path, version
+            );
+            std::fs::remove_dir_all(cache_dir)?;
+            return Ok(CacheDecision::Fetch);
+        }
+    }
+
+    println!("    {}@v{} (cached, verified)", module_path, version);
+    Ok(CacheDecision::Use)
+}
+
+/// Validate that a code dependency has pcb.toml manifest
+fn validate_code_dep_has_manifest(cache_dir: &Path, module_path: &str) -> Result<()> {
+    let pcb_toml_path = cache_dir.join("pcb.toml");
+    if !pcb_toml_path.exists() {
+        anyhow::bail!(
+            "Code dependency '{}' missing pcb.toml\n  \
+            If this is an asset repository, declare it under [assets] instead.",
+            module_path
+        );
+    }
+    Ok(())
+}
+
 /// Extract ref string from AssetDependencySpec
 ///
 /// Returns an error if the spec doesn't specify a version, branch, or rev (including HEAD)
@@ -942,7 +1021,8 @@ fn fetch_manifest(
     // Use sparse checkout to fetch the module (shared with Phase 3)
     println!("        Cloning (sparse checkout)");
 
-    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string())?;
+    let package_root =
+        ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string(), true)?;
     let pcb_toml_path = package_root.join("pcb.toml");
 
     // Read the manifest
@@ -1035,7 +1115,7 @@ fn fetch_asset_repo(
     // Use sparse checkout to fetch the asset repo
     println!("        Cloning (sparse checkout)");
 
-    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str)?;
+    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str, false)?;
 
     // Verify no pcb.toml exists (strict asset constraint)
     let pcb_toml_path = package_root.join("pcb.toml");
@@ -1726,90 +1806,35 @@ fn fetch_full_contents(
 
         let cache_marker = cache_dir.join(".pcbcache");
 
-        // Check if already cached
-        if cache_marker.exists() {
-            // Verify cache integrity against lockfile if available
-            if let Some(lf) = lockfile {
-                if let Some(locked_entry) = lf.get(&line.path, &version.to_string()) {
-                    // Read cached hashes
-                    let marker_content = std::fs::read_to_string(&cache_marker)?;
-                    let mut lines_iter = marker_content.lines();
-                    let cached_content_hash = lines_iter.next().unwrap_or("");
-                    let cached_manifest_hash = lines_iter.next();
+        let decision =
+            decide_cache_usage(&cache_dir, &cache_marker, lockfile, &line.path, version)?;
 
-                    // Verify content hash
-                    if cached_content_hash != locked_entry.content_hash {
-                        println!(
-                            "    {}@v{} (cache mismatch, re-fetching)",
-                            line.path, version
-                        );
-                        std::fs::remove_dir_all(&cache_dir)?;
-                        // Will re-fetch below
-                    } else if let (Some(cached_mh), Some(locked_mh)) =
-                        (cached_manifest_hash, &locked_entry.manifest_hash)
-                    {
-                        // Verify manifest hash if both exist
-                        if cached_mh != locked_mh {
-                            println!(
-                                "    {}@v{} (manifest mismatch, re-fetching)",
-                                line.path, version
-                            );
-                            std::fs::remove_dir_all(&cache_dir)?;
-                            // Will re-fetch below
-                        } else {
-                            println!("    {}@v{} (cached, verified)", line.path, version);
-                            continue;
-                        }
-                    } else {
-                        println!("    {}@v{} (cached, verified)", line.path, version);
-                        continue;
-                    }
-                } else {
-                    // Not in lockfile, trust cache
-                    println!("    {}@v{} (cached)", line.path, version);
-                    continue;
-                }
-            } else {
-                // No lockfile, trust cache
-                println!("    {}@v{} (cached)", line.path, version);
-                continue;
-            }
-        }
-
-        // Re-check if marker still doesn't exist (might have been deleted above)
-        if cache_marker.exists() {
+        if let CacheDecision::Use = decision {
+            validate_code_dep_has_manifest(&cache_dir, &line.path)?;
             continue;
+        } else {
+            // Cache miss - fetch and hash
+            println!("    {}@v{}...", line.path, version);
+
+            let package_root =
+                ensure_sparse_checkout(&cache_dir, &line.path, &version.to_string(), true)?;
+
+            print!("      Computing hashes... ");
+            std::io::Write::flush(&mut std::io::stdout())?;
+
+            let content_hash = compute_content_hash_from_dir(&package_root)?;
+
+            validate_code_dep_has_manifest(&package_root, &line.path)?;
+
+            let pcb_toml_path = package_root.join("pcb.toml");
+            let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
+            let manifest_hash = compute_manifest_hash(&manifest_content);
+
+            let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
+            std::fs::write(&cache_marker, marker_content)?;
+
+            println!("done");
         }
-
-        println!("    {}@v{}...", line.path, version);
-
-        // Ensure sparse-checkout working tree (reuses Phase 1 clone if already done)
-        let package_root = ensure_sparse_checkout(&cache_dir, &line.path, &version.to_string())?;
-
-        // Compute hashes immediately after fetch
-        print!("      Computing hashes... ");
-        std::io::Write::flush(&mut std::io::stdout())?;
-
-        let content_hash = compute_content_hash_from_dir(&package_root)?;
-
-        // Code dependencies must have pcb.toml
-        let pcb_toml_path = package_root.join("pcb.toml");
-        if !pcb_toml_path.exists() {
-            anyhow::bail!(
-                "Code dependency '{}' missing pcb.toml\n  \
-                If this is an asset repository, declare it under [assets] instead.",
-                line.path
-            );
-        }
-
-        let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
-        let manifest_hash = compute_manifest_hash(&manifest_content);
-
-        // Write cache marker with both hashes
-        let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
-        std::fs::write(&cache_marker, marker_content)?;
-
-        println!("done");
     }
 
     Ok(())
@@ -1828,6 +1853,7 @@ fn ensure_sparse_checkout(
     checkout_dir: &Path,
     module_path: &str,
     version_str: &str,
+    add_v_prefix: bool,
 ) -> Result<PathBuf> {
     let (repo_url, subpath) = split_repo_and_subpath(module_path);
     let is_pseudo_version = version_str.contains("-0.");
@@ -1836,12 +1862,19 @@ fn ensure_sparse_checkout(
     let ref_spec = if is_pseudo_version {
         // Extract commit hash from pseudo-version (last segment after final -)
         version_str.rsplit('-').next().unwrap().to_string()
-    } else {
-        // Regular version: construct tag with subpath prefix
+    } else if add_v_prefix {
+        // Code deps: add v-prefix for semver tags
         if subpath.is_empty() {
             format!("v{}", version_str)
         } else {
             format!("{}/v{}", subpath, version_str)
+        }
+    } else {
+        // Assets: use ref literally
+        if subpath.is_empty() {
+            version_str.to_string()
+        } else {
+            format!("{}/{}", subpath, version_str)
         }
     };
 
