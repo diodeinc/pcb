@@ -1,10 +1,10 @@
 # W25Q16JVUXIQ - 16Mbit QSPI Flash Module
 # Winbond 16Mbit Serial Flash in USON-8 3x2mm package
 
-load("github.com/akhilles/stdlib/interfaces.zen", "Ground", "Power", "Qspi")
+load("@stdlib/interfaces.zen", "Ground", "Power", "Qspi")
 
-Resistor = Module("github.com/akhilles/stdlib/generics/Resistor.zen")
-Capacitor = Module("github.com/akhilles/stdlib/generics/Capacitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
 # Configuration
 add_pullups = config("add_pullups", bool, default = True)
@@ -16,8 +16,8 @@ qspi = io("qspi", Qspi)
 
 Component(
     name = "W25Q16JVUXIQ",
-    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/Memory_Flash.kicad_sym", name = "W25Q16JVSS"),
-    footprint = File("gitlab.com/kicad/libraries/kicad-footprints/Package_SON.pretty/Winbond_USON-8-1EP_3x2mm_P0.5mm_EP0.2x1.6mm.kicad_mod"),
+    symbol = Symbol(library = "@kicad-symbols/Memory_Flash.kicad_sym", name = "W25Q16JVSS"),
+    footprint = File("@kicad-footprints/Package_SON.pretty/Winbond_USON-8-1EP_3x2mm_P0.5mm_EP0.2x1.6mm.kicad_mod"),
     mpn = "W25Q16JVUXIQ",
     manufacturer = "Winbond Electronics",
     description = "FLASH - NOR Memory IC 16Mbit SPI - Quad I/O 133 MHz 6 ns",

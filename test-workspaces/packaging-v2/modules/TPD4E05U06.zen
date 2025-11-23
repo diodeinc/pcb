@@ -3,7 +3,7 @@ TPD4E05U06 4-Channel ESD Protection Array Module
 Automotive-grade USB 2.0 ESD protection diode
 """
 
-load("github.com/akhilles/stdlib/interfaces.zen", "Ground", "Power", "Usb2")
+load("@stdlib/interfaces.zen", "Ground", "Power", "Usb2")
 
 gnd = io("GND", Ground)
 d1p = io("D1P", Net)
@@ -13,8 +13,8 @@ d2m = io("D2M", Net)
 
 Component(
     name = "TVS",
-    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/Power_Protection.kicad_sym", name = "TPD4E05U06DQA"),
-    footprint = File("gitlab.com/kicad/libraries/kicad-footprints/Package_SON.pretty/USON-10_2.5x1.0mm_P0.5mm.kicad_mod"),
+    symbol = Symbol(library = "@kicad-symbols/Power_Protection.kicad_sym", name = "TPD4E05U06DQA"),
+    footprint = File("@kicad-footprints/Package_SON.pretty/USON-10_2.5x1.0mm_P0.5mm.kicad_mod"),
     prefix = "D",
     pin_defs = {
         "D1+": "1",
