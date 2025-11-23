@@ -20,19 +20,6 @@ enum PathDepError {
 
     #[error("Path dependency '{url}' points to V1 package\n  Location: {location}\n  Path dependencies require V2 packages")]
     V1Package { url: String, location: PathBuf },
-
-    #[error("Path dependency '{url}' missing [package] section\n  Location: {location}")]
-    MissingPackageSection { url: String, location: PathBuf },
-
-    #[error("Path dependency '{url}' missing package.path field\n  Location: {location}\n  Add: path = \"{url}\"")]
-    MissingPackagePath { url: String, location: PathBuf },
-
-    #[error("Path dependency key mismatch:\n  Dependency: '{dep_key}'\n  Declared:   '{pkg_path}'\n  Location:   {location}")]
-    PathMismatch {
-        dep_key: String,
-        pkg_path: String,
-        location: PathBuf,
-    },
 }
 
 /// Module line identifier for MVS grouping
@@ -728,34 +715,6 @@ fn collect_deps_recursive(
             }
             Err(e) => return Err(e),
         };
-
-        // Validate package.path is present and matches dependency key
-        let package_config =
-            dep_config
-                .package
-                .as_ref()
-                .ok_or_else(|| PathDepError::MissingPackageSection {
-                    url: url.clone(),
-                    location: dep_pcb_toml.clone(),
-                })?;
-
-        let declared_path =
-            package_config
-                .path
-                .as_ref()
-                .ok_or_else(|| PathDepError::MissingPackagePath {
-                    url: url.clone(),
-                    location: dep_pcb_toml.clone(),
-                })?;
-
-        if declared_path != url {
-            return Err(PathDepError::PathMismatch {
-                dep_key: url.clone(),
-                pkg_path: declared_path.clone(),
-                location: dep_pcb_toml.clone(),
-            }
-            .into());
-        }
 
         collect_deps_recursive(
             &dep_config.dependencies,
