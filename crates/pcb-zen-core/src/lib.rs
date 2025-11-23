@@ -772,8 +772,6 @@ impl CoreLoadResolver {
                 "kicad-footprints",
                 "gitlab.com/kicad/libraries/kicad-footprints",
             ),
-            ("github", "github.com"),
-            ("gitlab", "gitlab.com"),
         ])
     }
 
@@ -815,7 +813,7 @@ impl CoreLoadResolver {
 
         // Unknown alias
         anyhow::bail!(
-            "Unknown alias '@{}'\nSupported toolchain aliases: @stdlib, @kicad-symbols, @kicad-footprints, @github, @gitlab\nOr define package-level aliases in [aliases] section",
+            "Unknown alias '@{}'\nSupported toolchain aliases: @stdlib, @kicad-symbols, @kicad-footprints\nOr define package-level aliases in [aliases] section",
             alias
         )
     }
