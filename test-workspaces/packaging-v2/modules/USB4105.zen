@@ -3,14 +3,14 @@ USB4105-GF-A USB-C Receptacle Module
 USB 2.0 only connector with 16-pin top mount horizontal design
 """
 
-load("github.com/akhilles/stdlib/interfaces.zen", "Ground", "Power", "Usb2")
-load("github.com/akhilles/stdlib/units.zen", "VoltageRange")
+load("@stdlib/interfaces.zen", "Ground", "Power", "Usb2")
+load("@stdlib/units.zen", "VoltageRange")
 
 add_property("layout_path", "build/USB4105")
 
-Resistor = Module("github.com/akhilles/stdlib/generics/Resistor.zen")
-Capacitor = Module("github.com/akhilles/stdlib/generics/Capacitor.zen")
-Tvs = Module("github.com/akhilles/stdlib/generics/Tvs.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Tvs = Module("@stdlib/generics/Tvs.zen")
 TPD4E05U06 = Module("TPD4E05U06.zen")
 
 # USB-C connector modes
@@ -30,8 +30,8 @@ cc2 = io("CC2", Net, optional = True, default = Net("CC2"))
 
 Component(
     name = "USB_C",
-    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/Connector.kicad_sym", name = "USB_C_Receptacle_USB2.0_16P"),
-    footprint = File("gitlab.com/kicad/libraries/kicad-footprints/Connector_USB.pretty/USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal.kicad_mod"),
+    symbol = Symbol(library = "@kicad-symbols/Connector.kicad_sym", name = "USB_C_Receptacle_USB2.0_16P"),
+    footprint = File("@kicad-footprints/Connector_USB.pretty/USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal.kicad_mod"),
     prefix = "J",
     pins = {
         "VBUS": vbus,

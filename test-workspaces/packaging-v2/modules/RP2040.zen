@@ -2,11 +2,11 @@
 RP2040 Microcontroller Module
 """
 
-load("github.com/akhilles/stdlib/interfaces.zen", "Analog", "Gpio", "Ground", "OscPair", "Power", "Qspi", "Swd", "Usb2")
+load("@stdlib/interfaces.zen", "Analog", "Gpio", "Ground", "OscPair", "Power", "Qspi", "Swd", "Usb2")
 
-Capacitor = Module("github.com/akhilles/stdlib/generics/Capacitor.zen")
-Resistor = Module("github.com/akhilles/stdlib/generics/Resistor.zen")
-TestPoint = Module("github.com/akhilles/stdlib/generics/TestPoint.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+TestPoint = Module("@stdlib/generics/TestPoint.zen")
 
 W25Q16JVUXIQ = Module("W25Q16JVUXIQ.zen")
 Button = Module("Button.zen")
@@ -64,8 +64,8 @@ for i in range(4):
 
 Component(
     name = "RP2040",
-    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/MCU_RaspberryPi.kicad_sym", name = "RP2040"),
-    footprint = File("gitlab.com/kicad/libraries/kicad-footprints/Package_DFN_QFN.pretty/QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm.kicad_mod"),
+    symbol = Symbol(library = "@kicad-symbols/MCU_RaspberryPi.kicad_sym", name = "RP2040"),
+    footprint = File("@kicad-footprints/Package_DFN_QFN.pretty/QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm.kicad_mod"),
     mpn = "RP2040",
     manufacturer = "Raspberry Pi",
     description = "Raspberry Pi RP2040 Microcontroller",

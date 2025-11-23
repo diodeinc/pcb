@@ -763,6 +763,63 @@ impl CoreLoadResolver {
         None
     }
 
+    /// Get V2 toolchain-level hardcoded aliases
+    fn get_v2_builtin_aliases(&self) -> HashMap<&'static str, &'static str> {
+        HashMap::from([
+            ("stdlib", "github.com/akhilles/stdlib"),
+            ("kicad-symbols", "gitlab.com/kicad/libraries/kicad-symbols"),
+            (
+                "kicad-footprints",
+                "gitlab.com/kicad/libraries/kicad-footprints",
+            ),
+            ("github", "github.com"),
+            ("gitlab", "gitlab.com"),
+        ])
+    }
+
+    /// Expand V2 alias: check package-level aliases first, then toolchain-level
+    fn expand_v2_alias(
+        &self,
+        context: &ResolveContext,
+        alias: &str,
+    ) -> Result<String, anyhow::Error> {
+        // Find the package root for the current file
+        let package_resolutions = self
+            .v2_package_resolutions
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("V2 package resolutions not available"))?;
+
+        let package_root = self
+            .find_package_root_for_file(&context.current_file, package_resolutions)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not find package root for {}",
+                    context.current_file.display()
+                )
+            })?;
+
+        // Load package's pcb.toml to get package-level aliases
+        let pcb_toml_path = package_root.join("pcb.toml");
+        if self.file_provider.exists(&pcb_toml_path) {
+            if let Ok(PcbToml::V2(v2)) = PcbToml::from_file(&*self.file_provider, &pcb_toml_path) {
+                if let Some(target) = v2.aliases.get(alias) {
+                    return Ok(target.clone());
+                }
+            }
+        }
+
+        // Fall back to toolchain-level aliases
+        if let Some(target) = self.get_v2_builtin_aliases().get(alias) {
+            return Ok(target.to_string());
+        }
+
+        // Unknown alias
+        anyhow::bail!(
+            "Unknown alias '@{}'\nSupported toolchain aliases: @stdlib, @kicad-symbols, @kicad-footprints, @github, @gitlab\nOr define package-level aliases in [aliases] section",
+            alias
+        )
+    }
+
     /// V2 remote resolution: longest prefix match against package's declared deps
     fn try_resolve_v2_workspace(
         &self,
@@ -888,17 +945,26 @@ impl CoreLoadResolver {
         Ok(resolved_path)
     }
 
-    /// V2 resolution: No aliases, only URLs and relative paths
+    /// V2 resolution: Toolchain + package-level aliases, URLs, and relative paths
     ///
-    /// V2 supports two load patterns:
-    /// 1. Canonical URLs: load("github.com/user/repo/path.zen") - looked up in resolution map
-    /// 2. Relative paths: load("./utils.zen") - resolved relative to current file with boundary checks
+    /// V2 supports three load patterns:
+    /// 1. Aliases: load("@stdlib/units.zen") - expanded via toolchain or package aliases
+    /// 2. Canonical URLs: load("github.com/user/repo/path.zen") - looked up in resolution map
+    /// 3. Relative paths: load("./utils.zen") - resolved relative to current file with boundary checks
     fn resolve_v2(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        // V2 does not support aliases - reject LoadSpec::Package immediately
-        if matches!(context.latest_spec(), LoadSpec::Package { .. }) {
-            anyhow::bail!(
-                "V2 does not support '@' imports. Use 'github.com/.../path.zen' or relative paths."
-            );
+        // Expand aliases: package-level first, then toolchain-level
+        if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
+            let expanded_url = self.expand_v2_alias(context, package)?;
+            let full_url = if path.as_os_str().is_empty() {
+                expanded_url
+            } else {
+                format!("{}/{}", expanded_url, path.display())
+            };
+
+            // Reparse the expanded URL as a proper LoadSpec
+            let expanded_spec = LoadSpec::parse(&full_url)
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse expanded alias: {}", full_url))?;
+            context.push_spec(expanded_spec)?;
         }
 
         let resolved_path = match context.latest_spec() {

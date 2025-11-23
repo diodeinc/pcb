@@ -76,6 +76,9 @@ pub struct PcbTomlV1 {
 /// path = "WV0002.zen"
 /// description = "Power Regulator Board"
 ///
+/// [aliases]
+/// mylib = "github.com/myorg/mylib"
+///
 /// [dependencies]
 /// "github.com/diodeinc/stdlib" = "0.3.2"
 /// "github.com/diodeinc/registry/reference/ti/tps54331" = "1.0.0"
@@ -114,6 +117,10 @@ pub struct PcbTomlV2 {
 
     /// Board configuration section
     pub board: Option<BoardDefinition>,
+
+    /// Package-level aliases (scoped to this package's .zen files only)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub aliases: HashMap<String, String>,
 
     /// Dependencies (code packages with pcb.toml)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -456,6 +463,7 @@ impl PcbToml {
                     workspace,
                     package,
                     board: v1.board,
+                    aliases: HashMap::new(),
                     dependencies,
                     assets: HashMap::new(),
                     patch: HashMap::new(),

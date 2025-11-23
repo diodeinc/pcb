@@ -3,11 +3,11 @@ TLV758P Adjustable LDO Regulator Module
 0.5A Low-Dropout Voltage Regulator in WSON-6 package
 """
 
-load("github.com/akhilles/stdlib/interfaces.zen", "Gpio", "Ground", "Power")
-load("github.com/akhilles/stdlib/units.zen", "Resistance", "unit")
+load("@stdlib/interfaces.zen", "Gpio", "Ground", "Power")
+load("@stdlib/units.zen", "Resistance", "unit")
 
-Capacitor = Module("github.com/akhilles/stdlib/generics/Capacitor.zen")
-Resistor = Module("github.com/akhilles/stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # -----------------------------------------------------------------------------
 # Component parameters
@@ -92,8 +92,8 @@ FB = Net("LDO_FB")
 
 Component(
     name = "U_LDO",
-    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/Regulator_Linear.kicad_sym", name = "TLV75801PDRV"),
-    footprint = File("gitlab.com/kicad/libraries/kicad-footprints/Package_SON.pretty/WSON-6-1EP_2x2mm_P0.65mm_EP1x1.6mm.kicad_mod"),
+    symbol = Symbol(library = "@kicad-symbols/Regulator_Linear.kicad_sym", name = "TLV75801PDRV"),
+    footprint = File("@kicad-footprints/Package_SON.pretty/WSON-6-1EP_2x2mm_P0.65mm_EP1x1.6mm.kicad_mod"),
     prefix = "U",
     pin_defs = {
         "VIN": "6",

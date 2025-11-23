@@ -5,9 +5,9 @@ mpn = config("mpn", str, default = "KMR231G LFS", optional = True)
 # MPN to footprint mapping
 def _get_footprint(part_number: str):
     footprint_map = {
-        "KMR231G LFS": "gitlab.com/kicad/libraries/kicad-footprints/Button_Switch_SMD.pretty/SW_Push_1P1T-SH_NO_CK_KMR2xxG.kicad_mod",
-        "KMR221G LFS": "gitlab.com/kicad/libraries/kicad-footprints/Button_Switch_SMD.pretty/SW_Push_1P1T-SH_NO_CK_KMR2xxG.kicad_mod",
-        "KMR241G LFS": "gitlab.com/kicad/libraries/kicad-footprints/Button_Switch_SMD.pretty/SW_Push_1P1T-SH_NO_CK_KMR2xxG.kicad_mod",
+        "KMR231G LFS": "@kicad-footprints/Button_Switch_SMD.pretty/SW_Push_1P1T-SH_NO_CK_KMR2xxG.kicad_mod",
+        "KMR221G LFS": "@kicad-footprints/Button_Switch_SMD.pretty/SW_Push_1P1T-SH_NO_CK_KMR2xxG.kicad_mod",
+        "KMR241G LFS": "@kicad-footprints/Button_Switch_SMD.pretty/SW_Push_1P1T-SH_NO_CK_KMR2xxG.kicad_mod",
     }
     if part_number not in footprint_map:
         error("Unsupported MPN: %s. Supported: %s" % (part_number, list(footprint_map.keys())))
@@ -19,7 +19,7 @@ P2 = io("P2", Net)
 Component(
     name = "SW",
     prefix = "SW",
-    symbol = Symbol(library = "gitlab.com/kicad/libraries/kicad-symbols/Switch.kicad_sym", name = "SW_Push"),
+    symbol = Symbol(library = "@kicad-symbols/Switch.kicad_sym", name = "SW_Push"),
     footprint = File(_get_footprint(mpn)),
     mpn = mpn,
     manufacturer = "C&K",
