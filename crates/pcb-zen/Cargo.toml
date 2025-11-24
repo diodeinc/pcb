@@ -36,7 +36,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 walkdir = { workspace = true }
 uuid = { workspace = true }
-pathdiff = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 ariadne = { workspace = true }
