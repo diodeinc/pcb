@@ -1,10 +1,11 @@
 [workspace]
-path = "github.com/diodeinc/pcb/test-workspaces/packaging-v2"
+repository = "github.com/diodeinc/pcb"
+path = "test-workspaces/packaging-v2"
 resolver = "2"
 pcb-version = "0.2"
 
 [dependencies]
-"github.com/akhilles/stdlib" = "0.4.4"
+"github.com/akhilles/stdlib" = "0.4.5"
 
 [assets]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"

@@ -134,16 +134,28 @@ Version formats:
 
 **Workspace Member Resolution:**
 
-Workspace members are automatically discovered and used instead of fetching from Git. Package paths are inferred from the workspace base path:
+Workspace members are automatically discovered and used instead of fetching from Git. Package paths are inferred from the workspace repository and optional subpath:
 
 ```toml
 # Workspace root pcb.toml
 [workspace]
-path = "github.com/myorg/registry"
+repository = "github.com/myorg/registry"
 members = ["reference/*"]
 ```
 
 Member packages at `reference/ti/tps54331/` automatically get the inferred path `github.com/myorg/registry/reference/ti/tps54331`. No manual configuration needed.
+
+For nested workspaces within monorepos:
+
+```toml
+# Workspace at hardware/boards/ in monorepo
+[workspace]
+repository = "github.com/mycompany/monorepo"
+path = "hardware/boards"
+members = ["*"]
+```
+
+Member at `power/` gets path `github.com/mycompany/monorepo/hardware/boards/power`.
 
 - **No `path` needed for workspace-internal dependencies** - just declare the normal dependency and the workspace member is automatically used
 - **Workspace members always shadow Git** - if the package is in the workspace, it's always used regardless of version
@@ -185,18 +197,18 @@ Supported formats:
 
 ### Multi-Package Workspaces
 
-Multi-package workspaces define a base package path that is used to infer member package paths:
+Multi-package workspaces define a repository and optional subpath used to infer member package paths:
 
 ```toml
 # Workspace root pcb.toml
 [workspace]
 resolver = "2"
 pcb-version = "0.3"
-path = "github.com/diodeinc/registry"
+repository = "github.com/diodeinc/registry"
 members = ["reference/*"]
 ```
 
-Member packages are discovered automatically and their import paths are inferred from the workspace base path plus their relative directory:
+Member packages are discovered automatically and their import paths are inferred from the repository + subpath (if present) + relative directory:
 
 ```
 github.com/diodeinc/registry/
