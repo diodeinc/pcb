@@ -230,33 +230,6 @@ fn resolve_dependencies(
     let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
 
     println!("\nPhase 0: Seed from workspace dependencies");
-
-    // Preseed from pcb.sum to skip sequential discovery
-    if let Some(ref lockfile) = existing_lockfile {
-        println!("  Preseeding from pcb.sum...");
-        let mut preseed_count = 0;
-        // Collect all unique module paths from lockfile (skip assets)
-        let mut seen_modules = HashSet::new();
-        for entry in lockfile.iter() {
-            // Skip asset entries (no manifest hash)
-            if entry.manifest_hash.is_none() {
-                continue;
-            }
-
-            if seen_modules.insert(entry.module_path.clone()) {
-                if let Ok(version) = Version::parse(&entry.version) {
-                    let line = ModuleLine::new(entry.module_path.clone(), &version);
-                    // Tentatively select this version (MVS may upgrade later)
-                    if !selected.contains_key(&line) {
-                        selected.insert(line.clone(), version);
-                        work_queue.push_back(line);
-                        preseed_count += 1;
-                    }
-                }
-            }
-        }
-        println!("  Preseeded {} modules from lockfile", preseed_count);
-    }
     println!();
 
     // Resolve dependencies per-package
@@ -840,18 +813,7 @@ fn decide_cache_usage(
     Ok(CacheDecision::Use)
 }
 
-/// Validate that a code dependency has pcb.toml manifest
-fn validate_code_dep_has_manifest(cache_dir: &Path, module_path: &str) -> Result<()> {
-    let pcb_toml_path = cache_dir.join("pcb.toml");
-    if !pcb_toml_path.exists() {
-        anyhow::bail!(
-            "Code dependency '{}' missing pcb.toml\n  \
-            If this is an asset repository, declare it under [assets] instead.",
-            module_path
-        );
-    }
-    Ok(())
-}
+
 
 /// Extract ref string from AssetDependencySpec
 ///
@@ -1003,12 +965,8 @@ fn fetch_manifest(
 
 /// Read and parse a pcb.toml manifest (both dependencies and assets)
 fn read_manifest_from_path(pcb_toml_path: &Path, _module_path: &str) -> Result<PackageManifest> {
-    // Check if pcb.toml exists (code packages must have manifests in V2)
     if !pcb_toml_path.exists() {
-        anyhow::bail!(
-            "Code dependency missing pcb.toml manifest\n  \
-            If this is an asset repository (e.g., KiCad libraries), declare it under [assets] instead."
-        );
+        anyhow::bail!("Missing pcb.toml at {}", pcb_toml_path.display());
     }
 
     let file_provider = DefaultFileProvider::new();
@@ -1017,11 +975,11 @@ fn read_manifest_from_path(pcb_toml_path: &Path, _module_path: &str) -> Result<P
     match config {
         PcbToml::V2(v2) => Ok(PackageManifest::from_v2(&v2)),
         PcbToml::V1(_) => {
-            // V1 packages don't have assets
-            anyhow::bail!(
-                "Failed to parse pcb.toml as V2 manifest\n  \
-                If this is an asset repository, declare it under [assets] instead."
-            );
+            // V1 packages = empty manifest for V2 resolution
+            Ok(PackageManifest {
+                dependencies: HashMap::new(),
+                assets: HashMap::new(),
+            })
         }
     }
 }
@@ -1039,12 +997,9 @@ fn fetch_asset_repo(
     ref_str: &str,
     patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
 ) -> Result<PathBuf> {
-    use std::fs;
-
     // 1. Check if this module is patched with a local path
     if let Some(patch) = patches.get(module_path) {
         let patched_path = workspace_root.join(&patch.path);
-        let patched_toml = patched_path.join("pcb.toml");
 
         println!("      Using patched source: {}", patch.path);
 
@@ -1058,17 +1013,7 @@ fn fetch_asset_repo(
             );
         }
 
-        // Verify patch target does NOT have pcb.toml (asset constraint)
-        if patched_toml.exists() {
-            anyhow::bail!(
-                "Asset '{}' is patched to a path with pcb.toml\n  \
-                Patch path: {}\n  \
-                Assets must not have manifests. Declare this under [dependencies] instead.",
-                module_path,
-                patched_path.display()
-            );
-        }
-
+        // Assets: ignore pcb.toml if present (no validation needed)
         return Ok(patched_path);
     }
 
@@ -1089,20 +1034,7 @@ fn fetch_asset_repo(
 
     let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str, false)?;
 
-    // Verify no pcb.toml exists (strict asset constraint)
-    let pcb_toml_path = package_root.join("pcb.toml");
-    if pcb_toml_path.exists() {
-        // Clean up the checkout
-        let _ = fs::remove_dir_all(&checkout_dir);
-        anyhow::bail!(
-            "Asset '{}' has a pcb.toml manifest\n  \
-            Location: {}\n  \
-            Assets must not have manifests. Declare this under [dependencies] instead.",
-            module_path,
-            pcb_toml_path.display()
-        );
-    }
-
+    // Assets: ignore pcb.toml if present (no validation needed)
     Ok(package_root)
 }
 
@@ -1782,7 +1714,6 @@ fn fetch_full_contents(
             decide_cache_usage(&cache_dir, &cache_marker, lockfile, &line.path, version)?;
 
         if let CacheDecision::Use = decision {
-            validate_code_dep_has_manifest(&cache_dir, &line.path)?;
             continue;
         } else {
             // Cache miss - fetch and hash
@@ -1795,8 +1726,6 @@ fn fetch_full_contents(
             std::io::Write::flush(&mut std::io::stdout())?;
 
             let content_hash = compute_content_hash_from_dir(&package_root)?;
-
-            validate_code_dep_has_manifest(&package_root, &line.path)?;
 
             let pcb_toml_path = package_root.join("pcb.toml");
             let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
