@@ -195,26 +195,35 @@ fn resolve_dependencies(
     }
 
     // Build workspace members index: package_path -> (dir, config)
-    // For multi-package workspaces: inferred from workspace.path + relative directory
+    // For multi-package workspaces: inferred from workspace.repository + workspace.path + relative directory
     // For standalone packages: packages aren't added here (they're resolved via cache in Phase 3)
     let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)> =
         HashMap::new();
 
-    if let Some(workspace_path) = v2.workspace.as_ref().and_then(|w| w.path.as_ref()) {
+    if let Some(workspace_repository) = v2.workspace.as_ref().and_then(|w| w.repository.as_ref()) {
         for (pcb_toml_path, config) in &packages {
             let PcbToml::V2(v2) = config else { continue };
 
             let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
 
-            // Infer package path from workspace.path + relative directory
+            // Infer package path from workspace.repository + workspace.path (if present) + relative directory
             if let Ok(relative_path) = package_dir.strip_prefix(workspace_root) {
                 let relative_str = relative_path.to_string_lossy();
+
+                // Build base path: repository + optional workspace subpath
+                let workspace_base =
+                    if let Some(ws_path) = v2.workspace.as_ref().and_then(|w| w.path.as_ref()) {
+                        format!("{}/{}", workspace_repository, ws_path)
+                    } else {
+                        workspace_repository.clone()
+                    };
+
                 let inferred_path = if relative_str.is_empty() {
                     // Root package at workspace root
-                    workspace_path.clone()
+                    workspace_base
                 } else {
-                    // Member package: workspace.path + relative directory
-                    format!("{}/{}", workspace_path, relative_str)
+                    // Member package: base + relative directory
+                    format!("{}/{}", workspace_base, relative_str)
                 };
 
                 workspace_members.insert(inferred_path, (package_dir, v2.clone()));
@@ -812,8 +821,6 @@ fn decide_cache_usage(
     println!("    {}@v{} (cached, verified)", module_path, version);
     Ok(CacheDecision::Use)
 }
-
-
 
 /// Extract ref string from AssetDependencySpec
 ///

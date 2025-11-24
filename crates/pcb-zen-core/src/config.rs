@@ -136,9 +136,15 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
-    /// Base package path for workspace (V2 only, required for V2 workspaces)
+    /// Repository URL for workspace (V2 only, required for V2 multi-package workspaces)
     /// Example: "github.com/diodeinc/registry"
-    /// Member package paths are inferred as: path + relative_dir_from_workspace_root
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+
+    /// Optional subpath within repository (V2 only)
+    /// Only needed if workspace root is not at repository root
+    /// Example: "hardware/boards" for nested workspaces in monorepos
+    /// Member package paths are inferred as: repository + "/" + path + "/" + relative_dir
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 
@@ -1009,6 +1015,7 @@ pub fn get_workspace_info(
         // Create a minimal workspace config with the last board as default
         final_config = Some(WorkspaceConfig {
             name: None,
+            repository: None,
             path: None,
             resolver: None,
             pcb_version: None,
