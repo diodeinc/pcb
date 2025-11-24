@@ -76,9 +76,6 @@ pub struct PcbTomlV1 {
 /// path = "WV0002.zen"
 /// description = "Power Regulator Board"
 ///
-/// [aliases]
-/// mylib = "github.com/myorg/mylib"
-///
 /// [dependencies]
 /// "github.com/diodeinc/stdlib" = "0.3.2"
 /// "github.com/diodeinc/registry/reference/ti/tps54331" = "1.0.0"
@@ -118,10 +115,6 @@ pub struct PcbTomlV2 {
     /// Board configuration section
     pub board: Option<BoardDefinition>,
 
-    /// Package-level aliases (scoped to this package's .zen files only)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub aliases: HashMap<String, String>,
-
     /// Dependencies (code packages with pcb.toml)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub dependencies: HashMap<String, DependencySpec>,
@@ -148,6 +141,12 @@ pub struct WorkspaceConfig {
     /// Optional workspace name (V1 only, ignored in V2)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+
+    /// Base package path for workspace (V2 only, required for V2 workspaces)
+    /// Example: "github.com/akhilles/registry"
+    /// Member package paths are inferred as: path + relative_dir_from_workspace_root
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 
     /// List of board directories/patterns (supports globs)
     #[serde(default = "default_members")]
@@ -197,11 +196,6 @@ pub type BoardDefinition = Board;
 /// V2 Package configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageConfig {
-    /// Package import path (e.g., "github.com/diodeinc/stdlib")
-    /// Required for publishable packages, optional for local-only packages
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-
     /// Minimum compatible toolchain release series (e.g., "0.3")
     #[serde(rename = "pcb-version")]
     pub pcb_version: String,
@@ -451,7 +445,6 @@ impl PcbToml {
                 // Create Package section if it's a module or board
                 let package = if v1.module.is_some() || v1.board.is_some() {
                     Some(PackageConfig {
-                        path: None, // V1->V2 conversion doesn't have package path
                         pcb_version: "0.3".to_string(),
                     })
                 } else {
@@ -463,7 +456,6 @@ impl PcbToml {
                     workspace,
                     package,
                     board: v1.board,
-                    aliases: HashMap::new(),
                     dependencies,
                     assets: HashMap::new(),
                     patch: HashMap::new(),
@@ -1047,6 +1039,7 @@ pub fn get_workspace_info(
         // Create a minimal workspace config with the last board as default
         final_config = Some(WorkspaceConfig {
             name: None,
+            path: None,
             members: default_members(),
             default_board: Some(discovery.boards.last().unwrap().name.clone()),
         });

@@ -196,15 +196,34 @@ fn resolve_dependencies(
         }
     }
 
-    // Build workspace members index: package.path -> (dir, config)
+    // Build workspace members index: inferred_package_path -> (dir, config)
+    // Package paths are inferred from workspace.path + relative directory
     let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)> =
         HashMap::new();
-    for (pcb_toml_path, config) in &packages {
-        let PcbToml::V2(v2) = config else { continue };
-        if let Some(pkg) = &v2.package {
-            if let Some(path) = &pkg.path {
-                let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
-                workspace_members.insert(path.clone(), (package_dir, v2.clone()));
+    
+    if let Some(workspace_path) = v2.workspace.as_ref().and_then(|w| w.path.as_ref()) {
+        for (pcb_toml_path, config) in &packages {
+            let PcbToml::V2(v2) = config else { continue };
+            
+            // Skip if no package section
+            if v2.package.is_none() {
+                continue;
+            }
+            
+            let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
+            
+            // Infer package path from workspace.path + relative directory
+            if let Ok(relative_path) = package_dir.strip_prefix(workspace_root) {
+                let relative_str = relative_path.to_string_lossy();
+                let inferred_path = if relative_str.is_empty() {
+                    // Root package at workspace root
+                    workspace_path.clone()
+                } else {
+                    // Member package: workspace.path + relative directory
+                    format!("{}/{}", workspace_path, relative_str)
+                };
+                
+                workspace_members.insert(inferred_path, (package_dir, v2.clone()));
             }
         }
     }

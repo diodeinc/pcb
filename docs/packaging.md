@@ -92,7 +92,6 @@ Unified `[package]` section replaces `[module]` and `[board]`:
 
 ```toml
 [package]
-path = "github.com/diodeinc/boards/WV0002"
 pcb-version = "0.3"
 
 [board]
@@ -101,17 +100,17 @@ path = "WV0002.zen"
 description = "Power Regulator Board"
 ```
 
-**`package.path`** specifies the canonical import path for this package (e.g., `github.com/diodeinc/stdlib` or `github.com/diodeinc/registry/reference/ti/tps54331`). Following Go's model, the import path identifies the package in the global namespace. This field is **required for publishable packages** but optional for local-only packages (those used only within a workspace and never tagged).
-
 **`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It is used to indicate breaking changes in the language or standard library that require a newer compiler.
 
 The package **version** itself is not in the manifest - it is derived from the Git tag, following Go's decentralized model where version control is the source of truth.
+
+The package **import path** is inferred from the workspace base path and the package's relative directory (see Workspace Configuration below).
 
 The optional `[board]` section specifies a `.zen` file that can be built as a standalone board with `pcb build`. Packages with or without `[board]` can be used as reusable modules via `Module()`.
 
 ### Dependencies
 
-Full repository URLs as keys, no aliases:
+Full repository URLs as keys:
 
 ```toml
 [dependencies]
@@ -130,16 +129,19 @@ Version formats:
 
 **Workspace Member Resolution:**
 
-Dependencies whose URL matches a workspace member's `package.path` automatically use the local workspace package instead of fetching from Git. This means:
+Workspace members are automatically discovered and used instead of fetching from Git. Package paths are inferred from the workspace base path:
 
-- **No `path` needed for workspace-internal dependencies** - just declare the normal dependency:
-  ```toml
-  [dependencies]
-  "github.com/myorg/workspace-package" = "0.3"
-  ```
-  
+```toml
+# Workspace root pcb.toml
+[workspace]
+path = "github.com/myorg/registry"
+members = ["reference/*"]
+```
+
+Member packages at `reference/ti/tps54331/` automatically get the inferred path `github.com/myorg/registry/reference/ti/tps54331`. No manual configuration needed.
+
+- **No `path` needed for workspace-internal dependencies** - just declare the normal dependency and the workspace member is automatically used
 - **Workspace members always shadow Git** - if the package is in the workspace, it's always used regardless of version
-
 - **Path dependencies are for external local development** - use them only when developing a package outside the workspace:
   ```toml
   [dependencies]
@@ -176,37 +178,59 @@ Supported formats:
 - Branch: `{ branch = "main" }` (resolved to commit hash in lockfile)
 - Revision: `{ rev = "a1b2c3d4" }` (commit hash)
 
+### Workspace Configuration
+
+Workspaces define a base package path that is used to infer member package paths:
+
+```toml
+# Workspace root pcb.toml
+version = "2"
+
+[workspace]
+path = "github.com/diodeinc/registry"
+members = ["reference/*"]
+```
+
+Member packages are discovered automatically and their import paths are inferred from the workspace base path plus their relative directory:
+
+```
+github.com/diodeinc/registry/
+  pcb.toml (workspace config with path = "github.com/diodeinc/registry")
+  reference/
+    ti/
+      tps54331/
+        pcb.toml → inferred path: github.com/diodeinc/registry/reference/ti/tps54331
+        tps54331.zen
+    analog/
+      ltc3115/
+        pcb.toml → inferred path: github.com/diodeinc/registry/reference/analog/ltc3115
+        ltc3115.zen
+```
+
+**Standalone Packages:**
+
+Packages without a workspace (no `[workspace]` section) work fine - they just can't be discovered as workspace members. Useful for single-package repositories like stdlib:
+
+```toml
+# github.com/diodeinc/stdlib/pcb.toml
+version = "2"
+
+[package]
+pcb-version = "0.3"
+```
+
 ### Git Tag Convention
 
 Following Go: root packages use `v<version>`, nested packages use `<path>/v<version>`.
 
-Registry restructured for per-component versioning:
-```
-github.com/diodeinc/registry/
-  reference/
-    ti/
-      tps54331/
-        pcb.toml
-        tps54331.zen
-    analog/
-      ltc3115/
-        pcb.toml
-        ltc3115.zen
-```
+Tags for workspace members:
+- `reference/ti/tps54331/v1.0.0`
+- `reference/analog/ltc3115/v1.5.0`
 
-Tags: `reference/ti/tps54331/v1.0.0`, `reference/analog/ltc3115/v1.5.0`. Independent version namespaces.
+Each package has independent version namespaces.
 
-Stdlib remains a single package:
-```
-github.com/diodeinc/stdlib/
-  pcb.toml
-  board_config.zen
-  interfaces.zen
-  units.zen
-  generics/
-```
-
-Tags: `v0.3.2`. Breaking changes in any part of stdlib require a major version bump for the whole package. This simplicity is acceptable for the core standard library, unlike the registry which must scale to thousands of independent components.
+Tags for standalone packages:
+- `v0.3.2` (e.g., stdlib at repository root)
 
 ### Dependency Resolution
 
@@ -265,7 +289,7 @@ Semver compatibility guarantees justify simple greedy selection. Within a family
 
 **Full URLs are strongly preferred.** This design adopts the Go philosophy that "the import path is the package identity":
 
-1.  **Unambiguous Origin**: `github.com/diodeinc/stdlib` tells you exactly who owns the code and where it lives. Aliases like `@utils` are ambiguous and require cross-referencing a configuration file to understand the dependency.
+1.  **Unambiguous Origin**: `github.com/diodeinc/stdlib` tells you exactly who owns the code and where it lives. While aliases like `@stdlib` work (auto-generated from dependencies), the full URL is always canonical.
 2.  **Decentralized Namespace**: URLs are globally unique. There is no central registry handing out short names or gatekeeping the "standard" names. Any user can publish `github.com/user/utils` without conflict.
 3.  **Zero-Config Readability**: A developer reading the code knows the dependencies without needing to see the build configuration.
 
@@ -277,19 +301,25 @@ load("github.com/diodeinc/stdlib/board_config.zen", "Board")
 SwitchingReg = Module("github.com/diodeinc/registry/reference/ti/tps54331/tps54331.zen")
 ```
 
-**Legacy Aliases (Discouraged)**
+**Auto-Generated Aliases**
 
-Aliases are supported primarily for backward compatibility and migration. New projects should avoid them.
+Aliases are automatically generated from the last path segment of dependencies and assets. This provides convenient shortcuts without manual configuration.
 
 ```python
-# Discouraged: requires alias mapping in pcb.toml or built-in knowledge
-load("@stdlib/properties.zen", "Layout")
+# With this in pcb.toml:
+# [dependencies]
+# "github.com/diodeinc/stdlib" = "0.4.4"
+# "github.com/diodeinc/registry/reference/XAL7070-562MEx" = "0.1.0"
+# [assets]
+# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
 
-# Aliases also work in asset paths (passed to Component/Symbol), but use full URLs where possible:
-# Symbol("@kicad-symbols/Device.kicad_sym:R")
+# These aliases are automatically available:
+load("@stdlib/properties.zen", "Layout")  # → github.com/diodeinc/stdlib
+load("@XAL7070-562MEx/XAL7070-562MEx.zen", "XAL7070")  # → github.com/.../XAL7070-562MEx
+Symbol("@kicad-symbols/Device.kicad_sym:R")  # → gitlab.com/.../kicad-symbols
 ```
 
-Three built-in aliases remain for convenience during transition: `@stdlib`, `@kicad-symbols`, `@kicad-footprints`. These expand to their full URLs before resolution.
+Aliases are only generated for unique last path segments (no collisions). If two dependencies end with the same name, neither gets an alias.
 
 Longest prefix matching: `github.com/diodeinc/stdlib` declared at `0.3.2` matches loading `github.com/diodeinc/stdlib/generics/Capacitor.zen`. Don't declare every subdirectory separately.
 
@@ -521,15 +551,21 @@ weave/
 
 Workspace root:
 ```toml
+version = "2"
+
 [workspace]
+path = "github.com/weaverobots/weave"
 members = ["boards/*"]
 default-board = "WV0002"
 
+[access]
 allow = ["*@weaverobots.com"]
 ```
 
 WV0002 declares dependencies:
 ```toml
+version = "2"
+
 [package]
 pcb-version = "0.3"
 
@@ -544,11 +580,11 @@ description = "Power Regulator Board"
 "github.com/diodeinc/registry/reference/analog/ltc3115" = "1.5"
 ```
 
-Load statements backward compatible (aliases work) or use full URLs:
+Load statements support auto-generated aliases or full URLs:
 ```python
-load("@stdlib/properties.zen", "Layout")
+load("@stdlib/properties.zen", "Layout")  # Auto-alias from "github.com/diodeinc/stdlib"
 # or
-load("github.com/diodeinc/stdlib/properties.zen", "Layout")
+load("github.com/diodeinc/stdlib/properties.zen", "Layout")  # Full canonical URL
 ```
 
 Lockfile generated first build:
