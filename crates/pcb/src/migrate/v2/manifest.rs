@@ -109,7 +109,8 @@ fn detect_workspace_path(workspace_root: &Path) -> Result<Option<String>> {
 }
 
 /// Convert all pcb.toml files in workspace to V2
-pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<()> {
+/// Returns (repository, workspace_path) for use in subsequent phases
+pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<(String, Option<String>)> {
     let repository = detect_repository(workspace_root)?;
     let path = detect_workspace_path(workspace_root)?;
 
@@ -146,7 +147,7 @@ pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok((repository, path))
 }
 
 /// Detect member patterns based on existing directories

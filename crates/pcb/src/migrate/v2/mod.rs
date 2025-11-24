@@ -3,6 +3,7 @@ use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod escape_paths;
 mod manifest;
 mod zen_paths;
 
@@ -22,11 +23,15 @@ pub fn migrate_to_v2(paths: &[PathBuf]) -> Result<()> {
 
     // Phase 2: Convert pcb.toml to V2
     eprintln!("\nPhase 2: Converting pcb.toml files to V2");
-    manifest::convert_workspace_to_v2(&workspace_root)?;
+    let (repository, workspace_path) = manifest::convert_workspace_to_v2(&workspace_root)?;
 
     // Phase 3: Convert workspace-relative paths in .zen files
     eprintln!("\nPhase 3: Converting workspace-relative paths in .zen files");
     zen_paths::convert_workspace_paths(&workspace_root)?;
+
+    // Phase 4: Convert cross-package relative paths to URLs
+    eprintln!("\nPhase 4: Converting cross-package paths to URLs");
+    escape_paths::convert_escape_paths(&workspace_root, &repository, workspace_path.as_deref())?;
 
     eprintln!("\n✓ Migration to V2 complete");
     eprintln!("  Review changes with: git diff");

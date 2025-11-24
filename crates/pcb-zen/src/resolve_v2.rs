@@ -120,10 +120,25 @@ fn resolve_dependencies(
     println!("V2 Dependency Resolution");
     println!("Workspace root: {}", workspace_root.display());
 
+    // Read workspace config
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+    let initial_config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+
+    // Discover member directories and build workspace members index
+    let member_patterns = initial_config
+        .workspace
+        .as_ref()
+        .map(|w| w.members.as_slice())
+        .unwrap_or(&[]);
+    let member_dirs = discover_member_dirs(workspace_root, member_patterns)?;
+
+    // Build workspace_member_urls for auto-deps (before auto-deps modifies configs)
+    let workspace_member_urls: HashSet<String> =
+        build_member_urls(&initial_config, workspace_root, &member_dirs);
+
     // Phase -1: Auto-add missing dependencies from .zen files
-    // This modifies pcb.toml files in place, so we read configs fresh afterwards
     println!("\nPhase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_root)?;
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_root, &workspace_member_urls)?;
     if auto_deps.total_added > 0 {
         println!(
             "  Auto-added {} dependencies across {} package(s)",
@@ -139,8 +154,7 @@ fn resolve_dependencies(
         }
     }
 
-    // Read workspace config (fresh, after auto-deps may have modified it)
-    let pcb_toml_path = workspace_root.join("pcb.toml");
+    // Re-read workspace config (auto-deps may have modified it)
     let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
 
     // Validate patches are only at workspace root
@@ -166,34 +180,30 @@ fn resolve_dependencies(
         None
     };
 
-    // Discover member packages (reads fresh configs from disk)
-    let member_patterns = config
-        .workspace
-        .as_ref()
-        .map(|w| w.members.as_slice())
-        .unwrap_or(&[]);
-    let mut packages = discover_packages(file_provider, workspace_root, member_patterns)?;
+    // Build workspace members: URL -> (dir, config)
+    // Includes ALL member directories (empty pcb.toml inherits V2 from workspace root)
+    let workspace_members = build_workspace_members(file_provider, &config, workspace_root, &member_dirs);
 
-    // Workspace root is always a package in V2
-    packages.insert(0, (pcb_toml_path, config.clone()));
+    // Extract V2 packages for resolution (root + members with is_v2())
+    let mut packages: Vec<(PathBuf, PcbToml)> = vec![(pcb_toml_path.clone(), config.clone())];
+    for (_url, (dir, pkg_config)) in &workspace_members {
+        if dir != workspace_root && pkg_config.is_v2() {
+            packages.push((dir.join("pcb.toml"), pkg_config.clone()));
+        }
+    }
 
-    // Display workspace type
-    if config.workspace.is_some() {
+    // Display workspace info
+    if let Some(ws) = &config.workspace {
         println!("Type: Explicit workspace");
-        if !member_patterns.is_empty() {
-            println!("Member patterns: {:?}", member_patterns);
+        if !ws.members.is_empty() {
+            println!("Member patterns: {:?}", ws.members);
         }
     } else {
         println!("Type: Standalone package (implicit workspace)");
     }
 
-    // Display discovered packages
     println!("\nDiscovered {} package(s):", packages.len());
     for (pcb_toml_path, config) in &packages {
-        if !config.is_v2() {
-            continue;
-        }
-
         let package_name = pcb_toml_path
             .parent()
             .and_then(|p| p.file_name())
@@ -201,60 +211,13 @@ fn resolve_dependencies(
             .unwrap_or_else(|| "unknown".into());
 
         if let Some(board) = &config.board {
-            println!(
-                "  - {} (board: {}) → {}",
-                package_name,
-                board.name,
-                pcb_toml_path.display()
-            );
+            println!("  - {} (board: {}) → {}", package_name, board.name, pcb_toml_path.display());
         } else {
             println!("  - {} → {}", package_name, pcb_toml_path.display());
         }
     }
 
-    // Build workspace members index: package_path -> (dir, config)
-    // For multi-package workspaces: inferred from workspace.repository + workspace.path + relative directory
-    // For standalone packages: packages aren't added here (they're resolved via cache in Phase 3)
-    let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)> =
-        HashMap::new();
-
-    if let Some(workspace_repository) = config
-        .workspace
-        .as_ref()
-        .and_then(|w| w.repository.as_ref())
-    {
-        for (pcb_toml_path, config) in &packages {
-            if !config.is_v2() {
-                continue;
-            }
-
-            let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
-
-            // Infer package path from workspace.repository + workspace.path (if present) + relative directory
-            if let Ok(relative_path) = package_dir.strip_prefix(workspace_root) {
-                let relative_str = relative_path.to_string_lossy();
-
-                // Build base path: repository + optional workspace subpath
-                let workspace_base = if let Some(ws_path) =
-                    config.workspace.as_ref().and_then(|w| w.path.as_ref())
-                {
-                    format!("{}/{}", workspace_repository, ws_path)
-                } else {
-                    workspace_repository.clone()
-                };
-
-                let inferred_path = if relative_str.is_empty() {
-                    // Root package at workspace root
-                    workspace_base
-                } else {
-                    // Member package: base + relative directory
-                    format!("{}/{}", workspace_base, relative_str)
-                };
-
-                workspace_members.insert(inferred_path, (package_dir, config.clone()));
-            }
-        }
-    }
+    println!("\nWorkspace members: {} (for local resolution)", workspace_members.len());
 
     let patches = config.patch.clone();
 
@@ -1523,55 +1486,108 @@ fn add_requirement(
     }
 }
 
-/// Discover V2 packages matching glob patterns
-fn discover_packages(
-    file_provider: &dyn FileProvider,
-    workspace_root: &Path,
-    patterns: &[String],
-) -> Result<Vec<(PathBuf, PcbToml)>> {
+/// Discover member package directories matching glob patterns
+fn discover_member_dirs(workspace_root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
     if patterns.is_empty() {
         return Ok(vec![]);
     }
 
-    // Build glob matchers
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         builder.add(Glob::new(pattern)?);
-        // Match pattern without /* suffix for exact directory matches
         if let Some(exact) = pattern.strip_suffix("/*") {
             builder.add(Glob::new(exact)?);
         }
     }
     let glob_set = builder.build()?;
 
-    // Walk workspace and collect matching V2 packages
-    // We're already in V2 context (workspace root has resolver = "2"), so parse members directly as V2
-    let mut packages = Vec::new();
+    let mut dirs = Vec::new();
     for entry in WalkDir::new(workspace_root)
         .into_iter()
         .filter_map(|e| e.ok())
     {
-        if !entry.path().is_dir() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("pcb.toml").exists() {
             continue;
         }
-
-        if let Ok(rel_path) = entry.path().strip_prefix(workspace_root) {
+        if let Ok(rel_path) = path.strip_prefix(workspace_root) {
             if glob_set.is_match(rel_path) {
-                let pcb_toml = entry.path().join("pcb.toml");
-                if file_provider.exists(&pcb_toml) {
-                    // Parse directly as V2 - members inherit V2 context from workspace root
-                    let content = file_provider.read_file(&pcb_toml)?;
-                    if let Ok(v2) = PcbToml::parse(&content) {
-                        if v2.is_v2() {
-                            packages.push((pcb_toml, v2));
-                        }
-                    }
-                }
+                dirs.push(path.to_path_buf());
             }
         }
     }
 
-    Ok(packages)
+    Ok(dirs)
+}
+
+/// Build URL set for workspace members (used by auto-deps before configs are modified)
+fn build_member_urls(config: &PcbToml, workspace_root: &Path, member_dirs: &[PathBuf]) -> HashSet<String> {
+    let Some(ws) = &config.workspace else {
+        return HashSet::new();
+    };
+    let Some(repo) = &ws.repository else {
+        return HashSet::new();
+    };
+
+    let base = match &ws.path {
+        Some(p) => format!("{}/{}", repo, p),
+        None => repo.clone(),
+    };
+
+    let mut urls = HashSet::new();
+    urls.insert(base.clone()); // root package
+
+    for dir in member_dirs {
+        if let Ok(rel) = dir.strip_prefix(workspace_root) {
+            let rel_str = rel.to_string_lossy();
+            if !rel_str.is_empty() {
+                urls.insert(format!("{}/{}", base, rel_str));
+            }
+        }
+    }
+
+    urls
+}
+
+/// Build workspace members map: URL -> (dir, config)
+fn build_workspace_members(
+    file_provider: &dyn FileProvider,
+    config: &PcbToml,
+    workspace_root: &Path,
+    member_dirs: &[PathBuf],
+) -> HashMap<String, (PathBuf, PcbToml)> {
+    let Some(ws) = &config.workspace else {
+        return HashMap::new();
+    };
+    let Some(repo) = &ws.repository else {
+        return HashMap::new();
+    };
+
+    let base = match &ws.path {
+        Some(p) => format!("{}/{}", repo, p),
+        None => repo.clone(),
+    };
+
+    let mut members = HashMap::new();
+
+    // Add root package
+    members.insert(base.clone(), (workspace_root.to_path_buf(), config.clone()));
+
+    // Add member directories
+    for dir in member_dirs {
+        if let Ok(rel) = dir.strip_prefix(workspace_root) {
+            let rel_str = rel.to_string_lossy();
+            if !rel_str.is_empty() {
+                let url = format!("{}/{}", base, rel_str);
+                let pcb_toml = dir.join("pcb.toml");
+                let content = file_provider.read_file(&pcb_toml).unwrap_or_default();
+                let pkg_config = PcbToml::parse(&content).unwrap_or_else(|_| PcbToml::parse("").unwrap());
+                members.insert(url, (dir.clone(), pkg_config));
+            }
+        }
+    }
+
+    members
 }
 
 /// Check if a directory is a package root (has V2 pcb.toml)

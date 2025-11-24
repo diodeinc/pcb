@@ -3343,7 +3343,6 @@ dependencies = [
  "lsp-types",
  "md5",
  "once_cell",
- "pathdiff",
  "pcb-eda",
  "pcb-kicad",
  "pcb-sch",
