@@ -972,11 +972,8 @@ By doing everything locally, we remove the CI dependency for the "release" step,
 
 
 v2 todos:
-- @stdlib alias
-- consider how we can avoid hardcoding "github.com"
 - add support for cloning asset subdirs
 - auto-detect dependencies from load() statements
 - pcb build auto-sorts dependencies, assets
 - fix out-of-tree path dependencies (e.g. stdlib) not working "Internal error: current file not in any V2 package"
 - add pcb publish support
-- don't do pcb.sum preseeding?

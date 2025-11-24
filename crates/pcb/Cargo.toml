@@ -52,6 +52,7 @@ starlark_syntax = { workspace = true }
 comfy-table = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
 chrono = { workspace = true }
