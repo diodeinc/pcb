@@ -1,0 +1,36 @@
+use anyhow::Result;
+use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+mod manifest;
+mod zen_paths;
+
+pub fn migrate_to_v2(paths: &[PathBuf]) -> Result<()> {
+    let start = if paths.is_empty() {
+        std::env::current_dir()?
+    } else {
+        paths[0].clone()
+    };
+
+    let file_provider = Arc::new(DefaultFileProvider::new());
+
+    // Phase 1: Find workspace root (reuse existing function)
+    eprintln!("Phase 1: Detecting workspace root");
+    let workspace_root = find_workspace_root(&*file_provider, &start);
+    eprintln!("  Workspace root: {}", workspace_root.display());
+
+    // Phase 2: Convert pcb.toml to V2
+    eprintln!("\nPhase 2: Converting pcb.toml files to V2");
+    manifest::convert_workspace_to_v2(&workspace_root)?;
+
+    // Phase 3: Convert workspace-relative paths in .zen files
+    eprintln!("\nPhase 3: Converting workspace-relative paths in .zen files");
+    zen_paths::convert_workspace_paths(&workspace_root)?;
+
+    eprintln!("\n✓ Migration to V2 complete");
+    eprintln!("  Review changes with: git diff");
+    eprintln!("  Run build to verify: pcb build");
+
+    Ok(())
+}

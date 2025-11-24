@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub mod codemods;
+pub mod v2;
 
 /// Arguments for the `migrate` command
 #[derive(Args, Debug, Default, Clone)]
@@ -15,10 +16,22 @@ pub struct MigrateArgs {
     /// When omitted, all .zen files in the current directory tree are considered.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
+
+    /// Run a specific migration
+    #[arg(long, value_name = "NAME")]
+    pub migration: Option<String>,
 }
 
 /// Execute the `migrate` command
 pub fn execute(args: MigrateArgs) -> Result<()> {
+    // Handle specific migrations
+    if let Some(migration_name) = &args.migration {
+        match migration_name.as_str() {
+            "v2" => return v2::migrate_to_v2(&args.paths),
+            _ => anyhow::bail!("Unknown migration: {}", migration_name),
+        }
+    }
+
     // Initialize ruff formatter once to format files after migrations
     let formatter = RuffFormatter::default();
     // Determine target files - always recursive for directories

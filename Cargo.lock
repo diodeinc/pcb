@@ -3039,6 +3039,7 @@ dependencies = [
  "starlark_syntax",
  "tempfile",
  "terminal_size",
+ "toml",
  "unicode-width 0.2.1",
  "walkdir",
  "zip 4.3.0",
