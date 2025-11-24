@@ -62,7 +62,7 @@ struct PackageManifest {
 }
 
 impl PackageManifest {
-    fn from_v2(v2: &pcb_zen_core::config::PcbTomlV2) -> Self {
+    fn from_v2(v2: &pcb_zen_core::config::PcbToml) -> Self {
         PackageManifest {
             dependencies: v2.dependencies.clone(),
             assets: v2.assets.clone(),
@@ -99,11 +99,10 @@ pub fn maybe_resolve_v2_workspace(paths: &[PathBuf]) -> Result<Option<Resolution
     }
 
     let config = PcbToml::from_file(&*file_provider, &pcb_toml_path)?;
-    if let PcbToml::V2(_) = config {
+    if config.is_v2() {
         return Ok(Some(resolve_dependencies(
             &*file_provider,
             &workspace_root,
-            &config,
         )?));
     }
 
@@ -117,26 +116,44 @@ pub fn maybe_resolve_v2_workspace(paths: &[PathBuf]) -> Result<Option<Resolution
 fn resolve_dependencies(
     file_provider: &dyn FileProvider,
     workspace_root: &Path,
-    config: &PcbToml,
 ) -> Result<ResolutionResult> {
-    let PcbToml::V2(v2) = config else {
-        unreachable!("resolve_dependencies called on non-V2 config");
-    };
+    println!("V2 Dependency Resolution");
+    println!("Workspace root: {}", workspace_root.display());
 
-    // Validate that patches are only at workspace root
-    if !v2.patch.is_empty() && v2.workspace.is_none() {
+    // Phase -1: Auto-add missing dependencies from .zen files
+    // This modifies pcb.toml files in place, so we read configs fresh afterwards
+    println!("\nPhase -1: Auto-detecting dependencies from .zen files");
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_root)?;
+    if auto_deps.total_added > 0 {
+        println!(
+            "  Auto-added {} dependencies across {} package(s)",
+            auto_deps.total_added, auto_deps.packages_updated
+        );
+    } else {
+        println!("  No missing dependencies");
+    }
+    for (path, aliases) in &auto_deps.unknown_aliases {
+        eprintln!("  ⊙ {} has unknown aliases:", path.display());
+        for alias in aliases {
+            eprintln!("      @{}", alias);
+        }
+    }
+
+    // Read workspace config (fresh, after auto-deps may have modified it)
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+    let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+
+    // Validate patches are only at workspace root
+    if !config.patch.is_empty() && config.workspace.is_none() {
         anyhow::bail!(
             "[patch] section is only allowed at workspace root\n  \
             Found in non-workspace pcb.toml at: {}\n  \
             Move [patch] to workspace root or remove it.",
-            workspace_root.join("pcb.toml").display()
+            pcb_toml_path.display()
         );
     }
 
-    println!("V2 Dependency Resolution");
-    println!("Workspace root: {}", workspace_root.display());
-
-    // Load existing lockfile if present - used for preseeding and verification
+    // Load existing lockfile if present
     let lockfile_path = workspace_root.join("pcb.sum");
     let existing_lockfile = if lockfile_path.exists() {
         println!("Loading pcb.sum...");
@@ -149,20 +166,19 @@ fn resolve_dependencies(
         None
     };
 
-    // Discover member packages
-    let member_patterns = v2
+    // Discover member packages (reads fresh configs from disk)
+    let member_patterns = config
         .workspace
         .as_ref()
         .map(|w| w.members.as_slice())
         .unwrap_or(&[]);
     let mut packages = discover_packages(file_provider, workspace_root, member_patterns)?;
 
-    // Workspace root is always a package in V2 (can contain reusable modules)
-    let root_pcb_toml = workspace_root.join("pcb.toml");
-    packages.insert(0, (root_pcb_toml, config.clone()));
+    // Workspace root is always a package in V2
+    packages.insert(0, (pcb_toml_path, config.clone()));
 
     // Display workspace type
-    if v2.workspace.is_some() {
+    if config.workspace.is_some() {
         println!("Type: Explicit workspace");
         if !member_patterns.is_empty() {
             println!("Member patterns: {:?}", member_patterns);
@@ -174,7 +190,9 @@ fn resolve_dependencies(
     // Display discovered packages
     println!("\nDiscovered {} package(s):", packages.len());
     for (pcb_toml_path, config) in &packages {
-        let PcbToml::V2(v2) = config else { continue };
+        if !config.is_v2() {
+            continue;
+        }
 
         let package_name = pcb_toml_path
             .parent()
@@ -182,7 +200,7 @@ fn resolve_dependencies(
             .map(|n| n.to_string_lossy())
             .unwrap_or_else(|| "unknown".into());
 
-        if let Some(board) = &v2.board {
+        if let Some(board) = &config.board {
             println!(
                 "  - {} (board: {}) → {}",
                 package_name,
@@ -197,12 +215,18 @@ fn resolve_dependencies(
     // Build workspace members index: package_path -> (dir, config)
     // For multi-package workspaces: inferred from workspace.repository + workspace.path + relative directory
     // For standalone packages: packages aren't added here (they're resolved via cache in Phase 3)
-    let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)> =
+    let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)> =
         HashMap::new();
 
-    if let Some(workspace_repository) = v2.workspace.as_ref().and_then(|w| w.repository.as_ref()) {
+    if let Some(workspace_repository) = config
+        .workspace
+        .as_ref()
+        .and_then(|w| w.repository.as_ref())
+    {
         for (pcb_toml_path, config) in &packages {
-            let PcbToml::V2(v2) = config else { continue };
+            if !config.is_v2() {
+                continue;
+            }
 
             let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
 
@@ -211,12 +235,13 @@ fn resolve_dependencies(
                 let relative_str = relative_path.to_string_lossy();
 
                 // Build base path: repository + optional workspace subpath
-                let workspace_base =
-                    if let Some(ws_path) = v2.workspace.as_ref().and_then(|w| w.path.as_ref()) {
-                        format!("{}/{}", workspace_repository, ws_path)
-                    } else {
-                        workspace_repository.clone()
-                    };
+                let workspace_base = if let Some(ws_path) =
+                    config.workspace.as_ref().and_then(|w| w.path.as_ref())
+                {
+                    format!("{}/{}", workspace_repository, ws_path)
+                } else {
+                    workspace_repository.clone()
+                };
 
                 let inferred_path = if relative_str.is_empty() {
                     // Root package at workspace root
@@ -226,12 +251,12 @@ fn resolve_dependencies(
                     format!("{}/{}", workspace_base, relative_str)
                 };
 
-                workspace_members.insert(inferred_path, (package_dir, v2.clone()));
+                workspace_members.insert(inferred_path, (package_dir, config.clone()));
             }
         }
     }
 
-    let patches = v2.patch.clone();
+    let patches = config.patch.clone();
 
     // MVS state
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
@@ -239,13 +264,15 @@ fn resolve_dependencies(
     let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
 
     println!("\nPhase 0: Seed from workspace dependencies");
-    println!();
 
     // Resolve dependencies per-package
-    println!("Per-Package Dependency Resolution:");
+    let mut packages_with_deps = Vec::new();
+    let mut packages_without_deps = 0;
 
     for (pcb_toml_path, config) in &packages {
-        let PcbToml::V2(v2) = config else { continue };
+        if !config.is_v2() {
+            continue;
+        }
 
         let package_name = pcb_toml_path
             .parent()
@@ -254,7 +281,7 @@ fn resolve_dependencies(
             .unwrap_or_else(|| "unknown".into());
 
         // Validate no patches in member packages
-        if !v2.patch.is_empty() {
+        if !config.patch.is_empty() {
             anyhow::bail!(
                 "[patch] section is only allowed at workspace root\n  \
                 Found in package: {}\n  \
@@ -265,32 +292,39 @@ fn resolve_dependencies(
             );
         }
 
-        println!("\n  Package: {}", package_name);
-
         // Collect this package's dependencies
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_root)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, config, workspace_root)?;
 
         if package_deps.is_empty() {
-            println!("    No dependencies");
+            packages_without_deps += 1;
             continue;
         }
 
-        println!("    Seeding {} dependencies into MVS:", package_deps.len());
+        packages_with_deps.push((package_name, package_deps));
+    }
 
-        // Seed MVS state from this package's dependencies
-        for dep in &package_deps {
-            // Skip local path dependencies (resolved per-package in build_resolution_map)
+    // Print summary
+    if packages_without_deps > 0 {
+        println!("  {} packages with no dependencies", packages_without_deps);
+    }
+    if !packages_with_deps.is_empty() {
+        println!("  {} packages with dependencies:", packages_with_deps.len());
+        for (package_name, package_deps) in &packages_with_deps {
+            println!("    {} ({} deps)", package_name, package_deps.len());
+        }
+    }
+
+    // Seed MVS state
+    for (_package_name, package_deps) in &packages_with_deps {
+        for dep in package_deps {
             if let DependencySpec::Detailed(detail) = &dep.spec {
                 if detail.path.is_some() {
-                    println!("      - {} (local path)", dep.url);
                     continue;
                 }
             }
 
-            // Resolve to concrete version (handles branches/revs)
             match resolve_to_version(&dep.url, &dep.spec, existing_lockfile.as_ref()) {
                 Ok(version) => {
-                    println!("      - {}@v{}", dep.url, version);
                     add_requirement(
                         dep.url.clone(),
                         version,
@@ -300,7 +334,7 @@ fn resolve_dependencies(
                     );
                 }
                 Err(e) => {
-                    eprintln!("      Warning: Failed to resolve {}: {}", dep.url, e);
+                    eprintln!("  Warning: Failed to resolve {}: {}", dep.url, e);
                 }
             }
         }
@@ -429,7 +463,7 @@ fn resolve_dependencies(
     let package_resolutions = build_resolution_map(&ResolutionContext {
         workspace_root,
         home_dir: &home,
-        root_config: config,
+        root_config: &config,
         packages: &packages,
         selected: &selected,
         patches: &patches,
@@ -453,7 +487,7 @@ struct ResolutionContext<'a> {
     selected: &'a HashMap<ModuleLine, Version>,
     patches: &'a HashMap<String, PatchSpec>,
     manifest_cache: &'a HashMap<(ModuleLine, Version), PackageManifest>,
-    workspace_members: &'a HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
+    workspace_members: &'a HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
 }
 
 /// Build the per-package resolution map
@@ -566,20 +600,21 @@ fn build_resolution_map(
     let mut results = HashMap::new();
 
     // Workspace root
-    if let PcbToml::V2(v2) = ctx.root_config {
+    {
+        let config = ctx.root_config;
         results.insert(
             ctx.workspace_root.to_path_buf(),
-            build_map(ctx.workspace_root, &v2.dependencies, &v2.assets),
+            build_map(ctx.workspace_root, &config.dependencies, &config.assets),
         );
     }
 
     // Member packages
     for (pkg_path, config) in ctx.packages {
-        if let PcbToml::V2(v2) = config {
+        {
             let pkg_dir = pkg_path.parent().unwrap();
             results.insert(
                 pkg_dir.to_path_buf(),
-                build_map(pkg_dir, &v2.dependencies, &v2.assets),
+                build_map(pkg_dir, &config.dependencies, &config.assets),
             );
         }
     }
@@ -603,7 +638,7 @@ fn build_resolution_map(
 /// Collect dependencies for a package and transitive local deps
 fn collect_package_dependencies(
     pcb_toml_path: &Path,
-    v2_config: &pcb_zen_core::config::PcbTomlV2,
+    v2_config: &pcb_zen_core::config::PcbToml,
     workspace_root: &Path,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
@@ -700,8 +735,8 @@ fn collect_deps_recursive(
 
         let file_provider = DefaultFileProvider::new();
         let dep_config = match PcbToml::from_file(&file_provider, &dep_pcb_toml) {
-            Ok(PcbToml::V2(config)) => config,
-            Ok(PcbToml::V1(_)) => {
+            Ok(config) if config.is_v2() => config,
+            Ok(_) => {
                 return Err(PathDepError::V1Package {
                     url: url.clone(),
                     location: dep_pcb_toml.clone(),
@@ -888,9 +923,11 @@ fn collect_and_fetch_assets(
 
     // 1. Collect assets from workspace and member packages
     for (pcb_toml_path, config) in packages {
-        let PcbToml::V2(v2) = config else { continue };
+        if !config.is_v2() {
+            continue;
+        }
 
-        if v2.assets.is_empty() {
+        if config.assets.is_empty() {
             continue;
         }
 
@@ -901,9 +938,9 @@ fn collect_and_fetch_assets(
             .unwrap_or_else(|| "unknown".into());
 
         println!("\n  Package: {}", package_name);
-        println!("    {} assets", v2.assets.len());
+        println!("    {} assets", config.assets.len());
 
-        for (module_path, asset_spec) in &v2.assets {
+        for (module_path, asset_spec) in &config.assets {
             fetch_if_needed(module_path, asset_spec)?;
         }
     }
@@ -931,7 +968,7 @@ fn fetch_manifest(
     module_path: &str,
     version: &Version,
     patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
-    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
+    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
     if let Some((_member_dir, member_v2)) = workspace_members.get(module_path) {
@@ -980,8 +1017,8 @@ fn read_manifest_from_path(pcb_toml_path: &Path, _module_path: &str) -> Result<P
     let config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
 
     match config {
-        PcbToml::V2(v2) => Ok(PackageManifest::from_v2(&v2)),
-        PcbToml::V1(_) => {
+        config if config.is_v2() => Ok(PackageManifest::from_v2(&config)),
+        _ => {
             // V1 packages = empty manifest for V2 resolution
             Ok(PackageManifest {
                 dependencies: HashMap::new(),
@@ -1143,8 +1180,10 @@ fn print_dependency_tree(
 
     // Package dependencies
     for (pcb_toml_path, config) in packages {
-        let PcbToml::V2(v2) = config else { continue };
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_root)?;
+        if !config.is_v2() {
+            continue;
+        }
+        let package_deps = collect_package_dependencies(pcb_toml_path, config, workspace_root)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec)
@@ -1186,7 +1225,7 @@ fn build_closure(
     packages: &[(PathBuf, PcbToml)],
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)>,
+    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
     workspace_root: &Path,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
     let mut build_set = HashSet::new();
@@ -1207,9 +1246,11 @@ fn build_closure(
 
     // Seed DFS from all package dependencies
     for (pcb_toml_path, config) in packages {
-        let PcbToml::V2(v2) = config else { continue };
+        if !config.is_v2() {
+            continue;
+        }
 
-        let package_deps = collect_package_dependencies(pcb_toml_path, v2, workspace_root)?;
+        let package_deps = collect_package_dependencies(pcb_toml_path, config, workspace_root)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {
@@ -1520,8 +1561,10 @@ fn discover_packages(
                 if file_provider.exists(&pcb_toml) {
                     // Parse directly as V2 - members inherit V2 context from workspace root
                     let content = file_provider.read_file(&pcb_toml)?;
-                    if let Ok(v2) = toml::from_str::<pcb_zen_core::config::PcbTomlV2>(&content) {
-                        packages.push((pcb_toml, PcbToml::V2(v2)));
+                    if let Ok(v2) = PcbToml::parse(&content) {
+                        if v2.is_v2() {
+                            packages.push((pcb_toml, v2));
+                        }
                     }
                 }
             }
@@ -1541,7 +1584,7 @@ fn is_package_dir(dir: &Path) -> bool {
     let file_provider = DefaultFileProvider::new();
     matches!(
         PcbToml::from_file(&file_provider, &pcb_toml),
-        Ok(PcbToml::V2(_))
+        Ok(ref config) if config.is_v2()
     )
 }
 

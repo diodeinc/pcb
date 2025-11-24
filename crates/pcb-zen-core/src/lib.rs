@@ -773,45 +773,6 @@ impl CoreLoadResolver {
         None
     }
 
-    /// Auto-generate aliases from dependencies and assets
-    ///
-    /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
-    /// Examples:
-    /// - "github.com/akhilles/stdlib" → "@stdlib"
-    /// - "github.com/akhilles/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
-    /// - "gitlab.com/kicad/libraries/kicad-symbols" → "@kicad-symbols"
-    fn get_auto_generated_aliases(v2: &config::PcbTomlV2) -> HashMap<String, String> {
-        let mut aliases = HashMap::new();
-        let mut seen_names: HashMap<String, usize> = HashMap::new();
-
-        // Collect all URLs from dependencies and assets
-        let all_urls: Vec<String> = v2
-            .dependencies
-            .keys()
-            .chain(v2.assets.keys())
-            .cloned()
-            .collect();
-
-        // First pass: count occurrences of each last segment
-        for url in &all_urls {
-            if let Some(last_segment) = url.split('/').next_back() {
-                *seen_names.entry(last_segment.to_string()).or_insert(0) += 1;
-            }
-        }
-
-        // Second pass: only add non-duplicate aliases
-        for url in &all_urls {
-            if let Some(last_segment) = url.split('/').next_back() {
-                let segment_string = last_segment.to_string();
-                if seen_names.get(&segment_string) == Some(&1) {
-                    aliases.insert(segment_string, url.clone());
-                }
-            }
-        }
-
-        aliases
-    }
-
     /// Expand V2 alias using auto-generated aliases from dependencies/assets
     fn expand_v2_alias(
         &self,
@@ -823,10 +784,9 @@ impl CoreLoadResolver {
         while let Some(dir) = current {
             let pcb_toml_path = dir.join("pcb.toml");
             if self.file_provider.exists(&pcb_toml_path) {
-                // Parse directly as V2 - we're already in V2 context (no version detection needed)
-                let content = self.file_provider.read_file(&pcb_toml_path)?;
-                if let Ok(v2) = toml::from_str::<config::PcbTomlV2>(&content) {
-                    let auto_aliases = Self::get_auto_generated_aliases(&v2);
+                // Parse pcb.toml
+                if let Ok(cfg) = config::PcbToml::from_file(&*self.file_provider, &pcb_toml_path) {
+                    let auto_aliases = cfg.auto_generated_aliases();
                     if let Some(target) = auto_aliases.get(alias) {
                         return Ok(target.clone());
                     }
@@ -837,10 +797,7 @@ impl CoreLoadResolver {
         }
 
         // Unknown alias
-        anyhow::bail!(
-            "Unknown alias '@{}'\nAliases are auto-generated from the last path segment of dependencies and assets",
-            alias
-        )
+        anyhow::bail!("Unknown alias '@{}'", alias)
     }
 
     /// V2 remote resolution: longest prefix match against package's declared deps

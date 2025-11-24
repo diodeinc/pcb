@@ -1,5 +1,6 @@
 //! Diode Star – evaluate .zen designs and return schematic data structures.
 
+mod auto_deps;
 pub mod diagnostics;
 pub mod git;
 pub mod load;
