@@ -748,6 +748,8 @@ impl CoreLoadResolver {
     }
 
     /// Find the package root for a given file by walking up directories
+    ///
+    /// First tries package_resolutions map (workspace packages), then walks up looking for pcb.toml (cached packages)
     fn find_package_root_for_file(
         &self,
         file: &Path,
@@ -755,9 +757,17 @@ impl CoreLoadResolver {
     ) -> Option<PathBuf> {
         let mut current = file.parent();
         while let Some(dir) = current {
+            // Check workspace package resolutions first
             if package_resolutions.contains_key(dir) {
                 return Some(dir.to_path_buf());
             }
+
+            // Check for pcb.toml (handles cached packages)
+            let pcb_toml = dir.join("pcb.toml");
+            if self.file_provider.exists(&pcb_toml) {
+                return Some(dir.to_path_buf());
+            }
+
             current = dir.parent();
         }
         None
@@ -808,30 +818,22 @@ impl CoreLoadResolver {
         context: &ResolveContext,
         alias: &str,
     ) -> Result<String, anyhow::Error> {
-        // Find the package root for the current file
-        let package_resolutions = self
-            .v2_package_resolutions
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("V2 package resolutions not available"))?;
-
-        let package_root = self
-            .find_package_root_for_file(&context.current_file, package_resolutions)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Could not find package root for {}",
-                    context.current_file.display()
-                )
-            })?;
-
-        // Load package's pcb.toml and generate aliases from dependencies/assets
-        let pcb_toml_path = package_root.join("pcb.toml");
-        if self.file_provider.exists(&pcb_toml_path) {
-            if let Ok(PcbToml::V2(v2)) = PcbToml::from_file(&*self.file_provider, &pcb_toml_path) {
-                let auto_aliases = Self::get_auto_generated_aliases(&v2);
-                if let Some(target) = auto_aliases.get(alias) {
-                    return Ok(target.clone());
+        // Find package root by walking up from current file looking for pcb.toml
+        let mut current = context.current_file.parent();
+        while let Some(dir) = current {
+            let pcb_toml_path = dir.join("pcb.toml");
+            if self.file_provider.exists(&pcb_toml_path) {
+                // Parse directly as V2 - we're already in V2 context (no version detection needed)
+                let content = self.file_provider.read_file(&pcb_toml_path)?;
+                if let Ok(v2) = toml::from_str::<config::PcbTomlV2>(&content) {
+                    let auto_aliases = Self::get_auto_generated_aliases(&v2);
+                    if let Some(target) = auto_aliases.get(alias) {
+                        return Ok(target.clone());
+                    }
                 }
+                break;
             }
+            current = dir.parent();
         }
 
         // Unknown alias

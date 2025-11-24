@@ -10,9 +10,10 @@ use crate::FileProvider;
 
 /// Top-level pcb.toml configuration - versioned enum
 ///
-/// The version is determined by a top-level `version` field in the TOML:
-/// - Missing or `version = "1"` → V1 (legacy)
-/// - `version = "2"` → V2 (new packaging system)
+/// Version detection:
+/// - If [workspace].resolver = "2" → V2 (new packaging system)
+/// - Else if top-level `version = "2"` → V2 (legacy form, still accepted)
+/// - Else (missing or `version = "1"`) → V1 (legacy)
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum PcbToml {
@@ -52,7 +53,7 @@ pub struct PcbTomlV1 {
     pub module: Option<ModuleConfig>,
 
     /// Board configuration section
-    pub board: Option<BoardConfig>,
+    pub board: Option<Board>,
 
     /// Package aliases configuration section
     #[serde(default)]
@@ -66,9 +67,8 @@ pub struct PcbTomlV1 {
 ///
 /// # Example (Package with Board)
 /// ```toml
-/// version = "2"
-///
-/// [package]
+/// [workspace]
+/// resolver = "2"
 /// pcb-version = "0.3"
 ///
 /// [board]
@@ -90,9 +90,9 @@ pub struct PcbTomlV1 {
 ///
 /// # Example (Workspace)
 /// ```toml
-/// version = "2"
-///
 /// [workspace]
+/// resolver = "2"
+/// pcb-version = "0.3"
 /// members = ["boards/*"]
 ///
 /// [access]
@@ -103,17 +103,11 @@ pub struct PcbTomlV1 {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PcbTomlV2 {
-    /// Version identifier (must be "2" in all valid V2 configs)
-    pub version: String,
-
-    /// Workspace configuration section
+    /// Workspace configuration section (required for V2)
     pub workspace: Option<WorkspaceConfig>,
 
-    /// Package configuration section
-    pub package: Option<PackageConfig>,
-
     /// Board configuration section
-    pub board: Option<BoardDefinition>,
+    pub board: Option<Board>,
 
     /// Dependencies (code packages with pcb.toml)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -143,10 +137,20 @@ pub struct WorkspaceConfig {
     pub name: Option<String>,
 
     /// Base package path for workspace (V2 only, required for V2 workspaces)
-    /// Example: "github.com/akhilles/registry"
+    /// Example: "github.com/diodeinc/registry"
     /// Member package paths are inferred as: path + relative_dir_from_workspace_root
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+
+    /// Dependency resolver version (V2: "2", V1: "1" or absent)
+    /// Determines packaging system version. Required for V2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolver: Option<String>,
+
+    /// Minimum compatible toolchain release series (e.g., "0.3")
+    /// V2 only. Indicates breaking changes requiring newer compiler.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pcb-version")]
+    pub pcb_version: Option<String>,
 
     /// List of board directories/patterns (supports globs)
     #[serde(default = "default_members")]
@@ -187,19 +191,8 @@ pub struct Board {
     pub description: String,
 }
 
-/// V1 board configuration (alias for backward compatibility)
+/// Board configuration (used for compatibility with external crates expecting BoardConfig name)
 pub type BoardConfig = Board;
-
-/// V2 board definition (alias for clarity)
-pub type BoardDefinition = Board;
-
-/// V2 Package configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageConfig {
-    /// Minimum compatible toolchain release series (e.g., "0.3")
-    #[serde(rename = "pcb-version")]
-    pub pcb_version: String,
-}
 
 /// V2 Dependency specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,22 +432,15 @@ impl PcbToml {
                     }
                 }
 
-                // Convert Workspace (already same struct, just pass through)
-                let workspace = v1.workspace;
-
-                // Create Package section if it's a module or board
-                let package = if v1.module.is_some() || v1.board.is_some() {
-                    Some(PackageConfig {
-                        pcb_version: "0.3".to_string(),
-                    })
-                } else {
-                    None
-                };
+                // Convert Workspace - V1 doesn't have resolver/pcb-version in workspace
+                let workspace = v1.workspace.map(|mut w| {
+                    w.resolver = Some("2".to_string());
+                    w.pcb_version = Some("0.3".to_string());
+                    w
+                });
 
                 Ok(PcbTomlV2 {
-                    version: "2".to_string(),
                     workspace,
-                    package,
                     board: v1.board,
                     dependencies,
                     assets: HashMap::new(),
@@ -634,36 +620,29 @@ fn default_members() -> Vec<String> {
 struct VersionDetector {
     #[serde(default)]
     version: Option<String>,
+    workspace: Option<WorkspaceDetector>,
 }
 
-impl PcbTomlV2 {
-    /// Validate V2 configuration invariants
-    pub fn validate(&self) -> Result<()> {
-        let is_workspace = self.workspace.is_some();
-        let is_package = self.package.is_some();
-
-        // Must have at least one of workspace/package
-        if !is_workspace && !is_package {
-            anyhow::bail!("pcb.toml v2 must have either [workspace] or [package] section");
-        }
-
-        // [board] requires [package] to be present
-        if self.board.is_some() && !is_package {
-            anyhow::bail!("[board] section requires [package] section");
-        }
-
-        Ok(())
-    }
+/// Minimal workspace config for resolver detection
+#[derive(Deserialize)]
+struct WorkspaceDetector {
+    resolver: Option<String>,
 }
 
 impl PcbToml {
     /// Parse a pcb.toml file from string content
     pub fn parse(content: &str) -> Result<Self> {
-        // First, detect the version
+        // First, detect the version/resolver
         let detector: VersionDetector = toml::from_str(content)
             .map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml version: {e}"))?;
 
-        match detector.version.as_deref() {
+        // Check workspace.resolver first (V2), then fall back to top-level version (legacy)
+        let version_str = detector
+            .workspace
+            .and_then(|w| w.resolver)
+            .or(detector.version);
+
+        match version_str.as_deref() {
             None | Some("1") => {
                 // Parse as V1
                 let v1: PcbTomlV1 = toml::from_str(content)
@@ -674,11 +653,10 @@ impl PcbToml {
                 // Parse as V2
                 let v2: PcbTomlV2 = toml::from_str(content)
                     .map_err(|e| anyhow::anyhow!("Failed to parse pcb.toml (V2): {e}"))?;
-                v2.validate()?;
                 Ok(PcbToml::V2(v2))
             }
             Some(v) => Err(anyhow::anyhow!(
-                "Unsupported pcb.toml version: {}. Supported versions: 1, 2",
+                "Unsupported pcb.toml resolver: {}. Supported versions: 1, 2",
                 v
             )),
         }
@@ -711,14 +689,6 @@ impl PcbToml {
         match self {
             PcbToml::V1(v1) => v1.board.is_some(),
             PcbToml::V2(_) => false,
-        }
-    }
-
-    /// Check if this is a V2 package
-    pub fn is_package(&self) -> bool {
-        match self {
-            PcbToml::V1(_) => false,
-            PcbToml::V2(v2) => v2.package.is_some(),
         }
     }
 
@@ -1040,6 +1010,8 @@ pub fn get_workspace_info(
         final_config = Some(WorkspaceConfig {
             name: None,
             path: None,
+            resolver: None,
+            pcb_version: None,
             members: default_members(),
             default_board: Some(discovery.boards.last().unwrap().name.clone()),
         });
@@ -1151,9 +1123,8 @@ description = "A test board"
     #[test]
     fn test_parse_v2_package() {
         let content = r#"
-version = "2"
-
-[package]
+[workspace]
+resolver = "2"
 pcb-version = "0.3"
 
 [board]
@@ -1164,13 +1135,12 @@ description = "Power Regulator Board"
 
         let config = PcbToml::parse(content).unwrap();
         assert!(matches!(config, PcbToml::V2(_)));
-        assert!(config.is_package());
-        assert!(!config.is_workspace());
         assert_eq!(config.version(), "2");
 
         if let PcbToml::V2(v2) = config {
-            let package = v2.package.as_ref().unwrap();
-            assert_eq!(package.pcb_version, "0.3");
+            let workspace = v2.workspace.as_ref().unwrap();
+            assert_eq!(workspace.resolver.as_deref(), Some("2"));
+            assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
 
             let board = v2.board.as_ref().unwrap();
             assert_eq!(board.name, "WV0002");
@@ -1182,10 +1152,11 @@ description = "Power Regulator Board"
     #[test]
     fn test_parse_v2_workspace() {
         let content = r#"
-version = "2"
-
 [workspace]
+resolver = "2"
 members = ["boards/*"]
+
+[access]
 allow = ["*@weaverobots.com"]
 "#;
 
@@ -1196,8 +1167,11 @@ allow = ["*@weaverobots.com"]
 
         if let PcbToml::V2(v2) = config {
             let workspace = v2.workspace.as_ref().unwrap();
+            assert_eq!(workspace.resolver.as_deref(), Some("2"));
             assert_eq!(workspace.members, vec!["boards/*"]);
-            assert_eq!(workspace.allow, vec!["*@weaverobots.com"]);
+
+            let access = v2.access.as_ref().unwrap();
+            assert_eq!(access.allow, vec!["*@weaverobots.com"]);
         }
     }
 
@@ -1278,15 +1252,12 @@ path = "test.zen"
     }
 
     #[test]
-    fn test_v2_workspace_and_package_allowed() {
+    fn test_v2_workspace_and_board() {
         let content = r#"
-version = "2"
-
 [workspace]
-members = ["boards/*"]
-
-[package]
+resolver = "2"
 pcb-version = "0.3"
+members = ["boards/*"]
 
 [board]
 name = "RootBoard"
@@ -1296,55 +1267,14 @@ name = "RootBoard"
         assert!(result.is_ok());
         if let Ok(PcbToml::V2(v2)) = result {
             assert!(v2.workspace.is_some());
-            assert!(v2.package.is_some());
             assert!(v2.board.is_some());
         }
-    }
-
-    #[test]
-    fn test_v2_validation_neither_workspace_nor_package() {
-        let content = r#"
-version = "2"
-
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
-"#;
-
-        let result = PcbToml::parse(content);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must have either [workspace] or [package]"));
-    }
-
-    #[test]
-    fn test_v2_validation_board_requires_package() {
-        let content = r#"
-version = "2"
-
-[workspace]
-members = ["boards/*"]
-
-[board]
-name = "InvalidBoard"
-"#;
-
-        let result = PcbToml::parse(content);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("[board] section requires [package]"));
     }
 
     #[test]
     fn test_unsupported_version() {
         let content = r#"
 version = "3"
-
-[package]
-pcb-version = "0.3"
 "#;
 
         let result = PcbToml::parse(content);
@@ -1352,7 +1282,7 @@ pcb-version = "0.3"
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unsupported pcb.toml version: 3"));
+            .contains("Unsupported pcb.toml resolver: 3"));
     }
 
     #[test]
