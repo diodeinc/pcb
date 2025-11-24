@@ -157,11 +157,9 @@ fn resolve_dependencies(
         .unwrap_or(&[]);
     let mut packages = discover_packages(file_provider, workspace_root, member_patterns)?;
 
-    // Check if workspace root itself is also a package
-    if v2.package.is_some() {
-        let root_pcb_toml = workspace_root.join("pcb.toml");
-        packages.insert(0, (root_pcb_toml, config.clone()));
-    }
+    // Workspace root is always a package in V2 (can contain reusable modules)
+    let root_pcb_toml = workspace_root.join("pcb.toml");
+    packages.insert(0, (root_pcb_toml, config.clone()));
 
     // Display workspace type
     if v2.workspace.is_some() {
@@ -196,22 +194,18 @@ fn resolve_dependencies(
         }
     }
 
-    // Build workspace members index: inferred_package_path -> (dir, config)
-    // Package paths are inferred from workspace.path + relative directory
+    // Build workspace members index: package_path -> (dir, config)
+    // For multi-package workspaces: inferred from workspace.path + relative directory
+    // For standalone packages: packages aren't added here (they're resolved via cache in Phase 3)
     let mut workspace_members: HashMap<String, (PathBuf, pcb_zen_core::config::PcbTomlV2)> =
         HashMap::new();
-    
+
     if let Some(workspace_path) = v2.workspace.as_ref().and_then(|w| w.path.as_ref()) {
         for (pcb_toml_path, config) in &packages {
             let PcbToml::V2(v2) = config else { continue };
-            
-            // Skip if no package section
-            if v2.package.is_none() {
-                continue;
-            }
-            
+
             let package_dir = pcb_toml_path.parent().unwrap().to_path_buf();
-            
+
             // Infer package path from workspace.path + relative directory
             if let Ok(relative_path) = package_dir.strip_prefix(workspace_root) {
                 let relative_str = relative_path.to_string_lossy();
@@ -222,7 +216,7 @@ fn resolve_dependencies(
                     // Member package: workspace.path + relative directory
                     format!("{}/{}", workspace_path, relative_str)
                 };
-                
+
                 workspace_members.insert(inferred_path, (package_dir, v2.clone()));
             }
         }
@@ -1571,6 +1565,7 @@ fn discover_packages(
     let glob_set = builder.build()?;
 
     // Walk workspace and collect matching V2 packages
+    // We're already in V2 context (workspace root has resolver = "2"), so parse members directly as V2
     let mut packages = Vec::new();
     for entry in WalkDir::new(workspace_root)
         .into_iter()
@@ -1584,10 +1579,10 @@ fn discover_packages(
             if glob_set.is_match(rel_path) {
                 let pcb_toml = entry.path().join("pcb.toml");
                 if file_provider.exists(&pcb_toml) {
-                    if let Ok(config) = PcbToml::from_file(file_provider, &pcb_toml) {
-                        if matches!(config, PcbToml::V2(_)) {
-                            packages.push((pcb_toml, config));
-                        }
+                    // Parse directly as V2 - members inherit V2 context from workspace root
+                    let content = file_provider.read_file(&pcb_toml)?;
+                    if let Ok(v2) = toml::from_str::<pcb_zen_core::config::PcbTomlV2>(&content) {
+                        packages.push((pcb_toml, PcbToml::V2(v2)));
                     }
                 }
             }
@@ -1597,7 +1592,7 @@ fn discover_packages(
     Ok(packages)
 }
 
-/// Check if a directory is a package root (has pcb.toml with [package])
+/// Check if a directory is a package root (has V2 pcb.toml)
 fn is_package_dir(dir: &Path) -> bool {
     let pcb_toml = dir.join("pcb.toml");
     if !pcb_toml.is_file() {
@@ -1605,11 +1600,10 @@ fn is_package_dir(dir: &Path) -> bool {
     }
 
     let file_provider = DefaultFileProvider::new();
-    if let Ok(config) = PcbToml::from_file(&file_provider, &pcb_toml) {
-        matches!(config, PcbToml::V2(ref v2) if v2.package.is_some())
-    } else {
-        false
-    }
+    matches!(
+        PcbToml::from_file(&file_provider, &pcb_toml),
+        Ok(PcbToml::V2(_))
+    )
 }
 
 /// Create a canonical, deterministic tar archive from a directory

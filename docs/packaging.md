@@ -86,13 +86,16 @@ Multiple versions, no coordination.
 
 ## Proposed Design
 
-### Package Configuration
+### Workspace Configuration
 
-Unified `[package]` section replaces `[module]` and `[board]`:
+All V2 packages require a `[workspace]` section (even standalone packages):
 
 ```toml
-[package]
+[workspace]
+resolver = "2"
 pcb-version = "0.3"
+
+[package]
 
 [board]
 name = "WV0002"
@@ -100,11 +103,13 @@ path = "WV0002.zen"
 description = "Power Regulator Board"
 ```
 
-**`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It is used to indicate breaking changes in the language or standard library that require a newer compiler.
+**`resolver`** determines the packaging system version ("2" for V2). Required.
+
+**`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It indicates breaking changes in the language or standard library that require a newer compiler.
 
 The package **version** itself is not in the manifest - it is derived from the Git tag, following Go's decentralized model where version control is the source of truth.
 
-The package **import path** is inferred from the workspace base path and the package's relative directory (see Workspace Configuration below).
+For multi-package workspaces, the `[workspace]` section also defines the base package path used to infer member package paths (see Multi-Package Workspaces below).
 
 The optional `[board]` section specifies a `.zen` file that can be built as a standalone board with `pcb build`. Packages with or without `[board]` can be used as reusable modules via `Module()`.
 
@@ -178,15 +183,15 @@ Supported formats:
 - Branch: `{ branch = "main" }` (resolved to commit hash in lockfile)
 - Revision: `{ rev = "a1b2c3d4" }` (commit hash)
 
-### Workspace Configuration
+### Multi-Package Workspaces
 
-Workspaces define a base package path that is used to infer member package paths:
+Multi-package workspaces define a base package path that is used to infer member package paths:
 
 ```toml
 # Workspace root pcb.toml
-version = "2"
-
 [workspace]
+resolver = "2"
+pcb-version = "0.3"
 path = "github.com/diodeinc/registry"
 members = ["reference/*"]
 ```
@@ -195,7 +200,7 @@ Member packages are discovered automatically and their import paths are inferred
 
 ```
 github.com/diodeinc/registry/
-  pcb.toml (workspace config with path = "github.com/diodeinc/registry")
+  pcb.toml (workspace config)
   reference/
     ti/
       tps54331/
@@ -205,18 +210,6 @@ github.com/diodeinc/registry/
       ltc3115/
         pcb.toml → inferred path: github.com/diodeinc/registry/reference/analog/ltc3115
         ltc3115.zen
-```
-
-**Standalone Packages:**
-
-Packages without a workspace (no `[workspace]` section) work fine - they just can't be discovered as workspace members. Useful for single-package repositories like stdlib:
-
-```toml
-# github.com/diodeinc/stdlib/pcb.toml
-version = "2"
-
-[package]
-pcb-version = "0.3"
 ```
 
 ### Git Tag Convention
@@ -551,10 +544,9 @@ weave/
 
 Workspace root:
 ```toml
-version = "2"
-
 [workspace]
-path = "github.com/weaverobots/weave"
+resolver = "2"
+pcb-version = "0.3"
 members = ["boards/*"]
 default-board = "WV0002"
 
@@ -564,10 +556,11 @@ allow = ["*@weaverobots.com"]
 
 WV0002 declares dependencies:
 ```toml
-version = "2"
+[workspace]
+resolver = "2"
+pcb-version = "0.3"
 
 [package]
-pcb-version = "0.3"
 
 [board]
 name = "WV0002"
