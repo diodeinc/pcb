@@ -1007,7 +1007,7 @@ impl std::fmt::Display for PhysicalValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tol_percent = self.tolerance * ONE_HUNDRED;
         let tol_str = if tol_percent > Decimal::ZERO {
-            format!(" {}%", tol_percent.round())
+            format!(" {}%", fmt_significant(tol_percent))
         } else {
             String::new()
         };

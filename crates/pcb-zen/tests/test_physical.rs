@@ -9,13 +9,21 @@ fn test_physical_types() {
     env.add_file(
         "test_physical.zen",
         r#"
-load("@stdlib/units.zen", "Voltage", "VoltageRange")
+load("@stdlib/units.zen", "Voltage", "VoltageRange", "Frequency")
 
 print("--- PhysicalValue ---")
 # Test PhysicalValue.abs() exists and works
 v1 = Voltage("-3.3V")
 print("has abs:", hasattr(v1, "abs"))
 print("abs value:", v1.abs())
+
+print("\n--- Frequency Parsing ---")
+# Test parsing of frequency with SI prefix and tolerance
+f1 = Frequency("1MHz 0.1%")
+print("Frequency:", f1)
+print("Value:", f1.value)
+print("Tolerance:", f1.tolerance)
+print("Unit:", f1.unit)
 
 print("\n--- PhysicalRange ---")
 # Test PhysicalRange.abs() does NOT exist

@@ -6,5 +6,11 @@ expression: stdout
 has abs: True
 abs value: 3.3V
 
+--- Frequency Parsing ---
+Frequency: 1MHz 0.1%
+Value: 1e+06
+Tolerance: 0.001
+Unit: Hz
+
 --- PhysicalRange ---
 range has abs: False
