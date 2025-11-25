@@ -843,9 +843,15 @@ impl CoreLoadResolver {
         });
 
         let Some((matched_dep, root_path)) = best_match else {
+            // Strip the filename from full_url to show the package path
+            let package_hint = full_url
+                .rsplit_once('/')
+                .map(|(prefix, _)| prefix)
+                .unwrap_or(&full_url);
             anyhow::bail!(
-                "Dependency '{}' not declared in [dependencies]",
-                full_url.split('/').take(3).collect::<Vec<_>>().join("/")
+                "No declared dependency matches '{}'\n  \
+                Add a dependency that covers this path to [dependencies] in pcb.toml",
+                package_hint
             );
         };
 

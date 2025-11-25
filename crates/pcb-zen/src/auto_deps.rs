@@ -1,11 +1,12 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use starlark::syntax::{AstModule, Dialect};
-use starlark_syntax::syntax::ast::{ExprP, StmtP};
+use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::top_level_stmts::top_level_stmts;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::ast_utils::visit_string_literals;
 use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 
@@ -67,8 +68,7 @@ pub fn auto_add_zen_deps(
 
         // Process URL imports - add workspace member deps with default version
         for url in &imports.urls {
-            let package_url = extract_package_url(url);
-            if workspace_members.contains(&package_url) {
+            if let Some(package_url) = find_matching_workspace_member(url, workspace_members) {
                 deps_to_add.push((package_url, DEFAULT_VERSION, false));
             }
         }
@@ -89,15 +89,26 @@ pub fn auto_add_zen_deps(
     Ok(summary)
 }
 
-/// Extract package URL from a full file path URL
-/// e.g., "github.com/diodeinc/registry/components/MICS-5524/MICS-5524.zen"
-///    -> "github.com/diodeinc/registry/components/MICS-5524"
-fn extract_package_url(file_url: &str) -> String {
-    if let Some(idx) = file_url.rfind('/') {
-        file_url[..idx].to_string()
-    } else {
-        file_url.to_string()
+/// Find the longest matching workspace member URL for a file URL
+/// e.g., "github.com/diodeinc/registry/modules/basic/CastellatedHoles/CastellatedHoles.zen"
+///    -> Some("github.com/diodeinc/registry/modules/basic") if that's a workspace member
+fn find_matching_workspace_member(file_url: &str, workspace_members: &HashSet<String>) -> Option<String> {
+    // Strip the .zen filename first
+    let without_file = file_url.rsplit_once('/')?.0;
+
+    // Try progressively shorter prefixes to find a matching workspace member
+    let mut path = without_file;
+    while !path.is_empty() {
+        if workspace_members.contains(path) {
+            return Some(path.to_string());
+        }
+        // Strip the last path component
+        path = match path.rsplit_once('/') {
+            Some((prefix, _)) => prefix,
+            None => break,
+        };
     }
+    None
 }
 
 /// Scan .zen files and group found imports by their nearest pcb.toml
@@ -158,7 +169,9 @@ fn extract_imports(content: &str) -> Option<(HashSet<String>, HashSet<String>)> 
     let mut urls = HashSet::new();
 
     ast.statement().visit_expr(|expr| {
-        extract_from_expr(expr, &mut aliases, &mut urls);
+        visit_string_literals(expr, &mut |s, _| {
+            extract_from_str(s, &mut aliases, &mut urls);
+        });
     });
 
     for stmt in top_level_stmts(ast.statement()) {
@@ -168,50 +181,6 @@ fn extract_imports(content: &str) -> Option<(HashSet<String>, HashSet<String>)> 
     }
 
     Some((aliases, urls))
-}
-
-/// Recursively extract imports from an expression
-fn extract_from_expr(
-    expr: &starlark_syntax::syntax::ast::AstExpr,
-    aliases: &mut HashSet<String>,
-    urls: &mut HashSet<String>,
-) {
-    if let ExprP::Literal(lit) = &expr.node {
-        let s = lit.to_string();
-        if s.len() > 2 && (s.starts_with('"') || s.starts_with('\'')) {
-            extract_from_str(&s[1..s.len() - 1], aliases, urls);
-        }
-    }
-
-    match &expr.node {
-        ExprP::Call(_, args) => {
-            for arg in &args.args {
-                if let starlark_syntax::syntax::ast::ArgumentP::Positional(e)
-                | starlark_syntax::syntax::ast::ArgumentP::Named(_, e) = &arg.node
-                {
-                    extract_from_expr(e, aliases, urls);
-                }
-            }
-        }
-        ExprP::If(if_box) => {
-            let (a, b, c) = &**if_box;
-            extract_from_expr(a, aliases, urls);
-            extract_from_expr(b, aliases, urls);
-            extract_from_expr(c, aliases, urls);
-        }
-        ExprP::List(exprs) | ExprP::Tuple(exprs) => {
-            for e in exprs {
-                extract_from_expr(e, aliases, urls);
-            }
-        }
-        ExprP::Dict(pairs) => {
-            for (k, v) in pairs {
-                extract_from_expr(k, aliases, urls);
-                extract_from_expr(v, aliases, urls);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Extract alias or URL from a string

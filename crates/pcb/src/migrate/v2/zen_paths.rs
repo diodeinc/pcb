@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use ignore::WalkBuilder;
+use pcb_zen::ast_utils::{apply_edits, collect_zen_files, visit_string_literals, SourceEdit};
 use starlark::syntax::{AstModule, Dialect};
-use starlark_syntax::syntax::ast::{ArgumentP, ExprP, StmtP};
+use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Convert all workspace-relative paths in .zen files to file-relative paths
 pub fn convert_workspace_paths(workspace_root: &Path) -> Result<()> {
@@ -37,26 +37,6 @@ pub fn convert_workspace_paths(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Collect all .zen files in workspace
-fn collect_zen_files(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    let walker = WalkBuilder::new(workspace_root)
-        .hidden(true) // Ignore hidden files and directories
-        .git_ignore(true) // Respect .gitignore
-        .git_exclude(true) // Respect .git/info/exclude
-        .build();
-
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.is_file() && path.extension() == Some(std::ffi::OsStr::new("zen")) {
-            files.push(path.to_path_buf());
-        }
-    }
-
-    Ok(files)
-}
-
 /// Convert workspace-relative paths in a single file
 fn convert_file(zen_file: &Path, content: &str, workspace_root: &Path) -> Result<Option<String>> {
     let mut dialect = Dialect::Extended;
@@ -64,78 +44,21 @@ fn convert_file(zen_file: &Path, content: &str, workspace_root: &Path) -> Result
 
     let ast = match AstModule::parse("<memory>", content.to_owned(), &dialect) {
         Ok(a) => a,
-        Err(_) => return Ok(None), // Skip unparseable files
+        Err(_) => return Ok(None),
     };
 
-    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
-    let mut edits: Vec<(usize, usize, usize, usize, String)> = Vec::new();
-
-    // Helper to recursively check all expressions for workspace paths
-    fn check_expr_for_workspace_paths(
-        expr: &starlark_syntax::syntax::ast::AstExpr,
-        edits: &mut Vec<(usize, usize, usize, usize, String)>,
-        zen_file: &Path,
-        workspace_root: &Path,
-        ast: &AstModule,
-    ) {
-        // Check if this expression is a string literal with workspace path
-        if let ExprP::Literal(lit) = &expr.node {
-            let s = lit.to_string();
-            if (s.starts_with('"') || s.starts_with('\'')) && s.len() > 2 {
-                let unquoted = &s[1..s.len() - 1];
-                if unquoted.starts_with("//") {
-                    if let Ok(relative) =
-                        convert_workspace_to_file_relative(unquoted, zen_file, workspace_root)
-                    {
-                        let span = ast.codemap().resolve_span(expr.span);
-                        edits.push((
-                            span.begin.line,
-                            span.begin.column,
-                            span.end.line,
-                            span.end.column,
-                            format!("\"{}\"", relative),
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Recurse into subexpressions based on type
-        match &expr.node {
-            ExprP::Call(_name, args) => {
-                for arg in &args.args {
-                    let arg_expr = match &arg.node {
-                        ArgumentP::Positional(e) => e,
-                        ArgumentP::Named(_, e) => e,
-                        _ => continue,
-                    };
-                    check_expr_for_workspace_paths(arg_expr, edits, zen_file, workspace_root, ast);
-                }
-            }
-            ExprP::If(if_box) => {
-                let (cond, then_expr, else_expr) = &**if_box;
-                check_expr_for_workspace_paths(cond, edits, zen_file, workspace_root, ast);
-                check_expr_for_workspace_paths(then_expr, edits, zen_file, workspace_root, ast);
-                check_expr_for_workspace_paths(else_expr, edits, zen_file, workspace_root, ast);
-            }
-            ExprP::List(exprs) | ExprP::Tuple(exprs) => {
-                for e in exprs {
-                    check_expr_for_workspace_paths(e, edits, zen_file, workspace_root, ast);
-                }
-            }
-            ExprP::Dict(pairs) => {
-                for (k, v) in pairs {
-                    check_expr_for_workspace_paths(k, edits, zen_file, workspace_root, ast);
-                    check_expr_for_workspace_paths(v, edits, zen_file, workspace_root, ast);
-                }
-            }
-            _ => {}
-        }
-    }
+    let mut edits: Vec<SourceEdit> = Vec::new();
 
     // Visit all expressions
     ast.statement().visit_expr(|expr| {
-        check_expr_for_workspace_paths(expr, &mut edits, zen_file, workspace_root, &ast);
+        visit_string_literals(expr, &mut |s, lit_expr| {
+            if s.starts_with("//") {
+                if let Ok(relative) = convert_workspace_to_file_relative(s, zen_file, workspace_root) {
+                    let span = ast.codemap().resolve_span(lit_expr.span);
+                    edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", relative)));
+                }
+            }
+        });
     });
 
     // Check load() statements
@@ -145,20 +68,10 @@ fn convert_file(zen_file: &Path, content: &str, workspace_root: &Path) -> Result
         };
 
         let module_path: &str = &load.module.node;
-
-        // Convert workspace-relative paths
         if module_path.starts_with("//") {
-            if let Ok(relative) =
-                convert_workspace_to_file_relative(module_path, zen_file, workspace_root)
-            {
+            if let Ok(relative) = convert_workspace_to_file_relative(module_path, zen_file, workspace_root) {
                 let span = ast.codemap().resolve_span(load.module.span);
-                edits.push((
-                    span.begin.line,
-                    span.begin.column,
-                    span.end.line,
-                    span.end.column,
-                    format!("\"{}\"", relative),
-                ));
+                edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", relative)));
             }
         }
     }
@@ -167,38 +80,8 @@ fn convert_file(zen_file: &Path, content: &str, workspace_root: &Path) -> Result
         return Ok(None);
     }
 
-    // Apply edits in reverse order to preserve offsets
-    edits.sort_by(|a, b| (a.0, a.1, a.2, a.3).cmp(&(b.0, b.1, b.2, b.3)));
-    for (start_line, start_col, end_line, end_col, replacement) in edits.into_iter().rev() {
-        if start_line == end_line {
-            if start_line >= lines.len() {
-                continue;
-            }
-            let line = &mut lines[start_line];
-            if start_col > line.len() || end_col > line.len() || end_col < start_col {
-                continue;
-            }
-            let (pre, rest) = line.split_at(start_col);
-            let (_, post) = rest.split_at(end_col - start_col);
-            let mut new_line = String::with_capacity(pre.len() + replacement.len() + post.len());
-            new_line.push_str(pre);
-            new_line.push_str(&replacement);
-            new_line.push_str(post);
-            *line = new_line;
-        } else {
-            if start_line >= lines.len() || end_line >= lines.len() {
-                continue;
-            }
-            let first_prefix =
-                lines[start_line][..start_col.min(lines[start_line].len())].to_string();
-            let last_suffix = lines[end_line][end_col.min(lines[end_line].len())..].to_string();
-            lines.splice(
-                start_line..=end_line,
-                vec![format!("{}{}{}", first_prefix, replacement, last_suffix)],
-            );
-        }
-    }
-
+    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+    apply_edits(&mut lines, edits);
     Ok(Some(lines.join("\n")))
 }
 

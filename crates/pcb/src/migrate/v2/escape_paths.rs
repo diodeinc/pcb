@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use ignore::WalkBuilder;
+use pcb_zen::ast_utils::{apply_edits, collect_zen_files, visit_string_literals, SourceEdit};
 use starlark::syntax::{AstModule, Dialect};
-use starlark_syntax::syntax::ast::{ArgumentP, ExprP, StmtP};
+use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
 use std::path::{Path, PathBuf};
 
-/// Convert cross-package relative paths to URLs in .zen files
+/// Convert cross-package relative paths and workspace-relative paths (//) to URLs in .zen files
 pub fn convert_escape_paths(
     workspace_root: &Path,
     repository: &str,
@@ -37,32 +37,12 @@ pub fn convert_escape_paths(
     }
 
     if converted_count == 0 {
-        eprintln!("  No cross-package paths found");
+        eprintln!("  No paths to convert");
     } else {
         eprintln!("  Converted {} file(s)", converted_count);
     }
 
     Ok(())
-}
-
-/// Collect all .zen files in workspace
-fn collect_zen_files(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    let walker = WalkBuilder::new(workspace_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .build();
-
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.is_file() && path.extension() == Some(std::ffi::OsStr::new("zen")) {
-            files.push(path.to_path_buf());
-        }
-    }
-
-    Ok(files)
 }
 
 /// Find the package root (nearest pcb.toml) for a .zen file
@@ -85,15 +65,40 @@ fn escapes_package(resolved_path: &Path, package_root: &Path) -> bool {
     !resolved_path.starts_with(package_root)
 }
 
-/// Check if a string looks like a relative path to a .zen file
-fn is_relative_zen_path(s: &str) -> bool {
-    // Must end with .zen
-    if !s.ends_with(".zen") {
-        return false;
+/// Try to convert a path to a URL, returns None if no conversion needed
+fn try_convert_path(
+    path_str: &str,
+    zen_dir: &Path,
+    package_root: &Path,
+    workspace_root: &Path,
+    repository: &str,
+    workspace_path: Option<&str>,
+) -> Option<String> {
+    if !path_str.ends_with(".zen") {
+        return None;
     }
-    // Must be a relative path (not an alias, not an absolute URL)
-    !s.starts_with('@') && !s.contains("://") && !s.starts_with("//")
-        && (s.starts_with("./") || s.starts_with("../") || !s.contains('/') || s.contains('/'))
+    // Skip aliases and already-converted URLs
+    if path_str.starts_with('@') || path_str.starts_with("github.com/") || path_str.starts_with("gitlab.com/") {
+        return None;
+    }
+
+    // Resolve the path
+    let resolved = if let Some(rest) = path_str.strip_prefix("//") {
+        // Workspace-relative path: //common/foo.zen -> workspace_root/common/foo.zen
+        workspace_root.join(rest)
+    } else {
+        // Relative path: ../foo.zen -> resolved relative to zen_dir
+        zen_dir.join(path_str)
+    };
+
+    let resolved = resolved.canonicalize().unwrap_or_else(|_| normalize_path(&resolved));
+
+    // Only convert if it escapes the package and stays within workspace
+    if !escapes_package(&resolved, package_root) || !resolved.starts_with(workspace_root) {
+        return None;
+    }
+
+    build_url(&resolved, workspace_root, repository, workspace_path)
 }
 
 /// Build URL from resolved path
@@ -130,85 +135,16 @@ fn convert_file(
     };
 
     let zen_dir = zen_file.parent().context("Zen file has no parent")?;
-    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
-    let mut edits: Vec<(usize, usize, usize, usize, String)> = Vec::new();
-
-    fn check_expr(
-        expr: &starlark_syntax::syntax::ast::AstExpr,
-        edits: &mut Vec<(usize, usize, usize, usize, String)>,
-        zen_dir: &Path,
-        package_root: &Path,
-        workspace_root: &Path,
-        repository: &str,
-        workspace_path: Option<&str>,
-        ast: &AstModule,
-    ) {
-        if let ExprP::Literal(lit) = &expr.node {
-            let s = lit.to_string();
-            if (s.starts_with('"') || s.starts_with('\'')) && s.len() > 2 {
-                let unquoted = &s[1..s.len() - 1];
-                if is_relative_zen_path(unquoted) {
-                    // Resolve relative path
-                    let resolved = zen_dir.join(unquoted);
-                    let resolved = match resolved.canonicalize() {
-                        Ok(p) => p,
-                        Err(_) => {
-                            // File doesn't exist, try to normalize without canonicalize
-                            normalize_path(&resolved)
-                        }
-                    };
-
-                    if escapes_package(&resolved, package_root) && resolved.starts_with(workspace_root) {
-                        if let Some(url) = build_url(&resolved, workspace_root, repository, workspace_path) {
-                            let span = ast.codemap().resolve_span(expr.span);
-                            edits.push((
-                                span.begin.line,
-                                span.begin.column,
-                                span.end.line,
-                                span.end.column,
-                                format!("\"{}\"", url),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        match &expr.node {
-            ExprP::Call(_name, args) => {
-                for arg in &args.args {
-                    let arg_expr = match &arg.node {
-                        ArgumentP::Positional(e) => e,
-                        ArgumentP::Named(_, e) => e,
-                        _ => continue,
-                    };
-                    check_expr(arg_expr, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-                }
-            }
-            ExprP::If(if_box) => {
-                let (cond, then_expr, else_expr) = &**if_box;
-                check_expr(cond, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-                check_expr(then_expr, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-                check_expr(else_expr, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-            }
-            ExprP::List(exprs) | ExprP::Tuple(exprs) => {
-                for e in exprs {
-                    check_expr(e, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-                }
-            }
-            ExprP::Dict(pairs) => {
-                for (k, v) in pairs {
-                    check_expr(k, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-                    check_expr(v, edits, zen_dir, package_root, workspace_root, repository, workspace_path, ast);
-                }
-            }
-            _ => {}
-        }
-    }
+    let mut edits: Vec<SourceEdit> = Vec::new();
 
     // Visit all expressions
     ast.statement().visit_expr(|expr| {
-        check_expr(expr, &mut edits, zen_dir, package_root, workspace_root, repository, workspace_path, &ast);
+        visit_string_literals(expr, &mut |s, lit_expr| {
+            if let Some(url) = try_convert_path(s, zen_dir, package_root, workspace_root, repository, workspace_path) {
+                let span = ast.codemap().resolve_span(lit_expr.span);
+                edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", url)));
+            }
+        });
     });
 
     // Check load() statements
@@ -218,26 +154,9 @@ fn convert_file(
         };
 
         let module_path: &str = &load.module.node;
-
-        if is_relative_zen_path(module_path) {
-            let resolved = zen_dir.join(module_path);
-            let resolved = match resolved.canonicalize() {
-                Ok(p) => p,
-                Err(_) => normalize_path(&resolved),
-            };
-
-            if escapes_package(&resolved, package_root) && resolved.starts_with(workspace_root) {
-                if let Some(url) = build_url(&resolved, workspace_root, repository, workspace_path) {
-                    let span = ast.codemap().resolve_span(load.module.span);
-                    edits.push((
-                        span.begin.line,
-                        span.begin.column,
-                        span.end.line,
-                        span.end.column,
-                        format!("\"{}\"", url),
-                    ));
-                }
-            }
+        if let Some(url) = try_convert_path(module_path, zen_dir, package_root, workspace_root, repository, workspace_path) {
+            let span = ast.codemap().resolve_span(load.module.span);
+            edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", url)));
         }
     }
 
@@ -245,37 +164,8 @@ fn convert_file(
         return Ok(None);
     }
 
-    // Apply edits in reverse order to preserve offsets
-    edits.sort_by(|a, b| (a.0, a.1, a.2, a.3).cmp(&(b.0, b.1, b.2, b.3)));
-    for (start_line, start_col, end_line, end_col, replacement) in edits.into_iter().rev() {
-        if start_line == end_line {
-            if start_line >= lines.len() {
-                continue;
-            }
-            let line = &mut lines[start_line];
-            if start_col > line.len() || end_col > line.len() || end_col < start_col {
-                continue;
-            }
-            let (pre, rest) = line.split_at(start_col);
-            let (_, post) = rest.split_at(end_col - start_col);
-            let mut new_line = String::with_capacity(pre.len() + replacement.len() + post.len());
-            new_line.push_str(pre);
-            new_line.push_str(&replacement);
-            new_line.push_str(post);
-            *line = new_line;
-        } else {
-            if start_line >= lines.len() || end_line >= lines.len() {
-                continue;
-            }
-            let first_prefix = lines[start_line][..start_col.min(lines[start_line].len())].to_string();
-            let last_suffix = lines[end_line][end_col.min(lines[end_line].len())..].to_string();
-            lines.splice(
-                start_line..=end_line,
-                vec![format!("{}{}{}", first_prefix, replacement, last_suffix)],
-            );
-        }
-    }
-
+    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+    apply_edits(&mut lines, edits);
     Ok(Some(lines.join("\n")))
 }
 
@@ -358,15 +248,30 @@ mod tests {
     }
 
     #[test]
-    fn test_is_relative_zen_path() {
-        assert!(is_relative_zen_path("../../components/LED/LED.zen"));
-        assert!(is_relative_zen_path("./module.zen"));
-        assert!(is_relative_zen_path("Module.zen"));
+    fn test_try_convert_path() {
+        let workspace_root = PathBuf::from("/workspace");
+        let package_root = PathBuf::from("/workspace/reference/foo");
+        let zen_dir = PathBuf::from("/workspace/reference/foo/src");
 
-        // Not relative paths
-        assert!(!is_relative_zen_path("@stdlib/interfaces.zen"));
-        assert!(!is_relative_zen_path("github.com/diodeinc/stdlib/interfaces.zen"));
-        assert!(!is_relative_zen_path("//stdlib/interfaces.zen"));
-        assert!(!is_relative_zen_path("not_a_zen_file.txt"));
+        // Relative path escaping package -> converts
+        // Note: can't test fully without real filesystem, but we can test the logic
+
+        // Already a URL -> no conversion
+        assert!(try_convert_path(
+            "github.com/diodeinc/registry/foo.zen",
+            &zen_dir, &package_root, &workspace_root, "github.com/test", None
+        ).is_none());
+
+        // Alias -> no conversion
+        assert!(try_convert_path(
+            "@stdlib/interfaces.zen",
+            &zen_dir, &package_root, &workspace_root, "github.com/test", None
+        ).is_none());
+
+        // Not a .zen file -> no conversion
+        assert!(try_convert_path(
+            "//common/foo.txt",
+            &zen_dir, &package_root, &workspace_root, "github.com/test", None
+        ).is_none());
     }
 }
