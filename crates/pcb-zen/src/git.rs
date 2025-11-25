@@ -195,13 +195,13 @@ pub fn create_tag(repo_root: &Path, tag_name: &str, message: &str) -> anyhow::Re
     }
 }
 
-/// Push a git tag to remote
-pub fn push_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
+/// Push a git tag to a specific remote
+pub fn push_tag(repo_root: &Path, tag_name: &str, remote: &str) -> anyhow::Result<()> {
     let status = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .arg("push")
-        .arg("origin")
+        .arg(remote)
         .arg(tag_name)
         .status()?;
 
@@ -209,6 +209,42 @@ pub fn push_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!("Git push failed for tag {tag_name}"))
+    }
+}
+
+/// Push multiple git tags to a specific remote in one command
+pub fn push_tags(repo_root: &Path, tag_names: &[&str], remote: &str) -> anyhow::Result<()> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root).arg("push").arg(remote);
+    for tag in tag_names {
+        cmd.arg(tag);
+    }
+
+    let status = cmd.status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Git push failed"))
+    }
+}
+
+/// Delete a local git tag
+pub fn delete_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("tag")
+        .arg("-d")
+        .arg(tag_name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Git tag delete failed for {tag_name}"))
     }
 }
 
@@ -251,4 +287,65 @@ pub fn get_remote_url(repo_root: &Path) -> anyhow::Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Check if working directory has uncommitted changes
+pub fn has_uncommitted_changes(repo_root: &Path) -> anyhow::Result<bool> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("status")
+        .arg("--porcelain")
+        .output()?;
+
+    if !out.status.success() {
+        return Err(anyhow::anyhow!("Failed to check git status"));
+    }
+
+    Ok(!out.stdout.is_empty())
+}
+
+/// Get the remote that a branch is tracking
+pub fn get_branch_remote(repo_root: &Path, branch: &str) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("config")
+        .arg("--get")
+        .arg(format!("branch.{}.remote", branch))
+        .output()
+        .ok()?;
+
+    if !out.status.success() {
+        return None;
+    }
+
+    let remote = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if remote.is_empty() {
+        None
+    } else {
+        Some(remote)
+    }
+}
+
+/// Fetch a specific branch from a remote
+pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("fetch")
+        .arg(remote)
+        .arg(branch)
+        .arg("--quiet")
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to fetch {} from {}",
+            branch,
+            remote
+        ))
+    }
 }

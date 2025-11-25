@@ -192,7 +192,7 @@ fn create_tag(info: &TagInfo) -> Result<()> {
 
 /// Push the tag to remote
 fn push_tag(info: &TagInfo) -> Result<()> {
-    git::push_tag(&info.workspace_root, &info.tag_name).context("Failed to push tag")
+    git::push_tag(&info.workspace_root, &info.tag_name, "origin").context("Failed to push tag")
 }
 
 /// Confirm push with user interaction

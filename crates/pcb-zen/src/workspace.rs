@@ -34,8 +34,9 @@ pub struct PackageInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board: Option<BoardSummary>,
 
-    /// Number of declared dependencies
-    pub dependency_count: usize,
+    /// Declared dependency URLs (for publish ordering)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
 
     /// Number of declared assets
     pub asset_count: usize,
@@ -267,7 +268,10 @@ fn build_package_info(
         })
     });
 
-    let dependency_count = config.as_ref().map(|c| c.dependencies.len()).unwrap_or(0);
+    let dependencies: Vec<String> = config
+        .as_ref()
+        .map(|c| c.dependencies.keys().cloned().collect())
+        .unwrap_or_default();
     let asset_count = config.as_ref().map(|c| c.assets.len()).unwrap_or(0);
 
     // Compute dirty status (with fast path for unpublished packages)
@@ -278,7 +282,7 @@ fn build_package_info(
         path: dir.to_path_buf(),
         latest_version,
         board,
-        dependency_count,
+        dependencies,
         asset_count,
         dirty: dirty_result.dirty,
         content_hash: dirty_result.hashes.content_hash,
@@ -293,7 +297,7 @@ fn build_package_info(
 /// - Root package with ws.path="hardware": "hardware/v"
 /// - Member at "ti/tps54331" with no ws.path: "ti/tps54331/v"
 /// - Member at "ti/tps54331" with ws.path="hardware": "hardware/ti/tps54331/v"
-fn compute_tag_prefix(rel_path: Option<&Path>, ws_path: &Option<String>) -> String {
+pub fn compute_tag_prefix(rel_path: Option<&Path>, ws_path: &Option<String>) -> String {
     let rel_str = rel_path
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -438,12 +442,10 @@ fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
 
 /// Read package hashes from a git tag annotation
 ///
-/// Expected tag annotation format:
+/// Expected tag annotation format (pcb.sum style):
 /// ```
-/// <message line(s)>
-///
-/// content-hash: h1:<base64>
-/// manifest-hash: h1:<base64>
+/// module_path v0.1.0 h1:<content_hash>
+/// module_path v0.1.0/pcb.toml h1:<manifest_hash>
 /// ```
 fn get_hashes_from_tag_annotation(workspace_root: &Path, tag_name: &str) -> Option<PackageHashes> {
     let output = Command::new("git")
@@ -464,16 +466,32 @@ fn get_hashes_from_tag_annotation(workspace_root: &Path, tag_name: &str) -> Opti
     parse_hashes_from_tag_body(&body)
 }
 
-/// Parse hashes from tag annotation body
+/// Parse hashes from tag annotation body (pcb.sum style format)
+///
+/// Format: Each line is "module_path version hash" where:
+/// - Content hash line: "module_path v0.1.0 h1:base64"
+/// - Manifest hash line: "module_path v0.1.0/pcb.toml h1:base64"
 fn parse_hashes_from_tag_body(body: &str) -> Option<PackageHashes> {
     let mut content_hash = None;
     let mut manifest_hash = None;
 
     for line in body.lines() {
-        if let Some(hash) = line.strip_prefix("content-hash: ") {
-            content_hash = Some(hash.trim().to_string());
-        } else if let Some(hash) = line.strip_prefix("manifest-hash: ") {
-            manifest_hash = Some(hash.trim().to_string());
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Find the hash at the end (h1:...)
+        if let Some(hash_start) = line.find(" h1:") {
+            let hash = line[hash_start + 1..].to_string(); // Include "h1:"
+
+            // Check if this is a manifest hash (contains /pcb.toml before the hash)
+            let before_hash = &line[..hash_start];
+            if before_hash.ends_with("/pcb.toml") {
+                manifest_hash = Some(hash);
+            } else {
+                content_hash = Some(hash);
+            }
         }
     }
 
@@ -667,5 +685,32 @@ mod tests {
             Some("1.0.0".to_string())
         );
         assert_eq!(find_latest_version(&tags, "nonexistent/v"), None);
+    }
+
+    #[test]
+    fn test_parse_hashes_from_tag_body() {
+        // pcb.sum style format (actual format used by publish)
+        let body = "github.com/akhilles/registry/harness v0.1.0 h1:mIGycQL5u80O2Jx/p3sUzJ566E74nA/Qof630p+ojSg=\ngithub.com/akhilles/registry/harness v0.1.0/pcb.toml h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=\n";
+
+        let hashes = parse_hashes_from_tag_body(body).expect("should parse hashes");
+        assert_eq!(
+            hashes.content_hash,
+            Some("h1:mIGycQL5u80O2Jx/p3sUzJ566E74nA/Qof630p+ojSg=".to_string())
+        );
+        assert_eq!(
+            hashes.manifest_hash,
+            Some("h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=".to_string())
+        );
+
+        // Empty body
+        assert!(parse_hashes_from_tag_body("").is_none());
+
+        // Missing manifest hash
+        let body_no_manifest = "github.com/foo v1.0.0 h1:abc123=\n";
+        assert!(parse_hashes_from_tag_body(body_no_manifest).is_none());
+
+        // Missing content hash
+        let body_no_content = "github.com/foo v1.0.0/pcb.toml h1:abc123=\n";
+        assert!(parse_hashes_from_tag_body(body_no_content).is_none());
     }
 }

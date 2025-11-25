@@ -199,8 +199,8 @@ fn print_package_line(pkg: &PackageInfo, ws: &V2Workspace) {
 
     // Deps/assets suffix
     let mut extras = Vec::new();
-    if pkg.dependency_count > 0 {
-        extras.push(format!("{} deps", pkg.dependency_count));
+    if !pkg.dependencies.is_empty() {
+        extras.push(format!("{} deps", pkg.dependencies.len()));
     }
     if pkg.asset_count > 0 {
         extras.push(format!("{} assets", pkg.asset_count));
