@@ -1697,7 +1697,7 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
 ///
 /// Creates canonical USTAR tarball from directory, streams to BLAKE3 hasher.
 /// Format: h1:<base64-encoded-blake3>
-fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
+pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
@@ -1712,7 +1712,7 @@ fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
 /// Compute manifest hash for a pcb.toml file
 ///
 /// Format: h1:<base64-encoded-blake3>
-fn compute_manifest_hash(manifest_content: &str) -> String {
+pub fn compute_manifest_hash(manifest_content: &str) -> String {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 

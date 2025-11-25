@@ -126,19 +126,15 @@ fn print_v2_human_readable(ws: &V2Workspace) {
                     })
                     .unwrap_or_else(|| "?.zen".to_string());
 
-                // Version display
-                let version_str = pkg
-                    .latest_version
-                    .as_ref()
-                    .map(|v| format!(" v{}", v))
-                    .unwrap_or_default();
+                // Version display with dirty indicator after (only if published)
+                // Use board's own version/dirty (from <board_name>/v<version> tags)
+                let version_str = match (&board.version, board.dirty) {
+                    (Some(v), true) => format!("{}{}", format!("(v{})", v).green(), "*".red()),
+                    (Some(v), false) => format!("(v{})", v).green().to_string(),
+                    (None, _) => "(unpublished)".yellow().to_string(),
+                };
 
-                println!(
-                    "  {}{} - {}",
-                    board.name.bold().green(),
-                    version_str.dimmed(),
-                    zen_path
-                );
+                println!("  {} {} - {}", board.name.bold(), version_str, zen_path);
 
                 if let Some(desc) = &board.description {
                     println!("    {}", desc);
@@ -178,15 +174,21 @@ fn print_package_line(pkg: &PackageInfo, ws: &V2Workspace) {
             .ok()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| pkg.url.split('/').next_back().unwrap_or(&pkg.url).to_string())
+            .unwrap_or_else(|| {
+                pkg.url
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&pkg.url)
+                    .to_string()
+            })
     };
 
-    // Version
-    let version_str = pkg
-        .latest_version
-        .as_ref()
-        .map(|v| format!("v{}", v).green().to_string())
-        .unwrap_or_else(|| "(unpublished)".yellow().to_string());
+    // Version display with dirty indicator after (only if published)
+    let version_str = match (&pkg.latest_version, pkg.dirty) {
+        (Some(v), true) => format!("{}{}", format!("(v{})", v).green(), "*".red()),
+        (Some(v), false) => format!("(v{})", v).green().to_string(),
+        (None, _) => "(unpublished)".yellow().to_string(),
+    };
 
     // Relative path from workspace root
     let rel_path = pkg
