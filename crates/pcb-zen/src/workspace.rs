@@ -12,8 +12,11 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use walkdir::WalkDir;
+
+use crate::resolve_v2::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// Information about a V2 workspace package member
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,18 @@ pub struct PackageInfo {
 
     /// Number of declared assets
     pub asset_count: usize,
+
+    /// Whether the package has unpublished changes
+    /// True if: no published version, or content differs from published version
+    pub dirty: bool,
+
+    /// Current content hash (h1:base64)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+
+    /// Current manifest hash (h1:base64)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
 }
 
 /// Summary of board configuration
@@ -46,6 +61,11 @@ pub struct BoardSummary {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zen_path: Option<String>,
+    /// Board version from <board_name>/v<version> tags
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Whether the board has unpublished changes
+    pub dirty: bool,
 }
 
 /// V2 workspace information
@@ -229,6 +249,10 @@ fn build_package_info(
         c.board.as_ref().map(|b| {
             // If no path specified, try to find a single .zen file in the directory
             let zen_path = b.path.clone().or_else(|| find_single_zen_file(dir));
+            // Boards use <board_name>/v<version> tag format
+            let board_tag_prefix = format!("{}/v", b.name);
+            let board_version = find_latest_version(tags, &board_tag_prefix);
+            let board_dirty = compute_dirty_status(workspace_root, dir, &board_tag_prefix, tags);
             BoardSummary {
                 name: b.name.clone(),
                 description: if b.description.is_empty() {
@@ -237,12 +261,17 @@ fn build_package_info(
                     Some(b.description.clone())
                 },
                 zen_path,
+                version: board_version,
+                dirty: board_dirty.dirty,
             }
         })
     });
 
     let dependency_count = config.as_ref().map(|c| c.dependencies.len()).unwrap_or(0);
     let asset_count = config.as_ref().map(|c| c.assets.len()).unwrap_or(0);
+
+    // Compute dirty status (with fast path for unpublished packages)
+    let dirty_result = compute_dirty_status(workspace_root, dir, &tag_prefix, tags);
 
     Ok(PackageInfo {
         url: url.to_string(),
@@ -251,6 +280,9 @@ fn build_package_info(
         board,
         dependency_count,
         asset_count,
+        dirty: dirty_result.dirty,
+        content_hash: dirty_result.hashes.content_hash,
+        manifest_hash: dirty_result.hashes.manifest_hash,
     })
 }
 
@@ -283,6 +315,177 @@ fn find_latest_version(tags: &[String], prefix: &str) -> Option<String> {
         })
         .max()
         .map(|v| v.to_string())
+}
+
+/// Package hashes (content + manifest)
+#[derive(Debug, Clone, Default)]
+struct PackageHashes {
+    content_hash: Option<String>,
+    manifest_hash: Option<String>,
+}
+
+impl PackageHashes {
+    fn compute(dir: &Path) -> Self {
+        let content_hash = compute_content_hash_from_dir(dir).ok();
+        let manifest_hash = std::fs::read_to_string(dir.join("pcb.toml"))
+            .ok()
+            .map(|content| compute_manifest_hash(&content));
+        Self {
+            content_hash,
+            manifest_hash,
+        }
+    }
+}
+
+/// Result of dirty detection with optional hashes
+struct DirtyResult {
+    dirty: bool,
+    hashes: PackageHashes,
+}
+
+/// Check if a package is dirty (has changes compared to published version)
+///
+/// Returns dirty status and computed hashes. Uses fast paths:
+/// - Unpublished: dirty, skip content hashing
+/// - Published but no hashes in tag: dirty (legacy tag), compute current hashes
+/// - Published with hashes: compare current vs tag hashes
+fn compute_dirty_status(
+    workspace_root: &Path,
+    package_dir: &Path,
+    tag_prefix: &str,
+    tags: &[String],
+) -> DirtyResult {
+    // Find the latest matching tag
+    let latest_tag = find_latest_tag(tags, tag_prefix);
+
+    let Some(tag_name) = latest_tag else {
+        // Fast path: unpublished = dirty, skip content hashing
+        return DirtyResult {
+            dirty: true,
+            hashes: PackageHashes::default(),
+        };
+    };
+
+    // Check for uncommitted changes first (cheaper than hashing)
+    if has_uncommitted_changes(workspace_root, package_dir) {
+        return DirtyResult {
+            dirty: true,
+            hashes: PackageHashes::compute(package_dir),
+        };
+    }
+
+    // Try to read hashes from tag annotation
+    let tagged_hashes = get_hashes_from_tag_annotation(workspace_root, &tag_name);
+
+    let Some(tagged) = tagged_hashes else {
+        // No hashes in tag annotation (legacy tag) = assume dirty
+        // Still compute current hashes for display
+        return DirtyResult {
+            dirty: true,
+            hashes: PackageHashes::compute(package_dir),
+        };
+    };
+
+    // Compute current hashes and compare
+    let current_hashes = PackageHashes::compute(package_dir);
+    let dirty = current_hashes.content_hash != tagged.content_hash
+        || current_hashes.manifest_hash != tagged.manifest_hash;
+
+    DirtyResult {
+        dirty,
+        hashes: current_hashes,
+    }
+}
+
+/// Find the latest tag matching a prefix, returning the full tag name
+fn find_latest_tag(tags: &[String], prefix: &str) -> Option<String> {
+    tags.iter()
+        .filter_map(|tag| {
+            let version_str = tag.strip_prefix(prefix)?;
+            let version = Version::parse(version_str).ok()?;
+            Some((tag.clone(), version))
+        })
+        .max_by(|a, b| a.1.cmp(&b.1))
+        .map(|(tag, _)| tag)
+}
+
+/// Check if there are uncommitted changes in a directory
+fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
+    let rel_path = package_dir
+        .strip_prefix(workspace_root)
+        .unwrap_or(package_dir);
+
+    let path_arg = if rel_path == Path::new("") {
+        ".".to_string()
+    } else {
+        rel_path.to_string_lossy().to_string()
+    };
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("--")
+        .arg(&path_arg)
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => !o.stdout.is_empty(),
+        _ => true,
+    }
+}
+
+/// Read package hashes from a git tag annotation
+///
+/// Expected tag annotation format:
+/// ```
+/// <message line(s)>
+///
+/// content-hash: h1:<base64>
+/// manifest-hash: h1:<base64>
+/// ```
+fn get_hashes_from_tag_annotation(workspace_root: &Path, tag_name: &str) -> Option<PackageHashes> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .arg("tag")
+        .arg("-l")
+        .arg("--format=%(contents)")
+        .arg(tag_name)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    parse_hashes_from_tag_body(&body)
+}
+
+/// Parse hashes from tag annotation body
+fn parse_hashes_from_tag_body(body: &str) -> Option<PackageHashes> {
+    let mut content_hash = None;
+    let mut manifest_hash = None;
+
+    for line in body.lines() {
+        if let Some(hash) = line.strip_prefix("content-hash: ") {
+            content_hash = Some(hash.trim().to_string());
+        } else if let Some(hash) = line.strip_prefix("manifest-hash: ") {
+            manifest_hash = Some(hash.trim().to_string());
+        }
+    }
+
+    // Both hashes must be present
+    if content_hash.is_some() && manifest_hash.is_some() {
+        Some(PackageHashes {
+            content_hash,
+            manifest_hash,
+        })
+    } else {
+        None
+    }
 }
 
 /// Find single .zen file in a directory (for board path discovery)
