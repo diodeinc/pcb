@@ -117,7 +117,8 @@ pub fn apply_edits(lines: &mut Vec<String>, mut edits: Vec<SourceEdit>) {
             if start_line >= lines.len() || end_line >= lines.len() {
                 continue;
             }
-            let first_prefix = lines[start_line][..start_col.min(lines[start_line].len())].to_string();
+            let first_prefix =
+                lines[start_line][..start_col.min(lines[start_line].len())].to_string();
             let last_suffix = lines[end_line][end_col.min(lines[end_line].len())..].to_string();
             lines.splice(
                 start_line..=end_line,

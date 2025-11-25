@@ -53,9 +53,17 @@ fn convert_file(zen_file: &Path, content: &str, workspace_root: &Path) -> Result
     ast.statement().visit_expr(|expr| {
         visit_string_literals(expr, &mut |s, lit_expr| {
             if s.starts_with("//") {
-                if let Ok(relative) = convert_workspace_to_file_relative(s, zen_file, workspace_root) {
+                if let Ok(relative) =
+                    convert_workspace_to_file_relative(s, zen_file, workspace_root)
+                {
                     let span = ast.codemap().resolve_span(lit_expr.span);
-                    edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", relative)));
+                    edits.push((
+                        span.begin.line,
+                        span.begin.column,
+                        span.end.line,
+                        span.end.column,
+                        format!("\"{}\"", relative),
+                    ));
                 }
             }
         });
@@ -69,9 +77,17 @@ fn convert_file(zen_file: &Path, content: &str, workspace_root: &Path) -> Result
 
         let module_path: &str = &load.module.node;
         if module_path.starts_with("//") {
-            if let Ok(relative) = convert_workspace_to_file_relative(module_path, zen_file, workspace_root) {
+            if let Ok(relative) =
+                convert_workspace_to_file_relative(module_path, zen_file, workspace_root)
+            {
                 let span = ast.codemap().resolve_span(load.module.span);
-                edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", relative)));
+                edits.push((
+                    span.begin.line,
+                    span.begin.column,
+                    span.end.line,
+                    span.end.column,
+                    format!("\"{}\"", relative),
+                ));
             }
         }
     }

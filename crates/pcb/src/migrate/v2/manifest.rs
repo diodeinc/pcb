@@ -205,8 +205,14 @@ fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result
         for entry in walker.filter_map(|e| e.ok()) {
             let path = entry.path();
 
-            // Skip directories and non-.zen files
-            if !path.is_file() || path.extension() != Some(std::ffi::OsStr::new("zen")) {
+            // Skip directories and files that aren't package content
+            let dominated_extensions = ["zen", "kicad_mod", "kicad_sym"];
+            let is_package_file = path.is_file()
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| dominated_extensions.contains(&ext));
+            if !is_package_file {
                 continue;
             }
 
