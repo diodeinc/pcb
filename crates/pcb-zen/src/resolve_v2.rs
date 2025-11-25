@@ -132,13 +132,14 @@ fn resolve_dependencies(
         .unwrap_or(&[]);
     let member_dirs = discover_member_dirs(workspace_root, member_patterns)?;
 
-    // Build workspace_member_urls for auto-deps (before auto-deps modifies configs)
-    let workspace_member_urls: HashSet<String> =
-        build_member_urls(&initial_config, workspace_root, &member_dirs);
+    // Build workspace_member_versions for auto-deps (before auto-deps modifies configs)
+    // Maps module_path -> latest published version (or "0.1.0" for unpublished)
+    let workspace_member_versions =
+        build_workspace_member_versions(&initial_config, workspace_root, &member_dirs);
 
     // Phase -1: Auto-add missing dependencies from .zen files
     println!("\nPhase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_root, &workspace_member_urls)?;
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_root, &workspace_member_versions)?;
     if auto_deps.total_added > 0 {
         println!(
             "  Auto-added {} dependencies across {} package(s)",
@@ -1539,17 +1540,21 @@ fn discover_member_dirs(workspace_root: &Path, patterns: &[String]) -> Result<Ve
     Ok(dirs)
 }
 
-/// Build URL set for workspace members (used by auto-deps before configs are modified)
-fn build_member_urls(
+/// Build workspace member versions map for auto-deps
+///
+/// Returns map: module_path -> version (latest published or "0.1.0" for unpublished)
+fn build_workspace_member_versions(
     config: &PcbToml,
     workspace_root: &Path,
     member_dirs: &[PathBuf],
-) -> HashSet<String> {
+) -> HashMap<String, String> {
+    use std::process::Command;
+
     let Some(ws) = &config.workspace else {
-        return HashSet::new();
+        return HashMap::new();
     };
     let Some(repo) = &ws.repository else {
-        return HashSet::new();
+        return HashMap::new();
     };
 
     let base = match &ws.path {
@@ -1557,19 +1562,60 @@ fn build_member_urls(
         None => repo.clone(),
     };
 
-    let mut urls = HashSet::new();
-    urls.insert(base.clone()); // root package
+    // Get local tags
+    let tags: Vec<String> = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .arg("tag")
+        .arg("-l")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
 
+    // Helper to find latest version for a tag prefix
+    let find_version = |prefix: &str| -> String {
+        tags.iter()
+            .filter_map(|tag| {
+                let version_str = tag.strip_prefix(prefix)?;
+                semver::Version::parse(version_str).ok()
+            })
+            .max()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "0.1.0".to_string())
+    };
+
+    let mut versions = HashMap::new();
+
+    // Root package
+    let root_prefix = match &ws.path {
+        Some(p) => format!("{}/v", p),
+        None => "v".to_string(),
+    };
+    versions.insert(base.clone(), find_version(&root_prefix));
+
+    // Member packages
     for dir in member_dirs {
         if let Ok(rel) = dir.strip_prefix(workspace_root) {
             let rel_str = rel.to_string_lossy();
             if !rel_str.is_empty() {
-                urls.insert(format!("{}/{}", base, rel_str));
+                let url = format!("{}/{}", base, rel_str);
+                let tag_prefix = match &ws.path {
+                    Some(p) => format!("{}/{}/v", p, rel_str),
+                    None => format!("{}/v", rel_str),
+                };
+                versions.insert(url, find_version(&tag_prefix));
             }
         }
     }
 
-    urls
+    versions
 }
 
 /// Build workspace members map: URL -> (dir, config)
