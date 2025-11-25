@@ -8,6 +8,7 @@ pub mod load;
 pub mod lsp;
 pub mod resolve_v2;
 pub mod suppression;
+pub mod workspace;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -24,6 +25,7 @@ pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve_v2::{maybe_resolve_v2_workspace, ResolutionResult};
 pub use starlark::errors::EvalSeverity;
+pub use workspace::{detect_v2_workspace, PackageInfo, V2Workspace};
 
 #[derive(Debug, Clone)]
 pub struct EvalConfig {
