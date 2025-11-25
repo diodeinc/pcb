@@ -1,5 +1,4 @@
 use anyhow::Result;
-use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use pcb_zen_core::config::{
     find_workspace_root, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
@@ -10,7 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
-use walkdir::WalkDir;
+
+use crate::workspace::{build_workspace_member_versions, discover_member_dirs};
 
 /// Path dependency validation errors
 #[derive(Debug, Error)]
@@ -1504,118 +1504,6 @@ fn add_requirement(
         selected.insert(line.clone(), final_version);
         work_queue.push_back(line);
     }
-}
-
-/// Discover member package directories matching glob patterns
-fn discover_member_dirs(workspace_root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
-    if patterns.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        builder.add(Glob::new(pattern)?);
-        if let Some(exact) = pattern.strip_suffix("/*") {
-            builder.add(Glob::new(exact)?);
-        }
-    }
-    let glob_set = builder.build()?;
-
-    let mut dirs = Vec::new();
-    for entry in WalkDir::new(workspace_root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_dir() || !path.join("pcb.toml").exists() {
-            continue;
-        }
-        if let Ok(rel_path) = path.strip_prefix(workspace_root) {
-            if glob_set.is_match(rel_path) {
-                dirs.push(path.to_path_buf());
-            }
-        }
-    }
-
-    Ok(dirs)
-}
-
-/// Build workspace member versions map for auto-deps
-///
-/// Returns map: module_path -> version (latest published or "0.1.0" for unpublished)
-fn build_workspace_member_versions(
-    config: &PcbToml,
-    workspace_root: &Path,
-    member_dirs: &[PathBuf],
-) -> HashMap<String, String> {
-    use std::process::Command;
-
-    let Some(ws) = &config.workspace else {
-        return HashMap::new();
-    };
-    let Some(repo) = &ws.repository else {
-        return HashMap::new();
-    };
-
-    let base = match &ws.path {
-        Some(p) => format!("{}/{}", repo, p),
-        None => repo.clone(),
-    };
-
-    // Get local tags
-    let tags: Vec<String> = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("tag")
-        .arg("-l")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Helper to find latest version for a tag prefix
-    let find_version = |prefix: &str| -> String {
-        tags.iter()
-            .filter_map(|tag| {
-                let version_str = tag.strip_prefix(prefix)?;
-                semver::Version::parse(version_str).ok()
-            })
-            .max()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "0.1.0".to_string())
-    };
-
-    let mut versions = HashMap::new();
-
-    // Root package
-    let root_prefix = match &ws.path {
-        Some(p) => format!("{}/v", p),
-        None => "v".to_string(),
-    };
-    versions.insert(base.clone(), find_version(&root_prefix));
-
-    // Member packages
-    for dir in member_dirs {
-        if let Ok(rel) = dir.strip_prefix(workspace_root) {
-            let rel_str = rel.to_string_lossy();
-            if !rel_str.is_empty() {
-                let url = format!("{}/{}", base, rel_str);
-                let tag_prefix = match &ws.path {
-                    Some(p) => format!("{}/{}/v", p, rel_str),
-                    None => format!("{}/v", rel_str),
-                };
-                versions.insert(url, find_version(&tag_prefix));
-            }
-        }
-    }
-
-    versions
 }
 
 /// Build workspace members map: URL -> (dir, config)

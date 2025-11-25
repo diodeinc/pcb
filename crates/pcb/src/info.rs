@@ -1,8 +1,11 @@
 use anyhow::Result;
 use clap::Args;
-use pcb_ui::{Colorize, Style, StyledText};
+use colored::Colorize as ColoredExt;
+use pcb_ui::{Style, StyledText};
+use pcb_zen::workspace::{detect_v2_workspace, PackageInfo, V2Workspace};
 use pcb_zen_core::config::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
+use serde::Serialize;
 use std::env;
 use std::path::Path;
 
@@ -25,25 +28,219 @@ pub enum OutputFormat {
     Json,
 }
 
+/// Combined workspace info for JSON output (supports both V1 and V2)
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum WorkspaceInfoOutput {
+    V1(pcb_zen_core::config::WorkspaceInfo),
+    V2(V2Workspace),
+}
+
 pub fn execute(args: InfoArgs) -> Result<()> {
     let start_path = match &args.path {
         Some(path) => Path::new(path).to_path_buf(),
         None => env::current_dir()?,
     };
 
+    // Try V2 first
+    if let Some(v2_workspace) = detect_v2_workspace(&start_path)? {
+        match args.format {
+            OutputFormat::Human => print_v2_human_readable(&v2_workspace),
+            OutputFormat::Json => print_json(&WorkspaceInfoOutput::V2(v2_workspace))?,
+        }
+        return Ok(());
+    }
+
+    // Fall back to V1
     let file_provider = DefaultFileProvider::new();
     let workspace_info = get_workspace_info(&file_provider, &start_path)?;
 
     match args.format {
-        OutputFormat::Human => print_human_readable(&workspace_info),
-        OutputFormat::Json => print_json(&workspace_info)?,
+        OutputFormat::Human => print_v1_human_readable(&workspace_info),
+        OutputFormat::Json => print_json(&WorkspaceInfoOutput::V1(workspace_info))?,
     }
 
     Ok(())
 }
 
-fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
-    println!("{}", "Workspace Information".with_style(Style::Blue));
+fn print_v2_human_readable(ws: &V2Workspace) {
+    // Header
+    println!("{}", "Workspace".with_style(Style::Blue).bold());
+    println!("Root: {}", ws.root.display());
+
+    if let Some(repo) = &ws.repository {
+        println!("Repository: {}", repo.with_style(Style::Cyan));
+    }
+    if let Some(pcb_version) = &ws.pcb_version {
+        println!("Toolchain: pcb >= {}", pcb_version);
+    }
+
+    // Member patterns (if not default)
+    if !ws.member_patterns.is_empty() && ws.member_patterns != vec!["boards/*".to_string()] {
+        println!("Members: {}", ws.member_patterns.join(", "));
+    }
+
+    println!();
+
+    // Separate boards from other packages
+    let all_packages = ws.all_packages();
+    let (mut boards, mut other_packages): (Vec<_>, Vec<_>) =
+        all_packages.into_iter().partition(|p| p.board.is_some());
+
+    // Sort by relative path
+    let sort_by_path = |a: &&PackageInfo, b: &&PackageInfo| {
+        let a_rel = a.path.strip_prefix(&ws.root).unwrap_or(&a.path);
+        let b_rel = b.path.strip_prefix(&ws.root).unwrap_or(&b.path);
+        a_rel.cmp(b_rel)
+    };
+    boards.sort_by(sort_by_path);
+    other_packages.sort_by(sort_by_path);
+
+    // Boards section (like V1)
+    if boards.is_empty() {
+        println!("No boards discovered");
+    } else {
+        println!(
+            "{} ({})",
+            "Boards".with_style(Style::Blue).bold(),
+            boards.len()
+        );
+
+        for pkg in &boards {
+            if let Some(board) = &pkg.board {
+                let zen_path = board
+                    .zen_path
+                    .as_ref()
+                    .map(|p| {
+                        // Make path relative to workspace root
+                        let pkg_rel = pkg
+                            .path
+                            .strip_prefix(&ws.root)
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        if pkg_rel.is_empty() {
+                            p.clone()
+                        } else {
+                            format!("{}/{}", pkg_rel, p)
+                        }
+                    })
+                    .unwrap_or_else(|| "?.zen".to_string());
+
+                // Version display
+                let version_str = pkg
+                    .latest_version
+                    .as_ref()
+                    .map(|v| format!(" v{}", v))
+                    .unwrap_or_default();
+
+                println!(
+                    "  {}{} - {}",
+                    board.name.bold().green(),
+                    version_str.dimmed(),
+                    zen_path
+                );
+
+                if let Some(desc) = &board.description {
+                    println!("    {}", desc);
+                }
+            }
+        }
+    }
+
+    // Packages section (non-boards)
+    if !other_packages.is_empty() {
+        println!();
+        println!(
+            "{} ({})",
+            "Packages".with_style(Style::Blue).bold(),
+            other_packages.len()
+        );
+
+        for pkg in &other_packages {
+            print_package_line(pkg, ws);
+        }
+    }
+}
+
+fn print_package_line(pkg: &PackageInfo, ws: &V2Workspace) {
+    let is_root = ws
+        .root_package
+        .as_ref()
+        .map(|r| r.url == pkg.url)
+        .unwrap_or(false);
+
+    // Package name (last segment of relative path, or "root")
+    let name = if is_root {
+        "root".to_string()
+    } else {
+        pkg.path
+            .strip_prefix(&ws.root)
+            .ok()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                pkg.url
+                    .split('/')
+                    .last()
+                    .unwrap_or(&pkg.url)
+                    .to_string()
+            })
+    };
+
+    // Version
+    let version_str = pkg
+        .latest_version
+        .as_ref()
+        .map(|v| format!("v{}", v).green().to_string())
+        .unwrap_or_else(|| "(unpublished)".yellow().to_string());
+
+    // Relative path from workspace root
+    let rel_path = pkg
+        .path
+        .strip_prefix(&ws.root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Deps/assets suffix
+    let mut extras = Vec::new();
+    if pkg.dependency_count > 0 {
+        extras.push(format!("{} deps", pkg.dependency_count));
+    }
+    if pkg.asset_count > 0 {
+        extras.push(format!("{} assets", pkg.asset_count));
+    }
+    let extras_str = if extras.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", extras.join(", ")).dimmed().to_string()
+    };
+
+    // Root indicator
+    let root_str = if is_root {
+        " (workspace root)".cyan().to_string()
+    } else {
+        String::new()
+    };
+
+    // Path display
+    let path_str = if rel_path.is_empty() || is_root {
+        String::new()
+    } else {
+        format!(" {}", rel_path.dimmed())
+    };
+
+    println!(
+        "  {} {}{}{}{}",
+        name.bold(),
+        version_str,
+        root_str,
+        path_str,
+        extras_str
+    );
+}
+
+fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
+    println!("{}", "Workspace".with_style(Style::Blue).bold());
     println!("Root: {}", info.root.display());
 
     if let Some(config) = &info.config {
@@ -84,7 +281,7 @@ fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
 
         println!(
             "{} ({})",
-            "Boards".with_style(Style::Blue),
+            "Boards".with_style(Style::Blue).bold(),
             info.boards.len()
         );
 
@@ -99,17 +296,15 @@ fn print_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
                 board.name.as_str().bold().green().to_string()
             };
 
-            if board.description.is_empty() {
-                println!("  {} - {}", name_display, board.zen_path);
-            } else {
-                println!("  {} - {}", name_display, board.zen_path);
+            println!("  {} - {}", name_display, board.zen_path);
+            if !board.description.is_empty() {
                 println!("    {}", board.description);
             }
         }
     }
 }
 
-fn print_json(info: &pcb_zen_core::config::WorkspaceInfo) -> Result<()> {
+fn print_json<T: Serialize>(info: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(info)?;
     println!("{json}");
     Ok(())
