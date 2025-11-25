@@ -3,7 +3,8 @@ use ignore::WalkBuilder;
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::top_level_stmts::top_level_stmts;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::visit_string_literals;
@@ -27,9 +28,6 @@ const KNOWN_ALIASES: &[(&str, &str, &str, bool)] = &[
     ),
 ];
 
-/// Default version for workspace member dependencies
-const DEFAULT_VERSION: &str = "0.1.0";
-
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
     pub total_added: usize,
@@ -44,15 +42,17 @@ struct CollectedImports {
 }
 
 /// Scan workspace for .zen files and auto-add missing dependencies to pcb.toml files
+///
+/// `workspace_members` maps module_path -> latest published version (or DEFAULT_VERSION if unpublished)
 pub fn auto_add_zen_deps(
     workspace_root: &Path,
-    workspace_members: &HashSet<String>,
+    workspace_members: &HashMap<String, String>,
 ) -> Result<AutoDepsSummary> {
     let package_imports = collect_imports_by_package(workspace_root)?;
     let mut summary = AutoDepsSummary::default();
 
     for (pcb_toml_path, imports) in package_imports {
-        let mut deps_to_add: Vec<(String, &str, bool)> = Vec::new();
+        let mut deps_to_add: Vec<(String, String, bool)> = Vec::new();
         let mut unknown_aliases: Vec<String> = Vec::new();
 
         // Process @alias imports
@@ -60,16 +60,18 @@ pub fn auto_add_zen_deps(
             if let Some((_, url, ver, is_asset)) =
                 KNOWN_ALIASES.iter().find(|(a, _, _, _)| a == alias)
             {
-                deps_to_add.push((url.to_string(), ver, *is_asset));
+                deps_to_add.push((url.to_string(), ver.to_string(), *is_asset));
             } else {
                 unknown_aliases.push(alias.clone());
             }
         }
 
-        // Process URL imports - add workspace member deps with default version
+        // Process URL imports - add workspace member deps with their latest version
         for url in &imports.urls {
-            if let Some(package_url) = find_matching_workspace_member(url, workspace_members) {
-                deps_to_add.push((package_url, DEFAULT_VERSION, false));
+            if let Some((package_url, version)) =
+                find_matching_workspace_member(url, workspace_members)
+            {
+                deps_to_add.push((package_url, version, false));
             }
         }
 
@@ -91,19 +93,21 @@ pub fn auto_add_zen_deps(
 
 /// Find the longest matching workspace member URL for a file URL
 /// e.g., "github.com/diodeinc/registry/modules/basic/CastellatedHoles/CastellatedHoles.zen"
-///    -> Some("github.com/diodeinc/registry/modules/basic") if that's a workspace member
+///    -> Some(("github.com/diodeinc/registry/modules/basic", "0.2.0")) if that's a workspace member
+///
+/// Returns (module_path, version) tuple
 fn find_matching_workspace_member(
     file_url: &str,
-    workspace_members: &HashSet<String>,
-) -> Option<String> {
-    // Strip the .zen filename first
+    workspace_members: &HashMap<String, String>,
+) -> Option<(String, String)> {
+    // Strip the filename first
     let without_file = file_url.rsplit_once('/')?.0;
 
     // Try progressively shorter prefixes to find a matching workspace member
     let mut path = without_file;
     while !path.is_empty() {
-        if workspace_members.contains(path) {
-            return Some(path.to_string());
+        if let Some(version) = workspace_members.get(path) {
+            return Some((path.to_string(), version.clone()));
         }
         // Strip the last path component
         path = match path.rsplit_once('/') {
@@ -203,7 +207,7 @@ fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<S
 }
 
 /// Add dependencies to a pcb.toml file, returns count added
-fn add_dependencies(pcb_toml_path: &Path, deps: &[(String, &str, bool)]) -> Result<usize> {
+fn add_dependencies(pcb_toml_path: &Path, deps: &[(String, String, bool)]) -> Result<usize> {
     if deps.is_empty() {
         return Ok(0);
     }
@@ -219,11 +223,11 @@ fn add_dependencies(pcb_toml_path: &Path, deps: &[(String, &str, bool)]) -> Resu
         if *is_asset {
             config
                 .assets
-                .insert(url.clone(), AssetDependencySpec::Ref(version.to_string()));
+                .insert(url.clone(), AssetDependencySpec::Ref(version.clone()));
         } else {
             config
                 .dependencies
-                .insert(url.clone(), DependencySpec::Version(version.to_string()));
+                .insert(url.clone(), DependencySpec::Version(version.clone()));
         }
         added += 1;
     }
