@@ -181,60 +181,65 @@ fn detect_member_patterns(workspace_root: &Path) -> Result<Vec<String>> {
 
 /// Generate empty pcb.toml files for member packages
 fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result<()> {
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
 
-    let mut created_packages: HashSet<PathBuf> = HashSet::new();
+    let package_extensions = ["zen", "kicad_mod", "kicad_sym"];
+
+    // Collect all directories that contain package files or already have pcb.toml
+    let mut candidate_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
     for pattern in members {
-        // Extract directory name (e.g., "components/*" -> "components")
         let dir_name = pattern.trim_end_matches("/*");
         let base_dir = workspace_root.join(dir_name);
-
         if !base_dir.exists() {
             continue;
         }
 
-        // Walk the directory looking for .zen files, respecting .gitignore
         let walker = WalkBuilder::new(&base_dir)
-            .max_depth(Some(3)) // Limit to 3 levels: components/a/b/foo.zen
-            .hidden(true) // Ignore hidden files and directories
-            .git_ignore(true) // Respect .gitignore
-            .git_exclude(true) // Respect .git/info/exclude
+            .max_depth(Some(3))
+            .hidden(true)
+            .git_ignore(true)
+            .git_exclude(true)
             .build();
 
         for entry in walker.filter_map(|e| e.ok()) {
             let path = entry.path();
-
-            // Skip directories and files that aren't package content
-            let dominated_extensions = ["zen", "kicad_mod", "kicad_sym"];
-            let is_package_file = path.is_file()
-                && path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|ext| dominated_extensions.contains(&ext));
-            if !is_package_file {
+            if !path.is_file() {
                 continue;
             }
 
-            // Get the directory containing this .zen file
-            let zen_dir = match path.parent() {
-                Some(dir) => dir,
-                None => continue,
-            };
+            let dominated_file = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| package_extensions.contains(&ext));
+            let is_manifest = path.file_name() == Some(std::ffi::OsStr::new("pcb.toml"));
 
-            // Skip if we already created a pcb.toml at this level or a parent level
-            if created_packages.iter().any(|pkg| zen_dir.starts_with(pkg)) {
-                continue;
-            }
-
-            // Create empty pcb.toml in this directory
-            let pcb_toml = zen_dir.join("pcb.toml");
-            if !pcb_toml.exists() {
-                std::fs::write(&pcb_toml, "")?;
-                eprintln!("  ✓ Created {}", pcb_toml.display());
-                created_packages.insert(zen_dir.to_path_buf());
+            if dominated_file || is_manifest {
+                if let Some(dir) = path.parent() {
+                    candidate_dirs.insert(dir.to_path_buf());
+                }
             }
         }
+    }
+
+    // Sort by depth (shallowest first) so parent packages are processed before children
+    let mut sorted_dirs: Vec<_> = candidate_dirs.into_iter().collect();
+    sorted_dirs.sort_by_key(|p| p.components().count());
+
+    // Process directories, tracking which subtrees are already covered
+    let mut covered: Vec<PathBuf> = Vec::new();
+
+    for dir in sorted_dirs {
+        if covered.iter().any(|pkg| dir.starts_with(pkg)) {
+            continue;
+        }
+
+        let pcb_toml = dir.join("pcb.toml");
+        if !pcb_toml.exists() {
+            std::fs::write(&pcb_toml, "")?;
+            eprintln!("  ✓ Created {}", pcb_toml.display());
+        }
+        covered.push(dir);
     }
 
     Ok(())

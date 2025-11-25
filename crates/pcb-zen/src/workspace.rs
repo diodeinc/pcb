@@ -425,10 +425,7 @@ mod tests {
     fn test_compute_tag_prefix() {
         // Root with no ws.path
         assert_eq!(compute_tag_prefix(None, &None), "v");
-        assert_eq!(
-            compute_tag_prefix(Some(Path::new("")), &None),
-            "v"
-        );
+        assert_eq!(compute_tag_prefix(Some(Path::new("")), &None), "v");
 
         // Root with ws.path
         assert_eq!(
@@ -461,10 +458,7 @@ mod tests {
             "other/v1.0.0".to_string(),
         ];
 
-        assert_eq!(
-            find_latest_version(&tags, "v"),
-            Some("0.2.1".to_string())
-        );
+        assert_eq!(find_latest_version(&tags, "v"), Some("0.2.1".to_string()));
         assert_eq!(
             find_latest_version(&tags, "other/v"),
             Some("1.0.0".to_string())

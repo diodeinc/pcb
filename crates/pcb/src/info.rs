@@ -178,13 +178,7 @@ fn print_package_line(pkg: &PackageInfo, ws: &V2Workspace) {
             .ok()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| {
-                pkg.url
-                    .split('/')
-                    .last()
-                    .unwrap_or(&pkg.url)
-                    .to_string()
-            })
+            .unwrap_or_else(|| pkg.url.split('/').next_back().unwrap_or(&pkg.url).to_string())
     };
 
     // Version

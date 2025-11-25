@@ -139,7 +139,8 @@ fn resolve_dependencies(
 
     // Phase -1: Auto-add missing dependencies from .zen files
     println!("\nPhase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps = crate::auto_deps::auto_add_zen_deps(workspace_root, &workspace_member_versions)?;
+    let auto_deps =
+        crate::auto_deps::auto_add_zen_deps(workspace_root, &workspace_member_versions)?;
     if auto_deps.total_added > 0 || auto_deps.versions_corrected > 0 {
         if auto_deps.total_added > 0 {
             println!(
