@@ -1,0 +1,10 @@
+---
+source: crates/pcb-zen/tests/test_physical.rs
+expression: stdout
+---
+--- PhysicalValue ---
+has abs: True
+abs value: 3.3V
+
+--- PhysicalRange ---
+range has abs: False
