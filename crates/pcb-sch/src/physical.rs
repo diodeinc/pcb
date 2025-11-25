@@ -2298,7 +2298,7 @@ mod tests {
         for (input, unit, value, tol, display) in [
             ("100nF 5%", PhysicalUnit::Farads, 1e-7, 0.05, "100nF 5%"),
             ("10kOhm 1%", PhysicalUnit::Ohms, 10000.0, 0.01, "10k 1%"),
-            ("3.3V 0.5%", PhysicalUnit::Volts, 3.3, 0.005, "3.3V 0%"), // Rounds to 0%
+            ("3.3V 0.5%", PhysicalUnit::Volts, 3.3, 0.005, "3.3V 0.5%"),
         ] {
             test_tolerance(input, unit, value, tol, display);
         }
