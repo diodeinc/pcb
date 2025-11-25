@@ -76,6 +76,16 @@ impl TestProject {
         self.eval_netlist_from_absolute(&top_path)
     }
 
+    /// Evaluate the Starlark project and return the full EvalOutput including prints
+    #[allow(dead_code)]
+    pub fn eval_module(
+        &self,
+        top_rel_path: impl AsRef<Path>,
+    ) -> WithDiagnostics<pcb_zen_core::EvalOutput> {
+        let top_path = self.root().join(top_rel_path);
+        pcb_zen::eval(&top_path, pcb_zen::EvalConfig::default())
+    }
+
     /// Same as [`Self::eval_netlist`] but accepts an absolute path.  This is useful
     /// when a test already has a full path (e.g. returned from [`Self::add_file`]).
     #[allow(dead_code)]

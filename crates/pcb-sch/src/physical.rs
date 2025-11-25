@@ -313,13 +313,16 @@ impl PhysicalValue {
         fn single_param_spec(param_type: Ty) -> ParamSpec {
             ParamSpec::new_parts([(ParamIsRequired::Yes, param_type)], [], None, [], None).unwrap()
         }
+        fn no_param_spec() -> ParamSpec {
+            ParamSpec::new_parts([], [], None, [], None).unwrap()
+        }
 
         let str_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let with_tolerance_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::string()));
         let with_value_param_spec = single_param_spec(Ty::union2(Ty::float(), Ty::int()));
         let with_unit_param_spec = single_param_spec(Ty::union2(Ty::string(), Ty::none()));
         let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
-        let abs_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
+        let abs_param_spec = no_param_spec();
         let within_param_spec = single_param_spec(Ty::any()); // Accepts any type like is_in()
 
         SortedMap::from_iter([
@@ -1004,7 +1007,7 @@ impl std::fmt::Display for PhysicalValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tol_percent = self.tolerance * ONE_HUNDRED;
         let tol_str = if tol_percent > Decimal::ZERO {
-            format!(" {}%", tol_percent.round())
+            format!(" {}%", fmt_significant(tol_percent))
         } else {
             String::new()
         };
@@ -1143,10 +1146,7 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         ))
     }
 
-    fn abs<'v>(
-        this: &PhysicalValue,
-        #[starlark(require = pos)] _arg: Value<'v>,
-    ) -> starlark::Result<PhysicalValue> {
+    fn abs<'v>(this: &PhysicalValue) -> starlark::Result<PhysicalValue> {
         Ok(this.abs())
     }
 
@@ -2298,7 +2298,7 @@ mod tests {
         for (input, unit, value, tol, display) in [
             ("100nF 5%", PhysicalUnit::Farads, 1e-7, 0.05, "100nF 5%"),
             ("10kOhm 1%", PhysicalUnit::Ohms, 10000.0, 0.01, "10k 1%"),
-            ("3.3V 0.5%", PhysicalUnit::Volts, 3.3, 0.005, "3.3V 0%"), // Rounds to 0%
+            ("3.3V 0.5%", PhysicalUnit::Volts, 3.3, 0.005, "3.3V 0.5%"),
         ] {
             test_tolerance(input, unit, value, tol, display);
         }
@@ -4158,5 +4158,18 @@ mod tests {
         let is_in_result2 = tight.downcast_ref::<PhysicalValue>().unwrap().is_in(loose);
         assert!(is_in_result2.is_ok());
         assert_eq!(is_in_result2.unwrap(), false);
+    }
+
+    #[test]
+    fn test_physical_value_abs() {
+        let v = physical_value(-3.3, 0.05, PhysicalUnit::Volts);
+        let abs_v = v.abs();
+        assert_eq!(abs_v.value, Decimal::from_f64(3.3).unwrap());
+        assert_eq!(abs_v.tolerance, Decimal::from_f64(0.05).unwrap());
+        assert_eq!(abs_v.unit, PhysicalUnit::Volts.into());
+
+        let v2 = physical_value(3.3, 0.05, PhysicalUnit::Volts);
+        let abs_v2 = v2.abs();
+        assert_eq!(abs_v2.value, Decimal::from_f64(3.3).unwrap());
     }
 }

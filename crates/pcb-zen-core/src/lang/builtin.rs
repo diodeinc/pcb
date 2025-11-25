@@ -9,7 +9,12 @@ use starlark::{
     environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
     eval::Evaluator,
     starlark_module, starlark_simple_value,
-    values::{none::NoneType, starlark_value, tuple::UnpackTuple, Freeze, StarlarkValue, Value},
+    values::{
+        none::{NoneOr, NoneType},
+        starlark_value,
+        tuple::UnpackTuple,
+        Freeze, StarlarkValue, Value,
+    },
     Error,
 };
 
@@ -189,12 +194,19 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
     fn physical_value(
         #[allow(unused_variables)] this: &Builtin,
-        unit: String,
+        unit: NoneOr<String>,
     ) -> starlark::Result<PhysicalValueType> {
-        let unit: pcb_sch::PhysicalUnit = unit
-            .parse()
-            .map_err(|err| Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err)))?;
-        Ok(PhysicalValueType::new(unit.into()))
+        match unit {
+            NoneOr::Other(u) => {
+                let unit: pcb_sch::PhysicalUnit = u.parse().map_err(|err| {
+                    Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err))
+                })?;
+                Ok(PhysicalValueType::new(unit.into()))
+            }
+            NoneOr::None => Ok(PhysicalValueType::new(
+                pcb_sch::physical::PhysicalUnitDims::DIMENSIONLESS,
+            )),
+        }
     }
 
     fn net_type<'v>(
