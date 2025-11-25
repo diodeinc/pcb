@@ -26,9 +26,14 @@ pub fn convert_escape_paths(
 
         let package_root = find_package_root(zen_file, workspace_root);
 
-        if let Some(updated) =
-            convert_file(zen_file, &content, &package_root, workspace_root, repository, workspace_path)?
-        {
+        if let Some(updated) = convert_file(
+            zen_file,
+            &content,
+            &package_root,
+            workspace_root,
+            repository,
+            workspace_path,
+        )? {
             std::fs::write(zen_file, updated)
                 .with_context(|| format!("Failed to write {}", zen_file.display()))?;
             eprintln!("  ✓ {}", zen_file.display());
@@ -74,11 +79,11 @@ fn try_convert_path(
     repository: &str,
     workspace_path: Option<&str>,
 ) -> Option<String> {
-    if !path_str.ends_with(".zen") {
-        return None;
-    }
     // Skip aliases and already-converted URLs
-    if path_str.starts_with('@') || path_str.starts_with("github.com/") || path_str.starts_with("gitlab.com/") {
+    if path_str.starts_with('@')
+        || path_str.starts_with("github.com/")
+        || path_str.starts_with("gitlab.com/")
+    {
         return None;
     }
 
@@ -91,7 +96,9 @@ fn try_convert_path(
         zen_dir.join(path_str)
     };
 
-    let resolved = resolved.canonicalize().unwrap_or_else(|_| normalize_path(&resolved));
+    let resolved = resolved
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_path(&resolved));
 
     // Only convert if it escapes the package and stays within workspace
     if !escapes_package(&resolved, package_root) || !resolved.starts_with(workspace_root) {
@@ -140,9 +147,22 @@ fn convert_file(
     // Visit all expressions
     ast.statement().visit_expr(|expr| {
         visit_string_literals(expr, &mut |s, lit_expr| {
-            if let Some(url) = try_convert_path(s, zen_dir, package_root, workspace_root, repository, workspace_path) {
+            if let Some(url) = try_convert_path(
+                s,
+                zen_dir,
+                package_root,
+                workspace_root,
+                repository,
+                workspace_path,
+            ) {
                 let span = ast.codemap().resolve_span(lit_expr.span);
-                edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", url)));
+                edits.push((
+                    span.begin.line,
+                    span.begin.column,
+                    span.end.line,
+                    span.end.column,
+                    format!("\"{}\"", url),
+                ));
             }
         });
     });
@@ -154,9 +174,22 @@ fn convert_file(
         };
 
         let module_path: &str = &load.module.node;
-        if let Some(url) = try_convert_path(module_path, zen_dir, package_root, workspace_root, repository, workspace_path) {
+        if let Some(url) = try_convert_path(
+            module_path,
+            zen_dir,
+            package_root,
+            workspace_root,
+            repository,
+            workspace_path,
+        ) {
             let span = ast.codemap().resolve_span(load.module.span);
-            edits.push((span.begin.line, span.begin.column, span.end.line, span.end.column, format!("\"{}\"", url)));
+            edits.push((
+                span.begin.line,
+                span.begin.column,
+                span.end.line,
+                span.end.column,
+                format!("\"{}\"", url),
+            ));
         }
     }
 
@@ -239,12 +272,28 @@ mod tests {
         let resolved = PathBuf::from("/workspace/components/LED/LED.zen");
 
         // Without workspace path
-        let url = build_url(&resolved, &workspace_root, "github.com/diodeinc/registry", None);
-        assert_eq!(url, Some("github.com/diodeinc/registry/components/LED/LED.zen".to_string()));
+        let url = build_url(
+            &resolved,
+            &workspace_root,
+            "github.com/diodeinc/registry",
+            None,
+        );
+        assert_eq!(
+            url,
+            Some("github.com/diodeinc/registry/components/LED/LED.zen".to_string())
+        );
 
         // With workspace path
-        let url = build_url(&resolved, &workspace_root, "github.com/company/monorepo", Some("hardware"));
-        assert_eq!(url, Some("github.com/company/monorepo/hardware/components/LED/LED.zen".to_string()));
+        let url = build_url(
+            &resolved,
+            &workspace_root,
+            "github.com/company/monorepo",
+            Some("hardware"),
+        );
+        assert_eq!(
+            url,
+            Some("github.com/company/monorepo/hardware/components/LED/LED.zen".to_string())
+        );
     }
 
     #[test]
@@ -259,19 +308,34 @@ mod tests {
         // Already a URL -> no conversion
         assert!(try_convert_path(
             "github.com/diodeinc/registry/foo.zen",
-            &zen_dir, &package_root, &workspace_root, "github.com/test", None
-        ).is_none());
+            &zen_dir,
+            &package_root,
+            &workspace_root,
+            "github.com/test",
+            None
+        )
+        .is_none());
 
         // Alias -> no conversion
         assert!(try_convert_path(
             "@stdlib/interfaces.zen",
-            &zen_dir, &package_root, &workspace_root, "github.com/test", None
-        ).is_none());
+            &zen_dir,
+            &package_root,
+            &workspace_root,
+            "github.com/test",
+            None
+        )
+        .is_none());
 
         // Not a .zen file -> no conversion
         assert!(try_convert_path(
             "//common/foo.txt",
-            &zen_dir, &package_root, &workspace_root, "github.com/test", None
-        ).is_none());
+            &zen_dir,
+            &package_root,
+            &workspace_root,
+            "github.com/test",
+            None
+        )
+        .is_none());
     }
 }

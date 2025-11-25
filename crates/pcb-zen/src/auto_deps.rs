@@ -92,7 +92,10 @@ pub fn auto_add_zen_deps(
 /// Find the longest matching workspace member URL for a file URL
 /// e.g., "github.com/diodeinc/registry/modules/basic/CastellatedHoles/CastellatedHoles.zen"
 ///    -> Some("github.com/diodeinc/registry/modules/basic") if that's a workspace member
-fn find_matching_workspace_member(file_url: &str, workspace_members: &HashSet<String>) -> Option<String> {
+fn find_matching_workspace_member(
+    file_url: &str,
+    workspace_members: &HashSet<String>,
+) -> Option<String> {
     // Strip the .zen filename first
     let without_file = file_url.rsplit_once('/')?.0;
 
@@ -194,7 +197,7 @@ fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<S
         return;
     }
 
-    if s.ends_with(".zen") && (s.starts_with("github.com/") || s.starts_with("gitlab.com/")) {
+    if s.starts_with("github.com/") || s.starts_with("gitlab.com/") {
         urls.insert(s.to_string());
     }
 }

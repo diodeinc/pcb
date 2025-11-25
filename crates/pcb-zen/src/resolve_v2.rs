@@ -182,11 +182,12 @@ fn resolve_dependencies(
 
     // Build workspace members: URL -> (dir, config)
     // Includes ALL member directories (empty pcb.toml inherits V2 from workspace root)
-    let workspace_members = build_workspace_members(file_provider, &config, workspace_root, &member_dirs);
+    let workspace_members =
+        build_workspace_members(file_provider, &config, workspace_root, &member_dirs);
 
     // Extract V2 packages for resolution (root + members with is_v2())
     let mut packages: Vec<(PathBuf, PcbToml)> = vec![(pcb_toml_path.clone(), config.clone())];
-    for (_url, (dir, pkg_config)) in &workspace_members {
+    for (dir, pkg_config) in workspace_members.values() {
         if dir != workspace_root && pkg_config.is_v2() {
             packages.push((dir.join("pcb.toml"), pkg_config.clone()));
         }
@@ -211,13 +212,21 @@ fn resolve_dependencies(
             .unwrap_or_else(|| "unknown".into());
 
         if let Some(board) = &config.board {
-            println!("  - {} (board: {}) → {}", package_name, board.name, pcb_toml_path.display());
+            println!(
+                "  - {} (board: {}) → {}",
+                package_name,
+                board.name,
+                pcb_toml_path.display()
+            );
         } else {
             println!("  - {} → {}", package_name, pcb_toml_path.display());
         }
     }
 
-    println!("\nWorkspace members: {} (for local resolution)", workspace_members.len());
+    println!(
+        "\nWorkspace members: {} (for local resolution)",
+        workspace_members.len()
+    );
 
     let patches = config.patch.clone();
 
@@ -1521,7 +1530,11 @@ fn discover_member_dirs(workspace_root: &Path, patterns: &[String]) -> Result<Ve
 }
 
 /// Build URL set for workspace members (used by auto-deps before configs are modified)
-fn build_member_urls(config: &PcbToml, workspace_root: &Path, member_dirs: &[PathBuf]) -> HashSet<String> {
+fn build_member_urls(
+    config: &PcbToml,
+    workspace_root: &Path,
+    member_dirs: &[PathBuf],
+) -> HashSet<String> {
     let Some(ws) = &config.workspace else {
         return HashSet::new();
     };
@@ -1581,7 +1594,8 @@ fn build_workspace_members(
                 let url = format!("{}/{}", base, rel_str);
                 let pcb_toml = dir.join("pcb.toml");
                 let content = file_provider.read_file(&pcb_toml).unwrap_or_default();
-                let pkg_config = PcbToml::parse(&content).unwrap_or_else(|_| PcbToml::parse("").unwrap());
+                let pkg_config =
+                    PcbToml::parse(&content).unwrap_or_else(|_| PcbToml::parse("").unwrap());
                 members.insert(url, (dir.clone(), pkg_config));
             }
         }
