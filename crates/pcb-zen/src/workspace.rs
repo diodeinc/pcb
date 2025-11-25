@@ -139,17 +139,17 @@ pub fn detect_v2_workspace_with_provider(
         return Ok(None);
     }
 
-    load_v2_workspace(file_provider, &workspace_root, &config)
+    load_v2_workspace(&workspace_root, &config)
 }
 
 /// Load V2 workspace information from a known V2 workspace root
 fn load_v2_workspace(
-    file_provider: &dyn FileProvider,
     workspace_root: &Path,
     config: &PcbToml,
 ) -> Result<Option<V2Workspace>> {
-    let ws = config.workspace.as_ref();
+    use rayon::prelude::*;
 
+    let ws = config.workspace.as_ref();
     let repository = ws.and_then(|w| w.repository.clone());
     let path = ws.and_then(|w| w.path.clone());
     let pcb_version = ws.and_then(|w| w.pcb_version.clone());
@@ -157,38 +157,32 @@ fn load_v2_workspace(
         .map(|w| w.members.clone())
         .unwrap_or_else(|| vec!["boards/*".to_string()]);
 
-    // Discover member directories
     let member_dirs = discover_member_dirs(workspace_root, &member_patterns)?;
-
-    // Get git tags for version discovery
     let tags = get_local_git_tags(workspace_root);
+    let tag_annotations = get_all_tag_annotations(workspace_root);
 
-    // Build base URL for package paths
     let base_url = match (&repository, &path) {
         (Some(repo), Some(p)) => Some(format!("{}/{}", repo, p)),
         (Some(repo), None) => Some(repo.clone()),
         _ => None,
     };
 
-    // Build package infos for members
-    let mut packages = Vec::new();
-    for dir in &member_dirs {
-        if let Ok(rel_path) = dir.strip_prefix(workspace_root) {
+    // Build package infos in parallel
+    let packages: Vec<PackageInfo> = member_dirs
+        .par_iter()
+        .filter_map(|dir| {
+            let rel_path = dir.strip_prefix(workspace_root).ok()?;
             let rel_str = rel_path.to_string_lossy();
             if rel_str.is_empty() {
-                continue; // Skip root, handled separately
+                return None;
             }
-
             let url = base_url
                 .as_ref()
                 .map(|base| format!("{}/{}", base, rel_str))
                 .unwrap_or_else(|| rel_str.to_string());
-
-            let pkg_info =
-                build_package_info(file_provider, dir, &url, workspace_root, &path, &tags)?;
-            packages.push(pkg_info);
-        }
-    }
+            build_package_info(dir, &url, workspace_root, &path, &tags, &tag_annotations).ok()
+        })
+        .collect();
 
     // Build root package info only if:
     // 1. It has at least one dependency or asset, OR
@@ -199,12 +193,12 @@ fn load_v2_workspace(
 
         if has_deps || no_other_packages {
             Some(build_package_info(
-                file_provider,
                 workspace_root,
                 base,
                 workspace_root,
                 &path,
                 &tags,
+                &tag_annotations,
             )?)
         } else {
             None
@@ -226,16 +220,17 @@ fn load_v2_workspace(
 
 /// Build PackageInfo for a single package directory
 fn build_package_info(
-    file_provider: &dyn FileProvider,
     dir: &Path,
     url: &str,
     workspace_root: &Path,
     ws_path: &Option<String>,
     tags: &[String],
+    tag_annotations: &HashMap<String, String>,
 ) -> Result<PackageInfo> {
     let pcb_toml_path = dir.join("pcb.toml");
-    let config = if file_provider.exists(&pcb_toml_path) {
-        PcbToml::from_file(file_provider, &pcb_toml_path).ok()
+    let config = if pcb_toml_path.exists() {
+        let file_provider = DefaultFileProvider::new();
+        PcbToml::from_file(&file_provider, &pcb_toml_path).ok()
     } else {
         None
     };
@@ -253,7 +248,8 @@ fn build_package_info(
             // Boards use <board_name>/v<version> tag format
             let board_tag_prefix = format!("{}/v", b.name);
             let board_version = find_latest_version(tags, &board_tag_prefix);
-            let board_dirty = compute_dirty_status(workspace_root, dir, &board_tag_prefix, tags);
+            let board_dirty =
+                compute_dirty_status(workspace_root, dir, &board_tag_prefix, tags, tag_annotations);
             BoardSummary {
                 name: b.name.clone(),
                 description: if b.description.is_empty() {
@@ -275,7 +271,7 @@ fn build_package_info(
     let asset_count = config.as_ref().map(|c| c.assets.len()).unwrap_or(0);
 
     // Compute dirty status (with fast path for unpublished packages)
-    let dirty_result = compute_dirty_status(workspace_root, dir, &tag_prefix, tags);
+    let dirty_result = compute_dirty_status(workspace_root, dir, &tag_prefix, tags, tag_annotations);
 
     Ok(PackageInfo {
         url: url.to_string(),
@@ -358,6 +354,7 @@ fn compute_dirty_status(
     package_dir: &Path,
     tag_prefix: &str,
     tags: &[String],
+    tag_annotations: &HashMap<String, String>,
 ) -> DirtyResult {
     // Find the latest matching tag
     let latest_tag = find_latest_tag(tags, tag_prefix);
@@ -378,8 +375,10 @@ fn compute_dirty_status(
         };
     }
 
-    // Try to read hashes from tag annotation
-    let tagged_hashes = get_hashes_from_tag_annotation(workspace_root, &tag_name);
+    // Look up hashes from pre-fetched tag annotations
+    let tagged_hashes = tag_annotations
+        .get(&tag_name)
+        .and_then(|body| parse_hashes_from_tag_body(body));
 
     let Some(tagged) = tagged_hashes else {
         // No hashes in tag annotation (legacy tag) = assume dirty
@@ -438,32 +437,6 @@ fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
         Ok(o) if o.status.success() => !o.stdout.is_empty(),
         _ => true,
     }
-}
-
-/// Read package hashes from a git tag annotation
-///
-/// Expected tag annotation format (pcb.sum style):
-/// ```
-/// module_path v0.1.0 h1:<content_hash>
-/// module_path v0.1.0/pcb.toml h1:<manifest_hash>
-/// ```
-fn get_hashes_from_tag_annotation(workspace_root: &Path, tag_name: &str) -> Option<PackageHashes> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("tag")
-        .arg("-l")
-        .arg("--format=%(contents)")
-        .arg(tag_name)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let body = String::from_utf8_lossy(&output.stdout);
-    parse_hashes_from_tag_body(&body)
 }
 
 /// Parse hashes from tag annotation body (pcb.sum style format)
@@ -529,8 +502,6 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
 
 /// Get local git tags from a repository
 fn get_local_git_tags(workspace_root: &Path) -> Vec<String> {
-    use std::process::Command;
-
     Command::new("git")
         .arg("-C")
         .arg(workspace_root)
@@ -546,6 +517,51 @@ fn get_local_git_tags(workspace_root: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Batch read all tag annotations from a repository
+///
+/// Uses a single `git for-each-ref` command to read all tag annotations at once,
+/// avoiding N separate git commands for N tags. Returns map of tag_name -> annotation_body.
+fn get_all_tag_annotations(workspace_root: &Path) -> HashMap<String, String> {
+    // Use a unique separator that won't appear in tag names or annotations
+    const RECORD_SEP: &str = "\x1E"; // ASCII Record Separator
+    const FIELD_SEP: &str = "\x1F"; // ASCII Unit Separator
+
+    let format = format!("%(refname:short){FIELD_SEP}%(contents){RECORD_SEP}");
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .arg("for-each-ref")
+        .arg(format!("--format={}", format))
+        .arg("refs/tags")
+        .output()
+        .ok();
+
+    let Some(output) = output else {
+        return HashMap::new();
+    };
+
+    if !output.status.success() {
+        return HashMap::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut result = HashMap::new();
+
+    for record in stdout.split(RECORD_SEP) {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+
+        if let Some((tag_name, body)) = record.split_once(FIELD_SEP) {
+            result.insert(tag_name.to_string(), body.to_string());
+        }
+    }
+
+    result
 }
 
 /// Discover member package directories matching glob patterns
