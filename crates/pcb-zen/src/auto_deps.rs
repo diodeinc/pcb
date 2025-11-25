@@ -12,7 +12,7 @@ use pcb_zen_core::DefaultFileProvider;
 
 /// Known alias mappings: (alias, url, version, is_asset)
 const KNOWN_ALIASES: &[(&str, &str, &str, bool)] = &[
-    ("stdlib", "github.com/akhilles/stdlib", "0.4.5", false),
+    ("stdlib", "github.com/akhilles/stdlib", "0.4.0", false),
     (
         "kicad-symbols",
         "gitlab.com/kicad/libraries/kicad-symbols",

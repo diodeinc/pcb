@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -33,16 +33,16 @@ pub struct PcbToml {
     pub packages: HashMap<String, String>,
 
     /// Dependencies (V2 only - code packages with pcb.toml)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub dependencies: HashMap<String, DependencySpec>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, DependencySpec>,
 
     /// Assets (V2 only - repositories without pcb.toml, e.g., KiCad libraries)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub assets: HashMap<String, AssetDependencySpec>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assets: BTreeMap<String, AssetDependencySpec>,
 
     /// Patches for local development (V2 only)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub patch: HashMap<String, PatchSpec>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub patch: BTreeMap<String, PatchSpec>,
 
     /// Vendor configuration (V2 only)
     #[serde(skip_serializing_if = "Option::is_none")]
