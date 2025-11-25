@@ -4,7 +4,6 @@ use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use walkdir::WalkDir;
 
 /// Detect git repository URL from the current branch's tracking remote
 fn detect_repository(workspace_root: &Path) -> Result<String> {
@@ -136,10 +135,13 @@ pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<(String, Option<
     }
 
     // Find and convert all member pcb.toml files (including newly created ones)
-    for entry in WalkDir::new(workspace_root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    let walker = WalkBuilder::new(workspace_root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .build();
+
+    for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.file_name() == Some(std::ffi::OsStr::new("pcb.toml")) && path != root_pcb_toml {
             convert_pcb_toml_to_v2(path, None, None, &[])?;
@@ -160,6 +162,7 @@ fn detect_member_patterns(workspace_root: &Path) -> Result<Vec<String>> {
         "boards/*",
         "graphics/*",
         "harness/*",
+        "generic-eda/*",
     ];
     let mut filtered = Vec::new();
 
