@@ -169,16 +169,25 @@ fn load_v2_workspace(
         }
     }
 
-    // Build root package info
+    // Build root package info only if:
+    // 1. It has at least one dependency or asset, OR
+    // 2. No other packages were found (so there's always at least one package)
     let root_package = if let Some(base) = &base_url {
-        Some(build_package_info(
-            file_provider,
-            workspace_root,
-            base,
-            workspace_root,
-            &path,
-            &tags,
-        )?)
+        let has_deps = !config.dependencies.is_empty() || !config.assets.is_empty();
+        let no_other_packages = packages.is_empty();
+
+        if has_deps || no_other_packages {
+            Some(build_package_info(
+                file_provider,
+                workspace_root,
+                base,
+                workspace_root,
+                &path,
+                &tags,
+            )?)
+        } else {
+            None
+        }
     } else {
         None
     };
