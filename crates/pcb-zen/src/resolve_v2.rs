@@ -57,8 +57,8 @@ struct UnresolvedDep {
 /// Only constructed from V2 pcb.toml files. Asset repositories themselves never have manifests.
 #[derive(Clone, Debug)]
 struct PackageManifest {
-    dependencies: HashMap<String, DependencySpec>,
-    assets: HashMap<String, pcb_zen_core::AssetDependencySpec>,
+    dependencies: BTreeMap<String, DependencySpec>,
+    assets: BTreeMap<String, pcb_zen_core::AssetDependencySpec>,
 }
 
 impl PackageManifest {
@@ -418,7 +418,7 @@ fn resolve_dependencies(
 
     // Phase 4: Update lockfile with cryptographic hashes
     println!("\nPhase 4: Updating lockfile");
-    let lockfile = update_lockfile(existing_lockfile, &build_set)?;
+    let lockfile = update_lockfile(existing_lockfile, &build_set, &asset_set)?;
 
     // Write lockfile to disk
     let lockfile_path = workspace_root.join("pcb.sum");
@@ -457,7 +457,7 @@ struct ResolutionContext<'a> {
     root_config: &'a PcbToml,
     packages: &'a [(PathBuf, PcbToml)],
     selected: &'a HashMap<ModuleLine, Version>,
-    patches: &'a HashMap<String, PatchSpec>,
+    patches: &'a BTreeMap<String, PatchSpec>,
     manifest_cache: &'a HashMap<(ModuleLine, Version), PackageManifest>,
     workspace_members: &'a HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
 }
@@ -547,8 +547,8 @@ fn build_resolution_map(
     // Build deps map for a package with base directory for local path resolution
     // V2 does not support aliases - only canonical URL dependencies
     let build_map = |base_dir: &Path,
-                     pkg_deps: &HashMap<String, DependencySpec>,
-                     pkg_assets: &HashMap<String, pcb_zen_core::AssetDependencySpec>|
+                     pkg_deps: &BTreeMap<String, DependencySpec>,
+                     pkg_assets: &BTreeMap<String, pcb_zen_core::AssetDependencySpec>|
      -> BTreeMap<String, PathBuf> {
         let mut map = BTreeMap::new();
 
@@ -628,7 +628,7 @@ fn collect_package_dependencies(
 
 /// Recursively collect dependencies, handling transitive local path dependencies
 fn collect_deps_recursive(
-    current_deps: &HashMap<String, DependencySpec>,
+    current_deps: &BTreeMap<String, DependencySpec>,
     package_dir: &Path,
     workspace_root: &Path,
     deps: &mut HashMap<String, UnresolvedDep>,
@@ -870,7 +870,7 @@ fn collect_and_fetch_assets(
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
     workspace_root: &Path,
-    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
 ) -> Result<HashSet<(String, String)>> {
     let mut asset_set = HashSet::new();
     let mut seen_assets: HashSet<(String, String)> = HashSet::new();
@@ -939,7 +939,7 @@ fn fetch_manifest(
     workspace_root: &Path,
     module_path: &str,
     version: &Version,
-    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
     workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
@@ -993,8 +993,8 @@ fn read_manifest_from_path(pcb_toml_path: &Path, _module_path: &str) -> Result<P
         _ => {
             // V1 packages = empty manifest for V2 resolution
             Ok(PackageManifest {
-                dependencies: HashMap::new(),
-                assets: HashMap::new(),
+                dependencies: BTreeMap::new(),
+                assets: BTreeMap::new(),
             })
         }
     }
@@ -1011,7 +1011,7 @@ fn fetch_asset_repo(
     workspace_root: &Path,
     module_path: &str,
     ref_str: &str,
-    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
 ) -> Result<PathBuf> {
     // 1. Check if this module is patched with a local path
     if let Some(patch) = patches.get(module_path) {
@@ -1050,7 +1050,17 @@ fn fetch_asset_repo(
 
     let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str, false)?;
 
-    // Assets: ignore pcb.toml if present (no validation needed)
+    // Compute and store content hash
+    print!("        Computing hashes... ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+
+    let content_hash = compute_content_hash_from_dir(&package_root)?;
+    let cache_marker = checkout_dir.join(".pcbcache");
+    // Assets don't have manifests, so just write content hash
+    std::fs::write(&cache_marker, format!("{}\n", content_hash))?;
+
+    println!("done");
+
     Ok(package_root)
 }
 
@@ -1462,7 +1472,7 @@ fn add_requirement(
     version: Version,
     selected: &mut HashMap<ModuleLine, Version>,
     work_queue: &mut VecDeque<ModuleLine>,
-    patches: &HashMap<String, pcb_zen_core::config::PatchSpec>,
+    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
 ) {
     // Check if this module is patched
     let (final_version, is_patched) = if patches.contains_key(&path) {
@@ -2090,25 +2100,24 @@ fn git_ls_remote_with_fallback(module_path: &str, refspec: &str) -> Result<(Stri
 fn update_lockfile(
     existing_lockfile: Option<Lockfile>,
     build_set: &HashSet<(ModuleLine, Version)>,
+    asset_set: &HashSet<(String, String)>,
 ) -> Result<Lockfile> {
     // Start with existing lockfile or create new one
     let mut lockfile = existing_lockfile.unwrap_or_default();
 
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let cache_base = home.join(".pcb").join("cache");
 
-    println!("  Reading hashes for {} dependencies...", build_set.len());
+    let total_count = build_set.len() + asset_set.len();
+    println!("  Reading hashes for {} entries...", total_count);
 
     let mut updated_count = 0;
     let mut added_count = 0;
 
+    // Process dependencies
     for (line, version) in build_set {
-        let cache_dir = home
-            .join(".pcb")
-            .join("cache")
-            .join(&line.path)
-            .join(version.to_string());
-
+        let cache_dir = cache_base.join(&line.path).join(version.to_string());
         let cache_marker = cache_dir.join(".pcbcache");
 
         // Read hashes from cache marker
@@ -2139,6 +2148,47 @@ fn update_lockfile(
         } else {
             updated_count += 1;
             println!("    {}@v{} (verified)", line.path, version);
+        }
+    }
+
+    // Process assets
+    for (module_path, ref_str) in asset_set {
+        let cache_dir = cache_base.join(module_path).join(ref_str);
+        let cache_marker = cache_dir.join(".pcbcache");
+
+        // Read hashes from cache marker
+        let marker_content = std::fs::read_to_string(&cache_marker).map_err(|e| {
+            anyhow::anyhow!(
+                "Missing cache marker for {}@{}: {}",
+                module_path,
+                ref_str,
+                e
+            )
+        })?;
+
+        let mut lines = marker_content.lines();
+        let content_hash = lines
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Invalid cache marker format: missing content hash"))?
+            .to_string();
+        let manifest_hash = lines.next().map(|s| s.to_string());
+
+        // Check if this is a new entry or update
+        let is_new = lockfile.get(module_path, ref_str).is_none();
+
+        lockfile.insert(LockEntry {
+            module_path: module_path.clone(),
+            version: ref_str.clone(),
+            content_hash,
+            manifest_hash,
+        });
+
+        if is_new {
+            added_count += 1;
+            println!("    {}@{} (added)", module_path, ref_str);
+        } else {
+            updated_count += 1;
+            println!("    {}@{} (verified)", module_path, ref_str);
         }
     }
 
