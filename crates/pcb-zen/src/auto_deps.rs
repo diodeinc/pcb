@@ -31,6 +31,7 @@ const KNOWN_ALIASES: &[(&str, &str, &str, bool)] = &[
 #[derive(Debug, Default)]
 pub struct AutoDepsSummary {
     pub total_added: usize,
+    pub versions_corrected: usize,
     pub packages_updated: usize,
     pub unknown_aliases: Vec<(PathBuf, Vec<String>)>,
 }
@@ -81,9 +82,11 @@ pub fn auto_add_zen_deps(
                 .push((pcb_toml_path.clone(), unknown_aliases));
         }
 
-        let added = add_dependencies(&pcb_toml_path, &deps_to_add)?;
-        if added > 0 {
+        let (added, corrected) =
+            add_and_correct_dependencies(&pcb_toml_path, &deps_to_add, workspace_members)?;
+        if added > 0 || corrected > 0 {
             summary.total_added += added;
+            summary.versions_corrected += corrected;
             summary.packages_updated += 1;
         }
     }
@@ -206,14 +209,16 @@ fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<S
     }
 }
 
-/// Add dependencies to a pcb.toml file, returns count added
-fn add_dependencies(pcb_toml_path: &Path, deps: &[(String, String, bool)]) -> Result<usize> {
-    if deps.is_empty() {
-        return Ok(0);
-    }
-
+/// Add dependencies to a pcb.toml file and correct workspace member versions
+/// Returns (added_count, corrected_count)
+fn add_and_correct_dependencies(
+    pcb_toml_path: &Path,
+    deps: &[(String, String, bool)],
+    workspace_members: &HashMap<String, String>,
+) -> Result<(usize, usize)> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut added = 0;
+    let mut corrected = 0;
 
     for (url, version, is_asset) in deps {
         if config.dependencies.contains_key(url) || config.assets.contains_key(url) {
@@ -232,9 +237,43 @@ fn add_dependencies(pcb_toml_path: &Path, deps: &[(String, String, bool)]) -> Re
         added += 1;
     }
 
-    if added > 0 {
+    corrected += correct_workspace_member_versions(&mut config, workspace_members);
+
+    if added > 0 || corrected > 0 {
         std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
     }
 
-    Ok(added)
+    Ok((added, corrected))
+}
+
+/// Correct versions of existing workspace member dependencies
+/// Returns count of versions corrected
+fn correct_workspace_member_versions(
+    config: &mut PcbToml,
+    workspace_members: &HashMap<String, String>,
+) -> usize {
+    let mut corrected = 0;
+
+    for (url, expected_version) in workspace_members {
+        if let Some(current_spec) = config.dependencies.get(url) {
+            let current_version = extract_version_string(current_spec);
+            if current_version.as_deref() != Some(expected_version.as_str()) {
+                config.dependencies.insert(
+                    url.clone(),
+                    DependencySpec::Version(expected_version.clone()),
+                );
+                corrected += 1;
+            }
+        }
+    }
+
+    corrected
+}
+
+/// Extract version string from a DependencySpec
+fn extract_version_string(spec: &DependencySpec) -> Option<String> {
+    match spec {
+        DependencySpec::Version(v) => Some(v.clone()),
+        DependencySpec::Detailed(detail) => detail.version.clone(),
+    }
 }
