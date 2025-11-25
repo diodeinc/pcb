@@ -12,5 +12,13 @@ Value: 1e+06
 Tolerance: 0.001
 Unit: Hz
 
+--- Dimensionless ---
+Type object: DimensionlessType
+d: 1.5
+type(d): PhysicalValue
+d.value: 1.5
+d.unit: 
+builtin.Voltage(1.5): VoltageType
+
 --- PhysicalRange ---
 range has abs: False

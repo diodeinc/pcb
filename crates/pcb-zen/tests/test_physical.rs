@@ -25,6 +25,19 @@ print("Value:", f1.value)
 print("Tolerance:", f1.tolerance)
 print("Unit:", f1.unit)
 
+print("\n--- Dimensionless ---")
+# Test builtin.physical_value(None)
+Dimensionless = builtin.physical_value(None)
+print("Type object:", Dimensionless)
+
+d = Dimensionless(1.5)
+print("d:", d)
+print("type(d):", type(d))
+print("d.value:", d.value)
+print("d.unit:", d.unit)
+
+print("builtin.Voltage(1.5):", builtin.Voltage(1.5))
+
 print("\n--- PhysicalRange ---")
 # Test PhysicalRange.abs() does NOT exist
 r1 = VoltageRange("1V to 3V")
