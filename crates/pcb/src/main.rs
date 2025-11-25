@@ -20,6 +20,7 @@ mod mcp;
 mod migrate;
 mod open;
 mod package;
+mod publish;
 mod release;
 mod self_update;
 mod sim;
@@ -93,6 +94,10 @@ enum Commands {
     #[command(alias = "o")]
     Open(open::OpenArgs),
 
+    /// Publish packages by creating version tags
+    #[command(alias = "p")]
+    Publish(publish::PublishArgs),
+
     /// Release PCB project versions
     #[command(alias = "r")]
     Release(release::ReleaseArgs),
@@ -160,6 +165,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
+        Commands::Publish(args) => publish::execute(args),
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
