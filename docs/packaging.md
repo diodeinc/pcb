@@ -924,56 +924,129 @@ The `stdlib` would be embedded in the `pcb` binary or distributed in an adjacent
 
 ## Publishing & Release Workflow
 
-### Current Limitations
+### `pcb publish`
 
-The current workflow separates tagging and releasing into two phases: `pcb tag` (local build, git tag, push) triggers CI, which then runs `pcb release` (upload to storage). This split is brittle and board-specific. We need a unified command for both packages and boards that handles the entire lifecycle atomically.
-
-### Proposed: `pcb publish`
-
-A single command to validate, build, tag, and publish artifacts for both packages and boards.
+Discovers dirty/unpublished packages in a V2 workspace and publishes them by creating annotated git tags with content and manifest hashes.
 
 ```bash
-# Publish a package (from root of repo)
-$ pcb publish -v v1.0.0
+# Publish all dirty packages in workspace
+$ pcb publish
 
-# Publish a specific board
-$ pcb publish -b WV0002 -v v1.0.0
+# Dry run - show what would be published without creating tags
+$ pcb publish --dry-run
 
-# Publish a specific sub-package (monorepo)
-$ pcb publish -p registry/reference/ti/tps54331 -v v1.0.0
-
-# Dry run (validate and build only, skip tagging/upload)
-$ pcb publish --dry-run -v v1.0.0
+# Publish from a specific path
+$ pcb publish ./path/to/workspace
 ```
+
+### Dirty Detection
+
+A package is considered **dirty** (needs publishing) if any of the following are true:
+
+1. **Unpublished** - No matching version tag exists
+2. **Uncommitted changes** - `git status` shows modifications in the package directory
+3. **Legacy tag** - Published tag exists but lacks hash annotations (pre-V2 tag)
+4. **Content changed** - Current content hash differs from the hash in the tag annotation
+5. **Manifest changed** - Current `pcb.toml` hash differs from the hash in the tag annotation
+
+### Tag Annotation Format
+
+Published tags are annotated with content and manifest hashes in `pcb.sum` format:
+
+```
+github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0 h1:mIGycQL5u80O2Jx/...=
+github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0/pcb.toml h1:rxNJufX5oaa...=
+```
+
+This embeds verification hashes directly in the git tag, enabling:
+- Dirty detection by comparing current vs published hashes
+- Integrity verification without fetching package contents
+- Reproducible builds via cryptographic content addressing
+
+### Versioning Strategy
+
+Version numbers are computed automatically:
+
+- **Unpublished packages**: Start at `0.1.0`
+- **Published 0.x packages**: Bump minor version (`0.3.2` → `0.4.0`)
+- **Published 1.x+ packages**: Bump major version (`1.2.3` → `2.0.0`)
+
+This follows the semver family convention where 0.x minor bumps are breaking changes.
+
+### Multi-Wave Publishing
+
+Packages with inter-dependencies are published in **waves** based on the dependency DAG:
+
+1. **Wave 1**: Leaf packages (no dirty dependencies) are tagged first
+2. **Wave 2**: Packages that depended on Wave 1 packages become publishable
+3. **Continue** until all packages are published or remaining packages have external blockers
+
+```bash
+$ pcb publish
+Found 12 dirty/unpublished package(s)
+
+Wave 1:
+3 package(s) can be published:
+  reference/ti/tps54331: 0.1.0 (initial) [reference/ti/tps54331/v0.1.0]
+  reference/analog/ltc3115: 0.1.0 (initial) [reference/analog/ltc3115/v0.1.0]
+  common/interfaces: 0.1.0 (initial) [common/interfaces/v0.1.0]
+
+Wave 2:
+5 package(s) can be published:
+  boards/power-supply: 0.1.0 (initial) [boards/power-supply/v0.1.0]
+  ...
+
+Push 12 tag(s) to origin? [y/N]:
+```
+
+All tags are created locally first, then pushed in a single batch after confirmation.
 
 ### Workflow Steps
 
-1.  **Pre-flight Checks:**
-    *   Working directory is clean (no uncommitted changes).
-    *   Current branch is `main` (or matches config).
-    *   Upstream is synchronized (no unpushed local commits).
-    *   Version tag does not already exist locally or remotely.
+1. **Pre-flight Checks:**
+   - Working directory is clean (no uncommitted changes)
+   - Current branch is `main`
+   - Local `main` is in sync with remote (fetches and compares HEAD)
 
-2.  **Validation & Build:**
-    *   **Package:** Runs `pcb build` (dry run) to verify dependency resolution and syntax. Runs tests.
-    *   **Board:** Runs full layout generation and DRC/ERC checks.
-    *   **Monorepo Package:** Verifies the isolated sub-package can resolve its own dependencies.
+2. **Discovery:**
+   - Detects V2 workspace and all member packages
+   - Computes content hashes for dirty detection
+   - Builds dependency graph from `pcb.toml` declarations
 
-3.  **Packaging:**
-    *   Creates the canonical artifact (tarball for packages, release bundle for boards).
-    *   Computes checksums.
-    *   *Stop here if `--dry-run` is set.*
+3. **Wave Publishing:**
+   - Identifies publishable packages (no dirty dependencies)
+   - Computes next versions and tag names
+   - Creates annotated tags locally with hash annotations
+   - Repeats until no more packages can be published
 
-4.  **Publishing (Atomic-ish):**
-    *   **Git Tag:** Creates and pushes the git tag (e.g., `v1.0.0` or `reference/ti/tps54331/v1.0.0`).
-    *   **Artifact Upload:** Uploads the release bundle to the storage server / registry.
+4. **Confirmation & Push:**
+   - Displays all accumulated tags across waves
+   - Prompts for confirmation before pushing
+   - Pushes all tags in a single `git push` command
+   - If declined, deletes all local tags created during the session
 
-By doing everything locally, we remove the CI dependency for the "release" step, treating CI purely as a verification gate for PRs. The publisher's machine (or a specialized release bot) is the source of truth.
+### Blocked Packages
 
+If packages cannot be published due to dirty dependencies, the command shows blocking info:
 
-v2 todos:
-- add support for cloning asset subdirs
-- auto-detect dependencies from load() statements
-- pcb build auto-sorts dependencies, assets
-- fix out-of-tree path dependencies (e.g. stdlib) not working "Internal error: current file not in any V2 package"
-- add pcb publish support
+```bash
+$ pcb publish
+Found 3 dirty/unpublished package(s)
+
+No packages can be published yet.
+All dirty packages depend on other dirty/unpublished packages.
+
+Dirty packages and their blocking dependencies:
+  boards/power-supply blocked by:
+    - github.com/diodeinc/registry/reference/ti/tps54331
+```
+
+---
+
+## Future Work
+
+### Remaining V2 Tasks
+
+- Auto-detect dependencies from `load()` statements
+- `pcb build` auto-sorts dependencies and assets in `pcb.toml`
+- Board publishing workflow (separate from package publishing)
