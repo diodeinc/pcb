@@ -74,6 +74,17 @@ pub fn collect_zen_files(root: &Path) -> Result<Vec<PathBuf>> {
         .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
+        .filter_entry(|entry| {
+            // Skip vendor directories
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name == "vendor" {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {

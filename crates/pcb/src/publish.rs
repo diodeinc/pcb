@@ -11,11 +11,11 @@ use pcb_zen::workspace::{compute_tag_prefix, detect_v2_workspace, PackageInfo, V
 use pcb_zen::{git, resolve_v2};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
+use rayon::prelude::*;
 use semver::Version;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
-use rayon::prelude::*;
 
 #[derive(Args, Debug)]
 #[command(about = "Publish packages by creating version tags")]
@@ -59,8 +59,9 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     let remote = if args.force {
         let current_branch = git::symbolic_ref_short_head(&workspace.root)
             .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
-        git::get_branch_remote(&workspace.root, &current_branch)
-            .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", current_branch))?
+        git::get_branch_remote(&workspace.root, &current_branch).ok_or_else(|| {
+            anyhow::anyhow!("Branch '{}' is not tracking a remote", current_branch)
+        })?
     } else {
         preflight_checks(&workspace.root)?
     };
