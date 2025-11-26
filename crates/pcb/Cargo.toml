@@ -60,6 +60,7 @@ dir-diff = { workspace = true }
 tempfile = { workspace = true }
 ignore = { workspace = true }
 semver = { workspace = true }
+rayon = { workspace = true }
 crossterm = { workspace = true }
 terminal_size = { workspace = true }
 unicode-width = { workspace = true }
