@@ -41,6 +41,10 @@ const PATH_CORRECTIONS: &[(&str, &str)] = &[
     ),
     // modules/robotics/* -> modules/*/
     (
+        "modules/robotics/CanTermination",
+        "modules/CanTermination/CanTermination",
+    ),
+    (
         "modules/robotics/CanTerminationSwitch",
         "modules/CanTerminationSwitch/CanTerminationSwitch",
     ),
