@@ -397,6 +397,43 @@ pub fn commit(repo_root: &Path, message: &str) -> anyhow::Result<String> {
     rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
 }
 
+/// Stage all changes and create a commit with git trailers
+///
+/// Adds a "Generated-by: pcb publish" trailer to indicate automated commit.
+/// Returns the commit SHA on success.
+pub fn commit_with_trailers(repo_root: &Path, message: &str) -> anyhow::Result<String> {
+    // Stage all changes
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("add")
+        .arg("-A")
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to stage changes"));
+    }
+
+    // Create commit with trailer
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("commit")
+        .arg("-m")
+        .arg(message)
+        .arg("--trailer")
+        .arg("Generated-by: pcb publish")
+        .stdout(std::process::Stdio::null())
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to create commit"));
+    }
+
+    // Return the commit SHA
+    rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
+}
+
 /// Reset to a specific commit (hard reset)
 pub fn reset_hard(repo_root: &Path, commit: &str) -> anyhow::Result<()> {
     let status = Command::new("git")
