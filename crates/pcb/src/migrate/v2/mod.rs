@@ -3,6 +3,7 @@ use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod alias_expansion;
 mod escape_paths;
 mod manifest;
 mod zen_paths;
@@ -32,6 +33,10 @@ pub fn migrate_to_v2(paths: &[PathBuf]) -> Result<()> {
     // Phase 4: Convert cross-package relative paths to URLs
     eprintln!("\nPhase 4: Converting cross-package paths to URLs");
     escape_paths::convert_escape_paths(&workspace_root, &repository, workspace_path.as_deref())?;
+
+    // Phase 5: Expand hardcoded aliases (@registry -> github.com/diodeinc/registry)
+    eprintln!("\nPhase 5: Expanding hardcoded aliases");
+    alias_expansion::expand_aliases(&workspace_root)?;
 
     eprintln!("\n✓ Migration to V2 complete");
     eprintln!("  Review changes with: git diff");
