@@ -45,6 +45,12 @@ pub struct PackageInfo {
     /// True if: no published version, or content differs from published version
     pub dirty: bool,
 
+    /// Whether the package depends (directly or transitively) on a dirty package
+    /// When a dirty package is published, all transitive_dirty packages will need
+    /// their pcb.toml updated and republished
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub transitive_dirty: bool,
+
     /// Current content hash (h1:base64)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
@@ -143,10 +149,7 @@ pub fn detect_v2_workspace_with_provider(
 }
 
 /// Load V2 workspace information from a known V2 workspace root
-fn load_v2_workspace(
-    workspace_root: &Path,
-    config: &PcbToml,
-) -> Result<Option<V2Workspace>> {
+fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V2Workspace>> {
     use rayon::prelude::*;
 
     let ws = config.workspace.as_ref();
@@ -207,6 +210,11 @@ fn load_v2_workspace(
         None
     };
 
+    // Compute transitive dirty status after all packages are built
+    let mut packages = packages;
+    let mut root_package = root_package;
+    compute_transitive_dirty(&mut packages, &mut root_package);
+
     Ok(Some(V2Workspace {
         root: workspace_root.to_path_buf(),
         repository,
@@ -216,6 +224,62 @@ fn load_v2_workspace(
         packages,
         root_package,
     }))
+}
+
+/// Compute transitive dirty status for all packages
+///
+/// A package is transitive_dirty if it depends (directly or transitively) on a dirty package.
+/// Uses BFS from all dirty packages, following reverse dependency edges.
+fn compute_transitive_dirty(packages: &mut [PackageInfo], root_package: &mut Option<PackageInfo>) {
+    use std::collections::{HashSet, VecDeque};
+
+    // Build reverse dependency graph: dep_url -> list of dependant URLs (using owned Strings)
+    let mut reverse_deps: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Build the reverse dependency map
+    for pkg in packages.iter().chain(root_package.iter()) {
+        for dep_url in &pkg.dependencies {
+            reverse_deps
+                .entry(dep_url.clone())
+                .or_default()
+                .push(pkg.url.clone());
+        }
+    }
+
+    // Find all directly dirty packages
+    let dirty_urls: HashSet<String> = packages
+        .iter()
+        .chain(root_package.iter())
+        .filter(|p| p.dirty)
+        .map(|p| p.url.clone())
+        .collect();
+
+    // BFS from dirty packages to find all transitively affected packages
+    let mut transitive_dirty_urls: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = dirty_urls.iter().cloned().collect();
+
+    while let Some(url) = queue.pop_front() {
+        // Get all packages that depend on this dirty/transitive_dirty package
+        if let Some(dependants) = reverse_deps.get(&url) {
+            for dependant_url in dependants {
+                // Skip if already marked as dirty or transitive_dirty
+                if dirty_urls.contains(dependant_url) {
+                    continue;
+                }
+                if transitive_dirty_urls.insert(dependant_url.clone()) {
+                    // Newly discovered - add to queue to propagate further
+                    queue.push_back(dependant_url.clone());
+                }
+            }
+        }
+    }
+
+    // Apply transitive_dirty flag to packages
+    for pkg in packages.iter_mut().chain(root_package.iter_mut()) {
+        if transitive_dirty_urls.contains(&pkg.url) {
+            pkg.transitive_dirty = true;
+        }
+    }
 }
 
 /// Build PackageInfo for a single package directory
@@ -248,8 +312,13 @@ fn build_package_info(
             // Boards use <board_name>/v<version> tag format
             let board_tag_prefix = format!("{}/v", b.name);
             let board_version = find_latest_version(tags, &board_tag_prefix);
-            let board_dirty =
-                compute_dirty_status(workspace_root, dir, &board_tag_prefix, tags, tag_annotations);
+            let board_dirty = compute_dirty_status(
+                workspace_root,
+                dir,
+                &board_tag_prefix,
+                tags,
+                tag_annotations,
+            );
             BoardSummary {
                 name: b.name.clone(),
                 description: if b.description.is_empty() {
@@ -271,7 +340,8 @@ fn build_package_info(
     let asset_count = config.as_ref().map(|c| c.assets.len()).unwrap_or(0);
 
     // Compute dirty status (with fast path for unpublished packages)
-    let dirty_result = compute_dirty_status(workspace_root, dir, &tag_prefix, tags, tag_annotations);
+    let dirty_result =
+        compute_dirty_status(workspace_root, dir, &tag_prefix, tags, tag_annotations);
 
     Ok(PackageInfo {
         url: url.to_string(),
@@ -281,6 +351,7 @@ fn build_package_info(
         dependencies,
         asset_count,
         dirty: dirty_result.dirty,
+        transitive_dirty: false, // Computed after all packages are built
         content_hash: dirty_result.hashes.content_hash,
         manifest_hash: dirty_result.hashes.manifest_hash,
     })

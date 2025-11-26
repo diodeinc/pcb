@@ -9,6 +9,8 @@ use colored::Colorize;
 use inquire::Confirm;
 use pcb_zen::workspace::{compute_tag_prefix, detect_v2_workspace, PackageInfo, V2Workspace};
 use pcb_zen::{git, resolve_v2};
+use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -35,20 +37,18 @@ struct PublishCandidate<'a> {
 }
 
 pub fn execute(args: PublishArgs) -> Result<()> {
-    let start_path = match &args.path {
-        Some(path) => Path::new(path).to_path_buf(),
-        None => env::current_dir()?,
-    };
+    let start_path = args
+        .path
+        .as_ref()
+        .map(|p| Path::new(p).to_path_buf())
+        .unwrap_or_else(|| env::current_dir().unwrap());
 
-    // Detect V2 workspace once (computes all content hashes upfront)
     let Some(workspace) = detect_v2_workspace(&start_path)? else {
         bail!("Not a V2 workspace. Publish requires [workspace] with resolver = \"2\"");
     };
 
-    // Safety checks
     let remote = preflight_checks(&workspace.root)?;
 
-    // Get all non-board packages
     let all_packages: Vec<&PackageInfo> = workspace
         .all_packages()
         .into_iter()
@@ -60,127 +60,121 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Build URL -> PackageInfo map for dependency lookups
     let pkg_by_url: HashMap<&str, &PackageInfo> =
         all_packages.iter().map(|p| (p.url.as_str(), *p)).collect();
 
-    // Track remaining dirty packages by URL
-    let mut remaining_dirty: HashSet<&str> = all_packages
+    let mut remaining_dirty: HashSet<String> = all_packages
         .iter()
-        .filter(|p| p.dirty)
-        .map(|p| p.url.as_str())
+        .filter(|p| p.dirty || p.transitive_dirty)
+        .map(|p| p.url.clone())
         .collect();
-
-    let initial_dirty_count = remaining_dirty.len();
 
     if remaining_dirty.is_empty() {
         println!("{}", "All packages are up to date".green());
         return Ok(());
     }
 
-    println!("Found {} dirty/unpublished package(s)", initial_dirty_count);
+    println!(
+        "Found {} dirty/unpublished package(s)",
+        all_packages.iter().filter(|p| p.dirty).count()
+    );
 
-    // Accumulate all tags across waves
+    let initial_commit = git::rev_parse(&workspace.root, "HEAD")
+        .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?;
+
     let mut all_tags: Vec<String> = Vec::new();
+    let mut made_commits = false;
     let mut wave = 0;
 
     loop {
         wave += 1;
 
-        // Find publishable: dirty packages whose deps are all not in remaining_dirty
+        // Find publishable: packages whose deps are all not in remaining_dirty
         let publishable: Vec<&PackageInfo> = remaining_dirty
             .iter()
-            .filter_map(|url| pkg_by_url.get(url).copied())
-            .filter(|pkg| {
-                !pkg.dependencies
-                    .iter()
-                    .any(|dep_url| remaining_dirty.contains(dep_url.as_str()))
-            })
+            .filter_map(|url| pkg_by_url.get(url.as_str()).copied())
+            .filter(|pkg| !pkg.dependencies.iter().any(|d| remaining_dirty.contains(d)))
             .collect();
 
         if publishable.is_empty() {
-            // No more packages can be published
             if all_tags.is_empty() {
-                // First wave and nothing publishable - show blocking info
-                println!();
-                println!("{}", "No packages can be published yet.".yellow());
-                println!("All dirty packages depend on other dirty/unpublished packages.");
-                println!();
-                println!("Dirty packages and their blocking dependencies:");
-                for url in &remaining_dirty {
-                    if let Some(pkg) = pkg_by_url.get(url) {
-                        let blocking: Vec<_> = pkg
-                            .dependencies
-                            .iter()
-                            .filter(|dep_url| remaining_dirty.contains(dep_url.as_str()))
-                            .map(|s| s.as_str())
-                            .collect();
-                        if !blocking.is_empty() {
-                            let rel_path = pkg
-                                .path
-                                .strip_prefix(&workspace.root)
-                                .unwrap_or(&pkg.path);
-                            println!("  {} blocked by:", rel_path.display());
-                            for dep in blocking {
-                                println!("    - {}", dep);
-                            }
-                        }
-                    }
-                }
+                print_blocking_info(&remaining_dirty, &pkg_by_url, &workspace.root);
             }
             break;
         }
 
-        // Build publish candidates with computed versions and hashes
         let candidates = build_publish_candidates(&publishable, &workspace)?;
 
-        // Display wave header if multiple waves
-        if wave > 1 || candidates.len() < initial_dirty_count {
+        // Display wave
+        if wave > 1 {
             println!();
-            println!("{}", format!("Wave {}:", wave).cyan().bold());
+        }
+        println!("{}", format!("Wave {}:", wave).cyan().bold());
+        println!("{} package(s) to publish:", candidates.len());
+        for c in &candidates {
+            print_candidate(c, &workspace.root);
         }
 
-        println!("{} package(s) can be published:", publishable.len());
+        let published_versions: HashMap<&str, &Version> = candidates
+            .iter()
+            .map(|c| (c.pkg.url.as_str(), &c.next_version))
+            .collect();
 
-        // Display what will be published
-        for candidate in &candidates {
-            let rel_path = candidate
-                .pkg
-                .path
-                .strip_prefix(&workspace.root)
-                .unwrap_or(&candidate.pkg.path);
-            let path_display = if rel_path.as_os_str().is_empty() {
-                "(root)".to_string()
-            } else {
-                rel_path.display().to_string()
-            };
-            let version_str = match &candidate.pkg.latest_version {
-                Some(v) => format!("{} → {}", v, candidate.next_version),
-                None => format!("{} (initial)", candidate.next_version),
-            };
-            println!(
-                "  {}: {} [{}]",
-                path_display,
-                version_str.green(),
-                candidate.tag_name.cyan()
-            );
+        for c in &candidates {
+            remaining_dirty.remove(&c.pkg.url);
+            all_tags.push(c.tag_name.clone());
         }
 
-        // Remove published packages from remaining_dirty and accumulate tags
-        for candidate in &candidates {
-            remaining_dirty.remove(candidate.pkg.url.as_str());
-            all_tags.push(candidate.tag_name.clone());
+        // Find dependants needing pcb.toml updates
+        let dependants: Vec<&PackageInfo> = remaining_dirty
+            .iter()
+            .filter_map(|url| pkg_by_url.get(url.as_str()).copied())
+            .filter(|pkg| {
+                pkg.dependencies
+                    .iter()
+                    .any(|d| published_versions.contains_key(d.as_str()))
+            })
+            .collect();
+
+        if !dependants.is_empty() {
+            println!();
+            println!("  {} {} pcb.toml file(s):", "→".cyan(), dependants.len());
+            for pkg in &dependants {
+                let rel = pkg.path.strip_prefix(&workspace.root).unwrap_or(&pkg.path);
+                println!("    {}/pcb.toml", rel.display());
+            }
         }
 
         if args.dry_run {
-            // Continue to show all waves in dry run
+            // Add dependants to remaining_dirty for next wave simulation
+            for pkg in &dependants {
+                remaining_dirty.insert(pkg.url.clone());
+            }
             continue;
         }
 
-        // Create tags locally
-        for candidate in &candidates {
-            let message = format_tag_message(candidate);
-            git::create_tag(&workspace.root, &candidate.tag_name, &message)?;
+        // Create tags
+        for c in &candidates {
+            git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(c))?;
+        }
+
+        // Update pcb.toml files and commit
+        if !dependants.is_empty() {
+            for pkg in &dependants {
+                bump_dependency_versions(&pkg.path.join("pcb.toml"), &published_versions)?;
+                remaining_dirty.insert(pkg.url.clone());
+            }
+
+            let names: Vec<_> = dependants
+                .iter()
+                .filter_map(|p| p.path.file_name())
+                .map(|n| n.to_string_lossy())
+                .collect();
+            git::commit(
+                &workspace.root,
+                &format!("Bump dependency versions: {}", names.join(", ")),
+            )?;
+            made_commits = true;
         }
     }
 
@@ -198,25 +192,36 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Confirm push of all accumulated tags
+    // Confirm and push
     println!();
-    let confirmed = Confirm::new(&format!("Push {} tag(s) to {}?", all_tags.len(), remote))
+    let prompt = if made_commits {
+        format!(
+            "Push main branch and {} tag(s) to {}?",
+            all_tags.len(),
+            remote
+        )
+    } else {
+        format!("Push {} tag(s) to {}?", all_tags.len(), remote)
+    };
+
+    if !Confirm::new(&prompt)
         .with_default(false)
         .prompt()
-        .unwrap_or(false);
-
-    if !confirmed {
-        // User declined - delete all tags we created across all waves
-        println!("Cleaning up {} local tag(s)...", all_tags.len());
-        let tag_refs: Vec<&str> = all_tags.iter().map(|s| s.as_str()).collect();
-        let _ = git::delete_tags(&workspace.root, &tag_refs);
-        println!("{}", "Publish cancelled".yellow());
-        return Ok(());
+        .unwrap_or(false)
+    {
+        return rollback(
+            &workspace.root,
+            &all_tags,
+            made_commits.then_some(&initial_commit),
+        );
     }
 
-    // Push all tags in one command
     println!();
     println!("Pushing to {}...", remote.cyan());
+    if made_commits {
+        git::push_branch(&workspace.root, "main", &remote)?;
+        println!("  Pushed main branch");
+    }
     let tag_refs: Vec<&str> = all_tags.iter().map(|s| s.as_str()).collect();
     git::push_tags(&workspace.root, &tag_refs, &remote)?;
     for tag in &all_tags {
@@ -226,11 +231,67 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     Ok(())
 }
 
-/// Run preflight safety checks before publishing
-///
-/// Returns the remote name that main is tracking
+fn rollback(repo_root: &Path, tags: &[String], reset_to: Option<&String>) -> Result<()> {
+    println!("Rolling back...");
+    let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
+    let _ = git::delete_tags(repo_root, &tag_refs);
+    println!("  Deleted {} local tag(s)", tags.len());
+    if let Some(commit) = reset_to {
+        git::reset_hard(repo_root, commit)?;
+        println!("  Reset to initial commit");
+    }
+    println!("{}", "Publish cancelled".yellow());
+    Ok(())
+}
+
+fn print_blocking_info(
+    remaining: &HashSet<String>,
+    pkg_by_url: &HashMap<&str, &PackageInfo>,
+    root: &Path,
+) {
+    println!();
+    println!("{}", "No packages can be published yet.".yellow());
+    println!("All dirty packages depend on other dirty/unpublished packages.");
+    println!();
+    println!("Dirty packages and their blocking dependencies:");
+    for url in remaining {
+        if let Some(pkg) = pkg_by_url.get(url.as_str()) {
+            let blocking: Vec<_> = pkg
+                .dependencies
+                .iter()
+                .filter(|d| remaining.contains(*d))
+                .collect();
+            if !blocking.is_empty() {
+                let rel = pkg.path.strip_prefix(root).unwrap_or(&pkg.path);
+                println!("  {} blocked by:", rel.display());
+                for dep in blocking {
+                    println!("    - {}", dep);
+                }
+            }
+        }
+    }
+}
+
+fn print_candidate(c: &PublishCandidate, root: &Path) {
+    let rel = c.pkg.path.strip_prefix(root).unwrap_or(&c.pkg.path);
+    let path_display = if rel.as_os_str().is_empty() {
+        "(root)".to_string()
+    } else {
+        rel.display().to_string()
+    };
+    let version_str = match &c.pkg.latest_version {
+        Some(v) => format!("{} → {}", v, c.next_version),
+        None => format!("{} (initial)", c.next_version),
+    };
+    println!(
+        "  {}: {} [{}]",
+        path_display,
+        version_str.green(),
+        c.tag_name.cyan()
+    );
+}
+
 fn preflight_checks(repo_root: &Path) -> Result<String> {
-    // 1. Check for uncommitted changes
     if git::has_uncommitted_changes(repo_root)? {
         bail!(
             "Working directory has uncommitted changes.\n\
@@ -238,9 +299,9 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
         );
     }
 
-    // 2. Check we're on the main branch
-    let current_branch = git::symbolic_ref_short_head(repo_root)
-        .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing."))?;
+    let current_branch = git::symbolic_ref_short_head(repo_root).ok_or_else(|| {
+        anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
+    })?;
 
     if current_branch != "main" {
         bail!(
@@ -251,7 +312,6 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
         );
     }
 
-    // 3. Get the remote that main is tracking
     let remote = git::get_branch_remote(repo_root, "main").ok_or_else(|| {
         anyhow::anyhow!(
             "Branch 'main' is not tracking a remote.\n\
@@ -262,16 +322,11 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
     let local_sha = git::rev_parse(repo_root, "HEAD")
         .ok_or_else(|| anyhow::anyhow!("Failed to get HEAD commit"))?;
 
-    println!(
-        "{} on main @ {}",
-        "✓".green(),
-        &local_sha[..8]
-    );
+    println!("{} on main @ {}", "✓".green(), &local_sha[..8]);
 
     Ok(remote)
 }
 
-/// Build publish candidates with computed versions and hashes
 fn build_publish_candidates<'a>(
     packages: &[&'a PackageInfo],
     workspace: &V2Workspace,
@@ -282,7 +337,6 @@ fn build_publish_candidates<'a>(
             let next_version = compute_next_version(pkg);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
-            // Reuse hashes from PackageInfo if available, otherwise compute
             let content_hash = pkg
                 .content_hash
                 .clone()
@@ -305,45 +359,54 @@ fn build_publish_candidates<'a>(
         .collect()
 }
 
-/// Compute next version for a package
-///
-/// - Unpublished: 0.1.0
-/// - Published: major version bump (0.x.y → 0.(x+1).0, N.x.y → (N+1).0.0 for N≥1)
 fn compute_next_version(pkg: &PackageInfo) -> Version {
     match &pkg.latest_version {
         None => Version::new(0, 1, 0),
         Some(v) => {
             let current = Version::parse(v).unwrap_or_else(|_| Version::new(0, 0, 0));
             if current.major == 0 {
-                // 0.x.y → 0.(x+1).0
                 Version::new(0, current.minor + 1, 0)
             } else {
-                // N.x.y → (N+1).0.0
                 Version::new(current.major + 1, 0, 0)
             }
         }
     }
 }
 
-/// Compute tag name for a package
 fn compute_tag_name(pkg: &PackageInfo, version: &Version, workspace: &V2Workspace) -> String {
     let rel_path = pkg.path.strip_prefix(&workspace.root).ok();
     let prefix = compute_tag_prefix(rel_path, &workspace.path);
     format!("{}{}", prefix, version)
 }
 
-/// Format tag message with hashes (pcb.sum format)
 fn format_tag_message(candidate: &PublishCandidate) -> String {
-    let module_path = &candidate.pkg.url;
-    let version = &candidate.next_version;
-
     format!(
         "{} v{} {}\n{} v{}/pcb.toml {}",
-        module_path,
-        version,
+        candidate.pkg.url,
+        candidate.next_version,
         candidate.content_hash,
-        module_path,
-        version,
+        candidate.pkg.url,
+        candidate.next_version,
         candidate.manifest_hash
     )
+}
+
+fn bump_dependency_versions(pcb_toml_path: &Path, updates: &HashMap<&str, &Version>) -> Result<()> {
+    let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
+    let mut changed = false;
+
+    for (dep_url, new_version) in updates {
+        if config.dependencies.contains_key(*dep_url) {
+            config.dependencies.insert(
+                dep_url.to_string(),
+                DependencySpec::Version(new_version.to_string()),
+            );
+            changed = true;
+        }
+    }
+
+    if changed {
+        std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
+    }
+    Ok(())
 }

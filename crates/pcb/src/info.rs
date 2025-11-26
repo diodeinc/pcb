@@ -126,13 +126,7 @@ fn print_v2_human_readable(ws: &V2Workspace) {
                     })
                     .unwrap_or_else(|| "?.zen".to_string());
 
-                // Version display with dirty indicator after (only if published)
-                // Use board's own version/dirty (from <board_name>/v<version> tags)
-                let version_str = match (&board.version, board.dirty) {
-                    (Some(v), true) => format!("{}{}", format!("(v{})", v).green(), "*".red()),
-                    (Some(v), false) => format!("(v{})", v).green().to_string(),
-                    (None, _) => "(unpublished)".yellow().to_string(),
-                };
+                let version_str = format_version(&board.version, board.dirty, pkg.transitive_dirty);
 
                 println!("  {} {} - {}", board.name.bold(), version_str, zen_path);
 
@@ -183,12 +177,7 @@ fn print_package_line(pkg: &PackageInfo, ws: &V2Workspace) {
             })
     };
 
-    // Version display with dirty indicator after (only if published)
-    let version_str = match (&pkg.latest_version, pkg.dirty) {
-        (Some(v), true) => format!("{}{}", format!("(v{})", v).green(), "*".red()),
-        (Some(v), false) => format!("(v{})", v).green().to_string(),
-        (None, _) => "(unpublished)".yellow().to_string(),
-    };
+    let version_str = format_version(&pkg.latest_version, pkg.dirty, pkg.transitive_dirty);
 
     // Relative path from workspace root
     let rel_path = pkg
@@ -304,4 +293,15 @@ fn print_json<T: Serialize>(info: &T) -> Result<()> {
     let json = serde_json::to_string_pretty(info)?;
     println!("{json}");
     Ok(())
+}
+
+/// Format version string with dirty indicators
+/// Red * = directly dirty, Yellow * = transitive dirty
+fn format_version(version: &Option<String>, dirty: bool, transitive_dirty: bool) -> String {
+    match (version, dirty, transitive_dirty) {
+        (Some(v), true, _) => format!("{}{}", format!("(v{})", v).green(), "*".red()),
+        (Some(v), false, true) => format!("{}{}", format!("(v{})", v).green(), "*".yellow()),
+        (Some(v), false, false) => format!("(v{})", v).green().to_string(),
+        (None, _, _) => "(unpublished)".yellow().to_string(),
+    }
 }

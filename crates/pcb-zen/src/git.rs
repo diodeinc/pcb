@@ -362,3 +362,73 @@ pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Res
         ))
     }
 }
+
+/// Stage all changes and create a commit
+///
+/// Returns the commit SHA on success
+pub fn commit(repo_root: &Path, message: &str) -> anyhow::Result<String> {
+    // Stage all changes
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("add")
+        .arg("-A")
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to stage changes"));
+    }
+
+    // Create commit
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("commit")
+        .arg("-m")
+        .arg(message)
+        .stdout(std::process::Stdio::null())
+        .status()?;
+
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to create commit"));
+    }
+
+    // Return the commit SHA
+    rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
+}
+
+/// Reset to a specific commit (hard reset)
+pub fn reset_hard(repo_root: &Path, commit: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("reset")
+        .arg("--hard")
+        .arg(commit)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Failed to reset to {}", commit))
+    }
+}
+
+/// Push a branch to a remote
+pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("push")
+        .arg(remote)
+        .arg(branch)
+        .status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("Failed to push {} to {}", branch, remote))
+    }
+}
