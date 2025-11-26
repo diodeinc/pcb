@@ -5,6 +5,8 @@ use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::file_walker::skip_vendor;
+
 /// Detect git repository URL from the current branch's tracking remote
 fn detect_repository(workspace_root: &Path) -> Result<String> {
     // Try to get the current branch's upstream
@@ -139,6 +141,7 @@ pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<(String, Option<
         .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
+        .filter_entry(skip_vendor)
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -200,6 +203,7 @@ fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result
             .hidden(true)
             .git_ignore(true)
             .git_exclude(true)
+            .filter_entry(skip_vendor)
             .build();
 
         for entry in walker.filter_map(|e| e.ok()) {
