@@ -1006,7 +1006,6 @@ All tags are created locally first, then pushed in a single batch after confirma
 1. **Pre-flight Checks:**
    - Working directory is clean (no uncommitted changes)
    - Current branch is `main`
-   - Local `main` is in sync with remote (fetches and compares HEAD)
 
 2. **Discovery:**
    - Detects V2 workspace and all member packages
@@ -1048,5 +1047,4 @@ Dirty packages and their blocking dependencies:
 ### Remaining V2 Tasks
 
 - Auto-detect dependencies from `load()` statements
-- `pcb build` auto-sorts dependencies and assets in `pcb.toml`
 - Board publishing workflow (separate from package publishing)
