@@ -23,6 +23,10 @@ pub struct PublishArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Only publish the first wave of packages without cascading updates
+    #[arg(long)]
+    pub no_cascade: bool,
+
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -115,9 +119,14 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             print_candidate(c, &workspace.root);
         }
 
-        let published_versions: HashMap<&str, &Version> = candidates
+        let published_versions: HashMap<&str, (Option<&str>, &Version)> = candidates
             .iter()
-            .map(|c| (c.pkg.url.as_str(), &c.next_version))
+            .map(|c| {
+                (
+                    c.pkg.url.as_str(),
+                    (c.pkg.latest_version.as_deref(), &c.next_version),
+                )
+            })
             .collect();
 
         for c in &candidates {
@@ -146,7 +155,9 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         }
 
         if args.dry_run {
-            // Add dependants to remaining_dirty for next wave simulation
+            if args.no_cascade {
+                break;
+            }
             for pkg in &dependants {
                 remaining_dirty.insert(pkg.url.clone());
             }
@@ -158,22 +169,19 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(c))?;
         }
 
-        // Update pcb.toml files and commit
+        if args.no_cascade {
+            break;
+        }
+
+        // Update pcb.toml files and commit for cascade mode
         if !dependants.is_empty() {
             for pkg in &dependants {
                 bump_dependency_versions(&pkg.path.join("pcb.toml"), &published_versions)?;
                 remaining_dirty.insert(pkg.url.clone());
             }
 
-            let names: Vec<_> = dependants
-                .iter()
-                .filter_map(|p| p.path.file_name())
-                .map(|n| n.to_string_lossy())
-                .collect();
-            git::commit(
-                &workspace.root,
-                &format!("Bump dependency versions: {}", names.join(", ")),
-            )?;
+            let commit_msg = format_dependency_bump_commit(&dependants, &published_versions);
+            git::commit_with_trailers(&workspace.root, &commit_msg)?;
             made_commits = true;
         }
     }
@@ -391,11 +399,63 @@ fn format_tag_message(candidate: &PublishCandidate) -> String {
     )
 }
 
-fn bump_dependency_versions(pcb_toml_path: &Path, updates: &HashMap<&str, &Version>) -> Result<()> {
+fn format_dependency_bump_commit(
+    dependants: &[&PackageInfo],
+    updates: &HashMap<&str, (Option<&str>, &Version)>,
+) -> String {
+    let mut pkg_names: Vec<_> = dependants
+        .iter()
+        .filter_map(|p| p.path.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect();
+    pkg_names.sort();
+
+    let title = format!("Bump dependency versions: {}", pkg_names.join(", "));
+
+    // Collect only deps that were actually updated in these dependants
+    let mut actual_updates: Vec<(&str, Option<&str>, &Version)> = updates
+        .iter()
+        .filter(|(url, _)| {
+            dependants
+                .iter()
+                .any(|pkg| pkg.dependencies.iter().any(|d| d == **url))
+        })
+        .map(|(url, (old, new))| (*url, *old, *new))
+        .collect();
+    actual_updates.sort_by_key(|(url, _, _)| *url);
+
+    // Body: list each dependency that was bumped
+    let mut body = String::from("\n");
+    for (dep_url, old_version, new_version) in actual_updates {
+        // Extract readable path from URL (e.g., "github.com/org/repo/modules/basic" -> "modules/basic")
+        let dep_path = dep_url
+            .split('/')
+            .skip(3) // skip github.com/org/repo
+            .collect::<Vec<_>>()
+            .join("/");
+        let display = if dep_path.is_empty() {
+            dep_url
+        } else {
+            &dep_path
+        };
+
+        match old_version {
+            Some(old) => body.push_str(&format!("{}: {} → {}\n", display, old, new_version)),
+            None => body.push_str(&format!("{} → {}\n", display, new_version)),
+        }
+    }
+
+    format!("{}\n{}", title, body)
+}
+
+fn bump_dependency_versions(
+    pcb_toml_path: &Path,
+    updates: &HashMap<&str, (Option<&str>, &Version)>,
+) -> Result<()> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut changed = false;
 
-    for (dep_url, new_version) in updates {
+    for (dep_url, (_, new_version)) in updates {
         if config.dependencies.contains_key(*dep_url) {
             config.dependencies.insert(
                 dep_url.to_string(),
