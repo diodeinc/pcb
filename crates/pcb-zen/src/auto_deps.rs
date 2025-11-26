@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
@@ -7,8 +7,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::ast_utils::visit_string_literals;
-use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, PcbToml};
+use crate::ast_utils::{skip_vendor, visit_string_literals};
+use crate::remote_discovery::{
+    find_matching_lockfile_entry, find_matching_remote_package, RemoteIndexCache,
+};
+use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, Lockfile, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 
 /// Known alias mappings: (alias, url, version, is_asset)
@@ -34,6 +37,8 @@ pub struct AutoDepsSummary {
     pub versions_corrected: usize,
     pub packages_updated: usize,
     pub unknown_aliases: Vec<(PathBuf, Vec<String>)>,
+    pub unknown_urls: Vec<(PathBuf, Vec<String>)>,
+    pub discovered_remote: usize,
 }
 
 #[derive(Debug, Default)]
@@ -44,17 +49,27 @@ struct CollectedImports {
 
 /// Scan workspace for .zen files and auto-add missing dependencies to pcb.toml files
 ///
+/// Resolution order for URL imports:
+/// 1. Workspace members (local packages)
+/// 2. Lockfile entries (pcb.sum) - fast path, no git operations
+/// 3. Remote package discovery (git tags) - slow path, cached per repo
+///
 /// `workspace_members` maps module_path -> latest published version (or DEFAULT_VERSION if unpublished)
 pub fn auto_add_zen_deps(
     workspace_root: &Path,
     workspace_members: &HashMap<String, String>,
+    lockfile: Option<&Lockfile>,
 ) -> Result<AutoDepsSummary> {
     let package_imports = collect_imports_by_package(workspace_root)?;
     let mut summary = AutoDepsSummary::default();
 
+    // Cache for remote package discovery (shared across all packages)
+    let mut remote_cache = RemoteIndexCache::new();
+
     for (pcb_toml_path, imports) in package_imports {
         let mut deps_to_add: Vec<(String, String, bool)> = Vec::new();
         let mut unknown_aliases: Vec<String> = Vec::new();
+        let mut unknown_urls: Vec<String> = Vec::new();
 
         // Process @alias imports
         for alias in &imports.aliases {
@@ -67,12 +82,38 @@ pub fn auto_add_zen_deps(
             }
         }
 
-        // Process URL imports - add workspace member deps with their latest version
+        // Process URL imports with 3-tier resolution
         for url in &imports.urls {
+            // 1. Try workspace members first (local packages)
             if let Some((package_url, version)) =
                 find_matching_workspace_member(url, workspace_members)
             {
                 deps_to_add.push((package_url, version, false));
+                continue;
+            }
+
+            // 2. Try lockfile (fast path - no git operations)
+            if let Some(lf) = lockfile {
+                if let Some((module_path, version)) = find_matching_lockfile_entry(url, lf) {
+                    deps_to_add.push((module_path, version, false));
+                    continue;
+                }
+            }
+
+            // 3. Try remote package discovery (slow path - cached per repo)
+            match find_matching_remote_package(url, &mut remote_cache) {
+                Ok(Some((module_path, version))) => {
+                    deps_to_add.push((module_path, version, false));
+                    summary.discovered_remote += 1;
+                }
+                Ok(None) => {
+                    unknown_urls.push(url.clone());
+                }
+                Err(e) => {
+                    // Network/git error - report but don't fail the build
+                    eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
+                    unknown_urls.push(url.clone());
+                }
             }
         }
 
@@ -80,6 +121,12 @@ pub fn auto_add_zen_deps(
             summary
                 .unknown_aliases
                 .push((pcb_toml_path.clone(), unknown_aliases));
+        }
+
+        if !unknown_urls.is_empty() {
+            summary
+                .unknown_urls
+                .push((pcb_toml_path.clone(), unknown_urls));
         }
 
         let (added, corrected) =
@@ -129,6 +176,7 @@ fn collect_imports_by_package(workspace_root: &Path) -> Result<HashMap<PathBuf, 
         .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
+        .filter_entry(skip_vendor)
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -141,7 +189,8 @@ fn collect_imports_by_package(workspace_root: &Path) -> Result<HashMap<PathBuf, 
             continue;
         };
 
-        let content = std::fs::read_to_string(path)?;
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
         let Some((aliases, urls)) = extract_imports(&content) else {
             eprintln!("  Warning: Failed to parse {}", path.display());
             continue;
