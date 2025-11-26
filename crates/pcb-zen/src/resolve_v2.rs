@@ -1562,20 +1562,6 @@ fn build_workspace_members(
     members
 }
 
-/// Check if a directory is a package root (has V2 pcb.toml)
-fn is_package_dir(dir: &Path) -> bool {
-    let pcb_toml = dir.join("pcb.toml");
-    if !pcb_toml.is_file() {
-        return false;
-    }
-
-    let file_provider = DefaultFileProvider::new();
-    matches!(
-        PcbToml::from_file(&file_provider, &pcb_toml),
-        Ok(ref config) if config.is_v2()
-    )
-}
-
 /// Create a canonical, deterministic tar archive from a directory
 ///
 /// Rules from packaging.md:
@@ -1618,7 +1604,7 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
             // and it's not the root we're packaging, exclude it and its entire subtree
             if entry.file_type().is_some_and(|ft| ft.is_dir())
                 && path != package_root
-                && is_package_dir(path)
+                && path.join("pcb.toml").is_file()
             {
                 return false; // Prune this entire subtree
             }
