@@ -137,15 +137,40 @@ fn resolve_dependencies(
     let workspace_member_versions =
         build_workspace_member_versions(&initial_config, workspace_root, &member_dirs);
 
+    // Load existing lockfile if present (needed for auto-deps fast path)
+    let lockfile_path = workspace_root.join("pcb.sum");
+    let existing_lockfile = if lockfile_path.exists() {
+        println!("Loading pcb.sum...");
+        let content = std::fs::read_to_string(&lockfile_path)?;
+        let lockfile = Lockfile::parse(&content)?;
+        println!("  Loaded lockfile");
+        Some(lockfile)
+    } else {
+        println!("No pcb.sum found (will be created)");
+        None
+    };
+
     // Phase -1: Auto-add missing dependencies from .zen files
     println!("\nPhase -1: Auto-detecting dependencies from .zen files");
-    let auto_deps =
-        crate::auto_deps::auto_add_zen_deps(workspace_root, &workspace_member_versions)?;
-    if auto_deps.total_added > 0 || auto_deps.versions_corrected > 0 {
+    let auto_deps = crate::auto_deps::auto_add_zen_deps(
+        workspace_root,
+        &workspace_member_versions,
+        existing_lockfile.as_ref(),
+    )?;
+    if auto_deps.total_added > 0
+        || auto_deps.versions_corrected > 0
+        || auto_deps.discovered_remote > 0
+    {
         if auto_deps.total_added > 0 {
             println!(
                 "  Auto-added {} dependencies across {} package(s)",
                 auto_deps.total_added, auto_deps.packages_updated
+            );
+        }
+        if auto_deps.discovered_remote > 0 {
+            println!(
+                "  Discovered {} remote package(s) via git tags",
+                auto_deps.discovered_remote
             );
         }
         if auto_deps.versions_corrected > 0 {
@@ -163,6 +188,12 @@ fn resolve_dependencies(
             eprintln!("      @{}", alias);
         }
     }
+    for (path, urls) in &auto_deps.unknown_urls {
+        eprintln!("  ⊙ {} has unknown remote URLs:", path.display());
+        for url in urls {
+            eprintln!("      {}", url);
+        }
+    }
 
     // Re-read workspace config (auto-deps may have modified it)
     let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
@@ -176,19 +207,6 @@ fn resolve_dependencies(
             pcb_toml_path.display()
         );
     }
-
-    // Load existing lockfile if present
-    let lockfile_path = workspace_root.join("pcb.sum");
-    let existing_lockfile = if lockfile_path.exists() {
-        println!("Loading pcb.sum...");
-        let content = std::fs::read_to_string(&lockfile_path)?;
-        let lockfile = Lockfile::parse(&content)?;
-        println!("  Loaded lockfile");
-        Some(lockfile)
-    } else {
-        println!("No pcb.sum found (will be created)");
-        None
-    };
 
     // Build workspace members: URL -> (dir, config)
     // Includes ALL member directories (empty pcb.toml inherits V2 from workspace root)
