@@ -360,13 +360,14 @@ fn resolve_dependencies(
             iterations, line.path, version, line.family
         );
 
-        // Fetch the manifest for this version (workspace members + patches applied inside)
-        match fetch_manifest(
+        // Fetch the package for this version (workspace members + patches applied inside)
+        match fetch_package(
             workspace_root,
             &line.path,
             &version,
             &patches,
             &workspace_members,
+            existing_lockfile.as_ref(),
         ) {
             Ok(manifest) => {
                 if !manifest.dependencies.is_empty() {
@@ -440,9 +441,7 @@ fn resolve_dependencies(
         println!("No assets");
     }
 
-    // Phase 3: Fetch full repository contents for the build set
-    println!("\nPhase 3: Fetching full repository contents");
-    fetch_full_contents(workspace_root, &build_set, existing_lockfile.as_ref())?;
+    // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
     // Phase 4: Update lockfile with cryptographic hashes
     println!("\nPhase 4: Updating lockfile");
@@ -962,13 +961,17 @@ fn collect_and_fetch_assets(
     Ok(asset_set)
 }
 
-/// Fetch a manifest (both dependencies and assets) from Git using sparse checkout
-fn fetch_manifest(
+/// Fetch a package from Git using sparse checkout
+///
+/// Fetches all package files, computes content/manifest hashes, and caches locally.
+/// Returns the package manifest for dependency resolution.
+fn fetch_package(
     workspace_root: &Path,
     module_path: &str,
     version: &Version,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
     workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
+    lockfile: Option<&Lockfile>,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
     if let Some((_member_dir, member_v2)) = workspace_members.get(module_path) {
@@ -995,13 +998,34 @@ fn fetch_manifest(
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let cache_base = home.join(".pcb").join("cache");
     let checkout_dir = cache_base.join(module_path).join(version.to_string());
+    let cache_marker = checkout_dir.join(".pcbcache");
 
-    // Use sparse checkout to fetch the module (shared with Phase 3)
+    // Check cache: if .pcbcache exists and matches lockfile, skip fetch
+    match decide_cache_usage(&checkout_dir, &cache_marker, lockfile, module_path, version)? {
+        CacheDecision::Use => {
+            let pcb_toml_path = checkout_dir.join("pcb.toml");
+            return read_manifest_from_path(&pcb_toml_path, module_path);
+        }
+        CacheDecision::Fetch => {}
+    }
+
+    // Fetch via sparse checkout
     println!("        Cloning (sparse checkout)");
-
     let package_root =
         ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string(), true)?;
     let pcb_toml_path = package_root.join("pcb.toml");
+
+    // Compute and store hashes (previously done in Phase 3)
+    print!("        Computing hashes... ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+
+    let content_hash = compute_content_hash_from_dir(&package_root)?;
+    let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
+    let manifest_hash = compute_manifest_hash(&manifest_content);
+
+    let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
+    std::fs::write(&cache_marker, marker_content)?;
+    println!("done");
 
     // Read the manifest
     read_manifest_from_path(&pcb_toml_path, module_path)
@@ -1737,59 +1761,6 @@ pub fn compute_manifest_hash(manifest_content: &str) -> String {
     let hash = blake3::hash(manifest_content.as_bytes());
 
     format!("h1:{}", STANDARD.encode(hash.as_bytes()))
-}
-
-/// Fetch full repository contents for all dependencies in the build set
-///
-/// Computes content and manifest hashes and stores them in .pcbcache marker.
-/// If lockfile is provided, verifies cached content against locked hashes.
-fn fetch_full_contents(
-    _workspace_root: &Path,
-    build_set: &HashSet<(ModuleLine, Version)>,
-    lockfile: Option<&Lockfile>,
-) -> Result<()> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    println!("  Fetching {} dependencies...", build_set.len());
-
-    for (line, version) in build_set {
-        let cache_dir = home
-            .join(".pcb")
-            .join("cache")
-            .join(&line.path)
-            .join(version.to_string());
-
-        let cache_marker = cache_dir.join(".pcbcache");
-
-        let decision =
-            decide_cache_usage(&cache_dir, &cache_marker, lockfile, &line.path, version)?;
-
-        if let CacheDecision::Use = decision {
-            continue;
-        } else {
-            // Cache miss - fetch and hash
-            println!("    {}@v{}...", line.path, version);
-
-            let package_root =
-                ensure_sparse_checkout(&cache_dir, &line.path, &version.to_string(), true)?;
-
-            print!("      Computing hashes... ");
-            std::io::Write::flush(&mut std::io::stdout())?;
-
-            let content_hash = compute_content_hash_from_dir(&package_root)?;
-
-            let pcb_toml_path = package_root.join("pcb.toml");
-            let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
-            let manifest_hash = compute_manifest_hash(&manifest_content);
-
-            let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
-            std::fs::write(&cache_marker, marker_content)?;
-
-            println!("done");
-        }
-    }
-
-    Ok(())
 }
 
 /// Ensure sparse-checkout working tree for a module at specific version
