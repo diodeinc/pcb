@@ -6,6 +6,7 @@ use std::sync::Arc;
 mod alias_expansion;
 mod escape_paths;
 mod manifest;
+mod path_correction;
 mod zen_paths;
 
 pub fn migrate_to_v2(paths: &[PathBuf]) -> Result<()> {
@@ -37,6 +38,10 @@ pub fn migrate_to_v2(paths: &[PathBuf]) -> Result<()> {
     // Phase 5: Expand hardcoded aliases (@registry -> github.com/diodeinc/registry)
     eprintln!("\nPhase 5: Expanding hardcoded aliases");
     alias_expansion::expand_aliases(&workspace_root)?;
+
+    // Phase 6: Correct stale registry paths
+    eprintln!("\nPhase 6: Correcting stale registry paths");
+    path_correction::correct_paths(&workspace_root)?;
 
     eprintln!("\n✓ Migration to V2 complete");
     eprintln!("  Review changes with: git diff");
