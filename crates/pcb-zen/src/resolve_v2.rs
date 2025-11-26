@@ -4,10 +4,12 @@ use pcb_zen_core::config::{
     find_workspace_root, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
+use rayon::prelude::*;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
 
 use crate::workspace::{build_workspace_member_versions, discover_member_dirs};
@@ -314,7 +316,7 @@ fn resolve_dependencies(
         }
     }
 
-    // Seed MVS state
+    // Seed MVS state from direct dependencies
     for (_package_name, package_deps) in &packages_with_deps {
         for dep in package_deps {
             if let DependencySpec::Detailed(detail) = &dep.spec {
@@ -340,74 +342,111 @@ fn resolve_dependencies(
         }
     }
 
-    println!("\nPhase 1: Discovery + MVS fixed point");
-    println!("Initial work queue: {} modules", work_queue.len());
-    println!();
+    println!("\nPhase 1: Parallel dependency resolution");
 
-    // Phase 1: Iteratively fetch manifests and discover transitive dependencies
-    let mut iterations = 0;
-    while let Some(line) = work_queue.pop_front() {
-        iterations += 1;
-        let version = selected[&line].clone();
+    // Wave-based parallel fetching with MVS
+    let phase1_start = Instant::now();
+    let mut wave_num = 0;
+    let mut total_fetched = 0;
 
-        // Check if we already fetched this exact version
-        if manifest_cache.contains_key(&(line.clone(), version.clone())) {
-            continue;
+    loop {
+        // Collect current wave: packages in queue that haven't been fetched yet
+        let wave: Vec<_> = work_queue
+            .drain(..)
+            .filter_map(|line| {
+                let version = selected.get(&line)?.clone();
+                if manifest_cache.contains_key(&(line.clone(), version.clone())) {
+                    None
+                } else {
+                    Some((line, version))
+                }
+            })
+            .collect();
+
+        if wave.is_empty() {
+            break;
         }
 
-        println!(
-            "  [{}] Fetching {}@v{} ({})",
-            iterations, line.path, version, line.family
-        );
+        wave_num += 1;
+        let wave_start = Instant::now();
+        println!("  Wave {}: {} packages", wave_num, wave.len());
 
-        // Fetch the package for this version (workspace members + patches applied inside)
-        match fetch_package(
-            workspace_root,
-            &line.path,
-            &version,
-            &patches,
-            &workspace_members,
-            existing_lockfile.as_ref(),
-        ) {
-            Ok(manifest) => {
-                if !manifest.dependencies.is_empty() {
-                    println!("      Found {} dependencies", manifest.dependencies.len());
+        // Parallel fetch all packages in this wave
+        let results: Vec<_> = wave
+            .par_iter()
+            .map(|(line, version)| {
+                let result = fetch_package(
+                    workspace_root,
+                    &line.path,
+                    version,
+                    &patches,
+                    &workspace_members,
+                );
+                (line.clone(), version.clone(), result)
+            })
+            .collect();
+
+        // Process results sequentially (MVS requires single-threaded updates)
+        let mut new_deps = 0;
+        for (line, version, result) in results {
+            total_fetched += 1;
+            match result {
+                Ok(manifest) => {
+                    manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
+
+                    for (dep_path, dep_spec) in &manifest.dependencies {
+                        if is_non_version_dep(dep_spec) {
+                            continue;
+                        }
+
+                        match resolve_to_version(dep_path, dep_spec, existing_lockfile.as_ref()) {
+                            Ok(dep_version) => {
+                                let before = work_queue.len();
+                                add_requirement(
+                                    dep_path.clone(),
+                                    dep_version,
+                                    &mut selected,
+                                    &mut work_queue,
+                                    &patches,
+                                );
+                                if work_queue.len() > before {
+                                    new_deps += 1;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("    Warning: Failed to resolve {}: {}", dep_path, e);
+                            }
+                        }
+                    }
                 }
-
-                // Cache the manifest
-                manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
-
-                // Add requirements from this manifest
-                for (dep_path, dep_spec) in &manifest.dependencies {
-                    // Skip local path dependencies
-                    if is_non_version_dep(dep_spec) {
-                        continue;
-                    }
-
-                    match resolve_to_version(dep_path, dep_spec, existing_lockfile.as_ref()) {
-                        Ok(dep_version) => {
-                            println!("        requires {}@v{}", dep_path, dep_version);
-                            add_requirement(
-                                dep_path.clone(),
-                                dep_version,
-                                &mut selected,
-                                &mut work_queue,
-                                &patches,
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("        Warning: Failed to resolve {}: {}", dep_path, e);
-                        }
-                    }
+                Err(e) => {
+                    eprintln!(
+                        "    Warning: Failed to fetch {}@v{}: {}",
+                        line.path, version, e
+                    );
                 }
             }
-            Err(e) => {
-                eprintln!("      Warning: {}", e);
-            }
+        }
+
+        let wave_elapsed = wave_start.elapsed();
+        if new_deps > 0 {
+            println!(
+                "    Fetched in {:.1}s, discovered {} new dependencies",
+                wave_elapsed.as_secs_f64(),
+                new_deps
+            );
+        } else {
+            println!("    Fetched in {:.1}s", wave_elapsed.as_secs_f64());
         }
     }
 
-    println!("\nFixed point reached after {} iterations", iterations);
+    let phase1_elapsed = phase1_start.elapsed();
+    println!(
+        "\n  Resolved {} packages in {} waves ({:.1}s)",
+        total_fetched,
+        wave_num,
+        phase1_elapsed.as_secs_f64()
+    );
 
     println!("\nPhase 2: Build closure");
     println!();
@@ -795,67 +834,6 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
-/// Cache decision for dependency fetching
-enum CacheDecision {
-    Fetch,
-    Use,
-}
-
-/// Decide whether to fetch or use cached dependency
-fn decide_cache_usage(
-    cache_dir: &Path,
-    cache_marker: &Path,
-    lockfile: Option<&Lockfile>,
-    module_path: &str,
-    version: &Version,
-) -> Result<CacheDecision> {
-    // No cache marker -> fetch
-    if !cache_marker.exists() {
-        return Ok(CacheDecision::Fetch);
-    }
-
-    // No lockfile -> trust cache
-    let Some(lockfile) = lockfile else {
-        println!("    {}@v{} (cached)", module_path, version);
-        return Ok(CacheDecision::Use);
-    };
-
-    // Lockfile present but no entry -> trust cache
-    let Some(locked_entry) = lockfile.get(module_path, &version.to_string()) else {
-        println!("    {}@v{} (cached)", module_path, version);
-        return Ok(CacheDecision::Use);
-    };
-
-    // Verify hashes against lockfile
-    let marker_content = std::fs::read_to_string(cache_marker)?;
-    let mut lines = marker_content.lines();
-    let cached_content = lines.next().unwrap_or("");
-    let cached_manifest = lines.next();
-
-    if cached_content != locked_entry.content_hash {
-        println!(
-            "    {}@v{} (cache mismatch, re-fetching)",
-            module_path, version
-        );
-        std::fs::remove_dir_all(cache_dir)?;
-        return Ok(CacheDecision::Fetch);
-    }
-
-    if let (Some(cm), Some(lm)) = (cached_manifest, &locked_entry.manifest_hash) {
-        if cm != lm {
-            println!(
-                "    {}@v{} (manifest mismatch, re-fetching)",
-                module_path, version
-            );
-            std::fs::remove_dir_all(cache_dir)?;
-            return Ok(CacheDecision::Fetch);
-        }
-    }
-
-    println!("    {}@v{} (cached, verified)", module_path, version);
-    Ok(CacheDecision::Use)
-}
-
 /// Extract ref string from AssetDependencySpec
 ///
 /// Returns an error if the spec doesn't specify a version, branch, or rev (including HEAD)
@@ -971,11 +949,9 @@ fn fetch_package(
     version: &Version,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
     workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
-    lockfile: Option<&Lockfile>,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
     if let Some((_member_dir, member_v2)) = workspace_members.get(module_path) {
-        println!("      Using workspace member: {}", module_path);
         return Ok(PackageManifest::from_v2(member_v2));
     }
 
@@ -984,13 +960,11 @@ fn fetch_package(
         let patched_path = workspace_root.join(&patch.path);
         let patched_toml = patched_path.join("pcb.toml");
 
-        println!("      Using patched source: {}", patch.path);
-
         if !patched_toml.exists() {
             anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
         }
 
-        return read_manifest_from_path(&patched_toml, module_path);
+        return read_manifest_from_path(&patched_toml);
     }
 
     // Cache directory: ~/.pcb/cache/{module_path}/{version}/
@@ -1000,45 +974,34 @@ fn fetch_package(
     let checkout_dir = cache_base.join(module_path).join(version.to_string());
     let cache_marker = checkout_dir.join(".pcbcache");
 
-    // Check cache: if .pcbcache exists and matches lockfile, skip fetch
-    match decide_cache_usage(&checkout_dir, &cache_marker, lockfile, module_path, version)? {
-        CacheDecision::Use => {
-            let pcb_toml_path = checkout_dir.join("pcb.toml");
-            return read_manifest_from_path(&pcb_toml_path, module_path);
-        }
-        CacheDecision::Fetch => {}
+    // Fast path: .pcbcache marker is written AFTER successful checkout + hash computation,
+    // so its existence guarantees the package is fully fetched and valid
+    if cache_marker.exists() {
+        let pcb_toml_path = checkout_dir.join("pcb.toml");
+        return read_manifest_from_path(&pcb_toml_path);
     }
 
-    // Fetch via sparse checkout
-    println!("        Cloning (sparse checkout)");
+    // Slow path: fetch via sparse checkout
     let package_root =
         ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string(), true)?;
     let pcb_toml_path = package_root.join("pcb.toml");
 
-    // Compute and store hashes (previously done in Phase 3)
-    print!("        Computing hashes... ");
-    std::io::Write::flush(&mut std::io::stdout())?;
-
+    // Compute and store hashes
     let content_hash = compute_content_hash_from_dir(&package_root)?;
     let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
     let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
     std::fs::write(&cache_marker, marker_content)?;
-    println!("done");
 
     // Read the manifest
-    read_manifest_from_path(&pcb_toml_path, module_path)
+    read_manifest_from_path(&pcb_toml_path)
 }
 
 /// Read and parse a pcb.toml manifest (both dependencies and assets)
-fn read_manifest_from_path(pcb_toml_path: &Path, _module_path: &str) -> Result<PackageManifest> {
-    if !pcb_toml_path.exists() {
-        anyhow::bail!("Missing pcb.toml at {}", pcb_toml_path.display());
-    }
-
-    let file_provider = DefaultFileProvider::new();
-    let config = PcbToml::from_file(&file_provider, pcb_toml_path)?;
+fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
+    let content = std::fs::read_to_string(pcb_toml_path)?;
+    let config = PcbToml::parse(&content)?;
 
     match config {
         config if config.is_v2() => Ok(PackageManifest::from_v2(&config)),
@@ -2064,8 +2027,26 @@ fn update_lockfile(
             .to_string();
         let manifest_hash = lines.next().map(|s| s.to_string());
 
-        // Check if this is a new entry or update
-        let is_new = lockfile.get(&line.path, &version.to_string()).is_none();
+        // Check against existing lockfile entry
+        if let Some(existing) = lockfile.get(&line.path, &version.to_string()) {
+            // Verify hashes match
+            if existing.content_hash != content_hash {
+                anyhow::bail!(
+                    "Cache tampered: {}@v{} content hash mismatch\n  \
+                    Expected: {}\n  \
+                    Got: {}\n  \
+                    Run: rm -rf ~/.pcb/cache/{}",
+                    line.path,
+                    version,
+                    existing.content_hash,
+                    content_hash,
+                    line.path
+                );
+            }
+            updated_count += 1;
+        } else {
+            added_count += 1;
+        }
 
         lockfile.insert(LockEntry {
             module_path: line.path.clone(),
@@ -2073,14 +2054,6 @@ fn update_lockfile(
             content_hash,
             manifest_hash,
         });
-
-        if is_new {
-            added_count += 1;
-            println!("    {}@v{} (added)", line.path, version);
-        } else {
-            updated_count += 1;
-            println!("    {}@v{} (verified)", line.path, version);
-        }
     }
 
     // Process assets
@@ -2106,7 +2079,11 @@ fn update_lockfile(
         let manifest_hash = lines.next().map(|s| s.to_string());
 
         // Check if this is a new entry or update
-        let is_new = lockfile.get(module_path, ref_str).is_none();
+        if lockfile.get(module_path, ref_str).is_none() {
+            added_count += 1;
+        } else {
+            updated_count += 1;
+        }
 
         lockfile.insert(LockEntry {
             module_path: module_path.clone(),
@@ -2114,14 +2091,6 @@ fn update_lockfile(
             content_hash,
             manifest_hash,
         });
-
-        if is_new {
-            added_count += 1;
-            println!("    {}@{} (added)", module_path, ref_str);
-        } else {
-            updated_count += 1;
-            println!("    {}@{} (verified)", module_path, ref_str);
-        }
     }
 
     if added_count > 0 || updated_count > 0 {
