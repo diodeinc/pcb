@@ -234,7 +234,7 @@ pub struct Board {
 pub type BoardConfig = Board;
 
 /// V2 Dependency specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
     /// Simple version string (e.g., "0.3.2", "^0.3.2", "0")
@@ -245,7 +245,7 @@ pub enum DependencySpec {
 }
 
 /// V2 Detailed dependency specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DependencyDetail {
     /// Specific version requirement
     #[serde(skip_serializing_if = "Option::is_none")]
