@@ -175,14 +175,19 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
         // Update pcb.toml files and commit for cascade mode
         if !dependants.is_empty() {
+            let mut changed_pkgs: Vec<&PackageInfo> = Vec::new();
             for pkg in &dependants {
-                bump_dependency_versions(&pkg.path.join("pcb.toml"), &published_versions)?;
+                if bump_dependency_versions(&pkg.path.join("pcb.toml"), &published_versions)? {
+                    changed_pkgs.push(pkg);
+                }
                 remaining_dirty.insert(pkg.url.clone());
             }
 
-            let commit_msg = format_dependency_bump_commit(&dependants, &published_versions);
-            git::commit_with_trailers(&workspace.root, &commit_msg)?;
-            made_commits = true;
+            if !changed_pkgs.is_empty() {
+                let commit_msg = format_dependency_bump_commit(&changed_pkgs, &published_versions);
+                git::commit_with_trailers(&workspace.root, &commit_msg)?;
+                made_commits = true;
+            }
         }
     }
 
@@ -448,25 +453,26 @@ fn format_dependency_bump_commit(
     format!("{}\n{}", title, body)
 }
 
+/// Returns true if any changes were made
 fn bump_dependency_versions(
     pcb_toml_path: &Path,
     updates: &HashMap<&str, (Option<&str>, &Version)>,
-) -> Result<()> {
+) -> Result<bool> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut changed = false;
 
     for (dep_url, (_, new_version)) in updates {
-        if config.dependencies.contains_key(*dep_url) {
-            config.dependencies.insert(
-                dep_url.to_string(),
-                DependencySpec::Version(new_version.to_string()),
-            );
-            changed = true;
+        if let Some(existing) = config.dependencies.get(*dep_url) {
+            let new_spec = DependencySpec::Version(new_version.to_string());
+            if *existing != new_spec {
+                config.dependencies.insert(dep_url.to_string(), new_spec);
+                changed = true;
+            }
         }
     }
 
     if changed {
         std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
     }
-    Ok(())
+    Ok(changed)
 }
