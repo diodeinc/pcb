@@ -259,32 +259,13 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
         )
     })?;
 
-    // 4. Fetch latest from remote to compare
-    git::fetch_branch(repo_root, &remote, "main")?;
-
-    // 5. Check if local main is in sync with remote main
     let local_sha = git::rev_parse(repo_root, "HEAD")
         .ok_or_else(|| anyhow::anyhow!("Failed to get HEAD commit"))?;
-    let remote_sha = git::rev_parse(repo_root, &format!("{}/main", remote))
-        .ok_or_else(|| anyhow::anyhow!("Failed to get {}/main commit", remote))?;
-
-    if local_sha != remote_sha {
-        bail!(
-            "Local 'main' is not in sync with '{}/main'.\n\
-             Local:  {}\n\
-             Remote: {}\n\
-             Pull or push changes before publishing.",
-            remote,
-            &local_sha[..8],
-            &remote_sha[..8]
-        );
-    }
 
     println!(
-        "{} on main @ {} (in sync with {})",
+        "{} on main @ {}",
         "✓".green(),
-        &local_sha[..8],
-        remote
+        &local_sha[..8]
     );
 
     Ok(remote)
