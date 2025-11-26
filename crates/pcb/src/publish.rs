@@ -15,6 +15,7 @@ use semver::Version;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
+use rayon::prelude::*;
 
 #[derive(Args, Debug)]
 #[command(about = "Publish packages by creating version tags")]
@@ -345,7 +346,7 @@ fn build_publish_candidates<'a>(
     workspace: &V2Workspace,
 ) -> Result<Vec<PublishCandidate<'a>>> {
     packages
-        .iter()
+        .par_iter()
         .map(|pkg| {
             let next_version = compute_next_version(pkg);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);

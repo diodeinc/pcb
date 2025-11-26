@@ -3032,6 +3032,7 @@ dependencies = [
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
+ "rayon",
  "semver",
  "serde",
  "serde_json",
