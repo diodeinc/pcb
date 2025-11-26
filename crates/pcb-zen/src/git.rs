@@ -231,20 +231,33 @@ pub fn push_tags(repo_root: &Path, tag_names: &[&str], remote: &str) -> anyhow::
 
 /// Delete a local git tag
 pub fn delete_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
+    delete_tags(repo_root, &[tag_name])
+}
+
+/// Delete multiple local git tags in one command
+pub fn delete_tags(repo_root: &Path, tag_names: &[&str]) -> anyhow::Result<()> {
+    if tag_names.is_empty() {
+        return Ok(());
+    }
+
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo_root)
         .arg("tag")
         .arg("-d")
-        .arg(tag_name)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
+        .stderr(std::process::Stdio::null());
+
+    for tag in tag_names {
+        cmd.arg(tag);
+    }
+
+    let status = cmd.status()?;
 
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Git tag delete failed for {tag_name}"))
+        Err(anyhow::anyhow!("Git tag delete failed"))
     }
 }
 

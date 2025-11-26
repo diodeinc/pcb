@@ -10,7 +10,7 @@ use inquire::Confirm;
 use pcb_zen::workspace::{compute_tag_prefix, detect_v2_workspace, PackageInfo, V2Workspace};
 use pcb_zen::{git, resolve_v2};
 use semver::Version;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::Path;
 
@@ -40,7 +40,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         None => env::current_dir()?,
     };
 
-    // Detect V2 workspace
+    // Detect V2 workspace once (computes all content hashes upfront)
     let Some(workspace) = detect_v2_workspace(&start_path)? else {
         bail!("Not a V2 workspace. Publish requires [workspace] with resolver = \"2\"");
     };
@@ -60,124 +60,156 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Find dirty/unpublished packages
-    let dirty_packages: Vec<&PackageInfo> = all_packages
-        .iter()
-        .filter(|p| p.dirty)
-        .copied()
-        .collect();
-
-    if dirty_packages.is_empty() {
-        println!("{}", "All packages are up to date".green());
-        return Ok(());
-    }
-
-    println!(
-        "Found {} dirty/unpublished package(s)",
-        dirty_packages.len()
-    );
-
     // Build URL -> PackageInfo map for dependency lookups
     let pkg_by_url: HashMap<&str, &PackageInfo> =
         all_packages.iter().map(|p| (p.url.as_str(), *p)).collect();
 
-    // Find publishable packages (leaves in dependency DAG)
-    let publishable = find_publishable_packages(&dirty_packages, &pkg_by_url);
+    // Track remaining dirty packages by URL
+    let mut remaining_dirty: HashSet<&str> = all_packages
+        .iter()
+        .filter(|p| p.dirty)
+        .map(|p| p.url.as_str())
+        .collect();
 
-    if publishable.is_empty() {
-        println!();
-        println!(
-            "{}",
-            "No packages can be published yet.".yellow()
-        );
-        println!("All dirty packages depend on other dirty/unpublished packages.");
-        println!();
-        println!("Dirty packages and their blocking dependencies:");
-        for pkg in &dirty_packages {
-            let blocking: Vec<_> = pkg
-                .dependencies
-                .iter()
-                .filter_map(|dep_url| pkg_by_url.get(dep_url.as_str()))
-                .filter(|dep| dep.dirty)
-                .map(|dep| dep.url.as_str())
-                .collect();
-            if !blocking.is_empty() {
-                let rel_path = pkg
-                    .path
-                    .strip_prefix(&workspace.root)
-                    .unwrap_or(&pkg.path);
-                println!("  {} blocked by:", rel_path.display());
-                for dep in blocking {
-                    println!("    - {}", dep);
-                }
-            }
-        }
+    let initial_dirty_count = remaining_dirty.len();
+
+    if remaining_dirty.is_empty() {
+        println!("{}", "All packages are up to date".green());
         return Ok(());
     }
 
-    println!(
-        "{} package(s) can be published:",
-        publishable.len()
-    );
+    println!("Found {} dirty/unpublished package(s)", initial_dirty_count);
 
-    // Build publish candidates with computed versions and hashes
-    let candidates = build_publish_candidates(&publishable, &workspace)?;
+    // Accumulate all tags across waves
+    let mut all_tags: Vec<String> = Vec::new();
+    let mut wave = 0;
 
-    // Display what will be published
-    for candidate in &candidates {
-        let rel_path = candidate
-            .pkg
-            .path
-            .strip_prefix(&workspace.root)
-            .unwrap_or(&candidate.pkg.path);
-        let path_display = if rel_path.as_os_str().is_empty() {
-            "(root)".to_string()
-        } else {
-            rel_path.display().to_string()
-        };
-        let version_str = match &candidate.pkg.latest_version {
-            Some(v) => format!("{} → {}", v, candidate.next_version),
-            None => format!("{} (initial)", candidate.next_version),
-        };
-        println!(
-            "  {}: {} [{}]",
-            path_display,
-            version_str.green(),
-            candidate.tag_name.cyan()
-        );
+    loop {
+        wave += 1;
+
+        // Find publishable: dirty packages whose deps are all not in remaining_dirty
+        let publishable: Vec<&PackageInfo> = remaining_dirty
+            .iter()
+            .filter_map(|url| pkg_by_url.get(url).copied())
+            .filter(|pkg| {
+                !pkg.dependencies
+                    .iter()
+                    .any(|dep_url| remaining_dirty.contains(dep_url.as_str()))
+            })
+            .collect();
+
+        if publishable.is_empty() {
+            // No more packages can be published
+            if all_tags.is_empty() {
+                // First wave and nothing publishable - show blocking info
+                println!();
+                println!("{}", "No packages can be published yet.".yellow());
+                println!("All dirty packages depend on other dirty/unpublished packages.");
+                println!();
+                println!("Dirty packages and their blocking dependencies:");
+                for url in &remaining_dirty {
+                    if let Some(pkg) = pkg_by_url.get(url) {
+                        let blocking: Vec<_> = pkg
+                            .dependencies
+                            .iter()
+                            .filter(|dep_url| remaining_dirty.contains(dep_url.as_str()))
+                            .map(|s| s.as_str())
+                            .collect();
+                        if !blocking.is_empty() {
+                            let rel_path = pkg
+                                .path
+                                .strip_prefix(&workspace.root)
+                                .unwrap_or(&pkg.path);
+                            println!("  {} blocked by:", rel_path.display());
+                            for dep in blocking {
+                                println!("    - {}", dep);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        }
+
+        // Build publish candidates with computed versions and hashes
+        let candidates = build_publish_candidates(&publishable, &workspace)?;
+
+        // Display wave header if multiple waves
+        if wave > 1 || candidates.len() < initial_dirty_count {
+            println!();
+            println!("{}", format!("Wave {}:", wave).cyan().bold());
+        }
+
+        println!("{} package(s) can be published:", publishable.len());
+
+        // Display what will be published
+        for candidate in &candidates {
+            let rel_path = candidate
+                .pkg
+                .path
+                .strip_prefix(&workspace.root)
+                .unwrap_or(&candidate.pkg.path);
+            let path_display = if rel_path.as_os_str().is_empty() {
+                "(root)".to_string()
+            } else {
+                rel_path.display().to_string()
+            };
+            let version_str = match &candidate.pkg.latest_version {
+                Some(v) => format!("{} → {}", v, candidate.next_version),
+                None => format!("{} (initial)", candidate.next_version),
+            };
+            println!(
+                "  {}: {} [{}]",
+                path_display,
+                version_str.green(),
+                candidate.tag_name.cyan()
+            );
+        }
+
+        // Remove published packages from remaining_dirty and accumulate tags
+        for candidate in &candidates {
+            remaining_dirty.remove(candidate.pkg.url.as_str());
+            all_tags.push(candidate.tag_name.clone());
+        }
+
+        if args.dry_run {
+            // Continue to show all waves in dry run
+            continue;
+        }
+
+        // Create tags locally
+        for candidate in &candidates {
+            let message = format_tag_message(candidate);
+            git::create_tag(&workspace.root, &candidate.tag_name, &message)?;
+        }
+    }
+
+    if all_tags.is_empty() {
+        return Ok(());
     }
 
     if args.dry_run {
         println!();
-        println!("{}", "Dry run - no tags created".yellow());
+        println!(
+            "{} ({} total)",
+            "Dry run - no tags created".yellow(),
+            all_tags.len()
+        );
         return Ok(());
     }
 
-    // Create tags locally
+    // Confirm push of all accumulated tags
     println!();
-    println!("Creating tags...");
-
-    let tag_names: Vec<String> = candidates.iter().map(|c| c.tag_name.clone()).collect();
-
-    for candidate in &candidates {
-        let message = format_tag_message(candidate);
-        git::create_tag(&workspace.root, &candidate.tag_name, &message)?;
-        println!("  Created {}", candidate.tag_name.green());
-    }
-
-    // Confirm push
-    let confirmed = Confirm::new(&format!("Push {} tag(s) to {}?", tag_names.len(), remote))
+    let confirmed = Confirm::new(&format!("Push {} tag(s) to {}?", all_tags.len(), remote))
         .with_default(false)
         .prompt()
         .unwrap_or(false);
 
     if !confirmed {
-        // User declined - delete the tags we just created
-        println!("Cleaning up local tags...");
-        for tag in &tag_names {
-            let _ = git::delete_tag(&workspace.root, tag);
-            println!("  Deleted {}", tag.yellow());
-        }
+        // User declined - delete all tags we created across all waves
+        println!("Cleaning up {} local tag(s)...", all_tags.len());
+        let tag_refs: Vec<&str> = all_tags.iter().map(|s| s.as_str()).collect();
+        let _ = git::delete_tags(&workspace.root, &tag_refs);
         println!("{}", "Publish cancelled".yellow());
         return Ok(());
     }
@@ -185,9 +217,9 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     // Push all tags in one command
     println!();
     println!("Pushing to {}...", remote.cyan());
-    let tag_refs: Vec<&str> = tag_names.iter().map(|s| s.as_str()).collect();
+    let tag_refs: Vec<&str> = all_tags.iter().map(|s| s.as_str()).collect();
     git::push_tags(&workspace.root, &tag_refs, &remote)?;
-    for tag in &tag_names {
+    for tag in &all_tags {
         println!("  Pushed {}", tag.green());
     }
 
@@ -256,26 +288,6 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
     );
 
     Ok(remote)
-}
-
-/// Find packages that can be published (all their workspace deps are clean and published)
-fn find_publishable_packages<'a>(
-    dirty_packages: &[&'a PackageInfo],
-    pkg_by_url: &HashMap<&str, &PackageInfo>,
-) -> Vec<&'a PackageInfo> {
-    dirty_packages
-        .iter()
-        .filter(|pkg| {
-            // A package is publishable if none of its workspace dependencies are dirty
-            !pkg.dependencies.iter().any(|dep_url| {
-                pkg_by_url
-                    .get(dep_url.as_str())
-                    .map(|dep| dep.dirty)
-                    .unwrap_or(false)
-            })
-        })
-        .copied()
-        .collect()
 }
 
 /// Build publish candidates with computed versions and hashes
