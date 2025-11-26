@@ -1,0 +1,15 @@
+[package]
+name = "pcb-autoplace"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.10"
+uuid = { version = "1.4", features = ["v4"] }
+
+# Dependencies from workspace
+pcb-zen-core = { path = "../pcb-zen-core" }
+pcb-sch = { path = "../pcb-sch" }

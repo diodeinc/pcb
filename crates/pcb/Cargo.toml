@@ -63,6 +63,8 @@ unicode-width = { workspace = true }
 indicatif = { workspace = true }
 gltfpack-sys = { workspace = true }
 axoupdater = { workspace = true }
+pcb-autoplace = { path = "../pcb-autoplace" }
+rand = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
