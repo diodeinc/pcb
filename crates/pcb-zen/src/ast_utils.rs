@@ -1,9 +1,21 @@
 //! AST utilities for traversing Starlark expressions and .zen file manipulation
 
 use anyhow::Result;
-use ignore::WalkBuilder;
+use ignore::{DirEntry, WalkBuilder};
 use starlark_syntax::syntax::ast::{ArgumentP, ExprP};
 use std::path::{Path, PathBuf};
+
+/// Filter function that skips vendor directories
+pub fn skip_vendor(entry: &DirEntry) -> bool {
+    if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+        if let Some(name) = entry.file_name().to_str() {
+            if name == "vendor" {
+                return false;
+            }
+        }
+    }
+    true
+}
 
 /// Recursively visit all string literals in an expression tree.
 ///
@@ -74,17 +86,7 @@ pub fn collect_zen_files(root: &Path) -> Result<Vec<PathBuf>> {
         .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
-        .filter_entry(|entry| {
-            // Skip vendor directories
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name == "vendor" {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
+        .filter_entry(skip_vendor)
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {
