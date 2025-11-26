@@ -469,3 +469,34 @@ pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Resu
         Err(anyhow::anyhow!("Failed to push {} to {}", branch, remote))
     }
 }
+
+/// List all tags in a repository
+pub fn list_all_tags(repo_root: &Path) -> anyhow::Result<Vec<String>> {
+    list_tags(repo_root, "*")
+}
+
+/// Clone bare repo with HTTPS→SSH fallback
+pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
+
+    let https_url = format!("https://{}.git", repo_url);
+
+    // Try HTTPS first
+    if clone_bare_with_filter(&https_url, dest).is_ok() {
+        return Ok(());
+    }
+
+    // Fallback to SSH
+    let ssh_url = format_ssh_url(repo_url);
+    clone_bare_with_filter(&ssh_url, dest)
+}
+
+/// Convert module path to SSH URL format
+fn format_ssh_url(module_path: &str) -> String {
+    let parts: Vec<&str> = module_path.splitn(2, '/').collect();
+    if parts.len() == 2 {
+        format!("git@{}:{}.git", parts[0], parts[1])
+    } else {
+        format!("https://{}.git", module_path)
+    }
+}
