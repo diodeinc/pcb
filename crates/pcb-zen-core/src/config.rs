@@ -126,8 +126,8 @@ impl PcbToml {
     ///
     /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
     /// Examples:
-    /// - "github.com/akhilles/stdlib" → "@stdlib"
-    /// - "github.com/akhilles/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
+    /// - "github.com/diodeinc/stdlib" → "@stdlib"
+    /// - "github.com/diodeinc/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
     /// - "gitlab.com/kicad/libraries/kicad-symbols" → "@kicad-symbols"
     pub fn auto_generated_aliases(&self) -> HashMap<String, String> {
         let mut aliases = HashMap::new();

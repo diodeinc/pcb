@@ -28,6 +28,10 @@ pub struct PublishArgs {
     #[arg(long)]
     pub no_cascade: bool,
 
+    /// Skip preflight checks (uncommitted changes, branch, remote)
+    #[arg(long, short = 'f')]
+    pub force: bool,
+
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -52,7 +56,14 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         bail!("Not a V2 workspace. Publish requires [workspace] with resolver = \"2\"");
     };
 
-    let remote = preflight_checks(&workspace.root)?;
+    let remote = if args.force {
+        let current_branch = git::symbolic_ref_short_head(&workspace.root)
+            .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;
+        git::get_branch_remote(&workspace.root, &current_branch)
+            .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracking a remote", current_branch))?
+    } else {
+        preflight_checks(&workspace.root)?
+    };
 
     let all_packages: Vec<&PackageInfo> = workspace
         .all_packages()
