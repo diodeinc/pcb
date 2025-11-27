@@ -586,8 +586,13 @@ pub struct WorkspaceInfo {
 }
 
 /// Default members pattern
-fn default_members() -> Vec<String> {
-    vec!["boards/*".to_string()]
+pub fn default_members() -> Vec<String> {
+    vec![
+        "components/*".to_string(),
+        "reference/*".to_string(),
+        "modules/*".to_string(),
+        "boards/*".to_string(),
+    ]
 }
 
 impl BoardInfo {
