@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
 
+use crate::git;
 use crate::workspace::{build_workspace_member_versions, discover_member_dirs};
 
 /// Path dependency validation errors
@@ -1351,7 +1352,7 @@ fn resolve_branch_to_pseudo_version(module_path: &str, branch: &str) -> Result<V
     );
 
     let refspec = format!("refs/heads/{}", branch);
-    let (commit, git_url) = git_ls_remote_with_fallback(module_path, &refspec)?;
+    let (commit, git_url) = git::ls_remote_with_fallback(module_path, &refspec)?;
 
     generate_pseudo_version_for_commit(module_path, &commit, &git_url)
 }
@@ -1378,8 +1379,6 @@ fn generate_pseudo_version_for_commit(
     commit: &str,
     git_url: &str,
 ) -> Result<Version> {
-    use std::process::Command;
-
     // Get a minimal clone to inspect the commit
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -1393,49 +1392,16 @@ fn generate_pseudo_version_for_commit(
 
     // Clone if needed (shallow)
     if !temp_clone.join(".git").exists() {
-        Command::new("git")
-            .arg("clone")
-            .arg("--bare")
-            .arg("--filter=blob:none")
-            .arg(git_url)
-            .arg(&temp_clone)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?;
+        git::clone_bare_with_filter(git_url, &temp_clone)?;
     } else {
         // Fetch updates
-        Command::new("git")
-            .arg("-C")
-            .arg(&temp_clone)
-            .arg("fetch")
-            .arg("origin")
-            .arg("--tags")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?;
+        let _ = git::run_in(&temp_clone, &["fetch", "origin", "--tags"]);
     }
 
     // Find latest tag reachable from this commit
-    let describe_output = Command::new("git")
-        .arg("-C")
-        .arg(&temp_clone)
-        .arg("describe")
-        .arg("--tags")
-        .arg("--abbrev=0")
-        .arg(commit)
-        .output();
-
-    let base_version = if let Ok(output) = describe_output {
-        if output.status.success() {
-            let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            // Parse tag (remove leading v)
-            parse_version_string(&tag).unwrap_or_else(|_| Version::new(0, 0, 0))
-        } else {
-            Version::new(0, 0, 0)
-        }
-    } else {
-        Version::new(0, 0, 0)
-    };
+    let base_version = git::describe_tags(&temp_clone, commit)
+        .and_then(|tag| parse_version_string(&tag).ok())
+        .unwrap_or_else(|| Version::new(0, 0, 0));
 
     // Increment patch version
     let pseudo_base = Version::new(
@@ -1445,31 +1411,12 @@ fn generate_pseudo_version_for_commit(
     );
 
     // Get commit timestamp
-    let timestamp_output = Command::new("git")
-        .arg("-C")
-        .arg(&temp_clone)
-        .arg("show")
-        .arg("-s")
-        .arg("--format=%ct")
-        .arg(commit)
-        .output()?;
-
-    let timestamp = if timestamp_output.status.success() {
-        String::from_utf8_lossy(&timestamp_output.stdout)
-            .trim()
-            .parse::<i64>()
-            .unwrap_or_else(|_| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64
-            })
-    } else {
+    let timestamp = git::show_commit_timestamp(&temp_clone, commit).unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64
-    };
+    });
 
     // Format timestamp as YYYYMMDDhhmmss using jiff
     let dt = jiff::Timestamp::from_second(timestamp)?;
@@ -1697,16 +1644,10 @@ fn verify_tag_hashes(
     manifest_hash: &str,
 ) -> Result<()> {
     // Read tag annotation from FETCH_HEAD (the fetched tag object)
-    let output = std::process::Command::new("git")
-        .args(["cat-file", "-p", "FETCH_HEAD"])
-        .current_dir(checkout_dir)
-        .output()?;
-
-    if !output.status.success() {
+    let Some(tag_body) = git::cat_file_fetch_head(checkout_dir) else {
         return Ok(());
-    }
+    };
 
-    let tag_body = String::from_utf8_lossy(&output.stdout);
     let Some((expected_content, expected_manifest)) = parse_hashes_from_tag_body(&tag_body) else {
         return Ok(());
     };
@@ -1775,7 +1716,7 @@ fn ensure_sparse_checkout(
     version_str: &str,
     add_v_prefix: bool,
 ) -> Result<PathBuf> {
-    let (repo_url, subpath) = split_repo_and_subpath(module_path);
+    let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
     let is_pseudo_version = version_str.contains("-0.");
 
     // Construct ref_spec (tag name or commit hash)
@@ -1806,21 +1747,21 @@ fn ensure_sparse_checkout(
 
     // Initialize Git repo
     std::fs::create_dir_all(checkout_dir)?;
-    run_git_in(&["init"], checkout_dir)?;
+    git::run_in(checkout_dir, &["init"])?;
 
     // Add remote (ignore errors if already exists)
     let https_url = format!("https://{}.git", repo_url);
-    let _ = run_git_in(&["remote", "add", "origin", &https_url], checkout_dir);
+    let _ = git::run_in(checkout_dir, &["remote", "add", "origin", &https_url]);
 
     // Configure as promisor remote for partial clone (required for --filter=blob:none to work)
-    run_git_in(&["config", "remote.origin.promisor", "true"], checkout_dir)?;
-    run_git_in(
-        &["config", "remote.origin.partialclonefilter", "blob:none"],
+    git::run_in(checkout_dir, &["config", "remote.origin.promisor", "true"])?;
+    git::run_in(
         checkout_dir,
+        &["config", "remote.origin.partialclonefilter", "blob:none"],
     )?;
 
     // Try HTTPS fetch, fallback to SSH if needed, fallback to no-v-prefix
-    let ssh_url = format_ssh_url(repo_url);
+    let ssh_url = git::format_ssh_url(repo_url);
     let tag_ref = if is_pseudo_version {
         ref_spec.clone()
     } else {
@@ -1835,36 +1776,23 @@ fn ensure_sparse_checkout(
         &tag_ref,
     ];
 
-    let mut fetch_succeeded = false;
-
     // Try HTTPS first
-    let fetch_result = std::process::Command::new("git")
-        .args(&fetch_args)
-        .current_dir(checkout_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-
-    if let Ok(status) = fetch_result {
-        if status.success() {
-            fetch_succeeded = true;
-        }
-    }
+    let fetch_succeeded = git::run_in(checkout_dir, &fetch_args).is_ok();
 
     // Try SSH if HTTPS failed
     if !fetch_succeeded {
-        run_git_in(&["remote", "set-url", "origin", &ssh_url], checkout_dir)?;
-        run_git_in(&fetch_args, checkout_dir)?;
+        git::run_in(checkout_dir, &["remote", "set-url", "origin", &ssh_url])?;
+        git::run_in(checkout_dir, &fetch_args)?;
     }
 
     // Configure sparse-checkout for nested packages (fetch only the subpath)
     if !subpath.is_empty() {
-        run_git_in(&["sparse-checkout", "init", "--cone"], checkout_dir)?;
-        run_git_in(&["sparse-checkout", "set", subpath], checkout_dir)?;
+        git::run_in(checkout_dir, &["sparse-checkout", "init", "--cone"])?;
+        git::run_in(checkout_dir, &["sparse-checkout", "set", subpath])?;
     }
 
     // Checkout and materialize the fetched ref
-    run_git_in(&["reset", "--hard", "FETCH_HEAD"], checkout_dir)?;
+    git::run_in(checkout_dir, &["reset", "--hard", "FETCH_HEAD"])?;
 
     // For nested packages: move subpath contents to cache root to eliminate path redundancy
     if !subpath.is_empty() {
@@ -1902,135 +1830,6 @@ fn ensure_sparse_checkout(
     }
 
     Ok(checkout_dir.to_path_buf())
-}
-
-/// Extract repository boundary and subpath from module path
-///
-/// Go convention: host/user/repo is the repository boundary
-/// For GitHub: github.com/user/repo
-/// For GitLab: gitlab.com/user/project (or nested groups: gitlab.com/group/subgroup/project)
-///
-/// Returns (repo_url, subpath)
-/// Examples:
-/// - github.com/diodeinc/registry → ("github.com/diodeinc/registry", "")
-/// - github.com/diodeinc/registry/components/2N7002 → ("github.com/diodeinc/registry", "components/2N7002")
-/// - gitlab.com/kicad/libraries/kicad-symbols → ("gitlab.com/kicad/libraries/kicad-symbols", "")
-fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
-    let parts: Vec<&str> = module_path.split('/').collect();
-
-    if parts.is_empty() {
-        return (module_path, "");
-    }
-
-    let host = parts[0];
-
-    // For GitHub only: repository is host/user/repo (first 3 segments), everything after is subpath
-    // For GitLab: support nested groups, so treat entire path as repo (no subpath support for now)
-    if host == "github.com" {
-        if parts.len() <= 3 {
-            // No subpath (just host/user/repo or less)
-            return (module_path, "");
-        }
-
-        // Split at the 3rd slash: host/user/repo | subpath
-        let repo_boundary = parts[..3].join("/");
-
-        // Return borrowed slices by finding the boundary position in the original string
-        let boundary_len = repo_boundary.len();
-        let repo_url = &module_path[..boundary_len];
-        let subpath_str = if boundary_len < module_path.len() {
-            &module_path[boundary_len + 1..] // Skip the '/' separator
-        } else {
-            ""
-        };
-
-        (repo_url, subpath_str)
-    } else {
-        // GitLab and other hosts: treat entire path as repo (GitLab supports nested groups)
-        (module_path, "")
-    }
-}
-
-/// Convert module path to SSH URL format
-///
-/// Examples:
-/// - github.com/user/repo → git@github.com:user/repo.git
-/// - gitlab.com/user/repo → git@gitlab.com:user/repo.git
-fn format_ssh_url(module_path: &str) -> String {
-    let parts: Vec<&str> = module_path.splitn(2, '/').collect();
-    if parts.len() == 2 {
-        let host = parts[0];
-        let path = parts[1];
-        format!("git@{}:{}.git", host, path)
-    } else {
-        // Fallback to HTTPS format if parsing fails
-        format!("https://{}.git", module_path)
-    }
-}
-
-fn run_git_in(args: &[&str], dir: &Path) -> Result<()> {
-    use std::process::Command;
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("git command failed: git {}", args.join(" "));
-    }
-    Ok(())
-}
-
-/// Execute git ls-remote with HTTPS→SSH fallback
-///
-/// Returns (commit_hash, git_url_used)
-fn git_ls_remote_with_fallback(module_path: &str, refspec: &str) -> Result<(String, String)> {
-    use std::process::Command;
-
-    let (repo_url, _) = split_repo_and_subpath(module_path);
-    let https_url = format!("https://{}.git", repo_url);
-    let ssh_url = format_ssh_url(repo_url);
-
-    // Try HTTPS first
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg(&https_url)
-        .arg(refspec)
-        .output()?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let commit = stdout
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().next())
-            .ok_or_else(|| anyhow::anyhow!("Ref {} not found in {}", refspec, module_path))?;
-        return Ok((commit.to_string(), https_url));
-    }
-
-    // Fallback to SSH
-    let output = Command::new("git")
-        .arg("ls-remote")
-        .arg(&ssh_url)
-        .arg(refspec)
-        .output()?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "Failed to ls-remote {} for {} (tried HTTPS and SSH)",
-            refspec,
-            module_path
-        );
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let commit = stdout
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().next())
-        .ok_or_else(|| anyhow::anyhow!("Ref {} not found in {}", refspec, module_path))?;
-    Ok((commit.to_string(), ssh_url))
 }
 
 /// Clone git repository with HTTPS→SSH fallback

@@ -1,39 +1,37 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-pub fn rev_parse(repo_root: &Path, ref_name: &str) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("rev-parse")
-        .arg(ref_name)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(s)
+fn git(repo_root: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo_root);
+    cmd
+}
+
+fn git_global() -> Command {
+    Command::new("git")
+}
+
+fn run_silent(mut cmd: Command) -> anyhow::Result<()> {
+    let status = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status()?;
+    if status.success() {
+        Ok(())
     } else {
-        None
+        anyhow::bail!("git command failed")
     }
 }
 
-pub fn rev_parse_head(repo_root: &Path) -> Option<String> {
-    rev_parse(repo_root, "HEAD")
+fn run_stdout(mut cmd: Command) -> anyhow::Result<String> {
+    let out = cmd.output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        anyhow::bail!("git command failed")
+    }
 }
 
-pub fn symbolic_ref_short_head(repo_root: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("symbolic-ref")
-        .arg("-q")
-        .arg("--short")
-        .arg("HEAD")
-        .output()
-        .ok()?;
+fn run_stdout_opt(mut cmd: Command) -> Option<String> {
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -45,553 +43,374 @@ pub fn symbolic_ref_short_head(repo_root: &Path) -> Option<String> {
     }
 }
 
-pub fn tag_exists(repo_root: &Path, tag_name: &str) -> bool {
-    // return true if the tag exists in the repo
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("tag")
-        .arg("-l")
-        .arg(tag_name)
-        .output()
-        .unwrap();
-    if !out.status.success() {
-        return false;
-    }
-    let out = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    out == tag_name
+fn run_lines(cmd: Command) -> Vec<String> {
+    run_stdout_opt(cmd)
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
-/// Check if git is available on the system
+fn run_check_output(mut cmd: Command, expected: &str) -> bool {
+    cmd.output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == expected)
+        .unwrap_or(false)
+}
+
+pub fn run_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let mut cmd = git(repo_root);
+    cmd.args(args);
+    run_silent(cmd)
+}
+
+pub fn run_output(repo_root: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let mut cmd = git(repo_root);
+    cmd.args(args);
+    run_stdout(cmd)
+}
+
+pub fn run_output_opt(repo_root: &Path, args: &[&str]) -> Option<String> {
+    let mut cmd = git(repo_root);
+    cmd.args(args);
+    run_stdout_opt(cmd)
+}
+
+pub fn rev_parse(repo_root: &Path, ref_name: &str) -> Option<String> {
+    let s = run_output_opt(repo_root, &["rev-parse", ref_name])?;
+    if s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
+pub fn rev_parse_head(repo_root: &Path) -> Option<String> {
+    rev_parse(repo_root, "HEAD")
+}
+
+pub fn rev_parse_short_head(repo_root: &Path) -> Option<String> {
+    run_output_opt(repo_root, &["rev-parse", "--short", "HEAD"])
+}
+
+pub fn get_repo_root(path: &Path) -> anyhow::Result<PathBuf> {
+    run_output(path, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+}
+
+pub fn symbolic_ref_short_head(repo_root: &Path) -> Option<String> {
+    run_output_opt(repo_root, &["symbolic-ref", "-q", "--short", "HEAD"])
+}
+
+pub fn rev_parse_abbrev_ref_head(repo_root: &Path) -> Option<String> {
+    run_output_opt(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD")
+}
+
+pub fn tag_exists(repo_root: &Path, tag_name: &str) -> bool {
+    let mut cmd = git(repo_root);
+    cmd.args(["tag", "-l", tag_name]);
+    run_check_output(cmd, tag_name)
+}
+
+pub fn list_tags(repo_root: &Path, pattern: &str) -> anyhow::Result<Vec<String>> {
+    run_output(repo_root, &["tag", "-l", pattern]).map(|s| {
+        s.lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+pub fn list_all_tags(repo_root: &Path) -> anyhow::Result<Vec<String>> {
+    list_tags(repo_root, "*")
+}
+
+pub fn list_all_tags_vec(repo_root: &Path) -> Vec<String> {
+    run_lines({
+        let mut cmd = git(repo_root);
+        cmd.args(["tag", "-l"]);
+        cmd
+    })
+}
+
+pub fn tags_pointing_at_head(repo_root: &Path) -> Vec<String> {
+    run_lines({
+        let mut cmd = git(repo_root);
+        cmd.args(["tag", "--points-at", "HEAD"]);
+        cmd
+    })
+}
+
+pub fn create_tag(repo_root: &Path, tag_name: &str, message: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["tag", "-a", tag_name, "-m", message])
+}
+
+pub fn delete_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["tag", "-d", tag_name])
+}
+
+pub fn delete_tags(repo_root: &Path, tag_names: &[&str]) -> anyhow::Result<()> {
+    if tag_names.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["tag", "-d"];
+    args.extend(tag_names);
+    run_in(repo_root, &args)
+}
+
+pub fn describe_tags(repo_root: &Path, commit: &str) -> Option<String> {
+    run_output_opt(repo_root, &["describe", "--tags", "--abbrev=0", commit])
+}
+
+pub fn get_all_tag_annotations(repo_root: &Path) -> HashMap<String, String> {
+    const RECORD_SEP: &str = "\x1E";
+    const FIELD_SEP: &str = "\x1F";
+    let format = format!("%(refname:short){FIELD_SEP}%(contents){RECORD_SEP}");
+
+    let mut cmd = git(repo_root);
+    cmd.args(["for-each-ref", &format!("--format={}", format), "refs/tags"]);
+
+    let Some(stdout) = run_stdout_opt(cmd) else {
+        return HashMap::new();
+    };
+
+    stdout
+        .split(RECORD_SEP)
+        .filter_map(|record| {
+            let record = record.trim();
+            record
+                .split_once(FIELD_SEP)
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+        })
+        .collect()
+}
+
+pub fn clone_bare_with_filter(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    let mut cmd = git_global();
+    cmd.args([
+        "clone",
+        "--bare",
+        "--filter=blob:none",
+        "--quiet",
+        remote_url,
+    ])
+    .arg(dest_dir);
+    run_silent(cmd)
+}
+
+pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
+    let mut cmd = git_global();
+    cmd.args(["clone", "--bare", "--quiet", remote_url])
+        .arg(dest_dir);
+    run_silent(cmd)
+}
+
+pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
+    let https_url = format!("https://{}.git", repo_url);
+    if clone_bare_with_filter(&https_url, dest).is_ok() {
+        return Ok(());
+    }
+    clone_bare_with_filter(&format_ssh_url(repo_url), dest)
+}
+
+pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
+    run_in(
+        bare_repo,
+        &[
+            "fetch",
+            "origin",
+            "--tags",
+            "--force",
+            "--prune",
+            "--prune-tags",
+            "--quiet",
+            "+refs/heads/*:refs/heads/*",
+        ],
+    )
+}
+
+pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["fetch", remote, branch, "--quiet"])
+}
+
+pub fn push_tag(repo_root: &Path, tag_name: &str, remote: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["push", remote, tag_name])
+}
+
+pub fn push_tags(repo_root: &Path, tag_names: &[&str], remote: &str) -> anyhow::Result<()> {
+    let mut args = vec!["push", remote];
+    args.extend(tag_names);
+    run_in(repo_root, &args)
+}
+
+pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["push", remote, branch])
+}
+
+pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
+    run_in(bare_repo, &["worktree", "prune"])
+}
+
+pub fn create_worktree(bare_repo: &Path, worktree_dir: &Path, rev: &str) -> anyhow::Result<()> {
+    let mut cmd = git(bare_repo);
+    cmd.args(["worktree", "add", "--detach", "--quiet"])
+        .arg(worktree_dir)
+        .arg(rev);
+    run_silent(cmd)
+}
+
+pub fn get_remote_url(repo_root: &Path) -> anyhow::Result<String> {
+    run_output(repo_root, &["remote", "get-url", "origin"])
+}
+
+pub fn get_remote_url_for(repo_root: &Path, remote: &str) -> anyhow::Result<String> {
+    run_output(repo_root, &["remote", "get-url", remote])
+}
+
+pub fn get_branch_remote(repo_root: &Path, branch: &str) -> Option<String> {
+    run_output_opt(
+        repo_root,
+        &["config", "--get", &format!("branch.{}.remote", branch)],
+    )
+}
+
+pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
+    let remote = run_output_opt(
+        repo_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .and_then(|s| s.split('/').next().map(str::to_string))
+    .unwrap_or_else(|| "origin".to_string());
+    let url = get_remote_url_for(repo_root, &remote)?;
+    parse_remote_url(&url)
+}
+
+pub fn has_uncommitted_changes(repo_root: &Path) -> anyhow::Result<bool> {
+    let out = git(repo_root).args(["status", "--porcelain"]).output()?;
+    if !out.status.success() {
+        anyhow::bail!("Failed to check git status");
+    }
+    Ok(!out.stdout.is_empty())
+}
+
+pub fn has_uncommitted_changes_in_path(repo_root: &Path, path: &Path) -> bool {
+    let path_arg = if path == Path::new("") || path == Path::new(".") {
+        "."
+    } else {
+        return git(repo_root)
+            .args(["status", "--porcelain", "--"])
+            .arg(path)
+            .output()
+            .map(|o| o.status.success() && !o.stdout.is_empty())
+            .unwrap_or(true);
+    };
+    git(repo_root)
+        .args(["status", "--porcelain", "--", path_arg])
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(true)
+}
+
+pub fn commit(repo_root: &Path, message: &str) -> anyhow::Result<String> {
+    run_in(repo_root, &["add", "-A"])?;
+    run_in(repo_root, &["commit", "-m", message])?;
+    rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
+}
+
+pub fn commit_with_trailers(repo_root: &Path, message: &str) -> anyhow::Result<String> {
+    run_in(repo_root, &["add", "-A"])?;
+    run_in(
+        repo_root,
+        &[
+            "commit",
+            "-m",
+            message,
+            "--trailer",
+            "Generated-by: pcb publish",
+        ],
+    )?;
+    rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
+}
+
+pub fn reset_hard(repo_root: &Path, commit: &str) -> anyhow::Result<()> {
+    run_in(repo_root, &["reset", "--hard", commit])
+}
+
 pub fn is_available() -> bool {
-    Command::new("git")
+    git_global()
         .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
 }
 
-/// Clone a bare repository with blob filtering for use as a shared object store
-pub fn clone_bare_with_filter(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("clone")
-        .arg("--bare")
-        .arg("--filter=blob:none")
-        .arg("--quiet")
-        .arg(remote_url)
-        .arg(dest_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
+pub fn cat_file_fetch_head(repo_root: &Path) -> Option<String> {
+    run_output_opt(repo_root, &["cat-file", "-p", "FETCH_HEAD"])
+}
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git bare clone failed for {remote_url}"))
+pub fn show_commit_timestamp(repo_root: &Path, commit: &str) -> Option<i64> {
+    run_output_opt(repo_root, &["show", "-s", "--format=%ct", commit]).and_then(|s| s.parse().ok())
+}
+
+pub fn format_ssh_url(module_path: &str) -> String {
+    match module_path.split_once('/') {
+        Some((host, path)) => format!("git@{}:{}.git", host, path),
+        None => format!("https://{}.git", module_path),
     }
 }
 
-/// Clone a bare repository without filtering (fallback for file:// URLs)
-pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("clone")
-        .arg("--bare")
-        .arg("--quiet")
-        .arg(remote_url)
-        .arg(dest_dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git bare clone failed for {remote_url}"))
-    }
-}
-
-/// Fetch updates in a bare repository
-pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(bare_repo)
-        .arg("fetch")
-        .arg("origin")
-        .arg("--tags")
-        .arg("--force")
-        .arg("--prune")
-        .arg("--prune-tags")
-        .arg("--quiet")
-        .arg("+refs/heads/*:refs/heads/*")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git fetch failed in bare repo"))
-    }
-}
-
-/// Prune stale worktree administrative data
-pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(bare_repo)
-        .arg("worktree")
-        .arg("prune")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git worktree prune failed"))
-    }
-}
-
-/// Create a worktree from a bare repository for a specific ref
-pub fn create_worktree(bare_repo: &Path, worktree_dir: &Path, rev: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(bare_repo)
-        .arg("worktree")
-        .arg("add")
-        .arg("--detach")
-        .arg("--quiet")
-        .arg(worktree_dir)
-        .arg(rev)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git worktree creation failed for {rev}"))
-    }
-}
-
-/// Create a git tag
-pub fn create_tag(repo_root: &Path, tag_name: &str, message: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("tag")
-        .arg("-a")
-        .arg(tag_name)
-        .arg("-m")
-        .arg(message)
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git tag creation failed for {tag_name}"))
-    }
-}
-
-/// Push a git tag to a specific remote
-pub fn push_tag(repo_root: &Path, tag_name: &str, remote: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("push")
-        .arg(remote)
-        .arg(tag_name)
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git push failed for tag {tag_name}"))
-    }
-}
-
-/// Push multiple git tags to a specific remote in one command
-pub fn push_tags(repo_root: &Path, tag_names: &[&str], remote: &str) -> anyhow::Result<()> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo_root).arg("push").arg(remote);
-    for tag in tag_names {
-        cmd.arg(tag);
-    }
-
-    let status = cmd.status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git push failed"))
-    }
-}
-
-/// Delete a local git tag
-pub fn delete_tag(repo_root: &Path, tag_name: &str) -> anyhow::Result<()> {
-    delete_tags(repo_root, &[tag_name])
-}
-
-/// Delete multiple local git tags in one command
-pub fn delete_tags(repo_root: &Path, tag_names: &[&str]) -> anyhow::Result<()> {
-    if tag_names.is_empty() {
-        return Ok(());
-    }
-
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(repo_root)
-        .arg("tag")
-        .arg("-d")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    for tag in tag_names {
-        cmd.arg(tag);
-    }
-
-    let status = cmd.status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Git tag delete failed"))
-    }
-}
-
-/// List git tags matching a pattern
-pub fn list_tags(repo_root: &Path, pattern: &str) -> anyhow::Result<Vec<String>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("tag")
-        .arg("-l")
-        .arg(pattern)
-        .output()?;
-
-    if !out.status.success() {
-        return Err(anyhow::anyhow!("Git tag list failed"));
-    }
-
-    let tags_output = String::from_utf8_lossy(&out.stdout);
-    let tags: Vec<String> = tags_output
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_string())
-        .collect();
-
-    Ok(tags)
-}
-
-/// Get the remote URL for origin
-pub fn get_remote_url(repo_root: &Path) -> anyhow::Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("remote")
-        .arg("get-url")
-        .arg("origin")
-        .output()?;
-
-    if !out.status.success() {
-        return Err(anyhow::anyhow!("Failed to get remote URL"));
-    }
-
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Check if working directory has uncommitted changes
-pub fn has_uncommitted_changes(repo_root: &Path) -> anyhow::Result<bool> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("status")
-        .arg("--porcelain")
-        .output()?;
-
-    if !out.status.success() {
-        return Err(anyhow::anyhow!("Failed to check git status"));
-    }
-
-    Ok(!out.stdout.is_empty())
-}
-
-/// Get the remote that a branch is tracking
-pub fn get_branch_remote(repo_root: &Path, branch: &str) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("config")
-        .arg("--get")
-        .arg(format!("branch.{}.remote", branch))
-        .output()
-        .ok()?;
-
-    if !out.status.success() {
-        return None;
-    }
-
-    let remote = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if remote.is_empty() {
-        None
-    } else {
-        Some(remote)
-    }
-}
-
-/// Fetch a specific branch from a remote
-pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("fetch")
-        .arg(remote)
-        .arg(branch)
-        .arg("--quiet")
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "Failed to fetch {} from {}",
-            branch,
-            remote
-        ))
-    }
-}
-
-/// Stage all changes and create a commit
-///
-/// Returns the commit SHA on success
-pub fn commit(repo_root: &Path, message: &str) -> anyhow::Result<String> {
-    // Stage all changes
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("add")
-        .arg("-A")
-        .status()?;
-
-    if !status.success() {
-        return Err(anyhow::anyhow!("Failed to stage changes"));
-    }
-
-    // Create commit
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("commit")
-        .arg("-m")
-        .arg(message)
-        .stdout(std::process::Stdio::null())
-        .status()?;
-
-    if !status.success() {
-        return Err(anyhow::anyhow!("Failed to create commit"));
-    }
-
-    // Return the commit SHA
-    rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
-}
-
-/// Stage all changes and create a commit with git trailers
-///
-/// Adds a "Generated-by: pcb publish" trailer to indicate automated commit.
-/// Returns the commit SHA on success.
-pub fn commit_with_trailers(repo_root: &Path, message: &str) -> anyhow::Result<String> {
-    // Stage all changes
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("add")
-        .arg("-A")
-        .status()?;
-
-    if !status.success() {
-        return Err(anyhow::anyhow!("Failed to stage changes"));
-    }
-
-    // Create commit with trailer
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("commit")
-        .arg("-m")
-        .arg(message)
-        .arg("--trailer")
-        .arg("Generated-by: pcb publish")
-        .stdout(std::process::Stdio::null())
-        .status()?;
-
-    if !status.success() {
-        return Err(anyhow::anyhow!("Failed to create commit"));
-    }
-
-    // Return the commit SHA
-    rev_parse(repo_root, "HEAD").ok_or_else(|| anyhow::anyhow!("Failed to get commit SHA"))
-}
-
-/// Reset to a specific commit (hard reset)
-pub fn reset_hard(repo_root: &Path, commit: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("reset")
-        .arg("--hard")
-        .arg(commit)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Failed to reset to {}", commit))
-    }
-}
-
-/// Push a branch to a remote
-pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("push")
-        .arg(remote)
-        .arg(branch)
-        .status()?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("Failed to push {} to {}", branch, remote))
-    }
-}
-
-/// List all tags in a repository
-pub fn list_all_tags(repo_root: &Path) -> anyhow::Result<Vec<String>> {
-    list_tags(repo_root, "*")
-}
-
-/// Clone bare repo with HTTPS→SSH fallback
-pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
-
-    let https_url = format!("https://{}.git", repo_url);
-
-    // Try HTTPS first
-    if clone_bare_with_filter(&https_url, dest).is_ok() {
-        return Ok(());
-    }
-
-    // Fallback to SSH
-    let ssh_url = format_ssh_url(repo_url);
-    clone_bare_with_filter(&ssh_url, dest)
-}
-
-/// Convert module path to SSH URL format
-fn format_ssh_url(module_path: &str) -> String {
-    let parts: Vec<&str> = module_path.splitn(2, '/').collect();
-    if parts.len() == 2 {
-        format!("git@{}:{}.git", parts[0], parts[1])
-    } else {
-        format!("https://{}.git", module_path)
-    }
-}
-
-/// Get the git repository root for a path
-pub fn get_repo_root(path: &Path) -> anyhow::Result<PathBuf> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()?;
-
-    if !out.status.success() {
-        return Err(anyhow::anyhow!("Not in a git repository"));
-    }
-
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&out.stdout).trim().to_string(),
-    ))
-}
-
-/// Get the remote URL for a specific remote (not just origin)
-pub fn get_remote_url_for(repo_root: &Path, remote: &str) -> anyhow::Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("remote")
-        .arg("get-url")
-        .arg(remote)
-        .output()?;
-
-    if !out.status.success() {
-        return Err(anyhow::anyhow!(
-            "No git remote '{}' configured. Run: git remote add {} <url>",
-            remote,
-            remote
-        ));
-    }
-
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Detect the repository URL from the current branch's tracking remote
-///
-/// Returns URL in standard format: github.com/user/repo
-pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
-    // Try to get the current branch's upstream
-    let upstream_output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("rev-parse")
-        .arg("--abbrev-ref")
-        .arg("--symbolic-full-name")
-        .arg("@{u}")
-        .output()?;
-
-    let remote = if upstream_output.status.success() {
-        // Extract remote name from upstream (e.g., "origin/main" -> "origin")
-        let upstream = String::from_utf8_lossy(&upstream_output.stdout)
-            .trim()
-            .to_string();
-        upstream
-            .split('/')
-            .next()
-            .unwrap_or("origin")
-            .to_string()
-    } else {
-        // Fall back to "origin" if no upstream configured
-        "origin".to_string()
-    };
-
-    let url = get_remote_url_for(repo_root, &remote)?;
-    parse_remote_url(&url)
-}
-
-/// Parse various git URL formats to standard form: github.com/user/repo
 pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
-    // Handle HTTPS: https://github.com/user/repo.git -> github.com/user/repo
     if let Some(rest) = url.strip_prefix("https://") {
-        let normalized = rest.strip_suffix(".git").unwrap_or(rest);
-        return Ok(normalized.to_string());
+        return Ok(rest.strip_suffix(".git").unwrap_or(rest).to_string());
     }
-
-    // Handle SSH: git@github.com:user/repo.git -> github.com/user/repo
     if let Some(rest) = url.strip_prefix("git@") {
-        let normalized = rest
-            .replace(':', "/")
+        let normalized = rest.replace(':', "/");
+        return Ok(normalized
             .strip_suffix(".git")
-            .unwrap_or(&rest.replace(':', "/"))
-            .to_string();
-        return Ok(normalized);
+            .unwrap_or(&normalized)
+            .to_string());
     }
+    anyhow::bail!("Unsupported git URL format: {}", url)
+}
 
-    Err(anyhow::anyhow!("Unsupported git URL format: {}", url))
+pub fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
+    let parts: Vec<&str> = module_path.split('/').collect();
+    if parts.is_empty() {
+        return (module_path, "");
+    }
+    if parts[0] == "github.com" && parts.len() > 3 {
+        let boundary = parts[..3].join("/").len();
+        return (&module_path[..boundary], &module_path[boundary + 1..]);
+    }
+    (module_path, "")
+}
+
+pub fn ls_remote_with_fallback(
+    module_path: &str,
+    refspec: &str,
+) -> anyhow::Result<(String, String)> {
+    let (repo_url, _) = split_repo_and_subpath(module_path);
+    let https_url = format!("https://{}.git", repo_url);
+    let ssh_url = format_ssh_url(repo_url);
+
+    for url in [&https_url, &ssh_url] {
+        let out = git_global().args(["ls-remote", url, refspec]).output()?;
+        if out.status.success() {
+            if let Some(commit) = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().next())
+            {
+                return Ok((commit.to_string(), url.clone()));
+            }
+        }
+    }
+    anyhow::bail!(
+        "Failed to ls-remote {} for {} (tried HTTPS and SSH)",
+        refspec,
+        module_path
+    )
 }
 
 #[cfg(test)]
@@ -619,6 +438,38 @@ mod tests {
         assert_eq!(
             parse_remote_url("git@github.com:diodeinc/stdlib").unwrap(),
             "github.com/diodeinc/stdlib"
+        );
+    }
+
+    #[test]
+    fn test_split_repo_and_subpath() {
+        assert_eq!(
+            split_repo_and_subpath("github.com/user/repo"),
+            ("github.com/user/repo", "")
+        );
+        assert_eq!(
+            split_repo_and_subpath("github.com/user/repo/pkg"),
+            ("github.com/user/repo", "pkg")
+        );
+        assert_eq!(
+            split_repo_and_subpath("github.com/user/repo/a/b/c"),
+            ("github.com/user/repo", "a/b/c")
+        );
+        assert_eq!(
+            split_repo_and_subpath("gitlab.com/group/project/pkg"),
+            ("gitlab.com/group/project/pkg", "")
+        );
+    }
+
+    #[test]
+    fn test_format_ssh_url() {
+        assert_eq!(
+            format_ssh_url("github.com/user/repo"),
+            "git@github.com:user/repo.git"
+        );
+        assert_eq!(
+            format_ssh_url("gitlab.com/group/project"),
+            "git@gitlab.com:group/project.git"
         );
     }
 }

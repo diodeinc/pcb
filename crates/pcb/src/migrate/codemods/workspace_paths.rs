@@ -11,7 +11,12 @@ use super::{Codemod, MigrateContext};
 pub struct WorkspacePaths;
 
 impl Codemod for WorkspacePaths {
-    fn apply(&self, ctx: &MigrateContext, zen_file: &Path, content: &str) -> Result<Option<String>> {
+    fn apply(
+        &self,
+        ctx: &MigrateContext,
+        zen_file: &Path,
+        content: &str,
+    ) -> Result<Option<String>> {
         let mut dialect = Dialect::Extended;
         dialect.enable_f_strings = true;
 

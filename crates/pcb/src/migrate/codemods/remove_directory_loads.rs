@@ -14,7 +14,12 @@ use starlark_syntax::syntax::module::AstModuleFields;
 pub struct RemoveDirectoryLoads;
 
 impl Codemod for RemoveDirectoryLoads {
-    fn apply(&self, _ctx: &MigrateContext, current_file: &Path, content: &str) -> Result<Option<String>> {
+    fn apply(
+        &self,
+        _ctx: &MigrateContext,
+        current_file: &Path,
+        content: &str,
+    ) -> Result<Option<String>> {
         let file_provider = Arc::new(DefaultFileProvider::new());
         let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
         let resolver =

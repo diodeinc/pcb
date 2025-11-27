@@ -18,11 +18,11 @@ use std::time::Instant;
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::vendor::sync_tracked_files;
+use pcb_zen::git;
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -521,33 +521,15 @@ fn get_kicad_version() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Helper to run a git command and return trimmed stdout
-fn git_output(path: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .args(args)
-        .current_dir(path)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-/// Get current git branch name (returns None if detached HEAD)
-fn get_git_branch(path: &Path) -> Option<String> {
-    git_output(path, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD")
-}
-
 /// Get git remotes as a map of name -> url
 fn get_git_remotes(path: &Path) -> serde_json::Value {
     let mut remotes = serde_json::Map::new();
-    let Some(remote_list) = git_output(path, &["remote"]) else {
+    let Some(remote_list) = git::run_output_opt(path, &["remote"]) else {
         return serde_json::Value::Object(remotes);
     };
 
     for name in remote_list.lines() {
-        if let Some(url) = git_output(path, &["remote", "get-url", name]) {
+        if let Some(url) = git::get_remote_url_for(path, name).ok() {
             remotes.insert(name.to_string(), serde_json::Value::String(url));
         }
     }
@@ -587,7 +569,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 
     // Get git info
     let workspace_root = info.workspace.root();
-    let branch = get_git_branch(workspace_root);
+    let branch = git::rev_parse_abbrev_ref_head(workspace_root);
     let remotes = get_git_remotes(workspace_root);
 
     let mut git_obj = serde_json::json!({
@@ -622,25 +604,14 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
     debug!("Getting git version from: {}", path.display());
 
     // Check if working directory is dirty
-    let status_out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(path)
-        .output()?;
+    let is_dirty = pcb_zen::git::has_uncommitted_changes_in_path(path, Path::new("."));
 
-    let is_dirty = status_out.status.success() && !status_out.stdout.is_empty();
-
-    // Get current commit hash (full)
-    let commit_out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(path)
-        .output()?;
-
-    if !commit_out.status.success() {
+    // Get current commit hash
+    let Some(full_hash) = pcb_zen::git::rev_parse_head(path) else {
         warn!("Not a git repository, using 'unknown' as version and hash");
         return Ok(("unknown".into(), "unknown".into()));
-    }
+    };
 
-    let full_hash = String::from_utf8(commit_out.stdout)?.trim().to_owned();
     let short_hash = full_hash[..7.min(full_hash.len())].to_owned();
 
     // If dirty, return short hash with dirty suffix for version, full hash for metadata
@@ -651,26 +622,18 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
     }
 
     // Check if current commit is tagged
-    let tag_out = Command::new("git")
-        .args(["tag", "--points-at", "HEAD"])
-        .current_dir(path)
-        .output()?;
+    let tags = pcb_zen::git::tags_pointing_at_head(path);
 
-    if tag_out.status.success() {
-        let tags = String::from_utf8(tag_out.stdout)?;
-        let tags: Vec<&str> = tags.lines().collect();
-
-        // Look for board-specific tag in format "board_name/version" (case-insensitive board name)
-        let tag_prefix = format!("{board_name}/");
-        for tag in tags {
-            if !tag.is_empty()
-                && tag.len() > tag_prefix.len()
-                && tag[..tag_prefix.len()].eq_ignore_ascii_case(&tag_prefix)
-            {
-                let version = tag[tag_prefix.len()..].to_string();
-                info!("Git version (board tag): {version} for board {board_name}");
-                return Ok((version, full_hash));
-            }
+    // Look for board-specific tag in format "board_name/version" (case-insensitive board name)
+    let tag_prefix = format!("{board_name}/");
+    for tag in &tags {
+        if !tag.is_empty()
+            && tag.len() > tag_prefix.len()
+            && tag[..tag_prefix.len()].eq_ignore_ascii_case(&tag_prefix)
+        {
+            let version = tag[tag_prefix.len()..].to_string();
+            info!("Git version (board tag): {version} for board {board_name}");
+            return Ok((version, full_hash));
         }
     }
 
