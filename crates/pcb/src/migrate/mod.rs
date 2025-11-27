@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use pcb_ui::prelude::*;
+use pcb_zen::git;
 use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::fs;
 use std::path::PathBuf;
@@ -43,8 +44,8 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
 
     // Step 2: Detect git repository info
     eprintln!("\nStep 2: Detecting git repository");
-    let repository = manifest_v2::detect_repository(&workspace_root)?;
-    let repo_subpath = manifest_v2::detect_repo_subpath(&workspace_root)?;
+    let repository = git::detect_repository_url(&workspace_root)?;
+    let repo_subpath = git::get_repo_subpath(&workspace_root)?;
 
     // Step 3: Convert pcb.toml files to V2 (must happen BEFORE .zen file discovery)
     eprintln!("\nStep 3: Converting pcb.toml files to V2");
