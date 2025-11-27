@@ -1,55 +1,95 @@
 use anyhow::Result;
 use clap::Args;
-use pcb_fmt::RuffFormatter;
 use pcb_ui::prelude::*;
+use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub mod codemods;
-pub mod v2;
+
+pub use codemods::MigrateContext;
+use codemods::{
+    alias_expansion::AliasExpansion, escape_paths::EscapePaths, manifest_v2,
+    path_correction::PathCorrection, remove_directory_loads::RemoveDirectoryLoads,
+    workspace_paths::WorkspacePaths, Codemod,
+};
+use crate::file_walker;
 
 /// Arguments for the `migrate` command
 #[derive(Args, Debug, Default, Clone)]
-#[command(about = "Migrate PCB projects from .zen files")]
+#[command(about = "Migrate PCB projects to V2 format")]
 pub struct MigrateArgs {
     /// One or more .zen files or directories containing .zen files to migrate.
     /// When omitted, all .zen files in the current directory tree are considered.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
-
-    /// Run a specific migration
-    #[arg(long, value_name = "NAME")]
-    pub migration: Option<String>,
 }
 
 /// Execute the `migrate` command
 pub fn execute(args: MigrateArgs) -> Result<()> {
-    // Handle specific migrations
-    if let Some(migration_name) = &args.migration {
-        match migration_name.as_str() {
-            "v2" => return v2::migrate_to_v2(&args.paths),
-            _ => anyhow::bail!("Unknown migration: {}", migration_name),
-        }
+    let start = if args.paths.is_empty() {
+        std::env::current_dir()?
+    } else {
+        args.paths[0].clone()
+    };
+
+    let file_provider = Arc::new(DefaultFileProvider::new());
+
+    // Step 1: Find workspace root
+    eprintln!("Step 1: Detecting workspace root");
+    let workspace_root = find_workspace_root(&*file_provider, &start);
+    eprintln!("  Workspace root: {}", workspace_root.display());
+
+    // Step 2: Detect git repository info
+    eprintln!("\nStep 2: Detecting git repository");
+    let repository = manifest_v2::detect_repository(&workspace_root)?;
+    let repo_subpath = manifest_v2::detect_repo_subpath(&workspace_root)?;
+
+    // Step 3: Convert pcb.toml files to V2 (must happen BEFORE .zen file discovery)
+    eprintln!("\nStep 3: Converting pcb.toml files to V2");
+    manifest_v2::convert_workspace_to_v2(&workspace_root, &repository, repo_subpath.as_deref())?;
+
+    // Step 4: Discover .zen files (now that workspace is V2)
+    eprintln!("\nStep 4: Discovering .zen files");
+    let zen_files = file_walker::collect_zen_files(&[&workspace_root], false)?;
+    eprintln!("  Found {} .zen files", zen_files.len());
+
+    if zen_files.is_empty() {
+        eprintln!("  No .zen files found, skipping codemods");
+    } else {
+        // Build context for codemods
+        let ctx = MigrateContext {
+            workspace_root: workspace_root.clone(),
+            repository,
+            repo_subpath,
+        };
+
+        // Step 5: Run all codemods on .zen files
+        eprintln!("\nStep 5: Running codemods on .zen files");
+        let codemods: Vec<Box<dyn Codemod>> = vec![
+            Box::new(RemoveDirectoryLoads),
+            Box::new(WorkspacePaths),
+            Box::new(EscapePaths),
+            Box::new(AliasExpansion),
+            Box::new(PathCorrection),
+        ];
+        run_codemods(&ctx, &zen_files, &codemods)?;
     }
 
-    // Initialize ruff formatter once to format files after migrations
-    let formatter = RuffFormatter::default();
-    // Determine target files - always recursive for directories
-    let zen_paths = crate::file_walker::collect_zen_files(&args.paths, false)?;
+    eprintln!("\n✓ Migration complete");
+    eprintln!("  Review changes with: git diff");
+    eprintln!("  Run build to verify: pcb build");
 
-    if zen_paths.is_empty() {
-        let cwd = std::env::current_dir()?;
-        anyhow::bail!(
-            "No .zen source files found in {}",
-            cwd.canonicalize().unwrap_or(cwd).display()
-        );
-    }
+    Ok(())
+}
 
-    // Initialize codemods sequence
-    let codemods: Vec<Box<dyn codemods::Codemod>> = vec![Box::new(
-        codemods::remove_directory_loads::RemoveDirectoryLoads,
-    )];
-
+/// Run codemods on a list of .zen files
+fn run_codemods(
+    ctx: &MigrateContext,
+    zen_paths: &[PathBuf],
+    codemods: &[Box<dyn Codemod>],
+) -> Result<()> {
     let mut has_errors = false;
 
     for path in zen_paths {
@@ -60,13 +100,13 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
 
         let mut spinner = Some(Spinner::builder(format!("{file_name}: Migrating")).start());
 
-        let original = fs::read_to_string(&path)?;
+        let original = fs::read_to_string(path)?;
         let mut content = original.clone();
         let mut changed = false;
 
         let mut file_failed = false;
-        for codemod in &codemods {
-            match codemod.apply(&path, &content) {
+        for codemod in codemods {
+            match codemod.apply(ctx, path, &content) {
                 Ok(Some(updated)) => {
                     content = updated;
                     changed = true;
@@ -88,25 +128,13 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
         }
 
         if changed && content != original {
-            if let Err(e) = fs::write(&path, content) {
+            if let Err(e) = fs::write(path, content) {
                 if let Some(sp) = spinner.take() {
                     sp.error(format!("{file_name}: Failed to write changes: {e}"));
                 } else {
                     Spinner::builder(format!("{file_name}: Migrating"))
                         .start()
                         .error(format!("{file_name}: Failed to write changes: {e}"));
-                }
-                has_errors = true;
-                continue;
-            }
-            // Format file after successful write
-            if let Err(e) = formatter.format_file(&path) {
-                if let Some(sp) = spinner.take() {
-                    sp.error(format!("{file_name}: Format failed: {e}"));
-                } else {
-                    Spinner::builder(format!("{file_name}: Migrating"))
-                        .start()
-                        .error(format!("{file_name}: Format failed: {e}"));
                 }
                 has_errors = true;
                 continue;
@@ -123,11 +151,6 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
             if let Some(sp) = spinner.take() {
                 sp.finish();
             }
-            eprintln!(
-                "{} {} (no changes)",
-                pcb_ui::icons::success(),
-                file_name.with_style(Style::Green).bold()
-            );
         }
     }
 

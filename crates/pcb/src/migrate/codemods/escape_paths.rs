@@ -1,53 +1,29 @@
 use anyhow::{Context, Result};
-use pcb_zen::ast_utils::{apply_edits, collect_zen_files, visit_string_literals, SourceEdit};
+use pcb_zen::ast_utils::{apply_edits, visit_string_literals, SourceEdit};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
 use std::path::{Path, PathBuf};
 
-/// Convert cross-package relative paths and workspace-relative paths (//) to URLs in .zen files
-pub fn convert_escape_paths(
-    workspace_root: &Path,
-    repository: &str,
-    workspace_path: Option<&str>,
-) -> Result<()> {
-    let zen_files = collect_zen_files(workspace_root)?;
+use super::{Codemod, MigrateContext};
 
-    if zen_files.is_empty() {
-        eprintln!("  No .zen files found");
-        return Ok(());
-    }
+/// Convert cross-package relative paths to URLs in .zen files
+pub struct EscapePaths;
 
-    let mut converted_count = 0;
+impl Codemod for EscapePaths {
+    fn apply(&self, ctx: &MigrateContext, zen_file: &Path, content: &str) -> Result<Option<String>> {
+        let package_root = find_package_root(zen_file, &ctx.workspace_root);
+        let repo_subpath = ctx.repo_subpath.as_ref().map(|p| p.to_string_lossy());
 
-    for zen_file in &zen_files {
-        let content = std::fs::read_to_string(zen_file)
-            .with_context(|| format!("Failed to read {}", zen_file.display()))?;
-
-        let package_root = find_package_root(zen_file, workspace_root);
-
-        if let Some(updated) = convert_file(
+        convert_file(
             zen_file,
-            &content,
+            content,
             &package_root,
-            workspace_root,
-            repository,
-            workspace_path,
-        )? {
-            std::fs::write(zen_file, updated)
-                .with_context(|| format!("Failed to write {}", zen_file.display()))?;
-            eprintln!("  ✓ {}", zen_file.display());
-            converted_count += 1;
-        }
+            &ctx.workspace_root,
+            &ctx.repository,
+            repo_subpath.as_deref(),
+        )
     }
-
-    if converted_count == 0 {
-        eprintln!("  No paths to convert");
-    } else {
-        eprintln!("  Converted {} file(s)", converted_count);
-    }
-
-    Ok(())
 }
 
 /// Find the package root (nearest pcb.toml) for a .zen file

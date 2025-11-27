@@ -1,9 +1,11 @@
-use anyhow::{Context, Result};
-use pcb_zen::ast_utils::{apply_edits, collect_zen_files, visit_string_literals, SourceEdit};
+use anyhow::Result;
+use pcb_zen::ast_utils::{apply_edits, visit_string_literals, SourceEdit};
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::module::AstModuleFields;
 use std::path::Path;
+
+use super::{Codemod, MigrateContext};
 
 const REGISTRY_PREFIX: &str = "github.com/diodeinc/registry/";
 
@@ -109,35 +111,62 @@ const PATH_CORRECTIONS: &[(&str, &str)] = &[
     ("harness/harness", "modules/Harness/Harness"),
 ];
 
-pub fn correct_paths(workspace_root: &Path) -> Result<()> {
-    let zen_files = collect_zen_files(workspace_root)?;
+/// Correct stale registry paths in .zen files
+pub struct PathCorrection;
 
-    if zen_files.is_empty() {
-        eprintln!("  No .zen files found");
-        return Ok(());
-    }
+impl Codemod for PathCorrection {
+    fn apply(&self, _ctx: &MigrateContext, _path: &Path, content: &str) -> Result<Option<String>> {
+        let mut dialect = Dialect::Extended;
+        dialect.enable_f_strings = true;
 
-    let mut converted_count = 0;
+        let ast = match AstModule::parse("<memory>", content.to_owned(), &dialect) {
+            Ok(a) => a,
+            Err(_) => return Ok(None),
+        };
 
-    for zen_file in &zen_files {
-        let content = std::fs::read_to_string(zen_file)
-            .with_context(|| format!("Failed to read {}", zen_file.display()))?;
+        let mut edits: Vec<SourceEdit> = Vec::new();
 
-        if let Some(updated) = convert_file(&content)? {
-            std::fs::write(zen_file, &updated)
-                .with_context(|| format!("Failed to write {}", zen_file.display()))?;
-            eprintln!("  ✓ {}", zen_file.display());
-            converted_count += 1;
+        ast.statement().visit_expr(|expr| {
+            visit_string_literals(expr, &mut |s, lit_expr| {
+                if let Some(corrected) = try_correct_path(s) {
+                    let span = ast.codemap().resolve_span(lit_expr.span);
+                    edits.push((
+                        span.begin.line,
+                        span.begin.column,
+                        span.end.line,
+                        span.end.column,
+                        format!("\"{}\"", corrected),
+                    ));
+                }
+            });
+        });
+
+        for stmt in starlark_syntax::syntax::top_level_stmts::top_level_stmts(ast.statement()) {
+            let StmtP::Load(load) = &stmt.node else {
+                continue;
+            };
+
+            let module_path: &str = &load.module.node;
+            if let Some(corrected) = try_correct_path(module_path) {
+                let span = ast.codemap().resolve_span(load.module.span);
+                edits.push((
+                    span.begin.line,
+                    span.begin.column,
+                    span.end.line,
+                    span.end.column,
+                    format!("\"{}\"", corrected),
+                ));
+            }
         }
-    }
 
-    if converted_count == 0 {
-        eprintln!("  No paths to correct");
-    } else {
-        eprintln!("  Corrected {} file(s)", converted_count);
-    }
+        if edits.is_empty() {
+            return Ok(None);
+        }
 
-    Ok(())
+        let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
+        apply_edits(&mut lines, edits);
+        Ok(Some(lines.join("\n")))
+    }
 }
 
 fn try_correct_path(path_str: &str) -> Option<String> {
@@ -150,62 +179,10 @@ fn try_correct_path(path_str: &str) -> Option<String> {
     None
 }
 
-fn convert_file(content: &str) -> Result<Option<String>> {
-    let mut dialect = Dialect::Extended;
-    dialect.enable_f_strings = true;
-
-    let ast = match AstModule::parse("<memory>", content.to_owned(), &dialect) {
-        Ok(a) => a,
-        Err(_) => return Ok(None),
-    };
-
-    let mut edits: Vec<SourceEdit> = Vec::new();
-
-    ast.statement().visit_expr(|expr| {
-        visit_string_literals(expr, &mut |s, lit_expr| {
-            if let Some(corrected) = try_correct_path(s) {
-                let span = ast.codemap().resolve_span(lit_expr.span);
-                edits.push((
-                    span.begin.line,
-                    span.begin.column,
-                    span.end.line,
-                    span.end.column,
-                    format!("\"{}\"", corrected),
-                ));
-            }
-        });
-    });
-
-    for stmt in starlark_syntax::syntax::top_level_stmts::top_level_stmts(ast.statement()) {
-        let StmtP::Load(load) = &stmt.node else {
-            continue;
-        };
-
-        let module_path: &str = &load.module.node;
-        if let Some(corrected) = try_correct_path(module_path) {
-            let span = ast.codemap().resolve_span(load.module.span);
-            edits.push((
-                span.begin.line,
-                span.begin.column,
-                span.end.line,
-                span.end.column,
-                format!("\"{}\"", corrected),
-            ));
-        }
-    }
-
-    if edits.is_empty() {
-        return Ok(None);
-    }
-
-    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
-    apply_edits(&mut lines, edits);
-    Ok(Some(lines.join("\n")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_try_correct_path() {
@@ -259,7 +236,13 @@ mod tests {
 MyModule = Module("github.com/diodeinc/registry/graphics/logos/Logo.zen")
 "#;
 
-        let result = convert_file(content)?;
+        let ctx = MigrateContext {
+            workspace_root: PathBuf::from("/workspace"),
+            repository: "github.com/test/repo".to_string(),
+            repo_subpath: None,
+        };
+        let codemod = PathCorrection;
+        let result = codemod.apply(&ctx, Path::new("test.zen"), content)?;
         assert!(result.is_some());
 
         let updated = result.unwrap();

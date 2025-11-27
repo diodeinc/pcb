@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::Codemod;
+use super::{Codemod, MigrateContext};
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::{file_extensions, CoreLoadResolver, DefaultFileProvider, LoadResolver};
 use starlark::syntax::{AstModule, Dialect};
@@ -14,7 +14,7 @@ use starlark_syntax::syntax::module::AstModuleFields;
 pub struct RemoveDirectoryLoads;
 
 impl Codemod for RemoveDirectoryLoads {
-    fn apply(&self, current_file: &Path, content: &str) -> Result<Option<String>> {
+    fn apply(&self, _ctx: &MigrateContext, current_file: &Path, content: &str) -> Result<Option<String>> {
         let file_provider = Arc::new(DefaultFileProvider::new());
         let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
         let resolver =
@@ -349,6 +349,14 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn dummy_ctx(workspace_root: &Path) -> MigrateContext {
+        MigrateContext {
+            workspace_root: workspace_root.to_path_buf(),
+            repository: "github.com/test/repo".to_string(),
+            repo_subpath: None,
+        }
+    }
+
     #[test]
     fn rewrites_directory_loads_when_all_symbols_exist() -> Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -362,8 +370,9 @@ mod tests {
         let content = "load(\"./mods\", \"A\", \"B\")\n";
         fs::write(&file, content)?;
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let updated = codemod.apply(&file, content)?;
+        let updated = codemod.apply(&ctx, &file, content)?;
         assert!(updated.is_some());
         let out = updated.unwrap();
         insta::assert_snapshot!(out, @r#"A = Module("./mods/A.zen")
@@ -383,8 +392,9 @@ B = Module("./mods/B.zen")"#);
         let content = "load(\"./mods\", \"A\", \"B\")\n";
         fs::write(&file, content)?;
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let updated = codemod.apply(&file, content);
+        let updated = codemod.apply(&ctx, &file, content);
         assert!(updated.is_err());
         Ok(())
     }
@@ -402,8 +412,9 @@ B = Module("./mods/B.zen")"#);
         let content = "load(\"./mods\", X = \"A\", \"B\")\n";
         fs::write(&file, content)?;
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let updated = codemod.apply(&file, content)?;
+        let updated = codemod.apply(&ctx, &file, content)?;
         assert!(updated.is_some());
         let out = updated.unwrap();
         insta::assert_snapshot!(out, @r#"X = Module("./mods/A.zen")
@@ -429,8 +440,9 @@ load("./mods", "B")
 "#;
         std::fs::write(&file, content)?;
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let updated = codemod.apply(&file, content)?;
+        let updated = codemod.apply(&ctx, &file, content)?;
         assert!(updated.is_some());
         let out = updated.unwrap();
         insta::assert_snapshot!(out, @r#"# header
@@ -456,8 +468,9 @@ B = Module("./mods/B.zen")
         let content = "load(\"./mods\", \"A\")\n";
         std::fs::write(&file, content).unwrap();
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let res = codemod.apply(&file, content);
+        let res = codemod.apply(&ctx, &file, content);
         assert!(
             res.is_err(),
             "expected error when non-starlark file matches stem"
@@ -481,8 +494,9 @@ _419_10_210_30_007000(
 "#;
         std::fs::write(&file, content)?;
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let updated = codemod.apply(&file, content)?;
+        let updated = codemod.apply(&ctx, &file, content)?;
         assert!(updated.is_some());
         let out = updated.unwrap();
         insta::assert_snapshot!(out, @r#"Component(
@@ -507,8 +521,9 @@ S(name = "U1", symbol = Symbol("already.kicad_sym"))
 "#;
         std::fs::write(&file, content)?;
 
+        let ctx = dummy_ctx(tmp.path());
         let codemod = RemoveDirectoryLoads;
-        let updated = codemod.apply(&file, content)?;
+        let updated = codemod.apply(&ctx, &file, content)?;
         assert!(updated.is_some());
         let out = updated.unwrap();
         insta::assert_snapshot!(out, @r#"

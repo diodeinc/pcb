@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn rev_parse(repo_root: &Path, ref_name: &str) -> Option<String> {
@@ -498,5 +498,127 @@ fn format_ssh_url(module_path: &str) -> String {
         format!("git@{}:{}.git", parts[0], parts[1])
     } else {
         format!("https://{}.git", module_path)
+    }
+}
+
+/// Get the git repository root for a path
+pub fn get_repo_root(path: &Path) -> anyhow::Result<PathBuf> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()?;
+
+    if !out.status.success() {
+        return Err(anyhow::anyhow!("Not in a git repository"));
+    }
+
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    ))
+}
+
+/// Get the remote URL for a specific remote (not just origin)
+pub fn get_remote_url_for(repo_root: &Path, remote: &str) -> anyhow::Result<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("remote")
+        .arg("get-url")
+        .arg(remote)
+        .output()?;
+
+    if !out.status.success() {
+        return Err(anyhow::anyhow!(
+            "No git remote '{}' configured. Run: git remote add {} <url>",
+            remote,
+            remote
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Detect the repository URL from the current branch's tracking remote
+///
+/// Returns URL in standard format: github.com/user/repo
+pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
+    // Try to get the current branch's upstream
+    let upstream_output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("--symbolic-full-name")
+        .arg("@{u}")
+        .output()?;
+
+    let remote = if upstream_output.status.success() {
+        // Extract remote name from upstream (e.g., "origin/main" -> "origin")
+        let upstream = String::from_utf8_lossy(&upstream_output.stdout)
+            .trim()
+            .to_string();
+        upstream
+            .split('/')
+            .next()
+            .unwrap_or("origin")
+            .to_string()
+    } else {
+        // Fall back to "origin" if no upstream configured
+        "origin".to_string()
+    };
+
+    let url = get_remote_url_for(repo_root, &remote)?;
+    parse_remote_url(&url)
+}
+
+/// Parse various git URL formats to standard form: github.com/user/repo
+pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
+    // Handle HTTPS: https://github.com/user/repo.git -> github.com/user/repo
+    if let Some(rest) = url.strip_prefix("https://") {
+        let normalized = rest.strip_suffix(".git").unwrap_or(rest);
+        return Ok(normalized.to_string());
+    }
+
+    // Handle SSH: git@github.com:user/repo.git -> github.com/user/repo
+    if let Some(rest) = url.strip_prefix("git@") {
+        let normalized = rest
+            .replace(':', "/")
+            .strip_suffix(".git")
+            .unwrap_or(&rest.replace(':', "/"))
+            .to_string();
+        return Ok(normalized);
+    }
+
+    Err(anyhow::anyhow!("Unsupported git URL format: {}", url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_remote_url_https() {
+        assert_eq!(
+            parse_remote_url("https://github.com/diodeinc/stdlib.git").unwrap(),
+            "github.com/diodeinc/stdlib"
+        );
+        assert_eq!(
+            parse_remote_url("https://github.com/diodeinc/stdlib").unwrap(),
+            "github.com/diodeinc/stdlib"
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh() {
+        assert_eq!(
+            parse_remote_url("git@github.com:diodeinc/stdlib.git").unwrap(),
+            "github.com/diodeinc/stdlib"
+        );
+        assert_eq!(
+            parse_remote_url("git@github.com:diodeinc/stdlib").unwrap(),
+            "github.com/diodeinc/stdlib"
+        );
     }
 }
