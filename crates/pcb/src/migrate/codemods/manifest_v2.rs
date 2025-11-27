@@ -1,32 +1,10 @@
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use pcb_zen::git;
 use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 
 use crate::file_walker::skip_vendor;
-
-/// Detect git repository URL from the current branch's tracking remote
-pub fn detect_repository(workspace_root: &Path) -> Result<String> {
-    git::detect_repository_url(workspace_root)
-}
-
-/// Calculate workspace path relative to git repository root
-pub fn detect_repo_subpath(workspace_root: &Path) -> Result<Option<PathBuf>> {
-    let git_root = git::get_repo_root(workspace_root)?;
-
-    // Calculate relative path
-    let rel = workspace_root
-        .strip_prefix(&git_root)
-        .context("Workspace not within git repository")?;
-
-    if rel == Path::new("") {
-        Ok(None) // Workspace at repo root
-    } else {
-        Ok(Some(rel.to_path_buf()))
-    }
-}
 
 /// Convert all pcb.toml files in workspace to V2
 pub fn convert_workspace_to_v2(

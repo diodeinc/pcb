@@ -284,6 +284,18 @@ pub fn detect_repository_url(repo_root: &Path) -> anyhow::Result<String> {
     parse_remote_url(&url)
 }
 
+pub fn get_repo_subpath(workspace_root: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let git_root = get_repo_root(workspace_root)?;
+    let rel = workspace_root
+        .strip_prefix(&git_root)
+        .map_err(|_| anyhow::anyhow!("Workspace not within git repository"))?;
+    if rel == Path::new("") {
+        Ok(None)
+    } else {
+        Ok(Some(rel.to_path_buf()))
+    }
+}
+
 pub fn has_uncommitted_changes(repo_root: &Path) -> anyhow::Result<bool> {
     let out = git(repo_root).args(["status", "--porcelain"]).output()?;
     if !out.status.success() {

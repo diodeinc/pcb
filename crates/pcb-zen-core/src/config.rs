@@ -189,6 +189,20 @@ pub struct WorkspaceConfig {
     pub default_board: Option<String>,
 }
 
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            name: None,
+            repository: None,
+            path: None,
+            resolver: None,
+            pcb_version: None,
+            default_board: None,
+            members: default_members(),
+        }
+    }
+}
+
 /// Access control configuration (shared by V1 and V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessConfig {
@@ -560,9 +574,8 @@ pub struct WorkspaceInfo {
     /// Workspace root directory
     pub root: PathBuf,
 
-    /// Workspace configuration if present
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub config: Option<WorkspaceConfig>,
+    /// Workspace configuration
+    pub config: WorkspaceConfig,
 
     /// All discovered boards
     pub boards: Vec<BoardInfo>,
@@ -653,12 +666,9 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
 pub fn discover_boards(
     file_provider: &dyn FileProvider,
     workspace_root: &Path,
-    workspace_config: &Option<WorkspaceConfig>,
+    workspace_config: &WorkspaceConfig,
 ) -> Result<DiscoveryResult> {
-    let member_patterns = workspace_config
-        .as_ref()
-        .map(|c| c.members.clone())
-        .unwrap_or_else(default_members);
+    let member_patterns = workspace_config.members.clone();
 
     // Build glob matchers
     let mut builder = GlobSetBuilder::new();
@@ -840,50 +850,19 @@ pub fn get_workspace_info(
     let workspace_root = find_workspace_root(file_provider, start_path);
 
     // Try to read workspace config
-    let workspace_config = {
-        let pcb_toml_path = workspace_root.join("pcb.toml");
-        if file_provider.exists(&pcb_toml_path) {
-            match PcbToml::from_file(file_provider, &pcb_toml_path) {
-                Ok(config) => {
-                    if config.is_v2() {
-                        // TODO: Handle V2 workspace config
-                        None
-                    } else {
-                        config.workspace
-                    }
-                }
-                Err(_) => None,
-            }
-        } else {
-            None
-        }
-    };
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+    let workspace_config = if file_provider.exists(&pcb_toml_path) {
+        PcbToml::from_file(file_provider, &pcb_toml_path)?.workspace
+    } else {
+        None
+    }.unwrap_or_default();
 
     // Discover boards
     let discovery = discover_boards(file_provider, &workspace_root, &workspace_config)?;
 
-    // If no default_board is configured and we have boards, set the last one as default
-    let mut final_config = workspace_config;
-    if let Some(config) = &mut final_config {
-        if config.default_board.is_none() && !discovery.boards.is_empty() {
-            config.default_board = Some(discovery.boards.last().unwrap().name.clone());
-        }
-    } else if !discovery.boards.is_empty() {
-        // Create a minimal workspace config with the last board as default
-        final_config = Some(WorkspaceConfig {
-            name: None,
-            repository: None,
-            path: None,
-            resolver: None,
-            pcb_version: None,
-            members: default_members(),
-            default_board: Some(discovery.boards.last().unwrap().name.clone()),
-        });
-    }
-
     Ok(WorkspaceInfo {
         root: workspace_root,
-        config: final_config,
+        config: workspace_config,
         boards: discovery.boards,
         errors: discovery.errors,
     })

@@ -228,16 +228,12 @@ fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
     println!("{}", "Workspace".with_style(Style::Blue).bold());
     println!("Root: {}", info.root.display());
 
-    if let Some(config) = &info.config {
-        if let Some(name) = &config.name {
-            println!("Name: {name}");
-        }
-        // Only show members if not default value
-        if config.members != vec!["boards/*".to_string()] {
-            println!("Members: {}", config.members.join(", "));
-        }
-    } else {
-        println!("No workspace configuration found");
+    if let Some(name) = &info.config.name {
+        println!("Name: {name}");
+    }
+    // Only show members if not default value
+    if info.config.members != vec!["boards/*".to_string()] {
+        println!("Members: {}", info.config.members.join(", "));
     }
 
     // Display errors if any
@@ -254,15 +250,13 @@ fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
     if info.boards.is_empty() {
         println!("No boards discovered");
         println!("Searched for pcb.toml files with [board] sections");
-        if let Some(config) = &info.config {
-            // Only show members if not default value
-            if config.members != vec!["boards/*".to_string()] {
-                println!("Members: {}", config.members.join(", "));
-            }
+        // Only show members if not default value
+        if info.config.members != vec!["boards/*".to_string()] {
+            println!("Members: {}", info.config.members.join(", "));
         }
     } else {
         // Get default board for marking
-        let default_board = info.config.as_ref().and_then(|c| c.default_board.as_ref());
+        let default_board = info.config.default_board.as_ref();
 
         println!(
             "{} ({})",

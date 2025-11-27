@@ -60,8 +60,9 @@ fn try_convert_path(
     repository: &str,
     workspace_path: Option<&str>,
 ) -> Option<String> {
-    // Skip aliases and already-converted URLs
-    if path_str.starts_with('@')
+    // Skip non-.zen files, aliases, and already-converted URLs
+    if !path_str.ends_with(".zen")
+        || path_str.starts_with('@')
         || path_str.starts_with("github.com/")
         || path_str.starts_with("gitlab.com/")
     {
