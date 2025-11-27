@@ -733,45 +733,41 @@ pub fn discover_boards(
                 if file_provider.exists(&pcb_toml_path) {
                     match PcbToml::from_file(file_provider, &pcb_toml_path) {
                         Ok(config) => {
-                            // Handle V1 board configs
-                            if !config.is_v2() {
-                                if let Some(board_config) = &config.board {
-                                    visited_directories.insert(path.to_path_buf());
+                            if let Some(board_config) = &config.board {
+                                visited_directories.insert(path.to_path_buf());
 
-                                    // Determine the zen file path
-                                    let zen_path = if let Some(configured_path) = &board_config.path
-                                    {
-                                        configured_path.clone()
-                                    } else {
-                                        // Look for single .zen file in directory
-                                        match find_single_zen_file(path) {
-                                            Some(zen_file) => zen_file,
-                                            None => {
-                                                errors.push(DiscoveryError {
-                                                    path: pcb_toml_path.clone(),
-                                                    error: "No path specified and no single .zen file found in directory".to_string(),
-                                                });
-                                                continue;
-                                            }
+                                // Determine the zen file path
+                                let zen_path = if let Some(configured_path) = &board_config.path {
+                                    configured_path.clone()
+                                } else {
+                                    // Look for single .zen file in directory
+                                    match find_single_zen_file(path) {
+                                        Some(zen_file) => zen_file,
+                                        None => {
+                                            errors.push(DiscoveryError {
+                                                path: pcb_toml_path.clone(),
+                                                error: "No path specified and no single .zen file found in directory".to_string(),
+                                            });
+                                            continue;
                                         }
-                                    };
+                                    }
+                                };
 
-                                    let workspace_relative_zen_path = relative_path.join(&zen_path);
-                                    let board = BoardInfo {
-                                        name: board_config.name.clone(),
-                                        zen_path: workspace_relative_zen_path
-                                            .to_string_lossy()
-                                            .to_string(),
-                                        description: board_config.description.clone(),
-                                    };
-                                    insert_board(
-                                        &mut boards_by_name,
-                                        &mut errors,
-                                        board,
-                                        pcb_toml_path,
-                                        false,
-                                    );
-                                }
+                                let workspace_relative_zen_path = relative_path.join(&zen_path);
+                                let board = BoardInfo {
+                                    name: board_config.name.clone(),
+                                    zen_path: workspace_relative_zen_path
+                                        .to_string_lossy()
+                                        .to_string(),
+                                    description: board_config.description.clone(),
+                                };
+                                insert_board(
+                                    &mut boards_by_name,
+                                    &mut errors,
+                                    board,
+                                    pcb_toml_path,
+                                    false,
+                                );
                             }
                         }
                         Err(e) => {
@@ -782,55 +778,6 @@ pub fn discover_boards(
                         }
                     }
                 }
-            }
-        }
-    }
-
-    // Secondary pass: Look for legacy boards directly under boards/
-    let boards_dir = workspace_root.join("boards");
-    if file_provider.exists(&boards_dir) {
-        // Use FileProvider for consistency
-        let entries = match std::fs::read_dir(&boards_dir) {
-            Ok(entries) => entries,
-            Err(_) => {
-                return Ok(DiscoveryResult {
-                    boards: Vec::new(),
-                    errors,
-                })
-            }
-        };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-
-            // Skip if not a directory or already visited
-            if !path.is_dir() || visited_directories.contains(&path) {
-                continue;
-            }
-
-            // Look for single .zen file in this directory
-            if let Some(zen_filename) = find_single_zen_file(&path) {
-                // Board name is the filename without extension
-                let board_name = zen_filename
-                    .strip_suffix(".zen")
-                    .unwrap_or(&zen_filename)
-                    .to_string();
-
-                // Calculate workspace-relative path
-                let board_dir_relative = path.strip_prefix(workspace_root).unwrap_or(&path);
-                let workspace_relative_zen_path = board_dir_relative.join(&zen_filename);
-                let board = BoardInfo {
-                    name: board_name,
-                    zen_path: workspace_relative_zen_path.to_string_lossy().to_string(),
-                    description: String::new(),
-                };
-                insert_board(
-                    &mut boards_by_name,
-                    &mut errors,
-                    board,
-                    path.join(&zen_filename),
-                    true,
-                );
             }
         }
     }
@@ -855,7 +802,8 @@ pub fn get_workspace_info(
         PcbToml::from_file(file_provider, &pcb_toml_path)?.workspace
     } else {
         None
-    }.unwrap_or_default();
+    }
+    .unwrap_or_default();
 
     // Discover boards
     let discovery = discover_boards(file_provider, &workspace_root, &workspace_config)?;
