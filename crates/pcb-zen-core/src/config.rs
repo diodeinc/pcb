@@ -10,11 +10,12 @@ use crate::FileProvider;
 
 /// Top-level pcb.toml configuration
 ///
-/// Version detection:
-/// - If [workspace].resolver = "2" → V2 mode (new packaging system)
-/// - Else → V1 mode (legacy)
+/// Version detection uses the `is_v2()` method:
+/// - V1 requires explicit V1-only constructs: `[packages]` or `[module]`
+/// - V2 is the default - empty pcb.toml, board-only, or any V2 fields are all valid V2
+/// - `resolver = "2"` is only needed at workspace root to opt-in an existing V1 workspace
 ///
-/// Both V1 and V2 fields coexist in the same struct. The resolver value determines behavior.
+/// Both V1 and V2 fields coexist in the same struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PcbToml {
     /// Workspace configuration section
@@ -54,28 +55,29 @@ pub struct PcbToml {
 }
 
 impl PcbToml {
+    /// Check if this requires V1 mode
+    ///
+    /// V1 is required when using V1-only constructs that have no V2 equivalent:
+    /// - `[packages]` section (V2 uses `[dependencies]`)
+    /// - `[module]` section (V2 uses different module system)
+    fn requires_v1(&self) -> bool {
+        !self.packages.is_empty() || self.module.is_some()
+    }
+
     /// Check if this is V2 mode
+    ///
     /// - Workspace with resolver="2" → V2
-    /// - Workspace with no resolver or resolver="1" → V1
-    /// - Has V1 [packages] section → V1
-    /// - Has V2 fields (dependencies, assets, patch, vendor) → V2
-    /// - Empty or ambiguous → V1 (backwards compat)
+    /// - Workspace with resolver="1" or no resolver → V1 (backwards compat)
+    /// - No workspace + V1 constructs (packages, module) → V1
+    /// - No workspace + no V1 constructs → V2 (e.g., empty pcb.toml, board-only)
     pub fn is_v2(&self) -> bool {
-        // Explicit resolver in workspace takes precedence
         if let Some(w) = &self.workspace {
+            // Workspace present: must explicitly opt-in to V2
             return w.resolver.as_deref() == Some("2");
         }
 
-        // V1 [packages] section means V1
-        if !self.packages.is_empty() {
-            return false;
-        }
-
-        // V2-specific fields indicate V2
-        !self.dependencies.is_empty()
-            || !self.assets.is_empty()
-            || !self.patch.is_empty()
-            || self.vendor.is_some()
+        // No workspace: V2 unless it has V1-only constructs
+        !self.requires_v1()
     }
 
     /// Parse from TOML string
@@ -104,22 +106,9 @@ impl PcbToml {
         self.board.is_some()
     }
 
-    /// Get the version as a string
-    pub fn version(&self) -> &str {
-        if self.is_v2() {
-            "2"
-        } else {
-            "1"
-        }
-    }
-
     /// Get package aliases (V1 only - V2 does not support aliases)
     pub fn packages(&self) -> HashMap<String, String> {
-        if self.is_v2() {
-            HashMap::new()
-        } else {
-            self.packages.clone()
-        }
+        self.packages.clone()
     }
 
     /// Auto-generate aliases from dependencies and assets (V2 only)
@@ -204,7 +193,7 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessConfig {
     /// Access control list (email patterns)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub allow: Vec<String>,
 }
 
@@ -595,26 +584,27 @@ impl BoardInfo {
     }
 }
 
-/// Walk up the directory tree starting at `start` until a directory containing
-/// `pcb.toml` with a `[workspace]` section is found. If we reach the filesystem root
-/// without finding one, return the start directory (or its parent if start is a file).
+/// Find the workspace root by walking up from `start`.
+///
+/// Resolution order:
+/// 1. First pcb.toml with explicit `[workspace]` section wins
+/// 2. If no explicit workspace found, first pcb.toml encountered
+/// 3. If no pcb.toml found, the start directory (or parent if start is a file)
+///
 /// Always returns a canonicalized absolute path.
 pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
-    // Convert to absolute path using combinators
     let abs_start = start
         .canonicalize()
         .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(start)))
         .unwrap_or_else(|_| start.to_path_buf());
 
-    // Start directory (parent if file, self if directory)
     let start_dir = if file_provider.is_directory(&abs_start) {
         abs_start
     } else {
         abs_start.parent().unwrap_or(&abs_start).to_path_buf()
     };
 
-    // Walk up looking for workspace
-    // Strategy: Prefer explicit [workspace], fall back to first V2 pcb.toml (implicit workspace)
+    // Collect all pcb.toml locations walking up
     let candidates: Vec<_> = std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent())
         .filter_map(|dir| {
             let pcb_toml = dir.join("pcb.toml");
@@ -623,22 +613,13 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Pa
             }
 
             match PcbToml::from_file(file_provider, &pcb_toml) {
-                Ok(config) => {
-                    let is_explicit_workspace = config.is_workspace();
-                    let is_v2 = config.is_v2();
-                    // V1 requires explicit workspace; V2 can be implicit
-                    if is_explicit_workspace || is_v2 {
-                        Some((dir.to_path_buf(), is_explicit_workspace))
-                    } else {
-                        None
-                    }
-                }
+                Ok(config) => Some((dir.to_path_buf(), config.is_workspace())),
                 Err(_) => None,
             }
         })
         .collect();
 
-    // Prefer explicit workspaces, fall back to first V2 package (implicit workspace)
+    // Prefer explicit [workspace], otherwise first pcb.toml
     candidates
         .iter()
         .find(|(_, is_explicit)| *is_explicit)
@@ -965,7 +946,6 @@ kicad = "@github/diodeinc/kicad"
         assert!(config.is_workspace());
         assert!(!config.is_module());
         assert!(!config.is_board());
-        assert_eq!(config.version(), "1");
 
         let workspace = config.workspace.unwrap();
         assert_eq!(workspace.name, Some("test_workspace".to_string()));
@@ -980,7 +960,8 @@ kicad = "@github/diodeinc/kicad"
     }
 
     #[test]
-    fn test_parse_v1_board() {
+    fn test_parse_board_only() {
+        // Board-only configs are V2 (no V1-specific constructs)
         let content = r#"
 [board]
 name = "TestBoard"
@@ -989,14 +970,28 @@ description = "A test board"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_v2());
+        assert!(config.is_v2()); // No V1 constructs, so it's V2
         assert!(config.is_board());
-        assert_eq!(config.version(), "1");
 
         let board = config.board.unwrap();
         assert_eq!(board.name, "TestBoard");
         assert_eq!(board.path, Some("test_board.zen".to_string()));
         assert_eq!(board.description, "A test board");
+    }
+
+    #[test]
+    fn test_parse_v1_module() {
+        // [module] section requires V1
+        let content = r#"
+[module]
+name = "stdlib"
+module_path = "github.com/diodeinc/stdlib"
+version = "0.3.0"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        assert!(!config.is_v2()); // Has [module], requires V1
+        assert!(config.is_module());
     }
 
     #[test]
@@ -1014,7 +1009,6 @@ description = "Power Regulator Board"
 
         let config = PcbToml::parse(content).unwrap();
         assert!(config.is_v2());
-        assert_eq!(config.version(), "2");
 
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.resolver.as_deref(), Some("2"));
@@ -1040,7 +1034,6 @@ allow = ["*@weaverobots.com"]
         let config = PcbToml::parse(content).unwrap();
         assert!(config.is_v2());
         assert!(config.is_workspace());
-        assert_eq!(config.version(), "2");
 
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.resolver.as_deref(), Some("2"));
@@ -1168,7 +1161,13 @@ name = "TestBoard"
 
         let config = PcbToml::parse(content).unwrap();
         assert!(!config.is_v2());
-        assert_eq!(config.version(), "1");
+    }
+
+    #[test]
+    fn test_empty_is_v2() {
+        // Empty pcb.toml is valid V2 (no V1 constructs)
+        let config = PcbToml::parse("").unwrap();
+        assert!(config.is_v2());
     }
 
     #[test]
