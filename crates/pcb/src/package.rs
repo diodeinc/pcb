@@ -1,7 +1,4 @@
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
-use blake3::Hasher;
 use clap::Args;
 use std::path::PathBuf;
 
@@ -38,63 +35,26 @@ pub fn execute(args: PackageArgs) -> Result<()> {
         println!("\nTotal: {} entries\n", entries.len());
     }
 
-    // Create canonical tar and compute hash
-    let mut hasher = Hasher::new();
-    let mut tar_data = Vec::new();
-
-    if args.output.is_some() {
-        // Need to buffer the tar data to write to file
-        let cursor = std::io::Cursor::new(&mut tar_data);
-        let mut multi_writer = MultiWriter::new(&mut hasher, cursor);
-        pcb_zen::canonical::create_canonical_tar(&path, &mut multi_writer)?;
-    } else {
-        // Just stream to hasher
-        pcb_zen::canonical::create_canonical_tar(&path, &mut hasher)?;
-    }
-
-    let hash = hasher.finalize();
-    let hash_b64 = BASE64.encode(hash.as_bytes());
-
-    println!("Content hash: h1:{}", hash_b64);
-
-    // Compute manifest hash if pcb.toml exists
-    let manifest_path = path.join("pcb.toml");
-    if manifest_path.exists() {
-        let manifest_content = std::fs::read(&manifest_path)?;
-        let manifest_hash = blake3::hash(&manifest_content);
-        let manifest_hash_b64 = BASE64.encode(manifest_hash.as_bytes());
-        println!("Manifest hash: h1:{}", manifest_hash_b64);
-    }
-
     // Write tar file if requested
-    if let Some(output_path) = args.output {
-        std::fs::write(&output_path, &tar_data)?;
+    if let Some(output_path) = &args.output {
+        let mut tar_data = Vec::new();
+        pcb_zen::canonical::create_canonical_tar(&path, &mut tar_data)?;
+        std::fs::write(output_path, &tar_data)?;
         println!("Wrote tar to: {}", output_path.display());
         println!("Tar size: {} bytes", tar_data.len());
     }
 
+    // Compute and print content hash
+    let content_hash = pcb_zen::canonical::compute_content_hash_from_dir(&path)?;
+    println!("Content hash: {}", content_hash);
+
+    // Compute manifest hash if pcb.toml exists
+    let manifest_path = path.join("pcb.toml");
+    if manifest_path.exists() {
+        let manifest_content = std::fs::read_to_string(&manifest_path)?;
+        let manifest_hash = pcb_zen::canonical::compute_manifest_hash(&manifest_content);
+        println!("Manifest hash: {}", manifest_hash);
+    }
+
     Ok(())
-}
-
-/// MultiWriter that writes to both a hasher and another writer
-struct MultiWriter<'a, W: std::io::Write> {
-    hasher: &'a mut Hasher,
-    writer: W,
-}
-
-impl<'a, W: std::io::Write> MultiWriter<'a, W> {
-    fn new(hasher: &'a mut Hasher, writer: W) -> Self {
-        Self { hasher, writer }
-    }
-}
-
-impl<'a, W: std::io::Write> std::io::Write for MultiWriter<'a, W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.hasher.update(buf);
-        self.writer.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.writer.flush()
-    }
 }
