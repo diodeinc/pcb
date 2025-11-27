@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 pub mod codemods;
 
+use crate::file_walker;
 pub use codemods::MigrateContext;
 use codemods::{
     alias_expansion::AliasExpansion, escape_paths::EscapePaths, manifest_v2,
     path_correction::PathCorrection, remove_directory_loads::RemoveDirectoryLoads,
     workspace_paths::WorkspacePaths, Codemod,
 };
-use crate::file_walker;
 
 /// Arguments for the `migrate` command
 #[derive(Args, Debug, Default, Clone)]
@@ -147,10 +147,8 @@ fn run_codemods(
                 pcb_ui::icons::success(),
                 file_name.with_style(Style::Green).bold()
             );
-        } else {
-            if let Some(sp) = spinner.take() {
-                sp.finish();
-            }
+        } else if let Some(sp) = spinner.take() {
+            sp.finish();
         }
     }
 

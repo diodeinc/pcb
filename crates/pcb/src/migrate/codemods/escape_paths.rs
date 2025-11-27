@@ -11,7 +11,12 @@ use super::{Codemod, MigrateContext};
 pub struct EscapePaths;
 
 impl Codemod for EscapePaths {
-    fn apply(&self, ctx: &MigrateContext, zen_file: &Path, content: &str) -> Result<Option<String>> {
+    fn apply(
+        &self,
+        ctx: &MigrateContext,
+        zen_file: &Path,
+        content: &str,
+    ) -> Result<Option<String>> {
         let package_root = find_package_root(zen_file, &ctx.workspace_root);
         let repo_subpath = ctx.repo_subpath.as_ref().map(|p| p.to_string_lossy());
 

@@ -12,10 +12,10 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use walkdir::WalkDir;
 
+use crate::git;
 use crate::resolve_v2::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// Information about a V2 workspace package member
@@ -161,8 +161,8 @@ fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V
         .unwrap_or_else(|| vec!["boards/*".to_string()]);
 
     let member_dirs = discover_member_dirs(workspace_root, &member_patterns)?;
-    let tags = get_local_git_tags(workspace_root);
-    let tag_annotations = get_all_tag_annotations(workspace_root);
+    let tags = git::list_all_tags_vec(workspace_root);
+    let tag_annotations = git::get_all_tag_annotations(workspace_root);
 
     let base_url = match (&repository, &path) {
         (Some(repo), Some(p)) => Some(format!("{}/{}", repo, p)),
@@ -488,26 +488,7 @@ fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
     let rel_path = package_dir
         .strip_prefix(workspace_root)
         .unwrap_or(package_dir);
-
-    let path_arg = if rel_path == Path::new("") {
-        ".".to_string()
-    } else {
-        rel_path.to_string_lossy().to_string()
-    };
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("status")
-        .arg("--porcelain")
-        .arg("--")
-        .arg(&path_arg)
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => !o.stdout.is_empty(),
-        _ => true,
-    }
+    git::has_uncommitted_changes_in_path(workspace_root, rel_path)
 }
 
 /// Parse hashes from tag annotation body (pcb.sum style format)
@@ -571,70 +552,6 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
     }
 }
 
-/// Get local git tags from a repository
-fn get_local_git_tags(workspace_root: &Path) -> Vec<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("tag")
-        .arg("-l")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Batch read all tag annotations from a repository
-///
-/// Uses a single `git for-each-ref` command to read all tag annotations at once,
-/// avoiding N separate git commands for N tags. Returns map of tag_name -> annotation_body.
-fn get_all_tag_annotations(workspace_root: &Path) -> HashMap<String, String> {
-    // Use a unique separator that won't appear in tag names or annotations
-    const RECORD_SEP: &str = "\x1E"; // ASCII Record Separator
-    const FIELD_SEP: &str = "\x1F"; // ASCII Unit Separator
-
-    let format = format!("%(refname:short){FIELD_SEP}%(contents){RECORD_SEP}");
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("for-each-ref")
-        .arg(format!("--format={}", format))
-        .arg("refs/tags")
-        .output()
-        .ok();
-
-    let Some(output) = output else {
-        return HashMap::new();
-    };
-
-    if !output.status.success() {
-        return HashMap::new();
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut result = HashMap::new();
-
-    for record in stdout.split(RECORD_SEP) {
-        let record = record.trim();
-        if record.is_empty() {
-            continue;
-        }
-
-        if let Some((tag_name, body)) = record.split_once(FIELD_SEP) {
-            result.insert(tag_name.to_string(), body.to_string());
-        }
-    }
-
-    result
-}
-
 /// Discover member package directories matching glob patterns
 pub fn discover_member_dirs(workspace_root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
     if patterns.is_empty() {
@@ -690,7 +607,7 @@ pub fn build_workspace_member_versions(
         None => repo.clone(),
     };
 
-    let tags = get_local_git_tags(workspace_root);
+    let tags = git::list_all_tags_vec(workspace_root);
 
     let mut versions = HashMap::new();
 
