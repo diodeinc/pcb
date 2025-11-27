@@ -60,20 +60,10 @@ pub fn convert_workspace_to_v2(
 
 /// Detect member patterns based on existing directories
 fn detect_member_patterns(workspace_root: &Path) -> Result<Vec<String>> {
-    let base_patterns = [
-        "components/*",
-        "reference/*",
-        "common/*",
-        "modules/*",
-        "boards/*",
-        "graphics/*",
-        "harness/*",
-        "generic-eda/*",
-    ];
+    let base_patterns = pcb_zen_core::config::default_members();
     let mut filtered = Vec::new();
 
     for pattern in &base_patterns {
-        // Extract directory name (e.g., "components/*" -> "components")
         let dir_name = pattern.trim_end_matches("/*");
         let dir_path = workspace_root.join(dir_name);
 
