@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{detect_v2_workspace, PackageInfo, V2Workspace};
-use pcb_zen_core::config::get_workspace_info;
+use pcb_zen::workspace::{detect_v2_workspace, get_workspace_info, PackageInfo, V2Workspace};
+use pcb_zen_core::config::default_members;
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
 use std::env;
@@ -32,7 +32,7 @@ pub enum OutputFormat {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum WorkspaceInfoOutput {
-    V1(pcb_zen_core::config::WorkspaceInfo),
+    V1(pcb_zen::workspace::WorkspaceInfo),
     V2(V2Workspace),
 }
 
@@ -224,7 +224,7 @@ fn print_package_line(pkg: &PackageInfo, ws: &V2Workspace) {
     );
 }
 
-fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
+fn print_v1_human_readable(info: &pcb_zen::workspace::WorkspaceInfo) {
     println!("{}", "Workspace".with_style(Style::Blue).bold());
     println!("Root: {}", info.root.display());
 
@@ -232,7 +232,7 @@ fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
         println!("Name: {name}");
     }
     // Only show members if not default value
-    if info.config.members != vec!["boards/*".to_string()] {
+    if info.config.members != default_members() {
         println!("Members: {}", info.config.members.join(", "));
     }
 
@@ -251,7 +251,7 @@ fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
         println!("No boards discovered");
         println!("Searched for pcb.toml files with [board] sections");
         // Only show members if not default value
-        if info.config.members != vec!["boards/*".to_string()] {
+        if info.config.members != default_members() {
             println!("Members: {}", info.config.members.join(", "));
         }
     } else {

@@ -1,12 +1,12 @@
-//! V2 Workspace introspection and member discovery
+//! Workspace introspection and member discovery
 //!
-//! Provides high-level APIs for querying V2 workspace information without
+//! Provides high-level APIs for querying workspace information without
 //! running full dependency resolution. Used by `pcb info` and other commands
 //! that need workspace metadata.
 
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
-use pcb_zen_core::config::{find_workspace_root, PcbToml};
+use pcb_zen_core::config::{find_workspace_root, PcbToml, WorkspaceConfig};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,101 @@ use walkdir::WalkDir;
 
 use crate::git;
 use crate::resolve_v2::{compute_content_hash_from_dir, compute_manifest_hash};
+
+/// A discovered member package in the workspace
+#[derive(Debug, Clone)]
+pub struct MemberPackage {
+    /// Package URL (e.g., "github.com/diodeinc/registry/components/LED")
+    pub url: String,
+    /// Package directory (absolute path)
+    pub dir: PathBuf,
+    /// Package directory relative to workspace root
+    pub rel_path: PathBuf,
+    /// Parsed pcb.toml config
+    pub config: PcbToml,
+    /// Latest published version from git tags (or "0.1.0" if unpublished)
+    pub version: String,
+}
+
+/// Board discovery information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardInfo {
+    /// Board name
+    pub name: String,
+    /// Path to the .zen file (relative to workspace root)
+    pub zen_path: String,
+    /// Board description
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    pub description: String,
+}
+
+impl BoardInfo {
+    /// Get the absolute path to the board's .zen file
+    pub fn absolute_zen_path(&self, workspace_root: &Path) -> PathBuf {
+        workspace_root.join(&self.zen_path)
+    }
+}
+
+/// Discovery errors that can occur during board discovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryError {
+    pub path: PathBuf,
+    pub error: String,
+}
+
+/// Result of board discovery with any errors encountered
+#[derive(Debug, Clone)]
+pub struct DiscoveryResult {
+    pub boards: Vec<BoardInfo>,
+    pub errors: Vec<DiscoveryError>,
+}
+
+/// Workspace information with discovered boards (V1/simple info)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceInfo {
+    /// Workspace root directory
+    pub root: PathBuf,
+    /// Workspace configuration
+    pub config: WorkspaceConfig,
+    /// All discovered boards
+    pub boards: Vec<BoardInfo>,
+    /// Discovery errors
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub errors: Vec<DiscoveryError>,
+}
+
+impl WorkspaceInfo {
+    /// Given an absolute .zen path, return the board name
+    pub fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
+        let canon = zen_path.canonicalize().ok()?;
+        self.boards
+            .iter()
+            .find(|b| b.absolute_zen_path(&self.root) == canon)
+            .map(|b| b.name.clone())
+    }
+
+    /// Given an absolute .zen path, return the full BoardInfo
+    pub fn board_info_for_zen(&self, zen_path: &Path) -> Option<&BoardInfo> {
+        let canon = zen_path.canonicalize().ok()?;
+        self.boards
+            .iter()
+            .find(|b| b.absolute_zen_path(&self.root) == canon)
+    }
+
+    /// Find a board by name, returning an error with available boards if not found
+    pub fn find_board_by_name(&self, board_name: &str) -> Result<&BoardInfo> {
+        self.boards
+            .iter()
+            .find(|b| b.name == board_name)
+            .ok_or_else(|| {
+                let available: Vec<_> = self.boards.iter().map(|b| b.name.as_str()).collect();
+                anyhow::anyhow!(
+                    "Board '{board_name}' not found. Available: [{}]",
+                    available.join(", ")
+                )
+            })
+    }
+}
 
 /// Information about a V2 workspace package member
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,15 +247,14 @@ pub fn detect_v2_workspace_with_provider(
 fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V2Workspace>> {
     use rayon::prelude::*;
 
+    let file_provider = DefaultFileProvider::new();
     let ws = config.workspace.as_ref();
     let repository = ws.and_then(|w| w.repository.clone());
     let path = ws.and_then(|w| w.path.clone());
     let pcb_version = ws.and_then(|w| w.pcb_version.clone());
-    let member_patterns = ws
-        .map(|w| w.members.clone())
-        .unwrap_or_else(|| vec!["boards/*".to_string()]);
+    let workspace_config = config.workspace.clone().unwrap_or_default();
 
-    let member_dirs = discover_member_dirs(workspace_root, &member_patterns)?;
+    let member_packages = discover_packages(&file_provider, workspace_root, &workspace_config)?;
     let tags = git::list_all_tags_vec(workspace_root);
     let tag_annotations = git::get_all_tag_annotations(workspace_root);
 
@@ -171,11 +265,10 @@ fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V
     };
 
     // Build package infos in parallel
-    let packages: Vec<PackageInfo> = member_dirs
+    let packages: Vec<PackageInfo> = member_packages
         .par_iter()
-        .filter_map(|dir| {
-            let rel_path = dir.strip_prefix(workspace_root).ok()?;
-            let rel_str = rel_path.to_string_lossy();
+        .filter_map(|pkg| {
+            let rel_str = pkg.rel_path.to_string_lossy();
             if rel_str.is_empty() {
                 return None;
             }
@@ -183,7 +276,7 @@ fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V
                 .as_ref()
                 .map(|base| format!("{}/{}", base, rel_str))
                 .unwrap_or_else(|| rel_str.to_string());
-            build_package_info(dir, &url, workspace_root, &path, &tags, &tag_annotations).ok()
+            build_package_info(&pkg.dir, &url, workspace_root, &path, &tags, &tag_annotations).ok()
         })
         .collect();
 
@@ -220,7 +313,7 @@ fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V
         repository,
         path,
         pcb_version,
-        member_patterns,
+        member_patterns: workspace_config.members.clone(),
         packages,
         root_package,
     }))
@@ -552,94 +645,159 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
     }
 }
 
-/// Discover member package directories matching glob patterns
-pub fn discover_member_dirs(workspace_root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
+/// Discover all member packages in a workspace matching the given patterns
+pub fn discover_packages(
+    file_provider: &dyn FileProvider,
+    workspace_root: &Path,
+    workspace_config: &WorkspaceConfig,
+) -> Result<Vec<MemberPackage>> {
+    let patterns = &workspace_config.members;
     if patterns.is_empty() {
         return Ok(vec![]);
     }
 
+    // Compute base URL from workspace config
+    let base_url = match (&workspace_config.repository, &workspace_config.path) {
+        (Some(repo), Some(p)) => Some(format!("{}/{}", repo, p)),
+        (Some(repo), None) => Some(repo.clone()),
+        _ => None,
+    };
+
+    // Fetch git tags once for version lookup
+    let tags = git::list_all_tags_vec(workspace_root);
+
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         builder.add(Glob::new(pattern)?);
-        // Also match exact directory (e.g., "boards" matches "boards/*")
         if let Some(exact) = pattern.strip_suffix("/*") {
             builder.add(Glob::new(exact)?);
         }
     }
     let glob_set = builder.build()?;
 
-    let mut dirs = Vec::new();
+    let mut packages = Vec::new();
     for entry in WalkDir::new(workspace_root)
         .into_iter()
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if !path.is_dir() || !path.join("pcb.toml").exists() {
+        if !path.is_dir() {
             continue;
         }
-        if let Ok(rel_path) = path.strip_prefix(workspace_root) {
-            if glob_set.is_match(rel_path) {
-                dirs.push(path.to_path_buf());
-            }
+        let pcb_toml_path = path.join("pcb.toml");
+        if !file_provider.exists(&pcb_toml_path) {
+            continue;
         }
+        let Ok(rel_path) = path.strip_prefix(workspace_root) else {
+            continue;
+        };
+        if !glob_set.is_match(rel_path) {
+            continue;
+        }
+        let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+        let rel_str = rel_path.to_string_lossy();
+        let url = base_url
+            .as_ref()
+            .map(|base| format!("{}/{}", base, rel_str))
+            .unwrap_or_else(|| rel_str.to_string());
+
+        // Compute version from git tags
+        let tag_prefix = compute_tag_prefix(Some(rel_path), &workspace_config.path);
+        let version =
+            find_latest_version(&tags, &tag_prefix).unwrap_or_else(|| "0.1.0".to_string());
+
+        packages.push(MemberPackage {
+            url,
+            dir: path.to_path_buf(),
+            rel_path: rel_path.to_path_buf(),
+            config,
+            version,
+        });
     }
 
-    Ok(dirs)
+    packages.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    Ok(packages)
 }
 
-/// Build workspace member versions map for auto-deps
-///
-/// Returns map: module_path -> version (latest published or "0.1.0" for unpublished)
-pub fn build_workspace_member_versions(
-    config: &PcbToml,
+/// Discover all boards in a workspace - packages with [board] section
+pub fn discover_boards(
+    file_provider: &dyn FileProvider,
     workspace_root: &Path,
-    member_dirs: &[PathBuf],
-) -> HashMap<String, String> {
-    let Some(ws) = &config.workspace else {
-        return HashMap::new();
-    };
-    let Some(repo) = &ws.repository else {
-        return HashMap::new();
-    };
+    workspace_config: &WorkspaceConfig,
+) -> Result<DiscoveryResult> {
+    let packages = discover_packages(file_provider, workspace_root, workspace_config)?;
 
-    let base = match &ws.path {
-        Some(p) => format!("{}/{}", repo, p),
-        None => repo.clone(),
-    };
+    let mut boards_by_name: HashMap<String, BoardInfo> = HashMap::new();
+    let mut errors = Vec::new();
 
-    let tags = git::list_all_tags_vec(workspace_root);
+    for pkg in packages {
+        let Some(board_config) = &pkg.config.board else {
+            continue;
+        };
 
-    let mut versions = HashMap::new();
-
-    // Root package
-    let root_prefix = match &ws.path {
-        Some(p) => format!("{}/v", p),
-        None => "v".to_string(),
-    };
-    versions.insert(
-        base.clone(),
-        find_latest_version(&tags, &root_prefix).unwrap_or_else(|| "0.1.0".to_string()),
-    );
-
-    // Member packages
-    for dir in member_dirs {
-        if let Ok(rel) = dir.strip_prefix(workspace_root) {
-            let rel_str = rel.to_string_lossy();
-            if !rel_str.is_empty() {
-                let url = format!("{}/{}", base, rel_str);
-                let tag_prefix = match &ws.path {
-                    Some(p) => format!("{}/{}/v", p, rel_str),
-                    None => format!("{}/v", rel_str),
-                };
-                versions.insert(
-                    url,
-                    find_latest_version(&tags, &tag_prefix).unwrap_or_else(|| "0.1.0".to_string()),
-                );
+        let zen_path = if let Some(configured_path) = &board_config.path {
+            configured_path.clone()
+        } else {
+            match find_single_zen_file(&pkg.dir) {
+                Some(zen_file) => zen_file,
+                None => {
+                    errors.push(DiscoveryError {
+                        path: pkg.dir.join("pcb.toml"),
+                        error: "No path specified and no single .zen file found".to_string(),
+                    });
+                    continue;
+                }
             }
+        };
+
+        let board = BoardInfo {
+            name: board_config.name.clone(),
+            zen_path: pkg.rel_path.join(&zen_path).to_string_lossy().to_string(),
+            description: board_config.description.clone(),
+        };
+
+        let has_conflict = boards_by_name
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case(&board.name));
+        if has_conflict {
+            errors.push(DiscoveryError {
+                path: pkg.dir.join("pcb.toml"),
+                error: format!("Duplicate board name: '{}'", board.name),
+            });
+        } else {
+            boards_by_name.insert(board.name.clone(), board);
         }
     }
 
-    versions
+    let mut boards: Vec<_> = boards_by_name.into_values().collect();
+    boards.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(DiscoveryResult { boards, errors })
+}
+
+/// Get complete workspace information including discovered boards
+pub fn get_workspace_info(
+    file_provider: &dyn FileProvider,
+    start_path: &Path,
+) -> Result<WorkspaceInfo> {
+    let workspace_root = find_workspace_root(file_provider, start_path);
+
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+    let workspace_config = if file_provider.exists(&pcb_toml_path) {
+        PcbToml::from_file(file_provider, &pcb_toml_path)?.workspace
+    } else {
+        None
+    }
+    .unwrap_or_default();
+
+    let discovery = discover_boards(file_provider, &workspace_root, &workspace_config)?;
+
+    Ok(WorkspaceInfo {
+        root: workspace_root,
+        config: workspace_config,
+        boards: discovery.boards,
+        errors: discovery.errors,
+    })
 }
 
 #[cfg(test)]
