@@ -277,7 +277,9 @@ fn print_v1_human_readable(info: &pcb_zen_core::config::WorkspaceInfo) {
 
             println!("  {} - {}", name_display, board.zen_path);
             if !board.description.is_empty() {
-                println!("    {}", board.description);
+                // Show only the first line of description
+                let first_line = board.description.lines().next().unwrap_or("");
+                println!("    {}", first_line);
             }
         }
     }
