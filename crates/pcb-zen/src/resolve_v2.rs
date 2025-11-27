@@ -1598,7 +1598,11 @@ fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, std::fs::FileTy
             continue;
         }
         let file_type = entry.file_type().unwrap();
-        entries.push((rel_path.to_path_buf(), file_type));
+        // Only include files - directories are implicit from file paths in tar
+        // This avoids issues with empty directories (which git doesn't track anyway)
+        if file_type.is_file() {
+            entries.push((rel_path.to_path_buf(), file_type));
+        }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(entries)
@@ -1609,20 +1613,17 @@ pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
     let entries = collect_canonical_entries(dir)?;
     Ok(entries
         .into_iter()
-        .map(|(p, ft)| {
-            let suffix = if ft.is_dir() { "/" } else { "" };
-            format!("{}{}", p.display(), suffix)
-        })
+        .map(|(p, _ft)| p.display().to_string())
         .collect())
 }
 
 /// Create a canonical, deterministic tar archive from a directory
 ///
 /// Rules from packaging.md:
-/// - Regular files and directories only (no symlinks, devices)
+/// - Regular files only (directories are implicit from paths)
 /// - Relative paths, forward slashes, lexicographic order
 /// - Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
-/// - File mode: 0644, directory mode: 0755
+/// - File mode: 0644
 /// - End with two 512-byte zero blocks
 /// - Respect .gitignore and filter internal marker files
 /// - Exclude nested packages (subdirs with pcb.toml + [package])
@@ -1635,46 +1636,25 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
 
     let entries = collect_canonical_entries(dir)?;
 
-    // Add entries to tar
-    for (rel_path, file_type) in entries {
+    for (rel_path, _file_type) in entries {
         let full_path = dir.join(&rel_path);
         let path_str = rel_path.to_str().unwrap().replace('\\', "/");
 
-        if file_type.is_dir() {
-            // Directory entry - use append_path_with_contents for automatic long path handling
-            let mut header = Header::new_gnu();
-            header.set_size(0);
-            header.set_mode(0o755);
-            header.set_mtime(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_username("")?;
-            header.set_groupname("")?;
-            header.set_entry_type(tar::EntryType::Directory);
+        let file = fs::File::open(&full_path)?;
+        let len = file.metadata()?.len();
+        let mut header = Header::new_gnu();
+        header.set_size(len);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_username("")?;
+        header.set_groupname("")?;
+        header.set_entry_type(tar::EntryType::Regular);
 
-            // Use append_data which handles long paths via PAX extensions
-            builder.append_data(&mut header, &path_str, &[][..])?;
-        } else if file_type.is_file() {
-            // Regular file - stream directly to avoid buffering in memory
-            let file = fs::File::open(&full_path)?;
-            let len = file.metadata()?.len();
-            let mut header = Header::new_gnu();
-            header.set_size(len);
-            header.set_mode(0o644);
-            header.set_mtime(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_username("")?;
-            header.set_groupname("")?;
-            header.set_entry_type(tar::EntryType::Regular);
-
-            // Use append_data which handles long paths via PAX extensions
-            builder.append_data(&mut header, &path_str, file)?;
-        }
-        // Skip symlinks and other special files
+        builder.append_data(&mut header, &path_str, file)?;
     }
 
-    // Finish tar (adds two 512-byte zero blocks)
     builder.finish()?;
 
     Ok(())
