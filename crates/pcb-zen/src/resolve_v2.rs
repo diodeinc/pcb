@@ -986,10 +986,19 @@ fn fetch_package(
         ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string(), true)?;
     let pcb_toml_path = package_root.join("pcb.toml");
 
-    // Compute and store hashes
+    // Compute hashes
     let content_hash = compute_content_hash_from_dir(&package_root)?;
     let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
     let manifest_hash = compute_manifest_hash(&manifest_content);
+
+    // Verify against expected hashes from git tag
+    verify_tag_hashes(
+        &checkout_dir,
+        module_path,
+        version,
+        &content_hash,
+        &manifest_hash,
+    )?;
 
     let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
     std::fs::write(&cache_marker, marker_content)?;
@@ -1562,6 +1571,51 @@ fn build_workspace_members(
     members
 }
 
+/// Collect entries for canonical tar (shared between create and list)
+fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, std::fs::FileType)>> {
+    let mut entries = Vec::new();
+    let package_root = dir.to_path_buf();
+    for result in WalkBuilder::new(dir)
+        .filter_entry(move |entry| {
+            let path = entry.path();
+            if entry.file_type().is_some_and(|ft| ft.is_dir())
+                && path != package_root
+                && path.join("pcb.toml").is_file()
+            {
+                return false;
+            }
+            true
+        })
+        .build()
+    {
+        let entry = result?;
+        let path = entry.path();
+        let rel_path = match path.strip_prefix(dir) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if rel_path == Path::new("") {
+            continue;
+        }
+        let file_type = entry.file_type().unwrap();
+        entries.push((rel_path.to_path_buf(), file_type));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(entries)
+}
+
+/// List entries that would be included in canonical tar (for debugging)
+pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
+    let entries = collect_canonical_entries(dir)?;
+    Ok(entries
+        .into_iter()
+        .map(|(p, ft)| {
+            let suffix = if ft.is_dir() { "/" } else { "" };
+            format!("{}{}", p.display(), suffix)
+        })
+        .collect())
+}
+
 /// Create a canonical, deterministic tar archive from a directory
 ///
 /// Rules from packaging.md:
@@ -1577,68 +1631,9 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
     use tar::{Builder, Header};
 
     let mut builder = Builder::new(writer);
-
-    // Use PAX format for long path support (KiCad footprints have very long paths)
     builder.mode(tar::HeaderMode::Deterministic);
 
-    // Collect all files and directories, sorted lexicographically
-    // Use ignore crate to respect .gitignore
-    let mut entries = Vec::new();
-    let package_root = dir.to_path_buf(); // Clone for closure
-    for result in WalkBuilder::new(dir)
-        .hidden(false) // Don't skip hidden files (we want .zen files if hidden)
-        .git_ignore(true) // Respect .gitignore
-        .git_global(false) // Don't use global gitignore
-        .git_exclude(true) // Respect .git/info/exclude
-        .filter_entry(move |entry| {
-            let path = entry.path();
-
-            // Filter out .git directory entirely (don't descend into it)
-            if let Some(file_name) = entry.file_name().to_str() {
-                if file_name == ".git" {
-                    return false;
-                }
-            }
-
-            // Prune nested packages: if this is a directory with pcb.toml + [package],
-            // and it's not the root we're packaging, exclude it and its entire subtree
-            if entry.file_type().is_some_and(|ft| ft.is_dir())
-                && path != package_root
-                && path.join("pcb.toml").is_file()
-            {
-                return false; // Prune this entire subtree
-            }
-
-            true
-        })
-        .build()
-    {
-        let entry = result?;
-        let path = entry.path();
-
-        // Skip internal marker files (.full-checkout, .pcbcache)
-        if let Some(file_name) = path.file_name() {
-            let name = file_name.to_str().unwrap_or("");
-            if name == ".full-checkout" || name == ".pcbcache" {
-                continue;
-            }
-        }
-
-        // Get relative path
-        let rel_path = match path.strip_prefix(dir) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if rel_path == Path::new("") {
-            continue; // Skip root
-        }
-
-        let file_type = entry.file_type().unwrap();
-        entries.push((rel_path.to_path_buf(), file_type));
-    }
-
-    // Sort lexicographically
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let entries = collect_canonical_entries(dir)?;
 
     // Add entries to tar
     for (rel_path, file_type) in entries {
@@ -1660,10 +1655,11 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
             // Use append_data which handles long paths via PAX extensions
             builder.append_data(&mut header, &path_str, &[][..])?;
         } else if file_type.is_file() {
-            // Regular file - use append_data for automatic long path handling
-            let content = fs::read(&full_path)?;
+            // Regular file - stream directly to avoid buffering in memory
+            let file = fs::File::open(&full_path)?;
+            let len = file.metadata()?.len();
             let mut header = Header::new_gnu();
-            header.set_size(content.len() as u64);
+            header.set_size(len);
             header.set_mode(0o644);
             header.set_mtime(0);
             header.set_uid(0);
@@ -1673,7 +1669,7 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
             header.set_entry_type(tar::EntryType::Regular);
 
             // Use append_data which handles long paths via PAX extensions
-            builder.append_data(&mut header, &path_str, &content[..])?;
+            builder.append_data(&mut header, &path_str, file)?;
         }
         // Skip symlinks and other special files
     }
@@ -1710,6 +1706,78 @@ pub fn compute_manifest_hash(manifest_content: &str) -> String {
     let hash = blake3::hash(manifest_content.as_bytes());
 
     format!("h1:{}", STANDARD.encode(hash.as_bytes()))
+}
+
+/// Verify computed hashes match the expected hashes from the git tag annotation
+fn verify_tag_hashes(
+    checkout_dir: &Path,
+    module_path: &str,
+    version: &Version,
+    content_hash: &str,
+    manifest_hash: &str,
+) -> Result<()> {
+    // Read tag annotation from FETCH_HEAD (the fetched tag object)
+    let output = std::process::Command::new("git")
+        .args(["cat-file", "-p", "FETCH_HEAD"])
+        .current_dir(checkout_dir)
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let tag_body = String::from_utf8_lossy(&output.stdout);
+    let Some((expected_content, expected_manifest)) = parse_hashes_from_tag_body(&tag_body) else {
+        return Ok(());
+    };
+
+    if content_hash != expected_content {
+        anyhow::bail!(
+            "Content hash mismatch for {}@v{}\n  \
+            Expected (from tag): {}\n  \
+            Computed:            {}\n\n\
+            This may indicate a bug in the packaging toolchain.",
+            module_path,
+            version,
+            expected_content,
+            content_hash
+        );
+    }
+
+    if manifest_hash != expected_manifest {
+        anyhow::bail!(
+            "Manifest hash mismatch for {}@v{}\n  \
+            Expected (from tag): {}\n  \
+            Computed:            {}\n\n\
+            This may indicate a bug in the packaging toolchain.",
+            module_path,
+            version,
+            expected_manifest,
+            manifest_hash
+        );
+    }
+
+    Ok(())
+}
+
+/// Parse content and manifest hashes from tag annotation body
+fn parse_hashes_from_tag_body(body: &str) -> Option<(String, String)> {
+    let mut content_hash = None;
+    let mut manifest_hash = None;
+
+    for line in body.lines() {
+        let line = line.trim();
+        if let Some(hash_start) = line.find(" h1:") {
+            let hash = line[hash_start + 1..].to_string();
+            if line[..hash_start].ends_with("/pcb.toml") {
+                manifest_hash = Some(hash);
+            } else {
+                content_hash = Some(hash);
+            }
+        }
+    }
+
+    content_hash.zip(manifest_hash)
 }
 
 /// Ensure sparse-checkout working tree for a module at specific version
@@ -1828,6 +1896,19 @@ fn ensure_sparse_checkout(
                 repo_url,
                 version_str
             );
+        }
+
+        // Cone mode includes root files (/*) - delete all except .git*, subpath
+        let subpath_root = subpath.split('/').next().unwrap();
+        for entry in std::fs::read_dir(checkout_dir)?.flatten() {
+            let name = entry.file_name();
+            let keep = name == ".git"
+                || name.to_string_lossy().starts_with(".git")
+                || name == subpath_root;
+            if !keep {
+                let _ = std::fs::remove_dir_all(entry.path())
+                    .or_else(|_| std::fs::remove_file(entry.path()));
+            }
         }
 
         // Move all contents from subpath_dir to checkout_dir

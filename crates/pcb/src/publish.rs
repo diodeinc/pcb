@@ -363,16 +363,10 @@ fn build_publish_candidates<'a>(
             let next_version = compute_next_version(pkg);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
-            let content_hash = pkg
-                .content_hash
-                .clone()
-                .map(Ok)
-                .unwrap_or_else(|| resolve_v2::compute_content_hash_from_dir(&pkg.path))?;
-
-            let manifest_hash = pkg.manifest_hash.clone().unwrap_or_else(|| {
-                let content = std::fs::read_to_string(pkg.path.join("pcb.toml")).unwrap();
-                resolve_v2::compute_manifest_hash(&content)
-            });
+            // Always recompute hashes - pcb.toml may have been modified by a previous wave
+            let content_hash = resolve_v2::compute_content_hash_from_dir(&pkg.path)?;
+            let manifest_content = std::fs::read_to_string(pkg.path.join("pcb.toml"))?;
+            let manifest_hash = resolve_v2::compute_manifest_hash(&manifest_content);
 
             Ok(PublishCandidate {
                 pkg,

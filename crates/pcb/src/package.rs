@@ -28,6 +28,16 @@ pub fn execute(args: PackageArgs) -> Result<()> {
 
     println!("Packaging: {}", path.display());
 
+    // If verbose, list what files will be included
+    if args.verbose {
+        println!("\nFiles included:");
+        let entries = pcb_zen::resolve_v2::list_canonical_tar_entries(&path)?;
+        for entry in &entries {
+            println!("  {}", entry);
+        }
+        println!("\nTotal: {} entries\n", entries.len());
+    }
+
     // Create canonical tar and compute hash
     let mut hasher = Hasher::new();
     let mut tar_data = Vec::new();
