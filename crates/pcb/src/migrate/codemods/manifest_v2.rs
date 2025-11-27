@@ -1,101 +1,20 @@
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
+use pcb_zen::git;
 use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::file_walker::skip_vendor;
 
 /// Detect git repository URL from the current branch's tracking remote
-fn detect_repository(workspace_root: &Path) -> Result<String> {
-    // Try to get the current branch's upstream
-    let upstream_output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("rev-parse")
-        .arg("--abbrev-ref")
-        .arg("--symbolic-full-name")
-        .arg("@{u}")
-        .output()
-        .context("Failed to get git upstream branch")?;
-
-    let remote = if upstream_output.status.success() {
-        // Extract remote name from upstream (e.g., "origin/main" -> "origin")
-        let upstream = String::from_utf8(upstream_output.stdout)?
-            .trim()
-            .to_string();
-        upstream
-            .split('/')
-            .next()
-            .context("Invalid upstream format")?
-            .to_string()
-    } else {
-        // Fall back to "origin" if no upstream configured
-        "origin".to_string()
-    };
-
-    // Get remote URL
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("remote")
-        .arg("get-url")
-        .arg(&remote)
-        .output()
-        .context("Failed to get remote URL")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "No git remote '{}' configured. Run: git remote add {} <url>",
-            remote,
-            remote
-        );
-    }
-
-    let url = String::from_utf8(output.stdout)?.trim().to_string();
-
-    // Parse URL to standard format: github.com/user/repo
-    parse_git_url(&url)
-}
-
-/// Parse various git URL formats to standard form
-fn parse_git_url(url: &str) -> Result<String> {
-    // Handle HTTPS: https://github.com/user/repo.git -> github.com/user/repo
-    if let Some(rest) = url.strip_prefix("https://") {
-        let normalized = rest.strip_suffix(".git").unwrap_or(rest);
-        return Ok(normalized.to_string());
-    }
-
-    // Handle SSH: git@github.com:user/repo.git -> github.com/user/repo
-    if let Some(rest) = url.strip_prefix("git@") {
-        let normalized = rest
-            .replace(':', "/")
-            .strip_suffix(".git")
-            .unwrap_or(&rest.replace(':', "/"))
-            .to_string();
-        return Ok(normalized);
-    }
-
-    anyhow::bail!("Unsupported git URL format: {}", url)
+pub fn detect_repository(workspace_root: &Path) -> Result<String> {
+    git::detect_repository_url(workspace_root)
 }
 
 /// Calculate workspace path relative to git repository root
-fn detect_workspace_path(workspace_root: &Path) -> Result<Option<String>> {
-    // Get git repository root
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_root)
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()
-        .context("Failed to get git repository root")?;
-
-    if !output.status.success() {
-        anyhow::bail!("Not in a git repository");
-    }
-
-    let git_root = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+pub fn detect_repo_subpath(workspace_root: &Path) -> Result<Option<PathBuf>> {
+    let git_root = git::get_repo_root(workspace_root)?;
 
     // Calculate relative path
     let rel = workspace_root
@@ -105,19 +24,19 @@ fn detect_workspace_path(workspace_root: &Path) -> Result<Option<String>> {
     if rel == Path::new("") {
         Ok(None) // Workspace at repo root
     } else {
-        Ok(Some(rel.to_string_lossy().replace('\\', "/")))
+        Ok(Some(rel.to_path_buf()))
     }
 }
 
 /// Convert all pcb.toml files in workspace to V2
-/// Returns (repository, workspace_path) for use in subsequent phases
-pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<(String, Option<String>)> {
-    let repository = detect_repository(workspace_root)?;
-    let path = detect_workspace_path(workspace_root)?;
-
+pub fn convert_workspace_to_v2(
+    workspace_root: &Path,
+    repository: &str,
+    repo_subpath: Option<&Path>,
+) -> Result<()> {
     eprintln!("  Repository: {}", repository);
-    if let Some(ref p) = path {
-        eprintln!("  Path: {}", p);
+    if let Some(p) = repo_subpath {
+        eprintln!("  Repo subpath: {}", p.display());
     }
 
     // Detect and filter member patterns
@@ -132,7 +51,13 @@ pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<(String, Option<
     // Convert root pcb.toml
     let root_pcb_toml = workspace_root.join("pcb.toml");
     if root_pcb_toml.exists() {
-        convert_pcb_toml_to_v2(&root_pcb_toml, Some(&repository), path.as_deref(), &members)?;
+        let repo_subpath_str = repo_subpath.map(|p| p.to_string_lossy().into_owned());
+        convert_pcb_toml_to_v2(
+            &root_pcb_toml,
+            Some(repository),
+            repo_subpath_str.as_deref(),
+            &members,
+        )?;
         eprintln!("  ✓ Converted {}", root_pcb_toml.display());
     }
 
@@ -152,7 +77,7 @@ pub fn convert_workspace_to_v2(workspace_root: &Path) -> Result<(String, Option<
         }
     }
 
-    Ok((repository, path))
+    Ok(())
 }
 
 /// Detect member patterns based on existing directories
@@ -253,7 +178,7 @@ fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result
 fn convert_pcb_toml_to_v2(
     path: &Path,
     repository: Option<&str>,
-    workspace_path: Option<&str>,
+    repo_subpath: Option<&str>,
     members: &[String],
 ) -> Result<()> {
     let file_provider = DefaultFileProvider::new();
@@ -282,7 +207,7 @@ fn convert_pcb_toml_to_v2(
         config.workspace = Some(WorkspaceConfig {
             name: None,
             repository: Some(repo.to_string()),
-            path: workspace_path.map(|s| s.to_string()),
+            path: repo_subpath.map(|s| s.to_string()),
             resolver: Some("2".to_string()),
             pcb_version: Some("0.2".to_string()),
             members: members.to_vec(),
@@ -302,31 +227,3 @@ fn convert_pcb_toml_to_v2(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_git_url_https() {
-        assert_eq!(
-            parse_git_url("https://github.com/diodeinc/stdlib.git").unwrap(),
-            "github.com/diodeinc/stdlib"
-        );
-        assert_eq!(
-            parse_git_url("https://github.com/diodeinc/stdlib").unwrap(),
-            "github.com/diodeinc/stdlib"
-        );
-    }
-
-    #[test]
-    fn test_parse_git_url_ssh() {
-        assert_eq!(
-            parse_git_url("git@github.com:diodeinc/stdlib.git").unwrap(),
-            "github.com/diodeinc/stdlib"
-        );
-        assert_eq!(
-            parse_git_url("git@github.com:diodeinc/stdlib").unwrap(),
-            "github.com/diodeinc/stdlib"
-        );
-    }
-}
