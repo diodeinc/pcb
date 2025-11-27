@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
 
+use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::resolve_v2::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// A discovered member package in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]

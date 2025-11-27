@@ -2,6 +2,7 @@
 
 pub mod ast_utils;
 mod auto_deps;
+pub mod canonical;
 pub mod diagnostics;
 pub mod git;
 pub mod load;

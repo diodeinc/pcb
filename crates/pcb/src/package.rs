@@ -31,7 +31,7 @@ pub fn execute(args: PackageArgs) -> Result<()> {
     // If verbose, list what files will be included
     if args.verbose {
         println!("\nFiles included:");
-        let entries = pcb_zen::resolve_v2::list_canonical_tar_entries(&path)?;
+        let entries = pcb_zen::canonical::list_canonical_tar_entries(&path)?;
         for entry in &entries {
             println!("  {}", entry);
         }
@@ -46,10 +46,10 @@ pub fn execute(args: PackageArgs) -> Result<()> {
         // Need to buffer the tar data to write to file
         let cursor = std::io::Cursor::new(&mut tar_data);
         let mut multi_writer = MultiWriter::new(&mut hasher, cursor);
-        pcb_zen::resolve_v2::create_canonical_tar(&path, &mut multi_writer)?;
+        pcb_zen::canonical::create_canonical_tar(&path, &mut multi_writer)?;
     } else {
         // Just stream to hasher
-        pcb_zen::resolve_v2::create_canonical_tar(&path, &mut hasher)?;
+        pcb_zen::canonical::create_canonical_tar(&path, &mut hasher)?;
     }
 
     let hash = hasher.finalize();
