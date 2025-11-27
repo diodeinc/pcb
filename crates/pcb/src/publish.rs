@@ -8,7 +8,7 @@ use clap::Args;
 use colored::Colorize;
 use inquire::Confirm;
 use pcb_zen::workspace::{compute_tag_prefix, detect_v2_workspace, PackageInfo, V2Workspace};
-use pcb_zen::{git, resolve_v2};
+use pcb_zen::{canonical, git};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
@@ -364,9 +364,9 @@ fn build_publish_candidates<'a>(
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
             // Always recompute hashes - pcb.toml may have been modified by a previous wave
-            let content_hash = resolve_v2::compute_content_hash_from_dir(&pkg.path)?;
+            let content_hash = canonical::compute_content_hash_from_dir(&pkg.path)?;
             let manifest_content = std::fs::read_to_string(pkg.path.join("pcb.toml"))?;
-            let manifest_hash = resolve_v2::compute_manifest_hash(&manifest_content);
+            let manifest_hash = canonical::compute_manifest_hash(&manifest_content);
 
             Ok(PublishCandidate {
                 pkg,

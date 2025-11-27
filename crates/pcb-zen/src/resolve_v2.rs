@@ -1,5 +1,4 @@
 use anyhow::Result;
-use ignore::WalkBuilder;
 use pcb_zen_core::config::{
     find_workspace_root, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
@@ -12,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
 
+use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::workspace::{get_workspace_info, WorkspaceInfo};
 
@@ -420,17 +420,12 @@ fn resolve_dependencies(
     println!();
 
     // Phase 2: Build the final dependency set using only selected versions
-    let build_set = build_closure(&workspace_info.packages, &selected, &manifest_cache)?;
+    let closure = build_closure(&workspace_info.packages, &selected, &manifest_cache)?;
 
-    println!("Build set: {} dependencies", build_set.len());
+    println!("Build set: {} dependencies", closure.build_set.len());
 
     // Print dependency tree
-    print_dependency_tree(
-        &workspace_info.packages,
-        workspace_root,
-        &build_set,
-        &manifest_cache,
-    )?;
+    print_dependency_tree(workspace_root, &closure, &manifest_cache);
 
     // Phase 2.5: Collect and fetch assets
     println!("\nPhase 2.5: Fetching assets");
@@ -450,13 +445,19 @@ fn resolve_dependencies(
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
     // Phase 4: Update lockfile with cryptographic hashes
-    println!("\nPhase 4: Updating lockfile");
-    let lockfile = update_lockfile(workspace_info.lockfile.take(), &build_set, &asset_set)?;
+    println!("\nPhase 4: Lockfile");
+    let (lockfile, added_count) = update_lockfile(
+        workspace_info.lockfile.take(),
+        &closure.build_set,
+        &asset_set,
+    )?;
 
-    // Write lockfile to disk
-    let lockfile_path = workspace_root.join("pcb.sum");
-    std::fs::write(&lockfile_path, lockfile.to_string())?;
-    println!("  Written to {}", lockfile_path.display());
+    // Only write lockfile to disk if new entries were added
+    if added_count > 0 {
+        let lockfile_path = workspace_root.join("pcb.sum");
+        std::fs::write(&lockfile_path, lockfile.to_string())?;
+        println!("  Updated {}", lockfile_path.display());
+    }
 
     println!("\nV2 dependency resolution complete");
 
@@ -997,18 +998,11 @@ fn fetch_asset_repo(
 
 /// Print a tree view of the dependency graph (cargo tree style)
 fn print_dependency_tree(
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     workspace_root: &Path,
-    build_set: &HashSet<(ModuleLine, Version)>,
+    closure: &ClosureResult,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-) -> Result<()> {
+) {
     println!();
-
-    // Build reverse lookup: path -> (line, version)
-    let mut build_map: HashMap<String, (ModuleLine, Version)> = HashMap::new();
-    for (line, version) in build_set {
-        build_map.insert(line.path.clone(), (line.clone(), version.clone()));
-    }
 
     // Track what we've printed to show (*)
     let mut printed = HashSet::new();
@@ -1088,35 +1082,13 @@ fn print_dependency_tree(
         .and_then(|n| n.to_str())
         .unwrap_or("workspace");
 
-    // Collect all root dependencies from packages
-    let mut all_roots = Vec::new();
-
-    // Package dependencies
-    for pkg in packages.values() {
-        let pcb_toml_path = pkg.dir.join("pcb.toml");
-        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
-
-        for dep in package_deps {
-            if !is_non_version_dep(&dep.spec)
-                && build_map.contains_key(&dep.url)
-                && !all_roots.contains(&dep.url)
-            {
-                all_roots.push(dep.url.clone());
-            }
-        }
-    }
-
-    // Sort for consistent output
-    all_roots.sort();
-    all_roots.dedup();
-
-    if !all_roots.is_empty() {
+    if !closure.root_deps.is_empty() {
         println!("{}", workspace_name);
-        for (i, url) in all_roots.iter().enumerate() {
-            let is_last = i == all_roots.len() - 1;
+        for (i, url) in closure.root_deps.iter().enumerate() {
+            let is_last = i == closure.root_deps.len() - 1;
             print_dep(
                 url,
-                &build_map,
+                &closure.build_map,
                 manifest_cache,
                 &mut printed,
                 "",
@@ -1125,20 +1097,30 @@ fn print_dependency_tree(
             );
         }
     }
+}
 
-    Ok(())
+/// Result of building the dependency closure
+struct ClosureResult {
+    /// Set of (ModuleLine, Version) pairs in the build closure
+    build_set: HashSet<(ModuleLine, Version)>,
+    /// Lookup: module_path -> (ModuleLine, Version) for the build set
+    build_map: HashMap<String, (ModuleLine, Version)>,
+    /// Direct dependency URLs from workspace packages (for tree roots)
+    root_deps: Vec<String>,
 }
 
 /// Build the final dependency closure using selected versions
 ///
 /// DFS from workspace package dependencies using selected versions.
+/// Returns the build set, a lookup map, and root dependency URLs.
 fn build_closure(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-) -> Result<HashSet<(ModuleLine, Version)>> {
+) -> Result<ClosureResult> {
     let mut build_set = HashSet::new();
     let mut stack = Vec::new();
+    let mut root_deps = Vec::new();
 
     // Build index: module_path → ModuleLine for fast lookups (excluding workspace members)
     let mut line_by_path: HashMap<String, Vec<ModuleLine>> = HashMap::new();
@@ -1153,15 +1135,16 @@ fn build_closure(
             .push(line.clone());
     }
 
-    // Seed DFS from all package dependencies
+    // Seed DFS from all package dependencies, collecting root deps
     for pkg in packages.values() {
-        let pcb_toml_path = pkg.dir.join("pcb.toml");
-        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
-
-        for dep in package_deps {
-            if !is_non_version_dep(&dep.spec) {
+        for (url, spec) in &pkg.config.dependencies {
+            if !is_non_version_dep(spec) {
+                // Track root deps for tree printing
+                if line_by_path.contains_key(url) && !root_deps.contains(url) {
+                    root_deps.push(url.clone());
+                }
                 // Find selected ModuleLine(s) for this path
-                if let Some(lines) = line_by_path.get(&dep.url) {
+                if let Some(lines) = line_by_path.get(url) {
                     stack.extend(lines.iter().cloned());
                 }
             }
@@ -1193,7 +1176,21 @@ fn build_closure(
         }
     }
 
-    Ok(build_set)
+    // Build reverse lookup: path -> (line, version) from build_set
+    let mut build_map: HashMap<String, (ModuleLine, Version)> = HashMap::new();
+    for (line, version) in &build_set {
+        build_map.insert(line.path.clone(), (line.clone(), version.clone()));
+    }
+
+    // Sort root deps for consistent output
+    root_deps.sort();
+    root_deps.dedup();
+
+    Ok(ClosureResult {
+        build_set,
+        build_map,
+        root_deps,
+    })
 }
 
 /// Resolve a dependency spec to a concrete version
@@ -1370,123 +1367,6 @@ fn add_requirement(
     }
 }
 
-/// Collect entries for canonical tar (shared between create and list)
-fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, std::fs::FileType)>> {
-    let mut entries = Vec::new();
-    let package_root = dir.to_path_buf();
-    for result in WalkBuilder::new(dir)
-        .filter_entry(move |entry| {
-            let path = entry.path();
-            if entry.file_type().is_some_and(|ft| ft.is_dir())
-                && path != package_root
-                && path.join("pcb.toml").is_file()
-            {
-                return false;
-            }
-            true
-        })
-        .build()
-    {
-        let entry = result?;
-        let path = entry.path();
-        let rel_path = match path.strip_prefix(dir) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if rel_path == Path::new("") {
-            continue;
-        }
-        let file_type = entry.file_type().unwrap();
-        // Only include files - directories are implicit from file paths in tar
-        // This avoids issues with empty directories (which git doesn't track anyway)
-        if file_type.is_file() {
-            entries.push((rel_path.to_path_buf(), file_type));
-        }
-    }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(entries)
-}
-
-/// List entries that would be included in canonical tar (for debugging)
-pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
-    let entries = collect_canonical_entries(dir)?;
-    Ok(entries
-        .into_iter()
-        .map(|(p, _ft)| p.display().to_string())
-        .collect())
-}
-
-/// Create a canonical, deterministic tar archive from a directory
-///
-/// Rules from packaging.md:
-/// - Regular files only (directories are implicit from paths)
-/// - Relative paths, forward slashes, lexicographic order
-/// - Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
-/// - File mode: 0644
-/// - End with two 512-byte zero blocks
-/// - Respect .gitignore and filter internal marker files
-/// - Exclude nested packages (subdirs with pcb.toml + [package])
-pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
-    use std::fs;
-    use tar::{Builder, Header};
-
-    let mut builder = Builder::new(writer);
-    builder.mode(tar::HeaderMode::Deterministic);
-
-    let entries = collect_canonical_entries(dir)?;
-
-    for (rel_path, _file_type) in entries {
-        let full_path = dir.join(&rel_path);
-        let path_str = rel_path.to_str().unwrap().replace('\\', "/");
-
-        let file = fs::File::open(&full_path)?;
-        let len = file.metadata()?.len();
-        let mut header = Header::new_gnu();
-        header.set_size(len);
-        header.set_mode(0o644);
-        header.set_mtime(0);
-        header.set_uid(0);
-        header.set_gid(0);
-        header.set_username("")?;
-        header.set_groupname("")?;
-        header.set_entry_type(tar::EntryType::Regular);
-
-        builder.append_data(&mut header, &path_str, file)?;
-    }
-
-    builder.finish()?;
-
-    Ok(())
-}
-
-/// Compute content hash from a directory
-///
-/// Creates canonical GNU tarball from directory, streams to BLAKE3 hasher.
-/// Format: h1:<base64-encoded-blake3>
-pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-
-    // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
-    let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(cache_dir, &mut hasher)?;
-    let hash = hasher.finalize();
-
-    Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
-}
-
-/// Compute manifest hash for a pcb.toml file
-///
-/// Format: h1:<base64-encoded-blake3>
-pub fn compute_manifest_hash(manifest_content: &str) -> String {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-
-    let hash = blake3::hash(manifest_content.as_bytes());
-
-    format!("h1:{}", STANDARD.encode(hash.as_bytes()))
-}
-
 /// Verify computed hashes match the expected hashes from the git tag annotation
 fn verify_tag_hashes(
     checkout_dir: &Path,
@@ -1504,31 +1384,43 @@ fn verify_tag_hashes(
         return Ok(());
     };
 
-    if content_hash != expected_content {
-        anyhow::bail!(
-            "Content hash mismatch for {}@v{}\n  \
-            Expected (from tag): {}\n  \
-            Computed:            {}\n\n\
-            This may indicate a bug in the packaging toolchain.",
-            module_path,
-            version,
-            expected_content,
-            content_hash
-        );
+    fn check_hash(
+        kind: &str,
+        computed: &str,
+        expected: &str,
+        module_path: &str,
+        version: &Version,
+    ) -> Result<()> {
+        if computed != expected {
+            anyhow::bail!(
+                "{} hash mismatch for {}@v{}\n  \
+                Expected (from tag): {}\n  \
+                Computed:            {}\n\n\
+                This may indicate a bug in the packaging toolchain.",
+                kind,
+                module_path,
+                version,
+                expected,
+                computed
+            );
+        }
+        Ok(())
     }
 
-    if manifest_hash != expected_manifest {
-        anyhow::bail!(
-            "Manifest hash mismatch for {}@v{}\n  \
-            Expected (from tag): {}\n  \
-            Computed:            {}\n\n\
-            This may indicate a bug in the packaging toolchain.",
-            module_path,
-            version,
-            expected_manifest,
-            manifest_hash
-        );
-    }
+    check_hash(
+        "Content",
+        content_hash,
+        &expected_content,
+        module_path,
+        version,
+    )?;
+    check_hash(
+        "Manifest",
+        manifest_hash,
+        &expected_manifest,
+        module_path,
+        version,
+    )?;
 
     Ok(())
 }
@@ -1684,24 +1576,27 @@ fn ensure_sparse_checkout(
     Ok(checkout_dir.to_path_buf())
 }
 
-/// Clone git repository with HTTPS→SSH fallback
 /// Update lockfile from build set
 ///
 /// Merges with existing lockfile (Go's model): keeps old entries and adds/updates new ones.
 /// This allows switching branches without losing checksums and enables historical verification.
 /// Use `pcb tidy` (future) to remove unused entries.
+///
+/// Returns (lockfile, added_count) - only write to disk if added_count > 0
 fn update_lockfile(
     existing_lockfile: Option<Lockfile>,
     build_set: &HashSet<(ModuleLine, Version)>,
     asset_set: &HashSet<(String, String)>,
-) -> Result<Lockfile> {
+) -> Result<(Lockfile, usize)> {
     // Start with existing lockfile or create new one
     let mut lockfile = existing_lockfile.unwrap_or_default();
 
     let total_count = build_set.len() + asset_set.len();
-    println!("  Reading hashes for {} entries...", total_count);
+    if total_count > 0 {
+        println!("  Verifying {} entries...", total_count);
+    }
 
-    let mut updated_count = 0;
+    let mut verified_count = 0;
     let mut added_count = 0;
 
     // Process dependencies
@@ -1737,17 +1632,16 @@ fn update_lockfile(
                     line.path
                 );
             }
-            updated_count += 1;
+            verified_count += 1;
         } else {
             added_count += 1;
+            lockfile.insert(LockEntry {
+                module_path: line.path.clone(),
+                version: version.to_string(),
+                content_hash,
+                manifest_hash,
+            });
         }
-
-        lockfile.insert(LockEntry {
-            module_path: line.path.clone(),
-            version: version.to_string(),
-            content_hash,
-            manifest_hash,
-        });
     }
 
     // Process assets
@@ -1775,24 +1669,22 @@ fn update_lockfile(
         // Check if this is a new entry or update
         if lockfile.get(module_path, ref_str).is_none() {
             added_count += 1;
+            lockfile.insert(LockEntry {
+                module_path: module_path.clone(),
+                version: ref_str.clone(),
+                content_hash,
+                manifest_hash,
+            });
         } else {
-            updated_count += 1;
+            verified_count += 1;
         }
-
-        lockfile.insert(LockEntry {
-            module_path: module_path.clone(),
-            version: ref_str.clone(),
-            content_hash,
-            manifest_hash,
-        });
     }
 
-    if added_count > 0 || updated_count > 0 {
-        println!(
-            "  Summary: {} added, {} verified",
-            added_count, updated_count
-        );
+    if added_count > 0 {
+        println!("  {} new, {} verified", added_count, verified_count);
+    } else if verified_count > 0 {
+        println!("  {} verified", verified_count);
     }
 
-    Ok(lockfile)
+    Ok((lockfile, added_count))
 }
