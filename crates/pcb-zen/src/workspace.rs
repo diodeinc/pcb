@@ -6,11 +6,11 @@
 
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
-use pcb_zen_core::config::{find_workspace_root, PcbToml, WorkspaceConfig};
+use pcb_zen_core::config::{find_workspace_root, Lockfile, PcbToml, WorkspaceConfig};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
@@ -19,10 +19,8 @@ use crate::git;
 use crate::resolve_v2::{compute_content_hash_from_dir, compute_manifest_hash};
 
 /// A discovered member package in the workspace
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberPackage {
-    /// Package URL (e.g., "github.com/diodeinc/registry/components/LED")
-    pub url: String,
     /// Package directory (absolute path)
     pub dir: PathBuf,
     /// Package directory relative to workspace root
@@ -66,21 +64,56 @@ pub struct DiscoveryResult {
     pub errors: Vec<DiscoveryError>,
 }
 
-/// Workspace information with discovered boards (V1/simple info)
+/// Comprehensive workspace information - the single source of truth
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     /// Workspace root directory
     pub root: PathBuf,
-    /// Workspace configuration
-    pub config: WorkspaceConfig,
-    /// All discovered boards
+
+    /// Root pcb.toml config (full)
+    pub config: PcbToml,
+
+    /// Discovered member packages keyed by URL (includes root if applicable)
+    pub packages: BTreeMap<String, MemberPackage>,
+
+    /// Boards derived from packages with [board] sections
     pub boards: Vec<BoardInfo>,
+
+    /// Optional lockfile (loaded from pcb.sum if present)
+    #[serde(skip)]
+    pub lockfile: Option<Lockfile>,
+
     /// Discovery errors
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub errors: Vec<DiscoveryError>,
 }
 
 impl WorkspaceInfo {
+    /// Get workspace config section (with defaults if not present)
+    pub fn workspace_config(&self) -> WorkspaceConfig {
+        self.config.workspace.clone().unwrap_or_default()
+    }
+
+    /// Reload pcb.toml configs after auto-deps modifications.
+    /// Only re-parses existing files - no re-discovery needed since
+    /// auto-deps only adds dependencies to known packages.
+    pub fn reload(&mut self) -> Result<()> {
+        let file_provider = DefaultFileProvider::new();
+
+        // Re-parse root config
+        let pcb_toml_path = self.root.join("pcb.toml");
+        if file_provider.exists(&pcb_toml_path) {
+            self.config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
+        }
+
+        // Re-parse each package's config
+        for pkg in self.packages.values_mut() {
+            let pkg_toml_path = pkg.dir.join("pcb.toml");
+            pkg.config = PcbToml::from_file(&file_provider, &pkg_toml_path)?;
+        }
+
+        Ok(())
+    }
+
     /// Given an absolute .zen path, return the board name
     pub fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
         let canon = zen_path.canonicalize().ok()?;
@@ -254,7 +287,9 @@ fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V
     let pcb_version = ws.and_then(|w| w.pcb_version.clone());
     let workspace_config = config.workspace.clone().unwrap_or_default();
 
-    let member_packages = discover_packages(&file_provider, workspace_root, &workspace_config)?;
+    // Use get_workspace_info to discover packages
+    let workspace_info = get_workspace_info(&file_provider, workspace_root)?;
+    let member_packages = &workspace_info.packages;
     let tags = git::list_all_tags_vec(workspace_root);
     let tag_annotations = git::get_all_tag_annotations(workspace_root);
 
@@ -267,16 +302,20 @@ fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V
     // Build package infos in parallel
     let packages: Vec<PackageInfo> = member_packages
         .par_iter()
-        .filter_map(|pkg| {
+        .filter_map(|(url, pkg)| {
             let rel_str = pkg.rel_path.to_string_lossy();
             if rel_str.is_empty() {
                 return None;
             }
-            let url = base_url
-                .as_ref()
-                .map(|base| format!("{}/{}", base, rel_str))
-                .unwrap_or_else(|| rel_str.to_string());
-            build_package_info(&pkg.dir, &url, workspace_root, &path, &tags, &tag_annotations).ok()
+            build_package_info(
+                &pkg.dir,
+                url,
+                workspace_root,
+                &path,
+                &tags,
+                &tag_annotations,
+            )
+            .ok()
         })
         .collect();
 
@@ -645,16 +684,28 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
     }
 }
 
-/// Discover all member packages in a workspace matching the given patterns
-pub fn discover_packages(
+/// Get complete workspace information - the single entry point for all workspace discovery.
+///
+/// Discovers packages, derives boards, builds workspace_members lookup, and optionally loads lockfile.
+pub fn get_workspace_info(
     file_provider: &dyn FileProvider,
-    workspace_root: &Path,
-    workspace_config: &WorkspaceConfig,
-) -> Result<Vec<MemberPackage>> {
+    start_path: &Path,
+) -> Result<WorkspaceInfo> {
+    let workspace_root = find_workspace_root(file_provider, start_path);
+    let pcb_toml_path = workspace_root.join("pcb.toml");
+
+    // Load root config
+    let config = if file_provider.exists(&pcb_toml_path) {
+        PcbToml::from_file(file_provider, &pcb_toml_path)?
+    } else {
+        // Empty config for directories without pcb.toml
+        PcbToml::parse("")?
+    };
+    let workspace_config = config.workspace.clone().unwrap_or_default();
+
+    // Discover packages inline
     let patterns = &workspace_config.members;
-    if patterns.is_empty() {
-        return Ok(vec![]);
-    }
+    let mut packages = BTreeMap::new();
 
     // Compute base URL from workspace config
     let base_url = match (&workspace_config.repository, &workspace_config.path) {
@@ -664,73 +715,78 @@ pub fn discover_packages(
     };
 
     // Fetch git tags once for version lookup
-    let tags = git::list_all_tags_vec(workspace_root);
+    let tags = git::list_all_tags_vec(&workspace_root);
 
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        builder.add(Glob::new(pattern)?);
-        if let Some(exact) = pattern.strip_suffix("/*") {
-            builder.add(Glob::new(exact)?);
+    if !patterns.is_empty() {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in patterns {
+            builder.add(Glob::new(pattern)?);
+            if let Some(exact) = pattern.strip_suffix("/*") {
+                builder.add(Glob::new(exact)?);
+            }
+        }
+        let glob_set = builder.build()?;
+
+        for entry in WalkDir::new(&workspace_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let pkg_toml_path = path.join("pcb.toml");
+            if !file_provider.exists(&pkg_toml_path) {
+                continue;
+            }
+            let Ok(rel_path) = path.strip_prefix(&workspace_root) else {
+                continue;
+            };
+            if !glob_set.is_match(rel_path) {
+                continue;
+            }
+            let pkg_config = PcbToml::from_file(file_provider, &pkg_toml_path)?;
+            let rel_str = rel_path.to_string_lossy();
+            let url = base_url
+                .as_ref()
+                .map(|base| format!("{}/{}", base, rel_str))
+                .unwrap_or_else(|| rel_str.to_string());
+
+            // Compute version from git tags
+            let tag_prefix = compute_tag_prefix(Some(rel_path), &workspace_config.path);
+            let version =
+                find_latest_version(&tags, &tag_prefix).unwrap_or_else(|| "0.1.0".to_string());
+
+            packages.insert(
+                url,
+                MemberPackage {
+                    dir: path.to_path_buf(),
+                    rel_path: rel_path.to_path_buf(),
+                    config: pkg_config,
+                    version,
+                },
+            );
         }
     }
-    let glob_set = builder.build()?;
 
-    let mut packages = Vec::new();
-    for entry in WalkDir::new(workspace_root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let pcb_toml_path = path.join("pcb.toml");
-        if !file_provider.exists(&pcb_toml_path) {
-            continue;
-        }
-        let Ok(rel_path) = path.strip_prefix(workspace_root) else {
-            continue;
-        };
-        if !glob_set.is_match(rel_path) {
-            continue;
-        }
-        let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
-        let rel_str = rel_path.to_string_lossy();
-        let url = base_url
-            .as_ref()
-            .map(|base| format!("{}/{}", base, rel_str))
-            .unwrap_or_else(|| rel_str.to_string());
-
-        // Compute version from git tags
-        let tag_prefix = compute_tag_prefix(Some(rel_path), &workspace_config.path);
-        let version =
-            find_latest_version(&tags, &tag_prefix).unwrap_or_else(|| "0.1.0".to_string());
-
-        packages.push(MemberPackage {
-            url,
-            dir: path.to_path_buf(),
-            rel_path: rel_path.to_path_buf(),
-            config,
-            version,
-        });
+    // Add root package if it has a repository URL
+    if let Some(url) = &base_url {
+        packages.insert(
+            url.clone(),
+            MemberPackage {
+                dir: workspace_root.clone(),
+                rel_path: PathBuf::new(),
+                config: config.clone(),
+                version: "0.1.0".to_string(), // Root version computed separately if needed
+            },
+        );
     }
 
-    packages.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    Ok(packages)
-}
-
-/// Discover all boards in a workspace - packages with [board] section
-pub fn discover_boards(
-    file_provider: &dyn FileProvider,
-    workspace_root: &Path,
-    workspace_config: &WorkspaceConfig,
-) -> Result<DiscoveryResult> {
-    let packages = discover_packages(file_provider, workspace_root, workspace_config)?;
-
-    let mut boards_by_name: HashMap<String, BoardInfo> = HashMap::new();
+    // Derive boards from packages
+    let mut boards_by_name: BTreeMap<String, BoardInfo> = BTreeMap::new();
     let mut errors = Vec::new();
 
-    for pkg in packages {
+    for pkg in packages.values() {
         let Some(board_config) = &pkg.config.board else {
             continue;
         };
@@ -772,31 +828,24 @@ pub fn discover_boards(
     let mut boards: Vec<_> = boards_by_name.into_values().collect();
     boards.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(DiscoveryResult { boards, errors })
-}
-
-/// Get complete workspace information including discovered boards
-pub fn get_workspace_info(
-    file_provider: &dyn FileProvider,
-    start_path: &Path,
-) -> Result<WorkspaceInfo> {
-    let workspace_root = find_workspace_root(file_provider, start_path);
-
-    let pcb_toml_path = workspace_root.join("pcb.toml");
-    let workspace_config = if file_provider.exists(&pcb_toml_path) {
-        PcbToml::from_file(file_provider, &pcb_toml_path)?.workspace
+    // Load lockfile if present
+    let lockfile_path = workspace_root.join("pcb.sum");
+    let lockfile = if lockfile_path.exists() {
+        match std::fs::read_to_string(&lockfile_path) {
+            Ok(content) => Lockfile::parse(&content).ok(),
+            Err(_) => None,
+        }
     } else {
         None
-    }
-    .unwrap_or_default();
-
-    let discovery = discover_boards(file_provider, &workspace_root, &workspace_config)?;
+    };
 
     Ok(WorkspaceInfo {
         root: workspace_root,
-        config: workspace_config,
-        boards: discovery.boards,
-        errors: discovery.errors,
+        config,
+        packages,
+        boards,
+        lockfile,
+        errors,
     })
 }
 

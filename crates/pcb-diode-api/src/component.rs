@@ -1195,10 +1195,8 @@ pub struct SearchArgs {
 pub fn execute(args: SearchArgs) -> Result<()> {
     let token = crate::auth::get_valid_token()?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root = pcb_zen_core::config::find_workspace_root(
-        &pcb_zen_core::DefaultFileProvider::new(),
-        &cwd,
-    );
+    let workspace_root =
+        pcb_zen_core::config::find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd);
 
     if args.json {
         println!("{}", search_json(&token, &args.part_number)?);
