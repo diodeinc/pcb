@@ -3,8 +3,8 @@ use ignore::WalkBuilder;
 use starlark::syntax::{AstModule, Dialect};
 use starlark_syntax::syntax::ast::StmtP;
 use starlark_syntax::syntax::top_level_stmts::top_level_stmts;
-use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
@@ -54,10 +54,10 @@ struct CollectedImports {
 /// 2. Lockfile entries (pcb.sum) - fast path, no git operations
 /// 3. Remote package discovery (git tags) - slow path, cached per repo
 ///
-/// `workspace_members` maps module_path -> latest published version (or DEFAULT_VERSION if unpublished)
+/// `packages` maps module_path -> MemberPackage (contains version info)
 pub fn auto_add_zen_deps(
     workspace_root: &Path,
-    workspace_members: &HashMap<String, String>,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     lockfile: Option<&Lockfile>,
 ) -> Result<AutoDepsSummary> {
     let package_imports = collect_imports_by_package(workspace_root)?;
@@ -85,9 +85,7 @@ pub fn auto_add_zen_deps(
         // Process URL imports with 3-tier resolution
         for url in &imports.urls {
             // 1. Try workspace members first (local packages)
-            if let Some((package_url, version)) =
-                find_matching_workspace_member(url, workspace_members)
-            {
+            if let Some((package_url, version)) = find_matching_workspace_member(url, packages) {
                 deps_to_add.push((package_url, version, false));
                 continue;
             }
@@ -130,7 +128,7 @@ pub fn auto_add_zen_deps(
         }
 
         let (added, corrected) =
-            add_and_correct_dependencies(&pcb_toml_path, &deps_to_add, workspace_members)?;
+            add_and_correct_dependencies(&pcb_toml_path, &deps_to_add, packages)?;
         if added > 0 || corrected > 0 {
             summary.total_added += added;
             summary.versions_corrected += corrected;
@@ -148,7 +146,7 @@ pub fn auto_add_zen_deps(
 /// Returns (module_path, version) tuple
 fn find_matching_workspace_member(
     file_url: &str,
-    workspace_members: &HashMap<String, String>,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> Option<(String, String)> {
     // Strip the filename first
     let without_file = file_url.rsplit_once('/')?.0;
@@ -156,8 +154,8 @@ fn find_matching_workspace_member(
     // Try progressively shorter prefixes to find a matching workspace member
     let mut path = without_file;
     while !path.is_empty() {
-        if let Some(version) = workspace_members.get(path) {
-            return Some((path.to_string(), version.clone()));
+        if let Some(pkg) = packages.get(path) {
+            return Some((path.to_string(), pkg.version.clone()));
         }
         // Strip the last path component
         path = match path.rsplit_once('/') {
@@ -263,7 +261,7 @@ fn extract_from_str(s: &str, aliases: &mut HashSet<String>, urls: &mut HashSet<S
 fn add_and_correct_dependencies(
     pcb_toml_path: &Path,
     deps: &[(String, String, bool)],
-    workspace_members: &HashMap<String, String>,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> Result<(usize, usize)> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut added = 0;
@@ -286,7 +284,7 @@ fn add_and_correct_dependencies(
         added += 1;
     }
 
-    corrected += correct_workspace_member_versions(&mut config, workspace_members);
+    corrected += correct_workspace_member_versions(&mut config, packages);
 
     if added > 0 || corrected > 0 {
         std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
@@ -299,18 +297,17 @@ fn add_and_correct_dependencies(
 /// Returns count of versions corrected
 fn correct_workspace_member_versions(
     config: &mut PcbToml,
-    workspace_members: &HashMap<String, String>,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> usize {
     let mut corrected = 0;
 
-    for (url, expected_version) in workspace_members {
+    for (url, pkg) in packages {
         if let Some(current_spec) = config.dependencies.get(url) {
             let current_version = extract_version_string(current_spec);
-            if current_version.as_deref() != Some(expected_version.as_str()) {
-                config.dependencies.insert(
-                    url.clone(),
-                    DependencySpec::Version(expected_version.clone()),
-                );
+            if current_version.as_deref() != Some(pkg.version.as_str()) {
+                config
+                    .dependencies
+                    .insert(url.clone(), DependencySpec::Version(pkg.version.clone()));
                 corrected += 1;
             }
         }

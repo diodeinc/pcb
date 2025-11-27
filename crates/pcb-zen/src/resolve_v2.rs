@@ -13,7 +13,7 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::git;
-use crate::workspace::discover_packages;
+use crate::workspace::{get_workspace_info, WorkspaceInfo};
 
 /// Path dependency validation errors
 #[derive(Debug, Error)]
@@ -123,40 +123,15 @@ fn resolve_dependencies(
     println!("V2 Dependency Resolution");
     println!("Workspace root: {}", workspace_root.display());
 
-    // Read workspace config
-    let pcb_toml_path = workspace_root.join("pcb.toml");
-    let initial_config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
-    let workspace_config = initial_config.workspace.clone().unwrap_or_default();
-
-    // Discover member packages
-    let member_packages = discover_packages(file_provider, workspace_root, &workspace_config)?;
-
-    // Build workspace_member_versions for auto-deps from discovered packages
-    // Maps module_path -> latest published version (or "0.1.0" for unpublished)
-    let workspace_member_versions: HashMap<String, String> = member_packages
-        .iter()
-        .map(|pkg| (pkg.url.clone(), pkg.version.clone()))
-        .collect();
-
-    // Load existing lockfile if present (needed for auto-deps fast path)
-    let lockfile_path = workspace_root.join("pcb.sum");
-    let existing_lockfile = if lockfile_path.exists() {
-        println!("Loading pcb.sum...");
-        let content = std::fs::read_to_string(&lockfile_path)?;
-        let lockfile = Lockfile::parse(&content)?;
-        println!("  Loaded lockfile");
-        Some(lockfile)
-    } else {
-        println!("No pcb.sum found (will be created)");
-        None
-    };
+    // Get workspace info - the single source of truth
+    let mut workspace_info = get_workspace_info(file_provider, workspace_root)?;
 
     // Phase -1: Auto-add missing dependencies from .zen files
     println!("\nPhase -1: Auto-detecting dependencies from .zen files");
     let auto_deps = crate::auto_deps::auto_add_zen_deps(
         workspace_root,
-        &workspace_member_versions,
-        existing_lockfile.as_ref(),
+        &workspace_info.packages,
+        workspace_info.lockfile.as_ref(),
     )?;
     if auto_deps.total_added > 0
         || auto_deps.versions_corrected > 0
@@ -196,52 +171,21 @@ fn resolve_dependencies(
         }
     }
 
-    // Re-read workspace config (auto-deps may have modified it)
-    let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+    // Reload configs (auto-deps may have modified them)
+    workspace_info.reload()?;
 
     // Validate patches are only at workspace root
-    if !config.patch.is_empty() && config.workspace.is_none() {
+    if !workspace_info.config.patch.is_empty() && workspace_info.config.workspace.is_none() {
         anyhow::bail!(
             "[patch] section is only allowed at workspace root\n  \
-            Found in non-workspace pcb.toml at: {}\n  \
+            Found in non-workspace pcb.toml at: {}/pcb.toml\n  \
             Move [patch] to workspace root or remove it.",
-            pcb_toml_path.display()
+            workspace_root.display()
         );
     }
-
-    // Re-discover packages after auto-deps may have modified configs
-    let workspace_config = config.workspace.clone().unwrap_or_default();
-    let mut member_packages = discover_packages(file_provider, workspace_root, &workspace_config)?;
-
-    // Compute root package URL and add to member_packages for unified handling
-    let root_url = workspace_config
-        .repository
-        .as_ref()
-        .map(|repo| match &workspace_config.path {
-            Some(p) => format!("{}/{}", repo, p),
-            None => repo.clone(),
-        });
-    if let Some(url) = &root_url {
-        member_packages.insert(
-            0,
-            crate::workspace::MemberPackage {
-                url: url.clone(),
-                dir: workspace_root.to_path_buf(),
-                rel_path: PathBuf::new(),
-                config: config.clone(),
-                version: "0.1.0".to_string(), // Root version not needed for resolution
-            },
-        );
-    }
-
-    // Build workspace members lookup: URL -> dir (for local dependency resolution)
-    let workspace_members: HashMap<String, PathBuf> = member_packages
-        .iter()
-        .map(|pkg| (pkg.url.clone(), pkg.dir.clone()))
-        .collect();
 
     // Display workspace info
-    if let Some(ws) = &config.workspace {
+    if let Some(ws) = &workspace_info.config.workspace {
         println!("Type: Explicit workspace");
         if !ws.members.is_empty() {
             println!("Member patterns: {:?}", ws.members);
@@ -250,8 +194,8 @@ fn resolve_dependencies(
         println!("Type: Standalone package (implicit workspace)");
     }
 
-    println!("\nDiscovered {} package(s):", member_packages.len());
-    for pkg in &member_packages {
+    println!("\nDiscovered {} package(s):", workspace_info.packages.len());
+    for pkg in workspace_info.packages.values() {
         let package_name = pkg
             .dir
             .file_name()
@@ -272,10 +216,10 @@ fn resolve_dependencies(
 
     println!(
         "\nWorkspace members: {} (for local resolution)",
-        workspace_members.len()
+        workspace_info.packages.len()
     );
 
-    let patches = config.patch.clone();
+    let patches = workspace_info.config.patch.clone();
 
     // MVS state
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
@@ -288,7 +232,7 @@ fn resolve_dependencies(
     let mut packages_with_deps = Vec::new();
     let mut packages_without_deps = 0;
 
-    for pkg in &member_packages {
+    for pkg in workspace_info.packages.values() {
         let package_name = pkg
             .dir
             .file_name()
@@ -309,8 +253,7 @@ fn resolve_dependencies(
         }
 
         // Collect this package's dependencies
-        let package_deps =
-            collect_package_dependencies(&pcb_toml_path, &pkg.config, workspace_root)?;
+        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
 
         if package_deps.is_empty() {
             packages_without_deps += 1;
@@ -340,7 +283,7 @@ fn resolve_dependencies(
                 }
             }
 
-            match resolve_to_version(&dep.url, &dep.spec, existing_lockfile.as_ref()) {
+            match resolve_to_version(&dep.url, &dep.spec, workspace_info.lockfile.as_ref()) {
                 Ok(version) => {
                     add_requirement(
                         dep.url.clone(),
@@ -395,7 +338,7 @@ fn resolve_dependencies(
                     &line.path,
                     version,
                     &patches,
-                    &workspace_members,
+                    &workspace_info.packages,
                 );
                 (line.clone(), version.clone(), result)
             })
@@ -414,7 +357,11 @@ fn resolve_dependencies(
                             continue;
                         }
 
-                        match resolve_to_version(dep_path, dep_spec, existing_lockfile.as_ref()) {
+                        match resolve_to_version(
+                            dep_path,
+                            dep_spec,
+                            workspace_info.lockfile.as_ref(),
+                        ) {
                             Ok(dep_version) => {
                                 let before = work_queue.len();
                                 add_requirement(
@@ -467,22 +414,22 @@ fn resolve_dependencies(
     println!();
 
     // Phase 2: Build the final dependency set using only selected versions
-    let build_set = build_closure(
-        &member_packages,
-        &selected,
-        &manifest_cache,
-        &workspace_members,
-    )?;
+    let build_set = build_closure(&workspace_info.packages, &selected, &manifest_cache)?;
 
     println!("Build set: {} dependencies", build_set.len());
 
     // Print dependency tree
-    print_dependency_tree(&member_packages, workspace_root, &build_set, &manifest_cache)?;
+    print_dependency_tree(
+        &workspace_info.packages,
+        workspace_root,
+        &build_set,
+        &manifest_cache,
+    )?;
 
     // Phase 2.5: Collect and fetch assets
     println!("\nPhase 2.5: Fetching assets");
     let asset_set = collect_and_fetch_assets(
-        &member_packages,
+        &workspace_info.packages,
         &manifest_cache,
         &selected,
         workspace_root,
@@ -498,7 +445,7 @@ fn resolve_dependencies(
 
     // Phase 4: Update lockfile with cryptographic hashes
     println!("\nPhase 4: Updating lockfile");
-    let lockfile = update_lockfile(existing_lockfile, &build_set, &asset_set)?;
+    let lockfile = update_lockfile(workspace_info.lockfile.take(), &build_set, &asset_set)?;
 
     // Write lockfile to disk
     let lockfile_path = workspace_root.join("pcb.sum");
@@ -507,21 +454,17 @@ fn resolve_dependencies(
 
     println!("\nV2 dependency resolution complete");
 
-    let package_paths = member_packages.iter().map(|pkg| pkg.dir.clone()).collect();
+    let package_paths = workspace_info
+        .packages
+        .values()
+        .map(|pkg| pkg.dir.clone())
+        .collect();
 
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
 
-    let package_resolutions = build_resolution_map(&ResolutionContext {
-        workspace_root,
-        home_dir: &home,
-        root_config: &config,
-        packages: &member_packages,
-        selected: &selected,
-        patches: &patches,
-        manifest_cache: &manifest_cache,
-        workspace_members: &workspace_members,
-    })?;
+    let package_resolutions =
+        build_resolution_map(&workspace_info, &home, &selected, &patches, &manifest_cache)?;
 
     Ok(ResolutionResult {
         workspace_root: workspace_root.to_path_buf(),
@@ -530,43 +473,35 @@ fn resolve_dependencies(
     })
 }
 
-/// Resolution context for building load maps
-struct ResolutionContext<'a> {
-    workspace_root: &'a Path,
-    home_dir: &'a Path,
-    root_config: &'a PcbToml,
-    packages: &'a [crate::workspace::MemberPackage],
-    selected: &'a HashMap<ModuleLine, Version>,
-    patches: &'a BTreeMap<String, PatchSpec>,
-    manifest_cache: &'a HashMap<(ModuleLine, Version), PackageManifest>,
-    workspace_members: &'a HashMap<String, PathBuf>,
-}
-
 /// Build the per-package resolution map
 fn build_resolution_map(
-    ctx: &ResolutionContext,
+    workspace_info: &WorkspaceInfo,
+    home_dir: &Path,
+    selected: &HashMap<ModuleLine, Version>,
+    patches: &BTreeMap<String, PatchSpec>,
+    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     // Helper to compute absolute path for a module line
-    let get_abs_path = |line: &ModuleLine, _version: &Version| -> PathBuf {
+    let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
         // 1. Check workspace members first
-        if let Some(member_dir) = ctx.workspace_members.get(&line.path) {
-            return member_dir.clone();
+        if let Some(member_pkg) = workspace_info.packages.get(&line.path) {
+            return member_pkg.dir.clone();
         }
         // 2. Check patches
-        if let Some(patch) = ctx.patches.get(&line.path) {
-            return ctx.workspace_root.join(&patch.path);
+        if let Some(patch) = patches.get(&line.path) {
+            return workspace_info.root.join(&patch.path);
         }
         // 3. Fall back to cache
-        ctx.home_dir
+        home_dir
             .join(".pcb")
             .join("cache")
             .join(&line.path)
-            .join(_version.to_string())
+            .join(version.to_string())
     };
 
     // Build lookup: url -> family -> path
     let mut url_to_families: HashMap<String, HashMap<String, PathBuf>> = HashMap::new();
-    for (line, version) in ctx.selected {
+    for (line, version) in selected {
         let abs_path = get_abs_path(line, version);
         url_to_families
             .entry(line.path.clone())
@@ -610,18 +545,13 @@ fn build_resolution_map(
     let resolve_asset =
         |url: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<PathBuf> {
             // Check patch first
-            if let Some(patch) = ctx.patches.get(url) {
-                return Ok(ctx.workspace_root.join(&patch.path));
+            if let Some(patch) = patches.get(url) {
+                return Ok(workspace_info.root.join(&patch.path));
             }
 
             // Cache path: ~/.pcb/cache/{url}/{ref}/
             let ref_str = extract_asset_ref(asset_spec)?;
-            Ok(ctx
-                .home_dir
-                .join(".pcb")
-                .join("cache")
-                .join(url)
-                .join(ref_str))
+            Ok(home_dir.join(".pcb").join("cache").join(url).join(ref_str))
         };
 
     // Build deps map for a package with base directory for local path resolution
@@ -652,16 +582,17 @@ fn build_resolution_map(
     let mut results = HashMap::new();
 
     // Workspace root
-    {
-        let config = ctx.root_config;
-        results.insert(
-            ctx.workspace_root.to_path_buf(),
-            build_map(ctx.workspace_root, &config.dependencies, &config.assets),
-        );
-    }
+    results.insert(
+        workspace_info.root.clone(),
+        build_map(
+            &workspace_info.root,
+            &workspace_info.config.dependencies,
+            &workspace_info.config.assets,
+        ),
+    );
 
     // Member packages
-    for pkg in ctx.packages {
+    for pkg in workspace_info.packages.values() {
         results.insert(
             pkg.dir.clone(),
             build_map(&pkg.dir, &pkg.config.dependencies, &pkg.config.assets),
@@ -671,9 +602,9 @@ fn build_resolution_map(
     // Transitive deps: each remote package gets its own resolution map
     // This ensures MVS-selected versions are used for all transitive loads
     // Assets come from the cached manifest (no duplicate file I/O)
-    for (line, version) in ctx.selected {
+    for (line, version) in selected {
         let abs_path = get_abs_path(line, version);
-        if let Some(manifest) = ctx.manifest_cache.get(&(line.clone(), version.clone())) {
+        if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
             results.insert(
                 abs_path.clone(),
                 build_map(&abs_path, &manifest.dependencies, &manifest.assets),
@@ -692,11 +623,7 @@ fn collect_package_dependencies(
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(
-        &v2_config.dependencies,
-        package_dir,
-        &mut deps,
-    )?;
+    collect_deps_recursive(&v2_config.dependencies, package_dir, &mut deps)?;
 
     Ok(deps.into_values().collect())
 }
@@ -778,11 +705,7 @@ fn collect_deps_recursive(
             Err(e) => return Err(e),
         };
 
-        collect_deps_recursive(
-            &dep_config.dependencies,
-            &resolved_path,
-            deps,
-        )?;
+        collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
     }
 
     Ok(())
@@ -864,7 +787,7 @@ fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String>
 ///
 /// Returns set of (module_path, ref) for all fetched assets
 fn collect_and_fetch_assets(
-    packages: &[crate::workspace::MemberPackage],
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
     workspace_root: &Path,
@@ -892,7 +815,7 @@ fn collect_and_fetch_assets(
         };
 
     // 1. Collect assets from workspace and member packages
-    for pkg in packages {
+    for pkg in packages.values() {
         if pkg.config.assets.is_empty() {
             continue;
         }
@@ -936,11 +859,11 @@ fn fetch_package(
     module_path: &str,
     version: &Version,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
-    workspace_members: &HashMap<String, PathBuf>,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
-    if let Some(member_dir) = workspace_members.get(module_path) {
-        let member_toml = member_dir.join("pcb.toml");
+    if let Some(member_pkg) = packages.get(module_path) {
+        let member_toml = member_pkg.dir.join("pcb.toml");
         return read_manifest_from_path(&member_toml);
     }
 
@@ -1079,7 +1002,7 @@ fn fetch_asset_repo(
 
 /// Print a tree view of the dependency graph (cargo tree style)
 fn print_dependency_tree(
-    packages: &[crate::workspace::MemberPackage],
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
@@ -1174,10 +1097,9 @@ fn print_dependency_tree(
     let mut all_roots = Vec::new();
 
     // Package dependencies
-    for pkg in packages {
+    for pkg in packages.values() {
         let pcb_toml_path = pkg.dir.join("pcb.toml");
-        let package_deps =
-            collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
+        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec)
@@ -1216,10 +1138,9 @@ fn print_dependency_tree(
 ///
 /// DFS from workspace package dependencies using selected versions.
 fn build_closure(
-    packages: &[crate::workspace::MemberPackage],
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-    workspace_members: &HashMap<String, PathBuf>,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
     let mut build_set = HashSet::new();
     let mut stack = Vec::new();
@@ -1228,7 +1149,7 @@ fn build_closure(
     let mut line_by_path: HashMap<String, Vec<ModuleLine>> = HashMap::new();
     for line in selected.keys() {
         // Skip workspace members - they don't need to be fetched
-        if workspace_members.contains_key(&line.path) {
+        if packages.contains_key(&line.path) {
             continue;
         }
         line_by_path
@@ -1238,10 +1159,9 @@ fn build_closure(
     }
 
     // Seed DFS from all package dependencies
-    for pkg in packages {
+    for pkg in packages.values() {
         let pcb_toml_path = pkg.dir.join("pcb.toml");
-        let package_deps =
-            collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
+        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {
@@ -1551,7 +1471,7 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
 
 /// Compute content hash from a directory
 ///
-/// Creates canonical USTAR tarball from directory, streams to BLAKE3 hasher.
+/// Creates canonical GNU tarball from directory, streams to BLAKE3 hasher.
 /// Format: h1:<base64-encoded-blake3>
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     use base64::engine::general_purpose::STANDARD;
