@@ -15,6 +15,12 @@ use thiserror::Error;
 use crate::git;
 use crate::workspace::{get_workspace_info, WorkspaceInfo};
 
+/// Get the PCB cache base directory (~/.pcb/cache)
+fn cache_base() -> PathBuf {
+    let home = dirs::home_dir().expect("Determine home directory");
+    home.join(".pcb").join("cache")
+}
+
 /// Path dependency validation errors
 #[derive(Debug, Error)]
 enum PathDepError {
@@ -460,11 +466,8 @@ fn resolve_dependencies(
         .map(|pkg| pkg.dir.clone())
         .collect();
 
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-
     let package_resolutions =
-        build_resolution_map(&workspace_info, &home, &selected, &patches, &manifest_cache)?;
+        build_resolution_map(&workspace_info, &selected, &patches, &manifest_cache)?;
 
     Ok(ResolutionResult {
         workspace_root: workspace_root.to_path_buf(),
@@ -476,11 +479,11 @@ fn resolve_dependencies(
 /// Build the per-package resolution map
 fn build_resolution_map(
     workspace_info: &WorkspaceInfo,
-    home_dir: &Path,
     selected: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+    let cache = cache_base();
     // Helper to compute absolute path for a module line
     let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
         // 1. Check workspace members first
@@ -492,11 +495,7 @@ fn build_resolution_map(
             return workspace_info.root.join(&patch.path);
         }
         // 3. Fall back to cache
-        home_dir
-            .join(".pcb")
-            .join("cache")
-            .join(&line.path)
-            .join(version.to_string())
+        cache.join(&line.path).join(version.to_string())
     };
 
     // Build lookup: url -> family -> path
@@ -551,7 +550,7 @@ fn build_resolution_map(
 
             // Cache path: ~/.pcb/cache/{url}/{ref}/
             let ref_str = extract_asset_ref(asset_spec)?;
-            Ok(home_dir.join(".pcb").join("cache").join(url).join(ref_str))
+            Ok(cache.join(url).join(ref_str))
         };
 
     // Build deps map for a package with base directory for local path resolution
@@ -880,10 +879,8 @@ fn fetch_package(
     }
 
     // Cache directory: ~/.pcb/cache/{module_path}/{version}/
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let cache_base = home.join(".pcb").join("cache");
-    let checkout_dir = cache_base.join(module_path).join(version.to_string());
+    let cache = cache_base();
+    let checkout_dir = cache.join(module_path).join(version.to_string());
     let cache_marker = checkout_dir.join(".pcbcache");
 
     // Fast path: .pcbcache marker is written AFTER successful checkout + hash computation,
@@ -970,10 +967,8 @@ fn fetch_asset_repo(
     }
 
     // Cache directory: ~/.pcb/cache/{module_path}/{ref}/
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let cache_base = home.join(".pcb").join("cache");
-    let checkout_dir = cache_base.join(module_path).join(ref_str);
+    let cache = cache_base();
+    let checkout_dir = cache.join(module_path).join(ref_str);
 
     // Check if already fetched
     if checkout_dir.exists() && checkout_dir.join(".pcbcache").exists() {
@@ -1284,13 +1279,8 @@ fn generate_pseudo_version_for_commit(
     git_url: &str,
 ) -> Result<Version> {
     // Get a minimal clone to inspect the commit
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let temp_clone = home
-        .join(".pcb")
-        .join("cache")
-        .join("temp")
-        .join(module_path);
+    let cache = cache_base();
+    let temp_clone = cache.join("temp").join(module_path);
 
     std::fs::create_dir_all(temp_clone.parent().unwrap())?;
 
@@ -1708,10 +1698,6 @@ fn update_lockfile(
     // Start with existing lockfile or create new one
     let mut lockfile = existing_lockfile.unwrap_or_default();
 
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let cache_base = home.join(".pcb").join("cache");
-
     let total_count = build_set.len() + asset_set.len();
     println!("  Reading hashes for {} entries...", total_count);
 
@@ -1720,7 +1706,7 @@ fn update_lockfile(
 
     // Process dependencies
     for (line, version) in build_set {
-        let cache_dir = cache_base.join(&line.path).join(version.to_string());
+        let cache_dir = cache_base().join(&line.path).join(version.to_string());
         let cache_marker = cache_dir.join(".pcbcache");
 
         // Read hashes from cache marker
@@ -1766,7 +1752,7 @@ fn update_lockfile(
 
     // Process assets
     for (module_path, ref_str) in asset_set {
-        let cache_dir = cache_base.join(module_path).join(ref_str);
+        let cache_dir = cache_base().join(module_path).join(ref_str);
         let cache_marker = cache_dir.join(".pcbcache");
 
         // Read hashes from cache marker
