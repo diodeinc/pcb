@@ -8,9 +8,4 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
-Warning: '@gitlab/mycompany/components:main' is an unstable reference. Use a pinned version.
-   ╭─[ <TEMP_DIR>/board.zen:2:18 ]
- 2 │SimpleResistor = Module("@gitlab/mycompany/components:main/SimpleResistor.zen")
-   │                                                ╰─────────────────────────────── '@gitlab/mycompany/components:main' is an unstable reference. Use a pinned version.
-
 ✓ board.zen (1 components)

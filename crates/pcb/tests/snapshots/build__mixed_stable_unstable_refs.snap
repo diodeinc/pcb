@@ -8,12 +8,4 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
-Warning: '@github/unstable/components:main' is an unstable reference. Use a pinned version.
-   ╭─[ <TEMP_DIR>/pcb.toml:4:12 ]
- 4 │unstable = "@github/unstable/components:main"
-   │                            ╰───────────────── '@github/unstable/components:main' is an unstable reference. Use a pinned version.
-   ├─[ <TEMP_DIR>/board.zen:3:21 ]
- 3 │UnstableCapacitor = Module("@unstable/UnstableCapacitor.zen")
-   │                                        ╰───────────────────── '@unstable' is an unstable reference. Use a pinned version.
-
 ✓ board.zen (2 components)
