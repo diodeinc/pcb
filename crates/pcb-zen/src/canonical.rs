@@ -3,9 +3,14 @@
 //! This module implements deterministic tar archives and BLAKE3 content hashing
 //! for package integrity verification.
 
-use anyhow::Result;
-use ignore::WalkBuilder;
+use std::fs;
 use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use ignore::WalkBuilder;
+use tar::{Builder, Header};
 
 /// Collect entries for canonical tar (shared between create and list)
 fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, std::fs::FileType)>> {
@@ -64,9 +69,6 @@ pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
 /// - Respect .gitignore and filter internal marker files
 /// - Exclude nested packages (subdirs with pcb.toml + [package])
 pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
-    use std::fs;
-    use tar::{Builder, Header};
-
     let mut builder = Builder::new(writer);
     builder.mode(tar::HeaderMode::Deterministic);
 
@@ -101,14 +103,10 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
 /// Creates canonical GNU tarball from directory, streams to BLAKE3 hasher.
 /// Format: h1:<base64-encoded-blake3>
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
     create_canonical_tar(cache_dir, &mut hasher)?;
     let hash = hasher.finalize();
-
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }
 
@@ -116,10 +114,6 @@ pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
 ///
 /// Format: h1:<base64-encoded-blake3>
 pub fn compute_manifest_hash(manifest_content: &str) -> String {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-
     let hash = blake3::hash(manifest_content.as_bytes());
-
     format!("h1:{}", STANDARD.encode(hash.as_bytes()))
 }
