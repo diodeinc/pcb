@@ -3078,6 +3078,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-mcp",
  "pcb-sch",
+ "pcb-zen",
  "pcb-zen-core",
  "rand 0.8.5",
  "regex",

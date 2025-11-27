@@ -13,7 +13,7 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::git;
-use crate::workspace::{build_workspace_member_versions, discover_member_dirs};
+use crate::workspace::discover_packages;
 
 /// Path dependency validation errors
 #[derive(Debug, Error)]
@@ -126,19 +126,17 @@ fn resolve_dependencies(
     // Read workspace config
     let pcb_toml_path = workspace_root.join("pcb.toml");
     let initial_config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
+    let workspace_config = initial_config.workspace.clone().unwrap_or_default();
 
-    // Discover member directories and build workspace members index
-    let member_patterns = initial_config
-        .workspace
-        .as_ref()
-        .map(|w| w.members.as_slice())
-        .unwrap_or(&[]);
-    let member_dirs = discover_member_dirs(workspace_root, member_patterns)?;
+    // Discover member packages
+    let member_packages = discover_packages(file_provider, workspace_root, &workspace_config)?;
 
-    // Build workspace_member_versions for auto-deps (before auto-deps modifies configs)
+    // Build workspace_member_versions for auto-deps from discovered packages
     // Maps module_path -> latest published version (or "0.1.0" for unpublished)
-    let workspace_member_versions =
-        build_workspace_member_versions(&initial_config, workspace_root, &member_dirs);
+    let workspace_member_versions: HashMap<String, String> = member_packages
+        .iter()
+        .map(|pkg| (pkg.url.clone(), pkg.version.clone()))
+        .collect();
 
     // Load existing lockfile if present (needed for auto-deps fast path)
     let lockfile_path = workspace_root.join("pcb.sum");
@@ -211,18 +209,36 @@ fn resolve_dependencies(
         );
     }
 
-    // Build workspace members: URL -> (dir, config)
-    // Includes ALL member directories (empty pcb.toml inherits V2 from workspace root)
-    let workspace_members =
-        build_workspace_members(file_provider, &config, workspace_root, &member_dirs);
+    // Re-discover packages after auto-deps may have modified configs
+    let workspace_config = config.workspace.clone().unwrap_or_default();
+    let mut member_packages = discover_packages(file_provider, workspace_root, &workspace_config)?;
 
-    // Extract V2 packages for resolution (root + members with is_v2())
-    let mut packages: Vec<(PathBuf, PcbToml)> = vec![(pcb_toml_path.clone(), config.clone())];
-    for (dir, pkg_config) in workspace_members.values() {
-        if dir != workspace_root && pkg_config.is_v2() {
-            packages.push((dir.join("pcb.toml"), pkg_config.clone()));
-        }
+    // Compute root package URL and add to member_packages for unified handling
+    let root_url = workspace_config
+        .repository
+        .as_ref()
+        .map(|repo| match &workspace_config.path {
+            Some(p) => format!("{}/{}", repo, p),
+            None => repo.clone(),
+        });
+    if let Some(url) = &root_url {
+        member_packages.insert(
+            0,
+            crate::workspace::MemberPackage {
+                url: url.clone(),
+                dir: workspace_root.to_path_buf(),
+                rel_path: PathBuf::new(),
+                config: config.clone(),
+                version: "0.1.0".to_string(), // Root version not needed for resolution
+            },
+        );
     }
+
+    // Build workspace members lookup: URL -> dir (for local dependency resolution)
+    let workspace_members: HashMap<String, PathBuf> = member_packages
+        .iter()
+        .map(|pkg| (pkg.url.clone(), pkg.dir.clone()))
+        .collect();
 
     // Display workspace info
     if let Some(ws) = &config.workspace {
@@ -234,23 +250,23 @@ fn resolve_dependencies(
         println!("Type: Standalone package (implicit workspace)");
     }
 
-    println!("\nDiscovered {} package(s):", packages.len());
-    for (pcb_toml_path, config) in &packages {
-        let package_name = pcb_toml_path
-            .parent()
-            .and_then(|p| p.file_name())
+    println!("\nDiscovered {} package(s):", member_packages.len());
+    for pkg in &member_packages {
+        let package_name = pkg
+            .dir
+            .file_name()
             .map(|n| n.to_string_lossy())
-            .unwrap_or_else(|| "unknown".into());
+            .unwrap_or_else(|| "root".into());
 
-        if let Some(board) = &config.board {
+        if let Some(board) = &pkg.config.board {
             println!(
                 "  - {} (board: {}) → {}",
                 package_name,
                 board.name,
-                pcb_toml_path.display()
+                pkg.dir.display()
             );
         } else {
-            println!("  - {} → {}", package_name, pcb_toml_path.display());
+            println!("  - {} → {}", package_name, pkg.dir.display());
         }
     }
 
@@ -272,19 +288,16 @@ fn resolve_dependencies(
     let mut packages_with_deps = Vec::new();
     let mut packages_without_deps = 0;
 
-    for (pcb_toml_path, config) in &packages {
-        if !config.is_v2() {
-            continue;
-        }
-
-        let package_name = pcb_toml_path
-            .parent()
-            .and_then(|p| p.file_name())
+    for pkg in &member_packages {
+        let package_name = pkg
+            .dir
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".into());
+            .unwrap_or_else(|| "root".into());
+        let pcb_toml_path = pkg.dir.join("pcb.toml");
 
-        // Validate no patches in member packages
-        if !config.patch.is_empty() {
+        // Validate no patches in member packages (except root)
+        if !pkg.config.patch.is_empty() && !pkg.rel_path.as_os_str().is_empty() {
             anyhow::bail!(
                 "[patch] section is only allowed at workspace root\n  \
                 Found in package: {}\n  \
@@ -296,7 +309,8 @@ fn resolve_dependencies(
         }
 
         // Collect this package's dependencies
-        let package_deps = collect_package_dependencies(pcb_toml_path, config, workspace_root)?;
+        let package_deps =
+            collect_package_dependencies(&pcb_toml_path, &pkg.config, workspace_root)?;
 
         if package_deps.is_empty() {
             packages_without_deps += 1;
@@ -454,22 +468,21 @@ fn resolve_dependencies(
 
     // Phase 2: Build the final dependency set using only selected versions
     let build_set = build_closure(
-        &packages,
+        &member_packages,
         &selected,
         &manifest_cache,
         &workspace_members,
-        workspace_root,
     )?;
 
     println!("Build set: {} dependencies", build_set.len());
 
     // Print dependency tree
-    print_dependency_tree(&packages, workspace_root, &build_set, &manifest_cache)?;
+    print_dependency_tree(&member_packages, workspace_root, &build_set, &manifest_cache)?;
 
     // Phase 2.5: Collect and fetch assets
     println!("\nPhase 2.5: Fetching assets");
     let asset_set = collect_and_fetch_assets(
-        &packages,
+        &member_packages,
         &manifest_cache,
         &selected,
         workspace_root,
@@ -494,7 +507,7 @@ fn resolve_dependencies(
 
     println!("\nV2 dependency resolution complete");
 
-    let package_paths = packages.iter().map(|(path, _)| path.clone()).collect();
+    let package_paths = member_packages.iter().map(|pkg| pkg.dir.clone()).collect();
 
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -503,7 +516,7 @@ fn resolve_dependencies(
         workspace_root,
         home_dir: &home,
         root_config: &config,
-        packages: &packages,
+        packages: &member_packages,
         selected: &selected,
         patches: &patches,
         manifest_cache: &manifest_cache,
@@ -522,11 +535,11 @@ struct ResolutionContext<'a> {
     workspace_root: &'a Path,
     home_dir: &'a Path,
     root_config: &'a PcbToml,
-    packages: &'a [(PathBuf, PcbToml)],
+    packages: &'a [crate::workspace::MemberPackage],
     selected: &'a HashMap<ModuleLine, Version>,
     patches: &'a BTreeMap<String, PatchSpec>,
     manifest_cache: &'a HashMap<(ModuleLine, Version), PackageManifest>,
-    workspace_members: &'a HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
+    workspace_members: &'a HashMap<String, PathBuf>,
 }
 
 /// Build the per-package resolution map
@@ -536,7 +549,7 @@ fn build_resolution_map(
     // Helper to compute absolute path for a module line
     let get_abs_path = |line: &ModuleLine, _version: &Version| -> PathBuf {
         // 1. Check workspace members first
-        if let Some((member_dir, _)) = ctx.workspace_members.get(&line.path) {
+        if let Some(member_dir) = ctx.workspace_members.get(&line.path) {
             return member_dir.clone();
         }
         // 2. Check patches
@@ -648,14 +661,11 @@ fn build_resolution_map(
     }
 
     // Member packages
-    for (pkg_path, config) in ctx.packages {
-        {
-            let pkg_dir = pkg_path.parent().unwrap();
-            results.insert(
-                pkg_dir.to_path_buf(),
-                build_map(pkg_dir, &config.dependencies, &config.assets),
-            );
-        }
+    for pkg in ctx.packages {
+        results.insert(
+            pkg.dir.clone(),
+            build_map(&pkg.dir, &pkg.config.dependencies, &pkg.config.assets),
+        );
     }
 
     // Transitive deps: each remote package gets its own resolution map
@@ -678,7 +688,6 @@ fn build_resolution_map(
 fn collect_package_dependencies(
     pcb_toml_path: &Path,
     v2_config: &pcb_zen_core::config::PcbToml,
-    workspace_root: &Path,
 ) -> Result<Vec<UnresolvedDep>> {
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
@@ -686,7 +695,6 @@ fn collect_package_dependencies(
     collect_deps_recursive(
         &v2_config.dependencies,
         package_dir,
-        workspace_root,
         &mut deps,
     )?;
 
@@ -697,7 +705,6 @@ fn collect_package_dependencies(
 fn collect_deps_recursive(
     current_deps: &BTreeMap<String, DependencySpec>,
     package_dir: &Path,
-    workspace_root: &Path,
     deps: &mut HashMap<String, UnresolvedDep>,
 ) -> Result<()> {
     for (url, spec) in current_deps {
@@ -743,20 +750,6 @@ fn collect_deps_recursive(
             );
         }
 
-        // Check if path points inside workspace
-        if let Ok(rel_path) = resolved_path.strip_prefix(workspace_root) {
-            anyhow::bail!(
-                "Path dependency '{}' points inside workspace\n  \
-                Path: {}\n  \
-                Workspace members are automatically resolved - remove the 'path' field.\n  \
-                Use: \"{}\" = \"{}\"",
-                url,
-                rel_path.display(),
-                url,
-                _expected_version.unwrap_or(&"0.1".to_string())
-            );
-        }
-
         // Add this local path dep
         deps.insert(
             url.clone(),
@@ -788,7 +781,6 @@ fn collect_deps_recursive(
         collect_deps_recursive(
             &dep_config.dependencies,
             &resolved_path,
-            workspace_root,
             deps,
         )?;
     }
@@ -872,7 +864,7 @@ fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String>
 ///
 /// Returns set of (module_path, ref) for all fetched assets
 fn collect_and_fetch_assets(
-    packages: &[(PathBuf, PcbToml)],
+    packages: &[crate::workspace::MemberPackage],
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
     workspace_root: &Path,
@@ -900,25 +892,20 @@ fn collect_and_fetch_assets(
         };
 
     // 1. Collect assets from workspace and member packages
-    for (pcb_toml_path, config) in packages {
-        if !config.is_v2() {
+    for pkg in packages {
+        if pkg.config.assets.is_empty() {
             continue;
         }
-
-        if config.assets.is_empty() {
-            continue;
-        }
-
-        let package_name = pcb_toml_path
-            .parent()
-            .and_then(|p| p.file_name())
+        let package_name = pkg
+            .dir
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".into());
+            .unwrap_or_else(|| "root".into());
 
         println!("\n  Package: {}", package_name);
-        println!("    {} assets", config.assets.len());
+        println!("    {} assets", pkg.config.assets.len());
 
-        for (module_path, asset_spec) in &config.assets {
+        for (module_path, asset_spec) in &pkg.config.assets {
             fetch_if_needed(module_path, asset_spec)?;
         }
     }
@@ -949,11 +936,12 @@ fn fetch_package(
     module_path: &str,
     version: &Version,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
-    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
+    workspace_members: &HashMap<String, PathBuf>,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
-    if let Some((_member_dir, member_v2)) = workspace_members.get(module_path) {
-        return Ok(PackageManifest::from_v2(member_v2));
+    if let Some(member_dir) = workspace_members.get(module_path) {
+        let member_toml = member_dir.join("pcb.toml");
+        return read_manifest_from_path(&member_toml);
     }
 
     // 2. Check if this module is patched with a local path
@@ -1091,7 +1079,7 @@ fn fetch_asset_repo(
 
 /// Print a tree view of the dependency graph (cargo tree style)
 fn print_dependency_tree(
-    packages: &[(PathBuf, PcbToml)],
+    packages: &[crate::workspace::MemberPackage],
     workspace_root: &Path,
     build_set: &HashSet<(ModuleLine, Version)>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
@@ -1186,11 +1174,10 @@ fn print_dependency_tree(
     let mut all_roots = Vec::new();
 
     // Package dependencies
-    for (pcb_toml_path, config) in packages {
-        if !config.is_v2() {
-            continue;
-        }
-        let package_deps = collect_package_dependencies(pcb_toml_path, config, workspace_root)?;
+    for pkg in packages {
+        let pcb_toml_path = pkg.dir.join("pcb.toml");
+        let package_deps =
+            collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec)
@@ -1229,11 +1216,10 @@ fn print_dependency_tree(
 ///
 /// DFS from workspace package dependencies using selected versions.
 fn build_closure(
-    packages: &[(PathBuf, PcbToml)],
+    packages: &[crate::workspace::MemberPackage],
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-    workspace_members: &HashMap<String, (PathBuf, pcb_zen_core::config::PcbToml)>,
-    workspace_root: &Path,
+    workspace_members: &HashMap<String, PathBuf>,
 ) -> Result<HashSet<(ModuleLine, Version)>> {
     let mut build_set = HashSet::new();
     let mut stack = Vec::new();
@@ -1252,12 +1238,10 @@ fn build_closure(
     }
 
     // Seed DFS from all package dependencies
-    for (pcb_toml_path, config) in packages {
-        if !config.is_v2() {
-            continue;
-        }
-
-        let package_deps = collect_package_dependencies(pcb_toml_path, config, workspace_root)?;
+    for pkg in packages {
+        let pcb_toml_path = pkg.dir.join("pcb.toml");
+        let package_deps =
+            collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
 
         for dep in package_deps {
             if !is_non_version_dep(&dep.spec) {
@@ -1474,48 +1458,6 @@ fn add_requirement(
         selected.insert(line.clone(), final_version);
         work_queue.push_back(line);
     }
-}
-
-/// Build workspace members map: URL -> (dir, config)
-fn build_workspace_members(
-    file_provider: &dyn FileProvider,
-    config: &PcbToml,
-    workspace_root: &Path,
-    member_dirs: &[PathBuf],
-) -> HashMap<String, (PathBuf, PcbToml)> {
-    let Some(ws) = &config.workspace else {
-        return HashMap::new();
-    };
-    let Some(repo) = &ws.repository else {
-        return HashMap::new();
-    };
-
-    let base = match &ws.path {
-        Some(p) => format!("{}/{}", repo, p),
-        None => repo.clone(),
-    };
-
-    let mut members = HashMap::new();
-
-    // Add root package
-    members.insert(base.clone(), (workspace_root.to_path_buf(), config.clone()));
-
-    // Add member directories
-    for dir in member_dirs {
-        if let Ok(rel) = dir.strip_prefix(workspace_root) {
-            let rel_str = rel.to_string_lossy();
-            if !rel_str.is_empty() {
-                let url = format!("{}/{}", base, rel_str);
-                let pcb_toml = dir.join("pcb.toml");
-                let content = file_provider.read_file(&pcb_toml).unwrap_or_default();
-                let pkg_config =
-                    PcbToml::parse(&content).unwrap_or_else(|_| PcbToml::parse("").unwrap());
-                members.insert(url, (dir.clone(), pkg_config));
-            }
-        }
-    }
-
-    members
 }
 
 /// Collect entries for canonical tar (shared between create and list)

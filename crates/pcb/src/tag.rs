@@ -4,7 +4,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pcb_ui::{Colorize, Spinner};
 use pcb_zen::git;
-use pcb_zen_core::config::get_workspace_info;
+use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
 use std::io::{self, Write};

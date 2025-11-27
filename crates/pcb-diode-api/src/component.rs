@@ -1519,10 +1519,10 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
 
 pub fn execute(args: SearchArgs) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root =
-        pcb_zen_core::config::get_workspace_info(&pcb_zen_core::DefaultFileProvider::new(), &cwd)
-            .map(|info| info.root)
-            .unwrap_or(cwd);
+    let workspace_root = pcb_zen_core::config::find_workspace_root(
+        &pcb_zen_core::DefaultFileProvider::new(),
+        &cwd,
+    );
 
     // Handle --dir mode (local directory)
     if let Some(ref dir) = args.dir {

@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use log::debug;
+use pcb_zen::workspace::{get_workspace_info, WorkspaceInfo as ConfigWorkspaceInfo};
 use pcb_zen::EvalConfig;
-use pcb_zen_core::config::{get_workspace_info, WorkspaceInfo as ConfigWorkspaceInfo};
 use pcb_zen_core::{DefaultFileProvider, EvalOutput, WithDiagnostics};
 
 use std::path::{Path, PathBuf};
