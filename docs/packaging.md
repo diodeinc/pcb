@@ -103,7 +103,7 @@ path = "WV0002.zen"
 description = "Power Regulator Board"
 ```
 
-**`resolver`** determines the packaging system version ("2" for V2). Required.
+**`resolver`** determines the packaging system version ("2" for V2). Required at workspace root to opt-in existing V1 workspaces. For new projects without V1-only constructs (`[packages]` or `[module]`), V2 is the default.
 
 **`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It indicates breaking changes in the language or standard library that require a newer compiler.
 
@@ -336,30 +336,33 @@ load("./units.zen", "Capacitance")
 
 ### Auto-Discovery
 
-Similar to Go, if a `load()` statement references a URL that is not declared in `pcb.toml`, the toolchain automatically attempts to resolve and add the dependency.
+During `pcb build`, the toolchain automatically scans `.zen` files and adds missing dependencies to `pcb.toml`. This runs before dependency resolution (Phase -1).
+
+**Resolution Order:**
+1.  **Known aliases**: Common aliases like `@stdlib`, `@kicad-symbols` are resolved to known URLs and default versions
+2.  **Workspace members**: URL imports matching workspace member paths use the member's published version
+3.  **Lockfile entries**: If a matching entry exists in `pcb.sum`, use that version (fast path, no git)
+4.  **Remote discovery**: Probe git tags to find the package and its latest version (slow path, cached per repo)
 
 **Mechanism:**
-1.  Parser extracts the import path: `github.com/user/repo/sub/module.zen`.
-2.  If no matching dependency is found, it probes path prefixes to identify the repository root (e.g., `github.com/user/repo`).
-3.  Fetches the latest stable release (semver).
-4.  Updates `pcb.toml` with the new dependency and `pcb.sum` with the hashes.
+1.  AST parser extracts import paths from `load()` statements and string literals (for `Module()`, `Symbol()`, etc.)
+2.  For each import, tries resolution in the order above
+3.  Updates `pcb.toml` with new dependencies
+4.  Also corrects versions for workspace member dependencies to match their published versions
 
-**Example:**
-User writes code without editing config:
-```python
-load("github.com/analog/lib/filter.zen", "Filter")
-```
-
-Running `pcb build`:
+**Example Output:**
 ```bash
 $ pcb build
-Resolving dependencies...
-  Auto-resolving github.com/analog/lib... found v1.2.0
-  Adding dependency to pcb.toml
-  Fetching github.com/analog/lib@v1.2.0...
+V2 Dependency Resolution
+Workspace root: /path/to/workspace
+
+Phase -1: Auto-detecting dependencies from .zen files
+  Auto-added 3 dependencies across 2 package(s)
+  Discovered 1 remote package(s) via git tags
+  Corrected 2 workspace member version(s)
 ```
 
-This enables a "code-first" workflow where manifests are managed primarily by the tool.
+Unknown aliases or unresolvable URLs are reported as warnings but don't fail the build.
 
 ### Workspace
 
@@ -367,14 +370,24 @@ Coordinate packages in monorepo:
 
 ```toml
 [workspace]
-members = ["boards/*"]
+resolver = "2"
+repository = "github.com/myorg/myrepo"
+members = ["boards/*", "components/*"]
 default-board = "WV0002"
+
+[access]
 allow = ["*@weaverobots.com"]
 
 [vendor]
 directory = "vendor"
 match = ["*"]
 ```
+
+**Default member patterns:** If `members` is not specified, the default patterns are:
+- `components/*`
+- `reference/*`
+- `modules/*`
+- `boards/*`
 
 Each member package declares its own dependencies:
 ```toml
@@ -420,9 +433,20 @@ members = ["boards/*"]
 
 ### Canonical Package Format
 
-Deterministic GNU tar with normalized metadata (mtime=0, uid=0, gid=0, mode 0644/0755), lexicographic ordering, PAX extensions for long paths. Filters `.git` and internal markers (`.pcbcache`, `.no-manifest`). Respects `.gitignore`. Streamed directly to BLAKE3 hasher (no buffering). Same commit produces identical hash regardless of remote.
+Deterministic GNU tar with normalized metadata:
+- `mtime=0`, `uid=0`, `gid=0`, `mode=0644`
+- Username/groupname set to empty strings
+- Lexicographic ordering of entries
+- Regular files only (directories implicit from paths)
+- Respects `.gitignore` via the `ignore` crate
+- Filters internal markers (`.pcbcache`)
+- Excludes nested packages (subdirectories with their own `pcb.toml`)
 
-Debug: `pcb package <dir> [-o output.tar]`
+Streamed directly to BLAKE3 hasher (no buffering). Same commit produces identical hash regardless of machine or remote.
+
+Debug: `pcb package <dir> [-o output.tar] [-v]`
+
+The `-v` flag shows all files that would be included in the package.
 
 ### Lockfile
 
@@ -432,7 +456,7 @@ github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo
 github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
 ```
 
-Two lines per dependency: content hash (canonical tar) and manifest hash (pcb.toml). Asset packages get content hash only. Pseudo-versions include full commit hash. Cache markers (`~/.pcb/cache/{path}/{version}/.pcbcache`) avoid re-hashing. Generated on first build, merged on updates, verified on subsequent builds. Commit to version control.
+Two lines per dependency: content hash (canonical tar BLAKE3) and manifest hash (pcb.toml BLAKE3). Asset packages get content hash only. Pseudo-versions include full commit hash. Cache markers (`~/.pcb/cache/{path}/{version}/.pcbcache`) store both hashes and avoid re-computation. Generated on first build, merged on updates, verified on subsequent builds. Commit to version control.
 
 ### Vendoring
 
@@ -792,23 +816,77 @@ Build includes both `stdlib@0.3.x` and `stdlib@1.0.x`. WV0002 uses new API, WV00
 
 ## Implementation
 
-### Resolution Phase
+### Resolution Phases
 
-1. **Seed:** Discover members → preseed from lockfile → resolve branches/revs → initialize MVS
-2. **Discovery:** Fetch manifests (blob-filtered) → add transitive deps → upgrade versions → repeat until fixed point
-3. **Build Closure:** DFS from workspace roots using final versions (filter obsolete)
-4. **Fetch:** Download full repos (shallow) → hash → cache markers
-5. **Lock:** Merge hashes into pcb.sum
+`pcb build` runs the following phases for V2 workspaces:
 
-Deterministic, monotonic, no backtracking. Patches participate in MVS. Incremental via lockfile/cache.
+#### Phase 1: Auto-Discovery
+
+Scans `.zen` files for imports and automatically adds missing dependencies to `pcb.toml` files.
+
+- Parses AST to extract import paths from `load()` statements and string literals
+- Resolves imports via: known aliases → workspace members → lockfile → remote discovery
+- Updates `pcb.toml` files with new dependencies
+- Corrects versions for workspace member dependencies
+
+This enables a "code-first" workflow where developers write imports and the toolchain manages manifests.
+
+#### Phase 2: Seed MVS State
+
+Initializes Minimal Version Selection state from workspace package dependencies.
+
+- Discovers workspace member packages via glob patterns
+- Preseeds from lockfile entries (avoids git operations for known versions)
+- Resolves branch/rev specs to pseudo-versions
+- Validates patches are only at workspace root
+
+#### Phase 3: Parallel Dependency Resolution
+
+Wave-based parallel fetching with MVS:
+
+1. **Collect Wave**: Gather packages from work queue not yet fetched
+2. **Parallel Fetch**: Fetch manifests using sparse checkout with `--filter=blob:none`
+3. **Process Results**: Add transitive dependencies to MVS state (monotonic upgrade)
+4. **Repeat**: Until work queue is empty (fixed point reached)
+
+Each wave can fetch multiple packages in parallel. MVS updates are done sequentially to maintain determinism.
+
+#### Phase 4: Build Closure
+
+Computes the minimal set of packages needed for the build.
+
+- DFS from workspace package dependencies using final selected versions
+- Filters out obsolete fetches (versions that were upgraded during resolution)
+- Produces a cargo-tree style dependency visualization
+
+#### Phase 5: Asset Fetching
+
+Fetches asset repositories (KiCad libraries, etc.).
+
+- Collects assets from workspace packages and transitive manifests
+- Fetches via sparse checkout (assets are leaf nodes, no transitive deps)
+- Computes content hashes for lockfile
+
+#### Phase 6: Lockfile Update
+
+Updates `pcb.sum` with cryptographic hashes.
+
+- Merges new entries with existing lockfile (accumulate, never delete)
+- Verifies cached entries against lockfile hashes
+- Only writes to disk if new entries were added
+
+The entire resolution is deterministic, monotonic (no backtracking), and incremental via lockfile preseeding and cache markers.
 
 ### Git Operations
 
-**Cache Structure:** `~/.pcb/cache/{full-module-path}/{version}/` contains package contents directly at root (no nested path redundancy) + `.pcbcache` marker for hash verification. Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
+**Cache Structure:** `~/.pcb/cache/{full-module-path}/{version}/` contains package contents directly at root (no nested path redundancy) + `.pcbcache` marker storing content and manifest hashes for verification. Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
 
 Examples:
-- Root package: `~/.pcb/cache/github.com/diodeinc/stdlib/v0.3.2/`
-- Nested package: `~/.pcb/cache/github.com/diodeinc/registry/components/2N7002/v1.0.0/`
+- Root package: `~/.pcb/cache/github.com/diodeinc/stdlib/0.3.2/`
+- Nested package: `~/.pcb/cache/github.com/diodeinc/registry/reference/ti/tps54331/1.0.0/`
+- Asset package: `~/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/`
+
+Note: Version directories use the version string without `v` prefix (e.g., `0.3.2` not `v0.3.2`).
 
 **Repository Boundary Detection:**
 - **GitHub:** 3-segment split: `github.com/user/repo` is the repository, everything after is subpath
@@ -862,31 +940,49 @@ Run 'pcb migrate' to update project.
 
 ### Migration Tool
 
+The `pcb migrate` command converts V1 workspaces to V2 format:
+
 ```bash
-$ pcb migrate
+$ pcb migrate [PATHS]
 
-Analyzing workspace...
-Found 6 boards
-Detected dependencies:
-  stdlib: v0.2.13, v0.3.1, v0.3.2
-  registry: v0.1.28, v0.3.1, v0.3.8
+Step 1: Detecting workspace root
+  Workspace root: /path/to/workspace
 
-Updating board pcb.toml files with detected dependencies...
-  WV0002: stdlib@0.3.2, registry/ti/tps54331@1.0, ...
-  WV0003: stdlib@0.3.1, registry/analog/ltc3115@1.5, ...
+Step 2: Detecting git repository
+  Repository: github.com/myorg/myrepo
 
-Board WV0001 uses stdlib@0.2.13 (incompatible with 0.3)
-Keep multiple major versions in build? [Y/n]: y
-  WV0001: stdlib@0.2.13 (separate family)
+Step 3: Converting pcb.toml files to V2
+  Converted 5 pcb.toml files
 
-Generating new pcb.toml files...
-Rewriting load statements (optional)...
-Creating pcb.sum lockfile...
+Step 4: Discovering .zen files
+  Found 12 .zen files
 
-Migration complete. Review with: git diff
+Step 5: Running codemods on .zen files
+  ✓ WV0002.zen
+  ✓ WV0003.zen
+  ...
+
+✓ Migration complete
+  Review changes with: git diff
+  Run build to verify: pcb build
 ```
 
-Conservative - preserves behavior, modernizes syntax. Clean git diff.
+**Codemods Applied:**
+
+1. **RemoveDirectoryLoads** - Removes directory `load()` statements (V2 requires file paths)
+2. **WorkspacePaths** - Converts paths like `./components/foo.zen` to full URLs
+3. **EscapePaths** - Escapes special characters in paths
+4. **AliasExpansion** - Expands `@alias/path` to full URLs
+5. **PathCorrection** - Fixes relative paths to use workspace-relative URLs
+
+**Manifest Conversion:**
+
+- Adds `resolver = "2"` to workspace root
+- Adds `repository` field from git remote
+- Converts `[packages]` to `[dependencies]`
+- Removes V1-only fields (`[module]`, `[board]` from workspace root)
+
+Conservative migration - preserves behavior while modernizing syntax. Review with `git diff` before committing.
 
 ## Adoption
 
@@ -932,8 +1028,8 @@ Discovers dirty/unpublished packages in a V2 workspace and publishes them by cre
 # Publish all dirty packages in workspace
 $ pcb publish
 
-# Dry run - show what would be published without creating tags
-$ pcb publish --dry-run
+# Skip preflight checks (uncommitted changes, branch verification)
+$ pcb publish --force
 
 # Publish from a specific path
 $ pcb publish ./path/to/workspace
@@ -948,6 +1044,8 @@ A package is considered **dirty** (needs publishing) if any of the following are
 3. **Legacy tag** - Published tag exists but lacks hash annotations (pre-V2 tag)
 4. **Content changed** - Current content hash differs from the hash in the tag annotation
 5. **Manifest changed** - Current `pcb.toml` hash differs from the hash in the tag annotation
+
+Use `pcb info` to see the current dirty state of all packages in a workspace.
 
 ### Tag Annotation Format
 
@@ -977,68 +1075,84 @@ This follows the semver family convention where 0.x minor bumps are breaking cha
 
 Packages with inter-dependencies are published in **waves** based on the dependency DAG:
 
-1. **Wave 1**: Leaf packages (no dirty dependencies) are tagged first
-2. **Wave 2**: Packages that depended on Wave 1 packages become publishable
-3. **Continue** until all packages are published or remaining packages have external blockers
+1. **Wave 1**: Packages with no dirty dependencies are tagged first
+2. **Dependency Bump**: After each wave, packages that depend on just-published packages have their `pcb.toml` updated with the new versions and a commit is created
+3. **Wave 2+**: Now-dirty dependents become publishable
+4. **Continue** until all packages are published
 
 ```bash
 $ pcb publish
-Found 12 dirty/unpublished package(s)
+✓ on main @ abc1234
 
 Wave 1:
-3 package(s) can be published:
+2 package(s) to publish:
   reference/ti/tps54331: 0.1.0 (initial) [reference/ti/tps54331/v0.1.0]
   reference/analog/ltc3115: 0.1.0 (initial) [reference/analog/ltc3115/v0.1.0]
-  common/interfaces: 0.1.0 (initial) [common/interfaces/v0.1.0]
+  patching: boards/power-supply/pcb.toml
 
 Wave 2:
-5 package(s) can be published:
+1 package(s) to publish:
   boards/power-supply: 0.1.0 (initial) [boards/power-supply/v0.1.0]
-  ...
 
-Push 12 tag(s) to origin? [y/N]:
+Push main branch and 3 tag(s) to origin? [y/N]:
 ```
 
-All tags are created locally first, then pushed in a single batch after confirmation.
+All tags are created locally first, then pushed in a single batch after confirmation. If you decline, all local tags are deleted and any commits are reset.
 
 ### Workflow Steps
 
 1. **Pre-flight Checks:**
    - Working directory is clean (no uncommitted changes)
    - Current branch is `main`
+   - Branch is tracking a remote
 
 2. **Discovery:**
-   - Detects V2 workspace and all member packages
+   - Detects V2 workspace and all member packages (excludes boards)
    - Computes content hashes for dirty detection
-   - Builds dependency graph from `pcb.toml` declarations
+   - Fetches tag annotations in batch for efficient comparison
 
 3. **Wave Publishing:**
    - Identifies publishable packages (no dirty dependencies)
    - Computes next versions and tag names
    - Creates annotated tags locally with hash annotations
+   - Updates `pcb.toml` of dependents and commits changes
    - Repeats until no more packages can be published
 
 4. **Confirmation & Push:**
-   - Displays all accumulated tags across waves
+   - Displays summary of tags and commits
    - Prompts for confirmation before pushing
-   - Pushes all tags in a single `git push` command
-   - If declined, deletes all local tags created during the session
+   - Pushes main branch (if commits were made) and all tags
+   - If declined, rolls back: deletes local tags and resets to initial commit
 
-### Blocked Packages
+### Board Packages
 
-If packages cannot be published due to dirty dependencies, the command shows blocking info:
+Packages with a `[board]` section are currently excluded from `pcb publish`. Board publishing support is planned for a future release.
+
+### `pcb info`
+
+Displays workspace and package information for V2 workspaces:
 
 ```bash
-$ pcb publish
-Found 3 dirty/unpublished package(s)
+$ pcb info
+Workspace
+Root: /path/to/workspace
+Repository: github.com/myorg/registry
+Toolchain: pcb >= 0.3
 
-No packages can be published yet.
-All dirty packages depend on other dirty/unpublished packages.
+Boards (2)
+  WV0002 (v1.0.0) - boards/WV0002/WV0002.zen
+    Power Regulator Board
 
-Dirty packages and their blocking dependencies:
-  boards/power-supply blocked by:
-    - github.com/diodeinc/registry/reference/ti/tps54331
+Packages (3)
+  tps54331 (v0.2.0) reference/ti/tps54331 (2 deps)
+  ltc3115 (v0.1.0)* reference/analog/ltc3115 (1 deps)
+  interfaces (unpublished) common/interfaces
 ```
+
+The `*` indicator shows packages with unpublished changes (dirty state).
+
+Options:
+- `--format json` - Output as JSON for tooling integration
 
 ---
 
@@ -1046,5 +1160,7 @@ Dirty packages and their blocking dependencies:
 
 ### Remaining V2 Tasks
 
-- Auto-detect dependencies from `load()` statements
-- Board publishing workflow (separate from package publishing)
+- Board publishing support in `pcb publish`
+- `pcb tidy` command to remove unused lockfile entries
+- `pcb upgrade` command to upgrade dependencies to latest versions
+- Offline mode improvements (`--offline` flag for air-gapped builds)
