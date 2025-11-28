@@ -185,6 +185,11 @@ pub struct WorkspaceConfig {
     /// Default board name to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
+
+    /// Patterns for dependencies to auto-vendor during build (supports globs)
+    /// Example: ["github.com/diodeinc/registry/*"]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor: Vec<String>,
 }
 
 impl Default for WorkspaceConfig {
@@ -197,6 +202,7 @@ impl Default for WorkspaceConfig {
             pcb_version: None,
             default_board: None,
             members: default_members(),
+            vendor: Vec::new(),
         }
     }
 }

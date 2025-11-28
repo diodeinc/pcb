@@ -374,13 +374,10 @@ resolver = "2"
 repository = "github.com/myorg/myrepo"
 members = ["boards/*", "components/*"]
 default-board = "WV0002"
+vendor = ["github.com/diodeinc/registry/**"]
 
 [access]
 allow = ["*@weaverobots.com"]
-
-[vendor]
-directory = "vendor"
-match = ["*"]
 ```
 
 **Default member patterns:** If `members` is not specified, the default patterns are:
@@ -460,32 +457,41 @@ Two lines per dependency: content hash (canonical tar BLAKE3) and manifest hash 
 
 ### Vendoring
 
-Vendoring allows checking dependencies into source control for hermetic builds (zero network dependence) or auditing.
+Vendoring copies dependencies from cache to `vendor/` for hermetic builds or auditing.
 
-**Configuration:**
-Controlled via top-level `[vendor]` in `pcb.toml`. Typically defined at the workspace root.
+**Integrated Vendoring (`workspace.vendor`):**
+
+Configure `vendor` patterns in the workspace section to automatically vendor matching dependencies during `pcb build`:
 
 ```toml
-[vendor]
-directory = "vendor"
-# List of package prefixes to vendor. Empty list or "*" vendors everything.
-match = ["github.com/diodeinc/registry/reference/ti"]
+[workspace]
+resolver = "2"
+repository = "github.com/myorg/myrepo"
+vendor = ["github.com/diodeinc/registry/**"]
 ```
 
-**Command:**
-`pcb vendor` populates the `vendor/` directory in the workspace root based strictly on `pcb.sum` versions and the configuration. It does not evaluate `.zen` files.
+Pattern syntax uses globs:
+- `*` matches a single path segment
+- `**` matches multiple segments (use for nested paths)
+
+Example: `github.com/diodeinc/registry/**` matches `github.com/diodeinc/registry/components/TPS54331`.
+
+Vendoring is incremental - existing entries are not re-copied.
+
+**Full Vendoring (`pcb vendor`):**
+
+The `pcb vendor` command vendors all dependencies (equivalent to pattern `["**"]`):
 
 ```bash
 $ pcb vendor
-# Populates vendor/github.com/diodeinc/registry/reference/ti/...
+✓ Vendored 41 packages and 2 assets
+Vendor directory: /path/to/workspace/vendor
 ```
 
 **Resolution Priority:**
-1.  **Workspace Vendor:** `vendor/` (if present and checksum matches `pcb.sum`)
-2.  **Global Cache:** `~/.cache/pcb/git/`
+1.  **Workspace Vendor:** `vendor/` (if present)
+2.  **Global Cache:** `~/.pcb/cache/`
 3.  **Network:** Fetch from upstream
-
-This enables workflows where specific critical dependencies are committed to the repo while others remain external.
 
 ### Standalone Scripts
 
