@@ -1,25 +1,21 @@
 use crate::build::create_diagnostics_passes;
 use crate::workspace::gather_workspace_info;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
 use log::debug;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
+use pcb_zen::{copy_to_vendor, get_workspace_info, resolve_dependencies};
+use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::LoadSpec;
-use pcb_zen_core::{config::find_workspace_root, DefaultFileProvider};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
 
 #[derive(Args)]
 pub struct VendorArgs {
     /// Path to .zen file or directory to analyze for dependencies.
     /// If a directory, will search recursively for .zen files.
     pub zen_path: PathBuf,
-
-    /// Check if vendor directory is up-to-date (useful for CI)
-    #[arg(long)]
-    pub check: bool,
 
     /// Continue vendoring even if some designs have build errors
     #[arg(long = "ignore-errors")]
@@ -28,18 +24,57 @@ pub struct VendorArgs {
 
 pub fn execute(args: VendorArgs) -> Result<()> {
     let zen_path = args.zen_path.canonicalize()?;
-    let workspace_root =
-        find_workspace_root(&DefaultFileProvider::new(), &zen_path).canonicalize()?;
-    if !workspace_root.join("pcb.toml").exists() {
-        anyhow::bail!(
-            "No pcb.toml found in workspace. \
-            Specify a path within a workspace that contains pcb.toml.",
-        );
+    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
+
+    // Check if this is a V2 workspace - use simplified closure-based vendoring
+    if workspace_info.config.is_v2() {
+        return execute_v2(&mut workspace_info);
     }
+
+    // V1 path: discover zen files and gather dependencies via evaluation
+    execute_v1(args, &workspace_info.root)
+}
+
+/// V2 vendoring: uses dependency closure from resolution
+fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
+    println!("V2 workspace detected - using closure-based vendoring\n");
+
+    let resolution = resolve_dependencies(workspace_info)?;
+    let result = copy_to_vendor(
+        &workspace_info.root,
+        &resolution.closure,
+        &resolution.assets,
+    )?;
+
+    println!();
+    println!(
+        "{} {}",
+        "✓".green().bold(),
+        format!(
+            "Vendored {} packages and {} assets",
+            result.package_count, result.asset_count
+        )
+        .bold()
+    );
+    println!(
+        "Vendor directory: {}",
+        result
+            .vendor_dir
+            .display()
+            .to_string()
+            .with_style(Style::Cyan)
+    );
+
+    Ok(())
+}
+
+/// V1 vendoring: discovers files via evaluation and tracks dependencies
+fn execute_v1(args: VendorArgs, workspace_root: &Path) -> Result<()> {
+    let zen_path = &args.zen_path;
 
     // Discover zen files to process
     let discovery_spinner = Spinner::builder("Discovering zen files").start();
-    let zen_files = discover_zen_files(&zen_path)?;
+    let zen_files = discover_zen_files(zen_path)?;
     discovery_spinner.finish();
     println!(
         "{} Found {} zen files to analyze",
@@ -55,29 +90,13 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     info_spinner.finish();
     println!("{} Dependencies analyzed", "✓".green());
 
-    // Handle check mode for CI
-    if args.check {
-        let check_spinner = Spinner::builder("Checking vendor directory").start();
-        debug!("Checking vendor directory: {}", vendor_dir.display());
-        let is_up_to_date = check_vendor_directory(&tracked_files, &workspace_root, &vendor_dir)?;
-        check_spinner.finish();
-
-        if is_up_to_date {
-            println!("{} Vendor directory is up-to-date", "✓".green());
-            return Ok(());
-        } else {
-            println!("{} Vendor directory is out-of-date", "✗".red());
-            anyhow::bail!("Vendor directory is not up-to-date. Run 'pcb vendor' to update it.");
-        }
-    }
-
     // Create vendor directory
     let _ = fs::remove_dir_all(&vendor_dir);
     fs::create_dir_all(&vendor_dir)?;
 
     // Copy vendor dependencies
     let vendor_spinner = Spinner::builder("Copying vendor dependencies").start();
-    let vendor_count = sync_tracked_files(&tracked_files, &workspace_root, &vendor_dir, None)?;
+    let vendor_count = sync_tracked_files(&tracked_files, workspace_root, &vendor_dir, None)?;
     vendor_spinner.finish();
 
     println!();
@@ -299,42 +318,6 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<usize> {
         }
     }
     Ok(synced_files)
-}
-
-/// Check if vendor directory is up-to-date by vendoring to a temp directory and comparing
-fn check_vendor_directory(
-    tracked_files: &HashMap<PathBuf, LoadSpec>,
-    workspace_root: &Path,
-    vendor_dir: &Path,
-) -> Result<bool> {
-    // If vendor directory doesn't exist, it's not up-to-date
-    if !vendor_dir.exists() {
-        debug!("Vendor directory does not exist: {}", vendor_dir.display());
-        return Ok(false);
-    }
-
-    // Create temporary directory for comparison
-    let temp_dir = TempDir::new().context("Failed to create temporary directory")?;
-    let temp_vendor_dir = temp_dir.path().join("vendor");
-    fs::create_dir_all(&temp_vendor_dir)?;
-
-    sync_tracked_files(tracked_files, workspace_root, &temp_vendor_dir, None)?;
-
-    // Compare temp directory with actual vendor directory using dir-diff
-    let are_different = dir_diff::is_different(&temp_vendor_dir, vendor_dir)
-        .context("Failed to compare vendor directories")?;
-
-    if are_different {
-        debug!(
-            "Vendor directory differs from expected (temp: {}, actual: {})",
-            temp_vendor_dir.display(),
-            vendor_dir.display()
-        );
-        Ok(false)
-    } else {
-        debug!("Vendor directory matches expected content");
-        Ok(true)
-    }
 }
 
 /// Make a single file or directory read-only
