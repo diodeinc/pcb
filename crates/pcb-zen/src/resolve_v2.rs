@@ -1,4 +1,5 @@
 use anyhow::Result;
+use globset::{Glob, GlobSetBuilder};
 use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
@@ -484,42 +485,78 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
     })
 }
 
-/// Copy closure and assets from cache to vendor directory
-pub fn copy_to_vendor(
-    workspace_root: &Path,
-    closure: &[ClosureEntry],
-    assets: &[AssetEntry],
+/// Vendor dependencies from cache to vendor directory
+///
+/// Vendors entries matching workspace.vendor patterns. No-op if not configured.
+/// Incremental - skips existing entries.
+pub fn vendor_deps(
+    workspace_info: &WorkspaceInfo,
+    resolution: &ResolutionResult,
 ) -> Result<VendorResult> {
-    let cache = cache_base();
-    let vendor_dir = workspace_root.join("vendor");
+    let vendor_dir = workspace_info.root.join("vendor");
 
-    // Clear and recreate vendor directory
-    if vendor_dir.exists() {
-        fs::remove_dir_all(&vendor_dir)?;
+    let patterns: Vec<&str> = workspace_info
+        .config
+        .workspace
+        .as_ref()
+        .map(|w| w.vendor.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
+    // No patterns = no-op
+    if patterns.is_empty() {
+        return Ok(VendorResult {
+            package_count: 0,
+            asset_count: 0,
+            vendor_dir,
+        });
     }
+
+    let cache = cache_base();
+
+    // Build glob matcher
+    let mut builder = GlobSetBuilder::new();
+    for pattern in &patterns {
+        builder.add(Glob::new(pattern)?);
+    }
+    let glob_set = builder.build()?;
+
+    // Filter entries by pattern
+    let matching_packages: Vec<_> = resolution
+        .closure
+        .iter()
+        .filter(|e| glob_set.is_match(&e.module_path))
+        .collect();
+
+    let matching_assets: Vec<_> = resolution
+        .assets
+        .iter()
+        .filter(|e| glob_set.is_match(&e.module_path))
+        .collect();
+
+    // Create vendor directory if needed
     fs::create_dir_all(&vendor_dir)?;
 
-    // Copy packages from closure
-    for entry in closure {
+    // Copy matching packages from cache
+    for entry in &matching_packages {
         let src = cache.join(&entry.module_path).join(&entry.version);
         let dst = vendor_dir.join(&entry.module_path).join(&entry.version);
-        if src.exists() {
+        if src.exists() && !dst.exists() {
             copy_dir_all(&src, &dst)?;
         }
     }
 
-    // Copy assets
-    for entry in assets {
+    // Copy matching assets from cache
+    for entry in &matching_assets {
         let src = cache.join(&entry.module_path).join(&entry.ref_str);
         let dst = vendor_dir.join(&entry.module_path).join(&entry.ref_str);
-        if src.exists() {
+        if src.exists() && !dst.exists() {
             copy_dir_all(&src, &dst)?;
         }
     }
 
     Ok(VendorResult {
-        package_count: closure.len(),
-        asset_count: assets.len(),
+        package_count: matching_packages.len(),
+        asset_count: matching_assets.len(),
         vendor_dir,
     })
 }

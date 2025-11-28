@@ -26,7 +26,7 @@ use pcb_zen_core::{
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve_v2::{
-    copy_to_vendor, resolve_dependencies, AssetEntry, ClosureEntry, ResolutionResult, VendorResult,
+    resolve_dependencies, vendor_deps, AssetEntry, ClosureEntry, ResolutionResult, VendorResult,
 };
 pub use starlark::errors::EvalSeverity;
 pub use workspace::{compute_tag_prefix, get_workspace_info, MemberPackage, WorkspaceInfo};

@@ -180,6 +180,7 @@ fn convert_pcb_toml_to_v2(
             pcb_version: Some("0.2".to_string()),
             members: members.to_vec(),
             default_board,
+            vendor: Vec::new(),
         });
     } else if let Some(mut ws) = config.workspace.take() {
         // Member package - add resolver

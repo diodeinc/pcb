@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Args;
 use log::debug;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
-use pcb_zen::{copy_to_vendor, get_workspace_info, resolve_dependencies};
+use pcb_zen::{get_workspace_info, resolve_dependencies, vendor_deps};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::LoadSpec;
 use std::collections::HashMap;
@@ -39,12 +39,13 @@ pub fn execute(args: VendorArgs) -> Result<()> {
 fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
     println!("V2 workspace detected - using closure-based vendoring\n");
 
+    // Vendor everything
+    if let Some(ws) = &mut workspace_info.config.workspace {
+        ws.vendor = vec!["**".to_string()];
+    }
+
     let resolution = resolve_dependencies(workspace_info)?;
-    let result = copy_to_vendor(
-        &workspace_info.root,
-        &resolution.closure,
-        &resolution.assets,
-    )?;
+    let result = vendor_deps(workspace_info, &resolution)?;
 
     println!();
     println!(
