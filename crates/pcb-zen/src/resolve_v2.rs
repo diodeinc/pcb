@@ -1,19 +1,18 @@
 use anyhow::Result;
-use pcb_zen_core::config::{
-    find_workspace_root, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
-};
-use pcb_zen_core::{DefaultFileProvider, FileProvider};
+use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
+use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
 use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+
 use std::time::Instant;
 use thiserror::Error;
 
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::workspace::{get_workspace_info, WorkspaceInfo};
+use crate::workspace::WorkspaceInfo;
 
 /// Get the PCB cache base directory (~/.pcb/cache)
 fn cache_base() -> PathBuf {
@@ -79,63 +78,58 @@ impl PackageManifest {
     }
 }
 
+/// Entry in the build closure - a resolved package dependency
 #[derive(Debug, Clone)]
+pub struct ClosureEntry {
+    /// Module path (e.g., "github.com/diodeinc/stdlib")
+    pub module_path: String,
+    /// Resolved version
+    pub version: String,
+}
+
+/// Entry for an asset dependency
+#[derive(Debug, Clone)]
+pub struct AssetEntry {
+    /// Module path (e.g., "gitlab.com/kicad/libraries/kicad-symbols")
+    pub module_path: String,
+    /// Git ref (tag, branch, or commit)
+    pub ref_str: String,
+}
+
+#[derive(Default, Debug, Clone)]
 pub struct ResolutionResult {
-    pub workspace_root: PathBuf,
     /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
     /// Uses BTreeMap for deterministic ordering (enables longest prefix matching)
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    pub packages: Vec<PathBuf>,
+    /// Package dependencies in the build closure (non-workspace)
+    pub closure: Vec<ClosureEntry>,
+    /// Asset dependencies
+    pub assets: Vec<AssetEntry>,
 }
 
-/// Check if the input paths are in a V2 workspace and run dependency resolution if needed
-///
-/// This is called once per `pcb build` invocation (workspace-first architecture).
-/// For V2 workspaces, it runs dependency resolution before any .zen file discovery.
-pub fn maybe_resolve_v2_workspace(paths: &[PathBuf]) -> Result<Option<ResolutionResult>> {
-    let input_path = if paths.is_empty() {
-        std::env::current_dir()?
-    } else {
-        paths[0].clone()
-    };
-
-    let file_provider = Arc::new(DefaultFileProvider::new());
-    let workspace_root = find_workspace_root(&*file_provider, &input_path);
-
-    let pcb_toml_path = workspace_root.join("pcb.toml");
-    if !file_provider.exists(&pcb_toml_path) {
-        return Ok(None);
-    }
-
-    let config = PcbToml::from_file(&*file_provider, &pcb_toml_path)?;
-    if config.is_v2() {
-        return Ok(Some(resolve_dependencies(
-            &*file_provider,
-            &workspace_root,
-        )?));
-    }
-
-    Ok(None)
+/// Result of V2 vendoring operation
+pub struct VendorResult {
+    /// Number of packages vendored
+    pub package_count: usize,
+    /// Number of assets vendored
+    pub asset_count: usize,
+    /// Path to vendor directory
+    pub vendor_dir: PathBuf,
 }
 
 /// V2 dependency resolution
 ///
-/// Discovers member packages, builds dependency graph using MVS, fetches dependencies,
+/// Builds dependency graph using MVS, fetches dependencies,
 /// and generates/updates the lockfile.
-fn resolve_dependencies(
-    file_provider: &dyn FileProvider,
-    workspace_root: &Path,
-) -> Result<ResolutionResult> {
+pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<ResolutionResult> {
+    let workspace_root = workspace_info.root.clone();
     println!("V2 Dependency Resolution");
     println!("Workspace root: {}", workspace_root.display());
-
-    // Get workspace info - the single source of truth
-    let mut workspace_info = get_workspace_info(file_provider, workspace_root)?;
 
     // Phase -1: Auto-add missing dependencies from .zen files
     println!("\nPhase -1: Auto-detecting dependencies from .zen files");
     let auto_deps = crate::auto_deps::auto_add_zen_deps(
-        workspace_root,
+        &workspace_root,
         &workspace_info.packages,
         workspace_info.lockfile.as_ref(),
     )?;
@@ -340,7 +334,7 @@ fn resolve_dependencies(
             .par_iter()
             .map(|(line, version)| {
                 let result = fetch_package(
-                    workspace_root,
+                    &workspace_root,
                     &line.path,
                     version,
                     &patches,
@@ -425,7 +419,7 @@ fn resolve_dependencies(
     println!("Build set: {} dependencies", closure.build_set.len());
 
     // Print dependency tree
-    print_dependency_tree(workspace_root, &closure, &manifest_cache);
+    print_dependency_tree(&workspace_root, &closure, &manifest_cache);
 
     // Phase 2.5: Collect and fetch assets
     println!("\nPhase 2.5: Fetching assets");
@@ -433,7 +427,7 @@ fn resolve_dependencies(
         &workspace_info.packages,
         &manifest_cache,
         &selected,
-        workspace_root,
+        &workspace_root,
         &patches,
     )?;
     if !asset_set.is_empty() {
@@ -461,20 +455,89 @@ fn resolve_dependencies(
 
     println!("\nV2 dependency resolution complete");
 
-    let package_paths = workspace_info
-        .packages
-        .values()
-        .map(|pkg| pkg.dir.clone())
+    let package_resolutions =
+        build_resolution_map(workspace_info, &selected, &patches, &manifest_cache)?;
+
+    // Convert closure to public format
+    let closure_entries: Vec<ClosureEntry> = closure
+        .build_set
+        .iter()
+        .map(|(line, version)| ClosureEntry {
+            module_path: line.path.clone(),
+            version: version.to_string(),
+        })
         .collect();
 
-    let package_resolutions =
-        build_resolution_map(&workspace_info, &selected, &patches, &manifest_cache)?;
+    // Convert assets to public format
+    let asset_entries: Vec<AssetEntry> = asset_set
+        .iter()
+        .map(|(url, ref_str)| AssetEntry {
+            module_path: url.clone(),
+            ref_str: ref_str.clone(),
+        })
+        .collect();
 
     Ok(ResolutionResult {
-        workspace_root: workspace_root.to_path_buf(),
         package_resolutions,
-        packages: package_paths,
+        closure: closure_entries,
+        assets: asset_entries,
     })
+}
+
+/// Copy closure and assets from cache to vendor directory
+pub fn copy_to_vendor(
+    workspace_root: &Path,
+    closure: &[ClosureEntry],
+    assets: &[AssetEntry],
+) -> Result<VendorResult> {
+    let cache = cache_base();
+    let vendor_dir = workspace_root.join("vendor");
+
+    // Clear and recreate vendor directory
+    if vendor_dir.exists() {
+        fs::remove_dir_all(&vendor_dir)?;
+    }
+    fs::create_dir_all(&vendor_dir)?;
+
+    // Copy packages from closure
+    for entry in closure {
+        let src = cache.join(&entry.module_path).join(&entry.version);
+        let dst = vendor_dir.join(&entry.module_path).join(&entry.version);
+        if src.exists() {
+            copy_dir_all(&src, &dst)?;
+        }
+    }
+
+    // Copy assets
+    for entry in assets {
+        let src = cache.join(&entry.module_path).join(&entry.ref_str);
+        let dst = vendor_dir.join(&entry.module_path).join(&entry.ref_str);
+        if src.exists() {
+            copy_dir_all(&src, &dst)?;
+        }
+    }
+
+    Ok(VendorResult {
+        package_count: closure.len(),
+        asset_count: assets.len(),
+        vendor_dir,
+    })
+}
+
+/// Recursively copy a directory
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// Build the per-package resolution map
@@ -485,6 +548,7 @@ fn build_resolution_map(
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     let cache = cache_base();
+    let vendor = workspace_info.root.join("vendor");
     // Helper to compute absolute path for a module line
     let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
         // 1. Check workspace members first
@@ -495,7 +559,12 @@ fn build_resolution_map(
         if let Some(patch) = patches.get(&line.path) {
             return workspace_info.root.join(&patch.path);
         }
-        // 3. Fall back to cache
+        // 3. Check vendor directory (before cache)
+        let vendor_path = vendor.join(&line.path).join(version.to_string());
+        if vendor_path.exists() {
+            return vendor_path;
+        }
+        // 4. Fall back to cache
         cache.join(&line.path).join(version.to_string())
     };
 
@@ -540,7 +609,7 @@ fn build_resolution_map(
         })
     };
 
-    // Resolve asset dependency to cache path
+    // Resolve asset dependency to vendor or cache path
     // Must match fetch_asset_repo() cache layout
     let resolve_asset =
         |url: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<PathBuf> {
@@ -549,8 +618,15 @@ fn build_resolution_map(
                 return Ok(workspace_info.root.join(&patch.path));
             }
 
-            // Cache path: ~/.pcb/cache/{url}/{ref}/
             let ref_str = extract_asset_ref(asset_spec)?;
+
+            // Check vendor directory first
+            let vendor_path = vendor.join(url).join(&ref_str);
+            if vendor_path.exists() {
+                return Ok(vendor_path);
+            }
+
+            // Fall back to cache: ~/.pcb/cache/{url}/{ref}/
             Ok(cache.join(url).join(ref_str))
         };
 

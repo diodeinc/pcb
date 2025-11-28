@@ -3,6 +3,7 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
+use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 
 use crate::file_walker;
@@ -154,10 +155,22 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let v2_result = pcb_zen::maybe_resolve_v2_workspace(&args.paths)?;
+    let input_path = args
+        .paths
+        .first()
+        .cloned()
+        .unwrap_or(std::env::current_dir()?);
+    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), &input_path)?;
+
+    // Resolve dependencies if v2
+    let resolution_result = if workspace_info.config.is_v2() {
+        Some(pcb_zen::resolve_dependencies(&mut workspace_info)?)
+    } else {
+        None
+    };
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = if v2_result.is_some() {
+    let zen_files = if workspace_info.config.is_v2() {
         // Canonicalize input paths (or use current dir if empty)
         let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
             vec![std::env::current_dir()?]
@@ -195,7 +208,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
-            v2_result.clone(),
+            resolution_result.clone(),
         ) else {
             continue;
         };
