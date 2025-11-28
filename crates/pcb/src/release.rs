@@ -547,7 +547,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         .workspace
         .config
         .board_info_for_zen(&info.workspace.zen_path)
-        .map(|b| b.description.as_str())
+        .map(|b| b.description)
         .filter(|d| !d.is_empty());
 
     let mut release_obj = serde_json::json!({

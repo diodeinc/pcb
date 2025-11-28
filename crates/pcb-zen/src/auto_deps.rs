@@ -155,7 +155,8 @@ fn find_matching_workspace_member(
     let mut path = without_file;
     while !path.is_empty() {
         if let Some(pkg) = packages.get(path) {
-            return Some((path.to_string(), pkg.version.clone()));
+            let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
+            return Some((path.to_string(), version));
         }
         // Strip the last path component
         path = match path.rsplit_once('/') {
@@ -302,12 +303,13 @@ fn correct_workspace_member_versions(
     let mut corrected = 0;
 
     for (url, pkg) in packages {
+        let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
         if let Some(current_spec) = config.dependencies.get(url) {
             let current_version = extract_version_string(current_spec);
-            if current_version.as_deref() != Some(pkg.version.as_str()) {
+            if current_version.as_deref() != Some(version.as_str()) {
                 config
                     .dependencies
-                    .insert(url.clone(), DependencySpec::Version(pkg.version.clone()));
+                    .insert(url.clone(), DependencySpec::Version(version));
                 corrected += 1;
             }
         }

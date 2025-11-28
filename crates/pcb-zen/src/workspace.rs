@@ -8,11 +8,11 @@ use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
 use pcb_zen_core::config::{find_workspace_root, Lockfile, PcbToml, WorkspaceConfig};
 use pcb_zen_core::{DefaultFileProvider, FileProvider};
+use rayon::prelude::*;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use walkdir::WalkDir;
 
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
@@ -27,8 +27,25 @@ pub struct MemberPackage {
     pub rel_path: PathBuf,
     /// Parsed pcb.toml config
     pub config: PcbToml,
-    /// Latest published version from git tags (or "0.1.0" if unpublished)
-    pub version: String,
+    /// Latest published version from git tags (None if unpublished)
+    pub version: Option<String>,
+
+    /// Whether the package has unpublished changes
+    /// True if: no published version, or content differs from published version
+    #[serde(default)]
+    pub dirty: bool,
+}
+
+impl MemberPackage {
+    /// Get dependency URLs from config
+    pub fn dependencies(&self) -> impl Iterator<Item = &String> {
+        self.config.dependencies.keys()
+    }
+
+    /// Get asset count from config
+    pub fn asset_count(&self) -> usize {
+        self.config.assets.len()
+    }
 }
 
 /// Board discovery information
@@ -57,13 +74,6 @@ pub struct DiscoveryError {
     pub error: String,
 }
 
-/// Result of board discovery with any errors encountered
-#[derive(Debug, Clone)]
-pub struct DiscoveryResult {
-    pub boards: Vec<BoardInfo>,
-    pub errors: Vec<DiscoveryError>,
-}
-
 /// Comprehensive workspace information - the single source of truth
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
@@ -75,9 +85,6 @@ pub struct WorkspaceInfo {
 
     /// Discovered member packages keyed by URL (includes root if applicable)
     pub packages: BTreeMap<String, MemberPackage>,
-
-    /// Boards derived from packages with [board] sections
-    pub boards: Vec<BoardInfo>,
 
     /// Optional lockfile (loaded from pcb.sum if present)
     #[serde(skip)]
@@ -91,6 +98,57 @@ impl WorkspaceInfo {
     /// Get workspace config section (with defaults if not present)
     pub fn workspace_config(&self) -> WorkspaceConfig {
         self.config.workspace.clone().unwrap_or_default()
+    }
+
+    /// Get repository URL from workspace config
+    pub fn repository(&self) -> Option<&str> {
+        self.config
+            .workspace
+            .as_ref()
+            .and_then(|w| w.repository.as_deref())
+    }
+
+    /// Get optional subpath within repository
+    pub fn path(&self) -> Option<&str> {
+        self.config
+            .workspace
+            .as_ref()
+            .and_then(|w| w.path.as_deref())
+    }
+
+    /// Get minimum pcb toolchain version
+    pub fn pcb_version(&self) -> Option<&str> {
+        self.config
+            .workspace
+            .as_ref()
+            .and_then(|w| w.pcb_version.as_deref())
+    }
+
+    /// Get member glob patterns
+    pub fn member_patterns(&self) -> Vec<String> {
+        self.config
+            .workspace
+            .as_ref()
+            .map(|w| w.members.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get all packages as a vector (for iteration)
+    pub fn all_packages(&self) -> Vec<&MemberPackage> {
+        self.packages.values().collect()
+    }
+
+    /// Get publishable packages (excludes packages with board sections)
+    pub fn publishable_packages(&self) -> Vec<&MemberPackage> {
+        self.packages
+            .values()
+            .filter(|p| p.config.board.is_none())
+            .collect()
+    }
+
+    /// Get total package count
+    pub fn package_count(&self) -> usize {
+        self.packages.len()
     }
 
     /// Reload pcb.toml configs after auto-deps modifications.
@@ -114,379 +172,53 @@ impl WorkspaceInfo {
         Ok(())
     }
 
+    /// Get boards derived from packages with [board] sections
+    pub fn boards(&self) -> BTreeMap<String, BoardInfo> {
+        self.packages
+            .values()
+            .filter_map(|pkg| {
+                let b = pkg.config.board.as_ref()?;
+                let zen = b.path.clone().or_else(|| find_single_zen_file(&pkg.dir))?;
+                Some((
+                    b.name.clone(),
+                    BoardInfo {
+                        name: b.name.clone(),
+                        zen_path: pkg.rel_path.join(&zen).to_string_lossy().to_string(),
+                        description: b.description.clone(),
+                    },
+                ))
+            })
+            .collect()
+    }
+
     /// Given an absolute .zen path, return the board name
     pub fn board_name_for_zen(&self, zen_path: &Path) -> Option<String> {
         let canon = zen_path.canonicalize().ok()?;
-        self.boards
-            .iter()
+        self.boards()
+            .into_values()
             .find(|b| b.absolute_zen_path(&self.root) == canon)
-            .map(|b| b.name.clone())
+            .map(|b| b.name)
     }
 
     /// Given an absolute .zen path, return the full BoardInfo
-    pub fn board_info_for_zen(&self, zen_path: &Path) -> Option<&BoardInfo> {
+    pub fn board_info_for_zen(&self, zen_path: &Path) -> Option<BoardInfo> {
         let canon = zen_path.canonicalize().ok()?;
-        self.boards
-            .iter()
+        self.boards()
+            .into_values()
             .find(|b| b.absolute_zen_path(&self.root) == canon)
     }
 
     /// Find a board by name, returning an error with available boards if not found
-    pub fn find_board_by_name(&self, board_name: &str) -> Result<&BoardInfo> {
-        self.boards
-            .iter()
-            .find(|b| b.name == board_name)
-            .ok_or_else(|| {
-                let available: Vec<_> = self.boards.iter().map(|b| b.name.as_str()).collect();
-                anyhow::anyhow!(
-                    "Board '{board_name}' not found. Available: [{}]",
-                    available.join(", ")
-                )
-            })
-    }
-}
-
-/// Information about a V2 workspace package member
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageInfo {
-    /// Package import URL (e.g., "github.com/diodeinc/registry/reference/ti/tps54331")
-    pub url: String,
-
-    /// Absolute path to the package directory
-    pub path: PathBuf,
-
-    /// Latest published version from git tags (None if unpublished)
-    pub latest_version: Option<String>,
-
-    /// Board configuration if this package defines a board
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub board: Option<BoardSummary>,
-
-    /// Declared dependency URLs (for publish ordering)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
-
-    /// Number of declared assets
-    pub asset_count: usize,
-
-    /// Whether the package has unpublished changes
-    /// True if: no published version, or content differs from published version
-    pub dirty: bool,
-
-    /// Whether the package depends (directly or transitively) on a dirty package
-    /// When a dirty package is published, all transitive_dirty packages will need
-    /// their pcb.toml updated and republished
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub transitive_dirty: bool,
-
-    /// Current content hash (h1:base64)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_hash: Option<String>,
-
-    /// Current manifest hash (h1:base64)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest_hash: Option<String>,
-}
-
-/// Summary of board configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardSummary {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub zen_path: Option<String>,
-    /// Board version from <board_name>/v<version> tags
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// Whether the board has unpublished changes
-    pub dirty: bool,
-}
-
-/// V2 workspace information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct V2Workspace {
-    /// Workspace root directory
-    pub root: PathBuf,
-
-    /// Repository URL from workspace config
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository: Option<String>,
-
-    /// Optional subpath within repository
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-
-    /// Minimum pcb toolchain version
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pcb_version: Option<String>,
-
-    /// Member glob patterns
-    pub member_patterns: Vec<String>,
-
-    /// Discovered package members
-    pub packages: Vec<PackageInfo>,
-
-    /// Root package info (if workspace root is also a package)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_package: Option<PackageInfo>,
-}
-
-impl V2Workspace {
-    /// Get all packages including root package
-    pub fn all_packages(&self) -> Vec<&PackageInfo> {
-        let mut all: Vec<&PackageInfo> = self.packages.iter().collect();
-        if let Some(root) = &self.root_package {
-            all.insert(0, root);
-        }
-        all
-    }
-
-    /// Get total package count
-    pub fn package_count(&self) -> usize {
-        self.packages.len() + if self.root_package.is_some() { 1 } else { 0 }
-    }
-}
-
-/// Detect and load V2 workspace information from a path
-///
-/// Returns None if not a V2 workspace.
-pub fn detect_v2_workspace(start_path: &Path) -> Result<Option<V2Workspace>> {
-    let file_provider = Arc::new(DefaultFileProvider::new());
-    detect_v2_workspace_with_provider(&*file_provider, start_path)
-}
-
-/// Detect V2 workspace with custom file provider (for testing)
-pub fn detect_v2_workspace_with_provider(
-    file_provider: &dyn FileProvider,
-    start_path: &Path,
-) -> Result<Option<V2Workspace>> {
-    let workspace_root = find_workspace_root(file_provider, start_path);
-
-    let pcb_toml_path = workspace_root.join("pcb.toml");
-    if !file_provider.exists(&pcb_toml_path) {
-        return Ok(None);
-    }
-
-    let config = PcbToml::from_file(file_provider, &pcb_toml_path)?;
-    if !config.is_v2() {
-        return Ok(None);
-    }
-
-    load_v2_workspace(&workspace_root, &config)
-}
-
-/// Load V2 workspace information from a known V2 workspace root
-fn load_v2_workspace(workspace_root: &Path, config: &PcbToml) -> Result<Option<V2Workspace>> {
-    use rayon::prelude::*;
-
-    let file_provider = DefaultFileProvider::new();
-    let ws = config.workspace.as_ref();
-    let repository = ws.and_then(|w| w.repository.clone());
-    let path = ws.and_then(|w| w.path.clone());
-    let pcb_version = ws.and_then(|w| w.pcb_version.clone());
-    let workspace_config = config.workspace.clone().unwrap_or_default();
-
-    // Use get_workspace_info to discover packages
-    let workspace_info = get_workspace_info(&file_provider, workspace_root)?;
-    let member_packages = &workspace_info.packages;
-    let tags = git::list_all_tags_vec(workspace_root);
-    let tag_annotations = git::get_all_tag_annotations(workspace_root);
-
-    let base_url = match (&repository, &path) {
-        (Some(repo), Some(p)) => Some(format!("{}/{}", repo, p)),
-        (Some(repo), None) => Some(repo.clone()),
-        _ => None,
-    };
-
-    // Build package infos in parallel
-    let packages: Vec<PackageInfo> = member_packages
-        .par_iter()
-        .filter_map(|(url, pkg)| {
-            let rel_str = pkg.rel_path.to_string_lossy();
-            if rel_str.is_empty() {
-                return None;
-            }
-            build_package_info(
-                &pkg.dir,
-                url,
-                workspace_root,
-                &path,
-                &tags,
-                &tag_annotations,
+    pub fn find_board_by_name(&self, board_name: &str) -> Result<BoardInfo> {
+        let boards = self.boards();
+        boards.get(board_name).cloned().ok_or_else(|| {
+            let available: Vec<_> = boards.keys().map(|k| k.as_str()).collect();
+            anyhow::anyhow!(
+                "Board '{board_name}' not found. Available: [{}]",
+                available.join(", ")
             )
-            .ok()
         })
-        .collect();
-
-    // Build root package info only if:
-    // 1. It has at least one dependency or asset, OR
-    // 2. No other packages were found (so there's always at least one package)
-    let root_package = if let Some(base) = &base_url {
-        let has_deps = !config.dependencies.is_empty() || !config.assets.is_empty();
-        let no_other_packages = packages.is_empty();
-
-        if has_deps || no_other_packages {
-            Some(build_package_info(
-                workspace_root,
-                base,
-                workspace_root,
-                &path,
-                &tags,
-                &tag_annotations,
-            )?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Compute transitive dirty status after all packages are built
-    let mut packages = packages;
-    let mut root_package = root_package;
-    compute_transitive_dirty(&mut packages, &mut root_package);
-
-    Ok(Some(V2Workspace {
-        root: workspace_root.to_path_buf(),
-        repository,
-        path,
-        pcb_version,
-        member_patterns: workspace_config.members.clone(),
-        packages,
-        root_package,
-    }))
-}
-
-/// Compute transitive dirty status for all packages
-///
-/// A package is transitive_dirty if it depends (directly or transitively) on a dirty package.
-/// Uses BFS from all dirty packages, following reverse dependency edges.
-fn compute_transitive_dirty(packages: &mut [PackageInfo], root_package: &mut Option<PackageInfo>) {
-    use std::collections::{HashSet, VecDeque};
-
-    // Build reverse dependency graph: dep_url -> list of dependant URLs (using owned Strings)
-    let mut reverse_deps: HashMap<String, Vec<String>> = HashMap::new();
-
-    // Build the reverse dependency map
-    for pkg in packages.iter().chain(root_package.iter()) {
-        for dep_url in &pkg.dependencies {
-            reverse_deps
-                .entry(dep_url.clone())
-                .or_default()
-                .push(pkg.url.clone());
-        }
     }
-
-    // Find all directly dirty packages
-    let dirty_urls: HashSet<String> = packages
-        .iter()
-        .chain(root_package.iter())
-        .filter(|p| p.dirty)
-        .map(|p| p.url.clone())
-        .collect();
-
-    // BFS from dirty packages to find all transitively affected packages
-    let mut transitive_dirty_urls: HashSet<String> = HashSet::new();
-    let mut queue: VecDeque<String> = dirty_urls.iter().cloned().collect();
-
-    while let Some(url) = queue.pop_front() {
-        // Get all packages that depend on this dirty/transitive_dirty package
-        if let Some(dependants) = reverse_deps.get(&url) {
-            for dependant_url in dependants {
-                // Skip if already marked as dirty or transitive_dirty
-                if dirty_urls.contains(dependant_url) {
-                    continue;
-                }
-                if transitive_dirty_urls.insert(dependant_url.clone()) {
-                    // Newly discovered - add to queue to propagate further
-                    queue.push_back(dependant_url.clone());
-                }
-            }
-        }
-    }
-
-    // Apply transitive_dirty flag to packages
-    for pkg in packages.iter_mut().chain(root_package.iter_mut()) {
-        if transitive_dirty_urls.contains(&pkg.url) {
-            pkg.transitive_dirty = true;
-        }
-    }
-}
-
-/// Build PackageInfo for a single package directory
-fn build_package_info(
-    dir: &Path,
-    url: &str,
-    workspace_root: &Path,
-    ws_path: &Option<String>,
-    tags: &[String],
-    tag_annotations: &HashMap<String, String>,
-) -> Result<PackageInfo> {
-    let pcb_toml_path = dir.join("pcb.toml");
-    let config = if pcb_toml_path.exists() {
-        let file_provider = DefaultFileProvider::new();
-        PcbToml::from_file(&file_provider, &pcb_toml_path).ok()
-    } else {
-        None
-    };
-
-    // Compute tag prefix for version lookup
-    let rel_path = dir.strip_prefix(workspace_root).ok();
-    let tag_prefix = compute_tag_prefix(rel_path, ws_path);
-
-    let latest_version = find_latest_version(tags, &tag_prefix);
-
-    let board = config.as_ref().and_then(|c| {
-        c.board.as_ref().map(|b| {
-            // If no path specified, try to find a single .zen file in the directory
-            let zen_path = b.path.clone().or_else(|| find_single_zen_file(dir));
-            // Boards use <board_name>/v<version> tag format
-            let board_tag_prefix = format!("{}/v", b.name);
-            let board_version = find_latest_version(tags, &board_tag_prefix);
-            let board_dirty = compute_dirty_status(
-                workspace_root,
-                dir,
-                &board_tag_prefix,
-                tags,
-                tag_annotations,
-            );
-            BoardSummary {
-                name: b.name.clone(),
-                description: if b.description.is_empty() {
-                    None
-                } else {
-                    Some(b.description.clone())
-                },
-                zen_path,
-                version: board_version,
-                dirty: board_dirty.dirty,
-            }
-        })
-    });
-
-    let dependencies: Vec<String> = config
-        .as_ref()
-        .map(|c| c.dependencies.keys().cloned().collect())
-        .unwrap_or_default();
-    let asset_count = config.as_ref().map(|c| c.assets.len()).unwrap_or(0);
-
-    // Compute dirty status (with fast path for unpublished packages)
-    let dirty_result =
-        compute_dirty_status(workspace_root, dir, &tag_prefix, tags, tag_annotations);
-
-    Ok(PackageInfo {
-        url: url.to_string(),
-        path: dir.to_path_buf(),
-        latest_version,
-        board,
-        dependencies,
-        asset_count,
-        dirty: dirty_result.dirty,
-        transitive_dirty: false, // Computed after all packages are built
-        content_hash: dirty_result.hashes.content_hash,
-        manifest_hash: dirty_result.hashes.manifest_hash,
-    })
 }
 
 /// Compute the git tag prefix for a package
@@ -520,87 +252,45 @@ fn find_latest_version(tags: &[String], prefix: &str) -> Option<String> {
         .map(|v| v.to_string())
 }
 
-/// Package hashes (content + manifest)
-#[derive(Debug, Clone, Default)]
-struct PackageHashes {
-    content_hash: Option<String>,
-    manifest_hash: Option<String>,
-}
-
-impl PackageHashes {
-    fn compute(dir: &Path) -> Self {
-        let content_hash = compute_content_hash_from_dir(dir).ok();
-        let manifest_hash = std::fs::read_to_string(dir.join("pcb.toml"))
-            .ok()
-            .map(|content| compute_manifest_hash(&content));
-        Self {
-            content_hash,
-            manifest_hash,
-        }
-    }
-}
-
-/// Result of dirty detection with optional hashes
-struct DirtyResult {
-    dirty: bool,
-    hashes: PackageHashes,
-}
-
 /// Check if a package is dirty (has changes compared to published version)
 ///
-/// Returns dirty status and computed hashes. Uses fast paths:
-/// - Unpublished: dirty, skip content hashing
-/// - Published but no hashes in tag: dirty (legacy tag), compute current hashes
+/// Uses fast paths:
+/// - Unpublished: dirty
+/// - Uncommitted changes: dirty
+/// - Published but no hashes in tag: dirty (legacy tag)
 /// - Published with hashes: compare current vs tag hashes
-fn compute_dirty_status(
+fn is_dirty(
     workspace_root: &Path,
     package_dir: &Path,
     tag_prefix: &str,
     tags: &[String],
     tag_annotations: &HashMap<String, String>,
-) -> DirtyResult {
+) -> bool {
     // Find the latest matching tag
-    let latest_tag = find_latest_tag(tags, tag_prefix);
-
-    let Some(tag_name) = latest_tag else {
-        // Fast path: unpublished = dirty, skip content hashing
-        return DirtyResult {
-            dirty: true,
-            hashes: PackageHashes::default(),
-        };
+    let Some(tag_name) = find_latest_tag(tags, tag_prefix) else {
+        return true; // Unpublished = dirty
     };
 
     // Check for uncommitted changes first (cheaper than hashing)
     if has_uncommitted_changes(workspace_root, package_dir) {
-        return DirtyResult {
-            dirty: true,
-            hashes: PackageHashes::compute(package_dir),
-        };
+        return true;
     }
 
     // Look up hashes from pre-fetched tag annotations
-    let tagged_hashes = tag_annotations
+    let Some(tagged) = tag_annotations
         .get(&tag_name)
-        .and_then(|body| parse_hashes_from_tag_body(body));
-
-    let Some(tagged) = tagged_hashes else {
-        // No hashes in tag annotation (legacy tag) = assume dirty
-        // Still compute current hashes for display
-        return DirtyResult {
-            dirty: true,
-            hashes: PackageHashes::compute(package_dir),
-        };
+        .and_then(|body| parse_hashes_from_tag_body(body))
+    else {
+        return true; // No hashes in tag annotation (legacy tag) = assume dirty
     };
 
     // Compute current hashes and compare
-    let current_hashes = PackageHashes::compute(package_dir);
-    let dirty = current_hashes.content_hash != tagged.content_hash
-        || current_hashes.manifest_hash != tagged.manifest_hash;
+    let current_content = compute_content_hash_from_dir(package_dir).ok();
+    let current_manifest = std::fs::read_to_string(package_dir.join("pcb.toml"))
+        .ok()
+        .map(|content| compute_manifest_hash(&content));
 
-    DirtyResult {
-        dirty,
-        hashes: current_hashes,
-    }
+    current_content != tagged.content_hash || current_manifest != tagged.manifest_hash
 }
 
 /// Find the latest tag matching a prefix, returning the full tag name
@@ -623,12 +313,18 @@ fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
     git::has_uncommitted_changes_in_path(workspace_root, rel_path)
 }
 
+/// Parsed hashes from tag annotation
+struct TagHashes {
+    content_hash: Option<String>,
+    manifest_hash: Option<String>,
+}
+
 /// Parse hashes from tag annotation body (pcb.sum style format)
 ///
 /// Format: Each line is "module_path version hash" where:
 /// - Content hash line: "module_path v0.1.0 h1:base64"
 /// - Manifest hash line: "module_path v0.1.0/pcb.toml h1:base64"
-fn parse_hashes_from_tag_body(body: &str) -> Option<PackageHashes> {
+fn parse_hashes_from_tag_body(body: &str) -> Option<TagHashes> {
     let mut content_hash = None;
     let mut manifest_hash = None;
 
@@ -654,7 +350,7 @@ fn parse_hashes_from_tag_body(body: &str) -> Option<PackageHashes> {
 
     // Both hashes must be present
     if content_hash.is_some() && manifest_hash.is_some() {
-        Some(PackageHashes {
+        Some(TagHashes {
             content_hash,
             manifest_hash,
         })
@@ -686,7 +382,7 @@ fn find_single_zen_file(dir: &Path) -> Option<String> {
 
 /// Get complete workspace information - the single entry point for all workspace discovery.
 ///
-/// Discovers packages, derives boards, builds workspace_members lookup, and optionally loads lockfile.
+/// Discovers packages, computes dirty status and hashes, derives boards, and loads lockfile.
 pub fn get_workspace_info(
     file_provider: &dyn FileProvider,
     start_path: &Path,
@@ -703,10 +399,6 @@ pub fn get_workspace_info(
     };
     let workspace_config = config.workspace.clone().unwrap_or_default();
 
-    // Discover packages inline
-    let patterns = &workspace_config.members;
-    let mut packages = BTreeMap::new();
-
     // Compute base URL from workspace config
     let base_url = match (&workspace_config.repository, &workspace_config.path) {
         (Some(repo), Some(p)) => Some(format!("{}/{}", repo, p)),
@@ -714,8 +406,13 @@ pub fn get_workspace_info(
         _ => None,
     };
 
-    // Fetch git tags once for version lookup
+    // Fetch git tags and annotations once for version lookup and dirty detection
     let tags = git::list_all_tags_vec(&workspace_root);
+    let tag_annotations = git::get_all_tag_annotations(&workspace_root);
+
+    // First pass: discover all package directories
+    let patterns = &workspace_config.members;
+    let mut package_dirs: Vec<(PathBuf, String, PcbToml)> = Vec::new(); // (dir, url, config)
 
     if !patterns.is_empty() {
         let mut builder = GlobSetBuilder::new();
@@ -742,6 +439,9 @@ pub fn get_workspace_info(
             let Ok(rel_path) = path.strip_prefix(&workspace_root) else {
                 continue;
             };
+            if rel_path.as_os_str().is_empty() {
+                continue; // Skip root, handled separately
+            }
             if !glob_set.is_match(rel_path) {
                 continue;
             }
@@ -752,81 +452,51 @@ pub fn get_workspace_info(
                 .map(|base| format!("{}/{}", base, rel_str))
                 .unwrap_or_else(|| rel_str.to_string());
 
-            // Compute version from git tags
-            let tag_prefix = compute_tag_prefix(Some(rel_path), &workspace_config.path);
-            let version =
-                find_latest_version(&tags, &tag_prefix).unwrap_or_else(|| "0.1.0".to_string());
-
-            packages.insert(
-                url,
-                MemberPackage {
-                    dir: path.to_path_buf(),
-                    rel_path: rel_path.to_path_buf(),
-                    config: pkg_config,
-                    version,
-                },
-            );
+            package_dirs.push((path.to_path_buf(), url, pkg_config));
         }
     }
 
-    // Add root package if it has a repository URL
+    // Add root package if it has repository URL and (has deps/assets OR no members found)
     if let Some(url) = &base_url {
-        packages.insert(
-            url.clone(),
-            MemberPackage {
-                dir: workspace_root.clone(),
-                rel_path: PathBuf::new(),
-                config: config.clone(),
-                version: "0.1.0".to_string(), // Root version computed separately if needed
-            },
-        );
-    }
+        let has_deps = !config.dependencies.is_empty() || !config.assets.is_empty();
+        let no_other_packages = package_dirs.is_empty();
 
-    // Derive boards from packages
-    let mut boards_by_name: BTreeMap<String, BoardInfo> = BTreeMap::new();
-    let mut errors = Vec::new();
-
-    for pkg in packages.values() {
-        let Some(board_config) = &pkg.config.board else {
-            continue;
-        };
-
-        let zen_path = if let Some(configured_path) = &board_config.path {
-            configured_path.clone()
-        } else {
-            match find_single_zen_file(&pkg.dir) {
-                Some(zen_file) => zen_file,
-                None => {
-                    errors.push(DiscoveryError {
-                        path: pkg.dir.join("pcb.toml"),
-                        error: "No path specified and no single .zen file found".to_string(),
-                    });
-                    continue;
-                }
-            }
-        };
-
-        let board = BoardInfo {
-            name: board_config.name.clone(),
-            zen_path: pkg.rel_path.join(&zen_path).to_string_lossy().to_string(),
-            description: board_config.description.clone(),
-        };
-
-        let has_conflict = boards_by_name
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case(&board.name));
-        if has_conflict {
-            errors.push(DiscoveryError {
-                path: pkg.dir.join("pcb.toml"),
-                error: format!("Duplicate board name: '{}'", board.name),
-            });
-        } else {
-            boards_by_name.insert(board.name.clone(), board);
+        if has_deps || no_other_packages {
+            package_dirs.push((workspace_root.clone(), url.clone(), config.clone()));
         }
     }
 
-    let mut boards: Vec<_> = boards_by_name.into_values().collect();
-    boards.sort_by(|a, b| a.name.cmp(&b.name));
+    // Build packages in parallel with dirty detection
+    let packages: BTreeMap<String, MemberPackage> = package_dirs
+        .par_iter()
+        .map(|(dir, url, pkg_config)| {
+            let rel_path = dir.strip_prefix(&workspace_root).unwrap_or(Path::new(""));
+
+            // For board packages, use board-specific tag prefix for version
+            let (tag_prefix, version) = if let Some(b) = &pkg_config.board {
+                let board_tag_prefix = format!("{}/v", b.name);
+                let board_version = find_latest_version(&tags, &board_tag_prefix);
+                (board_tag_prefix, board_version)
+            } else {
+                let pkg_tag_prefix = compute_tag_prefix(Some(rel_path), &workspace_config.path);
+                let pkg_version = find_latest_version(&tags, &pkg_tag_prefix);
+                (pkg_tag_prefix, pkg_version)
+            };
+
+            let dirty = is_dirty(&workspace_root, dir, &tag_prefix, &tags, &tag_annotations);
+
+            (
+                url.clone(),
+                MemberPackage {
+                    dir: dir.clone(),
+                    rel_path: rel_path.to_path_buf(),
+                    config: pkg_config.clone(),
+                    version,
+                    dirty,
+                },
+            )
+        })
+        .collect();
 
     // Load lockfile if present
     let lockfile_path = workspace_root.join("pcb.sum");
@@ -843,9 +513,8 @@ pub fn get_workspace_info(
         root: workspace_root,
         config,
         packages,
-        boards,
         lockfile,
-        errors,
+        errors: Vec::new(),
     })
 }
 

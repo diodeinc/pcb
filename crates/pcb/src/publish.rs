@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use clap::Args;
 use colored::Colorize;
 use inquire::Confirm;
-use pcb_zen::workspace::{compute_tag_prefix, detect_v2_workspace, PackageInfo, V2Workspace};
+use pcb_zen::workspace::{compute_tag_prefix, get_workspace_info, MemberPackage, WorkspaceInfo};
 use pcb_zen::{canonical, git};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
@@ -38,7 +38,8 @@ pub struct PublishArgs {
 
 /// Info about a package that will be published
 struct PublishCandidate<'a> {
-    pkg: &'a PackageInfo,
+    url: &'a str,
+    pkg: &'a MemberPackage,
     next_version: Version,
     tag_name: String,
     content_hash: String,
@@ -52,9 +53,12 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| env::current_dir().unwrap());
 
-    let Some(workspace) = detect_v2_workspace(&start_path)? else {
+    let file_provider = DefaultFileProvider::new();
+    let workspace = get_workspace_info(&file_provider, &start_path)?;
+
+    if !workspace.config.is_v2() {
         bail!("Not a V2 workspace. Publish requires [workspace] with resolver = \"2\"");
-    };
+    }
 
     let remote = if args.force {
         let current_branch = git::symbolic_ref_short_head(&workspace.root)
@@ -66,24 +70,21 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         preflight_checks(&workspace.root)?
     };
 
-    let all_packages: Vec<&PackageInfo> = workspace
-        .all_packages()
-        .into_iter()
-        .filter(|p| p.board.is_none())
+    // Get publishable packages (no boards) as (url, pkg) tuples
+    let all_packages: Vec<(&str, &MemberPackage)> = workspace
+        .packages
+        .iter()
+        .filter(|(_, p)| p.config.board.is_none())
+        .map(|(url, pkg)| (url.as_str(), pkg))
         .collect();
 
-    if all_packages.is_empty() {
-        println!("No packages found in workspace");
-        return Ok(());
-    }
-
-    let pkg_by_url: HashMap<&str, &PackageInfo> =
-        all_packages.iter().map(|p| (p.url.as_str(), *p)).collect();
+    let pkg_by_url: HashMap<&str, &MemberPackage> =
+        all_packages.iter().map(|(url, pkg)| (*url, *pkg)).collect();
 
     let mut remaining_dirty: HashSet<String> = all_packages
         .iter()
-        .filter(|p| p.dirty || p.transitive_dirty)
-        .map(|p| p.url.clone())
+        .filter(|(_, p)| p.dirty)
+        .map(|(url, _)| url.to_string())
         .collect();
 
     if remaining_dirty.is_empty() {
@@ -93,7 +94,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
     println!(
         "Found {} dirty/unpublished package(s)",
-        all_packages.iter().filter(|p| p.dirty).count()
+        all_packages.iter().filter(|(_, p)| p.dirty).count()
     );
 
     let initial_commit = git::rev_parse(&workspace.root, "HEAD")
@@ -107,10 +108,21 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         wave += 1;
 
         // Find publishable: packages whose deps are all not in remaining_dirty
-        let publishable: Vec<&PackageInfo> = remaining_dirty
+        // Collect URLs first to avoid borrow issues
+        let publishable_urls: Vec<String> = remaining_dirty
             .iter()
-            .filter_map(|url| pkg_by_url.get(url.as_str()).copied())
-            .filter(|pkg| !pkg.dependencies.iter().any(|d| remaining_dirty.contains(d)))
+            .filter(|url| {
+                pkg_by_url
+                    .get(url.as_str())
+                    .map(|pkg| !pkg.dependencies().any(|d| remaining_dirty.contains(d)))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        let publishable: Vec<(&str, &MemberPackage)> = publishable_urls
+            .iter()
+            .filter_map(|url| pkg_by_url.get(url.as_str()).map(|pkg| (url.as_str(), *pkg)))
             .collect();
 
         if publishable.is_empty() {
@@ -132,38 +144,42 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             print_candidate(c, &workspace.root);
         }
 
+        // Collect published URLs and versions (owned strings to avoid borrow issues)
+        let published_urls: Vec<String> = candidates.iter().map(|c| c.url.to_string()).collect();
         let published_versions: HashMap<&str, (Option<&str>, &Version)> = candidates
             .iter()
-            .map(|c| {
-                (
-                    c.pkg.url.as_str(),
-                    (c.pkg.latest_version.as_deref(), &c.next_version),
-                )
-            })
+            .map(|c| (c.url, (c.pkg.version.as_deref(), &c.next_version)))
             .collect();
 
+        for url in &published_urls {
+            remaining_dirty.remove(url);
+        }
         for c in &candidates {
-            remaining_dirty.remove(&c.pkg.url);
             all_tags.push(c.tag_name.clone());
         }
 
-        // Find dependants needing pcb.toml updates
-        let dependants: Vec<&PackageInfo> = remaining_dirty
+        // Find all packages that depend on just-published packages
+        let dependant_urls: Vec<String> = all_packages
             .iter()
-            .filter_map(|url| pkg_by_url.get(url.as_str()).copied())
-            .filter(|pkg| {
-                pkg.dependencies
-                    .iter()
-                    .any(|d| published_versions.contains_key(d.as_str()))
+            .filter(|(url, pkg)| {
+                !published_versions.contains_key(*url)
+                    && pkg
+                        .dependencies()
+                        .any(|d| published_versions.contains_key(d.as_str()))
             })
+            .map(|(url, _)| url.to_string())
+            .collect();
+
+        let dependants: Vec<(&str, &MemberPackage)> = dependant_urls
+            .iter()
+            .filter_map(|url| pkg_by_url.get(url.as_str()).map(|pkg| (url.as_str(), *pkg)))
             .collect();
 
         if !dependants.is_empty() {
             println!();
             println!("  {} {} pcb.toml file(s):", "→".cyan(), dependants.len());
-            for pkg in &dependants {
-                let rel = pkg.path.strip_prefix(&workspace.root).unwrap_or(&pkg.path);
-                println!("    {}/pcb.toml", rel.display());
+            for (_, pkg) in &dependants {
+                println!("    {}/pcb.toml", pkg.rel_path.display());
             }
         }
 
@@ -171,8 +187,8 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             if args.no_cascade {
                 break;
             }
-            for pkg in &dependants {
-                remaining_dirty.insert(pkg.url.clone());
+            for url in dependant_urls {
+                remaining_dirty.insert(url);
             }
             continue;
         }
@@ -188,12 +204,14 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
         // Update pcb.toml files and commit for cascade mode
         if !dependants.is_empty() {
-            let mut changed_pkgs: Vec<&PackageInfo> = Vec::new();
-            for pkg in &dependants {
-                if bump_dependency_versions(&pkg.path.join("pcb.toml"), &published_versions)? {
+            let mut changed_pkgs: Vec<&MemberPackage> = Vec::new();
+            for (_, pkg) in &dependants {
+                if bump_dependency_versions(&pkg.dir.join("pcb.toml"), &published_versions)? {
                     changed_pkgs.push(pkg);
                 }
-                remaining_dirty.insert(pkg.url.clone());
+            }
+            for url in dependant_urls {
+                remaining_dirty.insert(url);
             }
 
             if !changed_pkgs.is_empty() {
@@ -272,7 +290,7 @@ fn rollback(repo_root: &Path, tags: &[String], reset_to: Option<&String>) -> Res
 
 fn print_blocking_info(
     remaining: &HashSet<String>,
-    pkg_by_url: &HashMap<&str, &PackageInfo>,
+    pkg_by_url: &HashMap<&str, &MemberPackage>,
     root: &Path,
 ) {
     println!();
@@ -283,12 +301,11 @@ fn print_blocking_info(
     for url in remaining {
         if let Some(pkg) = pkg_by_url.get(url.as_str()) {
             let blocking: Vec<_> = pkg
-                .dependencies
-                .iter()
+                .dependencies()
                 .filter(|d| remaining.contains(*d))
                 .collect();
             if !blocking.is_empty() {
-                let rel = pkg.path.strip_prefix(root).unwrap_or(&pkg.path);
+                let rel = pkg.dir.strip_prefix(root).unwrap_or(&pkg.dir);
                 println!("  {} blocked by:", rel.display());
                 for dep in blocking {
                     println!("    - {}", dep);
@@ -299,13 +316,13 @@ fn print_blocking_info(
 }
 
 fn print_candidate(c: &PublishCandidate, root: &Path) {
-    let rel = c.pkg.path.strip_prefix(root).unwrap_or(&c.pkg.path);
+    let rel = c.pkg.dir.strip_prefix(root).unwrap_or(&c.pkg.dir);
     let path_display = if rel.as_os_str().is_empty() {
         "(root)".to_string()
     } else {
         rel.display().to_string()
     };
-    let version_str = match &c.pkg.latest_version {
+    let version_str = match &c.pkg.version {
         Some(v) => format!("{} → {}", v, c.next_version),
         None => format!("{} (initial)", c.next_version),
     };
@@ -354,21 +371,22 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
 }
 
 fn build_publish_candidates<'a>(
-    packages: &[&'a PackageInfo],
-    workspace: &V2Workspace,
+    packages: &[(&'a str, &'a MemberPackage)],
+    workspace: &WorkspaceInfo,
 ) -> Result<Vec<PublishCandidate<'a>>> {
     packages
         .par_iter()
-        .map(|pkg| {
+        .map(|(url, pkg)| {
             let next_version = compute_next_version(pkg);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
             // Always recompute hashes - pcb.toml may have been modified by a previous wave
-            let content_hash = canonical::compute_content_hash_from_dir(&pkg.path)?;
-            let manifest_content = std::fs::read_to_string(pkg.path.join("pcb.toml"))?;
+            let content_hash = canonical::compute_content_hash_from_dir(&pkg.dir)?;
+            let manifest_content = std::fs::read_to_string(pkg.dir.join("pcb.toml"))?;
             let manifest_hash = canonical::compute_manifest_hash(&manifest_content);
 
             Ok(PublishCandidate {
+                url,
                 pkg,
                 next_version,
                 tag_name,
@@ -379,8 +397,8 @@ fn build_publish_candidates<'a>(
         .collect()
 }
 
-fn compute_next_version(pkg: &PackageInfo) -> Version {
-    match &pkg.latest_version {
+fn compute_next_version(pkg: &MemberPackage) -> Version {
+    match &pkg.version {
         None => Version::new(0, 1, 0),
         Some(v) => {
             let current = Version::parse(v).unwrap_or_else(|_| Version::new(0, 0, 0));
@@ -393,31 +411,32 @@ fn compute_next_version(pkg: &PackageInfo) -> Version {
     }
 }
 
-fn compute_tag_name(pkg: &PackageInfo, version: &Version, workspace: &V2Workspace) -> String {
-    let rel_path = pkg.path.strip_prefix(&workspace.root).ok();
-    let prefix = compute_tag_prefix(rel_path, &workspace.path);
+fn compute_tag_name(pkg: &MemberPackage, version: &Version, workspace: &WorkspaceInfo) -> String {
+    let rel_path = pkg.dir.strip_prefix(&workspace.root).ok();
+    let ws_path = workspace.path().map(|s| s.to_string());
+    let prefix = compute_tag_prefix(rel_path, &ws_path);
     format!("{}{}", prefix, version)
 }
 
 fn format_tag_message(candidate: &PublishCandidate) -> String {
     format!(
         "{} v{} {}\n{} v{}/pcb.toml {}",
-        candidate.pkg.url,
+        candidate.url,
         candidate.next_version,
         candidate.content_hash,
-        candidate.pkg.url,
+        candidate.url,
         candidate.next_version,
         candidate.manifest_hash
     )
 }
 
 fn format_dependency_bump_commit(
-    dependants: &[&PackageInfo],
+    dependants: &[&MemberPackage],
     updates: &HashMap<&str, (Option<&str>, &Version)>,
 ) -> String {
     let mut pkg_names: Vec<_> = dependants
         .iter()
-        .filter_map(|p| p.path.file_name())
+        .filter_map(|p| p.dir.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .collect();
     pkg_names.sort();
@@ -430,7 +449,7 @@ fn format_dependency_bump_commit(
         .filter(|(url, _)| {
             dependants
                 .iter()
-                .any(|pkg| pkg.dependencies.iter().any(|d| d == **url))
+                .any(|pkg| pkg.dependencies().any(|d| d == **url))
         })
         .map(|(url, (old, new))| (*url, *old, *new))
         .collect();
