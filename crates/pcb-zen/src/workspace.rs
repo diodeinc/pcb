@@ -18,6 +18,22 @@ use walkdir::WalkDir;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 
+/// Why a package is dirty (has unpublished changes)
+#[derive(Debug, Clone)]
+pub enum DirtyReason {
+    /// Package has never been published
+    Unpublished,
+    /// Package has uncommitted changes in the working tree
+    Uncommitted,
+    /// Published tag has no hash annotations (legacy tag format)
+    LegacyTag,
+    /// Content or manifest hashes differ from published version
+    Modified {
+        content_hash: String,
+        manifest_hash: String,
+    },
+}
+
 /// A discovered member package in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberPackage {
@@ -29,11 +45,6 @@ pub struct MemberPackage {
     pub config: PcbToml,
     /// Latest published version from git tags (None if unpublished)
     pub version: Option<String>,
-
-    /// Whether the package has unpublished changes
-    /// True if: no published version, or content differs from published version
-    #[serde(default)]
-    pub dirty: bool,
 }
 
 impl MemberPackage {
@@ -45,6 +56,64 @@ impl MemberPackage {
     /// Get asset count from config
     pub fn asset_count(&self) -> usize {
         self.config.assets.len()
+    }
+
+    /// Check if this package has unpublished changes.
+    /// Returns Some(DirtyReason) if dirty, None if clean.
+    ///
+    /// Uses fast paths to avoid expensive hash computation when possible:
+    /// - Unpublished: Some(Unpublished)
+    /// - Uncommitted changes: Some(Uncommitted)
+    /// - Published but no hashes in tag: Some(LegacyTag)
+    /// - Published with hashes that differ: Some(Modified)
+    /// - Clean: None
+    pub fn is_dirty(
+        &self,
+        workspace_root: &Path,
+        workspace_path: &Option<String>,
+        tags: &[String],
+        tag_annotations: &HashMap<String, String>,
+    ) -> Option<DirtyReason> {
+        // Compute tag prefix based on package type
+        let tag_prefix = if let Some(b) = &self.config.board {
+            format!("{}/v", b.name)
+        } else {
+            compute_tag_prefix(Some(&self.rel_path), workspace_path)
+        };
+
+        // Find the latest matching tag
+        let Some(tag_name) = find_latest_tag(tags, &tag_prefix) else {
+            return Some(DirtyReason::Unpublished);
+        };
+
+        // Check for uncommitted changes first (cheaper than hashing)
+        if has_uncommitted_changes(workspace_root, &self.dir) {
+            return Some(DirtyReason::Uncommitted);
+        }
+
+        // Look up hashes from pre-fetched tag annotations
+        let Some(tagged) = tag_annotations
+            .get(&tag_name)
+            .and_then(|body| parse_hashes_from_tag_body(body))
+        else {
+            return Some(DirtyReason::LegacyTag);
+        };
+
+        // Compute current hashes and compare
+        let current_content = compute_content_hash_from_dir(&self.dir).ok();
+        let current_manifest = std::fs::read_to_string(self.dir.join("pcb.toml"))
+            .ok()
+            .map(|content| compute_manifest_hash(&content));
+
+        if current_content != tagged.content_hash || current_manifest != tagged.manifest_hash {
+            // Return the current hashes so they can be reused
+            Some(DirtyReason::Modified {
+                content_hash: current_content.unwrap_or_default(),
+                manifest_hash: current_manifest.unwrap_or_default(),
+            })
+        } else {
+            None // Clean
+        }
     }
 }
 
@@ -219,6 +288,22 @@ impl WorkspaceInfo {
             )
         })
     }
+
+    /// Get all dirty packages with their reasons.
+    /// Computes in parallel for performance.
+    pub fn dirty_packages(&self) -> BTreeMap<String, DirtyReason> {
+        let tags = git::list_all_tags_vec(&self.root);
+        let tag_annotations = git::get_all_tag_annotations(&self.root);
+        let workspace_path = self.path().map(|s| s.to_string());
+
+        self.packages
+            .par_iter()
+            .filter_map(|(url, pkg)| {
+                pkg.is_dirty(&self.root, &workspace_path, &tags, &tag_annotations)
+                    .map(|reason| (url.clone(), reason))
+            })
+            .collect()
+    }
 }
 
 /// Compute the git tag prefix for a package
@@ -250,47 +335,6 @@ fn find_latest_version(tags: &[String], prefix: &str) -> Option<String> {
         })
         .max()
         .map(|v| v.to_string())
-}
-
-/// Check if a package is dirty (has changes compared to published version)
-///
-/// Uses fast paths:
-/// - Unpublished: dirty
-/// - Uncommitted changes: dirty
-/// - Published but no hashes in tag: dirty (legacy tag)
-/// - Published with hashes: compare current vs tag hashes
-fn is_dirty(
-    workspace_root: &Path,
-    package_dir: &Path,
-    tag_prefix: &str,
-    tags: &[String],
-    tag_annotations: &HashMap<String, String>,
-) -> bool {
-    // Find the latest matching tag
-    let Some(tag_name) = find_latest_tag(tags, tag_prefix) else {
-        return true; // Unpublished = dirty
-    };
-
-    // Check for uncommitted changes first (cheaper than hashing)
-    if has_uncommitted_changes(workspace_root, package_dir) {
-        return true;
-    }
-
-    // Look up hashes from pre-fetched tag annotations
-    let Some(tagged) = tag_annotations
-        .get(&tag_name)
-        .and_then(|body| parse_hashes_from_tag_body(body))
-    else {
-        return true; // No hashes in tag annotation (legacy tag) = assume dirty
-    };
-
-    // Compute current hashes and compare
-    let current_content = compute_content_hash_from_dir(package_dir).ok();
-    let current_manifest = std::fs::read_to_string(package_dir.join("pcb.toml"))
-        .ok()
-        .map(|content| compute_manifest_hash(&content));
-
-    current_content != tagged.content_hash || current_manifest != tagged.manifest_hash
 }
 
 /// Find the latest tag matching a prefix, returning the full tag name
@@ -406,9 +450,8 @@ pub fn get_workspace_info(
         _ => None,
     };
 
-    // Fetch git tags and annotations once for version lookup and dirty detection
+    // Fetch git tags once for version lookup
     let tags = git::list_all_tags_vec(&workspace_root);
-    let tag_annotations = git::get_all_tag_annotations(&workspace_root);
 
     // First pass: discover all package directories
     let patterns = &workspace_config.members;
@@ -466,24 +509,20 @@ pub fn get_workspace_info(
         }
     }
 
-    // Build packages in parallel with dirty detection
+    // Build packages (no longer computing dirty status eagerly)
     let packages: BTreeMap<String, MemberPackage> = package_dirs
-        .par_iter()
+        .iter()
         .map(|(dir, url, pkg_config)| {
             let rel_path = dir.strip_prefix(&workspace_root).unwrap_or(Path::new(""));
 
             // For board packages, use board-specific tag prefix for version
-            let (tag_prefix, version) = if let Some(b) = &pkg_config.board {
+            let version = if let Some(b) = &pkg_config.board {
                 let board_tag_prefix = format!("{}/v", b.name);
-                let board_version = find_latest_version(&tags, &board_tag_prefix);
-                (board_tag_prefix, board_version)
+                find_latest_version(&tags, &board_tag_prefix)
             } else {
                 let pkg_tag_prefix = compute_tag_prefix(Some(rel_path), &workspace_config.path);
-                let pkg_version = find_latest_version(&tags, &pkg_tag_prefix);
-                (pkg_tag_prefix, pkg_version)
+                find_latest_version(&tags, &pkg_tag_prefix)
             };
-
-            let dirty = is_dirty(&workspace_root, dir, &tag_prefix, &tags, &tag_annotations);
 
             (
                 url.clone(),
@@ -492,7 +531,6 @@ pub fn get_workspace_info(
                     rel_path: rel_path.to_path_buf(),
                     config: pkg_config.clone(),
                     version,
-                    dirty,
                 },
             )
         })

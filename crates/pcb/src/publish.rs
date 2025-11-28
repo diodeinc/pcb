@@ -7,7 +7,9 @@ use anyhow::{bail, Result};
 use clap::Args;
 use colored::Colorize;
 use inquire::Confirm;
-use pcb_zen::workspace::{compute_tag_prefix, get_workspace_info, MemberPackage, WorkspaceInfo};
+use pcb_zen::workspace::{
+    compute_tag_prefix, get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo,
+};
 use pcb_zen::{canonical, git};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
@@ -45,7 +47,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .unwrap_or_else(|| env::current_dir().unwrap());
 
     let file_provider = DefaultFileProvider::new();
-    let mut workspace = get_workspace_info(&file_provider, &start_path)?;
+    let workspace = get_workspace_info(&file_provider, &start_path)?;
 
     if !workspace.config.is_v2() {
         bail!("Not a V2 workspace. Publish requires [workspace] with resolver = \"2\"");
@@ -71,7 +73,11 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     loop {
         wave += 1;
 
-        let candidates = build_publish_candidates(&workspace)?;
+        // Compute dirty packages fresh each wave (parallel)
+        // After bumping deps, modified packages will show as Uncommitted
+        let dirty_map = workspace.dirty_packages();
+
+        let candidates = build_publish_candidates(&workspace, &dirty_map)?;
 
         if candidates.is_empty() {
             println!("{}", "No packages to publish".green());
@@ -86,22 +92,21 @@ pub fn execute(args: PublishArgs) -> Result<()> {
             print_candidate(c, &workspace.root);
             all_tags.push(c.tag_name.clone());
             git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
-            workspace.packages.get_mut(url).unwrap().dirty = false;
         }
 
         // Find all packages that depend on just-published packages and bump their versions
         let changed_pkgs: Vec<&MemberPackage> = workspace
             .packages
-            .iter_mut()
+            .iter()
             .filter(|(_, pkg)| pkg.dependencies().any(|d| candidates.contains_key(d)))
             .filter_map(|(_, pkg)| {
-                println!("  patching: {}/pcb.toml", pkg.rel_path.display());
-                match bump_dependency_versions(&pkg.dir.join("pcb.toml"), &candidates).unwrap() {
-                    true => {
-                        pkg.dirty = true;
-                        Some(pkg as &MemberPackage)
-                    }
-                    false => None,
+                let changed =
+                    bump_dependency_versions(&pkg.dir.join("pcb.toml"), &candidates).unwrap();
+                if changed {
+                    println!("  patching: {}/pcb.toml", pkg.rel_path.display());
+                    Some(pkg)
+                } else {
+                    None
                 }
             })
             .collect();
@@ -229,20 +234,31 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
 
 fn build_publish_candidates(
     workspace: &WorkspaceInfo,
+    dirty_map: &BTreeMap<String, DirtyReason>,
 ) -> Result<BTreeMap<String, PublishCandidate>> {
     workspace
         .packages
         .par_iter()
-        .filter(|(_, p)| p.dirty)
-        .filter(|(_, p)| p.config.board.is_none())
-        .map(|(url, pkg)| {
+        .filter_map(|(url, pkg)| dirty_map.get(url).map(|reason| (url, pkg, reason)))
+        .filter(|(_, pkg, _)| pkg.config.board.is_none())
+        .map(|(url, pkg, reason)| {
             let next_version = compute_next_version(pkg);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
-            // Always recompute hashes - pcb.toml may have been modified by a previous wave
-            let content_hash = canonical::compute_content_hash_from_dir(&pkg.dir)?;
-            let manifest_content = std::fs::read_to_string(pkg.dir.join("pcb.toml"))?;
-            let manifest_hash = canonical::compute_manifest_hash(&manifest_content);
+            // Reuse hashes from DirtyReason::Modified if available, otherwise compute
+            let (content_hash, manifest_hash) = match reason {
+                DirtyReason::Modified {
+                    content_hash,
+                    manifest_hash,
+                } => (content_hash.clone(), manifest_hash.clone()),
+                _ => {
+                    // Unpublished, Uncommitted, or LegacyTag - need to compute hashes
+                    let content_hash = canonical::compute_content_hash_from_dir(&pkg.dir)?;
+                    let manifest_content = std::fs::read_to_string(pkg.dir.join("pcb.toml"))?;
+                    let manifest_hash = canonical::compute_manifest_hash(&manifest_content);
+                    (content_hash, manifest_hash)
+                }
+            };
 
             Ok((
                 url.clone(),
