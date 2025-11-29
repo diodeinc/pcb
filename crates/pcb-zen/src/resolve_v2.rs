@@ -477,20 +477,23 @@ pub fn resolve_dependencies(
 
 /// Vendor dependencies from cache to vendor directory
 ///
-/// Vendors entries matching workspace.vendor patterns. No-op if not configured.
-/// Incremental - skips existing entries.
+/// Vendors entries matching workspace.vendor patterns plus any additional_patterns.
+/// No-op if combined patterns is empty. Incremental - skips existing entries.
 pub fn vendor_deps(
     workspace_info: &WorkspaceInfo,
     resolution: &ResolutionResult,
+    additional_patterns: &[String],
 ) -> Result<VendorResult> {
     let vendor_dir = workspace_info.root.join("vendor");
 
-    let patterns: Vec<&str> = workspace_info
+    // Combine workspace.vendor patterns with additional patterns
+    let mut patterns: Vec<&str> = workspace_info
         .config
         .workspace
         .as_ref()
         .map(|w| w.vendor.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
+    patterns.extend(additional_patterns.iter().map(|s| s.as_str()));
 
     // No patterns = no-op
     if patterns.is_empty() {
