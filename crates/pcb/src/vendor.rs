@@ -44,7 +44,8 @@ fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
         ws.vendor = vec!["**".to_string()];
     }
 
-    let resolution = resolve_dependencies(workspace_info)?;
+    // Vendoring always needs network access (offline=false)
+    let resolution = resolve_dependencies(workspace_info, false)?;
     let result = vendor_deps(workspace_info, &resolution)?;
 
     println!();

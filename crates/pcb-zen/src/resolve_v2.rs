@@ -79,33 +79,14 @@ impl PackageManifest {
     }
 }
 
-/// Entry in the build closure - a resolved package dependency
-#[derive(Debug, Clone)]
-pub struct ClosureEntry {
-    /// Module path (e.g., "github.com/diodeinc/stdlib")
-    pub module_path: String,
-    /// Resolved version
-    pub version: String,
-}
-
-/// Entry for an asset dependency
-#[derive(Debug, Clone)]
-pub struct AssetEntry {
-    /// Module path (e.g., "gitlab.com/kicad/libraries/kicad-symbols")
-    pub module_path: String,
-    /// Git ref (tag, branch, or commit)
-    pub ref_str: String,
-}
-
 #[derive(Default, Debug, Clone)]
 pub struct ResolutionResult {
     /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
-    /// Uses BTreeMap for deterministic ordering (enables longest prefix matching)
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    /// Package dependencies in the build closure (non-workspace)
-    pub closure: Vec<ClosureEntry>,
-    /// Asset dependencies
-    pub assets: Vec<AssetEntry>,
+    /// Package dependencies in the build closure: (module_path, version)
+    pub closure: HashSet<(String, String)>,
+    /// Asset dependencies: (module_path, ref) -> resolved_path
+    pub assets: HashMap<(String, String), PathBuf>,
 }
 
 /// Result of V2 vendoring operation
@@ -122,9 +103,15 @@ pub struct VendorResult {
 ///
 /// Builds dependency graph using MVS, fetches dependencies,
 /// and generates/updates the lockfile.
-pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<ResolutionResult> {
+pub fn resolve_dependencies(
+    workspace_info: &mut WorkspaceInfo,
+    offline: bool,
+) -> Result<ResolutionResult> {
     let workspace_root = workspace_info.root.clone();
-    println!("V2 Dependency Resolution");
+    println!(
+        "V2 Dependency Resolution{}",
+        if offline { " (offline)" } else { "" }
+    );
     println!("Workspace root: {}", workspace_root.display());
 
     // Phase -1: Auto-add missing dependencies from .zen files
@@ -133,6 +120,7 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
         &workspace_root,
         &workspace_info.packages,
         workspace_info.lockfile.as_ref(),
+        offline,
     )?;
     if auto_deps.total_added > 0
         || auto_deps.versions_corrected > 0
@@ -284,7 +272,12 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
                 }
             }
 
-            match resolve_to_version(&dep.url, &dep.spec, workspace_info.lockfile.as_ref()) {
+            match resolve_to_version(
+                &dep.url,
+                &dep.spec,
+                workspace_info.lockfile.as_ref(),
+                offline,
+            ) {
                 Ok(version) => {
                     add_requirement(
                         dep.url.clone(),
@@ -340,6 +333,7 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
                     version,
                     &patches,
                     &workspace_info.packages,
+                    offline,
                 );
                 (line.clone(), version.clone(), result)
             })
@@ -362,6 +356,7 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
                             dep_path,
                             dep_spec,
                             workspace_info.lockfile.as_ref(),
+                            offline,
                         ) {
                             Ok(dep_version) => {
                                 let before = work_queue.len();
@@ -424,15 +419,16 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
 
     // Phase 2.5: Collect and fetch assets
     println!("\nPhase 2.5: Fetching assets");
-    let asset_set = collect_and_fetch_assets(
+    let asset_paths = collect_and_fetch_assets(
         &workspace_info.packages,
         &manifest_cache,
         &selected,
         &workspace_root,
         &patches,
+        offline,
     )?;
-    if !asset_set.is_empty() {
-        println!("Fetched {} assets", asset_set.len());
+    if !asset_paths.is_empty() {
+        println!("Fetched {} assets", asset_paths.len());
     } else {
         println!("No assets");
     }
@@ -444,7 +440,7 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
     let (lockfile, added_count) = update_lockfile(
         workspace_info.lockfile.take(),
         &closure.build_set,
-        &asset_set,
+        &asset_paths,
     )?;
 
     // Only write lockfile to disk if new entries were added
@@ -456,32 +452,26 @@ pub fn resolve_dependencies(workspace_info: &mut WorkspaceInfo) -> Result<Resolu
 
     println!("\nV2 dependency resolution complete");
 
-    let package_resolutions =
-        build_resolution_map(workspace_info, &selected, &patches, &manifest_cache)?;
+    let package_resolutions = build_resolution_map(
+        workspace_info,
+        &selected,
+        &patches,
+        &manifest_cache,
+        &asset_paths,
+        offline,
+    )?;
 
-    // Convert closure to public format
-    let closure_entries: Vec<ClosureEntry> = closure
+    // Convert closure to (module_path, version) pairs
+    let closure: HashSet<_> = closure
         .build_set
         .iter()
-        .map(|(line, version)| ClosureEntry {
-            module_path: line.path.clone(),
-            version: version.to_string(),
-        })
-        .collect();
-
-    // Convert assets to public format
-    let asset_entries: Vec<AssetEntry> = asset_set
-        .iter()
-        .map(|(url, ref_str)| AssetEntry {
-            module_path: url.clone(),
-            ref_str: ref_str.clone(),
-        })
+        .map(|(line, version)| (line.path.clone(), version.to_string()))
         .collect();
 
     Ok(ResolutionResult {
         package_resolutions,
-        closure: closure_entries,
-        assets: asset_entries,
+        closure,
+        assets: asset_paths,
     })
 }
 
@@ -520,43 +510,40 @@ pub fn vendor_deps(
     }
     let glob_set = builder.build()?;
 
-    // Filter entries by pattern
-    let matching_packages: Vec<_> = resolution
-        .closure
-        .iter()
-        .filter(|e| glob_set.is_match(&e.module_path))
-        .collect();
-
-    let matching_assets: Vec<_> = resolution
-        .assets
-        .iter()
-        .filter(|e| glob_set.is_match(&e.module_path))
-        .collect();
-
     // Create vendor directory if needed
     fs::create_dir_all(&vendor_dir)?;
 
     // Copy matching packages from cache
-    for entry in &matching_packages {
-        let src = cache.join(&entry.module_path).join(&entry.version);
-        let dst = vendor_dir.join(&entry.module_path).join(&entry.version);
+    let mut package_count = 0;
+    for (module_path, version) in &resolution.closure {
+        if !glob_set.is_match(module_path) {
+            continue;
+        }
+        let src = cache.join(module_path).join(version);
+        let dst = vendor_dir.join(module_path).join(version);
         if src.exists() && !dst.exists() {
             copy_dir_all(&src, &dst)?;
+            package_count += 1;
         }
     }
 
     // Copy matching assets from cache
-    for entry in &matching_assets {
-        let src = cache.join(&entry.module_path).join(&entry.ref_str);
-        let dst = vendor_dir.join(&entry.module_path).join(&entry.ref_str);
+    let mut asset_count = 0;
+    for (module_path, ref_str) in resolution.assets.keys() {
+        if !glob_set.is_match(module_path) {
+            continue;
+        }
+        let src = cache.join(module_path).join(ref_str);
+        let dst = vendor_dir.join(module_path).join(ref_str);
         if src.exists() && !dst.exists() {
             copy_dir_all(&src, &dst)?;
+            asset_count += 1;
         }
     }
 
     Ok(VendorResult {
-        package_count: matching_packages.len(),
-        asset_count: matching_assets.len(),
+        package_count,
+        asset_count,
         vendor_dir,
     })
 }
@@ -578,53 +565,59 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Build the per-package resolution map
+///
+/// When offline=true, only includes paths from workspace members, patches, and vendor/
+/// (never ~/.pcb/cache). This ensures offline builds fail if dependencies aren't vendored.
 fn build_resolution_map(
     workspace_info: &WorkspaceInfo,
     selected: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
+    asset_paths: &HashMap<(String, String), PathBuf>,
+    offline: bool,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     let cache = cache_base();
     let vendor = workspace_info.root.join("vendor");
+
     // Helper to compute absolute path for a module line
-    let get_abs_path = |line: &ModuleLine, version: &Version| -> PathBuf {
-        // 1. Check workspace members first
+    let get_abs_path = |line: &ModuleLine, version: &Version| -> Option<PathBuf> {
         if let Some(member_pkg) = workspace_info.packages.get(&line.path) {
-            return member_pkg.dir.clone();
+            return Some(member_pkg.dir.clone());
         }
-        // 2. Check patches
         if let Some(patch) = patches.get(&line.path) {
-            return workspace_info.root.join(&patch.path);
+            return Some(workspace_info.root.join(&patch.path));
         }
-        // 3. Check vendor directory (before cache)
         let vendor_path = vendor.join(&line.path).join(version.to_string());
         if vendor_path.exists() {
-            return vendor_path;
+            return Some(vendor_path);
         }
-        // 4. Fall back to cache
-        cache.join(&line.path).join(version.to_string())
+        if !offline {
+            let cache_path = cache.join(&line.path).join(version.to_string());
+            if cache_path.exists() {
+                return Some(cache_path);
+            }
+        }
+        None
     };
 
     // Build lookup: url -> family -> path
     let mut url_to_families: HashMap<String, HashMap<String, PathBuf>> = HashMap::new();
     for (line, version) in selected {
-        let abs_path = get_abs_path(line, version);
-        url_to_families
-            .entry(line.path.clone())
-            .or_default()
-            .insert(line.family.clone(), abs_path);
+        if let Some(abs_path) = get_abs_path(line, version) {
+            url_to_families
+                .entry(line.path.clone())
+                .or_default()
+                .insert(line.family.clone(), abs_path);
+        }
     }
 
-    // Resolve dependency -> path (with per-package base directory)
+    // Resolve dependency -> path
     let resolve = |base_dir: &Path, url: &str, spec: &DependencySpec| -> Option<PathBuf> {
-        // Local path - resolve relative to base_dir
         if let DependencySpec::Detailed(d) = spec {
             if let Some(path_str) = &d.path {
                 return Some(base_dir.join(path_str));
             }
         }
-
-        // Remote: find matching family
         let families = url_to_families.get(url)?;
         let version_str = match spec {
             DependencySpec::Version(v) => v.as_str(),
@@ -636,59 +629,31 @@ fn build_resolution_map(
         };
         let req_version = parse_version_string(version_str).ok()?;
         let req_family = ModuleLine::new(url.to_string(), &req_version).family;
-
         families.get(&req_family).cloned().or_else(|| {
-            if families.len() == 1 {
-                families.values().next().cloned()
-            } else {
-                None
-            }
+            (families.len() == 1)
+                .then(|| families.values().next().cloned())
+                .flatten()
         })
     };
 
-    // Resolve asset dependency to vendor or cache path
-    // Must match fetch_asset_repo() cache layout
-    let resolve_asset =
-        |url: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<PathBuf> {
-            // Check patch first
-            if let Some(patch) = patches.get(url) {
-                return Ok(workspace_info.root.join(&patch.path));
-            }
-
-            let ref_str = extract_asset_ref(asset_spec)?;
-
-            // Check vendor directory first
-            let vendor_path = vendor.join(url).join(&ref_str);
-            if vendor_path.exists() {
-                return Ok(vendor_path);
-            }
-
-            // Fall back to cache: ~/.pcb/cache/{url}/{ref}/
-            Ok(cache.join(url).join(ref_str))
-        };
-
-    // Build deps map for a package with base directory for local path resolution
-    // V2 does not support aliases - only canonical URL dependencies
+    // Build deps map for a package
     let build_map = |base_dir: &Path,
                      pkg_deps: &BTreeMap<String, DependencySpec>,
                      pkg_assets: &BTreeMap<String, pcb_zen_core::AssetDependencySpec>|
      -> BTreeMap<String, PathBuf> {
         let mut map = BTreeMap::new();
-
-        // Package deps - resolve local paths relative to base_dir
         for (url, spec) in pkg_deps {
             if let Some(path) = resolve(base_dir, url, spec) {
                 map.insert(url.clone(), path);
             }
         }
-
-        // Asset deps - resolve to cache paths
         for (url, asset_spec) in pkg_assets {
-            if let Ok(path) = resolve_asset(url, asset_spec) {
-                map.insert(url.clone(), path);
+            if let Ok(ref_str) = extract_asset_ref(asset_spec) {
+                if let Some(path) = asset_paths.get(&(url.clone(), ref_str)) {
+                    map.insert(url.clone(), path.clone());
+                }
             }
         }
-
         map
     };
 
@@ -712,16 +677,15 @@ fn build_resolution_map(
         );
     }
 
-    // Transitive deps: each remote package gets its own resolution map
-    // This ensures MVS-selected versions are used for all transitive loads
-    // Assets come from the cached manifest (no duplicate file I/O)
+    // Transitive deps
     for (line, version) in selected {
-        let abs_path = get_abs_path(line, version);
-        if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
-            results.insert(
-                abs_path.clone(),
-                build_map(&abs_path, &manifest.dependencies, &manifest.assets),
-            );
+        if let Some(abs_path) = get_abs_path(line, version) {
+            if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
+                results.insert(
+                    abs_path.clone(),
+                    build_map(&abs_path, &manifest.dependencies, &manifest.assets),
+                );
+            }
         }
     }
 
@@ -898,32 +862,33 @@ fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String>
 
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
-/// Returns set of (module_path, ref) for all fetched assets
+/// Returns map of (module_path, ref) -> resolved_path for all fetched assets
 fn collect_and_fetch_assets(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
     workspace_root: &Path,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
-) -> Result<HashSet<(String, String)>> {
-    let mut asset_set = HashSet::new();
-    let mut seen_assets: HashSet<(String, String)> = HashSet::new();
+    offline: bool,
+) -> Result<HashMap<(String, String), PathBuf>> {
+    let mut asset_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
     // Helper to fetch an asset if not already seen
     let mut fetch_if_needed =
         |module_path: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<()> {
             let ref_str = extract_asset_ref(asset_spec)?;
+            let key = (module_path.to_string(), ref_str.clone());
 
             // Skip if already processed
-            if !seen_assets.insert((module_path.to_string(), ref_str.clone())) {
+            if asset_paths.contains_key(&key) {
                 return Ok(());
             }
 
             println!("      Fetching {}@{}", module_path, ref_str);
 
-            // Fetch the asset repo
-            fetch_asset_repo(workspace_root, module_path, &ref_str, patches)?;
-            asset_set.insert((module_path.to_string(), ref_str));
+            // Fetch the asset repo and store the resolved path
+            let path = fetch_asset_repo(workspace_root, module_path, &ref_str, patches, offline)?;
+            asset_paths.insert(key, path);
             Ok(())
         };
 
@@ -960,19 +925,27 @@ fn collect_and_fetch_assets(
         }
     }
 
-    Ok(asset_set)
+    Ok(asset_paths)
 }
 
 /// Fetch a package from Git using sparse checkout
 ///
 /// Fetches all package files, computes content/manifest hashes, and caches locally.
 /// Returns the package manifest for dependency resolution.
+///
+/// Resolution order:
+/// 1. Workspace members (always)
+/// 2. Patches (always)
+/// 3. Vendor directory (always)
+/// 4. Cache (only if !offline)
+/// 5. Network fetch (only if !offline)
 fn fetch_package(
     workspace_root: &Path,
     module_path: &str,
     version: &Version,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    offline: bool,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
     if let Some(member_pkg) = packages.get(module_path) {
@@ -992,7 +965,27 @@ fn fetch_package(
         return read_manifest_from_path(&patched_toml);
     }
 
-    // Cache directory: ~/.pcb/cache/{module_path}/{version}/
+    // 3. Check vendor directory (before cache - vendor is the committed source of truth)
+    let vendor_dir = workspace_root
+        .join("vendor")
+        .join(module_path)
+        .join(version.to_string());
+    let vendor_toml = vendor_dir.join("pcb.toml");
+    if vendor_toml.exists() {
+        return read_manifest_from_path(&vendor_toml);
+    }
+
+    // 4. If offline, fail here - vendor is the only allowed source for offline builds
+    if offline {
+        anyhow::bail!(
+            "Package {} v{} not vendored (offline mode)\n  \
+            Run `pcb vendor` to vendor dependencies for offline builds",
+            module_path,
+            version
+        );
+    }
+
+    // 5. Check cache directory: ~/.pcb/cache/{module_path}/{version}/
     let cache = cache_base();
     let checkout_dir = cache.join(module_path).join(version.to_string());
     let cache_marker = checkout_dir.join(".pcbcache");
@@ -1004,7 +997,7 @@ fn fetch_package(
         return read_manifest_from_path(&pcb_toml_path);
     }
 
-    // Slow path: fetch via sparse checkout
+    // 6. Slow path: fetch via sparse checkout (network)
     let package_root =
         ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string(), true)?;
     let pcb_toml_path = package_root.join("pcb.toml");
@@ -1054,11 +1047,18 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// - Are leaf nodes (no transitive dependencies)
 /// - Don't participate in MVS (each ref is isolated)
 /// - Version/ref used literally as git tag (no v-prefix logic)
+///
+/// Resolution order:
+/// 1. Patches (always)
+/// 2. Vendor directory (always)
+/// 3. Cache (only if !offline)
+/// 4. Network fetch (only if !offline)
 fn fetch_asset_repo(
     workspace_root: &Path,
     module_path: &str,
     ref_str: &str,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
+    offline: bool,
 ) -> Result<PathBuf> {
     // 1. Check if this module is patched with a local path
     if let Some(patch) = patches.get(module_path) {
@@ -1080,7 +1080,27 @@ fn fetch_asset_repo(
         return Ok(patched_path);
     }
 
-    // Cache directory: ~/.pcb/cache/{module_path}/{ref}/
+    // 2. Check vendor directory (before cache - vendor is the committed source of truth)
+    let vendor_dir = workspace_root
+        .join("vendor")
+        .join(module_path)
+        .join(ref_str);
+    if vendor_dir.exists() && vendor_dir.join(".pcbcache").exists() {
+        println!("        Vendored");
+        return Ok(vendor_dir);
+    }
+
+    // 3. If offline, fail here - vendor is the only allowed source for offline builds
+    if offline {
+        anyhow::bail!(
+            "Asset {} @ {} not vendored (offline mode)\n  \
+            Run `pcb vendor` to vendor dependencies for offline builds",
+            module_path,
+            ref_str
+        );
+    }
+
+    // 4. Check cache directory: ~/.pcb/cache/{module_path}/{ref}/
     let cache = cache_base();
     let checkout_dir = cache.join(module_path).join(ref_str);
 
@@ -1090,7 +1110,7 @@ fn fetch_asset_repo(
         return Ok(checkout_dir);
     }
 
-    // Use sparse checkout to fetch the asset repo
+    // 5. Slow path: use sparse checkout to fetch the asset repo (network)
     println!("        Cloning (sparse checkout)");
 
     let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str, false)?;
@@ -1312,10 +1332,14 @@ fn build_closure(
 /// - Exact versions: "0.3.2" → v0.3.2
 /// - Branches: { branch = "main" } → pseudo-version (uses lockfile if available)
 /// - Revisions: { rev = "abcd1234" } → pseudo-version (uses lockfile if available)
+///
+/// When offline=true, branch/rev specs MUST have a locked version in pcb.sum.
+/// Network access (git ls-remote) is not allowed in offline mode.
 fn resolve_to_version(
     module_path: &str,
     spec: &DependencySpec,
     lockfile: Option<&Lockfile>,
+    offline: bool,
 ) -> Result<Version> {
     match spec {
         DependencySpec::Version(v) => parse_version_string(v),
@@ -1333,6 +1357,15 @@ fn resolve_to_version(
                         }
                     }
                 }
+                // No lockfile entry - need network access
+                if offline {
+                    anyhow::bail!(
+                        "Branch '{}' for {} requires network access (offline mode)\n  \
+                        Add to pcb.sum first by running online, then use --offline",
+                        branch,
+                        module_path
+                    );
+                }
                 resolve_branch_to_pseudo_version(module_path, branch)
             } else if let Some(rev) = &detail.rev {
                 // Use locked pseudo-version if available (skip git ls-remote)
@@ -1344,6 +1377,15 @@ fn resolve_to_version(
                             return Ok(locked_version);
                         }
                     }
+                }
+                // No lockfile entry - need network access
+                if offline {
+                    anyhow::bail!(
+                        "Rev '{}' for {} requires network access (offline mode)\n  \
+                        Add to pcb.sum first by running online, then use --offline",
+                        &rev[..8.min(rev.len())],
+                        module_path
+                    );
                 }
                 resolve_rev_to_pseudo_version(module_path, rev)
             } else {
@@ -1699,12 +1741,12 @@ fn ensure_sparse_checkout(
 fn update_lockfile(
     existing_lockfile: Option<Lockfile>,
     build_set: &HashSet<(ModuleLine, Version)>,
-    asset_set: &HashSet<(String, String)>,
+    asset_paths: &HashMap<(String, String), PathBuf>,
 ) -> Result<(Lockfile, usize)> {
     // Start with existing lockfile or create new one
     let mut lockfile = existing_lockfile.unwrap_or_default();
 
-    let total_count = build_set.len() + asset_set.len();
+    let total_count = build_set.len() + asset_paths.len();
     if total_count > 0 {
         println!("  Verifying {} entries...", total_count);
     }
@@ -1758,9 +1800,8 @@ fn update_lockfile(
     }
 
     // Process assets
-    for (module_path, ref_str) in asset_set {
-        let cache_dir = cache_base().join(module_path).join(ref_str);
-        let cache_marker = cache_dir.join(".pcbcache");
+    for ((module_path, ref_str), resolved_path) in asset_paths {
+        let cache_marker = resolved_path.join(".pcbcache");
 
         // Read hashes from cache marker
         let marker_content = std::fs::read_to_string(&cache_marker).map_err(|e| {
