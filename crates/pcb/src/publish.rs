@@ -49,10 +49,6 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     let file_provider = DefaultFileProvider::new();
     let workspace = get_workspace_info(&file_provider, &start_path)?;
 
-    if !workspace.config.is_v2() {
-        bail!("Not a V2 workspace. Publish requires [workspace] with resolver = \"2\"");
-    }
-
     let remote = if args.force {
         let current_branch = git::symbolic_ref_short_head(&workspace.root)
             .ok_or_else(|| anyhow::anyhow!("Not on a branch (detached HEAD state)"))?;

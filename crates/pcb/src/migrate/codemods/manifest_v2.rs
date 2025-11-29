@@ -6,6 +6,17 @@ use std::path::{Path, PathBuf};
 
 use crate::file_walker::skip_vendor;
 
+/// Get pcb-version from CARGO_PKG_VERSION (major.minor format)
+fn pcb_version_from_cargo() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 2 {
+        format!("{}.{}", parts[0], parts[1])
+    } else {
+        version.to_string()
+    }
+}
+
 /// Convert all pcb.toml files in workspace to V2
 pub fn convert_workspace_to_v2(
     workspace_root: &Path,
@@ -176,15 +187,16 @@ fn convert_pcb_toml_to_v2(
             name: None,
             repository: Some(repo.to_string()),
             path: repo_subpath.map(|s| s.to_string()),
-            resolver: Some("2".to_string()),
-            pcb_version: Some("0.2".to_string()),
+            resolver: None,
+            pcb_version: Some(pcb_version_from_cargo()),
             members: members.to_vec(),
             default_board,
             vendor: Vec::new(),
         });
     } else if let Some(mut ws) = config.workspace.take() {
-        // Member package - add resolver
-        ws.resolver = Some("2".to_string());
+        // Member package - set pcb-version
+        ws.resolver = None;
+        ws.pcb_version = Some(pcb_version_from_cargo());
         config.workspace = Some(ws);
     }
 

@@ -92,7 +92,6 @@ All V2 packages require a `[workspace]` section (even standalone packages):
 
 ```toml
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [package]
@@ -103,9 +102,7 @@ path = "WV0002.zen"
 description = "Power Regulator Board"
 ```
 
-**`resolver`** determines the packaging system version ("2" for V2). Required at workspace root to opt-in existing V1 workspaces. For new projects without V1-only constructs (`[packages]` or `[module]`), V2 is the default.
-
-**`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It indicates breaking changes in the language or standard library that require a newer compiler.
+**`pcb-version`** specifies the minimum compatible toolchain release series (e.g. `0.3` covers all `0.3.x` releases). It indicates breaking changes in the language or standard library that require a newer compiler. Workspaces with `pcb-version >= 0.3` use V2 resolution; older or missing versions use V1.
 
 The package **version** itself is not in the manifest - it is derived from the Git tag, following Go's decentralized model where version control is the source of truth.
 
@@ -202,7 +199,6 @@ Multi-package workspaces define a repository and optional subpath used to infer 
 ```toml
 # Workspace root pcb.toml
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 repository = "github.com/diodeinc/registry"
 members = ["reference/*"]
@@ -370,7 +366,7 @@ Coordinate packages in monorepo:
 
 ```toml
 [workspace]
-resolver = "2"
+pcb-version = "0.3"
 repository = "github.com/myorg/myrepo"
 members = ["boards/*", "components/*"]
 default-board = "WV0002"
@@ -465,7 +461,7 @@ Configure `vendor` patterns in the workspace section to automatically vendor mat
 
 ```toml
 [workspace]
-resolver = "2"
+pcb-version = "0.3"
 repository = "github.com/myorg/myrepo"
 vendor = ["github.com/diodeinc/registry/**"]
 ```
@@ -983,7 +979,7 @@ Step 5: Running codemods on .zen files
 
 **Manifest Conversion:**
 
-- Adds `resolver = "2"` to workspace root
+- Sets `pcb-version` to current toolchain version at workspace root
 - Adds `repository` field from git remote
 - Converts `[packages]` to `[dependencies]`
 - Removes V1-only fields (`[module]`, `[board]` from workspace root)

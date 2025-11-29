@@ -11,7 +11,7 @@ use crate::FileProvider;
 /// Version detection uses the `is_v2()` method:
 /// - V1 requires explicit V1-only constructs: `[packages]` or `[module]`
 /// - V2 is the default - empty pcb.toml, board-only, or any V2 fields are all valid V2
-/// - `resolver = "2"` is only needed at workspace root to opt-in an existing V1 workspace
+/// - Workspaces require `pcb-version = "0.3"` or higher for V2 mode
 ///
 /// Both V1 and V2 fields coexist in the same struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,18 +64,44 @@ impl PcbToml {
 
     /// Check if this is V2 mode
     ///
-    /// - Workspace with resolver="2" → V2
-    /// - Workspace with resolver="1" or no resolver → V1 (backwards compat)
+    /// - Workspace with pcb-version >= 0.3.0 → V2
+    /// - Workspace with pcb-version < 0.3.0 or no pcb-version → V1 (backwards compat)
     /// - No workspace + V1 constructs (packages, module) → V1
     /// - No workspace + no V1 constructs → V2 (e.g., empty pcb.toml, board-only)
     pub fn is_v2(&self) -> bool {
         if let Some(w) = &self.workspace {
-            // Workspace present: must explicitly opt-in to V2
-            return w.resolver.as_deref() == Some("2");
+            // Workspace present: V2 if pcb-version >= 0.3.0
+            if let Some(version_str) = &w.pcb_version {
+                return Self::parse_pcb_version(version_str)
+                    .map(|(major, minor, _)| major > 0 || minor >= 3)
+                    .unwrap_or(false);
+            }
+            // No pcb-version means V1 (backwards compat)
+            return false;
         }
 
         // No workspace: V2 unless it has V1-only constructs
         !self.requires_v1()
+    }
+
+    /// Parse pcb-version string into (major, minor, patch) tuple
+    /// Supports formats: "0.3", "0.3.0", "0.3.2"
+    fn parse_pcb_version(s: &str) -> Option<(u32, u32, u32)> {
+        let parts: Vec<&str> = s.split('.').collect();
+        match parts.len() {
+            2 => {
+                let major = parts[0].parse().ok()?;
+                let minor = parts[1].parse().ok()?;
+                Some((major, minor, 0))
+            }
+            3 => {
+                let major = parts[0].parse().ok()?;
+                let minor = parts[1].parse().ok()?;
+                let patch = parts[2].parse().ok()?;
+                Some((major, minor, patch))
+            }
+            _ => None,
+        }
     }
 
     /// Parse from TOML string
@@ -672,7 +698,6 @@ version = "0.3.0"
     fn test_parse_v2_package() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [board]
@@ -685,7 +710,6 @@ description = "Power Regulator Board"
         assert!(config.is_v2());
 
         let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.resolver.as_deref(), Some("2"));
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
 
         let board = config.board.as_ref().unwrap();
@@ -698,7 +722,7 @@ description = "Power Regulator Board"
     fn test_parse_v2_workspace() {
         let content = r#"
 [workspace]
-resolver = "2"
+pcb-version = "0.3"
 members = ["boards/*"]
 
 [access]
@@ -710,7 +734,7 @@ allow = ["*@weaverobots.com"]
         assert!(config.is_workspace());
 
         let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.resolver.as_deref(), Some("2"));
+        assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
         assert_eq!(workspace.members, vec!["boards/*"]);
 
         let access = config.access.as_ref().unwrap();
@@ -721,7 +745,6 @@ allow = ["*@weaverobots.com"]
     fn test_parse_v2_dependencies() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [board]
@@ -773,7 +796,6 @@ path = "test.zen"
     fn test_parse_v2_patch() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [board]
@@ -795,7 +817,6 @@ path = "test.zen"
     fn test_v2_workspace_and_board() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 members = ["boards/*"]
 
@@ -811,23 +832,24 @@ name = "RootBoard"
     }
 
     #[test]
-    fn test_unsupported_version() {
+    fn test_workspace_no_pcb_version_is_v1() {
         let content = r#"
 [workspace]
-resolver = "3"
+members = ["boards/*"]
+
+[board]
+name = "TestBoard"
 "#;
 
-        // Currently we don't validate resolver version during parse,
-        // so this will succeed. The version check happens elsewhere.
-        let result = PcbToml::parse(content);
-        assert!(result.is_ok());
+        let config = PcbToml::parse(content).unwrap();
+        assert!(!config.is_v2());
     }
 
     #[test]
-    fn test_explicit_v1() {
+    fn test_workspace_old_pcb_version_is_v1() {
         let content = r#"
 [workspace]
-resolver = "1"
+pcb-version = "0.2"
 
 [board]
 name = "TestBoard"
@@ -848,7 +870,6 @@ name = "TestBoard"
     fn test_v2_vendor_config() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [board]
@@ -877,7 +898,6 @@ match = ["github.com/diodeinc/registry/reference/ti"]
     fn test_v2_vendor_config_defaults() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [board]
@@ -901,7 +921,7 @@ path = "test.zen"
     fn test_v2_workspace_vendor_config() {
         let content = r#"
 [workspace]
-resolver = "2"
+pcb-version = "0.3"
 members = ["boards/*"]
 
 [vendor]
@@ -926,7 +946,6 @@ match = ["github.com/diodeinc/registry/reference"]
     fn test_v2_vendor_wildcard() {
         let content = r#"
 [workspace]
-resolver = "2"
 pcb-version = "0.3"
 
 [board]
