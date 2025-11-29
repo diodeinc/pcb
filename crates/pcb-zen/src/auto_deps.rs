@@ -52,18 +52,20 @@ struct CollectedImports {
 /// Resolution order for URL imports:
 /// 1. Workspace members (local packages)
 /// 2. Lockfile entries (pcb.sum) - fast path, no git operations
-/// 3. Remote package discovery (git tags) - slow path, cached per repo
+/// 3. Remote package discovery (git tags) - slow path, cached per repo (skipped when offline)
 ///
 /// `packages` maps module_path -> MemberPackage (contains version info)
 pub fn auto_add_zen_deps(
     workspace_root: &Path,
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     lockfile: Option<&Lockfile>,
+    offline: bool,
 ) -> Result<AutoDepsSummary> {
     let package_imports = collect_imports_by_package(workspace_root)?;
     let mut summary = AutoDepsSummary::default();
 
     // Cache for remote package discovery (shared across all packages)
+    // Only used when online
     let mut remote_cache = RemoteIndexCache::new();
 
     for (pcb_toml_path, imports) in package_imports {
@@ -82,7 +84,7 @@ pub fn auto_add_zen_deps(
             }
         }
 
-        // Process URL imports with 3-tier resolution
+        // Process URL imports with 3-tier resolution (tier 3 skipped when offline)
         for url in &imports.urls {
             // 1. Try workspace members first (local packages)
             if let Some((package_url, version)) = find_matching_workspace_member(url, packages) {
@@ -99,6 +101,12 @@ pub fn auto_add_zen_deps(
             }
 
             // 3. Try remote package discovery (slow path - cached per repo)
+            // Skip when offline - network access not allowed
+            if offline {
+                unknown_urls.push(url.clone());
+                continue;
+            }
+
             match find_matching_remote_package(url, &mut remote_cache) {
                 Ok(Some((module_path, version))) => {
                     deps_to_add.push((module_path, version, false));
