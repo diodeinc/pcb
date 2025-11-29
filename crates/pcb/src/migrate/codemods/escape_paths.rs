@@ -60,9 +60,8 @@ fn try_convert_path(
     repository: &str,
     workspace_path: Option<&str>,
 ) -> Option<String> {
-    // Skip non-.zen files, aliases, and already-converted URLs
-    if !path_str.ends_with(".zen")
-        || path_str.starts_with('@')
+    // Skip aliases and already-converted URLs
+    if path_str.starts_with('@')
         || path_str.starts_with("github.com/")
         || path_str.starts_with("gitlab.com/")
     {
@@ -309,15 +308,5 @@ mod tests {
         )
         .is_none());
 
-        // Not a .zen file -> no conversion
-        assert!(try_convert_path(
-            "//common/foo.txt",
-            &zen_dir,
-            &package_root,
-            &workspace_root,
-            "github.com/test",
-            None
-        )
-        .is_none());
     }
 }
