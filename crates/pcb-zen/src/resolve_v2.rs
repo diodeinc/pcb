@@ -26,9 +26,6 @@ fn cache_base() -> PathBuf {
 enum PathDepError {
     #[error("Path dependency '{url}' must specify a version\n  Example: {{ path = \"{path}\", version = \"1.0.0\" }}")]
     MissingVersion { url: String, path: String },
-
-    #[error("Path dependency '{url}' points to V1 package\n  Location: {location}\n  Path dependencies require V2 packages")]
-    V1Package { url: String, location: PathBuf },
 }
 
 /// Module line identifier for MVS grouping
@@ -774,14 +771,7 @@ fn collect_deps_recursive(
 
         let file_provider = DefaultFileProvider::new();
         let dep_config = match PcbToml::from_file(&file_provider, &dep_pcb_toml) {
-            Ok(config) if config.is_v2() => config,
-            Ok(_) => {
-                return Err(PathDepError::V1Package {
-                    url: url.clone(),
-                    location: dep_pcb_toml.clone(),
-                }
-                .into());
-            }
+            Ok(config) => config,
             Err(e) => return Err(e),
         };
 
