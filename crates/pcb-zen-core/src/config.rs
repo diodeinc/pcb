@@ -577,6 +577,7 @@ pub fn default_members() -> Vec<String> {
         "reference/*".to_string(),
         "modules/*".to_string(),
         "boards/*".to_string(),
+        "graphics/*".to_string(),
     ]
 }
 
