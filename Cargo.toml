@@ -132,6 +132,7 @@ quick-xml = "0.38"
 zstd = "0.13"
 jiff = "0.2"
 blake3 = "1.5"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 
 # The profile that 'dist' will build with
 [profile.dist]

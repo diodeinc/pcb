@@ -8,9 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
-use crate::remote_discovery::{
-    find_matching_lockfile_entry, find_matching_remote_package, RemoteIndexCache,
-};
+use crate::cache_index::{find_lockfile_entry, CacheIndex};
 use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, Lockfile, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 
@@ -64,9 +62,12 @@ pub fn auto_add_zen_deps(
     let package_imports = collect_imports_by_package(workspace_root)?;
     let mut summary = AutoDepsSummary::default();
 
-    // Cache for remote package discovery (shared across all packages)
-    // Only used when online
-    let mut remote_cache = RemoteIndexCache::new();
+    // Open cache index for remote package discovery
+    let index = if !offline {
+        CacheIndex::open().ok()
+    } else {
+        None
+    };
 
     for (pcb_toml_path, imports) in package_imports {
         let mut deps_to_add: Vec<(String, String, bool)> = Vec::new();
@@ -94,32 +95,43 @@ pub fn auto_add_zen_deps(
 
             // 2. Try lockfile (fast path - no git operations)
             if let Some(lf) = lockfile {
-                if let Some((module_path, version)) = find_matching_lockfile_entry(url, lf) {
+                if let Some((module_path, version)) = find_lockfile_entry(url, lf) {
                     deps_to_add.push((module_path, version, false));
                     continue;
                 }
             }
 
-            // 3. Try remote package discovery (slow path - cached per repo)
-            // Skip when offline - network access not allowed
+            // 3. Try sqlite cache (fast path - no git)
+            if let Some(ref idx) = index {
+                if let Some((module_path, version)) = idx.find_remote_package(url) {
+                    deps_to_add.push((module_path, version, false));
+                    continue;
+                }
+            }
+
+            // 4. Fetch and populate cache (slow path - git, only if online)
             if offline {
                 unknown_urls.push(url.clone());
                 continue;
             }
 
-            match find_matching_remote_package(url, &mut remote_cache) {
-                Ok(Some((module_path, version))) => {
-                    deps_to_add.push((module_path, version, false));
-                    summary.discovered_remote += 1;
+            if let Some(ref idx) = index {
+                match idx.find_or_discover_remote_package(url) {
+                    Ok(Some((module_path, version))) => {
+                        deps_to_add.push((module_path, version, false));
+                        summary.discovered_remote += 1;
+                    }
+                    Ok(None) => {
+                        unknown_urls.push(url.clone());
+                    }
+                    Err(e) => {
+                        // Network/git error - report but don't fail the build
+                        eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
+                        unknown_urls.push(url.clone());
+                    }
                 }
-                Ok(None) => {
-                    unknown_urls.push(url.clone());
-                }
-                Err(e) => {
-                    // Network/git error - report but don't fail the build
-                    eprintln!("  Warning: Failed to discover package for {}: {}", url, e);
-                    unknown_urls.push(url.clone());
-                }
+            } else {
+                unknown_urls.push(url.clone());
             }
         }
 
