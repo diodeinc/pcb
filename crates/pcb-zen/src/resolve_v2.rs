@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
+use crate::store::{create_asset_archive, unpack_vendored_asset, vendor_archive_path};
 use crate::workspace::WorkspaceInfo;
 
 /// Path dependency validation errors
@@ -319,14 +320,7 @@ pub fn resolve_dependencies(
         let results: Vec<_> = wave
             .par_iter()
             .map(|(line, version)| {
-                let result = fetch_package(
-                    &workspace_root,
-                    &line.path,
-                    version,
-                    &patches,
-                    &workspace_info.packages,
-                    offline,
-                );
+                let result = fetch_package(workspace_info, &line.path, version, offline);
                 (line.clone(), version.clone(), result)
             })
             .collect();
@@ -411,14 +405,8 @@ pub fn resolve_dependencies(
 
     // Phase 2.5: Collect and fetch assets
     println!("\nPhase 2.5: Fetching assets");
-    let asset_paths = collect_and_fetch_assets(
-        &workspace_info.packages,
-        &manifest_cache,
-        &selected,
-        &workspace_root,
-        &patches,
-        offline,
-    )?;
+    let asset_paths =
+        collect_and_fetch_assets(workspace_info, &manifest_cache, &selected, offline)?;
     if !asset_paths.is_empty() {
         println!("Fetched {} assets", asset_paths.len());
     } else {
@@ -519,16 +507,16 @@ pub fn vendor_deps(
         }
     }
 
-    // Copy matching assets from cache
+    // Compress matching assets from cache to .tar.zst archives
     let mut asset_count = 0;
     for (module_path, ref_str) in resolution.assets.keys() {
         if !glob_set.is_match(module_path) {
             continue;
         }
         let src = cache.join(module_path).join(ref_str);
-        let dst = vendor_dir.join(module_path).join(ref_str);
+        let dst = vendor_archive_path(&workspace_info.root, module_path, ref_str);
         if src.exists() && !dst.exists() {
-            copy_dir_all(&src, &dst)?;
+            create_asset_archive(&src, &dst)?;
             asset_count += 1;
         }
     }
@@ -540,13 +528,17 @@ pub fn vendor_deps(
     })
 }
 
-/// Recursively copy a directory
+/// Recursively copy a directory, excluding .git
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
         let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
+        let dst_path = dst.join(name);
         if entry.file_type()?.is_dir() {
             copy_dir_all(&src_path, &dst_path)?;
         } else {
@@ -845,11 +837,9 @@ fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String>
 ///
 /// Returns map of (module_path, ref) -> resolved_path for all fetched assets
 fn collect_and_fetch_assets(
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    workspace_info: &WorkspaceInfo,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     selected: &HashMap<ModuleLine, Version>,
-    workspace_root: &Path,
-    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
     offline: bool,
 ) -> Result<HashMap<(String, String), PathBuf>> {
     let mut asset_paths: HashMap<(String, String), PathBuf> = HashMap::new();
@@ -868,13 +858,13 @@ fn collect_and_fetch_assets(
             println!("      Fetching {}@{}", module_path, ref_str);
 
             // Fetch the asset repo and store the resolved path
-            let path = fetch_asset_repo(workspace_root, module_path, &ref_str, patches, offline)?;
+            let path = fetch_asset_repo(workspace_info, module_path, &ref_str, offline)?;
             asset_paths.insert(key, path);
             Ok(())
         };
 
     // 1. Collect assets from workspace and member packages
-    for pkg in packages.values() {
+    for pkg in workspace_info.packages.values() {
         if pkg.config.assets.is_empty() {
             continue;
         }
@@ -921,22 +911,20 @@ fn collect_and_fetch_assets(
 /// 4. Cache (only if !offline)
 /// 5. Network fetch (only if !offline)
 fn fetch_package(
-    workspace_root: &Path,
+    workspace_info: &WorkspaceInfo,
     module_path: &str,
     version: &Version,
-    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     offline: bool,
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
-    if let Some(member_pkg) = packages.get(module_path) {
+    if let Some(member_pkg) = workspace_info.packages.get(module_path) {
         let member_toml = member_pkg.dir.join("pcb.toml");
         return read_manifest_from_path(&member_toml);
     }
 
     // 2. Check if this module is patched with a local path
-    if let Some(patch) = patches.get(module_path) {
-        let patched_path = workspace_root.join(&patch.path);
+    if let Some(patch) = workspace_info.config.patch.get(module_path) {
+        let patched_path = workspace_info.root.join(&patch.path);
         let patched_toml = patched_path.join("pcb.toml");
 
         if !patched_toml.exists() {
@@ -947,7 +935,8 @@ fn fetch_package(
     }
 
     // 3. Check vendor directory (before cache - vendor is the committed source of truth)
-    let vendor_dir = workspace_root
+    let vendor_dir = workspace_info
+        .root
         .join("vendor")
         .join(module_path)
         .join(version.to_string());
@@ -1032,19 +1021,18 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 ///
 /// Resolution order:
 /// 1. Patches (always)
-/// 2. Vendor directory (always)
+/// 2. Vendored .tar.zst archive → unpack to content-addressed store (always)
 /// 3. Cache (only if !offline)
 /// 4. Network fetch (only if !offline)
 fn fetch_asset_repo(
-    workspace_root: &Path,
+    workspace_info: &WorkspaceInfo,
     module_path: &str,
     ref_str: &str,
-    patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
     offline: bool,
 ) -> Result<PathBuf> {
     // 1. Check if this module is patched with a local path
-    if let Some(patch) = patches.get(module_path) {
-        let patched_path = workspace_root.join(&patch.path);
+    if let Some(patch) = workspace_info.config.patch.get(module_path) {
+        let patched_path = workspace_info.root.join(&patch.path);
 
         println!("      Using patched source: {}", patch.path);
 
@@ -1065,14 +1053,28 @@ fn fetch_asset_repo(
     // Open cache index
     let index = CacheIndex::open()?;
 
-    // 2. Check vendor directory (before cache - vendor is the committed source of truth)
-    let vendor_dir = workspace_root
-        .join("vendor")
-        .join(module_path)
-        .join(ref_str);
-    if vendor_dir.exists() && index.get_asset(module_path, ref_str).is_some() {
-        println!("        Vendored");
-        return Ok(vendor_dir);
+    // 2. Check for vendored .tar.zst archive
+    let vendor_archive = vendor_archive_path(&workspace_info.root, module_path, ref_str);
+    if vendor_archive.exists() {
+        // Look up content hash from lockfile
+        let lock_entry = workspace_info
+            .lockfile
+            .as_ref()
+            .and_then(|lf| lf.get(module_path, ref_str))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Vendored asset {}@{} not found in pcb.sum\n  \
+                    Archive: {}\n  \
+                    Run `pcb vendor` to regenerate vendor directory and lockfile",
+                    module_path,
+                    ref_str,
+                    vendor_archive.display()
+                )
+            })?;
+
+        println!("        Vendored (unpacking to store)");
+        let store_path = unpack_vendored_asset(&vendor_archive, &lock_entry.content_hash)?;
+        return Ok(store_path);
     }
 
     // 3. If offline, fail here - vendor is the only allowed source for offline builds
@@ -1795,12 +1797,9 @@ fn update_lockfile(
 
     // Process assets
     for (module_path, ref_str) in asset_paths.keys() {
-        // Check if vendored
-        let vendor_dir = workspace_root
-            .join("vendor")
-            .join(module_path)
-            .join(ref_str);
-        if vendor_dir.exists() {
+        // Check if vendored (as .tar.zst archive)
+        let vendor_archive = vendor_archive_path(workspace_root, module_path, ref_str);
+        if vendor_archive.exists() {
             verified_count += 1;
             continue;
         }
