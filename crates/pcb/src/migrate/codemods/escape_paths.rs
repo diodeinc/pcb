@@ -307,6 +307,5 @@ mod tests {
             None
         )
         .is_none());
-
     }
 }

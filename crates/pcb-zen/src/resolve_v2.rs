@@ -11,15 +11,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use thiserror::Error;
 
+use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::workspace::WorkspaceInfo;
-
-/// Get the PCB cache base directory (~/.pcb/cache)
-fn cache_base() -> PathBuf {
-    let home = dirs::home_dir().expect("Determine home directory");
-    home.join(".pcb").join("cache")
-}
 
 /// Path dependency validation errors
 #[derive(Debug, Error)]
@@ -434,11 +429,8 @@ pub fn resolve_dependencies(
 
     // Phase 4: Update lockfile with cryptographic hashes
     println!("\nPhase 4: Lockfile");
-    let (lockfile, added_count) = update_lockfile(
-        workspace_info.lockfile.take(),
-        &closure.build_set,
-        &asset_paths,
-    )?;
+    let (lockfile, added_count) =
+        update_lockfile(workspace_info, &closure.build_set, &asset_paths)?;
 
     // Only write lockfile to disk if new entries were added
     if added_count > 0 {
@@ -770,11 +762,7 @@ fn collect_deps_recursive(
         }
 
         let file_provider = DefaultFileProvider::new();
-        let dep_config = match PcbToml::from_file(&file_provider, &dep_pcb_toml) {
-            Ok(config) => config,
-            Err(e) => return Err(e),
-        };
-
+        let dep_config = PcbToml::from_file(&file_provider, &dep_pcb_toml)?;
         collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
     }
 
@@ -981,18 +969,19 @@ fn fetch_package(
     // 5. Check cache directory: ~/.pcb/cache/{module_path}/{version}/
     let cache = cache_base();
     let checkout_dir = cache.join(module_path).join(version.to_string());
-    let cache_marker = checkout_dir.join(".pcbcache");
+    let version_str = version.to_string();
 
-    // Fast path: .pcbcache marker is written AFTER successful checkout + hash computation,
-    // so its existence guarantees the package is fully fetched and valid
-    if cache_marker.exists() {
+    // Open cache index for this thread
+    let index = CacheIndex::open()?;
+
+    // Fast path: index entry exists AND directory exists = valid cache
+    if index.get_package(module_path, &version_str).is_some() && checkout_dir.exists() {
         let pcb_toml_path = checkout_dir.join("pcb.toml");
         return read_manifest_from_path(&pcb_toml_path);
     }
 
-    // 6. Slow path: fetch via sparse checkout (network)
-    let package_root =
-        ensure_sparse_checkout(&checkout_dir, module_path, &version.to_string(), true)?;
+    // Slow path: fetch via sparse checkout (network)
+    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true)?;
     let pcb_toml_path = package_root.join("pcb.toml");
 
     // Compute hashes
@@ -1009,8 +998,8 @@ fn fetch_package(
         &manifest_hash,
     )?;
 
-    let marker_content = format!("{}\n{}\n", content_hash, manifest_hash);
-    std::fs::write(&cache_marker, marker_content)?;
+    // Store hashes in index
+    index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
 
     // Read the manifest
     read_manifest_from_path(&pcb_toml_path)
@@ -1073,12 +1062,15 @@ fn fetch_asset_repo(
         return Ok(patched_path);
     }
 
+    // Open cache index
+    let index = CacheIndex::open()?;
+
     // 2. Check vendor directory (before cache - vendor is the committed source of truth)
     let vendor_dir = workspace_root
         .join("vendor")
         .join(module_path)
         .join(ref_str);
-    if vendor_dir.exists() && vendor_dir.join(".pcbcache").exists() {
+    if vendor_dir.exists() && index.get_asset(module_path, ref_str).is_some() {
         println!("        Vendored");
         return Ok(vendor_dir);
     }
@@ -1097,8 +1089,8 @@ fn fetch_asset_repo(
     let cache = cache_base();
     let checkout_dir = cache.join(module_path).join(ref_str);
 
-    // Check if already fetched
-    if checkout_dir.exists() && checkout_dir.join(".pcbcache").exists() {
+    // Check if already fetched (index entry + directory exists)
+    if index.get_asset(module_path, ref_str).is_some() && checkout_dir.exists() {
         println!("        Cached");
         return Ok(checkout_dir);
     }
@@ -1113,9 +1105,7 @@ fn fetch_asset_repo(
     std::io::Write::flush(&mut std::io::stdout())?;
 
     let content_hash = compute_content_hash_from_dir(&package_root)?;
-    let cache_marker = checkout_dir.join(".pcbcache");
-    // Assets don't have manifests, so just write content hash
-    std::fs::write(&cache_marker, format!("{}\n", content_hash))?;
+    index.set_asset(module_path, ref_str, &content_hash)?;
 
     println!("done");
 
@@ -1390,15 +1380,24 @@ fn resolve_to_version(
 
 /// Resolve a Git branch to a pseudo-version
 fn resolve_branch_to_pseudo_version(module_path: &str, branch: &str) -> Result<Version> {
-    println!(
-        "        Resolving branch '{}' for {}...",
-        branch, module_path
-    );
+    let (repo_url, _) = git::split_repo_and_subpath(module_path);
+    let index = CacheIndex::open()?;
 
-    let refspec = format!("refs/heads/{}", branch);
-    let (commit, git_url) = git::ls_remote_with_fallback(module_path, &refspec)?;
+    // Check branch cache first
+    let commit = if let Some(cached_commit) = index.get_branch_commit(repo_url, branch) {
+        cached_commit
+    } else {
+        println!(
+            "        Resolving branch '{}' for {}...",
+            branch, module_path
+        );
+        let refspec = format!("refs/heads/{}", branch);
+        let (commit, _) = git::ls_remote_with_fallback(module_path, &refspec)?;
+        let _ = index.set_branch_commit(repo_url, branch, &commit);
+        commit
+    };
 
-    generate_pseudo_version_for_commit(module_path, &commit, &git_url)
+    generate_pseudo_version_for_commit(module_path, &commit)
 }
 
 /// Resolve a Git revision to a pseudo-version
@@ -1409,39 +1408,45 @@ fn resolve_rev_to_pseudo_version(module_path: &str, rev: &str) -> Result<Version
         module_path
     );
 
-    // For revisions, just use HTTPS (SSH wouldn't help for commit lookup)
-    let git_url = format!("https://{}.git", module_path);
-    generate_pseudo_version_for_commit(module_path, rev, &git_url)
+    generate_pseudo_version_for_commit(module_path, rev)
 }
 
 /// Generate a pseudo-version for a Git commit
 ///
 /// Format: v<base>-0.<timestamp>-<commit_short>
 /// Base version is derived from latest reachable tag, or v0.0.0 if none
-fn generate_pseudo_version_for_commit(
-    module_path: &str,
-    commit: &str,
-    git_url: &str,
-) -> Result<Version> {
-    // Get a minimal clone to inspect the commit
-    let cache = cache_base();
-    let temp_clone = cache.join("temp").join(module_path);
+///
+/// Uses bare repos (shared with remote package discovery) and caches
+/// commit metadata in SQLite to avoid redundant git operations.
+fn generate_pseudo_version_for_commit(module_path: &str, commit: &str) -> Result<Version> {
+    let (repo_url, _) = git::split_repo_and_subpath(module_path);
+    let index = CacheIndex::open()?;
 
-    std::fs::create_dir_all(temp_clone.parent().unwrap())?;
+    // Get from cache or compute and insert
+    let (timestamp, base_tag) = match index.get_commit_metadata(repo_url, commit) {
+        Some(cached) => cached,
+        None => {
+            let bare_dir = ensure_bare_repo(repo_url)?;
+            let base_tag = git::describe_tags(&bare_dir, commit);
+            let timestamp = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64
+            });
+            let _ = index.set_commit_metadata(repo_url, commit, timestamp, base_tag.as_deref());
+            (timestamp, base_tag)
+        }
+    };
 
-    // Clone if needed (shallow)
-    if !temp_clone.join(".git").exists() {
-        git::clone_bare_with_filter(git_url, &temp_clone)?;
-    } else {
-        // Fetch updates
-        let _ = git::run_in(&temp_clone, &["fetch", "origin", "--tags"]);
-    }
-
-    // Find latest tag reachable from this commit
-    let base_version = git::describe_tags(&temp_clone, commit)
+    let base_version = base_tag
         .and_then(|tag| parse_version_string(&tag).ok())
         .unwrap_or_else(|| Version::new(0, 0, 0));
 
+    build_pseudo_version(&base_version, timestamp, commit)
+}
+
+fn build_pseudo_version(base_version: &Version, timestamp: i64, commit: &str) -> Result<Version> {
     // Increment patch version
     let pseudo_base = Version::new(
         base_version.major,
@@ -1449,15 +1454,7 @@ fn generate_pseudo_version_for_commit(
         base_version.patch + 1,
     );
 
-    // Get commit timestamp
-    let timestamp = git::show_commit_timestamp(&temp_clone, commit).unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64
-    });
-
-    // Format timestamp as YYYYMMDDhhmmss using jiff
+    // Format timestamp as YYYYMMDDhhmmss
     let dt = jiff::Timestamp::from_second(timestamp)?;
     let timestamp_str = dt.strftime("%Y%m%d%H%M%S").to_string();
 
@@ -1732,41 +1729,45 @@ fn ensure_sparse_checkout(
 ///
 /// Returns (lockfile, added_count) - only write to disk if added_count > 0
 fn update_lockfile(
-    existing_lockfile: Option<Lockfile>,
+    workspace_info: &mut WorkspaceInfo,
     build_set: &HashSet<(ModuleLine, Version)>,
     asset_paths: &HashMap<(String, String), PathBuf>,
 ) -> Result<(Lockfile, usize)> {
-    // Start with existing lockfile or create new one
-    let mut lockfile = existing_lockfile.unwrap_or_default();
+    let workspace_root = &workspace_info.root;
+    let mut lockfile = workspace_info.lockfile.take().unwrap_or_default();
 
     let total_count = build_set.len() + asset_paths.len();
     if total_count > 0 {
         println!("  Verifying {} entries...", total_count);
     }
 
+    // Open cache index to read hashes
+    let index = CacheIndex::open()?;
+
     let mut verified_count = 0;
     let mut added_count = 0;
 
     // Process dependencies
     for (line, version) in build_set {
-        let cache_dir = cache_base().join(&line.path).join(version.to_string());
-        let cache_marker = cache_dir.join(".pcbcache");
+        let version_str = version.to_string();
 
-        // Read hashes from cache marker
-        let marker_content = std::fs::read_to_string(&cache_marker).map_err(|e| {
-            anyhow::anyhow!("Missing cache marker for {}@{}: {}", line.path, version, e)
-        })?;
+        // Check if vendored (trust lockfile, integrity via git)
+        let vendor_dir = workspace_root
+            .join("vendor")
+            .join(&line.path)
+            .join(&version_str);
+        if vendor_dir.exists() {
+            verified_count += 1;
+            continue;
+        }
 
-        let mut lines = marker_content.lines();
-        let content_hash = lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Invalid cache marker format: missing content hash"))?
-            .to_string();
-        let manifest_hash = lines.next().map(|s| s.to_string());
+        // Not vendored - must be in cache
+        let (content_hash, manifest_hash) = index
+            .get_package(&line.path, &version_str)
+            .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", line.path, version))?;
 
         // Check against existing lockfile entry
-        if let Some(existing) = lockfile.get(&line.path, &version.to_string()) {
-            // Verify hashes match
+        if let Some(existing) = lockfile.get(&line.path, &version_str) {
             if existing.content_hash != content_hash {
                 anyhow::bail!(
                     "Cache tampered: {}@v{} content hash mismatch\n  \
@@ -1785,42 +1786,37 @@ fn update_lockfile(
             added_count += 1;
             lockfile.insert(LockEntry {
                 module_path: line.path.clone(),
-                version: version.to_string(),
+                version: version_str,
                 content_hash,
-                manifest_hash,
+                manifest_hash: Some(manifest_hash),
             });
         }
     }
 
     // Process assets
-    for ((module_path, ref_str), resolved_path) in asset_paths {
-        let cache_marker = resolved_path.join(".pcbcache");
+    for (module_path, ref_str) in asset_paths.keys() {
+        // Check if vendored
+        let vendor_dir = workspace_root
+            .join("vendor")
+            .join(module_path)
+            .join(ref_str);
+        if vendor_dir.exists() {
+            verified_count += 1;
+            continue;
+        }
 
-        // Read hashes from cache marker
-        let marker_content = std::fs::read_to_string(&cache_marker).map_err(|e| {
-            anyhow::anyhow!(
-                "Missing cache marker for {}@{}: {}",
-                module_path,
-                ref_str,
-                e
-            )
+        // Not vendored - must be in cache
+        let content_hash = index.get_asset(module_path, ref_str).ok_or_else(|| {
+            anyhow::anyhow!("Missing cache entry for {}@{}", module_path, ref_str)
         })?;
 
-        let mut lines = marker_content.lines();
-        let content_hash = lines
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Invalid cache marker format: missing content hash"))?
-            .to_string();
-        let manifest_hash = lines.next().map(|s| s.to_string());
-
-        // Check if this is a new entry or update
         if lockfile.get(module_path, ref_str).is_none() {
             added_count += 1;
             lockfile.insert(LockEntry {
                 module_path: module_path.clone(),
                 version: ref_str.clone(),
                 content_hash,
-                manifest_hash,
+                manifest_hash: None,
             });
         } else {
             verified_count += 1;
