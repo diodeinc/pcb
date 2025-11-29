@@ -59,8 +59,12 @@ jobs:
       - name: Commit and push
         run: |
           git add Cargo.toml Cargo.lock
-          git commit -m "Release ${{ inputs.version }}"
-          git push origin main
+          if git diff --cached --quiet; then
+            echo "No changes to commit (version already set)"
+          else
+            git commit -m "Release ${{ inputs.version }}"
+            git push origin main
+          fi
 
       - name: Create and push tag
         run: |
