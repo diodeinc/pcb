@@ -963,6 +963,7 @@ fn default_for_type<'v>(
                 generate_net_id(),
                 String::new(),
                 SmallMap::new(),
+                eval.call_stack_top_location(),
             ))
             .to_value(),
         "InterfaceFactory" => typ

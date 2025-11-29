@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::HashMap, fmt};
 
 use allocative::Allocative;
 use pcb_sch::physical::{PhysicalRangeType, PhysicalValueType};
+use starlark::codemap::FileSpan;
 use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
@@ -110,6 +111,11 @@ pub struct NetValueGen<V> {
     pub(crate) type_name: String,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
+    /// The span where the net instance was created
+    #[allocative(skip)]
+    #[freeze(identity)]
+    #[serde(skip)]
+    pub(crate) span: Option<FileSpan>,
 }
 
 starlark_complex_value!(pub NetValue);
@@ -180,13 +186,19 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Create a new NetValue
-    pub fn new(net_id: NetId, name: String, properties: SmallMap<String, V>) -> Self {
+    pub fn new(
+        net_id: NetId,
+        name: String,
+        properties: SmallMap<String, V>,
+        span: Option<FileSpan>,
+    ) -> Self {
         Self {
             net_id,
             name,
             original_name: None,
             type_name: "Net".to_string(),
             properties,
+            span,
         }
     }
 
@@ -227,7 +239,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
-    pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
+    pub fn with_new_id(&self, heap: &'v Heap, span: Option<FileSpan>) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
             .iter()
@@ -240,6 +252,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             original_name: self.original_name.clone(),
             type_name: self.type_name.clone(),
             properties,
+            span,
         })
     }
 
@@ -258,6 +271,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             original_name: self.original_name.clone(),
             type_name: new_type_name.to_string(),
             properties,
+            span: self.span.clone(),
         })
     }
 }
@@ -674,7 +688,7 @@ where
                     };
 
                     if let Some(suffix) = legacy_suffix {
-                        let old_name = format!("{}_{}", net_name, suffix);
+                        let old_name = format!("{net_name}_{suffix}");
                         if let Some(ctx) = eval
                             .module()
                             .extra_value()
@@ -691,6 +705,7 @@ where
                     original_name,
                     type_name: self.type_name.clone(),
                     properties,
+                    span: eval.call_stack_top_location(),
                 }))
             })
     }

@@ -101,12 +101,12 @@ fn clone_net_template<'v>(
     {
         (
             net_val.original_name_opt().map(|s| s.to_owned()),
-            net_val.with_new_id(heap),
+            net_val.with_new_id(heap, eval.call_stack_top_location()),
         )
     } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
         (
             frozen_net.original_name_opt().map(|s| s.to_owned()),
-            frozen_net.with_new_id(heap),
+            frozen_net.with_new_id(heap, eval.call_stack_top_location()),
         )
     } else {
         return Err(anyhow::anyhow!("Expected Net template, got {}", template.get_type()).into());
@@ -134,6 +134,7 @@ fn clone_net_template<'v>(
         original_name: new_net.original_name_opt().map(|s| s.to_owned()),
         type_name: new_net.type_name.clone(),
         properties: new_net.properties().clone(),
+        span: new_net.span.clone(),
     }))
 }
 
