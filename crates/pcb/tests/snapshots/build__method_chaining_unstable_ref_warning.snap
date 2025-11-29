@@ -8,9 +8,4 @@ Exit Code: 0
 --- STDOUT ---
 
 --- STDERR ---
-Warning: '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
-   ╭─[ <TEMP_DIR>/board.zen:3:5 ]
- 3 │R = Module("@github/mycompany/components:main/SimpleResistor.zen").Resistance
-   │                                   ╰─────────────────────────────── '@github/mycompany/components:main' is an unstable reference. Use a pinned version.
-
 ✓ board.zen (0 components)

@@ -3,6 +3,8 @@ use ignore::WalkBuilder;
 use pcb_zen::file_extensions;
 use std::path::{Path, PathBuf};
 
+pub use pcb_zen::ast_utils::skip_vendor;
+
 /// Walk directories and process .zen files with a callback
 ///
 /// Features:
@@ -35,17 +37,7 @@ where
             .git_ignore(true)
             .git_exclude(true)
             .git_global(true)
-            .filter_entry(|entry| {
-                // Skip vendor directories
-                if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name == "vendor" {
-                            return false;
-                        }
-                    }
-                }
-                true
-            });
+            .filter_entry(skip_vendor);
 
         for result in builder.build() {
             let entry = result?;

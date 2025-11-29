@@ -141,22 +141,15 @@ impl LoadSpec {
         }
     }
 
-    /// Generate a structured remote reference for this LoadSpec.
-    pub fn remote_ref(&self) -> Option<crate::RemoteRef> {
+    /// Get the package URL for this spec (e.g. "github.com/user/repo")
+    ///
+    /// This returns the canonical package identifier used in V2 resolution maps.
+    /// It ignores the version/tag and internal path.
+    pub fn package_url(&self) -> Option<String> {
         match self {
-            LoadSpec::Github {
-                user, repo, rev, ..
-            } => Some(crate::RemoteRef::GitHub {
-                user: user.clone(),
-                repo: repo.clone(),
-                rev: rev.clone(),
-            }),
-            LoadSpec::Gitlab {
-                project_path, rev, ..
-            } => Some(crate::RemoteRef::GitLab {
-                project_path: project_path.clone(),
-                rev: rev.clone(),
-            }),
+            LoadSpec::Github { user, repo, .. } => Some(format!("github.com/{}/{}", user, repo)),
+            LoadSpec::Gitlab { project_path, .. } => Some(format!("gitlab.com/{}", project_path)),
+            LoadSpec::Package { package, .. } => Some(package.clone()),
             _ => None,
         }
     }
@@ -242,6 +235,64 @@ impl LoadSpec {
     /// The function does not touch the filesystem – it only performs syntactic
     /// parsing.
     pub fn parse(s: &str) -> Option<LoadSpec> {
+        if let Some(rest) = s.strip_prefix("github.com/") {
+            // V2 GitHub style: github.com/user/repo/path...
+            // Assumes standard user/repo structure (2 components)
+            let mut parts = rest.splitn(3, '/');
+            let user = parts.next().unwrap_or("").to_string();
+            let repo = parts.next().unwrap_or("").to_string();
+            let path_str = parts.next().unwrap_or("");
+
+            if user.is_empty() || repo.is_empty() {
+                return None;
+            }
+
+            return Some(LoadSpec::Github {
+                user,
+                repo,
+                rev: DEFAULT_GITHUB_REV.to_string(),
+                path: PathBuf::from(path_str),
+            });
+        }
+
+        if let Some(rest) = s.strip_prefix("gitlab.com/") {
+            // V2 GitLab style: gitlab.com/group/subgroup/project/path...
+            // GitLab supports nested groups, so we need to find the boundary between
+            // project path and file path using file extension heuristic
+
+            let parts: Vec<&str> = rest.split('/').collect();
+
+            // Find where the file path starts (first component with extension)
+            let mut project_parts = Vec::new();
+            let mut file_parts = Vec::new();
+            let mut found_file = false;
+
+            for part in parts {
+                if !found_file && (part.contains('.') || !file_parts.is_empty()) {
+                    found_file = true;
+                }
+
+                if found_file {
+                    file_parts.push(part);
+                } else {
+                    project_parts.push(part);
+                }
+            }
+
+            if project_parts.is_empty() {
+                return None;
+            }
+
+            let project_path = project_parts.join("/");
+            let file_path = file_parts.join("/");
+
+            return Some(LoadSpec::Gitlab {
+                project_path,
+                rev: DEFAULT_GITLAB_REV.to_string(),
+                path: PathBuf::from(file_path),
+            });
+        }
+
         if let Some(rest) = s.strip_prefix("@github/") {
             // GitHub: @github/user/repo:rev/path  (must come before generic "@pkg" handling)
             let mut user_repo_rev_and_path = rest.splitn(3, '/');

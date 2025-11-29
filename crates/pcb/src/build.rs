@@ -3,6 +3,7 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
+use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 
 use crate::file_walker;
@@ -39,8 +40,8 @@ pub fn create_diagnostics_passes(
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
 pub struct BuildArgs {
-    /// One or more .zen files or directories containing .zen files to build.
-    /// When omitted, all .zen files in the current directory tree are built.
+    /// One or more .zen files or directories to build.
+    /// When omitted, builds the current directory.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
@@ -77,6 +78,7 @@ pub fn build(
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
+    resolution_result: Option<pcb_zen::ResolutionResult>,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
@@ -87,6 +89,7 @@ pub fn build(
         zen_path,
         pcb_zen::EvalConfig {
             offline,
+            resolution_result,
             ..Default::default()
         },
     );
@@ -151,8 +154,42 @@ pub fn build(
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
+    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    let input_path = args
+        .paths
+        .first()
+        .cloned()
+        .unwrap_or(std::env::current_dir()?);
+    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), &input_path)?;
+
+    // Resolve dependencies if v2
+    let resolution_result = if workspace_info.config.is_v2() {
+        let resolution = pcb_zen::resolve_dependencies(&mut workspace_info, args.offline)?;
+        // Vendor deps matching workspace.vendor patterns (no additional patterns for build)
+        pcb_zen::vendor_deps(&workspace_info, &resolution, &[])?;
+        Some(resolution)
+    } else {
+        None
+    };
+
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = file_walker::collect_zen_files(&args.paths, false)?;
+    let zen_files = if workspace_info.config.is_v2() {
+        // Canonicalize input paths (or use current dir if empty)
+        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
+            vec![std::env::current_dir()?]
+        } else {
+            args.paths
+                .iter()
+                .map(|p| p.canonicalize())
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        // For V2: collect from search paths directly (includes workspace members AND local deps)
+        file_walker::collect_zen_files(&search_paths, false)?
+    } else {
+        // V1 mode: collect zen files from the given paths (or current dir)
+        file_walker::collect_zen_files(&args.paths, false)?
+    };
 
     if zen_files.is_empty() {
         let cwd = std::env::current_dir()?;
@@ -174,6 +211,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
+            resolution_result.clone(),
         ) else {
             continue;
         };

@@ -6,7 +6,7 @@ use pcb_kicad::{KiCadCliBuilder, PythonScriptBuilder};
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
-use pcb_zen_core::config::get_workspace_info;
+use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
@@ -18,7 +18,6 @@ use std::time::Instant;
 
 use chrono::Utc;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use zip::{write::FileOptions, ZipWriter};
 
@@ -531,7 +530,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         .workspace
         .config
         .board_info_for_zen(&info.workspace.zen_path)
-        .map(|b| b.description.as_str())
+        .map(|b| b.description)
         .filter(|d| !d.is_empty());
 
     let mut release_obj = serde_json::json!({
@@ -576,25 +575,13 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
     debug!("Getting git version from: {}", path.display());
 
     // Check if working directory is dirty
-    let status_out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(path)
-        .output()?;
-
-    let is_dirty = status_out.status.success() && !status_out.stdout.is_empty();
+    let is_dirty = pcb_zen::git::has_uncommitted_changes_in_path(path, Path::new("."));
 
     // Get current commit hash
-    let commit_out = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(path)
-        .output()?;
-
-    if !commit_out.status.success() {
+    let Some(commit_hash) = pcb_zen::git::rev_parse_short_head(path) else {
         warn!("Not a git repository, using 'unknown' as version and hash");
         return Ok(("unknown".into(), "unknown".into()));
-    }
-
-    let commit_hash = String::from_utf8(commit_out.stdout)?.trim().to_owned();
+    };
 
     // If dirty, return commit hash with dirty suffix
     if is_dirty {
@@ -604,26 +591,18 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
     }
 
     // Check if current commit is tagged
-    let tag_out = Command::new("git")
-        .args(["tag", "--points-at", "HEAD"])
-        .current_dir(path)
-        .output()?;
+    let tags = pcb_zen::git::tags_pointing_at_head(path);
 
-    if tag_out.status.success() {
-        let tags = String::from_utf8(tag_out.stdout)?;
-        let tags: Vec<&str> = tags.lines().collect();
-
-        // Look for board-specific tag in format "board_name/version" (case-insensitive board name)
-        let tag_prefix = format!("{board_name}/");
-        for tag in tags {
-            if !tag.is_empty()
-                && tag.len() > tag_prefix.len()
-                && tag[..tag_prefix.len()].eq_ignore_ascii_case(&tag_prefix)
-            {
-                let version = tag[tag_prefix.len()..].to_string();
-                info!("Git version (board tag): {version} for board {board_name}");
-                return Ok((version, commit_hash.clone()));
-            }
+    // Look for board-specific tag in format "board_name/version" (case-insensitive board name)
+    let tag_prefix = format!("{board_name}/");
+    for tag in &tags {
+        if !tag.is_empty()
+            && tag.len() > tag_prefix.len()
+            && tag[..tag_prefix.len()].eq_ignore_ascii_case(&tag_prefix)
+        {
+            let version = tag[tag_prefix.len()..].to_string();
+            info!("Git version (board tag): {version} for board {board_name}");
+            return Ok((version, commit_hash.clone()));
         }
     }
 
@@ -927,6 +906,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
+            None,
         );
         (has_errors, has_warnings)
     });
