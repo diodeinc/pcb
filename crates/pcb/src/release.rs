@@ -784,12 +784,12 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
             }
         }
 
-        // Create asset archives
+        // Copy assets
         for (module_path, ref_str) in &closure.assets {
             let src = cache.join(module_path).join(ref_str);
-            let dst = pcb_zen::store::vendor_archive_path(&src_dir, module_path, ref_str);
+            let dst = vendor_dir.join(module_path).join(ref_str);
             if src.exists() && !dst.exists() {
-                pcb_zen::store::create_asset_archive(&src, &dst)?;
+                copy_dir_excluding_git(&src, &dst)?;
                 debug!("Vendored asset {}@{}", module_path, ref_str);
             }
         }

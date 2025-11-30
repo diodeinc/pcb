@@ -9,7 +9,6 @@ pub mod git;
 pub mod load;
 pub mod lsp;
 pub mod resolve_v2;
-pub mod store;
 pub mod suppression;
 pub mod workspace;
 

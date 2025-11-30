@@ -14,7 +14,6 @@ use thiserror::Error;
 use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::store::{create_asset_archive, unpack_vendored_asset, vendor_archive_path};
 use crate::workspace::WorkspaceInfo;
 
 /// Path dependency validation errors
@@ -507,16 +506,16 @@ pub fn vendor_deps(
         }
     }
 
-    // Compress matching assets from cache to .tar.zst archives
+    // Copy matching assets from cache
     let mut asset_count = 0;
     for (module_path, ref_str) in resolution.assets.keys() {
         if !glob_set.is_match(module_path) {
             continue;
         }
         let src = cache.join(module_path).join(ref_str);
-        let dst = vendor_archive_path(&workspace_info.root, module_path, ref_str);
+        let dst = vendor_dir.join(module_path).join(ref_str);
         if src.exists() && !dst.exists() {
-            create_asset_archive(&src, &dst)?;
+            copy_dir_all(&src, &dst)?;
             asset_count += 1;
         }
     }
@@ -1021,7 +1020,7 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 ///
 /// Resolution order:
 /// 1. Patches (always)
-/// 2. Vendored .tar.zst archive → unpack to content-addressed store (always)
+/// 2. Vendor directory (always)
 /// 3. Cache (only if !offline)
 /// 4. Network fetch (only if !offline)
 fn fetch_asset_repo(
@@ -1053,28 +1052,15 @@ fn fetch_asset_repo(
     // Open cache index
     let index = CacheIndex::open()?;
 
-    // 2. Check for vendored .tar.zst archive
-    let vendor_archive = vendor_archive_path(&workspace_info.root, module_path, ref_str);
-    if vendor_archive.exists() {
-        // Look up content hash from lockfile
-        let lock_entry = workspace_info
-            .lockfile
-            .as_ref()
-            .and_then(|lf| lf.get(module_path, ref_str))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Vendored asset {}@{} not found in pcb.sum\n  \
-                    Archive: {}\n  \
-                    Run `pcb vendor` to regenerate vendor directory and lockfile",
-                    module_path,
-                    ref_str,
-                    vendor_archive.display()
-                )
-            })?;
-
-        println!("        Vendored (unpacking to store)");
-        let store_path = unpack_vendored_asset(&vendor_archive, &lock_entry.content_hash)?;
-        return Ok(store_path);
+    // 2. Check vendor directory (before cache - vendor is the committed source of truth)
+    let vendor_dir = workspace_info
+        .root
+        .join("vendor")
+        .join(module_path)
+        .join(ref_str);
+    if vendor_dir.exists() && index.get_asset(module_path, ref_str).is_some() {
+        println!("        Vendored");
+        return Ok(vendor_dir);
     }
 
     // 3. If offline, fail here - vendor is the only allowed source for offline builds
@@ -1797,9 +1783,12 @@ fn update_lockfile(
 
     // Process assets
     for (module_path, ref_str) in asset_paths.keys() {
-        // Check if vendored (as .tar.zst archive)
-        let vendor_archive = vendor_archive_path(workspace_root, module_path, ref_str);
-        if vendor_archive.exists() {
+        // Check if vendored
+        let vendor_dir = workspace_root
+            .join("vendor")
+            .join(module_path)
+            .join(ref_str);
+        if vendor_dir.exists() {
             verified_count += 1;
             continue;
         }

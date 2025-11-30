@@ -3394,7 +3394,6 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip 4.3.0",
- "zstd",
 ]
 
 [[package]]
