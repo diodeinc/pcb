@@ -112,6 +112,49 @@ snapshot_eval!(net_duplicate_names_uniq, {
     "#,
 });
 
+snapshot_eval!(net_multiple_collisions, {
+    "test.zen" => r#"
+        # Multiple nets with the same name should all get unique suffixes
+        a1 = Net("CLK")
+        a2 = Net("CLK")
+        a3 = Net("CLK")
+        a4 = Net("CLK")
+
+        print("a1:", a1.name)
+        print("a2:", a2.name)
+        print("a3:", a3.name)
+        print("a4:", a4.name)
+    "#,
+});
+
+snapshot_eval!(net_no_collision_different_names, {
+    "test.zen" => r#"
+        # Nets with different names should not trigger warnings
+        clk = Net("CLK")
+        rst = Net("RST")
+        en = Net("EN")
+
+        print("clk:", clk.name)
+        print("rst:", rst.name)
+        print("en:", en.name)
+    "#,
+});
+
+snapshot_eval!(net_collision_in_child_module, {
+    "child.zen" => r#"
+        # Child module with duplicate nets
+        sig1 = Net("SIG")
+        sig2 = Net("SIG")
+
+        print("child sig1:", sig1.name)
+        print("child sig2:", sig2.name)
+    "#,
+    "test.zen" => r#"
+        Child = Module("child.zen")
+        Child(name = "child1")
+    "#,
+});
+
 snapshot_eval!(net_field_with_field_spec, {
     "test.zen" => r#"
         # Create a net type with field() specs
