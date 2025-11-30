@@ -29,7 +29,6 @@ mod test;
 mod update;
 mod upgrade;
 mod vendor;
-mod workspace;
 
 #[derive(Parser)]
 #[command(name = "pcb")]

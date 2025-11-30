@@ -1,10 +1,9 @@
 use crate::build::create_diagnostics_passes;
-use crate::workspace::gather_workspace_info;
 use anyhow::Result;
 use clap::Args;
 use log::debug;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
-use pcb_zen::{get_workspace_info, resolve_dependencies, vendor_deps};
+use pcb_zen::{get_workspace_info, resolve_dependencies, vendor_deps, EvalConfig};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::LoadSpec;
 use std::collections::HashMap;
@@ -218,11 +217,15 @@ fn gather_vendor_info(
         Some(create_diagnostics_passes(&[]))
     };
     for zen_file in &zen_files {
-        // Don't use the vendor path for the workspace info, we're just gathering dependencies
-        let workspace_info = gather_workspace_info(zen_file.clone(), false)?;
+        // Don't use the vendor path for eval, we're just gathering dependencies
+        let eval_cfg = EvalConfig {
+            use_vendor: false,
+            ..Default::default()
+        };
+        let eval_result = pcb_zen::eval(zen_file, eval_cfg);
 
         // Decide if this file has errors (render diagnostics only when not ignoring errors)
-        let mut diagnostics = workspace_info.eval_result.diagnostics.clone();
+        let mut diagnostics = eval_result.diagnostics.clone();
         if let Some(passes) = &passes {
             diagnostics.apply_passes(passes);
         }
@@ -243,7 +246,7 @@ fn gather_vendor_info(
         }
 
         // Collect dependencies from successful evaluations
-        if let Some(output) = workspace_info.eval_result.output.as_ref() {
+        if let Some(output) = eval_result.output.as_ref() {
             let resolver = output.core_resolver().unwrap();
             tracked_files.extend(resolver.get_tracked_files());
         }

@@ -11,12 +11,14 @@ use pcb_zen_core::{DefaultFileProvider, FileProvider};
 use rayon::prelude::*;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::cache_index::cache_base;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
+use crate::resolve_v2::{extract_asset_ref, ResolutionResult};
 
 /// Why a package is dirty (has unpublished changes)
 #[derive(Debug, Clone)]
@@ -289,6 +291,19 @@ impl WorkspaceInfo {
         })
     }
 
+    /// Find the package URL for a zen file in a V2 workspace
+    ///
+    /// Returns the package URL if the zen file belongs to a workspace package
+    pub fn package_url_for_zen(&self, zen_path: &Path) -> Option<String> {
+        let canon_zen = zen_path.canonicalize().ok()?;
+        for (url, pkg) in &self.packages {
+            if canon_zen.starts_with(&pkg.dir) {
+                return Some(url.clone());
+            }
+        }
+        None
+    }
+
     /// Get all dirty packages with their reasons.
     /// Computes in parallel for performance.
     pub fn dirty_packages(&self) -> BTreeMap<String, DirtyReason> {
@@ -304,6 +319,106 @@ impl WorkspaceInfo {
             })
             .collect()
     }
+
+    /// Compute the transitive dependency closure for a specific package
+    ///
+    /// Given a package URL, returns all local workspace packages, remote packages,
+    /// and assets that the package transitively depends on.
+    ///
+    /// This is used by `pcb release` to copy only the necessary sources and vendor
+    /// only the necessary dependencies for a specific board.
+    pub fn package_closure(
+        &self,
+        package_url: &str,
+        resolution: &ResolutionResult,
+    ) -> PackageClosure {
+        let mut closure = PackageClosure::default();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = vec![package_url.to_string()];
+
+        // Path resolution: vendor takes precedence over cache
+        let cache = cache_base();
+        let vendor_base = self.root.join("vendor");
+
+        let get_pkg_root = |module_path: &str, version: &str| -> PathBuf {
+            // Check vendor first (same order as get_abs_path in build_resolution_map)
+            let vendor_path = vendor_base.join(module_path).join(version);
+            if vendor_path.exists() {
+                vendor_path
+            } else {
+                cache.join(module_path).join(version)
+            }
+        };
+
+        while let Some(url) = stack.pop() {
+            if !visited.insert(url.clone()) {
+                continue;
+            }
+
+            // Check if this is a local workspace package
+            if let Some(pkg) = self.packages.get(&url) {
+                closure.local_packages.insert(url.clone());
+
+                // Add its dependencies to the stack
+                for dep_url in pkg.config.dependencies.keys() {
+                    stack.push(dep_url.clone());
+                }
+
+                // Collect assets from this package
+                for (asset_url, asset_spec) in &pkg.config.assets {
+                    if let Ok(ref_str) = extract_asset_ref(asset_spec) {
+                        closure.assets.insert((asset_url.clone(), ref_str));
+                    }
+                }
+            } else {
+                // Remote package - check if it's in the resolution closure
+                if let Some((_, version)) = resolution.closure.iter().find(|(path, _)| path == &url)
+                {
+                    closure
+                        .remote_packages
+                        .insert((url.clone(), version.clone()));
+
+                    // Find transitive dependencies of this remote package
+                    // Use same path resolution as build_resolution_map (vendor > cache)
+                    let pkg_root = get_pkg_root(&url, version);
+
+                    // Look up this package's dependencies in package_resolutions
+                    if let Some(deps) = resolution.package_resolutions.get(&pkg_root) {
+                        for dep_url in deps.keys() {
+                            stack.push(dep_url.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also collect assets from remote packages in the closure
+        // These come from the resolution result
+        for (asset_path, asset_ref) in resolution.assets.keys() {
+            // Check if any package in our closure uses this asset
+            // For now, include all assets that are in the resolution
+            // TODO: More precise filtering based on which packages actually use each asset
+            closure
+                .assets
+                .insert((asset_path.clone(), asset_ref.clone()));
+        }
+
+        closure
+    }
+}
+
+/// Transitive dependency closure for a package
+///
+/// Used by `pcb release` to determine what needs to be copied/vendored
+/// for a specific board package.
+#[derive(Debug, Clone, Default)]
+pub struct PackageClosure {
+    /// Local workspace package URLs that this package depends on (transitive)
+    pub local_packages: HashSet<String>,
+    /// Remote packages (module_path, version) in the closure
+    pub remote_packages: HashSet<(String, String)>,
+    /// Assets (module_path, ref) in the closure
+    pub assets: HashSet<(String, String)>,
 }
 
 /// Compute the git tag prefix for a package

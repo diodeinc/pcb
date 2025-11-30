@@ -7,10 +7,11 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
 use pcb_zen::workspace::get_workspace_info;
+use pcb_zen::{EvalConfig, PackageClosure, ResolutionResult};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::{EvalOutput, WithDiagnostics};
 
-use crate::workspace::{gather_workspace_info, WorkspaceInfo};
+use pcb_zen::WorkspaceInfo;
 
 use std::fs;
 use std::io::{IsTerminal, Write};
@@ -157,8 +158,12 @@ pub struct ReleaseArgs {
 
 /// All information gathered during the release preparation phase
 pub struct ReleaseInfo {
-    /// Common workspace information
-    pub workspace: WorkspaceInfo,
+    /// Workspace configuration from pcb.toml discovery
+    pub config: WorkspaceInfo,
+    /// Canonical path to the .zen file being released
+    pub zen_path: PathBuf,
+    /// Eval output (needed for V1 file tracking in copy_sources)
+    pub eval_output: EvalOutput,
     /// Board name being released
     pub board_name: String,
     /// Release version (from git or fallback)
@@ -181,6 +186,30 @@ pub struct ReleaseInfo {
     pub yes: bool,
     /// Diagnostic kinds to suppress
     pub suppress: Vec<String>,
+    /// V2 resolution result (None for V1 workspaces)
+    pub v2_resolution: Option<ResolutionResult>,
+    /// V2 package closure for the board (None for V1 workspaces)
+    pub v2_closure: Option<PackageClosure>,
+}
+
+impl ReleaseInfo {
+    /// Get the workspace root directory
+    pub fn workspace_root(&self) -> &Path {
+        &self.config.root
+    }
+
+    /// Get a human-friendly board display name
+    pub fn board_display_name(&self) -> String {
+        self.config
+            .board_name_for_zen(&self.zen_path)
+            .unwrap_or_else(|| {
+                self.zen_path
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+    }
 }
 
 type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
@@ -278,50 +307,82 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
 
-        // Gather workspace info and evaluate the zen file
-        let (workspace, board_name) = if let Some(board_name) = &args.board {
-            let start_path = args.path.as_deref().unwrap_or(".");
-            let workspace_info =
-                get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
-            let board_info = workspace_info.find_board_by_name(board_name)?;
-            let zen_path = board_info.absolute_zen_path(&workspace_info.root);
-            let workspace = gather_workspace_info(zen_path, true)?;
-            (workspace, board_name.clone())
+        // Get workspace info first to detect V2
+        let start_path = args.path.as_deref().unwrap_or(".");
+        let mut config_workspace_info =
+            get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
+        let is_v2 = config_workspace_info.config.is_v2();
+
+        // Determine board name and zen path
+        let (zen_path, board_name) = if let Some(board_name) = &args.board {
+            let board_info = config_workspace_info.find_board_by_name(board_name)?;
+            let zen_path = board_info.absolute_zen_path(&config_workspace_info.root);
+            (zen_path, board_name.clone())
         } else if let Some(zen_file) = &args.file {
-            let workspace = gather_workspace_info(zen_file.clone(), true)?;
-            let board_name = workspace.board_display_name();
-            (workspace, board_name)
+            let zen_path = zen_file.canonicalize()?;
+            let board_name = config_workspace_info
+                .board_name_for_zen(&zen_path)
+                .unwrap_or_else(|| zen_path.file_stem().unwrap().to_string_lossy().to_string());
+            (zen_path, board_name)
         } else {
             unreachable!("Either board or file must be provided due to clap validation")
         };
 
+        // For V2: run resolution before eval to get package closure
+        let (v2_resolution, v2_closure) = if is_v2 {
+            info_spinner.set_message("Resolving V2 dependencies");
+            let resolution = pcb_zen::resolve_dependencies(&mut config_workspace_info, false)?;
+
+            // Find the package URL for this board
+            let closure = config_workspace_info
+                .package_url_for_zen(&zen_path)
+                .map(|url| config_workspace_info.package_closure(&url, &resolution));
+
+            (Some(resolution), closure)
+        } else {
+            (None, None)
+        };
+
+        info_spinner.set_message("Evaluating zen file");
+
+        // Evaluate the zen file (still needed for schematic)
+        // For V2: pass resolution so Module() paths resolve correctly
+        let eval_cfg = EvalConfig {
+            use_vendor: true,
+            resolution_result: v2_resolution.clone(),
+            ..Default::default()
+        };
+        let eval_result = pcb_zen::eval(&zen_path, eval_cfg);
+
         info_spinner.finish();
 
         // Render diagnostics and fail early if there are errors
-        let diagnostics = &workspace.eval_result.diagnostics;
-        if diagnostics.has_errors() || workspace.eval_result.output.is_none() {
-            let mut diagnostics = workspace.eval_result.diagnostics.clone();
+        if eval_result.diagnostics.has_errors() || eval_result.output.is_none() {
+            let mut diagnostics = eval_result.diagnostics.clone();
             let passes = crate::build::create_diagnostics_passes(&[]);
             diagnostics.apply_passes(&passes);
             anyhow::bail!("Evaluation failed");
         }
 
-        let info = build_release_info(
-            workspace,
+        let mut info = build_release_info(
+            config_workspace_info,
+            zen_path,
+            eval_result.output.unwrap(),
             board_name,
-            args.source_only,
-            args.output_dir.clone(),
-            args.output_name.clone(),
-            args.yes,
-            args.suppress.clone(),
+            &args,
         )?;
+
+        // Attach V2 data
+        info.v2_resolution = v2_resolution;
+        info.v2_closure = v2_closure;
 
         let elapsed = start_time.elapsed().as_secs_f64();
         eprintln!(
-            "{}: {} ({}) Release information gathered",
+            "{}: {} ({}) Release information gathered{}",
             format_cumulative_time(elapsed),
             "✓".green(),
-            format_task_duration(elapsed)
+            format_task_duration(elapsed),
+            if is_v2 { " (V2)" } else { "" }
         );
 
         info
@@ -362,31 +423,28 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
 
 /// Build ReleaseInfo from workspace info and other parameters
 fn build_release_info(
-    workspace: WorkspaceInfo,
+    config: WorkspaceInfo,
+    zen_path: PathBuf,
+    eval_output: EvalOutput,
     board_name: String,
-    source_only: bool,
-    output_dir: Option<PathBuf>,
-    output_name: Option<String>,
-    yes: bool,
-    suppress: Vec<String>,
+    args: &ReleaseArgs,
 ) -> Result<ReleaseInfo> {
     // Get version and git hash from git
-    let (version, git_hash) = git_version_and_hash(&workspace.config.root, &board_name)?;
+    let (version, git_hash) = git_version_and_hash(&config.root, &board_name)?;
 
     // Create release staging directory in workspace root with flat structure:
     // Structure: {workspace_root}/.pcb/releases/{board_name}-{version}
     // Example: /workspace/.pcb/releases/test_board-f20ac95-dirty
-    let staging_dir = workspace
-        .config
+    let staging_dir = config
         .root
         .join(".pcb/releases")
         .join(format!("{}-{}", board_name, version));
 
     // Determine output directory and name
-    let default_output_dir = workspace.config.root.join(".pcb/releases");
-    let output_dir = output_dir.unwrap_or(default_output_dir);
-    let output_name = output_name.unwrap_or_else(|| {
-        if source_only {
+    let default_output_dir = config.root.join(".pcb/releases");
+    let output_dir = args.output_dir.clone().unwrap_or(default_output_dir);
+    let output_name = args.output_name.clone().unwrap_or_else(|| {
+        if args.source_only {
             format!("{}-{}.source.zip", board_name, version)
         } else {
             format!("{}-{}.zip", board_name, version)
@@ -404,23 +462,19 @@ fn build_release_info(
     fs::create_dir_all(&staging_dir)?;
 
     // Extract layout path from evaluation
-    let layout_path = extract_layout_path(&workspace.zen_path, &workspace.eval_result)?;
+    let layout_path = extract_layout_path_from_output(&zen_path, &eval_output)?;
 
-    let schematic = workspace
-        .eval_result
-        .output
-        .as_ref()
-        .map(|m| m.to_schematic())
-        .transpose()?
-        .context("No schematic output from zen file")?;
-    let kind = if source_only {
+    let schematic = eval_output.to_schematic()?;
+    let kind = if args.source_only {
         ReleaseKind::SourceOnly
     } else {
         ReleaseKind::Full
     };
 
     Ok(ReleaseInfo {
-        workspace,
+        config,
+        zen_path,
+        eval_output,
         board_name,
         version,
         git_hash,
@@ -430,8 +484,10 @@ fn build_release_info(
         kind,
         output_dir,
         output_name,
-        yes,
-        suppress,
+        yes: args.yes,
+        suppress: args.suppress.clone(),
+        v2_resolution: None,
+        v2_closure: None,
     })
 }
 
@@ -462,17 +518,16 @@ fn display_release_info(info: &ReleaseInfo, format: ReleaseOutputFormat) {
 
             // Add file paths (relative to make them shorter)
             let zen_file = info
-                .workspace
                 .zen_path
-                .strip_prefix(info.workspace.root())
-                .unwrap_or(&info.workspace.zen_path)
+                .strip_prefix(info.workspace_root())
+                .unwrap_or(&info.zen_path)
                 .display()
                 .to_string();
             table.add_row(vec!["Zen File", &zen_file]);
 
             let staging_dir = info
                 .staging_dir
-                .strip_prefix(info.workspace.root())
+                .strip_prefix(info.workspace_root())
                 .unwrap_or(&info.staging_dir)
                 .display()
                 .to_string();
@@ -544,9 +599,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 
     // Get board description if available
     let board_description = info
-        .workspace
         .config
-        .board_info_for_zen(&info.workspace.zen_path)
+        .board_info_for_zen(&info.zen_path)
         .map(|b| b.description)
         .filter(|d| !d.is_empty());
 
@@ -555,8 +609,8 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         "board_name": info.board_name,
         "git_version": info.version,
         "created_at": rfc3339_timestamp,
-        "zen_file": info.workspace.zen_path.strip_prefix(info.workspace.root()).expect("zen_file must be within workspace_root"),
-        "workspace_root": info.workspace.root(),
+        "zen_file": info.zen_path.strip_prefix(info.workspace_root()).expect("zen_file must be within workspace_root"),
+        "workspace_root": info.workspace_root(),
         "staging_directory": info.staging_dir,
         "layout_path": info.layout_path,
         "source_only": source_only
@@ -568,7 +622,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     }
 
     // Get git info
-    let workspace_root = info.workspace.root();
+    let workspace_root = info.workspace_root();
     let branch = git::rev_parse_abbrev_ref_head(workspace_root);
     let remotes = get_git_remotes(workspace_root);
 
@@ -642,12 +696,17 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
     Ok((short_hash, full_hash))
 }
 
-/// Extract layout path from zen evaluation result
+/// Extract layout path from zen evaluation result (public for bom.rs)
 pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) -> Result<PathBuf> {
     let output = eval
         .output
         .as_ref()
         .context("Evaluation failed - see diagnostics above")?;
+    extract_layout_path_from_output(zen_path, output)
+}
+
+/// Extract layout path from zen evaluation output
+fn extract_layout_path_from_output(zen_path: &Path, output: &EvalOutput) -> Result<PathBuf> {
     let properties = output.sch_module.properties();
 
     let layout_path_value = properties.get("layout_path")
@@ -672,12 +731,96 @@ pub fn extract_layout_path(zen_path: &Path, eval: &WithDiagnostics<EvalOutput>) 
 
 /// Copy source files and vendor dependencies
 fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let output = info.workspace.eval_result.output.as_ref().unwrap();
+    // Use V2 package-based copying if we have resolution data
+    if let Some(closure) = &info.v2_closure {
+        return copy_sources_v2(info, closure);
+    }
+
+    // V1 fallback: use file tracking from eval
+    let output = &info.eval_output;
     let tracked_files = output.core_resolver().unwrap().get_tracked_files();
-    let workspace_root = info.workspace.root();
+    let workspace_root = info.workspace_root();
     let src_dir = info.staging_dir.join("src");
     let vendor_dir = src_dir.join("vendor");
     sync_tracked_files(&tracked_files, workspace_root, &vendor_dir, Some(&src_dir))?;
+    Ok(())
+}
+
+/// V2 source copying: copy workspace packages and vendor remote dependencies
+fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
+    let workspace_root = info.workspace_root();
+    let src_dir = info.staging_dir.join("src");
+    let vendor_dir = src_dir.join("vendor");
+
+    fs::create_dir_all(&src_dir)?;
+
+    // 1. Copy workspace root pcb.toml
+    let root_pcb_toml = workspace_root.join("pcb.toml");
+    if root_pcb_toml.exists() {
+        fs::copy(&root_pcb_toml, src_dir.join("pcb.toml"))?;
+    }
+
+    // 2. Copy local workspace packages that the board depends on
+    for pkg_url in &closure.local_packages {
+        if let Some(pkg) = info.config.packages.get(pkg_url) {
+            let dest = src_dir.join(&pkg.rel_path);
+            copy_dir_excluding_git(&pkg.dir, &dest)?;
+            debug!("Copied package {} to {}", pkg_url, dest.display());
+        }
+    }
+
+    // 3. Vendor remote dependencies
+    if let Some(_resolution) = &info.v2_resolution {
+        fs::create_dir_all(&vendor_dir)?;
+        let cache = pcb_zen::cache_index::cache_base();
+
+        // Copy remote packages
+        for (module_path, version) in &closure.remote_packages {
+            let src = cache.join(module_path).join(version);
+            let dst = vendor_dir.join(module_path).join(version);
+            if src.exists() && !dst.exists() {
+                copy_dir_excluding_git(&src, &dst)?;
+                debug!("Vendored package {}@{}", module_path, version);
+            }
+        }
+
+        // Create asset archives
+        for (module_path, ref_str) in &closure.assets {
+            let src = cache.join(module_path).join(ref_str);
+            let dst = pcb_zen::store::vendor_archive_path(&src_dir, module_path, ref_str);
+            if src.exists() && !dst.exists() {
+                pcb_zen::store::create_asset_archive(&src, &dst)?;
+                debug!("Vendored asset {}@{}", module_path, ref_str);
+            }
+        }
+
+        // Copy pcb.sum lockfile if present
+        let lockfile_src = workspace_root.join("pcb.sum");
+        if lockfile_src.exists() {
+            fs::copy(&lockfile_src, src_dir.join("pcb.sum"))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Copy a directory recursively, excluding .git
+fn copy_dir_excluding_git(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let src_path = entry.path();
+        let dst_path = dst.join(name);
+        if entry.file_type()?.is_dir() {
+            copy_dir_excluding_git(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
     Ok(())
 }
 
@@ -685,7 +828,7 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 fn copy_layout(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // If build directory doesn't exist, generate layout files first
     if !info.layout_path.exists() {
-        pcb_layout::process_layout(&info.schematic, &info.workspace.zen_path, false, false)?;
+        pcb_layout::process_layout(&info.schematic, &info.zen_path, false, false)?;
     }
 
     let layout_staging_dir = info.staging_dir.join("layout");
@@ -748,7 +891,7 @@ fn generate_fab_drawing(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 /// Copy documentation files from docs directory adjacent to zen file
 fn copy_docs(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Look for docs directory adjacent to zen file
-    let docs_source_dir = info.workspace.zen_path.parent().unwrap().join("docs");
+    let docs_source_dir = info.zen_path.parent().unwrap().join("docs");
 
     // Only proceed if docs directory exists
     if !docs_source_dir.exists() {
@@ -863,7 +1006,7 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     debug!("Substituting version variables in KiCad files");
 
     // Determine display name of the board
-    let board_name = info.workspace.board_display_name();
+    let board_name = info.board_display_name();
 
     // First, update the .kicad_pro file to ensure text variables are defined
     let kicad_pro_path = info.staging_dir.join("layout").join("layout.kicad_pro");
@@ -907,15 +1050,27 @@ print("Text variables updated successfully")
 fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Calculate the zen file path in the staging directory
     let zen_file_rel = info
-        .workspace
         .zen_path
-        .strip_prefix(info.workspace.root())
+        .strip_prefix(info.workspace_root())
         .context("Zen file must be within workspace root")?;
-    let staged_zen_path = info.staging_dir.join("src").join(zen_file_rel);
+    let staged_src = info.staging_dir.join("src");
+    let staged_zen_path = staged_src.join(zen_file_rel);
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
     let file_name = staged_zen_path.file_name().unwrap().to_string_lossy();
+
+    // For V2: re-resolve dependencies on the staged sources
+    // This is cleaner than remapping paths from the original resolution
+    let staged_resolution = if info.v2_resolution.is_some() {
+        let mut staged_workspace =
+            get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
+        // Staged sources have vendored deps, so run resolution in offline mode
+        let resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true)?;
+        Some(resolution)
+    } else {
+        None
+    };
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly
@@ -937,7 +1092,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
-            None,
+            staged_resolution,
         );
         (has_errors, has_warnings)
     });

@@ -803,7 +803,7 @@ fn parse_version_string(s: &str) -> Result<Version> {
 /// Extract ref string from AssetDependencySpec
 ///
 /// Returns an error if the spec doesn't specify a version, branch, or rev (including HEAD)
-fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String> {
+pub fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String> {
     use pcb_zen_core::AssetDependencySpec;
 
     match spec {
@@ -1830,3 +1830,5 @@ fn update_lockfile(
 
     Ok((lockfile, added_count))
 }
+
+// PackageClosure and package_closure() method are now in workspace.rs
