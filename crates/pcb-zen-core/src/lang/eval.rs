@@ -794,6 +794,26 @@ impl EvalContext {
                     frozen_heap: self.frozen_heap.clone(),
                 };
                 let mut ret = WithDiagnostics::success(output);
+
+                // Emit collision warnings for nets that were renamed due to duplicates
+                for (_id, net_info) in extra.module.introduced_nets() {
+                    if let Some(original) = &net_info.original_name {
+                        ret.diagnostics.push(crate::Diagnostic {
+                            path: extra.module.source_path().to_string(),
+                            span: net_info.span.as_ref().map(|s| s.resolve_span()),
+                            severity: EvalSeverity::Warning,
+                            body: format!(
+                                "Net '{}' was renamed to '{}' due to name collision",
+                                original, net_info.final_name
+                            ),
+                            call_stack: None,
+                            child: None,
+                            source_error: None,
+                            suppressed: false,
+                        });
+                    }
+                }
+
                 ret.diagnostics.extend(extra.diagnostics().clone());
                 ret.diagnostics.extend(diagnostics_ref.borrow().clone());
                 ret

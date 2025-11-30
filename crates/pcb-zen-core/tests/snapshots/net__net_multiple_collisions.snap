@@ -1,0 +1,19 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+a1: CLK
+a2: CLK_2
+a3: CLK_3
+a4: CLK_4
+Warning: test.zen:4:6-16 Net 'CLK' was renamed to 'CLK_2' due to name collision
+Warning: test.zen:5:6-16 Net 'CLK' was renamed to 'CLK_3' due to name collision
+Warning: test.zen:6:6-16 Net 'CLK' was renamed to 'CLK_4' due to name collision
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[]
+

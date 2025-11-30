@@ -114,13 +114,14 @@ fn clone_net_template<'v>(
 
     let net_name = compute_net_name(prefix, template_name_opt.as_deref(), field_name_opt, eval);
     let new_net = new_net_value.downcast_ref::<NetValue<'v>>().unwrap();
+    let call_span = eval.call_stack_top_location();
 
     // Register and get final name (or skip registration if should_register=false)
     let final_name = if should_register {
         eval.module()
             .extra_value()
             .and_then(|e| e.downcast_ref::<ContextValue>())
-            .map(|ctx| ctx.register_net(new_net.id(), &net_name))
+            .map(|ctx| ctx.register_net(new_net.id(), &net_name, call_span))
             .transpose()?
             .unwrap_or(net_name)
     } else {

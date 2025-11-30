@@ -1,0 +1,15 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+expression: output
+---
+clk: CLK
+rst: RST
+en: EN
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+    },
+}
+[]
+
