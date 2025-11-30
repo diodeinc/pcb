@@ -6,7 +6,7 @@ use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
-    codemap::ResolvedSpan,
+    codemap::{FileSpan, ResolvedSpan},
     eval::CallStack,
     values::{
         starlark_value, Freeze, FreezeResult, Freezer, FrozenValue, StarlarkValue, Trace, Value,
@@ -236,10 +236,15 @@ impl<'v> ContextValue<'v> {
     }
 
     /// Register a newly created net with this module. Enforces per-module uniqueness of names.
-    pub(crate) fn register_net(&self, id: NetId, local_name: &str) -> anyhow::Result<String> {
+    pub(crate) fn register_net(
+        &self,
+        id: NetId,
+        local_name: &str,
+        span: Option<FileSpan>,
+    ) -> anyhow::Result<String> {
         self.module
             .borrow_mut()
-            .register_net(id, local_name.to_string())
+            .register_net(id, local_name.to_string(), span)
     }
 
     /// Unregister a previously registered net from the current module.

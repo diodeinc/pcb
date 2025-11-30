@@ -390,11 +390,11 @@ impl ModuleConverter {
         // For the root module, no prefix is added.
         let module_path = instance_ref.instance_path.join(".");
 
-        for (net_id, local_name) in module.introduced_nets().iter() {
+        for (net_id, net_info) in module.introduced_nets().iter() {
             let final_name = if module_path.is_empty() {
-                local_name.clone()
+                net_info.final_name.clone()
             } else {
-                format!("{module_path}.{local_name}")
+                format!("{module_path}.{}", net_info.final_name)
             };
             self.net_to_name.insert(*net_id, final_name);
         }

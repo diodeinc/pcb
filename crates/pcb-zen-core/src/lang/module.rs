@@ -34,7 +34,7 @@ use crate::lang::interface::{
 };
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
-use starlark::codemap::{CodeMap, Pos, Span};
+use starlark::codemap::{CodeMap, FileSpan, Pos, Span};
 use starlark::values::dict::{AllocDict, DictRef};
 
 use starlark::values::record::{FrozenRecord, Record};
@@ -58,6 +58,17 @@ macro_rules! downcast_frozen_module {
 use super::net::{generate_net_id, FrozenNetType, FrozenNetValue, NetId, NetType, NetValue};
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
+
+/// Info about a net introduced by this module
+#[derive(Clone, Debug, Trace, Allocative, Freeze)]
+pub struct IntroducedNet {
+    pub final_name: String,
+    /// Original name before deduplication (only set if collision occurred)
+    pub original_name: Option<String>,
+    #[allocative(skip)]
+    #[freeze(identity)]
+    pub span: Option<FileSpan>,
+}
 
 #[derive(Clone, PartialEq, Eq, Hash, Allocative, Freeze, Serialize)]
 pub struct ModulePath {
@@ -293,8 +304,8 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     inputs: SmallMap<String, V>,
     properties: SmallMap<String, V>,
     signature: Vec<ParameterMetadataGen<V>>,
-    /// Nets that are introduced (created) by this module. Map of `net id → local name`.
-    introduced_nets: SmallMap<NetId, String>,
+    /// Nets that are introduced (created) by this module. Map of `net id → net info`.
+    introduced_nets: SmallMap<NetId, IntroducedNet>,
     /// Local name → net id, to enforce uniqueness of names within a module.
     net_name_to_id: SmallMap<String, NetId>,
     /// Parsed position data from pcb:sch comments in this module's source file
@@ -555,14 +566,15 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Record that this module introduced a net with `id` and `local_name`.
     /// If another net with the same local name already exists in this module,
     /// generate a unique variant by appending a numeric suffix (e.g. `_2`, `_3`, ...).
-    pub fn register_net(&mut self, id: NetId, local_name: String) -> anyhow::Result<String> {
+    pub fn register_net(
+        &mut self,
+        id: NetId,
+        local_name: String,
+        span: Option<FileSpan>,
+    ) -> anyhow::Result<String> {
         // If this id was already registered, keep the first assignment (idempotent)
-        if self.introduced_nets.get(&id).is_some() {
-            // Return the already-registered name
-            if let Some(name) = self.introduced_nets.get(&id) {
-                return Ok(name.clone());
-            }
-            return Ok(local_name);
+        if let Some(info) = self.introduced_nets.get(&id) {
+            return Ok(info.final_name.clone());
         }
 
         // If the provided name is empty/whitespace, fall back to a stable placeholder.
@@ -593,13 +605,23 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             base_name.clone()
         };
 
+        // Track whether a collision occurred (name was changed)
+        let had_collision = unique_name != base_name;
+
         self.net_name_to_id.insert(unique_name.clone(), id);
-        self.introduced_nets.insert(id, unique_name.clone());
+        self.introduced_nets.insert(
+            id,
+            IntroducedNet {
+                final_name: unique_name.clone(),
+                original_name: if had_collision { Some(base_name) } else { None },
+                span,
+            },
+        );
         Ok(unique_name)
     }
 
     /// Return the map of nets introduced by this module.
-    pub fn introduced_nets(&self) -> &starlark::collections::SmallMap<NetId, String> {
+    pub fn introduced_nets(&self) -> &starlark::collections::SmallMap<NetId, IntroducedNet> {
         &self.introduced_nets
     }
 
@@ -656,9 +678,9 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     pub fn unregister_net(&mut self, id: NetId) {
         // Find the name associated with this id (if any)
         let mut name_to_remove: Option<String> = None;
-        for (nid, name) in self.introduced_nets.iter() {
+        for (nid, info) in self.introduced_nets.iter() {
             if *nid == id {
-                name_to_remove = Some(name.clone());
+                name_to_remove = Some(info.final_name.clone());
                 break;
             }
         }
@@ -666,9 +688,9 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         if let Some(name) = name_to_remove {
             // Rebuild introduced_nets without the given id
             let mut rebuilt_nets = starlark::collections::SmallMap::new();
-            for (nid, n) in self.introduced_nets.iter() {
+            for (nid, info) in self.introduced_nets.iter() {
                 if *nid != id {
-                    rebuilt_nets.insert(*nid, n.clone());
+                    rebuilt_nets.insert(*nid, info.clone());
                 }
             }
             self.introduced_nets = rebuilt_nets;
@@ -963,7 +985,6 @@ fn default_for_type<'v>(
                 generate_net_id(),
                 String::new(),
                 SmallMap::new(),
-                eval.call_stack_top_location(),
             ))
             .to_value(),
         "InterfaceFactory" => typ
