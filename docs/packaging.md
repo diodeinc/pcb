@@ -2,7 +2,9 @@
 
 ## Overview
 
-Proposes per-package versioning in monorepos, ahead-of-time dependency resolution with lockfiles, and semantic versioning support. Draws from Go modules for Git-based distribution and Cargo for manifest structure. Enables parallel dependency downloads, reproducible builds, and gradual migrations across major versions.
+Per-package versioning in monorepos, ahead-of-time dependency resolution with lockfiles, and semantic versioning support. Draws from Go modules for Git-based distribution and Cargo for manifest structure. Enables parallel dependency downloads, reproducible builds, and gradual migrations across major versions.
+
+**Implementation Status:** Core V2 features are implemented and production-ready. See [Implementation Status](#implementation-status) for details.
 
 ## Motivation
 
@@ -667,58 +669,57 @@ Evaluating WV0002.zen...
 Build succeeded.
 ```
 
-### Upgrading Dependencies
+### Updating Dependencies
 
-Workspace-level upgrade:
+Update all dependencies to latest compatible versions (non-breaking):
 ```bash
-$ pcb upgrade --dependencies
+$ pcb update
 
 Checking for updates...
-  github.com/diodeinc/stdlib: 0.3.2 → 0.3.4 available
-  github.com/diodeinc/registry/reference/ti/tps54331: 1.0.0 → 1.0.1 available
-  github.com/diodeinc/registry/reference/analog/ltc3115: 1.5.0 → 1.5.2 available
-
-Upgrade to latest minor versions? [Y/n]: y
+  github.com/diodeinc/stdlib: 0.3.2 → 0.3.4
+  github.com/diodeinc/registry/reference/ti/tps54331: 1.0.0 → 1.0.1
+  github.com/diodeinc/registry/reference/analog/ltc3115: 1.5.0 → 1.5.2
 
 Updating pcb.toml...
-  "github.com/diodeinc/stdlib" = "0.3.4"
-  "github.com/diodeinc/registry/reference/ti/tps54331" = "1.0.1"
-  "github.com/diodeinc/registry/reference/analog/ltc3115" = "1.5.2"
-
 Resolving dependencies...
-  Fetching github.com/diodeinc/stdlib@v0.3.4
-  Fetching github.com/diodeinc/registry/reference/ti/tps54331@v1.0.1
-  Fetching github.com/diodeinc/registry/reference/analog/ltc3115@v1.5.2
-
-Building all workspace boards...
-  WV0001... ✓
-  WV0002... ✓
-  WV0003... ✓
-  WV0004... ✓
-  WV0005... ✓
-
-All boards built successfully.
 Updating pcb.sum...
 
-Changes: pcb.toml, pcb.sum
-Commit to lock versions.
+Updated 3 dependencies.
 ```
 
-Specific dependency:
+Update a specific dependency:
 ```bash
-$ pcb upgrade --dependencies github.com/diodeinc/stdlib
+$ pcb update github.com/diodeinc/stdlib
 
-Current: 0.3.2
-Available:
-  0.3.3 (2024-10-15)
-  0.3.4 (2024-11-01)
+github.com/diodeinc/stdlib: 0.3.2 → 0.3.4
 
-Select [0.3.4]: 0.3.4
+Updated 1 dependency.
+```
+
+Update to latest versions including breaking changes (`-b/--breaking`):
+```bash
+$ pcb update --breaking
+
+Checking for updates (including breaking)...
+  github.com/diodeinc/stdlib: 0.3.4 → 1.0.0 (breaking)
+  github.com/diodeinc/registry/reference/ti/tps54331: 1.0.1 → 2.0.0 (breaking)
 
 Updating pcb.toml...
 Resolving dependencies...
-Testing builds... ✓
-Done. Commit changes.
+Updating pcb.sum...
+
+Updated 2 dependencies (2 breaking).
+```
+
+Remove unused entries from lockfile (`--tidy`):
+```bash
+$ pcb update --tidy
+
+Removing unused lockfile entries...
+  Removed github.com/old/unused-dep v1.0.0
+  Removed github.com/another/stale-dep v2.1.0
+
+Cleaned 2 unused entries from pcb.sum.
 ```
 
 ### Local Development
@@ -1158,11 +1159,36 @@ Options:
 
 ---
 
-## Future Work
+## Implementation Status
 
-### Remaining V2 Tasks
+### Implemented Features
 
-- Board publishing support in `pcb publish`
-- `pcb tidy` command to remove unused lockfile entries
-- `pcb upgrade` command to upgrade dependencies to latest versions
-- Offline mode improvements (`--offline` flag for air-gapped builds)
+| Feature | Status | Notes |
+|---------|--------|-------|
+| V2 manifest format | ✅ Done | `pcb-version`, `[dependencies]`, `[assets]`, `[patch]` |
+| Workspace discovery | ✅ Done | Glob patterns, member packages |
+| Dependency resolution (MVS) | ✅ Done | Wave-based parallel fetching |
+| Asset packages | ✅ Done | KiCad libraries, etc. |
+| Lockfile (`pcb.sum`) | ✅ Done | BLAKE3 hashes, Go-style accumulate |
+| Canonical packaging | ✅ Done | Deterministic tar, content hashing |
+| `pcb build` (V2) | ✅ Done | Full resolution pipeline |
+| `pcb vendor` | ✅ Done | V1 and V2 modes |
+| `pcb publish` | ✅ Done | Multi-wave publishing, dependency bumping |
+| `pcb info` | ✅ Done | V1 and V2 display modes |
+| `pcb migrate` | ✅ Done | Codemods for .zen files, manifest conversion |
+| `pcb package` | ✅ Done | Debug tool for tar/hash inspection |
+| Offline mode | ✅ Done | `--offline` flag, vendor-only resolution |
+| Auto-discovery | ✅ Done | Auto-add missing deps from .zen files |
+| Pseudo-versions | ✅ Done | Branch/rev to `v<base>-0.<ts>-<commit>` |
+| Patches (`[patch]`) | ✅ Done | Local path overrides |
+| Cache index (SQLite) | ✅ Done | Fast hash lookups, branch caching |
+| Tag hash verification | ✅ Done | Verify fetched content against tag annotations |
+
+### Remaining Tasks
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Board publishing | 🚧 Planned | `pcb publish` currently excludes boards |
+| `pcb update` | 🚧 Planned | Non-interactive dep updates, `--breaking` for major versions, `--tidy` to clean lockfile |
+| Module proxy | 💭 Future | `PCB_PROXY` for cached archives |
+| Bundled stdlib | 💭 Future | Embed stdlib in toolchain |
