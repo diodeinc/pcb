@@ -129,6 +129,23 @@ impl PcbToml {
         Self::parse(&content)
     }
 
+    /// Extract and parse inline pcb.toml from .zen file content
+    ///
+    /// Looks for a block in leading comments like:
+    /// ```text
+    /// # ```pcb
+    /// # [package]
+    /// # pcb-version = "0.3"
+    /// # ```
+    /// ```
+    ///
+    /// Returns `Some(Ok(config))` if inline manifest found and parsed successfully,
+    /// `Some(Err(...))` if found but failed to parse,
+    /// `None` if no inline manifest block found.
+    pub fn from_zen_content(zen_content: &str) -> Option<Result<Self>> {
+        extract_inline_manifest(zen_content).map(|toml| Self::parse(&toml))
+    }
+
     /// Check if this configuration represents a workspace
     pub fn is_workspace(&self) -> bool {
         self.workspace.is_some()
@@ -362,7 +379,7 @@ pub struct AssetDependencyDetail {
 /// Format mirrors Go's go.sum with separate content and manifest hashes.
 ///
 /// # Example
-/// ```
+/// ```text
 /// github.com/diodeinc/stdlib v0.3.2 h1:abc123...
 /// github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:def456...
 /// ```
@@ -396,7 +413,7 @@ impl Lockfile {
     /// Parse pcb.sum file
     ///
     /// Format:
-    /// ```
+    /// ```text
     /// module_path version h1:hash
     /// module_path version/pcb.toml h1:hash
     /// ```
@@ -598,6 +615,59 @@ pub fn default_members() -> Vec<String> {
         "boards/*".to_string(),
         "graphics/*".to_string(),
     ]
+}
+
+/// Extract inline pcb.toml manifest from .zen file content
+///
+/// Looks for a comment block in the leading comments like:
+/// ```text
+/// # ```pcb
+/// # [package]
+/// # pcb-version = "0.3"
+/// # ```
+/// ```
+///
+/// Returns the TOML content (with comment prefixes stripped) if found.
+pub fn extract_inline_manifest(zen_content: &str) -> Option<String> {
+    let mut in_block = false;
+    let mut toml_lines = Vec::new();
+
+    for line in zen_content.lines() {
+        let trimmed = line.trim();
+
+        // Stop scanning once we hit non-comment, non-empty, non-shebang content
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            break;
+        }
+
+        // Check for opening marker: # ```pcb
+        if !in_block && trimmed.starts_with('#') {
+            let after_hash = trimmed.strip_prefix('#').unwrap().trim();
+            if after_hash == "```pcb" {
+                in_block = true;
+                continue;
+            }
+        }
+
+        // Check for closing marker: # ```
+        if in_block && trimmed.starts_with('#') {
+            let after_hash = trimmed.strip_prefix('#').unwrap().trim();
+            if after_hash == "```" {
+                // Found complete block
+                return Some(toml_lines.join("\n"));
+            }
+
+            // Strip "# " prefix and collect TOML content
+            let content = trimmed
+                .strip_prefix('#')
+                .unwrap()
+                .strip_prefix(' ')
+                .unwrap_or(trimmed.strip_prefix('#').unwrap());
+            toml_lines.push(content.to_string());
+        }
+    }
+
+    None
 }
 
 /// Find the workspace root by walking up from `start`.
@@ -984,5 +1054,100 @@ match = ["*"]
         assert!(vendor.should_vendor("github.com/diodeinc/stdlib"));
         assert!(vendor.should_vendor("github.com/any/package"));
         assert!(vendor.should_vendor("gitlab.com/kicad/symbols"));
+    }
+
+    #[test]
+    fn test_extract_inline_manifest_basic() {
+        let zen_content = r#"#!/usr/bin/env pcb build
+#
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+#
+# [dependencies]
+# "github.com/diodeinc/stdlib" = "0.3"
+# ```
+
+load("github.com/diodeinc/stdlib/units.zen", "Voltage")
+"#;
+
+        let result = extract_inline_manifest(zen_content);
+        assert!(result.is_some());
+        let toml = result.unwrap();
+        assert!(toml.contains("[workspace]"));
+        assert!(toml.contains("pcb-version = \"0.3\""));
+        assert!(toml.contains("[dependencies]"));
+    }
+
+    #[test]
+    fn test_extract_inline_manifest_no_shebang() {
+        let zen_content = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+load("foo.zen", "Bar")
+"#;
+
+        let result = extract_inline_manifest(zen_content);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_extract_inline_manifest_missing() {
+        let zen_content = r#"# Just a regular comment
+load("foo.zen", "Bar")
+"#;
+
+        let result = extract_inline_manifest(zen_content);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_inline_manifest_unclosed() {
+        let zen_content = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# Missing closing marker
+
+load("foo.zen", "Bar")
+"#;
+
+        let result = extract_inline_manifest(zen_content);
+        // Unclosed block should return None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_from_zen_content() {
+        let zen_content = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+load("foo.zen", "Bar")
+"#;
+
+        let result = PcbToml::from_zen_content(zen_content);
+        assert!(result.is_some());
+        let config = result.unwrap().unwrap();
+        assert!(config.is_v2());
+    }
+
+    #[test]
+    fn test_from_zen_content_v1() {
+        // V1 style inline manifest (no pcb-version)
+        let zen_content = r#"# ```pcb
+# [packages]
+# stdlib = "@github/diodeinc/stdlib:v0.3.2"
+# ```
+
+load("@stdlib/foo.zen", "Bar")
+"#;
+
+        let result = PcbToml::from_zen_content(zen_content);
+        assert!(result.is_some());
+        let config = result.unwrap().unwrap();
+        assert!(!config.is_v2()); // Has [packages] which requires V1
     }
 }

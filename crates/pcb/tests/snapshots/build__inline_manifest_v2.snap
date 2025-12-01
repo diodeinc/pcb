@@ -1,0 +1,40 @@
+---
+source: crates/pcb/tests/build.rs
+assertion_line: 455
+expression: output
+---
+Command: pcb build standalone.zen
+Exit Code: 0
+
+--- STDOUT ---
+V2 Dependency Resolution
+Workspace root: <TEMP_DIR>
+
+Phase -1: Auto-detecting dependencies from .zen files
+  No missing dependencies or version corrections
+Type: Explicit workspace
+Member patterns: ["components/*", "reference/*", "modules/*", "boards/*", "graphics/*"]
+
+Discovered 0 package(s):
+
+Workspace members: 0 (for local resolution)
+
+Phase 0: Seed from workspace dependencies
+
+Phase 1: Parallel dependency resolution
+
+  Resolved 0 packages in 0 waves (0.0s)
+
+Phase 2: Build closure
+
+Build set: 0 dependencies
+
+
+Phase 2.5: Fetching assets
+No assets
+
+Phase 4: Lockfile
+
+V2 dependency resolution complete
+--- STDERR ---
+✓ standalone.zen (0 components)

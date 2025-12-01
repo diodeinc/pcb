@@ -26,7 +26,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
 
     // Check if this is a V2 workspace - use simplified closure-based vendoring
-    if workspace_info.config.is_v2() {
+    if workspace_info.is_v2() {
         return execute_v2(&mut workspace_info);
     }
 

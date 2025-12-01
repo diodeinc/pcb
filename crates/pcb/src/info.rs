@@ -3,7 +3,6 @@ use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_ui::{Style, StyledText};
 use pcb_zen::workspace::{get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo};
-use pcb_zen_core::config::default_members;
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -40,7 +39,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
     match args.format {
         OutputFormat::Human => {
-            if workspace_info.config.is_v2() {
+            if workspace_info.is_v2() {
                 print_v2_human_readable(&workspace_info);
             } else {
                 print_v1_human_readable(&workspace_info);
@@ -209,15 +208,14 @@ fn print_v1_human_readable(info: &pcb_zen::workspace::WorkspaceInfo) {
     println!("Root: {}", info.root.display());
 
     // Get workspace config if present
-    let ws_config = info.config.workspace.as_ref();
+    let ws_config = info.config.as_ref().and_then(|c| c.workspace.as_ref());
     let members = ws_config.map(|ws| &ws.members).cloned().unwrap_or_default();
     let default_board = ws_config.and_then(|ws| ws.default_board.as_ref());
 
     if let Some(name) = ws_config.and_then(|ws| ws.name.as_ref()) {
         println!("Name: {name}");
     }
-    // Only show members if not default value
-    if members != default_members() {
+    if !members.is_empty() {
         println!("Members: {}", members.join(", "));
     }
 
@@ -236,10 +234,6 @@ fn print_v1_human_readable(info: &pcb_zen::workspace::WorkspaceInfo) {
     if boards.is_empty() {
         println!("No boards discovered");
         println!("Searched for pcb.toml files with [board] sections");
-        // Only show members if not default value
-        if members != default_members() {
-            println!("Members: {}", members.join(", "));
-        }
     } else {
         println!(
             "{} ({})",

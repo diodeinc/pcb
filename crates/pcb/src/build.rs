@@ -163,7 +163,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), &input_path)?;
 
     // Resolve dependencies if v2
-    let resolution_result = if workspace_info.config.is_v2() {
+    let resolution_result = if workspace_info.is_v2() {
         let resolution = pcb_zen::resolve_dependencies(&mut workspace_info, args.offline)?;
         // Vendor deps matching workspace.vendor patterns (no additional patterns for build)
         pcb_zen::vendor_deps(&workspace_info, &resolution, &[], None)?;
@@ -173,7 +173,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     };
 
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = if workspace_info.config.is_v2() {
+    let zen_files = if workspace_info.is_v2() {
         // Canonicalize input paths (or use current dir if empty)
         let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
             vec![std::env::current_dir()?]

@@ -151,8 +151,9 @@ pub struct WorkspaceInfo {
     /// Workspace root directory
     pub root: PathBuf,
 
-    /// Root pcb.toml config (full)
-    pub config: PcbToml,
+    /// Root pcb.toml config (if present from file or inline manifest)
+    /// None means no manifest exists - implies V1 mode for backwards compatibility
+    pub config: Option<PcbToml>,
 
     /// Discovered member packages keyed by URL (includes root if applicable)
     pub packages: BTreeMap<String, MemberPackage>,
@@ -166,40 +167,49 @@ pub struct WorkspaceInfo {
 }
 
 impl WorkspaceInfo {
+    /// Check if this workspace is V2 mode
+    /// Returns false if no manifest exists (backwards compatibility)
+    pub fn is_v2(&self) -> bool {
+        self.config.as_ref().is_some_and(|c| c.is_v2())
+    }
+
     /// Get workspace config section (with defaults if not present)
     pub fn workspace_config(&self) -> WorkspaceConfig {
-        self.config.workspace.clone().unwrap_or_default()
+        self.config
+            .as_ref()
+            .and_then(|c| c.workspace.clone())
+            .unwrap_or_default()
     }
 
     /// Get repository URL from workspace config
     pub fn repository(&self) -> Option<&str> {
         self.config
-            .workspace
             .as_ref()
+            .and_then(|c| c.workspace.as_ref())
             .and_then(|w| w.repository.as_deref())
     }
 
     /// Get optional subpath within repository
     pub fn path(&self) -> Option<&str> {
         self.config
-            .workspace
             .as_ref()
+            .and_then(|c| c.workspace.as_ref())
             .and_then(|w| w.path.as_deref())
     }
 
     /// Get minimum pcb toolchain version
     pub fn pcb_version(&self) -> Option<&str> {
         self.config
-            .workspace
             .as_ref()
+            .and_then(|c| c.workspace.as_ref())
             .and_then(|w| w.pcb_version.as_deref())
     }
 
     /// Get member glob patterns
     pub fn member_patterns(&self) -> Vec<String> {
         self.config
-            .workspace
             .as_ref()
+            .and_then(|c| c.workspace.as_ref())
             .map(|w| w.members.clone())
             .unwrap_or_default()
     }
@@ -231,7 +241,7 @@ impl WorkspaceInfo {
         // Re-parse root config
         let pcb_toml_path = self.root.join("pcb.toml");
         if file_provider.exists(&pcb_toml_path) {
-            self.config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
+            self.config = Some(PcbToml::from_file(&file_provider, &pcb_toml_path)?);
         }
 
         // Re-parse each package's config
@@ -549,14 +559,24 @@ pub fn get_workspace_info(
     let workspace_root = find_workspace_root(file_provider, start_path);
     let pcb_toml_path = workspace_root.join("pcb.toml");
 
-    // Load root config
-    let config = if file_provider.exists(&pcb_toml_path) {
-        PcbToml::from_file(file_provider, &pcb_toml_path)?
+    // Load root config: pcb.toml file > inline manifest in .zen file > None (V1)
+    let config: Option<PcbToml> = if file_provider.exists(&pcb_toml_path) {
+        Some(PcbToml::from_file(file_provider, &pcb_toml_path)?)
+    } else if start_path.extension().is_some_and(|ext| ext == "zen") {
+        // Try to extract inline manifest from .zen file
+        let zen_content = file_provider.read_file(start_path)?;
+        match PcbToml::from_zen_content(&zen_content) {
+            Some(Ok(cfg)) => Some(cfg),
+            Some(Err(e)) => return Err(e),
+            None => None, // No inline manifest → V1
+        }
     } else {
-        // Empty config for directories without pcb.toml
-        PcbToml::parse("")?
+        None // No manifest at all → V1
     };
-    let workspace_config = config.workspace.clone().unwrap_or_default();
+    let workspace_config = config
+        .as_ref()
+        .and_then(|c| c.workspace.clone())
+        .unwrap_or_default();
 
     // Compute base URL from workspace config
     let base_url = match (&workspace_config.repository, &workspace_config.path) {
@@ -615,12 +635,12 @@ pub fn get_workspace_info(
     }
 
     // Add root package if it has repository URL and (has deps/assets OR no members found)
-    if let Some(url) = &base_url {
-        let has_deps = !config.dependencies.is_empty() || !config.assets.is_empty();
+    if let (Some(url), Some(cfg)) = (&base_url, &config) {
+        let has_deps = !cfg.dependencies.is_empty() || !cfg.assets.is_empty();
         let no_other_packages = package_dirs.is_empty();
 
         if has_deps || no_other_packages {
-            package_dirs.push((workspace_root.clone(), url.clone(), config.clone()));
+            package_dirs.push((workspace_root.clone(), url.clone(), cfg.clone()));
         }
     }
 

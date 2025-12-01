@@ -156,17 +156,23 @@ pub fn resolve_dependencies(
     workspace_info.reload()?;
 
     // Validate patches are only at workspace root
-    if !workspace_info.config.patch.is_empty() && workspace_info.config.workspace.is_none() {
-        anyhow::bail!(
-            "[patch] section is only allowed at workspace root\n  \
-            Found in non-workspace pcb.toml at: {}/pcb.toml\n  \
-            Move [patch] to workspace root or remove it.",
-            workspace_root.display()
-        );
+    if let Some(config) = &workspace_info.config {
+        if !config.patch.is_empty() && config.workspace.is_none() {
+            anyhow::bail!(
+                "[patch] section is only allowed at workspace root\n  \
+                Found in non-workspace pcb.toml at: {}/pcb.toml\n  \
+                Move [patch] to workspace root or remove it.",
+                workspace_root.display()
+            );
+        }
     }
 
     // Display workspace info
-    if let Some(ws) = &workspace_info.config.workspace {
+    if let Some(ws) = workspace_info
+        .config
+        .as_ref()
+        .and_then(|c| c.workspace.as_ref())
+    {
         println!("Type: Explicit workspace");
         if !ws.members.is_empty() {
             println!("Member patterns: {:?}", ws.members);
@@ -200,7 +206,11 @@ pub fn resolve_dependencies(
         workspace_info.packages.len()
     );
 
-    let patches = workspace_info.config.patch.clone();
+    let patches = workspace_info
+        .config
+        .as_ref()
+        .map(|c| c.patch.clone())
+        .unwrap_or_default();
 
     // MVS state
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
@@ -472,8 +482,8 @@ pub fn vendor_deps(
     // Combine workspace.vendor patterns with additional patterns
     let mut patterns: Vec<&str> = workspace_info
         .config
-        .workspace
         .as_ref()
+        .and_then(|c| c.workspace.as_ref())
         .map(|w| w.vendor.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
     patterns.extend(additional_patterns.iter().map(|s| s.as_str()));
@@ -728,13 +738,16 @@ fn build_resolution_map(
     let mut results = HashMap::new();
 
     // Workspace root
+    let empty_deps = BTreeMap::new();
+    let empty_assets = BTreeMap::new();
+    let (root_deps, root_assets) = workspace_info
+        .config
+        .as_ref()
+        .map(|c| (&c.dependencies, &c.assets))
+        .unwrap_or((&empty_deps, &empty_assets));
     results.insert(
         workspace_info.root.clone(),
-        build_map(
-            &workspace_info.root,
-            &workspace_info.config.dependencies,
-            &workspace_info.config.assets,
-        ),
+        build_map(&workspace_info.root, root_deps, root_assets),
     );
 
     // Member packages
@@ -1007,7 +1020,11 @@ fn fetch_package(
     }
 
     // 2. Check if this module is patched with a local path
-    if let Some(patch) = workspace_info.config.patch.get(module_path) {
+    if let Some(patch) = workspace_info
+        .config
+        .as_ref()
+        .and_then(|c| c.patch.get(module_path))
+    {
         let patched_path = workspace_info.root.join(&patch.path);
         let patched_toml = patched_path.join("pcb.toml");
 
@@ -1120,7 +1137,11 @@ fn fetch_asset_repo(
     let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
     // 1. Check if this asset is patched with a local path (use full asset_key for lookup)
-    if let Some(patch) = workspace_info.config.patch.get(asset_key) {
+    if let Some(patch) = workspace_info
+        .config
+        .as_ref()
+        .and_then(|c| c.patch.get(asset_key))
+    {
         let patched_path = workspace_info.root.join(&patch.path);
 
         println!("      Using patched source: {}", patch.path);

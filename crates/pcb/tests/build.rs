@@ -434,6 +434,27 @@ SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
     assert_snapshot!("commit_stable_ref", output);
 }
 
+#[test]
+fn test_inline_manifest_v2() {
+    let mut sandbox = Sandbox::new();
+
+    // Standalone .zen file with inline pcb.toml (V2 mode)
+    // Uses minimal code that doesn't require dependencies
+    let inline_manifest_zen = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+# Simple V2 standalone script - no dependencies needed
+x = 1 + 2
+"#;
+
+    let output = sandbox
+        .write("standalone.zen", inline_manifest_zen)
+        .snapshot_run("pcb", ["build", "standalone.zen"]);
+    assert_snapshot!("inline_manifest_v2", output);
+}
+
 // Tests for -S flag with kind-based suppression
 
 #[test]

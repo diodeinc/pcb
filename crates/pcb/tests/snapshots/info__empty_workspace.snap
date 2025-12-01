@@ -1,14 +1,14 @@
 ---
 source: crates/pcb/tests/info.rs
+assertion_line: 54
 expression: output
 ---
 Command: pcb info
 Exit Code: 0
 
 --- STDOUT ---
-Workspace Information
+Workspace
 Root: <TEMP_DIR>
-No workspace configuration found
 
 No boards discovered
 Searched for pcb.toml files with [board] sections

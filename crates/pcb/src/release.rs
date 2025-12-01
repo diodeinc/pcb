@@ -311,7 +311,7 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         let start_path = args.path.as_deref().unwrap_or(".");
         let mut config_workspace_info =
             get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
-        let is_v2 = config_workspace_info.config.is_v2();
+        let is_v2 = config_workspace_info.is_v2();
 
         // Determine board name and zen path
         let (zen_path, board_name) = if let Some(board_name) = &args.board {
