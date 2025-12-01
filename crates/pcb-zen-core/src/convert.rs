@@ -32,6 +32,10 @@ pub(crate) struct ModuleConverter {
     comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
     // Mapping <module instance ref> -> <module value> for position processing
     module_instances: Vec<(InstanceRef, FrozenModuleValue)>,
+    // Net name aliases: when a net appears in multiple modules' introduced_nets,
+    // the child's scoped name maps to the parent's canonical name.
+    // Format: scoped_child_name -> canonical_name
+    net_name_aliases: HashMap<String, String>,
 }
 
 /// Module signature information to be serialized as JSON
@@ -147,6 +151,7 @@ impl ModuleConverter {
             net_to_properties: HashMap::new(),
             comp_models: Vec::new(),
             module_instances: Vec::new(),
+            net_name_aliases: HashMap::new(),
         }
     }
 
@@ -283,7 +288,15 @@ impl ModuleConverter {
         self.schematic.assign_reference_designators();
 
         // Validate moved directives, collect warnings, and filter out problematic ones
-        let (diagnostics, filtered_moved_paths) = self.validate_and_filter_moved_directives();
+        let (diagnostics, mut filtered_moved_paths) = self.validate_and_filter_moved_directives();
+
+        // Merge net name aliases (from nets appearing in multiple modules' introduced_nets)
+        // These map the child's scoped name to the parent's canonical name.
+        for (scoped_name, canonical_name) in &self.net_name_aliases {
+            filtered_moved_paths
+                .entry(scoped_name.clone())
+                .or_insert_with(|| canonical_name.clone());
+        }
 
         self.schematic.moved_paths = filtered_moved_paths;
         self.post_process_all_positions();
@@ -391,12 +404,22 @@ impl ModuleConverter {
         let module_path = instance_ref.instance_path.join(".");
 
         for (net_id, net_info) in module.introduced_nets().iter() {
-            let final_name = if module_path.is_empty() {
+            let scoped_name = if module_path.is_empty() {
                 net_info.final_name.clone()
             } else {
                 format!("{module_path}.{}", net_info.final_name)
             };
-            self.net_to_name.insert(*net_id, final_name);
+
+            // If this net already has a name (from a parent module), don't overwrite.
+            // Instead, record the scoped name as an alias pointing to the canonical name.
+            if let Some(canonical_name) = self.net_to_name.get(net_id) {
+                if &scoped_name != canonical_name {
+                    self.net_name_aliases
+                        .insert(scoped_name, canonical_name.clone());
+                }
+            } else {
+                self.net_to_name.insert(*net_id, scoped_name);
+            }
         }
 
         // Add direct child components
@@ -435,12 +458,12 @@ impl ModuleConverter {
             };
 
             if local.is_empty() {
-                if let Some(pref) = module_pref {
+                if let Some(pref) = &module_pref {
                     format!("{pref}.N{}", net.id())
                 } else {
                     String::new()
                 }
-            } else if let Some(pref) = module_pref {
+            } else if let Some(pref) = &module_pref {
                 format!("{pref}.{local}")
             } else {
                 local.to_string()
