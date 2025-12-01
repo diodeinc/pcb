@@ -649,11 +649,12 @@ where
 
                 // Register net in the current module (or skip if __register=false)
                 let net_name = original_name.clone().unwrap_or_default();
+                let call_span = eval.call_stack_top_location();
                 let final_name = if should_register {
                     eval.module()
                         .extra_value()
                         .and_then(|e| e.downcast_ref::<ContextValue>())
-                        .map(|ctx| ctx.register_net(net_id, &net_name))
+                        .map(|ctx| ctx.register_net(net_id, &net_name, call_span.clone()))
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e.to_string()))?
                         .unwrap_or_else(|| net_name.clone())
@@ -674,7 +675,7 @@ where
                     };
 
                     if let Some(suffix) = legacy_suffix {
-                        let old_name = format!("{}_{}", net_name, suffix);
+                        let old_name = format!("{net_name}_{suffix}");
                         if let Some(ctx) = eval
                             .module()
                             .extra_value()

@@ -9,7 +9,7 @@ fn test_physical_types() {
     env.add_file(
         "test_physical.zen",
         r#"
-load("@stdlib/units.zen", "Voltage", "VoltageRange", "Frequency")
+load("@stdlib:v0.3.20/units.zen", "Voltage", "VoltageRange", "Frequency")
 
 print("--- PhysicalValue ---")
 # Test PhysicalValue.abs() exists and works

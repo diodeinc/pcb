@@ -4,6 +4,7 @@ expression: output
 ---
 en1: EN
 en2: EN_2
+Warning: test.zen:4:7-16 Net 'EN' was renamed to 'EN_2' due to name collision
 {
     <root>: Module {
         path: <root>,
