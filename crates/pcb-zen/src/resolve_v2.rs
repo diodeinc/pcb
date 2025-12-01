@@ -1203,9 +1203,13 @@ fn fetch_asset_repo(
         return Ok(target_path);
     }
 
-    // 5. Ensure base repo is fetched (sparse checkout the full repo once)
-    if !repo_cache_dir.join(".git").exists() {
-        println!("        Cloning (sparse checkout)");
+    // 5. Ensure base repo is fetched (archive download or sparse checkout)
+    // Check for .git (git source) or any content like pcb.toml (archive source)
+    let repo_exists = repo_cache_dir.join(".git").exists()
+        || (repo_cache_dir.exists()
+            && std::fs::read_dir(&repo_cache_dir).is_ok_and(|mut d| d.next().is_some()));
+    if !repo_exists {
+        println!("        Fetching");
         ensure_sparse_checkout(&repo_cache_dir, repo_url, ref_str, false)?;
     }
 
@@ -1747,12 +1751,44 @@ fn ensure_sparse_checkout(
         }
     };
 
-    // If .git already exists, assume checkout is done (cache hit)
-    // Package root is always checkout_dir (nested packages already moved up)
-    if checkout_dir.join(".git").exists() {
+    // If directory already exists with content, assume checkout is done (cache hit)
+    // Check for pcb.toml or any file as marker (works for both git and archive sources)
+    if checkout_dir.exists()
+        && (checkout_dir.join(".git").exists() || checkout_dir.join("pcb.toml").exists())
+    {
         return Ok(checkout_dir.to_path_buf());
     }
 
+    // Try HTTP archive download first for supported hosts (faster than git)
+    // Skip for pseudo-versions (commit hashes) and nested packages with subpaths
+    if !is_pseudo_version && subpath.is_empty() {
+        let host = repo_url.split('/').next().unwrap_or("");
+        if let Some((url_pattern, root_pattern)) = crate::archive::get_archive_pattern(host) {
+            match crate::archive::fetch_archive(
+                url_pattern,
+                root_pattern,
+                repo_url,
+                &ref_spec,
+                checkout_dir,
+            ) {
+                Ok(path) => {
+                    log::info!("Downloaded {} via HTTP archive", module_path);
+                    return Ok(path);
+                }
+                Err(e) => {
+                    log::debug!(
+                        "Archive download failed for {}: {}, falling back to git",
+                        module_path,
+                        e
+                    );
+                    // Clean up any partial download
+                    let _ = std::fs::remove_dir_all(checkout_dir);
+                }
+            }
+        }
+    }
+
+    // Fallback: Git sparse checkout
     // Initialize Git repo
     std::fs::create_dir_all(checkout_dir)?;
     git::run_in(checkout_dir, &["init"])?;
