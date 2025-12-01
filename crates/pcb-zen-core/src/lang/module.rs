@@ -34,7 +34,7 @@ use crate::lang::interface::{
 };
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
-use starlark::codemap::{CodeMap, FileSpan, Pos, Span};
+use starlark::codemap::{CodeMap, Pos, Span};
 use starlark::values::dict::{AllocDict, DictRef};
 
 use starlark::values::record::{FrozenRecord, Record};
@@ -65,9 +65,10 @@ pub struct IntroducedNet {
     pub final_name: String,
     /// Original name before deduplication (only set if collision occurred)
     pub original_name: Option<String>,
-    #[allocative(skip)]
+    /// Call stack at the time the net was registered (for diagnostic context)
     #[freeze(identity)]
-    pub span: Option<FileSpan>,
+    #[allocative(skip)]
+    pub call_stack: starlark::eval::CallStack,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Allocative, Freeze, Serialize)]
@@ -570,7 +571,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &mut self,
         id: NetId,
         local_name: String,
-        span: Option<FileSpan>,
+        call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
         // If this id was already registered, keep the first assignment (idempotent)
         if let Some(info) = self.introduced_nets.get(&id) {
@@ -614,7 +615,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             IntroducedNet {
                 final_name: unique_name.clone(),
                 original_name: if had_collision { Some(base_name) } else { None },
-                span,
+                call_stack,
             },
         );
         Ok(unique_name)

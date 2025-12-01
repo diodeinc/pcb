@@ -798,15 +798,28 @@ impl EvalContext {
                 // Emit collision warnings for nets that were renamed due to duplicates
                 for (_id, net_info) in extra.module.introduced_nets() {
                     if let Some(original) = &net_info.original_name {
+                        let span = net_info
+                            .call_stack
+                            .frames
+                            .last()
+                            .and_then(|f| f.location.as_ref())
+                            .map(|loc| loc.resolve_span());
+                        let path = net_info
+                            .call_stack
+                            .frames
+                            .last()
+                            .and_then(|f| f.location.as_ref())
+                            .map(|loc| loc.file.filename().to_string())
+                            .unwrap_or_else(|| extra.module.source_path().to_string());
                         ret.diagnostics.push(crate::Diagnostic {
-                            path: extra.module.source_path().to_string(),
-                            span: net_info.span.as_ref().map(|s| s.resolve_span()),
+                            path,
+                            span,
                             severity: EvalSeverity::Warning,
                             body: format!(
                                 "Net '{}' was renamed to '{}' due to name collision",
                                 original, net_info.final_name
                             ),
-                            call_stack: None,
+                            call_stack: Some(net_info.call_stack.clone()),
                             child: None,
                             source_error: None,
                             suppressed: false,

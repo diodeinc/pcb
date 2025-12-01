@@ -6,7 +6,7 @@ use allocative::Allocative;
 use serde::Serialize;
 use starlark::{
     any::ProvidesStaticType,
-    codemap::{FileSpan, ResolvedSpan},
+    codemap::ResolvedSpan,
     eval::CallStack,
     values::{
         starlark_value, Freeze, FreezeResult, Freezer, FrozenValue, StarlarkValue, Trace, Value,
@@ -240,11 +240,11 @@ impl<'v> ContextValue<'v> {
         &self,
         id: NetId,
         local_name: &str,
-        span: Option<FileSpan>,
+        call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
         self.module
             .borrow_mut()
-            .register_net(id, local_name.to_string(), span)
+            .register_net(id, local_name.to_string(), call_stack)
     }
 
     /// Unregister a previously registered net from the current module.
