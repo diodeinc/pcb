@@ -1,0 +1,52 @@
+---
+source: crates/pcb-zen/tests/net.rs
+expression: netlist
+---
+(export (version "E")
+  (design
+    (source "unknown")
+    (date "")
+    (tool "pcb"))
+  (components
+    (comp (ref "R1")
+      (value "?")
+      (footprint "SMD:0402")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "Regulator.R1") (tstamps "a879d39a-b8a0-5473-a37a-6f7cfddd2790"))
+      (tstamps "a879d39a-b8a0-5473-a37a-6f7cfddd2790")
+      (property (name "Reference") (value "R1"))
+    )
+    (comp (ref "R2")
+      (value "?")
+      (footprint "SMD:0402")
+      (libsource (lib "lib") (part "?") (description "unknown"))
+      (sheetpath (names "Regulator.R2") (tstamps "f9a06d42-9647-5330-b3dc-fe00b973cbd6"))
+      (tstamps "f9a06d42-9647-5330-b3dc-fe00b973cbd6")
+      (property (name "Reference") (value "R2"))
+    )
+  )
+  (libparts
+    (libpart (lib "lib") (part "?")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "P1") (type "stereo"))
+        (pin (num "2") (name "P2") (type "stereo"))
+      )
+    )
+  )
+  (nets
+    (net (code "1") (name "GND")
+      (node (ref "R1") (pin "2") (pintype "stereo"))
+      (node (ref "R2") (pin "2") (pintype "stereo"))
+    )
+    (net (code "2") (name "Regulator.INTERNAL")
+      (node (ref "R2") (pin "1") (pintype "stereo"))
+    )
+    (net (code "3") (name "VIN")
+      (node (ref "R1") (pin "1") (pintype "stereo"))
+    )
+  )
+)
