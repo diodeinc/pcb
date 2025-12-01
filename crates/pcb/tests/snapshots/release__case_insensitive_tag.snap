@@ -4,7 +4,7 @@ expression: sb.snapshot_dir(staging_dir)
 ---
 === diagnostics.json
 {
-  "CaseBoard.zen": []
+  "boards/CaseBoard.zen": []
 }
 === metadata.json
 {
@@ -13,7 +13,7 @@ expression: sb.snapshot_dir(staging_dir)
     "describe": "v9.9.9",
     "hash": "<GIT_HASH>",
     "remotes": {},
-    "workspace": "<TEMP_DIR>/src/boards"
+    "workspace": "<TEMP_DIR>/src"
   },
   "release": {
     "board_name": "CaseBoard",
@@ -22,9 +22,9 @@ expression: sb.snapshot_dir(staging_dir)
     "layout_path": "<TEMP_DIR>/src/boards/build/CaseBoard",
     "schema_version": "1",
     "source_only": true,
-    "staging_directory": "<TEMP_DIR>/src/boards/.pcb/releases/CaseBoard-v9.9.9",
-    "workspace_root": "<TEMP_DIR>/src/boards",
-    "zen_file": "CaseBoard.zen"
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/CaseBoard-v9.9.9",
+    "workspace_root": "<TEMP_DIR>/src",
+    "zen_file": "boards/CaseBoard.zen"
   },
   "system": {
     "arch": "<ARCH>",
@@ -34,7 +34,7 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== src/CaseBoard.zen
+=== src/boards/CaseBoard.zen
 
 add_property("layout_path", "build/CaseBoard")
 
@@ -42,6 +42,5 @@ n1 = Net("N1")
 n2 = Net("N2")
 === src/pcb.toml
 
-[board]
-name = "CaseBoard"
-path = "CaseBoard.zen"
+[workspace]
+name = "case_workspace"

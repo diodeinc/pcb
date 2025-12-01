@@ -12,4 +12,4 @@ Exit Code: 1
 Error: Release validation failed
 
 Caused by:
-    Board 'NonExistentBoard' not found. Available: [TB0001]
+    Board 'NonExistentBoard' not found. Available: []
