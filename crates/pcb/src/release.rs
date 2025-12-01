@@ -769,30 +769,18 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
         }
     }
 
-    // 3. Vendor remote dependencies
-    if let Some(_resolution) = &info.v2_resolution {
-        fs::create_dir_all(&vendor_dir)?;
-        let cache = pcb_zen::cache_index::cache_base();
-
-        // Copy remote packages
-        for (module_path, version) in &closure.remote_packages {
-            let src = cache.join(module_path).join(version);
-            let dst = vendor_dir.join(module_path).join(version);
-            if src.exists() && !dst.exists() {
-                copy_dir_excluding_git(&src, &dst)?;
-                debug!("Vendored package {}@{}", module_path, version);
-            }
-        }
-
-        // Copy assets
-        for (module_path, ref_str) in &closure.assets {
-            let src = cache.join(module_path).join(ref_str);
-            let dst = vendor_dir.join(module_path).join(ref_str);
-            if src.exists() && !dst.exists() {
-                copy_dir_excluding_git(&src, &dst)?;
-                debug!("Vendored asset {}@{}", module_path, ref_str);
-            }
-        }
+    // 3. Vendor remote dependencies using vendor_deps with "**" pattern
+    if let Some(resolution) = &info.v2_resolution {
+        let result = pcb_zen::vendor_deps(
+            &info.config,
+            resolution,
+            &["**".to_string()],
+            Some(&vendor_dir),
+        )?;
+        debug!(
+            "Vendored {} packages and {} assets",
+            result.package_count, result.asset_count
+        );
 
         // Copy pcb.sum lockfile if present
         let lockfile_src = workspace_root.join("pcb.sum");

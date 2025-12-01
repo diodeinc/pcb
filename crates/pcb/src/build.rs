@@ -166,7 +166,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let resolution_result = if workspace_info.config.is_v2() {
         let resolution = pcb_zen::resolve_dependencies(&mut workspace_info, args.offline)?;
         // Vendor deps matching workspace.vendor patterns (no additional patterns for build)
-        pcb_zen::vendor_deps(&workspace_info, &resolution, &[])?;
+        pcb_zen::vendor_deps(&workspace_info, &resolution, &[], None)?;
         Some(resolution)
     } else {
         None

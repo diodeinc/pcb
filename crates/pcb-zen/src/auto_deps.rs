@@ -10,9 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::ast_utils::{skip_vendor, visit_string_literals};
 use crate::cache_index::{find_lockfile_entry, CacheIndex};
 use crate::git;
-use pcb_zen_core::config::{
-    AssetDependencySpec, DependencySpec, Lockfile, PcbToml, KICAD_ASSETS,
-};
+use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, Lockfile, PcbToml, KICAD_ASSETS};
 use pcb_zen_core::DefaultFileProvider;
 
 #[derive(Debug, Default)]
@@ -449,17 +447,25 @@ mod tests {
     fn test_extract_kicad_asset_symbols() {
         // Standard symbol file
         let (url, ver) = extract_kicad_asset("@kicad-symbols/Device.kicad_sym").unwrap();
-        assert_eq!(url, "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym");
+        assert_eq!(
+            url,
+            "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
+        );
         assert_eq!(ver, "9.0.3");
 
         // Strip :ComponentName suffix
-        let (url, _) =
-            extract_kicad_asset("@kicad-symbols/Device.kicad_sym:D_Schottky").unwrap();
-        assert_eq!(url, "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym");
+        let (url, _) = extract_kicad_asset("@kicad-symbols/Device.kicad_sym:D_Schottky").unwrap();
+        assert_eq!(
+            url,
+            "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
+        );
 
         // Truncated component name
         let (url, _) = extract_kicad_asset("@kicad-symbols/Device.kicad_sym:D").unwrap();
-        assert_eq!(url, "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym");
+        assert_eq!(
+            url,
+            "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
+        );
 
         // Empty after prefix
         assert!(extract_kicad_asset("@kicad-symbols/").is_none());
@@ -476,7 +482,9 @@ mod tests {
 
         // With subpath
         assert_eq!(
-            get_kicad_asset_version("gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"),
+            get_kicad_asset_version(
+                "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"
+            ),
             Some("9.0.3".to_string())
         );
         assert_eq!(
@@ -511,7 +519,11 @@ mod tests {
         // Dynamic KiCad path -> silently skipped
         aliases.clear();
         urls.clear();
-        extract_from_str("@kicad-footprints/{}.pretty/{}.kicad_mod", &mut aliases, &mut urls);
+        extract_from_str(
+            "@kicad-footprints/{}.pretty/{}.kicad_mod",
+            &mut aliases,
+            &mut urls,
+        );
         assert!(aliases.is_empty());
         assert!(urls.is_empty());
     }

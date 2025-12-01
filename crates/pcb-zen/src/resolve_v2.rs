@@ -455,12 +455,19 @@ pub fn resolve_dependencies(
 ///
 /// Vendors entries matching workspace.vendor patterns plus any additional_patterns.
 /// No-op if combined patterns is empty. Incremental - skips existing entries.
+///
+/// If `target_vendor_dir` is provided, vendors to that directory instead of
+/// `workspace_info.root/vendor`. This is used by `pcb release` to vendor into
+/// the staging directory.
 pub fn vendor_deps(
     workspace_info: &WorkspaceInfo,
     resolution: &ResolutionResult,
     additional_patterns: &[String],
+    target_vendor_dir: Option<&Path>,
 ) -> Result<VendorResult> {
-    let vendor_dir = workspace_info.root.join("vendor");
+    let vendor_dir = target_vendor_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_info.root.join("vendor"));
 
     // Combine workspace.vendor patterns with additional patterns
     let mut patterns: Vec<&str> = workspace_info
@@ -1078,7 +1085,6 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// - Are leaf nodes (no transitive dependencies)
 /// - Don't participate in MVS (each ref is isolated)
 /// - Version/ref used literally as git tag (no v-prefix logic)
-/// Fetch an asset repository, handling subpath dependencies
 ///
 /// The asset_key may include a subpath (e.g., "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty").
 /// The full repo is cached at ~/.pcb/cache/{repo}/{ref}/, but only the subpath is vendored and returned.
@@ -1118,7 +1124,11 @@ fn fetch_asset_repo(
     let index = CacheIndex::open()?;
 
     // 2. Check vendor directory: vendor/{repo}/{ref}/{subpath}/
-    let vendor_base = workspace_info.root.join("vendor").join(repo_url).join(ref_str);
+    let vendor_base = workspace_info
+        .root
+        .join("vendor")
+        .join(repo_url)
+        .join(ref_str);
     let vendor_dir = if subpath.is_empty() {
         vendor_base.clone()
     } else {
@@ -1881,9 +1891,9 @@ fn update_lockfile(
         }
 
         // Not vendored - must be in cache
-        let content_hash = index.get_asset(repo_url, subpath, ref_str).ok_or_else(|| {
-            anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str)
-        })?;
+        let content_hash = index
+            .get_asset(repo_url, subpath, ref_str)
+            .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str))?;
 
         // Lockfile entry uses full asset_key (includes subpath)
         if lockfile.get(asset_key, ref_str).is_none() {

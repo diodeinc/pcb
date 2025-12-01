@@ -42,7 +42,7 @@ fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
     let resolution = resolve_dependencies(workspace_info, false)?;
 
     // Vendor everything - pass ["**"] pattern to match all packages and assets
-    let result = vendor_deps(workspace_info, &resolution, &["**".to_string()])?;
+    let result = vendor_deps(workspace_info, &resolution, &["**".to_string()], None)?;
 
     println!();
     println!(

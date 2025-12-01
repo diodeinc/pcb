@@ -518,16 +518,26 @@ mod tests {
             ("gitlab.com/kicad/libraries/kicad-footprints", "")
         );
         assert_eq!(
-            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"),
-            ("gitlab.com/kicad/libraries/kicad-footprints", "Resistor_SMD.pretty")
+            split_asset_repo_and_subpath(
+                "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"
+            ),
+            (
+                "gitlab.com/kicad/libraries/kicad-footprints",
+                "Resistor_SMD.pretty"
+            )
         );
         assert_eq!(
             split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-symbols"),
             ("gitlab.com/kicad/libraries/kicad-symbols", "")
         );
         assert_eq!(
-            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"),
-            ("gitlab.com/kicad/libraries/kicad-symbols", "Device.kicad_sym")
+            split_asset_repo_and_subpath(
+                "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
+            ),
+            (
+                "gitlab.com/kicad/libraries/kicad-symbols",
+                "Device.kicad_sym"
+            )
         );
 
         // Unknown repos fall back to standard split
