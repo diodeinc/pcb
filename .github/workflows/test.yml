@@ -15,8 +15,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build_and_test:
-    name: Build and Test (${{ matrix.config.name }})
+  lint:
+    name: Lint and Check
+    runs-on: ubicloud-standard-16-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check All
+        run: cargo check --workspace --all
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+  test:
+    name: Test (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs-on }}
     container: ${{ matrix.config.container }}
     timeout-minutes: 20
@@ -85,14 +111,8 @@ jobs:
           # Only save cache from main branch to prevent cache proliferation
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build All (Workspace)
-        run: cargo build --verbose --workspace
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --workspace -- -D warnings
+      - name: Build CLI
+        run: cargo build -p pcb
 
       - name: Test All (Workspace)
         env:
