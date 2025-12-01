@@ -191,7 +191,7 @@ fn convert_pcb_toml_to_v2(
             pcb_version: Some(pcb_version_from_cargo()),
             members: members.to_vec(),
             default_board,
-            vendor: Vec::new(),
+            vendor: vec!["github.com/diodeinc/registry/**".to_string()],
         });
     } else if let Some(mut ws) = config.workspace.take() {
         // Member package - set pcb-version
