@@ -798,6 +798,10 @@ impl EvalContext {
                 // Emit collision warnings for nets that were renamed due to duplicates
                 for (_id, net_info) in extra.module.introduced_nets() {
                     if let Some(original) = &net_info.original_name {
+                        // Sorry!
+                        if original == "NC" {
+                            continue;
+                        }
                         let span = net_info
                             .call_stack
                             .frames
