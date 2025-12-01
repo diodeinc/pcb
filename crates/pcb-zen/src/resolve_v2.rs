@@ -488,6 +488,7 @@ pub fn vendor_deps(
     }
 
     let cache = cache_base();
+    let workspace_vendor = workspace_info.root.join("vendor");
 
     // Build glob matcher
     let mut builder = GlobSetBuilder::new();
@@ -499,13 +500,19 @@ pub fn vendor_deps(
     // Create vendor directory if needed
     fs::create_dir_all(&vendor_dir)?;
 
-    // Copy matching packages from cache
+    // Copy matching packages from workspace vendor or cache (vendor takes precedence)
     let mut package_count = 0;
     for (module_path, version) in &resolution.closure {
         if !glob_set.is_match(module_path) {
             continue;
         }
-        let src = cache.join(module_path).join(version);
+        let vendor_src = workspace_vendor.join(module_path).join(version);
+        let cache_src = cache.join(module_path).join(version);
+        let src = if vendor_src.exists() {
+            vendor_src
+        } else {
+            cache_src
+        };
         let dst = vendor_dir.join(module_path).join(version);
         if src.exists() && !dst.exists() {
             copy_dir_all(&src, &dst)?;
@@ -513,7 +520,7 @@ pub fn vendor_deps(
         }
     }
 
-    // Copy matching assets from cache (handling subpaths)
+    // Copy matching assets from workspace vendor or cache (handling subpaths)
     let mut asset_count = 0;
     for (asset_key, ref_str) in resolution.assets.keys() {
         if !glob_set.is_match(asset_key) {
@@ -523,11 +530,21 @@ pub fn vendor_deps(
         // Split asset_key into (repo_url, subpath) for proper cache/vendor paths
         let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
-        // Source: cache/{repo}/{ref}/{subpath}
-        let src = if subpath.is_empty() {
+        // Source: check workspace vendor first, then cache
+        let vendor_src = if subpath.is_empty() {
+            workspace_vendor.join(repo_url).join(ref_str)
+        } else {
+            workspace_vendor.join(repo_url).join(ref_str).join(subpath)
+        };
+        let cache_src = if subpath.is_empty() {
             cache.join(repo_url).join(ref_str)
         } else {
             cache.join(repo_url).join(ref_str).join(subpath)
+        };
+        let src = if vendor_src.exists() {
+            vendor_src
+        } else {
+            cache_src
         };
 
         // Destination: vendor/{repo}/{ref}/{subpath}
