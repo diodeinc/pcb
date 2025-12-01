@@ -6,6 +6,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::FileProvider;
 
+/// Known KiCad asset repositories: (alias, base_url, default_version)
+pub const KICAD_ASSETS: &[(&str, &str, &str)] = &[
+    (
+        "kicad-footprints",
+        "gitlab.com/kicad/libraries/kicad-footprints",
+        "9.0.3",
+    ),
+    (
+        "kicad-symbols",
+        "gitlab.com/kicad/libraries/kicad-symbols",
+        "9.0.3",
+    ),
+];
+
 /// Top-level pcb.toml configuration
 ///
 /// Version detection uses the `is_v2()` method:
@@ -145,6 +159,11 @@ impl PcbToml {
     pub fn auto_generated_aliases(&self) -> HashMap<String, String> {
         let mut aliases = HashMap::new();
         let mut seen_names: HashMap<String, usize> = HashMap::new();
+
+        // Always include KiCad asset aliases
+        for (alias, base_url, _) in KICAD_ASSETS {
+            aliases.insert(alias.to_string(), base_url.to_string());
+        }
 
         // Collect all URLs from dependencies and assets
         let all_urls: Vec<String> = self

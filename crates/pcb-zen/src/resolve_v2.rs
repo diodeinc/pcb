@@ -506,16 +506,42 @@ pub fn vendor_deps(
         }
     }
 
-    // Copy matching assets from cache
+    // Copy matching assets from cache (handling subpaths)
     let mut asset_count = 0;
-    for (module_path, ref_str) in resolution.assets.keys() {
-        if !glob_set.is_match(module_path) {
+    for (asset_key, ref_str) in resolution.assets.keys() {
+        if !glob_set.is_match(asset_key) {
             continue;
         }
-        let src = cache.join(module_path).join(ref_str);
-        let dst = vendor_dir.join(module_path).join(ref_str);
+
+        // Split asset_key into (repo_url, subpath) for proper cache/vendor paths
+        let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+
+        // Source: cache/{repo}/{ref}/{subpath}
+        let src = if subpath.is_empty() {
+            cache.join(repo_url).join(ref_str)
+        } else {
+            cache.join(repo_url).join(ref_str).join(subpath)
+        };
+
+        // Destination: vendor/{repo}/{ref}/{subpath}
+        let dst = if subpath.is_empty() {
+            vendor_dir.join(repo_url).join(ref_str)
+        } else {
+            vendor_dir.join(repo_url).join(ref_str).join(subpath)
+        };
+
         if src.exists() && !dst.exists() {
-            copy_dir_all(&src, &dst)?;
+            // Create parent directory
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            // Copy file or directory as appropriate
+            if src.is_file() {
+                fs::copy(&src, &dst)?;
+            } else {
+                copy_dir_all(&src, &dst)?;
+            }
             asset_count += 1;
         }
     }
@@ -619,6 +645,41 @@ fn build_resolution_map(
         })
     };
 
+    // Helper to get asset path with LPM fallback
+    // If exact asset_key not found, try to find any entry from the same repo
+    let get_asset_path = |asset_key: &str, ref_str: &str| -> Option<PathBuf> {
+        // 1. Try exact match first
+        if let Some(path) = asset_paths.get(&(asset_key.to_string(), ref_str.to_string())) {
+            return Some(path.clone());
+        }
+
+        // 2. LPM: try without subpath (whole-repo dependency)
+        let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+        if !subpath.is_empty() {
+            if let Some(path) = asset_paths.get(&(repo_url.to_string(), ref_str.to_string())) {
+                return Some(path.join(subpath));
+            }
+        }
+
+        // 3. Find any entry from the same repo (for subpath-only dependencies)
+        // e.g., pcb.toml has "gitlab.com/.../Device.kicad_sym" but we need "power.kicad_sym"
+        for ((key, key_ref), path) in asset_paths.iter() {
+            if key_ref != ref_str {
+                continue;
+            }
+            let (key_repo, key_subpath) = git::split_asset_repo_and_subpath(key);
+            if key_repo == repo_url && !key_subpath.is_empty() {
+                // Found another subpath from same repo - use repo root + our subpath
+                // path points to key_subpath, so we need to go up to repo root
+                if let Some(repo_root) = path.parent() {
+                    return Some(repo_root.join(subpath));
+                }
+            }
+        }
+
+        None
+    };
+
     // Build deps map for a package
     let build_map = |base_dir: &Path,
                      pkg_deps: &BTreeMap<String, DependencySpec>,
@@ -630,10 +691,10 @@ fn build_resolution_map(
                 map.insert(url.clone(), path);
             }
         }
-        for (url, asset_spec) in pkg_assets {
+        for (asset_key, asset_spec) in pkg_assets {
             if let Ok(ref_str) = extract_asset_ref(asset_spec) {
-                if let Some(path) = asset_paths.get(&(url.clone(), ref_str)) {
-                    map.insert(url.clone(), path.clone());
+                if let Some(path) = get_asset_path(asset_key, &ref_str) {
+                    map.insert(asset_key.clone(), path);
                 }
             }
         }
@@ -1017,48 +1078,54 @@ fn read_manifest_from_path(pcb_toml_path: &Path) -> Result<PackageManifest> {
 /// - Are leaf nodes (no transitive dependencies)
 /// - Don't participate in MVS (each ref is isolated)
 /// - Version/ref used literally as git tag (no v-prefix logic)
+/// Fetch an asset repository, handling subpath dependencies
+///
+/// The asset_key may include a subpath (e.g., "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty").
+/// The full repo is cached at ~/.pcb/cache/{repo}/{ref}/, but only the subpath is vendored and returned.
 ///
 /// Resolution order:
-/// 1. Patches (always)
-/// 2. Vendor directory (always)
-/// 3. Cache (only if !offline)
+/// 1. Patches (use asset_key for lookup)
+/// 2. Vendor directory: vendor/{repo}/{ref}/{subpath}/
+/// 3. Cache: cache/{repo}/{ref}/, return subpath within it
 /// 4. Network fetch (only if !offline)
 fn fetch_asset_repo(
     workspace_info: &WorkspaceInfo,
-    module_path: &str,
+    asset_key: &str,
     ref_str: &str,
     offline: bool,
 ) -> Result<PathBuf> {
-    // 1. Check if this module is patched with a local path
-    if let Some(patch) = workspace_info.config.patch.get(module_path) {
+    let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+
+    // 1. Check if this asset is patched with a local path (use full asset_key for lookup)
+    if let Some(patch) = workspace_info.config.patch.get(asset_key) {
         let patched_path = workspace_info.root.join(&patch.path);
 
         println!("      Using patched source: {}", patch.path);
 
-        // Verify patch path exists
         if !patched_path.exists() {
             anyhow::bail!(
                 "Asset '{}' is patched to a non-existent path\n  \
                 Patch path: {}",
-                module_path,
+                asset_key,
                 patched_path.display()
             );
         }
 
-        // Assets: ignore pcb.toml if present (no validation needed)
         return Ok(patched_path);
     }
 
     // Open cache index
     let index = CacheIndex::open()?;
 
-    // 2. Check vendor directory (before cache - vendor is the committed source of truth)
-    let vendor_dir = workspace_info
-        .root
-        .join("vendor")
-        .join(module_path)
-        .join(ref_str);
-    if vendor_dir.exists() && index.get_asset(module_path, ref_str).is_some() {
+    // 2. Check vendor directory: vendor/{repo}/{ref}/{subpath}/
+    let vendor_base = workspace_info.root.join("vendor").join(repo_url).join(ref_str);
+    let vendor_dir = if subpath.is_empty() {
+        vendor_base.clone()
+    } else {
+        vendor_base.join(subpath)
+    };
+
+    if vendor_dir.exists() && index.get_asset(repo_url, subpath, ref_str).is_some() {
         println!("        Vendored");
         return Ok(vendor_dir);
     }
@@ -1068,36 +1135,52 @@ fn fetch_asset_repo(
         anyhow::bail!(
             "Asset {} @ {} not vendored (offline mode)\n  \
             Run `pcb vendor` to vendor dependencies for offline builds",
-            module_path,
+            asset_key,
             ref_str
         );
     }
 
-    // 4. Check cache directory: ~/.pcb/cache/{module_path}/{ref}/
+    // 4. Check cache: full repo at cache/{repo}/{ref}/, target is subpath within it
     let cache = cache_base();
-    let checkout_dir = cache.join(module_path).join(ref_str);
+    let repo_cache_dir = cache.join(repo_url).join(ref_str);
+    let target_path = if subpath.is_empty() {
+        repo_cache_dir.clone()
+    } else {
+        repo_cache_dir.join(subpath)
+    };
 
-    // Check if already fetched (index entry + directory exists)
-    if index.get_asset(module_path, ref_str).is_some() && checkout_dir.exists() {
+    // Check if subpath already indexed and exists in cache
+    if index.get_asset(repo_url, subpath, ref_str).is_some() && target_path.exists() {
         println!("        Cached");
-        return Ok(checkout_dir);
+        return Ok(target_path);
     }
 
-    // 5. Slow path: use sparse checkout to fetch the asset repo (network)
-    println!("        Cloning (sparse checkout)");
+    // 5. Ensure base repo is fetched (sparse checkout the full repo once)
+    if !repo_cache_dir.join(".git").exists() {
+        println!("        Cloning (sparse checkout)");
+        ensure_sparse_checkout(&repo_cache_dir, repo_url, ref_str, false)?;
+    }
 
-    let package_root = ensure_sparse_checkout(&checkout_dir, module_path, ref_str, false)?;
+    // Verify subpath exists in the cloned repo
+    if !subpath.is_empty() && !target_path.exists() {
+        anyhow::bail!(
+            "Subpath '{}' not found in {}@{}",
+            subpath,
+            repo_url,
+            ref_str
+        );
+    }
 
-    // Compute and store content hash
+    // Compute and store content hash on subpath only
     print!("        Computing hashes... ");
     std::io::Write::flush(&mut std::io::stdout())?;
 
-    let content_hash = compute_content_hash_from_dir(&package_root)?;
-    index.set_asset(module_path, ref_str, &content_hash)?;
+    let content_hash = compute_content_hash_from_dir(&target_path)?;
+    index.set_asset(repo_url, subpath, ref_str, &content_hash)?;
 
     println!("done");
 
-    Ok(package_root)
+    Ok(target_path)
 }
 
 /// Print a tree view of the dependency graph (cargo tree style)
@@ -1781,27 +1864,32 @@ fn update_lockfile(
         }
     }
 
-    // Process assets
-    for (module_path, ref_str) in asset_paths.keys() {
-        // Check if vendored
-        let vendor_dir = workspace_root
-            .join("vendor")
-            .join(module_path)
-            .join(ref_str);
+    // Process assets (asset_key includes subpath)
+    for (asset_key, ref_str) in asset_paths.keys() {
+        let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+
+        // Check if vendored: vendor/{repo}/{ref}/{subpath}
+        let vendor_base = workspace_root.join("vendor").join(repo_url).join(ref_str);
+        let vendor_dir = if subpath.is_empty() {
+            vendor_base
+        } else {
+            vendor_base.join(subpath)
+        };
         if vendor_dir.exists() {
             verified_count += 1;
             continue;
         }
 
         // Not vendored - must be in cache
-        let content_hash = index.get_asset(module_path, ref_str).ok_or_else(|| {
-            anyhow::anyhow!("Missing cache entry for {}@{}", module_path, ref_str)
+        let content_hash = index.get_asset(repo_url, subpath, ref_str).ok_or_else(|| {
+            anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str)
         })?;
 
-        if lockfile.get(module_path, ref_str).is_none() {
+        // Lockfile entry uses full asset_key (includes subpath)
+        if lockfile.get(asset_key, ref_str).is_none() {
             added_count += 1;
             lockfile.insert(LockEntry {
-                module_path: module_path.clone(),
+                module_path: asset_key.clone(),
                 version: ref_str.clone(),
                 content_hash,
                 manifest_hash: None,

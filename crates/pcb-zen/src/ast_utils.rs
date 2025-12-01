@@ -21,7 +21,11 @@ pub fn skip_vendor(entry: &DirEntry) -> bool {
 ///
 /// The callback `f` is called for each unquoted string literal found.
 /// This handles nested expressions including Dot (member access), Index,
-/// Call arguments, If expressions, List, Tuple, and Dict.
+/// Call arguments, If expressions, List, Tuple, Dict, and FString templates.
+///
+/// For f-strings, the format template string is passed to the callback with `{}`
+/// markers in place of interpolated expressions. This allows extracting static
+/// portions of the string for analysis (e.g., asset path detection).
 pub fn visit_string_literals<F>(expr: &starlark_syntax::syntax::ast::AstExpr, f: &mut F)
 where
     F: FnMut(&str, &starlark_syntax::syntax::ast::AstExpr),
@@ -36,6 +40,17 @@ where
 
     // Recurse into subexpressions
     match &expr.node {
+        ExprP::FString(fstring) => {
+            // Extract the format template string (with {} markers for interpolations)
+            // This allows detecting static asset paths even in f-strings
+            let template = &fstring.format.node;
+            f(template, expr);
+
+            // Also recurse into the interpolated expressions
+            for e in &fstring.expressions {
+                visit_string_literals(e, f);
+            }
+        }
         ExprP::Call(_, args) => {
             for arg in &args.args {
                 let arg_expr = match &arg.node {
@@ -73,6 +88,11 @@ where
                 visit_string_literals(k, f);
                 visit_string_literals(v, f);
             }
+        }
+        ExprP::Op(left, _, right) => {
+            // Handle binary operations like string concatenation ("a" + "b")
+            visit_string_literals(left, f);
+            visit_string_literals(right, f);
         }
         _ => {}
     }

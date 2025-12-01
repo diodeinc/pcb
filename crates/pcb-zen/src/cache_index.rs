@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use crate::git;
 
 /// Bump this when changing table schemas to auto-reset the cache.
-const SCHEMA_VERSION: i32 = 2;
+/// v3: Added subpath column to assets table for subpath asset dependencies
+const SCHEMA_VERSION: i32 = 3;
 
 pub struct CacheIndex {
     conn: Connection,
@@ -49,9 +50,10 @@ impl CacheIndex {
             );
             CREATE TABLE IF NOT EXISTS assets (
                 module_path TEXT NOT NULL,
+                subpath TEXT NOT NULL,
                 ref_str TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
-                PRIMARY KEY (module_path, ref_str)
+                PRIMARY KEY (module_path, subpath, ref_str)
             );
             CREATE TABLE IF NOT EXISTS remote_packages (
                 repo_url TEXT NOT NULL,
@@ -106,13 +108,13 @@ impl CacheIndex {
         Ok(())
     }
 
-    // Assets (no manifest hash)
+    // Assets (no manifest hash, with optional subpath)
 
-    pub fn get_asset(&self, module_path: &str, ref_str: &str) -> Option<String> {
+    pub fn get_asset(&self, module_path: &str, subpath: &str, ref_str: &str) -> Option<String> {
         self.conn
             .query_row(
-                "SELECT content_hash FROM assets WHERE module_path = ?1 AND ref_str = ?2",
-                params![module_path, ref_str],
+                "SELECT content_hash FROM assets WHERE module_path = ?1 AND subpath = ?2 AND ref_str = ?3",
+                params![module_path, subpath, ref_str],
                 |row| row.get(0),
             )
             .optional()
@@ -120,10 +122,16 @@ impl CacheIndex {
             .flatten()
     }
 
-    pub fn set_asset(&self, module_path: &str, ref_str: &str, content_hash: &str) -> Result<()> {
+    pub fn set_asset(
+        &self,
+        module_path: &str,
+        subpath: &str,
+        ref_str: &str,
+        content_hash: &str,
+    ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO assets (module_path, ref_str, content_hash) VALUES (?1, ?2, ?3)",
-            params![module_path, ref_str, content_hash],
+            "INSERT OR REPLACE INTO assets (module_path, subpath, ref_str, content_hash) VALUES (?1, ?2, ?3, ?4)",
+            params![module_path, subpath, ref_str, content_hash],
         )?;
         Ok(())
     }
@@ -351,19 +359,56 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE assets (
                 module_path TEXT NOT NULL,
+                subpath TEXT NOT NULL,
                 ref_str TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
-                PRIMARY KEY (module_path, ref_str)
+                PRIMARY KEY (module_path, subpath, ref_str)
             );",
         )?;
         let index = CacheIndex { conn };
 
-        assert!(index.get_asset("github.com/foo/bar", "v1.0.0").is_none());
+        // Whole repo (empty subpath)
+        assert!(index
+            .get_asset("gitlab.com/kicad/libraries/kicad-footprints", "", "9.0.3")
+            .is_none());
 
-        index.set_asset("github.com/foo/bar", "v1.0.0", "hash123")?;
+        index.set_asset(
+            "gitlab.com/kicad/libraries/kicad-footprints",
+            "",
+            "9.0.3",
+            "hash123",
+        )?;
 
-        let content = index.get_asset("github.com/foo/bar", "v1.0.0").unwrap();
+        let content = index
+            .get_asset("gitlab.com/kicad/libraries/kicad-footprints", "", "9.0.3")
+            .unwrap();
         assert_eq!(content, "hash123");
+
+        // Subpath asset
+        index.set_asset(
+            "gitlab.com/kicad/libraries/kicad-footprints",
+            "Resistor_SMD.pretty",
+            "9.0.3",
+            "subpath_hash",
+        )?;
+
+        let subpath_content = index
+            .get_asset(
+                "gitlab.com/kicad/libraries/kicad-footprints",
+                "Resistor_SMD.pretty",
+                "9.0.3",
+            )
+            .unwrap();
+        assert_eq!(subpath_content, "subpath_hash");
+
+        // Different subpaths don't conflict
+        assert!(index
+            .get_asset(
+                "gitlab.com/kicad/libraries/kicad-footprints",
+                "Capacitor_SMD.pretty",
+                "9.0.3"
+            )
+            .is_none());
 
         Ok(())
     }
