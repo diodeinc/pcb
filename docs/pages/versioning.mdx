@@ -1,0 +1,436 @@
+---
+title: "Versioning"
+description: "Principles of dependency versioning for PCB designs"
+---
+
+A version identifies a specific, immutable snapshot of a package's source code.
+Versions give engineers a precise language for specifying requirements: when a
+package declares a dependency on `stdlib@0.3.2`, any engineer building it will
+use exactly that version, producing identical results regardless of when or where
+the build runs.
+
+## Principles
+
+The package system is built on three principles: compatibility, repeatability, and
+cooperation. These principles reinforce each other and guide every design decision.
+
+### Compatibility
+
+<Info>
+The meaning of a package version should not change over time.
+</Info>
+
+**Semantic versioning** encodes compatibility promises in version numbers:
+
+- **Patch versions** (0.3.1 → 0.3.2): Metadata changes only. No changes to
+  connectivity, layout, or electrical behavior. Examples: updating documentation,
+  fixing a typo in a property value, adding manufacturer aliases.
+- **Minor versions** (0.3.x → 0.4.0): New functionality that doesn't break existing
+  designs. Examples: adding optional pins, new configuration options, additional
+  footprint variants.
+- **Major versions** (0.x → 1.0): Breaking changes that may require design updates.
+  Examples: changing pin definitions, restructuring interfaces, removing deprecated
+  features.
+
+For pre-1.0 packages, minor versions (0.3 vs 0.4) are treated as breaking changes,
+following the convention that early development may have frequent API changes.
+
+**Semver families** group compatible versions together. Within a family, any version
+can substitute for any other without breaking dependent code:
+
+```
+v0.3.x family: 0.3.0, 0.3.1, 0.3.2, ...  (compatible)
+v0.4.x family: 0.4.0, 0.4.1, ...          (compatible)
+v0.3.x and v0.4.x: different families     (potentially incompatible)
+```
+
+When a build requires multiple versions from the same family, the system selects the
+highest version. This is safe precisely because compatibility guarantees that newer
+versions in a family work everywhere older versions did.
+
+### Repeatability
+
+<Info>
+The result of a build should not change over time.
+</Info>
+
+Given the same source files, a build should produce the same output whether it runs
+today, next month, or next year. Time should not be an input to the build process.
+
+Repeatability has two components:
+
+**Version selection must be deterministic.** Given a set of dependencies, the system
+must always select the same versions. This rules out "latest compatible version"
+resolution that depends on what versions exist at build time.
+
+**Selected versions must be immutable.** Once selected, a version's contents cannot
+change. This rules out mutable references like branches or tags that can be moved.
+
+The package system achieves repeatability through:
+
+1. **Minimal Version Selection (MVS)**: Select the *minimum* version that satisfies
+   all constraints. The selected version is determined entirely by the dependency
+   graph, not by what versions happen to exist on remote servers.
+
+2. **Lockfiles (`pcb.sum`)**: Record the exact versions and cryptographic hashes of
+   all dependencies. Subsequent builds verify against the lockfile rather than
+   resolving again.
+
+3. **Content hashing**: Every package version is identified by a BLAKE3 hash of its
+   contents. If the contents change (even with the same version tag), the hash changes,
+   and the build fails verification.
+
+### Cooperation
+
+<Info>
+To maintain the package ecosystem, we must all work together.
+</Info>
+
+Technical mechanisms can enforce compatibility and repeatability, but they cannot
+create them. A version number is a *promise* from the package author to their users.
+The system trusts that authors will:
+
+- Follow semantic versioning conventions
+- Test changes before releasing new versions
+- Avoid breaking changes within a semver family
+- Communicate clearly when breaking changes are necessary
+
+In return, the system provides tools that make cooperation easier:
+
+- **Gradual migration**: Multiple major versions can coexist in a single build,
+  allowing dependent packages to upgrade at their own pace
+- **Publishing workflow**: The `pcb publish` command validates packages before
+  release, catching common mistakes early
+
+No amount of clever algorithms can fix a package that violates its compatibility
+promises. The goal is to make keeping promises easy and breaking them hard.
+
+## Coexisting Versions
+
+Sometimes breaking changes are necessary. A component library might need to
+restructure its pin definitions, or the stdlib might change how units are
+represented. When this happens, packages that depend on the old API cannot
+immediately upgrade—they need time to adapt.
+
+The package system supports **multiple major versions in a single build**. If your
+workspace contains:
+
+```toml
+# Board WV0001 (not yet migrated)
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3"
+
+# Board WV0002 (migrated to new API)
+[dependencies]
+"github.com/diodeinc/stdlib" = "1.0"
+```
+
+Both boards can build together. The system maintains separate copies of
+`stdlib@0.3.x` and `stdlib@1.0.x`, each used by the boards that require them.
+Types and values from different major versions are distinct and cannot be mixed.
+
+This approach has two key benefits:
+
+**No flag day upgrades.** Teams can migrate board-by-board over weeks or months,
+validating each migration before moving to the next. The old version remains
+available as long as any board needs it.
+
+**Diamond dependencies work.** If Board A uses Library X (stdlib 0.3) and Library Y
+(stdlib 1.0), both libraries function correctly. Library X sees stdlib 0.3 types,
+Library Y sees stdlib 1.0 types, and the board sees whatever version it declares.
+
+The limitation is that types from different major versions are incompatible. A
+`Net` from stdlib 0.3 cannot be passed to a function expecting a stdlib 1.0 `Net`.
+This is intentional—major versions represent breaking changes, and the system
+enforces that boundary.
+
+## Minimal Version Selection
+
+Most package managers (npm, Cargo, pip) use SAT solvers to find the newest versions
+that satisfy all constraints. This approach has a fundamental problem: the result
+depends on what versions exist at resolution time. If a new version is published
+between two builds, the resolver might select it, changing your dependencies without
+any change to your code.
+
+SAT solvers also introduce complexity. When constraints conflict, the solver must
+backtrack and try alternative versions. This can be slow, and when it fails, the
+error messages are often inscrutable—the solver tried thousands of combinations
+and none worked.
+
+Minimal Version Selection (MVS) takes a different approach: instead of finding
+the newest versions that work, find the *minimum* versions that each package
+explicitly requires. This simple change has profound consequences.
+
+### How MVS Works
+
+Consider this dependency graph:
+
+```
+Board
+├── stdlib >= 0.3
+└── regulator >= 1.0
+    └── stdlib >= 0.3.2
+```
+
+The Board requires `stdlib >= 0.3.0`. The regulator requires `stdlib >= 0.3.2`.
+MVS selects `stdlib@0.3.2`—the minimum version that satisfies both constraints.
+
+Even if `stdlib@0.3.9` exists and is compatible, MVS chooses 0.3.2 because that's
+what the dependencies explicitly require. The existence of newer versions is
+irrelevant.
+
+### Why Minimum, Not Maximum?
+
+This seems counterintuitive. Wouldn't you want the newest compatible version with
+all its bug fixes? The key insight is that **the author tested with specific versions**.
+
+When the regulator author published version 1.0.0, they tested it with `stdlib@0.3.2`.
+They know it works with that version. They *hope* it works with 0.3.9, but they
+haven't tested it. By selecting the minimum, MVS chooses the versions that were
+actually tested together.
+
+If you want newer versions, you explicitly upgrade:
+
+```toml
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3.9"
+```
+
+Now MVS selects 0.3.9 because *you* require it. You're taking responsibility for
+testing with that version.
+
+### Properties of MVS
+
+**Deterministic.** The selected versions depend only on the dependency graph, not
+on what versions exist remotely. Two engineers building the same code get the
+same versions, even if one builds months later when new versions exist.
+
+**No backtracking.** MVS never needs to "try" a version and backtrack if it fails.
+It computes the answer directly: for each package, find the maximum of the minimum
+versions required by all dependents.
+
+**Understandable.** You can compute the result by hand. For each package, look at
+every place it's required and take the highest version. That's it.
+
+**Fast.** Linear in the size of the dependency graph. No exponential search space.
+
+### Resolution Algorithm
+
+1. **Seed**: Collect direct dependencies from all workspace members. Group by
+   (package path, semver family). Initialize each family to the highest version
+   explicitly required.
+
+2. **Discover**: Fetch manifests for selected versions. For each transitive
+   dependency, if it requires a higher version within an existing family, upgrade.
+   Repeat until no changes (fixed point).
+
+3. **Build closure**: Trace the dependency graph from workspace roots using final
+   versions. This filters out any versions that were superseded during discovery.
+
+**Example with multiple semver families:**
+
+```
+WV0001: stdlib = 0.2.13
+WV0002: stdlib = 0.3.2, regulator = 1.0
+WV0003: stdlib = 0.3.1
+regulator@1.0.0: stdlib = 0.3.0
+
+Result:
+  v0.2.x family → stdlib@0.2.13
+  v0.3.x family → stdlib@0.3.2 (max of 0.3.2, 0.3.1, 0.3.0)
+```
+
+Both versions coexist in the final build because they're in different semver families.
+
+## Import Paths as Identity
+
+Import paths serve as globally unique package identifiers:
+
+```python
+load("github.com/diodeinc/stdlib/units.zen", "Voltage")
+load("github.com/myorg/components/capacitor.zen", "Capacitor")
+```
+
+This design has several benefits:
+
+**No central registry.** Anyone can publish packages to their own repository without
+coordinating names. There's no competition for short names or namespacing conflicts.
+
+**Unambiguous origin.** The import path tells you exactly where code comes from.
+When reading unfamiliar code, you can immediately identify package ownership.
+
+**Zero-configuration.** A file's imports fully specify its dependencies. No external
+configuration is needed to understand what a module requires.
+
+Versions are intentionally *not* embedded in import paths. Instead, the `pcb.toml`
+manifest declares which version of each package to use:
+
+```toml
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.3"
+"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
+```
+
+This separation means:
+- Import statements remain stable across version upgrades
+- Version changes are localized to manifest files
+- The same source file can work with different versions in different contexts
+
+## Lockfiles
+
+The lockfile (`pcb.sum`) records exact versions and cryptographic hashes:
+
+```
+github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
+github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
+github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0 h1:ghi789jkl012...
+github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0/pcb.toml h1:mno345pqr678...
+```
+
+Each dependency has two entries:
+- **Content hash**: BLAKE3 hash of the package's canonical tar archive
+- **Manifest hash**: BLAKE3 hash of the package's `pcb.toml` file
+
+The lockfile provides:
+
+**Reproducibility.** Any build using this lockfile will use exactly these versions
+with exactly these contents, regardless of what versions exist upstream.
+
+**Integrity verification.** If a package's contents change (whether through
+tampering, tag mutation, or repository corruption), the hash won't match and the
+build fails.
+
+**Efficient updates.** When dependencies change, only new entries are added. The
+lockfile accumulates entries over time, never automatically deleting old ones.
+Use `pcb update --tidy` to remove unused entries.
+
+**Commit the lockfile to version control.** This ensures all engineers and CI
+systems use identical dependencies.
+
+## Pseudo-Versions
+
+Sometimes you need to depend on unreleased code—a bug fix that hasn't been tagged,
+or a feature branch under development. Pseudo-versions provide a way to reference
+specific commits while maintaining version ordering.
+
+Format: `v<base>-0.<timestamp>-<commit>`
+
+```toml
+[dependencies]
+# Branch reference - resolved to pseudo-version
+"github.com/diodeinc/stdlib" = { branch = "main" }
+
+# Specific commit
+"github.com/diodeinc/stdlib" = { rev = "a1b2c3d4" }
+```
+
+When resolved, these become pseudo-versions like:
+```
+v0.3.15-0.20251120004415-137e2dcabc28
+```
+
+The base version (0.3.15) is the next patch version after the most recent tag
+reachable from that commit. This ensures pseudo-versions sort correctly: they're
+newer than the tag they follow but older than the next official release.
+
+Pseudo-versions participate fully in MVS. If one package requires `stdlib@0.3.14`
+and another requires the pseudo-version above, MVS selects the pseudo-version
+(it's higher). This enables testing unreleased fixes without breaking version
+resolution.
+
+**Use pseudo-versions sparingly.** They represent unreleased, potentially unstable
+code. For production builds, prefer tagged releases.
+
+## Commands
+
+### pcb migrate
+
+Converts a V1 workspace to V2 format. Updates `pcb.toml` manifests and
+rewrites `.zen` files to use the new import syntax.
+
+```bash
+pcb migrate                  # Migrate current workspace
+pcb migrate ./path/to/workspace
+```
+
+The command:
+1. Detects the workspace root and git repository
+2. Converts `pcb.toml` files to V2 format (adds `pcb-version`, converts `[packages]` to `[dependencies]`)
+3. Rewrites `.zen` files (expands aliases to full URLs, fixes paths)
+
+Review changes with `git diff` before committing.
+
+### pcb build
+
+Builds a board or workspace member. Automatically resolves dependencies,
+fetches packages, and verifies the lockfile.
+
+```bash
+pcb build                    # Build default board
+pcb build boards/WV0002      # Build specific board
+pcb build --offline          # Build using only cached/vendored packages
+```
+
+On first build, `pcb.sum` is created with resolved versions and content hashes.
+Subsequent builds verify against the lockfile.
+
+### pcb update
+
+Updates dependencies to newer versions.
+
+```bash
+pcb update                   # Update all dependencies
+pcb update stdlib            # Update specific package
+pcb update --tidy            # Remove unused lockfile entries
+```
+
+Non-breaking updates (within the same semver family) are applied automatically.
+Breaking updates are shown separately, and you can interactively select which
+ones to apply.
+
+### pcb publish
+
+Publishes packages by creating annotated git tags. Discovers which packages
+have changed since their last published version and tags them.
+
+```bash
+pcb publish                  # Publish all changed packages
+pcb publish --force          # Skip preflight checks
+```
+
+A package needs publishing if:
+- No version tag exists (unpublished)
+- Content hash differs from the published tag
+- Manifest (`pcb.toml`) hash differs from the published tag
+
+Versions are computed automatically:
+- **Unpublished**: starts at `0.1.0`
+- **0.x packages**: bumps minor (`0.3.2` → `0.4.0`)
+- **1.x+ packages**: bumps patch (`1.2.3` → `1.2.4`)
+
+Packages with interdependencies are published in waves—packages with no dirty
+dependencies first, then their dependents after `pcb.toml` files are updated.
+
+### pcb info
+
+Displays workspace and package information.
+
+```bash
+pcb info                     # Show workspace summary
+pcb info --format json       # Machine-readable output
+```
+
+### pcb vendor
+
+Copies dependencies to a local `vendor/` directory for hermetic builds.
+
+```bash
+pcb vendor                   # Vendor all dependencies
+```
+
+You can also configure automatic vendoring in `pcb.toml`:
+
+```toml
+[workspace]
+vendor = ["github.com/diodeinc/registry/**"]
+```

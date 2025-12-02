@@ -39,7 +39,7 @@
       },
       {
         "group": "Documentation",
-        "pages": ["pages/spec"]
+        "pages": ["pages/spec", "pages/versioning"]
       }
     ]
   },
