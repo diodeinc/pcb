@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 use pcb_zen_core::DefaultFileProvider;
@@ -50,6 +51,20 @@ pub fn convert_workspace_to_v2(
         eprintln!("  ✓ Converted {}", root_pcb_toml.display());
     }
 
+    // Build glob set for member patterns
+    let glob_set = if !members.is_empty() {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in &members {
+            builder.add(Glob::new(pattern)?);
+            if let Some(exact) = pattern.strip_suffix("/*") {
+                builder.add(Glob::new(exact)?);
+            }
+        }
+        Some(builder.build()?)
+    } else {
+        None
+    };
+
     // Find and convert all member pcb.toml files (including newly created ones)
     let walker = WalkBuilder::new(workspace_root)
         .hidden(true)
@@ -60,10 +75,22 @@ pub fn convert_workspace_to_v2(
 
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.file_name() == Some(std::ffi::OsStr::new("pcb.toml")) && path != root_pcb_toml {
-            convert_pcb_toml_to_v2(path, None, None, &[])?;
-            eprintln!("  ✓ Converted {}", path.display());
+        if path.file_name() != Some(std::ffi::OsStr::new("pcb.toml")) || path == root_pcb_toml {
+            continue;
         }
+
+        // Check if path matches member patterns
+        if let Some(ref glob_set) = glob_set {
+            let Ok(rel_path) = path.parent().unwrap_or(path).strip_prefix(workspace_root) else {
+                continue;
+            };
+            if !glob_set.is_match(rel_path) {
+                continue;
+            }
+        }
+
+        convert_pcb_toml_to_v2(path, None, None, &[])?;
+        eprintln!("  ✓ Converted {}", path.display());
     }
 
     Ok(())
@@ -192,6 +219,7 @@ fn convert_pcb_toml_to_v2(
             members: members.to_vec(),
             default_board,
             vendor: vec!["github.com/diodeinc/registry/**".to_string()],
+            exclude: Vec::new(),
         });
     } else if let Some(mut ws) = config.workspace.take() {
         // Member package - set pcb-version

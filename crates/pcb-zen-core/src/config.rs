@@ -252,6 +252,11 @@ pub struct WorkspaceConfig {
     /// Example: ["github.com/diodeinc/registry/*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vendor: Vec<String>,
+
+    /// Patterns to exclude from member discovery (supports globs, applied after members)
+    /// Example: ["modules/deprecated/*", "boards/test-*"]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
 }
 
 impl Default for WorkspaceConfig {
@@ -265,6 +270,7 @@ impl Default for WorkspaceConfig {
             default_board: None,
             members: default_members(),
             vendor: Vec::new(),
+            exclude: Vec::new(),
         }
     }
 }

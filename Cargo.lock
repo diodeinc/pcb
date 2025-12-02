@@ -3031,6 +3031,7 @@ dependencies = [
  "dirs",
  "duct",
  "env_logger",
+ "globset",
  "gltfpack-sys",
  "ignore",
  "indicatif",

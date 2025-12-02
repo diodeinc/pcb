@@ -590,6 +590,7 @@ pub fn get_workspace_info(
 
     // First pass: discover all package directories
     let patterns = &workspace_config.members;
+    let exclude_patterns = &workspace_config.exclude;
     let mut package_dirs: Vec<(PathBuf, String, PcbToml)> = Vec::new(); // (dir, url, config)
 
     if !patterns.is_empty() {
@@ -601,6 +602,20 @@ pub fn get_workspace_info(
             }
         }
         let glob_set = builder.build()?;
+
+        // Build exclude glob set
+        let exclude_glob_set = if !exclude_patterns.is_empty() {
+            let mut exclude_builder = GlobSetBuilder::new();
+            for pattern in exclude_patterns {
+                exclude_builder.add(Glob::new(pattern)?);
+                if let Some(exact) = pattern.strip_suffix("/*") {
+                    exclude_builder.add(Glob::new(exact)?);
+                }
+            }
+            Some(exclude_builder.build()?)
+        } else {
+            None
+        };
 
         for entry in WalkDir::new(&workspace_root)
             .into_iter()
@@ -622,6 +637,12 @@ pub fn get_workspace_info(
             }
             if !glob_set.is_match(rel_path) {
                 continue;
+            }
+            // Apply exclude patterns after member matching
+            if let Some(ref exclude_set) = exclude_glob_set {
+                if exclude_set.is_match(rel_path) {
+                    continue;
+                }
             }
             let pkg_config = PcbToml::from_file(file_provider, &pkg_toml_path)?;
             let rel_str = rel_path.to_string_lossy();
