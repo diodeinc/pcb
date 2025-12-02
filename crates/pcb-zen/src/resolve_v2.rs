@@ -24,6 +24,18 @@ enum PathDepError {
     MissingVersion { url: String, path: String },
 }
 
+/// Compute the semver family for a version
+///
+/// For 0.x versions, the minor version determines the family (0.2.x and 0.3.x are different families)
+/// For 1.x+ versions, the major version determines the family
+pub fn semver_family(v: &Version) -> String {
+    if v.major == 0 {
+        format!("v0.{}", v.minor)
+    } else {
+        format!("v{}", v.major)
+    }
+}
+
 /// Module line identifier for MVS grouping
 ///
 /// A module line represents a semver family:
@@ -37,13 +49,10 @@ pub struct ModuleLine {
 
 impl ModuleLine {
     fn new(path: String, version: &Version) -> Self {
-        let family = if version.major == 0 {
-            format!("v0.{}", version.minor)
-        } else {
-            format!("v{}", version.major)
-        };
-
-        ModuleLine { path, family }
+        ModuleLine {
+            path,
+            family: semver_family(version),
+        }
     }
 }
 

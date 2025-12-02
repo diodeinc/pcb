@@ -8,7 +8,7 @@ use clap::Args;
 use colored::Colorize;
 use inquire::MultiSelect;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen::{get_all_versions_for_repo, git};
+use pcb_zen::{get_all_versions_for_repo, git, semver_family};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
@@ -21,10 +21,6 @@ pub struct UpdateArgs {
     /// Path to workspace (defaults to current directory)
     #[arg(default_value = ".")]
     pub path: PathBuf,
-
-    /// Include breaking version updates (prompts for selection)
-    #[arg(long, short = 'b')]
-    pub breaking: bool,
 
     /// Remove unused entries from lockfile
     #[arg(long)]
@@ -111,8 +107,8 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     // Collect URLs to apply
     let mut urls_to_apply: HashSet<&str> = non_breaking.iter().map(|u| u.url.as_str()).collect();
 
-    // Breaking updates require --breaking flag and interactive selection
-    if !breaking.is_empty() && args.breaking {
+    // Breaking updates require interactive selection
+    if !breaking.is_empty() {
         let options: Vec<String> = breaking
             .iter()
             .map(|u| format!("{} {} → {}", u.url, u.current, u.new_version))
@@ -127,14 +123,12 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
                 urls_to_apply.insert(&u.url);
             }
         }
-    } else if !breaking.is_empty() {
-        println!("{}", "Use --breaking to include breaking updates.".cyan());
     }
 
     // Apply all matching updates
     let updates_to_apply: Vec<_> = pending
         .iter()
-        .filter(|u| urls_to_apply.contains(u.url.as_str()) && (args.breaking || !u.is_breaking))
+        .filter(|u| urls_to_apply.contains(u.url.as_str()))
         .collect();
 
     if updates_to_apply.is_empty() {
@@ -327,18 +321,6 @@ fn extract_version(spec: &DependencySpec) -> Option<Version> {
             }
             d.version.as_ref().and_then(|v| Version::parse(v).ok())
         }
-    }
-}
-
-/// Compute the semver family for a version
-///
-/// For 0.x versions, the minor version determines the family (0.2.x and 0.3.x are different families)
-/// For 1.x+ versions, the major version determines the family
-fn semver_family(v: &Version) -> String {
-    if v.major == 0 {
-        format!("v0.{}", v.minor)
-    } else {
-        format!("v{}", v.major)
     }
 }
 

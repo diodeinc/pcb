@@ -14,11 +14,12 @@ fn git_global() -> Command {
 }
 
 fn run_silent(mut cmd: Command) -> anyhow::Result<()> {
-    let status = cmd.stdout(Stdio::null()).stderr(Stdio::null()).status()?;
-    if status.success() {
+    let out = cmd.output()?;
+    if out.status.success() {
         Ok(())
     } else {
-        anyhow::bail!("git command failed")
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("git command failed: {}", stderr.trim())
     }
 }
 
@@ -27,7 +28,8 @@ fn run_stdout(mut cmd: Command) -> anyhow::Result<String> {
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        anyhow::bail!("git command failed")
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("git command failed: {}", stderr.trim())
     }
 }
 
