@@ -24,6 +24,7 @@ use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
 };
 
+pub use cache_index::get_all_versions_for_repo;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve_v2::{resolve_dependencies, vendor_deps, ResolutionResult, VendorResult};

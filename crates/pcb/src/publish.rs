@@ -4,9 +4,9 @@
 //! content and manifest hashes.
 
 use anyhow::{bail, Result};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use colored::Colorize;
-use inquire::Confirm;
+use inquire::{Confirm, Select};
 use pcb_zen::workspace::{
     compute_tag_prefix, get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo,
 };
@@ -21,6 +21,35 @@ use std::path::Path;
 
 use crate::file_walker::collect_zen_files;
 
+/// Version bump type for publishing
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+pub enum BumpType {
+    /// Bug fixes only (x.y.Z)
+    Patch,
+    /// New features, backwards compatible (x.Y.0)
+    Minor,
+    /// Breaking changes (X.0.0)
+    Major,
+}
+
+impl std::fmt::Display for BumpType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BumpType::Patch => write!(f, "Patch"),
+            BumpType::Minor => write!(f, "Minor"),
+            BumpType::Major => write!(f, "Major"),
+        }
+    }
+}
+
+/// Strategy for determining version bumps across waves
+enum BumpStrategy {
+    /// Apply the same bump type to all packages
+    SameForAll(BumpType),
+    /// Prompt for each package individually
+    ChooseIndividually,
+}
+
 #[derive(Args, Debug)]
 #[command(about = "Publish packages by creating version tags")]
 pub struct PublishArgs {
@@ -33,6 +62,10 @@ pub struct PublishArgs {
     /// Supports hierarchical matching (e.g., 'electrical' matches 'electrical.voltage_mismatch')
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
+
+    /// Version bump type (non-interactive). Applies same bump to all packages.
+    #[arg(long, value_enum)]
+    pub bump: Option<BumpType>,
 
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
@@ -73,6 +106,35 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     let initial_commit = git::rev_parse(&workspace.root, "HEAD")
         .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?;
 
+    // Determine bump strategy (CLI flag or interactive prompt)
+    // This is used across all waves for consistency
+    let bump_strategy: BumpStrategy = if let Some(bump) = args.bump {
+        BumpStrategy::SameForAll(bump)
+    } else {
+        // Compute initial dirty packages to determine strategy
+        let initial_dirty_map = workspace.dirty_packages();
+        let dirty_packages: Vec<_> = initial_dirty_map
+            .keys()
+            .filter_map(|url| {
+                workspace
+                    .packages
+                    .get(url)
+                    .filter(|pkg| pkg.config.board.is_none())
+                    .map(|pkg| (url, pkg))
+            })
+            .collect();
+
+        if dirty_packages.is_empty() {
+            println!("{}", "No packages to publish".green());
+            return Ok(());
+        }
+
+        prompt_bump_strategy_choice(&dirty_packages)?
+    };
+
+    // Track bump types chosen for each package (accumulates across waves)
+    let mut bump_map: BTreeMap<String, BumpType> = BTreeMap::new();
+
     let mut all_tags: Vec<String> = Vec::new();
     let mut commits: Vec<String> = Vec::new();
     let mut wave = 0;
@@ -84,7 +146,56 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         // After bumping deps, modified packages will show as Uncommitted
         let dirty_map = workspace.dirty_packages();
 
-        let candidates = build_publish_candidates(&workspace, &dirty_map)?;
+        // Filter to non-board packages
+        let dirty_packages: Vec<_> = dirty_map
+            .keys()
+            .filter_map(|url| {
+                workspace
+                    .packages
+                    .get(url)
+                    .filter(|pkg| pkg.config.board.is_none())
+                    .map(|pkg| (url, pkg))
+            })
+            .collect();
+
+        if dirty_packages.is_empty() {
+            if wave == 1 {
+                println!("{}", "No packages to publish".green());
+            }
+            break;
+        }
+
+        // Find packages that need bump type selection (not yet in bump_map)
+        let new_packages: Vec<_> = dirty_packages
+            .iter()
+            .filter(|(url, _)| !bump_map.contains_key(*url))
+            .cloned()
+            .collect();
+
+        // Get bump types for new packages based on strategy
+        if !new_packages.is_empty() {
+            match &bump_strategy {
+                BumpStrategy::SameForAll(bump) => {
+                    for (url, _) in &new_packages {
+                        bump_map.insert((*url).clone(), *bump);
+                    }
+                }
+                BumpStrategy::ChooseIndividually => {
+                    // Prompt for each new package
+                    for (url, pkg) in &new_packages {
+                        if pkg.version.is_some() {
+                            let bump = prompt_single_bump(url, pkg)?;
+                            bump_map.insert((*url).clone(), bump);
+                        } else {
+                            // Unpublished packages get placeholder (will be 0.1.0)
+                            bump_map.insert((*url).clone(), BumpType::Minor);
+                        }
+                    }
+                }
+            }
+        }
+
+        let candidates = build_publish_candidates(&workspace, &dirty_map, &bump_map)?;
 
         if candidates.is_empty() {
             println!("{}", "No packages to publish".green());
@@ -288,6 +399,7 @@ fn preflight_checks(repo_root: &Path) -> Result<String> {
 fn build_publish_candidates(
     workspace: &WorkspaceInfo,
     dirty_map: &BTreeMap<String, DirtyReason>,
+    bump_map: &BTreeMap<String, BumpType>,
 ) -> Result<BTreeMap<String, PublishCandidate>> {
     workspace
         .packages
@@ -295,7 +407,8 @@ fn build_publish_candidates(
         .filter_map(|(url, pkg)| dirty_map.get(url).map(|reason| (url, pkg, reason)))
         .filter(|(_, pkg, _)| pkg.config.board.is_none())
         .map(|(url, pkg, reason)| {
-            let next_version = compute_next_version(pkg);
+            let bump = bump_map.get(url).copied().unwrap_or(BumpType::Minor);
+            let next_version = compute_next_version(pkg, bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
             // Reuse hashes from DirtyReason::Modified if available, otherwise compute
@@ -327,18 +440,140 @@ fn build_publish_candidates(
         .collect()
 }
 
-fn compute_next_version(pkg: &MemberPackage) -> Version {
+fn compute_next_version(pkg: &MemberPackage, bump: BumpType) -> Version {
     match &pkg.version {
-        None => Version::new(0, 1, 0),
+        None => Version::new(0, 1, 0), // Always 0.1.0 for unpublished
         Some(v) => {
             let current = Version::parse(v).unwrap_or_else(|_| Version::new(0, 0, 0));
-            if current.major == 0 {
-                Version::new(0, current.minor + 1, 0)
-            } else {
-                Version::new(current.major + 1, 0, 0)
+            match bump {
+                BumpType::Patch => Version::new(current.major, current.minor, current.patch + 1),
+                BumpType::Minor => Version::new(current.major, current.minor + 1, 0),
+                BumpType::Major => {
+                    if current.major == 0 {
+                        // For 0.x, "major" means bump the minor (semver convention)
+                        Version::new(0, current.minor + 1, 0)
+                    } else {
+                        Version::new(current.major + 1, 0, 0)
+                    }
+                }
             }
         }
     }
+}
+
+/// Prompt user to choose a bump strategy (same for all vs individual)
+/// Returns the strategy to use across all waves
+fn prompt_bump_strategy_choice(packages: &[(&String, &MemberPackage)]) -> Result<BumpStrategy> {
+    // Filter to only published packages (unpublished always get 0.1.0)
+    let published: Vec<_> = packages
+        .iter()
+        .filter(|(_, pkg)| pkg.version.is_some())
+        .collect();
+
+    if published.is_empty() {
+        // All packages are unpublished, no prompt needed - use minor as default
+        return Ok(BumpStrategy::SameForAll(BumpType::Minor));
+    }
+
+    // Show package list
+    println!();
+    println!(
+        "{} package(s) with unpublished changes:",
+        published.len().to_string().cyan()
+    );
+    for (url, pkg) in &published {
+        let version = pkg.version.as_deref().unwrap_or("unpublished");
+        let short_name = url.split('/').next_back().unwrap_or(url);
+        println!("  {} ({})", short_name, version);
+    }
+    println!();
+
+    // Skip "same for all" prompt if only one published package - go straight to individual
+    if published.len() == 1 {
+        return Ok(BumpStrategy::ChooseIndividually);
+    }
+
+    // Ask if same bump for all or individual
+    let strategy_options = vec!["Same bump for all", "Choose individually"];
+    let strategy = Select::new(
+        "How do you want to version these packages?",
+        strategy_options,
+    )
+    .prompt()
+    .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
+
+    if strategy == "Same bump for all" {
+        let bump = prompt_bump_type_selection()?;
+        Ok(BumpStrategy::SameForAll(bump))
+    } else {
+        Ok(BumpStrategy::ChooseIndividually)
+    }
+}
+
+/// Prompt for a single bump type selection
+fn prompt_bump_type_selection() -> Result<BumpType> {
+    let options = [
+        ("Patch (x.y.Z) - bug fixes", BumpType::Patch),
+        ("Minor (x.Y.0) - new features", BumpType::Minor),
+        ("Major (X.0.0) - breaking changes", BumpType::Major),
+    ];
+
+    let labels: Vec<&str> = options.iter().map(|(label, _)| *label).collect();
+    let selected = Select::new("Select version bump:", labels)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
+
+    Ok(options
+        .iter()
+        .find(|(label, _)| *label == selected)
+        .map(|(_, bump)| *bump)
+        .unwrap_or(BumpType::Minor))
+}
+
+/// Prompt for version bump for a single package
+fn prompt_single_bump(url: &str, pkg: &MemberPackage) -> Result<BumpType> {
+    let current = pkg
+        .version
+        .as_ref()
+        .and_then(|v| Version::parse(v).ok())
+        .unwrap_or_else(|| Version::new(0, 0, 0));
+
+    let short_name = url.split('/').next_back().unwrap_or(url);
+
+    // Build options with computed next versions
+    let patch_ver = Version::new(current.major, current.minor, current.patch + 1);
+    let minor_ver = Version::new(current.major, current.minor + 1, 0);
+    let major_ver = if current.major == 0 {
+        Version::new(0, current.minor + 1, 0)
+    } else {
+        Version::new(current.major + 1, 0, 0)
+    };
+
+    let options = if current.major == 0 {
+        // For 0.x, major bump is same as minor (both increment minor)
+        vec![
+            (format!("Patch → {}", patch_ver), BumpType::Patch),
+            (format!("Minor/Major → {}", minor_ver), BumpType::Minor),
+        ]
+    } else {
+        vec![
+            (format!("Patch → {}", patch_ver), BumpType::Patch),
+            (format!("Minor → {}", minor_ver), BumpType::Minor),
+            (format!("Major → {}", major_ver), BumpType::Major),
+        ]
+    };
+
+    let labels: Vec<&str> = options.iter().map(|(label, _)| label.as_str()).collect();
+    let prompt = format!("{} (current: {})", short_name, current);
+    let selected = Select::new(&prompt, labels)
+        .prompt()
+        .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
+
+    Ok(options
+        .iter()
+        .find(|(label, _)| label == selected)
+        .map(|(_, bump)| *bump)
+        .unwrap_or(BumpType::Minor))
 }
 
 fn compute_tag_name(pkg: &MemberPackage, version: &Version, workspace: &WorkspaceInfo) -> String {

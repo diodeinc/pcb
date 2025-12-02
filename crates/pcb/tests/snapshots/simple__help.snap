@@ -16,7 +16,7 @@ Commands:
   test     Run tests in .zen files
   migrate  Migrate PCB projects
   upgrade  Upgrade PCB projects (reserved)
-  update   Update board designs (reserved)
+  update   Update dependencies to latest compatible versions
   self     Update the pcb tool itself
   bom      Generate Bill of Materials (BOM)
   info     Display workspace and board information

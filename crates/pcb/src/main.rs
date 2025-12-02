@@ -65,7 +65,7 @@ enum Commands {
     /// Upgrade PCB projects (reserved)
     Upgrade(upgrade::UpgradeArgs),
 
-    /// Update board designs (reserved)
+    /// Update dependencies to latest compatible versions
     Update(update::UpdateArgs),
 
     /// Update the pcb tool itself

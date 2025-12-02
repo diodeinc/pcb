@@ -210,7 +210,53 @@ impl CacheIndex {
 
         Ok(())
     }
+}
 
+/// Get all available versions for packages in a repository
+///
+/// Returns a map from package_path (relative to repo) to all available versions,
+/// sorted descending (newest first). This fetches/updates the bare repo and parses
+/// all version tags.
+///
+/// For root packages (tags like `v1.0.0`), the package path is an empty string.
+/// For nested packages (tags like `path/to/pkg/v1.0.0`), the package path is `path/to/pkg`.
+///
+/// Example:
+/// - repo_url: "github.com/diodeinc/stdlib"
+/// - Returns: { "" => [0.4.0, 0.3.2, 0.3.1, ...] } (root package)
+///
+/// - repo_url: "github.com/diodeinc/registry"
+/// - Returns: { "reference/ti/tps54331" => [1.2.0, 1.1.0, 1.0.0], ... }
+pub fn get_all_versions_for_repo(repo_url: &str) -> Result<BTreeMap<String, Vec<Version>>> {
+    let bare_dir = ensure_bare_repo(repo_url)?;
+    let tags = git::list_all_tags(&bare_dir)?;
+
+    let mut packages: BTreeMap<String, Vec<Version>> = BTreeMap::new();
+    for tag in tags {
+        // Try to parse as nested package tag (path/v1.0.0)
+        if let Some((pkg_path, version)) = parse_version_tag(&tag) {
+            packages.entry(pkg_path).or_default().push(version);
+        } else if let Some(version) = parse_root_version_tag(&tag) {
+            // Root package tag (v1.0.0) - empty string as package path
+            packages.entry(String::new()).or_default().push(version);
+        }
+    }
+
+    // Sort versions descending for each package (newest first)
+    for versions in packages.values_mut() {
+        versions.sort_by(|a, b| b.cmp(a));
+    }
+
+    Ok(packages)
+}
+
+/// Parse a root package version tag (e.g., "v1.0.0" -> Version)
+fn parse_root_version_tag(tag: &str) -> Option<Version> {
+    let version_str = tag.strip_prefix('v')?;
+    Version::parse(version_str).ok()
+}
+
+impl CacheIndex {
     // Commit metadata (for pseudo-version generation)
 
     pub fn get_commit_metadata(
