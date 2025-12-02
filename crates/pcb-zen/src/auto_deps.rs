@@ -41,7 +41,7 @@ pub fn auto_add_zen_deps(
     lockfile: Option<&Lockfile>,
     offline: bool,
 ) -> Result<AutoDepsSummary> {
-    let package_imports = collect_imports_by_package(workspace_root)?;
+    let package_imports = collect_imports_by_package(workspace_root, packages)?;
     let mut summary = AutoDepsSummary::default();
 
     let index = if !offline {
@@ -174,49 +174,59 @@ fn find_matching_workspace_member(
     None
 }
 
-/// Scan .zen files and group found imports by their nearest pcb.toml
-fn collect_imports_by_package(workspace_root: &Path) -> Result<HashMap<PathBuf, CollectedImports>> {
+/// Scan .zen files in workspace member packages and group found imports by their nearest pcb.toml
+fn collect_imports_by_package(
+    workspace_root: &Path,
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+) -> Result<HashMap<PathBuf, CollectedImports>> {
     let mut result: HashMap<PathBuf, CollectedImports> = HashMap::new();
 
-    let walker = WalkBuilder::new(workspace_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .filter_entry(skip_vendor)
-        .build();
+    // Only scan directories that are part of workspace member packages
+    for member in packages.values() {
+        let walker = WalkBuilder::new(&member.dir)
+            .hidden(true)
+            .git_ignore(true)
+            .git_exclude(true)
+            .filter_entry(skip_vendor)
+            .build();
 
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if !path.is_file() || path.extension() != Some(std::ffi::OsStr::new("zen")) {
-            continue;
+        for entry in walker.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_file() || path.extension() != Some(std::ffi::OsStr::new("zen")) {
+                continue;
+            }
+
+            let Some(pcb_toml) = find_nearest_pcb_toml(path, workspace_root) else {
+                continue;
+            };
+
+            let content = std::fs::read_to_string(path)
+                .with_context(|| format!("Failed to read {}", path.display()))?;
+            let Some((aliases, urls)) = extract_imports(&content) else {
+                eprintln!("  Warning: Failed to parse {}", path.display());
+                continue;
+            };
+
+            let imports = result.entry(pcb_toml).or_default();
+            imports.aliases.extend(aliases);
+            imports.urls.extend(urls);
         }
-
-        let Some(pcb_toml) = find_nearest_pcb_toml(path) else {
-            continue;
-        };
-
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
-        let Some((aliases, urls)) = extract_imports(&content) else {
-            eprintln!("  Warning: Failed to parse {}", path.display());
-            continue;
-        };
-
-        let imports = result.entry(pcb_toml).or_default();
-        imports.aliases.extend(aliases);
-        imports.urls.extend(urls);
     }
 
     Ok(result)
 }
 
-/// Find nearest pcb.toml by walking up from a file
-fn find_nearest_pcb_toml(from: &Path) -> Option<PathBuf> {
+/// Find nearest pcb.toml by walking up from a file (stopping at workspace root)
+fn find_nearest_pcb_toml(from: &Path, workspace_root: &Path) -> Option<PathBuf> {
     let mut dir = from.parent();
     while let Some(d) = dir {
         let pcb_toml = d.join("pcb.toml");
         if pcb_toml.exists() {
             return Some(pcb_toml);
+        }
+        // Don't walk above workspace root
+        if d == workspace_root {
+            break;
         }
         dir = d.parent();
     }
