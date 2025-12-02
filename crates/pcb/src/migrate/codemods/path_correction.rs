@@ -94,7 +94,7 @@ const PATH_CORRECTIONS: &[(&str, &str)] = &[
     ),
     (
         "modules/robotics/AnalogBatteryVoltageLedBar",
-        "modules/AnalogBatteryVoltageLedBar/AnalogBatteryVoltageLedBar",
+        "modules/AnalogBatteryVoltageLedBar",
     ),
     // modules/dsp/* -> modules/*/
     (

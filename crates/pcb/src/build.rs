@@ -192,8 +192,19 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                 .collect::<Result<Vec<_>, _>>()?
         };
 
-        // For V2: collect from search paths directly (includes workspace members AND local deps)
-        file_walker::collect_zen_files(&search_paths, false)?
+        // For V2: collect from search paths, filtered to workspace members only
+        let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
+
+        // Filter to only include files within workspace member packages
+        all_zen_files
+            .into_iter()
+            .filter(|zen_path| {
+                workspace_info
+                    .packages
+                    .values()
+                    .any(|pkg| zen_path.starts_with(&pkg.dir))
+            })
+            .collect()
     } else {
         // V1 mode: collect zen files from the given paths (or current dir)
         file_walker::collect_zen_files(&args.paths, false)?
