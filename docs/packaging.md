@@ -431,11 +431,13 @@ members = ["boards/*"]
 Deterministic GNU tar with normalized metadata:
 - `mtime=0`, `uid=0`, `gid=0`, `mode=0644`
 - Username/groupname set to empty strings
-- Lexicographic ordering of entries
+- Lexicographic ordering of entries (byte comparison of full path strings)
 - Regular files only (directories implicit from paths)
 - Respects `.gitignore` via the `ignore` crate
 - Excludes nested packages (subdirectories with their own `pcb.toml`)
 - NFC Unicode normalization for cross-platform path consistency
+
+**Why GNU over PAX?** The POSIX.1-2001 PAX format offers unlimited filename length and native UTF-8 support, but includes non-deterministic fields by default (`atime`, `ctime`, PID in header paths). Achieving reproducibility with PAX requires explicit field deletion. GNU format is deterministic by default with `HeaderMode::Deterministic`, simpler to implement, and sufficient for package paths (already NFC-normalized UTF-8). PAX would only benefit paths exceeding ~256 characters or requiring extended attributes—neither applies here.
 
 Streamed directly to BLAKE3 hasher (no buffering). Same commit produces identical hash regardless of machine or remote.
 

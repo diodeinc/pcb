@@ -69,6 +69,21 @@ pub struct BuildArgs {
     pub suppress: Vec<String>,
 }
 
+/// Print success message with component count for a built schematic
+pub fn print_build_success(file_name: &str, schematic: &Schematic) {
+    let component_count = schematic
+        .instances
+        .values()
+        .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+        .count();
+    eprintln!(
+        "{} {} ({} components)",
+        pcb_ui::icons::success(),
+        file_name.with_style(Style::Green).bold(),
+        component_count
+    );
+}
+
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
 pub fn build(
@@ -237,18 +252,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                 }
             }
         } else {
-            // Print success with component count
-            let component_count = schematic
-                .instances
-                .values()
-                .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-                .count();
-            eprintln!(
-                "{} {} ({} components)",
-                pcb_ui::icons::success(),
-                file_name.with_style(Style::Green).bold(),
-                component_count
-            );
+            print_build_success(&file_name, &schematic);
         }
     }
 

@@ -26,6 +26,12 @@ pub struct PublishArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
+    /// Suppress diagnostics by kind or severity. Use 'warnings' or 'errors' for all
+    /// warnings/errors, or specific kinds like 'electrical.voltage_mismatch'.
+    /// Supports hierarchical matching (e.g., 'electrical' matches 'electrical.voltage_mismatch')
+    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
+    pub suppress: Vec<String>,
+
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -58,6 +64,9 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     } else {
         preflight_checks(&workspace.root)?
     };
+
+    // Build workspace to validate before publishing
+    build_workspace(&workspace, &args.suppress)?;
 
     let initial_commit = git::rev_parse(&workspace.root, "HEAD")
         .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?;
@@ -155,6 +164,52 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     git::push_tags(&workspace.root, &tag_refs, &remote)?;
     for tag in &all_tags {
         println!("  Pushed {}", tag.green());
+    }
+
+    Ok(())
+}
+
+fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()> {
+    println!();
+    println!("{}", "Building workspace...".cyan().bold());
+
+    // Collect all .zen files from workspace (skips vendor/, respects gitignore)
+    let zen_files = crate::file_walker::collect_zen_files(&[workspace.root.clone()], false)?;
+
+    if zen_files.is_empty() {
+        return Ok(());
+    }
+
+    // Resolve dependencies if v2 workspace
+    let resolution_result = if workspace.is_v2() {
+        let mut ws = workspace.clone();
+        let resolution = pcb_zen::resolve_dependencies(&mut ws, false)?;
+        pcb_zen::vendor_deps(&ws, &resolution, &[], None)?;
+        Some(resolution)
+    } else {
+        None
+    };
+
+    let mut has_errors = false;
+    let mut has_warnings = false;
+
+    for zen_path in &zen_files {
+        let file_name = zen_path.file_name().unwrap().to_string_lossy();
+        if let Some(schematic) = crate::build::build(
+            zen_path,
+            false,
+            crate::build::create_diagnostics_passes(suppress),
+            false,
+            &mut has_errors,
+            &mut has_warnings,
+            resolution_result.clone(),
+        ) {
+            crate::build::print_build_success(&file_name, &schematic);
+        }
+    }
+
+    if has_errors {
+        bail!("Build failed. Fix errors before publishing.");
     }
 
     Ok(())
