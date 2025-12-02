@@ -217,6 +217,39 @@ pub fn resolve_dependencies(
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
     let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
 
+    // Preseed from lockfile (opportunistic frontloading)
+    // This allows Wave 1 to start fetching known deps immediately
+    if let Some(lockfile) = &workspace_info.lockfile {
+        for entry in lockfile.iter() {
+            // Skip assets (no manifest_hash = asset)
+            if entry.manifest_hash.is_none() {
+                continue;
+            }
+
+            // Skip workspace members (resolved locally)
+            if workspace_info.packages.contains_key(&entry.module_path) {
+                continue;
+            }
+
+            // Parse version (skip invalid entries)
+            let Ok(version) = Version::parse(&entry.version) else {
+                continue;
+            };
+
+            let line = ModuleLine::new(entry.module_path.clone(), &version);
+
+            // Only insert if not already selected (shouldn't happen, but defensive)
+            if !selected.contains_key(&line) {
+                println!(
+                    "  → Adding {}@v{} (from pcb.sum)",
+                    entry.module_path, version
+                );
+                selected.insert(line.clone(), version);
+                work_queue.push_back(line);
+            }
+        }
+    }
+
     println!("\nPhase 0: Seed from workspace dependencies");
 
     // Resolve dependencies per-package
@@ -939,61 +972,87 @@ fn collect_and_fetch_assets(
     selected: &HashMap<ModuleLine, Version>,
     offline: bool,
 ) -> Result<HashMap<(String, String), PathBuf>> {
-    let mut asset_paths: HashMap<(String, String), PathBuf> = HashMap::new();
+    // Collect all (asset_key, ref) pairs from workspace + transitive deps
+    let mut all_assets: Vec<(String, String)> = Vec::new();
 
-    // Helper to fetch an asset if not already seen
-    let mut fetch_if_needed =
-        |module_path: &str, asset_spec: &pcb_zen_core::AssetDependencySpec| -> Result<()> {
-            let ref_str = extract_asset_ref(asset_spec)?;
-            let key = (module_path.to_string(), ref_str.clone());
-
-            // Skip if already processed
-            if asset_paths.contains_key(&key) {
-                return Ok(());
-            }
-
-            println!("      Fetching {}@{}", module_path, ref_str);
-
-            // Fetch the asset repo and store the resolved path
-            let path = fetch_asset_repo(workspace_info, module_path, &ref_str, offline)?;
-            asset_paths.insert(key, path);
-            Ok(())
-        };
-
-    // 1. Collect assets from workspace and member packages
     for pkg in workspace_info.packages.values() {
-        if pkg.config.assets.is_empty() {
-            continue;
-        }
-        let package_name = pkg
-            .dir
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "root".into());
-
-        println!("\n  Package: {}", package_name);
-        println!("    {} assets", pkg.config.assets.len());
-
-        for (module_path, asset_spec) in &pkg.config.assets {
-            fetch_if_needed(module_path, asset_spec)?;
+        for (path, spec) in &pkg.config.assets {
+            if let Ok(ref_str) = extract_asset_ref(spec) {
+                all_assets.push((path.clone(), ref_str));
+            }
         }
     }
 
-    // 2. Collect assets from transitive packages (via manifest cache)
     for (line, version) in selected {
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
-            if !manifest.assets.is_empty() {
-                println!("\n  Transitive: {}", line.path);
-                println!("    {} assets", manifest.assets.len());
-
-                for (module_path, asset_spec) in &manifest.assets {
-                    fetch_if_needed(module_path, asset_spec)?;
+            for (path, spec) in &manifest.assets {
+                if let Ok(ref_str) = extract_asset_ref(spec) {
+                    all_assets.push((path.clone(), ref_str));
                 }
             }
         }
     }
 
-    Ok(asset_paths)
+    if all_assets.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // Dedupe assets by (asset_key, ref)
+    let unique_assets: HashSet<_> = all_assets.into_iter().collect();
+
+    // Dedupe repos by (repo_url, ref) - multiple subpaths share the same repo
+    let mut repos_to_fetch: HashSet<(String, String)> = HashSet::new();
+    for (asset_key, ref_str) in &unique_assets {
+        let (repo_url, _) = git::split_asset_repo_and_subpath(asset_key);
+        repos_to_fetch.insert((repo_url.to_string(), ref_str.clone()));
+    }
+
+    // Print repos we're fetching
+    for (repo_url, ref_str) in &repos_to_fetch {
+        println!("  {}@{}", repo_url, ref_str);
+    }
+
+    // Fetch repos in parallel
+    let errors: Vec<_> = repos_to_fetch
+        .par_iter()
+        .filter_map(|(repo_url, ref_str)| {
+            fetch_asset_repo(workspace_info, repo_url, ref_str, offline)
+                .err()
+                .map(|e| format!("{}@{}: {}", repo_url, ref_str, e))
+        })
+        .collect();
+
+    if !errors.is_empty() {
+        anyhow::bail!("Failed to fetch assets:\n  {}", errors.join("\n  "));
+    }
+
+    // Hash and index each subpath in parallel, build result map
+    let cache = cache_base();
+    let results: Vec<_> = unique_assets
+        .par_iter()
+        .filter_map(|(asset_key, ref_str)| {
+            let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+            let target_path = cache.join(repo_url).join(ref_str).join(subpath);
+
+            if !target_path.exists() {
+                log::warn!("Asset subpath not found: {}", asset_key);
+                return None;
+            }
+
+            // Index if needed
+            if let Ok(index) = CacheIndex::open() {
+                if index.get_asset(repo_url, subpath, ref_str).is_none() {
+                    if let Ok(hash) = compute_content_hash_from_dir(&target_path) {
+                        let _ = index.set_asset(repo_url, subpath, ref_str, &hash);
+                    }
+                }
+            }
+
+            Some(((asset_key.clone(), ref_str.clone()), target_path))
+        })
+        .collect();
+
+    Ok(results.into_iter().collect())
 }
 
 /// Fetch a package from Git using sparse checkout
@@ -1144,7 +1203,7 @@ fn fetch_asset_repo(
     {
         let patched_path = workspace_info.root.join(&patch.path);
 
-        println!("      Using patched source: {}", patch.path);
+        log::debug!("Asset {} using patched source: {}", asset_key, patch.path);
 
         if !patched_path.exists() {
             anyhow::bail!(
@@ -1174,7 +1233,7 @@ fn fetch_asset_repo(
     };
 
     if vendor_dir.exists() && index.get_asset(repo_url, subpath, ref_str).is_some() {
-        println!("        Vendored");
+        log::debug!("Asset {}@{} vendored", asset_key, ref_str);
         return Ok(vendor_dir);
     }
 
@@ -1199,7 +1258,7 @@ fn fetch_asset_repo(
 
     // Check if subpath already indexed and exists in cache
     if index.get_asset(repo_url, subpath, ref_str).is_some() && target_path.exists() {
-        println!("        Cached");
+        log::debug!("Asset {}@{} cached", asset_key, ref_str);
         return Ok(target_path);
     }
 
@@ -1209,7 +1268,7 @@ fn fetch_asset_repo(
         || (repo_cache_dir.exists()
             && std::fs::read_dir(&repo_cache_dir).is_ok_and(|mut d| d.next().is_some()));
     if !repo_exists {
-        println!("        Fetching");
+        log::debug!("Asset {}@{} fetching", asset_key, ref_str);
         ensure_sparse_checkout(&repo_cache_dir, repo_url, ref_str, false)?;
     }
 
@@ -1224,13 +1283,9 @@ fn fetch_asset_repo(
     }
 
     // Compute and store content hash on subpath only
-    print!("        Computing hashes... ");
-    std::io::Write::flush(&mut std::io::stdout())?;
-
     let content_hash = compute_content_hash_from_dir(&target_path)?;
     index.set_asset(repo_url, subpath, ref_str, &content_hash)?;
-
-    println!("done");
+    log::debug!("Asset {}@{} hashed: {}", asset_key, ref_str, content_hash);
 
     Ok(target_path)
 }
