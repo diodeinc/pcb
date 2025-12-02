@@ -1,0 +1,8 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: "format!\n(\"entries:\\n{}\\n\\nhash: {}\", if entries.is_empty() { \"(none)\".to_string() }\nelse { entries.join(\"\\n\") }, content_hash)"
+---
+entries:
+(none)
+
+hash: h1:1v2d5bzPIj9SOzFsnNHPmp2H6kJHPWjgEdrRPwm/iRc=

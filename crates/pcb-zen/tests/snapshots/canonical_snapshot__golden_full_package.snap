@@ -1,0 +1,10 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: "format!\n(\"entries:\\n{}\\n\\nhash: {}\", if entries.is_empty() { \"(none)\".to_string() }\nelse { entries.join(\"\\n\") }, content_hash)"
+---
+entries:
+lib/util.zen
+main.zen
+pcb.toml
+
+hash: h1:Kdq2wxcrM7Pd+djmS2N3opAaS9rVaDZQXDNyVtBmjMk=

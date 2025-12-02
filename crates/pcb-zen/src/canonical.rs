@@ -2,18 +2,41 @@
 //!
 //! This module implements deterministic tar archives and BLAKE3 content hashing
 //! for package integrity verification.
+//!
+//! ## Canonicalization Rules
+//!
+//! To ensure byte-identical archives across platforms:
+//! - Paths are normalized to NFC Unicode form (macOS uses NFD, Linux uses NFC)
+//! - Paths use forward slashes and are sorted by byte value (not path components)
+//! - Metadata is normalized: mtime=0, uid=0, gid=0, mode=0644, empty user/group names
+//! - Only regular files are included (directories are implicit)
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ignore::WalkBuilder;
 use tar::{Builder, Header};
+use unicode_normalization::UnicodeNormalization;
+
+/// Convert a path to a canonical tar path string.
+///
+/// - Converts to UTF-8 (errors on non-UTF-8 paths)
+/// - Normalizes to NFC Unicode form for cross-platform consistency
+/// - Uses forward slashes
+fn canonicalize_path(path: &Path) -> Result<String> {
+    let s = path
+        .to_str()
+        .with_context(|| format!("non-UTF-8 path: {:?}", path))?;
+    // NFC normalization: macOS stores filenames as NFD, Linux as NFC.
+    // Normalizing to NFC ensures identical hashes across platforms.
+    Ok(s.nfc().collect::<String>().replace('\\', "/"))
+}
 
 /// Collect entries for canonical tar (shared between create and list)
-fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, std::fs::FileType)>> {
+fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, String)>> {
     let mut entries = Vec::new();
     let package_root = dir.to_path_buf();
     for result in WalkBuilder::new(dir)
@@ -42,41 +65,41 @@ fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, std::fs::FileTy
         // Only include files - directories are implicit from file paths in tar
         // This avoids issues with empty directories (which git doesn't track anyway)
         if file_type.is_file() {
-            entries.push((rel_path.to_path_buf(), file_type));
+            let canonical = canonicalize_path(rel_path)?;
+            entries.push((rel_path.to_path_buf(), canonical));
         }
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    // Sort by canonical path string bytes, not by PathBuf components.
+    // This matters for paths like "a/b" vs "a-c" where component order differs from byte order.
+    entries.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
     Ok(entries)
 }
 
 /// List entries that would be included in canonical tar (for debugging)
 pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
     let entries = collect_canonical_entries(dir)?;
-    Ok(entries
-        .into_iter()
-        .map(|(p, _ft)| p.display().to_string())
-        .collect())
+    Ok(entries.into_iter().map(|(_, canonical)| canonical).collect())
 }
 
 /// Create a canonical, deterministic tar archive from a directory
 ///
 /// Rules from packaging.md:
 /// - Regular files only (directories are implicit from paths)
-/// - Relative paths, forward slashes, lexicographic order
+/// - Relative paths, forward slashes, lexicographic byte order
+/// - NFC Unicode normalization for cross-platform consistency
 /// - Normalized metadata: mtime=0, uid=0, gid=0, uname="", gname=""
 /// - File mode: 0644
 /// - End with two 512-byte zero blocks
 /// - Respect .gitignore and filter internal marker files
-/// - Exclude nested packages (subdirs with pcb.toml + [package])
+/// - Exclude nested packages (subdirs with pcb.toml)
 pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
     let mut builder = Builder::new(writer);
     builder.mode(tar::HeaderMode::Deterministic);
 
     let entries = collect_canonical_entries(dir)?;
 
-    for (rel_path, _file_type) in entries {
+    for (rel_path, canonical_path) in entries {
         let full_path = dir.join(&rel_path);
-        let path_str = rel_path.to_str().unwrap().replace('\\', "/");
 
         let file = fs::File::open(&full_path)?;
         let len = file.metadata()?.len();
@@ -90,7 +113,7 @@ pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<
         header.set_groupname("")?;
         header.set_entry_type(tar::EntryType::Regular);
 
-        builder.append_data(&mut header, &path_str, file)?;
+        builder.append_data(&mut header, &canonical_path, file)?;
     }
 
     builder.finish()?;

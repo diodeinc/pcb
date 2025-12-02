@@ -3391,6 +3391,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "toml",
+ "unicode-normalization",
  "uuid",
  "walkdir",
  "zip 4.3.0",

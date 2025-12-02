@@ -248,7 +248,7 @@ Semantic versioning with Minimal Version Selection within semver families. Multi
 1. **Seed:** Discover members, preseed from lockfile, resolve branches/revs to pseudo-versions, initialize MVS state
 2. **Discovery:** Iteratively fetch manifests (blob-filtered clones), add transitive deps, monotonically upgrade versions until fixed point
 3. **Build Closure:** DFS from workspace roots using final selected versions (filters Phase 1 obsolete fetches)
-4. **Fetch:** Download full repos (shallow clones), compute hashes, create `.pcbcache` markers
+4. **Fetch:** Download full repos (shallow clones), compute hashes, update cache index
 5. **Lock:** Merge hashes into `pcb.sum` (accumulate, never delete)
 
 **Precedence Order:**
@@ -434,8 +434,8 @@ Deterministic GNU tar with normalized metadata:
 - Lexicographic ordering of entries
 - Regular files only (directories implicit from paths)
 - Respects `.gitignore` via the `ignore` crate
-- Filters internal markers (`.pcbcache`)
 - Excludes nested packages (subdirectories with their own `pcb.toml`)
+- NFC Unicode normalization for cross-platform path consistency
 
 Streamed directly to BLAKE3 hasher (no buffering). Same commit produces identical hash regardless of machine or remote.
 
@@ -451,7 +451,7 @@ github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo
 github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
 ```
 
-Two lines per dependency: content hash (canonical tar BLAKE3) and manifest hash (pcb.toml BLAKE3). Asset packages get content hash only. Pseudo-versions include full commit hash. Cache markers (`~/.pcb/cache/{path}/{version}/.pcbcache`) store both hashes and avoid re-computation. Generated on first build, merged on updates, verified on subsequent builds. Commit to version control.
+Two lines per dependency: content hash (canonical tar BLAKE3) and manifest hash (pcb.toml BLAKE3). Asset packages get content hash only. Pseudo-versions include full commit hash. A SQLite cache index at `~/.pcb/cache/index.db` stores hashes to avoid re-computation. Generated on first build, merged on updates, verified on subsequent builds. Commit to version control.
 
 ### Vendoring
 
@@ -882,7 +882,7 @@ The entire resolution is deterministic, monotonic (no backtracking), and increme
 
 ### Git Operations
 
-**Cache Structure:** `~/.pcb/cache/{full-module-path}/{version}/` contains package contents directly at root (no nested path redundancy) + `.pcbcache` marker storing content and manifest hashes for verification. Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
+**Cache Structure:** `~/.pcb/cache/{full-module-path}/{version}/` contains package contents directly at root (no nested path redundancy). A SQLite index at `~/.pcb/cache/index.db` stores content and manifest hashes for verification. Temp bare repos in `~/.pcb/cache/temp/` for pseudo-version generation.
 
 Examples:
 - Root package: `~/.pcb/cache/github.com/diodeinc/stdlib/0.3.2/`
@@ -915,7 +915,7 @@ Note: Version directories use the version string without `v` prefix (e.g., `0.3.
 
 **Pseudo-versions:** `git ls-remote` → `git describe` → `v<base+1>-0.<timestamp>-<commit>` (40-char hash)
 
-**Optimizations:** Sparse-checkout (bandwidth), .pcbcache markers (skip re-hash), lockfile preseeding (skip git ls-remote), .no-manifest markers (skip asset package re-fetch)
+**Optimizations:** Sparse-checkout (bandwidth), SQLite cache index (skip re-hash), lockfile preseeding (skip git ls-remote)
 
 ### Load Resolution
 

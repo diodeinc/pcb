@@ -58,6 +58,7 @@ base64 = { workspace = true }
 blake3 = { workspace = true }
 rayon = { workspace = true }
 rusqlite = { workspace = true }
+unicode-normalization = { workspace = true }
 
 pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }

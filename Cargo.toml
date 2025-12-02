@@ -133,6 +133,7 @@ zstd = "0.13"
 jiff = "0.2"
 blake3 = "1.5"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
+unicode-normalization = "0.1"
 
 # The profile that 'dist' will build with
 [profile.dist]

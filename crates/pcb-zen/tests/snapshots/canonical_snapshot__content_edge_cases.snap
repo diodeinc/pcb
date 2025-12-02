@@ -1,0 +1,13 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: "format!\n(\"entries:\\n{}\\n\\nhash: {}\", if entries.is_empty() { \"(none)\".to_string() }\nelse { entries.join(\"\\n\") }, content_hash)"
+---
+entries:
+data.bin
+empty.txt
+file with spaces.txt
+file-with-dashes.txt
+unix.txt
+windows.txt
+
+hash: h1:FN3SuYue4j9wxoV5qvJ9vPrhOV9el1DT4JAyRvL5I48=
