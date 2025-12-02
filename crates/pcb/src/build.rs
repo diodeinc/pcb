@@ -3,7 +3,6 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
-use pcb_zen_core::DefaultFileProvider;
 use std::path::{Path, PathBuf};
 
 use crate::file_walker;
@@ -100,10 +99,13 @@ pub fn build(
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
+    // In V2 mode, resolution handles offline - eval doesn't need network access
+    // In V1 mode (resolution_result is None), offline would break V1 dep resolution
+    let is_v2 = resolution_result.is_some();
     let eval_result = pcb_zen::eval(
         zen_path,
         pcb_zen::EvalConfig {
-            offline,
+            offline: is_v2 && offline,
             resolution_result,
             ..Default::default()
         },
@@ -175,17 +177,8 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         .first()
         .cloned()
         .unwrap_or(std::env::current_dir()?);
-    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), &input_path)?;
-
-    // Resolve dependencies if v2
-    let resolution_result = if workspace_info.is_v2() {
-        let resolution = pcb_zen::resolve_dependencies(&mut workspace_info, args.offline)?;
-        // Vendor deps matching workspace.vendor patterns (no additional patterns for build)
-        pcb_zen::vendor_deps(&workspace_info, &resolution, &[], None)?;
-        Some(resolution)
-    } else {
-        None
-    };
+    let (workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(&input_path, args.offline)?;
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_files = if workspace_info.is_v2() {

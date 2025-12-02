@@ -174,7 +174,8 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     println!("{}", "Building workspace...".cyan().bold());
 
     // Collect all .zen files from workspace (skips vendor/, respects gitignore)
-    let zen_files = crate::file_walker::collect_zen_files(&[workspace.root.clone()], false)?;
+    let zen_files =
+        crate::file_walker::collect_zen_files(std::slice::from_ref(&workspace.root), false)?;
 
     if zen_files.is_empty() {
         return Ok(());

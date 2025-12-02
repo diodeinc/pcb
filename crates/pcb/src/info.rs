@@ -16,6 +16,10 @@ pub struct InfoArgs {
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     pub format: OutputFormat,
 
+    /// Show dependency tree (V2 workspaces only)
+    #[arg(long)]
+    pub tree: bool,
+
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
 }
@@ -35,7 +39,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
     };
 
     let file_provider = DefaultFileProvider::new();
-    let workspace_info = get_workspace_info(&file_provider, &start_path)?;
+    let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
 
     match args.format {
         OutputFormat::Human => {
@@ -46,6 +50,18 @@ pub fn execute(args: InfoArgs) -> Result<()> {
             }
         }
         OutputFormat::Json => print_json(&workspace_info)?,
+    }
+
+    // Print dependency tree if requested (V2 only)
+    if args.tree {
+        if workspace_info.is_v2() {
+            println!();
+            println!("{}", "Dependencies".with_style(Style::Blue).bold());
+            let result = pcb_zen::resolve_dependencies(&mut workspace_info, false)?;
+            result.print_tree(&workspace_info);
+        } else {
+            eprintln!("Dependency tree is only available for V2 workspaces");
+        }
     }
 
     Ok(())

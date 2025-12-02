@@ -30,6 +30,8 @@ mod update;
 mod upgrade;
 mod vendor;
 
+mod resolve;
+
 #[derive(Parser)]
 #[command(name = "pcb")]
 #[command(about = "PCB tool with build and layout capabilities", long_about = None)]

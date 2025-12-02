@@ -75,20 +75,34 @@ pub struct BomArgs {
     #[arg(short = 'r', long = "rules", value_hint = clap::ValueHint::FilePath)]
     pub rules: Option<PathBuf>,
 
-    /// Run in offline mode without fetching part availability
-    #[cfg(feature = "api")]
-    #[arg(long)]
+    /// Disable network access (offline mode) - only use vendored dependencies
+    #[arg(long = "offline")]
     pub offline: bool,
 }
 
 pub fn execute(args: BomArgs) -> Result<()> {
+    // V2 workspace-first architecture: resolve dependencies before evaluation
+    let input_path = args.file.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let (_workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(&input_path, args.offline)?;
+
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
     // Show spinner while processing
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
     // Evaluate the design
-    let eval_result = pcb_zen::eval(&args.file, pcb_zen::EvalConfig::default());
+    // In V2 mode, resolution handles offline - eval doesn't need network
+    // In V1 mode, --offline only affects availability API, not evaluation
+    let is_v2 = resolution_result.is_some();
+    let eval_result = pcb_zen::eval(
+        &args.file,
+        pcb_zen::EvalConfig {
+            offline: is_v2 && args.offline,
+            resolution_result,
+            ..Default::default()
+        },
+    );
     let layout_path = extract_layout_path(&args.file, &eval_result).ok();
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
+use pcb_ui::{Colorize, Style, StyledText};
 use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
@@ -29,7 +30,7 @@ enum PathDepError {
 /// - For v0.x: family is "v0.<minor>" (e.g., v0.2, v0.3 are different families)
 /// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ModuleLine {
+pub struct ModuleLine {
     path: String,   // e.g., "github.com/diodeinc/stdlib"
     family: String, // e.g., "v0.3" or "v1"
 }
@@ -57,7 +58,7 @@ struct UnresolvedDep {
 ///
 /// Only constructed from V2 pcb.toml files. Asset repositories themselves never have manifests.
 #[derive(Clone, Debug)]
-struct PackageManifest {
+pub struct PackageManifest {
     dependencies: BTreeMap<String, DependencySpec>,
     assets: BTreeMap<String, pcb_zen_core::AssetDependencySpec>,
 }
@@ -81,6 +82,143 @@ pub struct ResolutionResult {
     pub assets: HashMap<(String, String), PathBuf>,
 }
 
+impl ResolutionResult {
+    /// Print the dependency tree to stdout
+    pub fn print_tree(&self, workspace_info: &WorkspaceInfo) {
+        let workspace_name = workspace_info
+            .root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace");
+
+        // Build version map from closure: module_path -> version
+        let version_map: HashMap<&str, &str> = self
+            .closure
+            .iter()
+            .map(|(path, version)| (path.as_str(), version.as_str()))
+            .collect();
+
+        // Collect root deps (direct deps from workspace packages)
+        let mut root_deps: Vec<&str> = Vec::new();
+        for pkg in workspace_info.packages.values() {
+            for url in pkg.config.dependencies.keys() {
+                if version_map.contains_key(url.as_str()) && !root_deps.contains(&url.as_str()) {
+                    root_deps.push(url.as_str());
+                }
+            }
+        }
+        root_deps.sort();
+
+        if root_deps.is_empty() {
+            return;
+        }
+
+        // Build dep graph: url -> Vec<dep_urls> by reading pcb.toml from resolved paths
+        let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Build graph from closure packages by reading their pcb.toml files
+        for (path, _version) in &self.closure {
+            if dep_graph.contains_key(path) {
+                continue;
+            }
+            // Find resolved path for this package
+            for deps in self.package_resolutions.values() {
+                if let Some(resolved) = deps.get(path) {
+                    let pcb_toml = resolved.join("pcb.toml");
+                    if pcb_toml.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
+                            if let Ok(config) = PcbToml::parse(&content) {
+                                let transitive: Vec<String> = config
+                                    .dependencies
+                                    .keys()
+                                    .filter(|dep_url| version_map.contains_key(dep_url.as_str()))
+                                    .cloned()
+                                    .collect();
+                                dep_graph.insert(path.clone(), transitive);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Track what we've printed to show (*)
+        let mut printed = HashSet::new();
+
+        // Helper to format package name: drop host (first segment), show rest
+        let format_name = |url: &str| -> String {
+            let parts: Vec<_> = url.split('/').collect();
+            if parts.len() > 1 {
+                parts[1..].join("/")
+            } else {
+                url.to_string()
+            }
+        };
+
+        // Recursive print helper
+        fn print_dep(
+            url: &str,
+            version_map: &HashMap<&str, &str>,
+            dep_graph: &HashMap<String, Vec<String>>,
+            printed: &mut HashSet<String>,
+            prefix: &str,
+            is_last: bool,
+            format_name: &impl Fn(&str) -> String,
+        ) {
+            let branch = if is_last { "└── " } else { "├── " };
+            let version = version_map.get(url).copied().unwrap_or("?");
+            let already_printed = !printed.insert(url.to_string());
+
+            println!(
+                "{}{}{} v{}{}",
+                prefix,
+                branch,
+                format_name(url),
+                version,
+                if already_printed { " (*)" } else { "" }
+            );
+
+            if already_printed {
+                return;
+            }
+
+            if let Some(deps) = dep_graph.get(url) {
+                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                let mut sorted_deps: Vec<_> = deps.iter().map(|s| s.as_str()).collect();
+                sorted_deps.sort();
+
+                for (i, dep_url) in sorted_deps.iter().enumerate() {
+                    let is_last_child = i == sorted_deps.len() - 1;
+                    print_dep(
+                        dep_url,
+                        version_map,
+                        dep_graph,
+                        printed,
+                        &child_prefix,
+                        is_last_child,
+                        format_name,
+                    );
+                }
+            }
+        }
+
+        println!("{}", workspace_name);
+        for (i, url) in root_deps.iter().enumerate() {
+            let is_last = i == root_deps.len() - 1;
+            print_dep(
+                url,
+                &version_map,
+                &dep_graph,
+                &mut printed,
+                "",
+                is_last,
+                &format_name,
+            );
+        }
+    }
+}
+
 /// Result of V2 vendoring operation
 pub struct VendorResult {
     /// Number of packages vendored
@@ -100,55 +238,57 @@ pub fn resolve_dependencies(
     offline: bool,
 ) -> Result<ResolutionResult> {
     let workspace_root = workspace_info.root.clone();
-    println!(
+    log::debug!(
         "V2 Dependency Resolution{}",
         if offline { " (offline)" } else { "" }
     );
-    println!("Workspace root: {}", workspace_root.display());
+    log::debug!("Workspace root: {}", workspace_root.display());
 
     // Phase -1: Auto-add missing dependencies from .zen files
-    println!("\nPhase -1: Auto-detecting dependencies from .zen files");
+    log::debug!("Phase -1: Auto-detecting dependencies from .zen files");
     let auto_deps = crate::auto_deps::auto_add_zen_deps(
         &workspace_root,
         &workspace_info.packages,
         workspace_info.lockfile.as_ref(),
         offline,
     )?;
-    if auto_deps.total_added > 0
-        || auto_deps.versions_corrected > 0
-        || auto_deps.discovered_remote > 0
-    {
-        if auto_deps.total_added > 0 {
-            println!(
-                "  Auto-added {} dependencies across {} package(s)",
-                auto_deps.total_added, auto_deps.packages_updated
-            );
-        }
-        if auto_deps.discovered_remote > 0 {
-            println!(
-                "  Discovered {} remote package(s) via git tags",
-                auto_deps.discovered_remote
-            );
-        }
-        if auto_deps.versions_corrected > 0 {
-            println!(
-                "  Corrected {} workspace member version(s)",
-                auto_deps.versions_corrected
-            );
-        }
-    } else {
-        println!("  No missing dependencies or version corrections");
+    if auto_deps.total_added > 0 {
+        log::debug!(
+            "Auto-added {} dependencies across {} package(s)",
+            auto_deps.total_added,
+            auto_deps.packages_updated
+        );
+    }
+    if auto_deps.discovered_remote > 0 {
+        log::debug!(
+            "Discovered {} remote package(s) via git tags",
+            auto_deps.discovered_remote
+        );
+    }
+    if auto_deps.versions_corrected > 0 {
+        log::debug!(
+            "Corrected {} workspace member version(s)",
+            auto_deps.versions_corrected
+        );
     }
     for (path, aliases) in &auto_deps.unknown_aliases {
-        eprintln!("  ⊙ {} has unknown aliases:", path.display());
+        eprintln!(
+            "{} {} has unknown aliases:",
+            "warning:".with_style(Style::Yellow),
+            path.display().to_string().bold()
+        );
         for alias in aliases {
-            eprintln!("      @{}", alias);
+            eprintln!("    @{}", alias);
         }
     }
     for (path, urls) in &auto_deps.unknown_urls {
-        eprintln!("  ⊙ {} has unknown remote URLs:", path.display());
+        eprintln!(
+            "{} {} has unknown remote URLs:",
+            "warning:".with_style(Style::Yellow),
+            path.display().to_string().bold()
+        );
         for url in urls {
-            eprintln!("      {}", url);
+            eprintln!("    {}", url);
         }
     }
 
@@ -167,42 +307,8 @@ pub fn resolve_dependencies(
         }
     }
 
-    // Display workspace info
-    if let Some(ws) = workspace_info
-        .config
-        .as_ref()
-        .and_then(|c| c.workspace.as_ref())
-    {
-        println!("Type: Explicit workspace");
-        if !ws.members.is_empty() {
-            println!("Member patterns: {:?}", ws.members);
-        }
-    } else {
-        println!("Type: Standalone package (implicit workspace)");
-    }
-
-    println!("\nDiscovered {} package(s):", workspace_info.packages.len());
-    for pkg in workspace_info.packages.values() {
-        let package_name = pkg
-            .dir
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_else(|| "root".into());
-
-        if let Some(board) = &pkg.config.board {
-            println!(
-                "  - {} (board: {}) → {}",
-                package_name,
-                board.name,
-                pkg.dir.display()
-            );
-        } else {
-            println!("  - {} → {}", package_name, pkg.dir.display());
-        }
-    }
-
-    println!(
-        "\nWorkspace members: {} (for local resolution)",
+    log::debug!(
+        "Workspace members: {} (for local resolution)",
         workspace_info.packages.len()
     );
 
@@ -240,17 +346,14 @@ pub fn resolve_dependencies(
 
             // Only insert if not already selected (shouldn't happen, but defensive)
             if !selected.contains_key(&line) {
-                println!(
-                    "  → Adding {}@v{} (from pcb.sum)",
-                    entry.module_path, version
-                );
+                log::debug!("Adding {}@v{} (from pcb.sum)", entry.module_path, version);
                 selected.insert(line.clone(), version);
                 work_queue.push_back(line);
             }
         }
     }
 
-    println!("\nPhase 0: Seed from workspace dependencies");
+    log::debug!("Phase 0: Seed from workspace dependencies");
 
     // Resolve dependencies per-package
     let mut packages_with_deps = Vec::new();
@@ -289,12 +392,12 @@ pub fn resolve_dependencies(
 
     // Print summary
     if packages_without_deps > 0 {
-        println!("  {} packages with no dependencies", packages_without_deps);
+        log::debug!("  {} packages with no dependencies", packages_without_deps);
     }
     if !packages_with_deps.is_empty() {
-        println!("  {} packages with dependencies:", packages_with_deps.len());
+        log::debug!("  {} packages with dependencies:", packages_with_deps.len());
         for (package_name, package_deps) in &packages_with_deps {
-            println!("    {} ({} deps)", package_name, package_deps.len());
+            log::debug!("    {} ({} deps)", package_name, package_deps.len());
         }
     }
 
@@ -323,13 +426,18 @@ pub fn resolve_dependencies(
                     );
                 }
                 Err(e) => {
-                    eprintln!("  Warning: Failed to resolve {}: {}", dep.url, e);
+                    eprintln!(
+                        "{} failed to resolve {}: {}",
+                        "warning:".with_style(Style::Yellow),
+                        dep.url.as_str().bold(),
+                        e
+                    );
                 }
             }
         }
     }
 
-    println!("\nPhase 1: Parallel dependency resolution");
+    log::debug!("Phase 1: Parallel dependency resolution");
 
     // Wave-based parallel fetching with MVS
     let phase1_start = Instant::now();
@@ -356,7 +464,7 @@ pub fn resolve_dependencies(
 
         wave_num += 1;
         let wave_start = Instant::now();
-        println!("  Wave {}: {} packages", wave_num, wave.len());
+        log::debug!("  Wave {}: {} packages", wave_num, wave.len());
 
         // Parallel fetch all packages in this wave
         let results: Vec<_> = wave
@@ -400,15 +508,23 @@ pub fn resolve_dependencies(
                                 }
                             }
                             Err(e) => {
-                                eprintln!("    Warning: Failed to resolve {}: {}", dep_path, e);
+                                eprintln!(
+                                    "{} failed to resolve {}: {}",
+                                    "warning:".with_style(Style::Yellow),
+                                    dep_path.as_str().bold(),
+                                    e
+                                );
                             }
                         }
                     }
                 }
                 Err(e) => {
                     eprintln!(
-                        "    Warning: Failed to fetch {}@v{}: {}",
-                        line.path, version, e
+                        "{} failed to fetch {}@v{}: {}",
+                        "warning:".with_style(Style::Yellow),
+                        line.path.as_str().bold(),
+                        version,
+                        e
                     );
                 }
             }
@@ -416,60 +532,55 @@ pub fn resolve_dependencies(
 
         let wave_elapsed = wave_start.elapsed();
         if new_deps > 0 {
-            println!(
+            log::debug!(
                 "    Fetched in {:.1}s, discovered {} new dependencies",
                 wave_elapsed.as_secs_f64(),
                 new_deps
             );
         } else {
-            println!("    Fetched in {:.1}s", wave_elapsed.as_secs_f64());
+            log::debug!("    Fetched in {:.1}s", wave_elapsed.as_secs_f64());
         }
     }
 
     let phase1_elapsed = phase1_start.elapsed();
-    println!(
-        "\n  Resolved {} packages in {} waves ({:.1}s)",
+    log::debug!(
+        "  Resolved {} packages in {} waves ({:.1}s)",
         total_fetched,
         wave_num,
         phase1_elapsed.as_secs_f64()
     );
 
-    println!("\nPhase 2: Build closure");
-    println!();
+    log::debug!("Phase 2: Build closure");
 
     // Phase 2: Build the final dependency set using only selected versions
-    let closure = build_closure(&workspace_info.packages, &selected, &manifest_cache)?;
+    let closure = build_closure(&workspace_info.packages, &selected, &manifest_cache);
 
-    println!("Build set: {} dependencies", closure.build_set.len());
-
-    // Print dependency tree
-    print_dependency_tree(&workspace_root, &closure, &manifest_cache);
+    log::debug!("Build set: {} dependencies", closure.len());
 
     // Phase 2.5: Collect and fetch assets
-    println!("\nPhase 2.5: Fetching assets");
+    log::debug!("Phase 2.5: Fetching assets");
     let asset_paths =
         collect_and_fetch_assets(workspace_info, &manifest_cache, &selected, offline)?;
     if !asset_paths.is_empty() {
-        println!("Fetched {} assets", asset_paths.len());
+        log::debug!("Fetched {} assets", asset_paths.len());
     } else {
-        println!("No assets");
+        log::debug!("No assets");
     }
 
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
     // Phase 4: Update lockfile with cryptographic hashes
-    println!("\nPhase 4: Lockfile");
-    let (lockfile, added_count) =
-        update_lockfile(workspace_info, &closure.build_set, &asset_paths)?;
+    log::debug!("Phase 4: Lockfile");
+    let (lockfile, added_count) = update_lockfile(workspace_info, &closure, &asset_paths)?;
 
     // Only write lockfile to disk if new entries were added
     if added_count > 0 {
         let lockfile_path = workspace_root.join("pcb.sum");
         std::fs::write(&lockfile_path, lockfile.to_string())?;
-        println!("  Updated {}", lockfile_path.display());
+        log::debug!("  Updated {}", lockfile_path.display());
     }
 
-    println!("\nV2 dependency resolution complete");
+    log::debug!("V2 dependency resolution complete");
 
     let package_resolutions = build_resolution_map(
         workspace_info,
@@ -481,15 +592,14 @@ pub fn resolve_dependencies(
     )?;
 
     // Convert closure to (module_path, version) pairs
-    let closure: HashSet<_> = closure
-        .build_set
+    let closure_set: HashSet<_> = closure
         .iter()
         .map(|(line, version)| (line.path.clone(), version.to_string()))
         .collect();
 
     Ok(ResolutionResult {
         package_resolutions,
-        closure,
+        closure: closure_set,
         assets: asset_paths,
     })
 }
@@ -1009,7 +1119,7 @@ fn collect_and_fetch_assets(
 
     // Print repos we're fetching
     for (repo_url, ref_str) in &repos_to_fetch {
-        println!("  {}@{}", repo_url, ref_str);
+        log::debug!("  {}@{}", repo_url, ref_str);
     }
 
     // Fetch repos in parallel
@@ -1290,131 +1400,17 @@ fn fetch_asset_repo(
     Ok(target_path)
 }
 
-/// Print a tree view of the dependency graph (cargo tree style)
-fn print_dependency_tree(
-    workspace_root: &Path,
-    closure: &ClosureResult,
-    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-) {
-    println!();
-
-    // Track what we've printed to show (*)
-    let mut printed = HashSet::new();
-
-    // Helper to format package name: drop host (first segment), show rest
-    let format_name = |url: &str| -> String {
-        let parts: Vec<_> = url.split('/').collect();
-        if parts.len() > 1 {
-            parts[1..].join("/")
-        } else {
-            url.to_string()
-        }
-    };
-
-    // Helper to print a dependency with tree formatting (cargo tree style)
-    fn print_dep(
-        url: &str,
-        build_map: &HashMap<String, (ModuleLine, Version)>,
-        manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-        printed: &mut HashSet<String>,
-        prefix: &str,
-        is_last: bool,
-        format_name: &impl Fn(&str) -> String,
-    ) {
-        let branch = if is_last { "└── " } else { "├── " };
-
-        if let Some((line, version)) = build_map.get(url) {
-            let already_printed = !printed.insert(url.to_string());
-
-            println!(
-                "{}{}{} v{}{}",
-                prefix,
-                branch,
-                format_name(url),
-                version,
-                if already_printed { " (*)" } else { "" }
-            );
-
-            // Don't recurse if already shown
-            if already_printed {
-                return;
-            }
-
-            // Print transitive dependencies
-            if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
-                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                let mut dep_list: Vec<_> = manifest
-                    .dependencies
-                    .iter()
-                    .filter(|(dep_url, spec)| {
-                        !is_non_version_dep(spec) && build_map.contains_key(*dep_url)
-                    })
-                    .collect();
-
-                // Sort for consistent output
-                dep_list.sort_by_key(|(url, _)| *url);
-
-                for (i, (dep_url, _)) in dep_list.iter().enumerate() {
-                    let is_last_child = i == dep_list.len() - 1;
-                    print_dep(
-                        dep_url,
-                        build_map,
-                        manifest_cache,
-                        printed,
-                        &child_prefix,
-                        is_last_child,
-                        format_name,
-                    );
-                }
-            }
-        }
-    }
-
-    // Workspace root header
-    let workspace_name = workspace_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace");
-
-    if !closure.root_deps.is_empty() {
-        println!("{}", workspace_name);
-        for (i, url) in closure.root_deps.iter().enumerate() {
-            let is_last = i == closure.root_deps.len() - 1;
-            print_dep(
-                url,
-                &closure.build_map,
-                manifest_cache,
-                &mut printed,
-                "",
-                is_last,
-                &format_name,
-            );
-        }
-    }
-}
-
-/// Result of building the dependency closure
-struct ClosureResult {
-    /// Set of (ModuleLine, Version) pairs in the build closure
-    build_set: HashSet<(ModuleLine, Version)>,
-    /// Lookup: module_path -> (ModuleLine, Version) for the build set
-    build_map: HashMap<String, (ModuleLine, Version)>,
-    /// Direct dependency URLs from workspace packages (for tree roots)
-    root_deps: Vec<String>,
-}
-
 /// Build the final dependency closure using selected versions
 ///
 /// DFS from workspace package dependencies using selected versions.
-/// Returns the build set, a lookup map, and root dependency URLs.
+/// Returns the set of (ModuleLine, Version) pairs in the build closure.
 fn build_closure(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-) -> Result<ClosureResult> {
+) -> HashSet<(ModuleLine, Version)> {
     let mut build_set = HashSet::new();
     let mut stack = Vec::new();
-    let mut root_deps = Vec::new();
 
     // Build index: module_path → ModuleLine for fast lookups (excluding workspace members)
     let mut line_by_path: HashMap<String, Vec<ModuleLine>> = HashMap::new();
@@ -1429,15 +1425,10 @@ fn build_closure(
             .push(line.clone());
     }
 
-    // Seed DFS from all package dependencies, collecting root deps
+    // Seed DFS from all package dependencies
     for pkg in packages.values() {
         for (url, spec) in &pkg.config.dependencies {
             if !is_non_version_dep(spec) {
-                // Track root deps for tree printing
-                if line_by_path.contains_key(url) && !root_deps.contains(url) {
-                    root_deps.push(url.clone());
-                }
-                // Find selected ModuleLine(s) for this path
                 if let Some(lines) = line_by_path.get(url) {
                     stack.extend(lines.iter().cloned());
                 }
@@ -1470,21 +1461,7 @@ fn build_closure(
         }
     }
 
-    // Build reverse lookup: path -> (line, version) from build_set
-    let mut build_map: HashMap<String, (ModuleLine, Version)> = HashMap::new();
-    for (line, version) in &build_set {
-        build_map.insert(line.path.clone(), (line.clone(), version.clone()));
-    }
-
-    // Sort root deps for consistent output
-    root_deps.sort();
-    root_deps.dedup();
-
-    Ok(ClosureResult {
-        build_set,
-        build_map,
-        root_deps,
-    })
+    build_set
 }
 
 /// Resolve a dependency spec to a concrete version
@@ -1513,7 +1490,7 @@ fn resolve_to_version(
                     if let Ok(locked_version) = Version::parse(&entry.version) {
                         if locked_version.pre.starts_with("0.") {
                             // It's a pseudo-version, use it
-                            println!("        Using locked v{} (from pcb.sum)", locked_version);
+                            log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
                             return Ok(locked_version);
                         }
                     }
@@ -1534,7 +1511,7 @@ fn resolve_to_version(
                     if let Ok(locked_version) = Version::parse(&entry.version) {
                         if locked_version.pre.starts_with("0.") {
                             // It's a pseudo-version, use it
-                            println!("        Using locked v{} (from pcb.sum)", locked_version);
+                            log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
                             return Ok(locked_version);
                         }
                     }
@@ -1565,9 +1542,10 @@ fn resolve_branch_to_pseudo_version(module_path: &str, branch: &str) -> Result<V
     let commit = if let Some(cached_commit) = index.get_branch_commit(repo_url, branch) {
         cached_commit
     } else {
-        println!(
+        log::debug!(
             "        Resolving branch '{}' for {}...",
-            branch, module_path
+            branch,
+            module_path
         );
         let refspec = format!("refs/heads/{}", branch);
         let (commit, _) = git::ls_remote_with_fallback(module_path, &refspec)?;
@@ -1580,7 +1558,7 @@ fn resolve_branch_to_pseudo_version(module_path: &str, branch: &str) -> Result<V
 
 /// Resolve a Git revision to a pseudo-version
 fn resolve_rev_to_pseudo_version(module_path: &str, rev: &str) -> Result<Version> {
-    println!(
+    log::debug!(
         "        Resolving rev '{}' for {}...",
         &rev[..8.min(rev.len())],
         module_path
@@ -1683,7 +1661,7 @@ fn add_requirement(
             "Adding"
         };
         let suffix = if is_patched { " (patched)" } else { "" };
-        println!("  → {} {}@v{}{}", action, path, final_version, suffix);
+        log::debug!("  → {} {}@v{}{}", action, path, final_version, suffix);
 
         selected.insert(line.clone(), final_version);
         work_queue.push_back(line);
@@ -1948,7 +1926,7 @@ fn update_lockfile(
 
     let total_count = build_set.len() + asset_paths.len();
     if total_count > 0 {
-        println!("  Verifying {} entries...", total_count);
+        log::debug!("  Verifying {} entries...", total_count);
     }
 
     // Open cache index to read hashes
@@ -2039,9 +2017,9 @@ fn update_lockfile(
     }
 
     if added_count > 0 {
-        println!("  {} new, {} verified", added_count, verified_count);
+        log::debug!("  {} new, {} verified", added_count, verified_count);
     } else if verified_count > 0 {
-        println!("  {} verified", verified_count);
+        log::debug!("  {} verified", verified_count);
     }
 
     Ok((lockfile, added_count))

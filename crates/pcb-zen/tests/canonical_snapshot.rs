@@ -132,7 +132,10 @@ fn nested_package_exclusion() {
     let dir = CanonicalTestDir::new();
 
     // Root package files (should be included)
-    dir.add_file("pcb.toml", "[package]\nname = \"root\"\nversion = \"1.0.0\"\n");
+    dir.add_file(
+        "pcb.toml",
+        "[package]\nname = \"root\"\nversion = \"1.0.0\"\n",
+    );
     dir.add_file("main.zen", "# root module");
     dir.add_file("lib/helper.zen", "# helper");
 
@@ -212,12 +215,21 @@ fn deterministic_hashing() {
     let hash1 = compute_content_hash_from_dir(dir1.root()).unwrap();
     let hash2 = compute_content_hash_from_dir(dir2.root()).unwrap();
 
-    assert_eq!(hash1, hash2, "identical directories should produce identical hashes");
+    assert_eq!(
+        hash1, hash2,
+        "identical directories should produce identical hashes"
+    );
 
     // Verify path normalization (forward slashes, no leading ./)
     let entries = list_canonical_tar_entries(dir1.root()).unwrap();
-    assert!(entries.iter().all(|e| !e.contains('\\')), "should use forward slashes");
-    assert!(entries.iter().all(|e| !e.starts_with("./")), "should not have leading ./");
+    assert!(
+        entries.iter().all(|e| !e.contains('\\')),
+        "should use forward slashes"
+    );
+    assert!(
+        entries.iter().all(|e| !e.starts_with("./")),
+        "should not have leading ./"
+    );
 
     insta::assert_snapshot!(hash1);
 }
@@ -233,7 +245,10 @@ fn content_change_changes_hash() {
     let hash1 = compute_content_hash_from_dir(dir1.root()).unwrap();
     let hash2 = compute_content_hash_from_dir(dir2.root()).unwrap();
 
-    assert_ne!(hash1, hash2, "different content should produce different hashes");
+    assert_ne!(
+        hash1, hash2,
+        "different content should produce different hashes"
+    );
 }
 
 #[test]

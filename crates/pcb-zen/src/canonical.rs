@@ -78,7 +78,10 @@ fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, String)>> {
 /// List entries that would be included in canonical tar (for debugging)
 pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
     let entries = collect_canonical_entries(dir)?;
-    Ok(entries.into_iter().map(|(_, canonical)| canonical).collect())
+    Ok(entries
+        .into_iter()
+        .map(|(_, canonical)| canonical)
+        .collect())
 }
 
 /// Create a canonical, deterministic tar archive from a directory
