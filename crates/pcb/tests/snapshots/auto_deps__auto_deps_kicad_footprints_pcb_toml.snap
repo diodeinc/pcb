@@ -1,0 +1,16 @@
+---
+source: crates/pcb/tests/auto_deps.rs
+expression: pcb_toml_content
+---
+[workspace]
+pcb-version = "0.3"
+members = [
+    "components/*",
+    "reference/*",
+    "modules/*",
+    "boards/*",
+    "graphics/*",
+]
+
+[assets]
+"gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod" = "9.0.3"
