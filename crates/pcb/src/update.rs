@@ -58,107 +58,100 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     // Find all pending updates across all pcb.toml files
     let pending = find_pending_updates(&workspace, &args.packages)?;
 
-    if pending.is_empty() {
-        println!("{}", "All dependencies are up to date.".green());
-        return Ok(());
-    }
+    if !pending.is_empty() {
+        // Separate and deduplicate for display (show each URL once)
+        let mut displayed: HashSet<(&str, bool)> = HashSet::new();
+        let mut non_breaking: Vec<&PendingUpdate> = Vec::new();
+        let mut breaking: Vec<&PendingUpdate> = Vec::new();
 
-    // Separate and deduplicate for display (show each URL once)
-    let mut displayed: HashSet<(&str, bool)> = HashSet::new();
-    let mut non_breaking: Vec<&PendingUpdate> = Vec::new();
-    let mut breaking: Vec<&PendingUpdate> = Vec::new();
-
-    for u in &pending {
-        if u.is_breaking {
-            if displayed.insert((&u.url, true)) {
-                breaking.push(u);
+        for u in &pending {
+            if u.is_breaking {
+                if displayed.insert((&u.url, true)) {
+                    breaking.push(u);
+                }
+            } else if displayed.insert((&u.url, false)) {
+                non_breaking.push(u);
             }
-        } else if displayed.insert((&u.url, false)) {
-            non_breaking.push(u);
         }
-    }
 
-    // Display non-breaking updates
-    for u in &non_breaking {
-        println!(
-            "  {}: {} → {}",
-            u.url,
-            u.current,
-            u.new_version.to_string().green()
-        );
-    }
+        // Display non-breaking updates
+        for u in &non_breaking {
+            println!(
+                "  {}: {} → {}",
+                u.url,
+                u.current,
+                u.new_version.to_string().green()
+            );
+        }
 
-    // Display breaking updates (always show, but only prompt if --breaking)
-    for u in &breaking {
-        println!(
-            "  {}: {} → {} {}",
-            u.url,
-            u.current,
-            u.new_version.to_string().yellow(),
-            "(breaking)".yellow()
-        );
-    }
+        // Display breaking updates (always show, but only prompt if --breaking)
+        for u in &breaking {
+            println!(
+                "  {}: {} → {} {}",
+                u.url,
+                u.current,
+                u.new_version.to_string().yellow(),
+                "(breaking)".yellow()
+            );
+        }
 
-    if non_breaking.is_empty() && breaking.is_empty() {
-        println!("{}", "No updates available.".green());
-        return Ok(());
-    }
+        // Collect URLs to apply
+        let mut urls_to_apply: HashSet<&str> =
+            non_breaking.iter().map(|u| u.url.as_str()).collect();
 
-    // Collect URLs to apply
-    let mut urls_to_apply: HashSet<&str> = non_breaking.iter().map(|u| u.url.as_str()).collect();
+        // Breaking updates require interactive selection
+        if !breaking.is_empty() {
+            let options: Vec<String> = breaking
+                .iter()
+                .map(|u| format!("{} {} → {}", u.url, u.current, u.new_version))
+                .collect();
 
-    // Breaking updates require interactive selection
-    if !breaking.is_empty() {
-        let options: Vec<String> = breaking
+            let selected = MultiSelect::new("Select breaking updates to apply:", options.clone())
+                .prompt()
+                .unwrap_or_default();
+
+            for (i, u) in breaking.iter().enumerate() {
+                if selected.contains(&options[i]) {
+                    urls_to_apply.insert(&u.url);
+                }
+            }
+        }
+
+        // Apply all matching updates
+        let updates_to_apply: Vec<_> = pending
             .iter()
-            .map(|u| format!("{} {} → {}", u.url, u.current, u.new_version))
+            .filter(|u| urls_to_apply.contains(u.url.as_str()))
             .collect();
 
-        let selected = MultiSelect::new("Select breaking updates to apply:", options.clone())
-            .prompt()
-            .unwrap_or_default();
-
-        for (i, u) in breaking.iter().enumerate() {
-            if selected.contains(&options[i]) {
-                urls_to_apply.insert(&u.url);
+        if !updates_to_apply.is_empty() {
+            let breaking_count = updates_to_apply.iter().filter(|u| u.is_breaking).count();
+            for u in &updates_to_apply {
+                update_dependency_version(&u.pcb_toml_path, &u.url, &u.new_version)?;
             }
+
+            // Summary - count unique files updated
+            let files_updated: HashSet<_> =
+                updates_to_apply.iter().map(|u| &u.pcb_toml_path).collect();
+            let summary = if breaking_count > 0 {
+                format!(
+                    "Updated {} dependencies in {} files ({} breaking)",
+                    updates_to_apply.len(),
+                    files_updated.len(),
+                    breaking_count
+                )
+            } else {
+                format!(
+                    "Updated {} dependencies in {} files",
+                    updates_to_apply.len(),
+                    files_updated.len()
+                )
+            };
+            println!("{}", summary.green());
+            println!("Run {} to update the lockfile.", "pcb build".cyan());
         }
-    }
-
-    // Apply all matching updates
-    let updates_to_apply: Vec<_> = pending
-        .iter()
-        .filter(|u| urls_to_apply.contains(u.url.as_str()))
-        .collect();
-
-    if updates_to_apply.is_empty() {
-        println!("{}", "No updates to apply.".yellow());
-        return Ok(());
-    }
-
-    let breaking_count = updates_to_apply.iter().filter(|u| u.is_breaking).count();
-    for u in &updates_to_apply {
-        update_dependency_version(&u.pcb_toml_path, &u.url, &u.new_version)?;
-    }
-
-    // Summary - count unique files updated
-    let files_updated: HashSet<_> = updates_to_apply.iter().map(|u| &u.pcb_toml_path).collect();
-    let summary = if breaking_count > 0 {
-        format!(
-            "Updated {} dependencies in {} files ({} breaking)",
-            updates_to_apply.len(),
-            files_updated.len(),
-            breaking_count
-        )
     } else {
-        format!(
-            "Updated {} dependencies in {} files",
-            updates_to_apply.len(),
-            files_updated.len()
-        )
-    };
-    println!("{}", summary.green());
-    println!("Run {} to update the lockfile.", "pcb build".cyan());
+        println!("{}", "All dependencies are up to date.".green());
+    }
 
     // Handle --tidy flag
     if args.tidy {
