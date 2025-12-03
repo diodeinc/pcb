@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Style, StyledText};
 use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
@@ -10,19 +10,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use std::time::Instant;
-use thiserror::Error;
 
 use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::workspace::WorkspaceInfo;
-
-/// Path dependency validation errors
-#[derive(Debug, Error)]
-enum PathDepError {
-    #[error("Path dependency '{url}' must specify a version\n  Example: {{ path = \"{path}\", version = \"1.0.0\" }}")]
-    MissingVersion { url: String, path: String },
-}
 
 /// Compute the semver family for a version
 ///
@@ -389,7 +381,8 @@ pub fn resolve_dependencies(
         }
 
         // Collect this package's dependencies
-        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)?;
+        let package_deps = collect_package_dependencies(&pcb_toml_path, &pkg.config)
+            .with_context(|| format!("in package '{}'", package_name))?;
 
         if package_deps.is_empty() {
             packages_without_deps += 1;
@@ -933,7 +926,8 @@ fn collect_package_dependencies(
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(&v2_config.dependencies, package_dir, &mut deps)?;
+    collect_deps_recursive(&v2_config.dependencies, package_dir, &mut deps)
+        .with_context(|| format!("in {}", pcb_toml_path.display()))?;
 
     Ok(deps.into_values().collect())
 }
@@ -955,11 +949,11 @@ fn collect_deps_recursive(
             DependencySpec::Detailed(detail) if detail.path.is_some() => {
                 let path = detail.path.as_ref().unwrap();
                 if detail.version.is_none() {
-                    return Err(PathDepError::MissingVersion {
-                        url: url.clone(),
-                        path: path.clone(),
-                    }
-                    .into());
+                    anyhow::bail!(
+                        "Path dependency '{}' must specify a version\n  Example: {{ path = \"{}\", version = \"1.0.0\" }}",
+                        url,
+                        path
+                    );
                 }
                 (path, detail.version.as_ref())
             }
@@ -1004,7 +998,8 @@ fn collect_deps_recursive(
 
         let file_provider = DefaultFileProvider::new();
         let dep_config = PcbToml::from_file(&file_provider, &dep_pcb_toml)?;
-        collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)?;
+        collect_deps_recursive(&dep_config.dependencies, &resolved_path, deps)
+            .with_context(|| format!("in {}", dep_pcb_toml.display()))?;
     }
 
     Ok(())

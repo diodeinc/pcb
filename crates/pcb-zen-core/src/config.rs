@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::FileProvider;
@@ -125,8 +125,10 @@ impl PcbToml {
 
     /// Parse from file content
     pub fn from_file(file_provider: &dyn FileProvider, path: &Path) -> Result<Self> {
-        let content = file_provider.read_file(path)?;
-        Self::parse(&content)
+        let content = file_provider
+            .read_file(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        Self::parse(&content).with_context(|| format!("failed to parse {}", path.display()))
     }
 
     /// Extract and parse inline pcb.toml from .zen file content
