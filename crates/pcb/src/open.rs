@@ -19,8 +19,10 @@ pub struct OpenArgs {
 
 pub fn execute(args: OpenArgs) -> Result<()> {
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.paths.first().map(|p| p.as_path()), args.offline)?;
+    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
+        args.paths.first().map(|p| p.as_path()),
+        args.offline,
+    )?;
 
     open_layout(&args, &workspace_info, resolution_result)
 }

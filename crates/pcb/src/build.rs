@@ -172,8 +172,10 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let (workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(args.paths.first().map(|p| p.as_path()), args.offline)?;
+    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
+        args.paths.first().map(|p| p.as_path()),
+        args.offline,
+    )?;
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_files = if workspace_info.is_v2() {
