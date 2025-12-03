@@ -188,7 +188,7 @@ impl Sandbox {
 
     /// Initialize a git repository in the current default cwd and set default user.
     pub fn init_git(&mut self) -> &mut Self {
-        self.git(["init"]);
+        self.git(["init", "-b", "main"]);
         // default user
         self.git(["config", "user.email", "test@example.com"]);
         self.git(["config", "user.name", "Sandbox"]);

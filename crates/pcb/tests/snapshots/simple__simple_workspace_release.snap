@@ -10,6 +10,7 @@ Exit Code: 0
   "git": {
     "describe": "unknown",
     "hash": "unknown",
+    "remotes": {},
     "workspace": "<TEMP_DIR>"
   },
   "release": {
