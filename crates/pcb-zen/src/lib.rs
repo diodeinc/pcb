@@ -1,10 +1,17 @@
 //! Diode Star – evaluate .zen designs and return schematic data structures.
 
+pub mod archive;
+pub mod ast_utils;
+mod auto_deps;
+pub mod cache_index;
+pub mod canonical;
 pub mod diagnostics;
 pub mod git;
 pub mod load;
 pub mod lsp;
+pub mod resolve_v2;
 pub mod suppression;
+pub mod workspace;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,14 +24,22 @@ use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
 };
 
+pub use cache_index::get_all_versions_for_repo;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
+pub use resolve_v2::{
+    resolve_dependencies, semver_family, vendor_deps, ResolutionResult, VendorResult,
+};
 pub use starlark::errors::EvalSeverity;
+pub use workspace::{
+    compute_tag_prefix, get_workspace_info, MemberPackage, PackageClosure, WorkspaceInfo,
+};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EvalConfig {
     pub offline: bool,
     pub use_vendor: bool,
+    pub resolution_result: Option<ResolutionResult>,
 }
 
 impl Default for EvalConfig {
@@ -32,6 +47,7 @@ impl Default for EvalConfig {
         Self {
             offline: false,
             use_vendor: true,
+            resolution_result: None,
         }
     }
 }
@@ -51,11 +67,17 @@ pub fn eval(file: &Path, cfg: EvalConfig) -> WithDiagnostics<EvalOutput> {
         Arc::new(DefaultRemoteFetcher::default())
     };
 
+    let (use_vendor, v2_resolutions) = match cfg.resolution_result {
+        Some(res) => (false, Some(res.package_resolutions)),
+        None => (cfg.use_vendor, None),
+    };
+
     let load_resolver = Arc::new(CoreLoadResolver::new(
         file_provider.clone(),
         remote_fetcher,
         workspace_root.to_path_buf(),
-        cfg.use_vendor,
+        use_vendor,
+        v2_resolutions,
     ));
 
     // Track workspace-level pcb.toml if present for dependency awareness

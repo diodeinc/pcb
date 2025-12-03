@@ -39,8 +39,8 @@ pub fn create_diagnostics_passes(
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
 pub struct BuildArgs {
-    /// One or more .zen files or directories containing .zen files to build.
-    /// When omitted, all .zen files in the current directory tree are built.
+    /// One or more .zen files or directories to build.
+    /// When omitted, builds the current directory.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     pub paths: Vec<PathBuf>,
 
@@ -68,6 +68,21 @@ pub struct BuildArgs {
     pub suppress: Vec<String>,
 }
 
+/// Print success message with component count for a built schematic
+pub fn print_build_success(file_name: &str, schematic: &Schematic) {
+    let component_count = schematic
+        .instances
+        .values()
+        .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
+        .count();
+    eprintln!(
+        "{} {} ({} components)",
+        pcb_ui::icons::success(),
+        file_name.with_style(Style::Green).bold(),
+        component_count
+    );
+}
+
 /// Evaluate a single Starlark file and print any diagnostics
 /// Returns the evaluation result and whether there were any errors
 pub fn build(
@@ -77,16 +92,21 @@ pub fn build(
     deny_warnings: bool,
     has_errors: &mut bool,
     has_warnings: &mut bool,
+    resolution_result: Option<pcb_zen::ResolutionResult>,
 ) -> Option<Schematic> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
     debug!("Compiling Zener file: {}", zen_path.display());
     let spinner = Spinner::builder(format!("{file_name}: Building")).start();
 
+    // In V2 mode, resolution handles offline - eval doesn't need network access
+    // In V1 mode (resolution_result is None), offline would break V1 dep resolution
+    let is_v2 = resolution_result.is_some();
     let eval_result = pcb_zen::eval(
         zen_path,
         pcb_zen::EvalConfig {
-            offline,
+            offline: is_v2 && offline,
+            resolution_result,
             ..Default::default()
         },
     );
@@ -151,8 +171,46 @@ pub fn build(
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
+    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
+        args.paths.first().map(|p| p.as_path()),
+        args.offline,
+    )?;
+
     // Process .zen files using shared walker - always recursive for directories
-    let zen_files = file_walker::collect_zen_files(&args.paths, false)?;
+    let zen_files = if workspace_info.is_v2() {
+        // Canonicalize input paths (or use current dir if empty)
+        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
+            vec![std::env::current_dir()?]
+        } else {
+            args.paths
+                .iter()
+                .map(|p| p.canonicalize())
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        // For V2: collect from search paths, filtered to workspace members only
+        let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
+
+        // Filter to only include files within workspace member packages
+        // Skip filtering if no packages discovered (e.g., standalone inline manifest)
+        if workspace_info.packages.is_empty() {
+            all_zen_files
+        } else {
+            all_zen_files
+                .into_iter()
+                .filter(|zen_path| {
+                    workspace_info
+                        .packages
+                        .values()
+                        .any(|pkg| zen_path.starts_with(&pkg.dir))
+                })
+                .collect()
+        }
+    } else {
+        // V1 mode: collect zen files from the given paths (or current dir)
+        file_walker::collect_zen_files(&args.paths, false)?
+    };
 
     if zen_files.is_empty() {
         let cwd = std::env::current_dir()?;
@@ -174,6 +232,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
+            resolution_result.clone(),
         ) else {
             continue;
         };
@@ -199,18 +258,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                 }
             }
         } else {
-            // Print success with component count
-            let component_count = schematic
-                .instances
-                .values()
-                .filter(|i| i.kind == pcb_sch::InstanceKind::Component)
-                .count();
-            eprintln!(
-                "{} {} ({} components)",
-                pcb_ui::icons::success(),
-                file_name.with_style(Style::Green).bold(),
-                component_count
-            );
+            print_build_success(&file_name, &schematic);
         }
     }
 

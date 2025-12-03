@@ -1,0 +1,10 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: "format!(\"simple: {simple}\nempty: {empty}\nno_newline: {no_newline}\nextra_spaces: {extra_spaces}\nwith_newline: {with_newline}\nfull: {full}\")"
+---
+simple: h1:J1a2c4d3MagNTtb1Tq12VBV/yM4zP6exIyF90j5WyqU=
+empty: h1:rxNJufX5oaagQE3qNtzJSZvLJcmtwRK3zJqTyuQfMmI=
+no_newline: h1:N1qYqrkOqcID3UOzKcioXh9EbvAz2Ta7dU5rlHxPnO0=
+extra_spaces: h1:83QM3A9DFFifCX+ZkJBsBekzkxNN6k9NyAdlotFrAH8=
+with_newline: h1:ksp88KYd/HCmpmONnTS7CMtJsz7MPcOYIpgLhbZjpRU=
+full: h1:gHIdIBIQgaYn2kpxGwjV7DV/+g7NDyT34zk0GRJTPpU=

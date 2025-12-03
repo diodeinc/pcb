@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: hash1
+---
+h1:o/UjctMrJSSYnETR11PrBq3JQPz3qfrNXHJTGyp9AOk=

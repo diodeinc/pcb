@@ -218,6 +218,7 @@ macro_rules! snapshot_eval {
                 Arc::new(NoopRemoteFetcher::default()),
                 std::path::PathBuf::from("/"),
                 true,
+                None,
             ));
 
 

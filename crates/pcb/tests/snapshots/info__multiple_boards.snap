@@ -6,7 +6,7 @@ Command: pcb info
 Exit Code: 0
 
 --- STDOUT ---
-Workspace Information
+Workspace
 Root: <TEMP_DIR>
 Name: BoardDiscoveryTest
 Members: boards/*, special/custom-board

@@ -1,0 +1,18 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: "format!\n(\"entries:\\n{}\\n\\nhash: {}\", if entries.is_empty() { \"(none)\".to_string() }\nelse { entries.join(\"\\n\") }, content_hash)"
+---
+entries:
+UPPER.txt
+a.txt
+deep/a/b/c/d.txt
+file1.txt
+file10.txt
+file2.txt
+lower.txt
+m.txt
+src/lib/util.zen
+src/main.zen
+z.txt
+
+hash: h1:38yiLoeeaCaTTRhsMLMh+nYdgZ/2VjLjBdOySm0JkMo=

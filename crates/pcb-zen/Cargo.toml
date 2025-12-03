@@ -28,6 +28,7 @@ clap = { workspace = true }
 debugserver-types = { workspace = true }
 either = { workspace = true }
 globset = { workspace = true }
+ignore = { workspace = true }
 itertools = { workspace = true }
 lsp-types = { workspace = true }
 serde = { workspace = true }
@@ -35,7 +36,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 walkdir = { workspace = true }
 uuid = { workspace = true }
-pathdiff = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 ariadne = { workspace = true }
@@ -51,6 +51,14 @@ zip = { workspace = true }
 tempfile = { workspace = true }
 md5 = { workspace = true }
 fslock = { workspace = true }
+semver = { workspace = true }
+jiff = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+rayon = { workspace = true }
+rusqlite = { workspace = true }
+unicode-normalization = { workspace = true }
 
 pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }

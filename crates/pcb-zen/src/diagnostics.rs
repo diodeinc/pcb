@@ -123,7 +123,17 @@ fn render_diagnostic(diagnostic: &Diagnostic) {
     };
 
     // Compute span for deepest message.
-    let primary_src_str = sources_map.get(&deepest_error_msg.path).unwrap();
+    // Note: deepest_error_msg.path might not be in sources_map if it doesn't have a span
+    let primary_src_str = match sources_map.get(&deepest_error_msg.path) {
+        Some(src) => src,
+        None => {
+            // Fall back to plain printing if we can't get the source
+            for m in &messages {
+                eprintln!("{m}");
+            }
+            return;
+        }
+    };
     let primary_span = compute_span(primary_src_str, deepest_error_msg);
     if primary_span.is_none() {
         for m in &messages {

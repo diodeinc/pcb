@@ -79,6 +79,11 @@ name = "CaseBoard"
 path = "CaseBoard.zen"
 "#;
 
+const CASE_WORKSPACE_PCB_TOML: &str = r#"
+[workspace]
+name = "case_workspace"
+"#;
+
 const TB0002_BOARD_PCB_TOML: &str = r#"
 [board]
 name = "TB0002"
@@ -305,6 +310,7 @@ n2 = Net("N2")
     let output = sb
         .cwd("src")
         .ignore_globs(["layout/*"])
+        .write("pcb.toml", CASE_WORKSPACE_PCB_TOML)
         .write("boards/pcb.toml", CASE_BOARD_PCB_TOML)
         .write("boards/CaseBoard.zen", board_zen)
         .init_git()
@@ -334,7 +340,7 @@ n2 = Net("N2")
         [
             "build",
             "--offline",
-            &format!("{staging_dir}/src/CaseBoard.zen"),
+            &format!("{staging_dir}/src/boards/CaseBoard.zen"),
         ],
     );
     assert_snapshot!("case_insensitive_tag_build", build_ouput);

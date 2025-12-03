@@ -19,6 +19,8 @@ mod lsp;
 mod mcp;
 mod migrate;
 mod open;
+mod package;
+mod publish;
 mod release;
 mod self_update;
 mod sim;
@@ -27,7 +29,8 @@ mod test;
 mod update;
 mod upgrade;
 mod vendor;
-mod workspace;
+
+mod resolve;
 
 #[derive(Parser)]
 #[command(name = "pcb")]
@@ -62,7 +65,7 @@ enum Commands {
     /// Upgrade PCB projects (reserved)
     Upgrade(upgrade::UpgradeArgs),
 
-    /// Update board designs (reserved)
+    /// Update dependencies to latest compatible versions
     Update(update::UpdateArgs),
 
     /// Update the pcb tool itself
@@ -92,6 +95,10 @@ enum Commands {
     #[command(alias = "o")]
     Open(open::OpenArgs),
 
+    /// Publish packages by creating version tags
+    #[command(alias = "p")]
+    Publish(publish::PublishArgs),
+
     /// Release PCB project versions
     #[command(alias = "r")]
     Release(release::ReleaseArgs),
@@ -118,6 +125,10 @@ enum Commands {
 
     /// IPC-2581 parser and inspection tool
     Ipc2581(ipc2581::Ipc2581Args),
+
+    /// Create canonical tar package and compute hash (debug tool)
+    #[command(hide = true)]
+    Package(package::PackageArgs),
 
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
@@ -156,6 +167,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
+        Commands::Publish(args) => publish::execute(args),
         Commands::Release(args) => release::execute(args),
         Commands::Tag(args) => tag::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
@@ -166,6 +178,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Sim(args) => sim::execute(args),
         Commands::Mcp(args) => mcp::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
+        Commands::Package(args) => package::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");

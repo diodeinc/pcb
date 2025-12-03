@@ -6,11 +6,10 @@ Command: pcb info
 Exit Code: 0
 
 --- STDOUT ---
-Workspace Information
+Workspace
 Root: <TEMP_DIR>
 
-Boards (2)
+Boards (1)
   TestBoard - boards/BoardWithToml/test_board.zen
     Main test board for validation
-  board (default) - boards/BoardWithoutToml/board.zen
 --- STDERR ---

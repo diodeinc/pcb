@@ -9,23 +9,45 @@ Exit Code: 0
 {
   "root": "<TEMP_DIR>",
   "config": {
-    "name": "BoardDiscoveryTest",
-    "members": [
-      "boards/*",
-      "special/custom-board"
-    ],
-    "default_board": "TestBoard"
-  },
-  "boards": [
-    {
-      "name": "MainBoard",
-      "zen_path": "boards/main-board/main_board.zen"
+    "workspace": {
+      "name": "BoardDiscoveryTest",
+      "members": [
+        "boards/*",
+        "special/custom-board"
+      ],
+      "default_board": "TestBoard"
     },
-    {
-      "name": "TestBoard",
-      "zen_path": "boards/test-board/test_board.zen",
-      "description": "Main test board for validation"
+    "packages": {
+      "stdlib": "@github/diodeinc/stdlib:v1.0.0"
     }
-  ]
+  },
+  "packages": {
+    "boards/main-board": {
+      "dir": "<TEMP_DIR>/boards/main-board",
+      "rel_path": "boards/main-board",
+      "config": {
+        "workspace": null,
+        "board": {
+          "name": "MainBoard",
+          "path": "main_board.zen"
+        }
+      },
+      "version": null
+    },
+    "boards/test-board": {
+      "dir": "<TEMP_DIR>/boards/test-board",
+      "rel_path": "boards/test-board",
+      "config": {
+        "workspace": null,
+        "board": {
+          "name": "TestBoard",
+          "path": "test_board.zen",
+          "description": "Main test board for validation"
+        }
+      },
+      "version": null
+    }
+  },
+  "errors": []
 }
 --- STDERR ---

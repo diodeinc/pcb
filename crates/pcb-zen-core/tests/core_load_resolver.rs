@@ -167,13 +167,6 @@ impl RemoteFetcher for MockRemoteFetcher {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No mock result for spec: {}", spec_str))
     }
-
-    fn remote_ref_meta(
-        &self,
-        _remote_ref: &pcb_zen_core::RemoteRef,
-    ) -> Option<pcb_zen_core::RemoteRefMeta> {
-        None // Mock doesn't provide metadata
-    }
 }
 
 #[test]
@@ -199,6 +192,7 @@ fn test_resolve_github_spec() {
         remote_fetcher.clone(),
         PathBuf::from("/workspace"),
         true,
+        None,
     );
 
     let spec = LoadSpec::Github {
@@ -243,6 +237,7 @@ fn test_resolve_relative_from_github_spec() {
         remote_fetcher.clone(),
         PathBuf::from("/workspace"),
         true,
+        None,
     );
 
     // First, let's test resolving a relative path from the cached Resistor.zen
@@ -285,6 +280,7 @@ fn test_resolve_workspace_path_from_remote() {
         remote_fetcher.clone(),
         PathBuf::from("/workspace"),
         true,
+        None,
     );
 
     // When resolving a workspace path from a remote file, it should be
@@ -327,6 +323,7 @@ stdlib = "@github/diodeinc/stdlib"
         remote_fetcher.clone(),
         workspace_root.clone(),
         true,
+        None,
     );
 
     // Test resolving a package alias
@@ -387,6 +384,7 @@ fn test_resolve_relative_from_remote_with_mapping() {
         remote_fetcher.clone(),
         PathBuf::from("/workspace"),
         true,
+        None,
     );
 
     // First resolve the GitHub spec for Resistor.zen
@@ -467,6 +465,7 @@ fn test_resolve_workspace_path_from_remote_with_mapping() {
         remote_fetcher.clone(),
         PathBuf::from("/workspace"),
         true,
+        None,
     );
 
     // Resolve the initial file
@@ -542,6 +541,7 @@ stdlib = "@github/diodeinc/stdlib:v1.0.0"
         remote_fetcher.clone(),
         workspace_root.clone(),
         true,
+        None,
     );
 
     // Test resolving package from workspace root directory
@@ -610,6 +610,7 @@ local = "./local"
         remote_fetcher.clone(),
         workspace_root.clone(),
         true,
+        None,
     );
 
     // Test from workspace root - should use v1.0.0
@@ -692,6 +693,7 @@ stdlib = "@github/diodeinc/stdlib"
         remote_fetcher.clone(),
         workspace_root.clone(),
         true,
+        None,
     ));
 
     let spec = LoadSpec::Package {

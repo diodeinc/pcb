@@ -29,15 +29,6 @@ gnd = Net("GND")
 SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
 "#;
 
-const LOAD_AND_MODULE_UNSTABLE_ZEN: &str = r#"
-load("@github/mycompany/components:main/common.zen", "helper")
-SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
 const WARNING_AND_ERROR_ZEN: &str = r#"
 SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
 
@@ -45,16 +36,6 @@ vcc = Net("VCC")
 gnd = Net("GND")
 # This will cause an error - missing required parameter
 SimpleResistor(name = "R1", P1 = vcc)
-"#;
-
-const METHOD_CHAINING_UNSTABLE_ZEN: &str = r#"
-# Test Module() with method chaining - should still show span highlighting
-R = Module("@github/mycompany/components:main/SimpleResistor.zen").Resistance
-"#;
-
-const COMMON_ZEN: &str = r#"
-def helper():
-    return "helper function"
 "#;
 
 const TEST_KICAD_MOD: &str = r#"(footprint "test"
@@ -193,72 +174,6 @@ warn("Warning 2 should NOT be suppressed")
 warn("Warning 3")  # suppress: warnings
 warn("Warning 4 should NOT be suppressed")
 "#;
-
-#[test]
-fn test_pcb_build_unstable_ref_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository with a simple component
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .push_mirror();
-
-    // Create a board that uses the component from the fake git repository with unstable ref (:main)
-    let output = sandbox
-        .write("board.zen", UNSTABLE_REF_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("module_unstable_ref_warning", output);
-}
-
-#[test]
-fn test_load_and_module_unstable_ref_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository with components and common utilities
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("common.zen", COMMON_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add components and utilities")
-        .push_mirror();
-
-    // Create a board that uses both load() and Module() with unstable refs
-    let output = sandbox
-        .write("board.zen", LOAD_AND_MODULE_UNSTABLE_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("load_and_module_unstable_ref_warning", output);
-}
-
-#[test]
-fn test_unstable_ref_no_explicit_branch() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .push_mirror();
-
-    // Create a board that uses unstable ref without explicit ":main" (defaults to HEAD)
-    let unstable_default_zen = r#"
-SimpleResistor = Module("@github/mycompany/components/SimpleResistor.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
-    let output = sandbox
-        .write("board.zen", unstable_default_zen)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("unstable_ref_no_explicit_branch", output);
-}
 
 #[test]
 fn test_warning_and_error_mixed() {
@@ -407,252 +322,6 @@ StableComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
 }
 
 #[test]
-fn test_method_chaining_unstable_ref_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository with a component that exports a sub-interface
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .push_mirror();
-
-    // Create a board that uses Module() with method chaining (.Resistance)
-    // This should show proper span highlighting on the string argument
-    let output = sandbox
-        .write("board.zen", METHOD_CHAINING_UNSTABLE_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("method_chaining_unstable_ref_warning", output);
-}
-
-#[test]
-fn test_alias_unstable_ref_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository with components
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .push_mirror();
-
-    // Create a pcb.toml with an alias that points to an unstable ref
-    let pcb_toml_content = r#"
-[packages]
-mycomps = "@github/mycompany/components:main"
-"#;
-
-    // Create a board that uses the component via an alias
-    let board_zen_content = r#"
-SimpleResistor = Module("@mycomps/SimpleResistor.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
-    let output = sandbox
-        .write("pcb.toml", pcb_toml_content)
-        .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("alias_unstable_ref_warning", output);
-}
-
-#[test]
-fn test_default_alias_unstable_ref_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake stdlib repository that matches the default stdlib alias
-    sandbox
-        .git_fixture("https://github.com/diodeinc/stdlib.git")
-        .write("TestModule.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add test module")
-        .push_mirror();
-
-    // Create a board that uses the default stdlib alias with HEAD (unstable)
-    let board_zen_content = r#"
-TestModule = Module("@stdlib/TestModule.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-TestModule(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
-    let output = sandbox
-        .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("default_alias_unstable_ref_warning", output);
-}
-
-#[test]
-fn test_gitlab_unstable_ref_warning() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake GitLab repository with components
-    sandbox
-        .git_fixture("https://gitlab.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .push_mirror();
-
-    // Create a board that uses GitLab with unstable ref
-    let board_zen_content = r#"
-SimpleResistor = Module("@gitlab/mycompany/components:main/SimpleResistor.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
-    let output = sandbox
-        .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("gitlab_unstable_ref_warning", output);
-}
-
-#[test]
-fn test_transitive_unstable_dependencies() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a third-party utility repo (unstable)
-    sandbox
-        .git_fixture("https://github.com/thirdparty/utils.git")
-        .write(
-            "Utility.zen",
-            r#"
-def utility_function(): 
-    return "helper"
-"#,
-        )
-        .commit("Add utility functions")
-        .push_mirror();
-
-    // Create intermediate components repo (stable) that depends on unstable third-party via PCB.toml
-    sandbox
-        .git_fixture("https://github.com/mycompany/intermediate.git")
-        .write(
-            "pcb.toml",
-            r#"
-[packages]
-utils = "@github/thirdparty/utils:main"
-"#,
-        )
-        .write(
-            "IntermediateComponent.zen",
-            r#"
-# This intermediate component depends on unstable third-party via alias
-load("@utils/Utility.zen", "utility_function")
-
-value = config("value", str, default = "10kOhm")
-P1 = io("P1", Net)
-P2 = io("P2", Net)
-
-Component(
-    name = "R",
-    prefix = "R",
-    footprint = File("test.kicad_mod"),
-    pin_defs = {"P1": "1", "P2": "2"},
-    pins = {"P1": P1, "P2": P2},
-    properties = {"value": value, "type": "resistor"},
-)
-"#,
-        )
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add intermediate component")
-        .tag("v1.0.0", false)
-        .push_mirror();
-
-    // Create a PCB.toml with multiple aliases creating a chain
-    let pcb_toml_content = r#"
-[packages]
-intermediate = "@github/mycompany/intermediate:v1.0.0"
-utils = "@github/thirdparty/utils:main"
-"#;
-
-    // Create a board that uses the intermediate alias (which internally uses the utils alias)
-    let board_zen_content = r#"
-IntermediateComponent = Module("@intermediate/IntermediateComponent.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-IntermediateComponent(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-"#;
-
-    let output = sandbox
-        .write("pcb.toml", pcb_toml_content)
-        .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("transitive_unstable_dependencies", output);
-}
-
-#[test]
-fn test_mixed_stable_unstable_refs() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a stable component repository
-    sandbox
-        .git_fixture("https://github.com/stable/components.git")
-        .write("StableResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add stable resistor")
-        .tag("v1.0.0", false)
-        .push_mirror();
-
-    // Create an unstable component repository
-    sandbox
-        .git_fixture("https://github.com/unstable/components.git")
-        .write(
-            "UnstableCapacitor.zen",
-            r#"
-value = config("value", str, default = "1uF")
-
-P1 = io("P1", Net)
-P2 = io("P2", Net)
-
-Component(
-    name = "C",
-    prefix = "C",
-    footprint = File("test.kicad_mod"),
-    pin_defs = {"P1": "1", "P2": "2"},
-    pins = {"P1": P1, "P2": P2},
-    properties = {"value": value, "type": "capacitor"},
-)
-"#,
-        )
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add unstable capacitor")
-        .push_mirror();
-
-    // Create PCB.toml with mixed stable/unstable aliases
-    let pcb_toml_content = r#"
-[packages]
-stable = "@github/stable/components:v1.0.0"
-unstable = "@github/unstable/components:main"
-"#;
-
-    // Create a board that uses both stable and unstable components
-    let board_zen_content = r#"
-StableResistor = Module("@stable/StableResistor.zen")
-UnstableCapacitor = Module("@unstable/UnstableCapacitor.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-StableResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
-UnstableCapacitor(name = "C1", value = "1uF", P1 = vcc, P2 = gnd)
-"#;
-
-    let output = sandbox
-        .write("pcb.toml", pcb_toml_content)
-        .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("mixed_stable_unstable_refs", output);
-}
-
-#[test]
 fn test_aggregated_warnings() {
     let mut sandbox = Sandbox::new();
 
@@ -739,30 +408,6 @@ Comp2(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
 }
 
 #[test]
-fn test_unstable_ref_wrong_tag() {
-    let mut sandbox = Sandbox::new();
-
-    // Create a fake git repository with HEAD tagged
-    sandbox
-        .git_fixture("https://github.com/mycompany/components.git")
-        .write("SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add simple resistor component")
-        .tag("v1.0.0", false)
-        .push_mirror();
-
-    // Create a board that uses branch unstabe ref
-    let unstable_default_zen = r#"
-SimpleResistor = Module("@github/mycompany/components:main/SimpleResistor.zen")
-"#;
-
-    let output = sandbox
-        .write("board.zen", unstable_default_zen)
-        .snapshot_run("pcb", ["build", "board.zen"]);
-    assert_snapshot!("unstable_ref_wrong_tag", output);
-}
-
-#[test]
 fn test_commit_stable_ref() {
     let mut sandbox = Sandbox::new();
 
@@ -787,6 +432,27 @@ SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
         .write("board.zen", unstable_default_zen)
         .snapshot_run("pcb", ["build", "board.zen"]);
     assert_snapshot!("commit_stable_ref", output);
+}
+
+#[test]
+fn test_inline_manifest_v2() {
+    let mut sandbox = Sandbox::new();
+
+    // Standalone .zen file with inline pcb.toml (V2 mode)
+    // Uses minimal code that doesn't require dependencies
+    let inline_manifest_zen = r#"# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+# ```
+
+# Simple V2 standalone script - no dependencies needed
+x = 1 + 2
+"#;
+
+    let output = sandbox
+        .write("standalone.zen", inline_manifest_zen)
+        .snapshot_run("pcb", ["build", "standalone.zen"]);
+    assert_snapshot!("inline_manifest_v2", output);
 }
 
 // Tests for -S flag with kind-based suppression

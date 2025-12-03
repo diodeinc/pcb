@@ -94,6 +94,7 @@ mod tests {
             Arc::new(crate::NoopRemoteFetcher),
             parent_dir.to_path_buf(),
             false,
+            None,
         ));
         EvalContext::new(load_resolver).set_source_path(test_path)
     }

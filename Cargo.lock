@@ -223,6 +223,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayref"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -448,6 +454,19 @@ dependencies = [
  "radium",
  "tap",
  "wyz",
+]
+
+[[package]]
+name = "blake3"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3888aaa89e4b2a40fca9848e400f6a658a5a3978de7be858e209cafa8be9a4a0"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
 ]
 
 [[package]]
@@ -783,6 +802,12 @@ dependencies = [
  "log",
  "web-sys",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "convert_case"
@@ -1361,6 +1386,18 @@ name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+
+[[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastrand"
@@ -2307,7 +2344,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2408,6 +2445,17 @@ dependencies = [
  "bitflags 2.9.1",
  "libc",
  "redox_syscall",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "133c182a6a2c87864fe97778797e46c7e999672690dc9fa3ee8e241aa4a9c13f"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -2967,7 +3015,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pcb"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -2983,6 +3031,7 @@ dependencies = [
  "dirs",
  "duct",
  "env_logger",
+ "globset",
  "gltfpack-sys",
  "ignore",
  "indicatif",
@@ -3005,6 +3054,7 @@ dependencies = [
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
+ "rayon",
  "semver",
  "serde",
  "serde_json",
@@ -3012,6 +3062,7 @@ dependencies = [
  "starlark_syntax",
  "tempfile",
  "terminal_size",
+ "toml",
  "unicode-width 0.2.1",
  "walkdir",
  "zip 4.3.0",
@@ -3019,7 +3070,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-command-runner"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "log",
@@ -3030,7 +3081,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-diode-api"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -3049,6 +3100,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-mcp",
  "pcb-sch",
+ "pcb-zen",
  "pcb-zen-core",
  "rand 0.8.5",
  "regex",
@@ -3067,7 +3119,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-eda"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -3079,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-fmt"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ruff_formatter",
@@ -3089,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ipc2581-tools"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3111,7 +3163,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-kicad"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3129,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-layout"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3154,7 +3206,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-mcp"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "rpc-router",
@@ -3166,7 +3218,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sch"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3197,7 +3249,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sexpr"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "log",
  "serde",
@@ -3205,7 +3257,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sim"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -3235,7 +3287,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-starlark-lsp"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "derivative",
@@ -3256,7 +3308,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-test-utils"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "assert_fs",
@@ -3275,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ui"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "colored",
@@ -3288,12 +3340,14 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "allocative",
  "anyhow",
  "argfile",
  "ariadne",
+ "base64",
+ "blake3",
  "clap",
  "debugserver-types",
  "derive_more",
@@ -3304,14 +3358,15 @@ dependencies = [
  "flate2",
  "fslock",
  "globset",
+ "ignore",
  "insta",
  "itertools 0.13.0",
+ "jiff",
  "log",
  "lsp-server",
  "lsp-types",
  "md5",
  "once_cell",
- "pathdiff",
  "pcb-eda",
  "pcb-kicad",
  "pcb-sch",
@@ -3319,12 +3374,16 @@ dependencies = [
  "pcb-starlark-lsp",
  "pcb-ui",
  "pcb-zen-core",
+ "rayon",
  "regex",
  "reqwest",
+ "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "sha2",
  "starlark",
  "starlark_derive",
  "starlark_map",
@@ -3333,6 +3392,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "toml",
+ "unicode-normalization",
  "uuid",
  "walkdir",
  "zip 4.3.0",
@@ -3340,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-core"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3370,6 +3430,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rust_decimal",
+ "semver",
  "serde",
  "serde_json",
  "smallvec",
@@ -3388,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-wasm"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -3817,6 +3878,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.3",
+]
+
+[[package]]
+name = "rayon"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -4268,6 +4349,20 @@ source = "git+https://github.com/astral-sh/ruff?tag=0.13.0#a1fdd66f10a045a574efb
 dependencies = [
  "get-size2",
  "serde",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "165ca6e57b20e1351573e3729b958bc62f0e48025386970b6e4d29e7a7e71f3f"
+dependencies = [
+ "bitflags 2.9.1",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec",
 ]
 
 [[package]]

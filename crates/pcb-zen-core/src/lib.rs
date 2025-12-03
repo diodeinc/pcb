@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
 };
@@ -14,7 +14,6 @@ pub mod lang;
 pub mod load_spec;
 mod moved;
 pub mod passes;
-pub mod warnings;
 
 /// Attribute, net, and record field constants used across the core
 pub mod attrs {
@@ -48,12 +47,15 @@ pub mod attrs {
 }
 
 // Re-export commonly used types
-pub use config::{BoardConfig, ModuleConfig, PcbToml, WorkspaceConfig};
+pub use config::{
+    AssetDependencyDetail, AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig,
+    PcbToml, WorkspaceConfig,
+};
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
     DiagnosticsReport, LoadError, WithDiagnostics,
 };
-pub use lang::error::{SuppressedDiagnostics, UnstableRefError};
+pub use lang::error::SuppressedDiagnostics;
 pub use lang::eval::{EvalContext, EvalOutput};
 pub use load_spec::LoadSpec;
 pub use passes::{
@@ -258,9 +260,6 @@ pub trait RemoteFetcher: Send + Sync {
         spec: &LoadSpec,
         workspace_root: &Path,
     ) -> Result<PathBuf, anyhow::Error>;
-
-    /// Lookup metadata for a previously fetched remote ref, if cached.
-    fn remote_ref_meta(&self, remote_ref: &RemoteRef) -> Option<RemoteRefMeta>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -277,70 +276,6 @@ impl RemoteFetcher for NoopRemoteFetcher {
             Run 'pcb vendor' to download dependencies locally.",
             spec
         ))
-    }
-
-    fn remote_ref_meta(&self, _remote_ref: &RemoteRef) -> Option<RemoteRefMeta> {
-        None
-    }
-}
-
-/// Abstraction for resolving load() paths to file contents
-/// Kind of a resolved Git reference after fetching
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefKind {
-    Tag,
-    Commit,
-    Unstable,
-}
-
-/// Remote reference identifier with structured information
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RemoteRef {
-    GitHub {
-        user: String,
-        repo: String,
-        rev: String,
-    },
-    GitLab {
-        project_path: String,
-        rev: String,
-    },
-}
-
-impl RemoteRef {
-    /// Get the canonical repository URL for this remote reference
-    pub fn repo_url(&self) -> Option<String> {
-        match self {
-            RemoteRef::GitHub { user, repo, .. } => {
-                Some(format!("https://github.com/{user}/{repo}"))
-            }
-            RemoteRef::GitLab { project_path, .. } => {
-                Some(format!("https://gitlab.com/{project_path}"))
-            }
-        }
-    }
-
-    pub fn rev(&self) -> &str {
-        match self {
-            RemoteRef::GitHub { rev, .. } | RemoteRef::GitLab { rev, .. } => rev,
-        }
-    }
-}
-
-/// Metadata about a resolved remote reference
-#[derive(Debug, Clone)]
-pub struct RemoteRefMeta {
-    /// Full 40-character SHA-1 commit id
-    pub commit_sha1: String,
-    /// Full SHA-256 commit id when repository uses SHA-256 object format
-    pub commit_sha256: Option<String>,
-    /// Classification of the ref
-    pub kind: RefKind,
-}
-
-impl RemoteRefMeta {
-    pub fn stable(&self) -> bool {
-        matches!(self.kind, RefKind::Tag | RefKind::Commit)
     }
 }
 
@@ -472,12 +407,6 @@ pub trait LoadResolver: Send + Sync + Any {
     /// Returns the resolved absolute path that should be loaded.
     fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error>;
 
-    /// Return the remote ref for a resolved path, if available.
-    fn remote_ref(&self, _path: &Path) -> Option<RemoteRef>;
-
-    /// Return stored metadata for a previously fetched remote ref, if available.
-    fn remote_ref_meta(&self, _remote_ref: &RemoteRef) -> Option<RemoteRefMeta>;
-
     /// Manually track a file. Useful for entrypoints.
     fn track_file(&self, path: &Path);
 
@@ -552,6 +481,10 @@ pub struct CoreLoadResolver {
     remote_fetcher: Arc<dyn RemoteFetcher>,
     workspace_root: PathBuf,
     use_vendor_dir: bool,
+    /// V2 resolution map: Package Root -> Import URL -> Resolved Path
+    /// Contains workspace packages AND transitive remote deps
+    /// BTreeMap enables longest prefix matching for nested package paths
+    v2_package_resolutions: Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>>,
     /// Maps resolved paths to their original LoadSpecs
     /// This allows us to resolve relative paths from remote files correctly
     path_to_spec: Arc<Mutex<HashMap<PathBuf, LoadSpec>>>,
@@ -566,6 +499,7 @@ impl CoreLoadResolver {
         remote_fetcher: Arc<dyn RemoteFetcher>,
         workspace_root: PathBuf,
         use_vendor_dir: bool,
+        v2_package_resolutions: Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>>,
     ) -> Self {
         // Canonicalize workspace root once to avoid path comparison issues
         let workspace_root = file_provider
@@ -578,6 +512,7 @@ impl CoreLoadResolver {
             workspace_root,
             path_to_spec: Arc::new(Mutex::new(HashMap::new())),
             use_vendor_dir,
+            v2_package_resolutions,
             alias_cache: RwLock::new(HashMap::new()),
         }
     }
@@ -595,6 +530,7 @@ impl CoreLoadResolver {
             remote_fetcher,
             workspace_root,
             use_vendor_dir,
+            None,
         )
     }
 
@@ -691,7 +627,7 @@ impl CoreLoadResolver {
             .into_iter()
             .map(|p| {
                 let content = self.file_provider.read_file(&p)?;
-                let toml_aliases = config::PcbToml::parse(&content)?.packages;
+                let toml_aliases = config::PcbToml::parse(&content)?.packages();
                 // Convert to AliasInfo with source path
                 let canonical_path = self.file_provider.canonicalize(&p)?;
                 let alias_info_map = toml_aliases
@@ -762,7 +698,7 @@ impl CoreLoadResolver {
             .insert(resolved_path, spec);
     }
 
-    /// Handle remote relative path resolution
+    /// Handle remote relative path resolution (V1 only)
     /// Pushes resolved specs directly to the context's spec history if applicable
     fn handle_remote_relative_paths(&self, context: &mut ResolveContext) -> anyhow::Result<()> {
         // Only proceed if the current file is actually from a remote spec
@@ -812,15 +748,149 @@ impl CoreLoadResolver {
         Ok(())
     }
 
-    /// Resolve remote specs (Package/Github/Gitlab)
+    /// Find the package root for a given file by walking up directories
+    ///
+    /// First tries package_resolutions map (workspace packages), then walks up looking for pcb.toml (cached packages)
+    fn find_package_root_for_file(
+        &self,
+        file: &Path,
+        package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+    ) -> Option<PathBuf> {
+        let mut current = file.parent();
+        while let Some(dir) = current {
+            // Check workspace package resolutions first
+            if package_resolutions.contains_key(dir) {
+                return Some(dir.to_path_buf());
+            }
+
+            // Check for pcb.toml (handles cached packages)
+            let pcb_toml = dir.join("pcb.toml");
+            if self.file_provider.exists(&pcb_toml) {
+                return Some(dir.to_path_buf());
+            }
+
+            current = dir.parent();
+        }
+        None
+    }
+
+    /// Expand V2 alias using auto-generated aliases from dependencies/assets
+    fn expand_v2_alias(
+        &self,
+        context: &ResolveContext,
+        alias: &str,
+    ) -> Result<String, anyhow::Error> {
+        // Find package root by walking up from current file looking for pcb.toml
+        let mut current = context.current_file.parent();
+        while let Some(dir) = current {
+            let pcb_toml_path = dir.join("pcb.toml");
+            if self.file_provider.exists(&pcb_toml_path) {
+                // Parse pcb.toml
+                if let Ok(cfg) = config::PcbToml::from_file(&*self.file_provider, &pcb_toml_path) {
+                    let auto_aliases = cfg.auto_generated_aliases();
+                    if let Some(target) = auto_aliases.get(alias) {
+                        return Ok(target.clone());
+                    }
+                }
+                break;
+            }
+            current = dir.parent();
+        }
+
+        // Unknown alias
+        anyhow::bail!("Unknown alias '@{}'", alias)
+    }
+
+    /// V2 remote resolution: longest prefix match against package's declared deps
+    fn try_resolve_v2_workspace(
+        &self,
+        context: &ResolveContext,
+        package_root: &Path,
+    ) -> Result<PathBuf, anyhow::Error> {
+        let spec = context.latest_spec();
+
+        // Build full URL from spec
+        let (base, path) = match spec {
+            LoadSpec::Github {
+                user, repo, path, ..
+            } => (format!("github.com/{}/{}", user, repo), path),
+            LoadSpec::Gitlab {
+                project_path, path, ..
+            } => (format!("gitlab.com/{}", project_path), path),
+            LoadSpec::Package { package, path, .. } => (package.clone(), path),
+            _ => unreachable!(),
+        };
+
+        let mut full_url = base;
+        for component in path.components() {
+            if let std::path::Component::Normal(part) = component {
+                full_url.push('/');
+                full_url.push_str(&part.to_string_lossy());
+            }
+        }
+
+        let resolved_map = self
+            .v2_package_resolutions
+            .as_ref()
+            .unwrap()
+            .get(package_root)
+            .expect("package_resolutions out of sync");
+
+        // Longest prefix match
+        let best_match = resolved_map.iter().rev().find(|(dep_url, _)| {
+            full_url.starts_with(dep_url.as_str())
+                && (full_url.len() == dep_url.len()
+                    || full_url.as_bytes().get(dep_url.len()) == Some(&b'/'))
+        });
+
+        let Some((matched_dep, root_path)) = best_match else {
+            // Strip the filename from full_url to show the package path
+            let package_hint = full_url
+                .rsplit_once('/')
+                .map(|(prefix, _)| prefix)
+                .unwrap_or(&full_url);
+            anyhow::bail!(
+                "No declared dependency matches '{}'\n  \
+                Add a dependency that covers this path to [dependencies] in pcb.toml",
+                package_hint
+            );
+        };
+
+        let relative_path = full_url
+            .strip_prefix(matched_dep.as_str())
+            .and_then(|s| s.strip_prefix('/'))
+            .unwrap_or("");
+
+        let full_path = if relative_path.is_empty() {
+            root_path.clone()
+        } else {
+            root_path.join(relative_path)
+        };
+
+        if !self.file_provider.exists(&full_path) {
+            anyhow::bail!(
+                "File not found: {} (resolved to: {}, dep root: {})",
+                relative_path,
+                full_path.display(),
+                root_path.display()
+            );
+        }
+
+        self.insert_load_spec(full_path.clone(), spec.clone());
+        Ok(full_path)
+    }
+
+    /// Resolve remote specs - V1 only
     fn resolve_remote_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
         let resolved_spec = context.latest_spec().clone();
+
         // First try vendor directory if available
         if self.use_vendor_dir {
             if let Ok(vendor_path) = self.try_resolve_from_vendor(&resolved_spec) {
                 return Ok(vendor_path);
             }
         }
+
         let resolved_path = self
             .remote_fetcher
             .fetch_remote(&resolved_spec, &self.workspace_root)?;
@@ -832,7 +902,7 @@ impl CoreLoadResolver {
         Ok(resolved_path)
     }
 
-    /// Resolve local specs (Path/WorkspacePath)
+    /// Resolve local specs - V1 logic (workspace-relative and absolute paths allowed)
     fn resolve_local_spec(&self, context: &mut ResolveContext) -> anyhow::Result<PathBuf> {
         let mut resolved_spec = context.latest_spec().clone();
         let effective_workspace_root = self.get_effective_workspace_root(context)?;
@@ -848,7 +918,6 @@ impl CoreLoadResolver {
                 } else if path.is_absolute() {
                     path.clone()
                 } else {
-                    // Regular relative paths are resolved from current file's directory
                     let current_dir = context.current_file.parent().unwrap();
                     let path = &current_dir.join(&*path);
                     context.file_provider.canonicalize(path)?
@@ -858,10 +927,117 @@ impl CoreLoadResolver {
             _ => unreachable!(),
         };
 
-        // Verify the path exists
         let resolved_path = resolved_spec.path().clone();
         self.insert_load_spec(resolved_path.clone(), resolved_spec);
         Ok(resolved_path)
+    }
+
+    /// V2 resolution: Toolchain + package-level aliases, URLs, and relative paths
+    ///
+    /// V2 supports three load patterns:
+    /// 1. Aliases: load("@stdlib/units.zen") - expanded via toolchain or package aliases
+    /// 2. Canonical URLs: load("github.com/user/repo/path.zen") - looked up in resolution map
+    /// 3. Relative paths: load("./utils.zen") - resolved relative to current file with boundary checks
+    fn resolve_v2(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // Expand aliases: package-level first, then toolchain-level
+        if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
+            let expanded_url = self.expand_v2_alias(context, package)?;
+            let full_url = if path.as_os_str().is_empty() {
+                expanded_url
+            } else {
+                format!("{}/{}", expanded_url, path.display())
+            };
+
+            // Reparse the expanded URL as a proper LoadSpec
+            let expanded_spec = LoadSpec::parse(&full_url)
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse expanded alias: {}", full_url))?;
+            context.push_spec(expanded_spec)?;
+        }
+
+        let resolved_path = match context.latest_spec() {
+            // URL loads: github.com/... or gitlab.com/...
+            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => self.resolve_v2_url(context)?,
+            // Relative path loads: ./utils.zen or ../sibling.zen
+            LoadSpec::Path { .. } => self.resolve_v2_relative(context)?,
+            LoadSpec::Package { .. } => unreachable!("Package checked above"),
+        };
+
+        // Validate existence
+        if !context.file_provider.exists(&resolved_path)
+            && !context.original_spec().allow_not_exist()
+        {
+            return Err(anyhow::anyhow!(
+                "File not found: {}",
+                resolved_path.display()
+            ));
+        }
+
+        // Case sensitivity validation
+        if context.file_provider.exists(&resolved_path) {
+            validate_path_case(context.file_provider, &resolved_path)?;
+        }
+
+        Ok(resolved_path)
+    }
+
+    /// V2 URL resolution: translate canonical URL to cache path using resolution map
+    fn resolve_v2_url(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // Find which package the current file belongs to
+        let package_root = self
+            .v2_package_resolutions
+            .as_ref()
+            .and_then(|m| self.find_package_root_for_file(&context.current_file, m))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Internal error: current file not in any V2 package: {}",
+                    context.current_file.display()
+                )
+            })?;
+
+        // Use existing try_resolve_v2_workspace which does longest-prefix matching
+        self.try_resolve_v2_workspace(context, &package_root)
+    }
+
+    /// V2 relative path resolution: resolve relative to current file with boundary enforcement
+    fn resolve_v2_relative(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        let LoadSpec::Path { path, .. } = context.latest_spec() else {
+            unreachable!("resolve_v2_relative called on non-Path spec");
+        };
+
+        // Find package root for boundary enforcement
+        let package_root = self
+            .v2_package_resolutions
+            .as_ref()
+            .and_then(|m| self.find_package_root_for_file(&context.current_file, m))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Internal error: current file not in any V2 package: {}",
+                    context.current_file.display()
+                )
+            })?;
+
+        // Resolve relative to current file's directory
+        let current_dir = context
+            .current_file
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
+
+        let resolved_path = current_dir.join(path);
+
+        // Canonicalize both paths for boundary check
+        let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
+        let canonical_root = context.file_provider.canonicalize(&package_root)?;
+
+        // Enforce package boundary: resolved path must stay within package root
+        if !canonical_resolved.starts_with(&canonical_root) {
+            anyhow::bail!(
+                "Cannot load outside package boundary: '{}' would escape package root '{}'",
+                path.display(),
+                package_root.display()
+            );
+        }
+
+        Ok(canonical_resolved)
     }
 }
 
@@ -871,6 +1047,12 @@ impl LoadResolver for CoreLoadResolver {
     }
 
     fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
+        // V2 mode: use simplified, separate resolution path
+        if self.v2_package_resolutions.is_some() {
+            return self.resolve_v2(context);
+        }
+
+        // V1 mode: legacy resolution with remote relative paths and workspace complexity
         // Handle remote relative paths
         self.handle_remote_relative_paths(context)?;
         // Resolve aliases
@@ -901,14 +1083,6 @@ impl LoadResolver for CoreLoadResolver {
         }
 
         Ok(resolved_path)
-    }
-
-    fn remote_ref(&self, path: &Path) -> Option<RemoteRef> {
-        self.get_load_spec(path).and_then(|s| s.remote_ref())
-    }
-
-    fn remote_ref_meta(&self, remote_ref: &RemoteRef) -> Option<RemoteRefMeta> {
-        self.remote_fetcher.remote_ref_meta(remote_ref)
     }
 
     fn track_file(&self, path: &Path) {

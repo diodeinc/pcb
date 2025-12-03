@@ -50,13 +50,16 @@ starlark_syntax = { workspace = true }
 comfy-table = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
 chrono = { workspace = true }
 dir-diff = { workspace = true }
 tempfile = { workspace = true }
 ignore = { workspace = true }
+globset = { workspace = true }
 semver = { workspace = true }
+rayon = { workspace = true }
 crossterm = { workspace = true }
 terminal_size = { workspace = true }
 unicode-width = { workspace = true }

@@ -1,8 +1,8 @@
 use log::debug;
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::{EvalContext, FileProvider};
+use pcb_zen_core::{AssetDependencySpec, EvalContext, FileProvider, Lockfile, PcbToml};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
@@ -88,13 +88,6 @@ impl pcb_zen_core::RemoteFetcher for WasmRemoteFetcher {
                 Ok(path.clone())
             }
         }
-    }
-
-    fn remote_ref_meta(
-        &self,
-        _remote_ref: &pcb_zen_core::RemoteRef,
-    ) -> Option<pcb_zen_core::RemoteRefMeta> {
-        None
     }
 }
 
@@ -301,6 +294,120 @@ impl pcb_zen_core::FileProvider for WasmFileProvider {
     }
 }
 
+/// Construct vendor path for a module: vendor/<repo_url>/<version>/<subpath>
+///
+/// For assets with subpaths (e.g., gitlab.com/kicad/.../Resistor_SMD.pretty),
+/// splits into repo_url and subpath to construct correct vendor structure.
+fn vendor_path_for_module(vendor_dir: &Path, module_path: &str, version: &str) -> PathBuf {
+    let (repo_url, subpath) = pcb_zen_core::config::split_asset_repo_and_subpath(module_path);
+    if subpath.is_empty() {
+        vendor_dir.join(repo_url).join(version)
+    } else {
+        vendor_dir.join(repo_url).join(version).join(subpath)
+    }
+}
+
+/// Lightweight V2 resolution from pcb.sum + vendor/
+///
+/// Returns package resolutions if pcb.sum exists (implying V2 mode).
+/// Assumes vendor/ contains all dependencies.
+fn resolve_from_lockfile_and_vendor(
+    file_provider: &dyn FileProvider,
+    workspace_root: &Path,
+) -> Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+    // Read pcb.sum - presence implies V2
+    let lockfile_content = file_provider
+        .read_file(&workspace_root.join("pcb.sum"))
+        .ok()?;
+    let lockfile = Lockfile::parse(&lockfile_content).ok()?;
+
+    // Read workspace pcb.toml
+    let pcb_toml_content = file_provider
+        .read_file(&workspace_root.join("pcb.toml"))
+        .ok()?;
+    let pcb_toml = PcbToml::parse(&pcb_toml_content).ok()?;
+
+    let vendor_dir = workspace_root.join("vendor");
+
+    // Build url -> vendor path lookup from lockfile
+    let url_to_path: HashMap<String, PathBuf> = lockfile
+        .iter()
+        .filter_map(|entry| {
+            let vendor_path =
+                vendor_path_for_module(&vendor_dir, &entry.module_path, &entry.version);
+            file_provider
+                .exists(&vendor_path)
+                .then(|| (entry.module_path.clone(), vendor_path))
+        })
+        .collect();
+
+    // Helper to build resolution map for a package config
+    let build_pkg_map = |config: &PcbToml| -> BTreeMap<String, PathBuf> {
+        let mut map = BTreeMap::new();
+
+        // Dependencies: look up in lockfile-derived map
+        for url in config.dependencies.keys() {
+            if let Some(path) = url_to_path.get(url) {
+                map.insert(url.clone(), path.clone());
+            }
+        }
+
+        // Assets: construct vendor path directly from asset spec
+        for (asset_key, asset_spec) in &config.assets {
+            if let Some(ref_str) = extract_asset_ref(asset_spec) {
+                let asset_path = vendor_path_for_module(&vendor_dir, asset_key, &ref_str);
+                if file_provider.exists(&asset_path) {
+                    map.insert(asset_key.clone(), asset_path);
+                }
+            }
+        }
+
+        map
+    };
+
+    let mut results: HashMap<PathBuf, BTreeMap<String, PathBuf>> = HashMap::new();
+
+    // Workspace root
+    results.insert(workspace_root.to_path_buf(), build_pkg_map(&pcb_toml));
+
+    // Vendored packages
+    for vendor_path in url_to_path.values() {
+        if let Ok(content) = file_provider.read_file(&vendor_path.join("pcb.toml")) {
+            if let Ok(pkg_config) = PcbToml::parse(&content) {
+                results.insert(vendor_path.clone(), build_pkg_map(&pkg_config));
+            }
+        }
+    }
+
+    // Workspace members
+    if let Some(workspace) = &pcb_toml.workspace {
+        for member_pattern in &workspace.members {
+            let member_dir = workspace_root.join(member_pattern.trim_end_matches("/*"));
+            if let Ok(content) = file_provider.read_file(&member_dir.join("pcb.toml")) {
+                if let Ok(member_config) = PcbToml::parse(&content) {
+                    results.insert(member_dir, build_pkg_map(&member_config));
+                }
+            }
+        }
+    }
+
+    Some(results)
+}
+
+/// Extract ref string from AssetDependencySpec (version/branch/rev, excluding HEAD)
+fn extract_asset_ref(spec: &AssetDependencySpec) -> Option<String> {
+    match spec {
+        AssetDependencySpec::Ref(r) if r != "HEAD" => Some(r.clone()),
+        AssetDependencySpec::Detailed(d) => d
+            .version
+            .clone()
+            .or_else(|| d.branch.clone())
+            .or_else(|| d.rev.clone())
+            .filter(|r| r != "HEAD"),
+        _ => None,
+    }
+}
+
 /// Convert a Diagnostic to DiagnosticInfo
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
     let level = match diag.severity {
@@ -386,12 +493,17 @@ impl Module {
         // Determine workspace root using pcb.toml discovery
         let workspace_root = find_workspace_root(file_provider.as_ref(), &path);
 
+        // Try lightweight V2 resolution from lockfile + vendor
+        let v2_resolutions =
+            resolve_from_lockfile_and_vendor(file_provider.as_ref(), &workspace_root);
+
         // Create load resolver
         let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
             file_provider.clone(),
             remote_fetcher.clone(),
             workspace_root,
             use_vendor_dir,
+            v2_resolutions,
         ));
 
         Ok(Module {
@@ -457,12 +569,17 @@ impl Module {
         let main_path = PathBuf::from(main_file);
         let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path);
 
+        // Try lightweight V2 resolution from lockfile + vendor
+        let v2_resolutions =
+            resolve_from_lockfile_and_vendor(file_provider.as_ref(), &workspace_root);
+
         // Create load resolver
         let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
             file_provider.clone(),
             remote_fetcher.clone(),
             workspace_root,
             use_vendor_dir,
+            v2_resolutions,
         ));
 
         Ok(Module {

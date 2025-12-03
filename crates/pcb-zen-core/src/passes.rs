@@ -2,7 +2,6 @@ use crate::lang::error::CategorizedDiagnostic;
 use crate::{Diagnostic, Diagnostics, DiagnosticsPass, SuppressedDiagnostics};
 use starlark::errors::EvalSeverity;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 /// A pass that filters out hidden diagnostics (containing "<hidden>")
@@ -19,32 +18,19 @@ impl DiagnosticsPass for FilterHiddenPass {
 
 /// A pass that filters out diagnostics that are too noisy for LSP/editor display
 pub struct LspFilterPass {
-    workspace_root: std::path::PathBuf,
+    _workspace_root: std::path::PathBuf,
 }
 
 impl LspFilterPass {
     pub fn new(workspace_root: std::path::PathBuf) -> Self {
-        Self { workspace_root }
+        Self {
+            _workspace_root: workspace_root,
+        }
     }
 }
 
 impl DiagnosticsPass for LspFilterPass {
-    fn apply(&self, diagnostics: &mut Diagnostics) {
-        let vendor_dir = self.workspace_root.join("vendor");
-
-        diagnostics.diagnostics.retain(|diag| {
-            let innermost = diag.innermost();
-
-            // Check if innermost has unstable ref error and is external
-            innermost
-                .downcast_error_ref::<crate::UnstableRefError>()
-                .map(|_| {
-                    let path = Path::new(&innermost.path);
-                    path.starts_with(&self.workspace_root) && !path.starts_with(&vendor_dir)
-                })
-                .unwrap_or(true) // Keep non-unstable-ref diagnostics
-        });
-    }
+    fn apply(&self, _diagnostics: &mut Diagnostics) {}
 }
 
 /// Suppress diagnostics by kind or severity.
