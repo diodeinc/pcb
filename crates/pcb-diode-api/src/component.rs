@@ -764,7 +764,7 @@ pub fn add_component_to_workspace(
                 download.metadata.manufacturer.as_deref(),
             )?;
 
-            fs::write(&component_file, content)?;
+            write_component_files(&component_file, &component_dir, &content)?;
         }
     }
 
@@ -777,6 +777,17 @@ pub fn add_component_to_workspace(
 pub struct AddComponentResult {
     pub component_path: PathBuf,
     pub already_exists: bool,
+}
+
+/// Write a .zen file and create an empty pcb.toml in the component directory
+fn write_component_files(component_file: &Path, component_dir: &Path, content: &str) -> Result<()> {
+    fs::write(component_file, content)?;
+
+    let toml_path = component_dir.join("pcb.toml");
+    if !toml_path.exists() {
+        fs::write(&toml_path, "")?;
+    }
+    Ok(())
 }
 
 /// Sanitize an MPN for use as a directory/file name and Component name
@@ -1502,7 +1513,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         symbol.manufacturer.as_deref(),
     )?;
 
-    fs::write(&component_file, &zen_content).context("Failed to write .zen file")?;
+    write_component_files(&component_file, &component_dir, &zen_content)?;
 
     // Show result
     let display_path = component_file
