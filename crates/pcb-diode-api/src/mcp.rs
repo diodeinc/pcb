@@ -60,7 +60,6 @@ pub fn tools() -> Vec<ToolInfo> {
                                 "part_number": {"type": "string"},
                                 "description": {"type": ["string", "null"]},
                                 "package_category": {"type": ["string", "null"]},
-                                "datasheets": {"type": "array", "items": {"type": "string"}},
                                 "has_ecad_model": {"type": "boolean"},
                                 "has_step_model": {"type": "boolean"}
                             },
@@ -125,7 +124,6 @@ fn search_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolRes
                 "part_number": r.part_number,
                 "description": r.description,
                 "package_category": r.package_category,
-                "datasheets": r.datasheets,
                 "has_ecad_model": r.model_availability.ecad_model,
                 "has_step_model": r.model_availability.step_model,
             })
