@@ -584,7 +584,7 @@ fn get_git_remotes(path: &Path) -> serde_json::Value {
     };
 
     for name in remote_list.lines() {
-        if let Some(url) = git::get_remote_url_for(path, name).ok() {
+        if let Ok(url) = git::get_remote_url_for(path, name) {
             remotes.insert(name.to_string(), serde_json::Value::String(url));
         }
     }
