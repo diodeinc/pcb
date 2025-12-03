@@ -802,16 +802,18 @@ impl EvalContext {
                         if original == "NC" {
                             continue;
                         }
-                        let span = net_info
+                        // Find the first frame with location info (iterating from most recent)
+                        // Native Rust functions (like `io()`) have location: None, so we skip them
+                        let frame_with_location = net_info
                             .call_stack
                             .frames
-                            .last()
+                            .iter()
+                            .rev()
+                            .find(|f| f.location.is_some());
+                        let span = frame_with_location
                             .and_then(|f| f.location.as_ref())
                             .map(|loc| loc.resolve_span());
-                        let path = net_info
-                            .call_stack
-                            .frames
-                            .last()
+                        let path = frame_with_location
                             .and_then(|f| f.location.as_ref())
                             .map(|loc| loc.file.filename().to_string())
                             .unwrap_or_else(|| extra.module.source_path().to_string());
