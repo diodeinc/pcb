@@ -521,6 +521,40 @@ fn get_kicad_version() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Helper to run a git command and return trimmed stdout
+fn git_output(path: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Get current git branch name (returns None if detached HEAD)
+fn get_git_branch(path: &Path) -> Option<String> {
+    git_output(path, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD")
+}
+
+/// Get git remotes as a map of name -> url
+fn get_git_remotes(path: &Path) -> serde_json::Value {
+    let mut remotes = serde_json::Map::new();
+    let Some(remote_list) = git_output(path, &["remote"]) else {
+        return serde_json::Value::Object(remotes);
+    };
+
+    for name in remote_list.lines() {
+        if let Some(url) = git_output(path, &["remote", "get-url", name]) {
+            remotes.insert(name.to_string(), serde_json::Value::String(url));
+        }
+    }
+
+    serde_json::Value::Object(remotes)
+}
+
 /// Create the metadata JSON object (shared between display and file writing)
 fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
     let source_only = matches!(info.kind, ReleaseKind::SourceOnly);
@@ -551,6 +585,22 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
         release_obj["description"] = serde_json::json!(desc);
     }
 
+    // Get git info
+    let workspace_root = info.workspace.root();
+    let branch = get_git_branch(workspace_root);
+    let remotes = get_git_remotes(workspace_root);
+
+    let mut git_obj = serde_json::json!({
+        "describe": info.version.clone(),
+        "hash": info.git_hash.clone(),
+        "workspace": workspace_root.display().to_string(),
+        "remotes": remotes
+    });
+
+    if let Some(branch) = branch {
+        git_obj["branch"] = serde_json::Value::String(branch);
+    }
+
     serde_json::json!({
         "release": release_obj,
         "system": {
@@ -560,11 +610,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
             "cli_version": env!("CARGO_PKG_VERSION"),
             "kicad_version": get_kicad_version()
         },
-        "git": {
-            "describe": info.version.clone(),
-            "hash": info.git_hash.clone(),
-            "workspace": info.workspace.root().display().to_string()
-        }
+        "git": git_obj
     })
 }
 

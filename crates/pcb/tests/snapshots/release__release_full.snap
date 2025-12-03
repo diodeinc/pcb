@@ -80,6 +80,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
   "git": {
     "describe": "unknown",
     "hash": "unknown",
+    "remotes": {},
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {

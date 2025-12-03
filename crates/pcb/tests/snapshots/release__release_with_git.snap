@@ -9,8 +9,10 @@ expression: sb.snapshot_dir(staging_dir)
 === metadata.json
 {
   "git": {
+    "branch": "main",
     "describe": "v1.2.3",
     "hash": "<GIT_HASH>",
+    "remotes": {},
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {
