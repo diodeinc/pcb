@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::ast_utils::{skip_vendor, visit_string_literals};
-use crate::cache_index::{find_lockfile_entry, CacheIndex};
+use crate::cache_index::{cache_base, find_lockfile_entry, CacheIndex};
 use crate::git;
 use pcb_zen_core::config::{AssetDependencySpec, DependencySpec, Lockfile, PcbToml, KICAD_ASSETS};
 use pcb_zen_core::DefaultFileProvider;
@@ -69,9 +69,21 @@ pub fn auto_add_zen_deps(
         }
 
         // Process URL imports
+        let cache = cache_base();
         for url in &imports.urls {
             // Check if this is a known KiCad asset with subpath
             if let Some(version) = get_kicad_asset_version(url) {
+                // Opportunistically verify path exists if we have the repo cached
+                let (repo_url, subpath) = git::split_asset_repo_and_subpath(url);
+                let repo_cache_dir = cache.join(repo_url).join(&version);
+                if repo_cache_dir.exists() && !subpath.is_empty() {
+                    let target_path = repo_cache_dir.join(subpath);
+                    if !target_path.exists() {
+                        // Path doesn't exist in cached repo, skip auto-dep
+                        unknown_urls.push(url.clone());
+                        continue;
+                    }
+                }
                 deps_to_add.push((url.clone(), version, true));
                 continue;
             }
