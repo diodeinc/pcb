@@ -36,15 +36,27 @@ fn canonicalize_path(path: &Path) -> Result<String> {
 }
 
 /// Collect entries for canonical tar (shared between create and list)
-fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, String)>> {
+///
+/// Handles both directories (walks all files) and single files.
+/// For single files, returns just that file with its filename as the path.
+fn collect_canonical_entries(path: &Path) -> Result<Vec<(PathBuf, String)>> {
+    // Handle single file case - include it with just its filename
+    if path.is_file() {
+        let filename = path
+            .file_name()
+            .with_context(|| format!("path has no filename: {:?}", path))?;
+        let canonical = canonicalize_path(Path::new(filename))?;
+        return Ok(vec![(PathBuf::from(filename), canonical)]);
+    }
+
     let mut entries = Vec::new();
-    let package_root = dir.to_path_buf();
-    for result in WalkBuilder::new(dir)
+    let package_root = path.to_path_buf();
+    for result in WalkBuilder::new(path)
         .filter_entry(move |entry| {
-            let path = entry.path();
+            let entry_path = entry.path();
             if entry.file_type().is_some_and(|ft| ft.is_dir())
-                && path != package_root
-                && path.join("pcb.toml").is_file()
+                && entry_path != package_root
+                && entry_path.join("pcb.toml").is_file()
             {
                 return false;
             }
@@ -53,8 +65,8 @@ fn collect_canonical_entries(dir: &Path) -> Result<Vec<(PathBuf, String)>> {
         .build()
     {
         let entry = result?;
-        let path = entry.path();
-        let rel_path = match path.strip_prefix(dir) {
+        let entry_path = entry.path();
+        let rel_path = match entry_path.strip_prefix(path) {
             Ok(p) => p,
             Err(_) => continue,
         };
@@ -84,7 +96,7 @@ pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Create a canonical, deterministic tar archive from a directory
+/// Create a canonical, deterministic tar archive from a directory or file
 ///
 /// Rules from packaging.md:
 /// - Regular files only (directories are implicit from paths)
@@ -95,14 +107,22 @@ pub fn list_canonical_tar_entries(dir: &Path) -> Result<Vec<String>> {
 /// - End with two 512-byte zero blocks
 /// - Respect .gitignore and filter internal marker files
 /// - Exclude nested packages (subdirs with pcb.toml)
-pub fn create_canonical_tar<W: std::io::Write>(dir: &Path, writer: W) -> Result<()> {
+///
+/// For single files, creates a tar with just that file using its filename as the path.
+pub fn create_canonical_tar<W: std::io::Write>(path: &Path, writer: W) -> Result<()> {
     let mut builder = Builder::new(writer);
     builder.mode(tar::HeaderMode::Deterministic);
 
-    let entries = collect_canonical_entries(dir)?;
+    let is_file = path.is_file();
+    let entries = collect_canonical_entries(path)?;
 
     for (rel_path, canonical_path) in entries {
-        let full_path = dir.join(&rel_path);
+        // For single files, the original path IS the file; for directories, join the relative path
+        let full_path = if is_file {
+            path.to_path_buf()
+        } else {
+            path.join(&rel_path)
+        };
 
         let file = fs::File::open(&full_path)?;
         let len = file.metadata()?.len();

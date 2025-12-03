@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Args)]
 pub struct PackageArgs {
-    /// Directory to package
+    /// Directory or file to package
     path: PathBuf,
 
     /// Output tar file path (optional)
@@ -19,11 +19,16 @@ pub struct PackageArgs {
 pub fn execute(args: PackageArgs) -> Result<()> {
     let path = args.path.canonicalize()?;
 
-    if !path.is_dir() {
-        anyhow::bail!("Path must be a directory: {}", path.display());
+    if !path.exists() {
+        anyhow::bail!("Path does not exist: {}", path.display());
     }
 
-    println!("Packaging: {}", path.display());
+    let is_file = path.is_file();
+    println!(
+        "Packaging {}: {}",
+        if is_file { "file" } else { "directory" },
+        path.display()
+    );
 
     // If verbose, list what files will be included
     if args.verbose {
@@ -48,12 +53,14 @@ pub fn execute(args: PackageArgs) -> Result<()> {
     let content_hash = pcb_zen::canonical::compute_content_hash_from_dir(&path)?;
     println!("Content hash: {}", content_hash);
 
-    // Compute manifest hash if pcb.toml exists
-    let manifest_path = path.join("pcb.toml");
-    if manifest_path.exists() {
-        let manifest_content = std::fs::read_to_string(&manifest_path)?;
-        let manifest_hash = pcb_zen::canonical::compute_manifest_hash(&manifest_content);
-        println!("Manifest hash: {}", manifest_hash);
+    // Compute manifest hash if pcb.toml exists (only for directories)
+    if !is_file {
+        let manifest_path = path.join("pcb.toml");
+        if manifest_path.exists() {
+            let manifest_content = std::fs::read_to_string(&manifest_path)?;
+            let manifest_hash = pcb_zen::canonical::compute_manifest_hash(&manifest_content);
+            println!("Manifest hash: {}", manifest_hash);
+        }
     }
 
     Ok(())

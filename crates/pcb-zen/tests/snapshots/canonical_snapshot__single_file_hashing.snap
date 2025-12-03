@@ -1,0 +1,8 @@
+---
+source: crates/pcb-zen/tests/canonical_snapshot.rs
+expression: "format!(\"test.txt: {hash1}\\nother.txt: {hash2}\\nsame_content_a.txt: {hash_a}\\nsame_content_b.txt: {hash_b}\")"
+---
+test.txt: h1:Hf/W810/4CriQ+bjnc5X548a7N+z7MR66fC1SD28rMw=
+other.txt: h1:QSR3rjK+1QKzD9oJ9T5PK87FxFLfoRTbPiJ3ZBkYQxg=
+same_content_a.txt: h1:9Ch9ZItoyHdKho147ji3+PAxcjOBo41kYCsHhoyJfy0=
+same_content_b.txt: h1:myMrxcH9yvgLJyPnL13AIoRNwI6e76mDmzUYBvMpFmI=

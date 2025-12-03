@@ -127,6 +127,7 @@ enum Commands {
     Ipc2581(ipc2581::Ipc2581Args),
 
     /// Create canonical tar package and compute hash (debug tool)
+    #[command(hide = true)]
     Package(package::PackageArgs),
 
     /// External subcommands are forwarded to pcb-<command>

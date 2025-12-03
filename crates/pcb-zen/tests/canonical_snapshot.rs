@@ -296,3 +296,45 @@ fn empty_directory() {
     // No files - should produce empty entries and a known hash
     canonical_snapshot!(dir);
 }
+
+#[test]
+fn single_file_hashing() {
+    // Test that single files (not directories) are hashed correctly
+    let dir = CanonicalTestDir::new();
+    dir.add_file("test.txt", "hello world");
+    dir.add_file("other.txt", "different content");
+
+    let file1 = dir.root().join("test.txt");
+    let file2 = dir.root().join("other.txt");
+
+    // Single files should produce entries with just the filename
+    let entries1 = list_canonical_tar_entries(&file1).unwrap();
+    let entries2 = list_canonical_tar_entries(&file2).unwrap();
+
+    assert_eq!(entries1, vec!["test.txt"]);
+    assert_eq!(entries2, vec!["other.txt"]);
+
+    // Different files should produce different hashes
+    let hash1 = compute_content_hash_from_dir(&file1).unwrap();
+    let hash2 = compute_content_hash_from_dir(&file2).unwrap();
+
+    assert_ne!(hash1, hash2, "different files should have different hashes");
+
+    // Same content in different filenames should produce different hashes
+    // (because the filename is part of the tar entry)
+    dir.add_file("same_content_a.txt", "identical");
+    dir.add_file("same_content_b.txt", "identical");
+
+    let hash_a = compute_content_hash_from_dir(&dir.root().join("same_content_a.txt")).unwrap();
+    let hash_b = compute_content_hash_from_dir(&dir.root().join("same_content_b.txt")).unwrap();
+
+    assert_ne!(
+        hash_a, hash_b,
+        "same content with different filenames should have different hashes"
+    );
+
+    // Snapshot the hashes for stability
+    insta::assert_snapshot!(format!(
+        "test.txt: {hash1}\nother.txt: {hash2}\nsame_content_a.txt: {hash_a}\nsame_content_b.txt: {hash_b}"
+    ));
+}

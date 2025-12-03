@@ -34,7 +34,6 @@ Commands:
   sim      Run SPICE simulations
   mcp      Start the Model Context Protocol (MCP) server
   ipc2581  IPC-2581 parser and inspection tool
-  package  Create canonical tar package and compute hash (debug tool)
   help     Print this message or the help of the given subcommand(s)
 
 Options:
