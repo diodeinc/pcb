@@ -3060,6 +3060,7 @@ dependencies = [
  "toml",
  "unicode-width 0.2.1",
  "urlencoding",
+ "walkdir",
  "zip 4.3.0",
  "zstd",
 ]

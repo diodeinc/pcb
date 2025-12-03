@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelAvailability {
@@ -1227,36 +1228,21 @@ fn discover_files_recursive(dir: &Path) -> Result<DiscoveredFiles> {
     let mut pdfs = Vec::new();
     let mut steps = Vec::new();
 
-    fn walk_dir(
-        dir: &Path,
-        symbols: &mut Vec<PathBuf>,
-        footprints: &mut Vec<PathBuf>,
-        pdfs: &mut Vec<PathBuf>,
-        steps: &mut Vec<PathBuf>,
-    ) -> Result<()> {
-        for entry in fs::read_dir(dir).context("Failed to read directory")? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                // Recurse into subdirectories
-                walk_dir(&path, symbols, footprints, pdfs, steps)?;
-            } else if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    match ext.to_lowercase().as_str() {
-                        "kicad_sym" => symbols.push(path),
-                        "kicad_mod" => footprints.push(path),
-                        "pdf" => pdfs.push(path),
-                        "step" | "stp" | "wrl" => steps.push(path),
-                        _ => {}
-                    }
-                }
+    for entry in WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+            match ext.to_lowercase().as_str() {
+                "kicad_sym" => symbols.push(entry.into_path()),
+                "kicad_mod" => footprints.push(entry.into_path()),
+                "pdf" => pdfs.push(entry.into_path()),
+                "step" | "stp" | "wrl" => steps.push(entry.into_path()),
+                _ => {}
             }
         }
-        Ok(())
     }
-
-    walk_dir(dir, &mut symbols, &mut footprints, &mut pdfs, &mut steps)?;
 
     // Sort for consistent ordering
     symbols.sort();
