@@ -11,6 +11,7 @@ expression: sb.snapshot_dir(staging_dir)
   "git": {
     "describe": "unknown",
     "hash": "unknown",
+    "remotes": {},
     "workspace": "<TEMP_DIR>/src"
   },
   "release": {

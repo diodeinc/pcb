@@ -15,11 +15,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelAvailability {
-    #[serde(rename = "ECAD_model")]
+    #[serde(rename = "ECAD_model", default)]
     pub ecad_model: bool,
-    #[serde(rename = "STEP_model")]
+    #[serde(rename = "STEP_model", default)]
     pub step_model: bool,
 }
 
@@ -30,7 +30,9 @@ pub struct ComponentSearchResult {
     pub description: Option<String>,
     pub package_category: Option<String>,
     pub component_id: String,
+    #[serde(default)]
     pub datasheets: Vec<String>,
+    #[serde(default)]
     pub model_availability: ModelAvailability,
     pub source: Option<String>,
 }
@@ -1125,7 +1127,6 @@ pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
                 "component_id": r.component_id,
                 "has_2d_model": r.model_availability.ecad_model,
                 "has_3d_model": r.model_availability.step_model,
-                "datasheets": r.datasheets,
                 "source": r.source,
             })
         })
