@@ -42,20 +42,31 @@ pub struct LspEvalContext {
     file_provider: Arc<dyn FileProvider>,
 }
 
-/// Helper function to create a standard load resolver with remote and workspace support
+/// Helper function to create a standard load resolver with remote and workspace support.
+/// For V2 workspaces, this resolves dependencies to enable proper module resolution.
 fn create_standard_load_resolver(
     file_provider: Arc<dyn FileProvider>,
     file_path: &Path,
 ) -> Arc<CoreLoadResolver> {
     let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
 
+    // Resolve V2 dependencies if this is a V2 workspace
+    let v2_resolutions = crate::get_workspace_info(file_provider.as_ref(), file_path)
+        .ok()
+        .filter(|ws| ws.is_v2())
+        .and_then(|mut ws| {
+            crate::resolve_dependencies(&mut ws, false)
+                .ok()
+                .map(|res| res.package_resolutions)
+        });
+
     let remote_fetcher = Arc::new(DefaultRemoteFetcher::default());
     Arc::new(CoreLoadResolver::new(
         file_provider,
         remote_fetcher,
         workspace_root.to_path_buf(),
-        true,
-        None,
+        v2_resolutions.is_none(), // use_vendor only if not V2
+        v2_resolutions,
     ))
 }
 

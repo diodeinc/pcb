@@ -172,13 +172,8 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let input_path = args
-        .paths
-        .first()
-        .cloned()
-        .unwrap_or(std::env::current_dir()?);
     let (workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(&input_path, args.offline)?;
+        crate::resolve::resolve_v2_if_needed(args.paths.first().map(|p| p.as_path()), args.offline)?;
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_files = if workspace_info.is_v2() {
@@ -196,15 +191,20 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
 
         // Filter to only include files within workspace member packages
-        all_zen_files
-            .into_iter()
-            .filter(|zen_path| {
-                workspace_info
-                    .packages
-                    .values()
-                    .any(|pkg| zen_path.starts_with(&pkg.dir))
-            })
-            .collect()
+        // Skip filtering if no packages discovered (e.g., standalone inline manifest)
+        if workspace_info.packages.is_empty() {
+            all_zen_files
+        } else {
+            all_zen_files
+                .into_iter()
+                .filter(|zen_path| {
+                    workspace_info
+                        .packages
+                        .values()
+                        .any(|pkg| zen_path.starts_with(&pkg.dir))
+                })
+                .collect()
+        }
     } else {
         // V1 mode: collect zen files from the given paths (or current dir)
         file_walker::collect_zen_files(&args.paths, false)?

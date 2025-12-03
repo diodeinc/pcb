@@ -82,9 +82,8 @@ pub struct BomArgs {
 
 pub fn execute(args: BomArgs) -> Result<()> {
     // V2 workspace-first architecture: resolve dependencies before evaluation
-    let input_path = args.file.parent().unwrap_or(Path::new(".")).to_path_buf();
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(&input_path, args.offline)?;
+        crate::resolve::resolve_v2_if_needed(args.file.parent(), args.offline)?;
 
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 

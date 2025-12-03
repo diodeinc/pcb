@@ -64,13 +64,8 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     }
 
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
-    let input_path = args
-        .paths
-        .first()
-        .cloned()
-        .unwrap_or(std::env::current_dir()?);
     let (_workspace_info, resolution_result) =
-        crate::resolve::resolve_v2_if_needed(&input_path, args.offline)?;
+        crate::resolve::resolve_v2_if_needed(args.paths.first().map(|p| p.as_path()), args.offline)?;
 
     // Collect .zen files to process - always recursive for directories
     let zen_paths = file_walker::collect_zen_files(&args.paths, false)?;

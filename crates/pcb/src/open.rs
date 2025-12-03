@@ -11,15 +11,54 @@ pub struct OpenArgs {
     /// One or more .zen files to build/open. When omitted, behaves like before.
     #[arg(value_name = "PATHS", value_hint = clap::ValueHint::AnyPath)]
     paths: Vec<PathBuf>,
+
+    /// Disable network access (offline mode) - only use vendored dependencies
+    #[arg(long = "offline")]
+    pub offline: bool,
 }
 
 pub fn execute(args: OpenArgs) -> Result<()> {
-    open_layout(args.paths)
+    // V2 workspace-first architecture: resolve dependencies before finding .zen files
+    let (workspace_info, resolution_result) =
+        crate::resolve::resolve_v2_if_needed(args.paths.first().map(|p| p.as_path()), args.offline)?;
+
+    open_layout(&args, &workspace_info, resolution_result)
 }
 
-fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
+fn open_layout(
+    args: &OpenArgs,
+    workspace_info: &pcb_zen::WorkspaceInfo,
+    resolution_result: Option<pcb_zen::ResolutionResult>,
+) -> Result<()> {
     // Collect .zen files to process
-    let zen_files = file_walker::collect_zen_files(&zen_paths, false)?;
+    let zen_files = if workspace_info.is_v2() {
+        // Canonicalize input paths (or use current dir if empty)
+        let search_paths: Vec<PathBuf> = if args.paths.is_empty() {
+            vec![std::env::current_dir()?]
+        } else {
+            args.paths
+                .iter()
+                .map(|p| p.canonicalize())
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        // For V2: collect from search paths, filtered to workspace members only
+        let all_zen_files = file_walker::collect_zen_files(&search_paths, false)?;
+
+        // Filter to only include files within workspace member packages
+        all_zen_files
+            .into_iter()
+            .filter(|zen_path| {
+                workspace_info
+                    .packages
+                    .values()
+                    .any(|pkg| zen_path.starts_with(&pkg.dir))
+            })
+            .collect()
+    } else {
+        // V1 mode: collect zen files from the given paths (or current dir)
+        file_walker::collect_zen_files(&args.paths, false)?
+    };
 
     if zen_files.is_empty() {
         // Try to find a layout file in the current directory
@@ -53,13 +92,24 @@ fn open_layout(zen_paths: Vec<PathBuf>) -> Result<()> {
 
     let mut available_layouts = Vec::new();
 
+    // In V2 mode, resolution handles offline - eval doesn't need network access
+    // In V1 mode (resolution_result is None), offline would break V1 dep resolution
+    let is_v2 = resolution_result.is_some();
+
     // Process each .zen/.zen file to find available layouts
     for zen_path in zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         // Evaluate the zen file
-        let (output, diagnostics) =
-            pcb_zen::run(&zen_path, pcb_zen::EvalConfig::default()).unpack();
+        let (output, diagnostics) = pcb_zen::run(
+            &zen_path,
+            pcb_zen::EvalConfig {
+                offline: is_v2 && args.offline,
+                resolution_result: resolution_result.clone(),
+                ..Default::default()
+            },
+        )
+        .unpack();
 
         if diagnostics.has_errors() {
             eprintln!("Skipping {file_name} due to build errors");

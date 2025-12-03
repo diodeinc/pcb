@@ -181,9 +181,15 @@ fn collect_imports_by_package(
 ) -> Result<HashMap<PathBuf, CollectedImports>> {
     let mut result: HashMap<PathBuf, CollectedImports> = HashMap::new();
 
-    // Only scan directories that are part of workspace member packages
-    for member in packages.values() {
-        let walker = WalkBuilder::new(&member.dir)
+    // Determine directories to scan: member packages if any, otherwise workspace root
+    let dirs_to_scan: Vec<PathBuf> = if packages.is_empty() {
+        vec![workspace_root.to_path_buf()]
+    } else {
+        packages.values().map(|m| m.dir.clone()).collect()
+    };
+
+    for dir in dirs_to_scan {
+        let walker = WalkBuilder::new(&dir)
             .hidden(true)
             .git_ignore(true)
             .git_exclude(true)
