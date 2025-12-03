@@ -676,6 +676,48 @@ pub fn extract_inline_manifest(zen_content: &str) -> Option<String> {
     None
 }
 
+/// Split a module path into (repo_url, subpath) for github.com repos
+///
+/// Examples:
+/// - "github.com/user/repo" -> ("github.com/user/repo", "")
+/// - "github.com/user/repo/pkg" -> ("github.com/user/repo", "pkg")
+/// - "github.com/user/repo/a/b/c" -> ("github.com/user/repo", "a/b/c")
+pub fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
+    let parts: Vec<&str> = module_path.split('/').collect();
+    if parts.is_empty() {
+        return (module_path, "");
+    }
+    if parts[0] == "github.com" && parts.len() > 3 {
+        let boundary = parts[..3].join("/").len();
+        return (&module_path[..boundary], &module_path[boundary + 1..]);
+    }
+    (module_path, "")
+}
+
+/// Split asset dependency key into (repo_url, subpath)
+///
+/// Handles known asset repositories with nested group paths (e.g., gitlab.com/kicad/libraries/...).
+/// For unknown repos, falls back to standard split_repo_and_subpath logic.
+///
+/// Examples:
+/// - "gitlab.com/kicad/libraries/kicad-footprints" -> ("gitlab.com/kicad/libraries/kicad-footprints", "")
+/// - "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty" -> ("gitlab.com/kicad/libraries/kicad-footprints", "Resistor_SMD.pretty")
+/// - "github.com/user/assets/foo" -> ("github.com/user/assets", "foo")
+pub fn split_asset_repo_and_subpath(asset_key: &str) -> (&str, &str) {
+    for (_, base_url, _) in KICAD_ASSETS {
+        if asset_key.starts_with(base_url) {
+            if asset_key.len() > base_url.len() && asset_key.as_bytes()[base_url.len()] == b'/' {
+                return (base_url, &asset_key[base_url.len() + 1..]);
+            } else if asset_key.len() == base_url.len() {
+                return (base_url, "");
+            }
+        }
+    }
+
+    // Fallback to standard split logic for github repos
+    split_repo_and_subpath(asset_key)
+}
+
 /// Find the workspace root by walking up from `start`.
 ///
 /// Resolution order:
@@ -1155,5 +1197,67 @@ load("@stdlib/foo.zen", "Bar")
         assert!(result.is_some());
         let config = result.unwrap().unwrap();
         assert!(!config.is_v2()); // Has [packages] which requires V1
+    }
+
+    #[test]
+    fn test_split_repo_and_subpath() {
+        assert_eq!(
+            split_repo_and_subpath("github.com/user/repo"),
+            ("github.com/user/repo", "")
+        );
+        assert_eq!(
+            split_repo_and_subpath("github.com/user/repo/pkg"),
+            ("github.com/user/repo", "pkg")
+        );
+        assert_eq!(
+            split_repo_and_subpath("github.com/user/repo/a/b/c"),
+            ("github.com/user/repo", "a/b/c")
+        );
+        // Non-github repos return full path as repo_url
+        assert_eq!(
+            split_repo_and_subpath("gitlab.com/group/project/pkg"),
+            ("gitlab.com/group/project/pkg", "")
+        );
+    }
+
+    #[test]
+    fn test_split_asset_repo_and_subpath() {
+        // Known KiCad asset repos
+        assert_eq!(
+            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-footprints"),
+            ("gitlab.com/kicad/libraries/kicad-footprints", "")
+        );
+        assert_eq!(
+            split_asset_repo_and_subpath(
+                "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty"
+            ),
+            (
+                "gitlab.com/kicad/libraries/kicad-footprints",
+                "Resistor_SMD.pretty"
+            )
+        );
+        assert_eq!(
+            split_asset_repo_and_subpath("gitlab.com/kicad/libraries/kicad-symbols"),
+            ("gitlab.com/kicad/libraries/kicad-symbols", "")
+        );
+        assert_eq!(
+            split_asset_repo_and_subpath(
+                "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym"
+            ),
+            (
+                "gitlab.com/kicad/libraries/kicad-symbols",
+                "Device.kicad_sym"
+            )
+        );
+
+        // Unknown repos fall back to standard split
+        assert_eq!(
+            split_asset_repo_and_subpath("github.com/user/assets"),
+            ("github.com/user/assets", "")
+        );
+        assert_eq!(
+            split_asset_repo_and_subpath("github.com/user/assets/subdir"),
+            ("github.com/user/assets", "subdir")
+        );
     }
 }

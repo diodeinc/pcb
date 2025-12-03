@@ -1,5 +1,7 @@
-use pcb_zen_core::config::KICAD_ASSETS;
 use std::collections::HashMap;
+
+// Re-export path splitting functions from core
+pub use pcb_zen_core::config::{split_asset_repo_and_subpath, split_repo_and_subpath};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -387,42 +389,6 @@ pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
             .to_string());
     }
     anyhow::bail!("Unsupported git URL format: {}", url)
-}
-
-pub fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
-    let parts: Vec<&str> = module_path.split('/').collect();
-    if parts.is_empty() {
-        return (module_path, "");
-    }
-    if parts[0] == "github.com" && parts.len() > 3 {
-        let boundary = parts[..3].join("/").len();
-        return (&module_path[..boundary], &module_path[boundary + 1..]);
-    }
-    (module_path, "")
-}
-
-/// Split asset dependency key into (repo_url, subpath)
-///
-/// Handles known asset repositories with nested group paths (e.g., gitlab.com/kicad/libraries/...).
-/// For unknown repos, falls back to standard split_repo_and_subpath logic.
-///
-/// Examples:
-/// - "gitlab.com/kicad/libraries/kicad-footprints" -> ("gitlab.com/kicad/libraries/kicad-footprints", "")
-/// - "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty" -> ("gitlab.com/kicad/libraries/kicad-footprints", "Resistor_SMD.pretty")
-/// - "github.com/user/assets/foo" -> ("github.com/user/assets", "foo")
-pub fn split_asset_repo_and_subpath(asset_key: &str) -> (&str, &str) {
-    for (_, base_url, _) in KICAD_ASSETS {
-        if asset_key.starts_with(base_url) {
-            if asset_key.len() > base_url.len() && asset_key.as_bytes()[base_url.len()] == b'/' {
-                return (base_url, &asset_key[base_url.len() + 1..]);
-            } else if asset_key.len() == base_url.len() {
-                return (base_url, "");
-            }
-        }
-    }
-
-    // Fallback to standard split logic for github repos
-    split_repo_and_subpath(asset_key)
 }
 
 pub fn ls_remote_with_fallback(

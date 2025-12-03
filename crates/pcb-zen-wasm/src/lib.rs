@@ -294,6 +294,19 @@ impl pcb_zen_core::FileProvider for WasmFileProvider {
     }
 }
 
+/// Construct vendor path for a module: vendor/<repo_url>/<version>/<subpath>
+///
+/// For assets with subpaths (e.g., gitlab.com/kicad/.../Resistor_SMD.pretty),
+/// splits into repo_url and subpath to construct correct vendor structure.
+fn vendor_path_for_module(vendor_dir: &Path, module_path: &str, version: &str) -> PathBuf {
+    let (repo_url, subpath) = pcb_zen_core::config::split_asset_repo_and_subpath(module_path);
+    if subpath.is_empty() {
+        vendor_dir.join(repo_url).join(version)
+    } else {
+        vendor_dir.join(repo_url).join(version).join(subpath)
+    }
+}
+
 /// Lightweight V2 resolution from pcb.sum + vendor/
 ///
 /// Returns package resolutions if pcb.sum exists (implying V2 mode).
@@ -320,7 +333,8 @@ fn resolve_from_lockfile_and_vendor(
     let url_to_path: HashMap<String, PathBuf> = lockfile
         .iter()
         .filter_map(|entry| {
-            let vendor_path = vendor_dir.join(&entry.module_path).join(&entry.version);
+            let vendor_path =
+                vendor_path_for_module(&vendor_dir, &entry.module_path, &entry.version);
             file_provider
                 .exists(&vendor_path)
                 .then(|| (entry.module_path.clone(), vendor_path))
@@ -331,17 +345,17 @@ fn resolve_from_lockfile_and_vendor(
     let build_pkg_map = |config: &PcbToml| -> BTreeMap<String, PathBuf> {
         let mut map = BTreeMap::new();
 
-        // Dependencies
+        // Dependencies: look up in lockfile-derived map
         for url in config.dependencies.keys() {
             if let Some(path) = url_to_path.get(url) {
                 map.insert(url.clone(), path.clone());
             }
         }
 
-        // Assets: vendor/<repo_url>/<ref>/
+        // Assets: construct vendor path directly from asset spec
         for (asset_key, asset_spec) in &config.assets {
             if let Some(ref_str) = extract_asset_ref(asset_spec) {
-                let asset_path = vendor_dir.join(asset_key).join(&ref_str);
+                let asset_path = vendor_path_for_module(&vendor_dir, asset_key, &ref_str);
                 if file_provider.exists(&asset_path) {
                     map.insert(asset_key.clone(), asset_path);
                 }
