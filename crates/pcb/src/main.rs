@@ -28,6 +28,7 @@ mod update;
 mod upgrade;
 mod vendor;
 mod workspace;
+mod autoplace;
 
 #[derive(Parser)]
 #[command(name = "pcb")]
@@ -78,6 +79,10 @@ enum Commands {
     /// Layout PCB designs
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
+
+    /// Automatically place components
+    #[command(alias = "a")]
+    Autoplace(autoplace::AutoplaceArgs),
 
     /// Clean PCB build artifacts
     Clean(clean::CleanArgs),
@@ -152,6 +157,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
         Commands::Layout(args) => layout::execute(args),
+        Commands::Autoplace(args) => autoplace::execute(args),
         Commands::Clean(args) => clean::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
