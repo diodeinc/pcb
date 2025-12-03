@@ -1220,30 +1220,43 @@ struct DiscoveredFiles {
     steps: Vec<PathBuf>,
 }
 
-/// Discover relevant files in a directory for component generation
-fn discover_files(dir: &Path) -> Result<DiscoveredFiles> {
+/// Recursively discover relevant files in a directory for component generation
+fn discover_files_recursive(dir: &Path) -> Result<DiscoveredFiles> {
     let mut symbols = Vec::new();
     let mut footprints = Vec::new();
     let mut pdfs = Vec::new();
     let mut steps = Vec::new();
 
-    for entry in fs::read_dir(dir).context("Failed to read directory")? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
+    fn walk_dir(
+        dir: &Path,
+        symbols: &mut Vec<PathBuf>,
+        footprints: &mut Vec<PathBuf>,
+        pdfs: &mut Vec<PathBuf>,
+        steps: &mut Vec<PathBuf>,
+    ) -> Result<()> {
+        for entry in fs::read_dir(dir).context("Failed to read directory")? {
+            let entry = entry?;
+            let path = entry.path();
 
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            match ext.to_lowercase().as_str() {
-                "kicad_sym" => symbols.push(path),
-                "kicad_mod" => footprints.push(path),
-                "pdf" => pdfs.push(path),
-                "step" | "stp" => steps.push(path),
-                _ => {}
+            if path.is_dir() {
+                // Recurse into subdirectories
+                walk_dir(&path, symbols, footprints, pdfs, steps)?;
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    match ext.to_lowercase().as_str() {
+                        "kicad_sym" => symbols.push(path),
+                        "kicad_mod" => footprints.push(path),
+                        "pdf" => pdfs.push(path),
+                        "step" | "stp" | "wrl" => steps.push(path),
+                        _ => {}
+                    }
+                }
             }
         }
+        Ok(())
     }
+
+    walk_dir(dir, &mut symbols, &mut footprints, &mut pdfs, &mut steps)?;
 
     // Sort for consistent ordering
     symbols.sort();
@@ -1303,41 +1316,136 @@ fn path_filename(path: &Path) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Generate a .zen component file from a local directory containing KiCad files
-fn execute_from_dir(dir: &Path) -> Result<()> {
+/// Copy a file to the working directory, returning the new path
+fn copy_to_workdir(src: &Path, workdir: &Path) -> Result<PathBuf> {
+    let filename = src
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
+    let dest = workdir.join(filename);
+    fs::copy(src, &dest).with_context(|| format!("Failed to copy {}", src.display()))?;
+    Ok(dest)
+}
+
+/// Generate a .zen component file from a local directory containing KiCad files.
+/// Recursively searches for symbols, footprints, 3D models, and datasheets,
+/// then installs the component to the current workspace's components directory.
+fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     if !dir.is_dir() {
         anyhow::bail!("Path is not a directory: {}", dir.display());
     }
 
-    let component_name = sanitize_mpn_for_path(
-        dir.file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid directory name"))?,
-    );
-
     println!(
-        "{} Discovering files in {}",
+        "{} Discovering files recursively in {}",
         "→".blue().bold(),
         dir.display()
     );
-    let files = discover_files(dir)?;
+    let files = discover_files_recursive(dir)?;
+
+    if files.symbols.is_empty() {
+        anyhow::bail!("No .kicad_sym files found in directory or subdirectories");
+    }
+
+    // Show discovered files
+    println!(
+        "  Found {} symbol(s), {} footprint(s), {} 3D model(s), {} datasheet(s)",
+        files.symbols.len(),
+        files.footprints.len(),
+        files.steps.len(),
+        files.pdfs.len()
+    );
 
     // Select symbol (prompts if multiple)
-    let symbol_path = select_symbol(files.symbols)?;
+    let selected_symbol = select_symbol(files.symbols)?;
+    println!(
+        "  {} Symbol: {}",
+        "✓".green(),
+        selected_symbol.display().to_string().cyan()
+    );
+
+    // Parse symbol to extract MPN and manufacturer
+    let symbol_lib = pcb_eda::SymbolLibrary::from_file(&selected_symbol)
+        .context("Failed to parse symbol file")?;
+    let symbol = symbol_lib
+        .first_symbol()
+        .ok_or_else(|| anyhow::anyhow!("No symbols found in library"))?;
+
+    // Use symbol name as MPN, fall back to directory name
+    let mpn = if !symbol.name.is_empty() {
+        symbol.name.clone()
+    } else {
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid directory name"))?
+            .to_string()
+    };
+
+    let sanitized_mpn = sanitize_mpn_for_path(&mpn);
+    let sanitized_mfr = symbol
+        .manufacturer
+        .as_deref()
+        .map(sanitize_mpn_for_path)
+        .unwrap_or_else(|| "unknown".to_string());
+
+    println!(
+        "  {} MPN: {}, Manufacturer: {}",
+        "ℹ".blue(),
+        mpn.cyan(),
+        symbol.manufacturer.as_deref().unwrap_or("unknown").cyan()
+    );
+
+    // Build path: components/<manufacturer>/<part_number>/<part_number>.zen
+    let component_dir = workspace_root
+        .join("components")
+        .join(&sanitized_mfr)
+        .join(&sanitized_mpn);
+    let component_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+
+    // Check if component already exists
+    if component_file.exists() {
+        let display_path = component_file
+            .strip_prefix(workspace_root)
+            .unwrap_or(&component_file);
+        println!(
+            "{} Component already exists at: {}",
+            "ℹ".blue().bold(),
+            display_path.display().to_string().cyan()
+        );
+        return Ok(());
+    }
+
+    // Create component directory
+    fs::create_dir_all(&component_dir)?;
+
+    println!(
+        "{} Copying files to component directory...",
+        "→".blue().bold()
+    );
+
+    // Copy the selected symbol
+    let symbol_path = copy_to_workdir(&selected_symbol, &component_dir)?;
     let symbol_filename = path_filename(&symbol_path);
-    println!("  {} Symbol: {}", "✓".green(), symbol_filename.cyan());
 
-    let footprint_path = files.footprints.first();
-    let step_path = files.steps.first();
-
-    if let Some(fp) = footprint_path {
+    // Copy first footprint if available
+    let footprint_path = if let Some(fp) = files.footprints.first() {
         println!("  {} Footprint: {}", "✓".green(), path_filename(fp).cyan());
-    }
-    if let Some(sp) = step_path {
+        Some(copy_to_workdir(fp, &component_dir)?)
+    } else {
+        None
+    };
+
+    // Copy first STEP file if available
+    let step_path = if let Some(sp) = files.steps.first() {
         println!("  {} 3D Model: {}", "✓".green(), path_filename(sp).cyan());
-    }
+        Some(copy_to_workdir(sp, &component_dir)?)
+    } else {
+        None
+    };
+
+    // Copy all PDFs
+    let mut pdf_paths = Vec::new();
     for pdf in &files.pdfs {
         println!("  {} Datasheet: {}", "✓".green(), path_filename(pdf).cyan());
+        pdf_paths.push(copy_to_workdir(pdf, &component_dir)?);
     }
 
     // Upgrade files
@@ -1345,13 +1453,13 @@ fn execute_from_dir(dir: &Path) -> Result<()> {
     if let Err(e) = upgrade_symbol(&symbol_path) {
         println!("  {} Symbol upgrade skipped: {}", "!".yellow(), e);
     }
-    if let Some(fp) = footprint_path {
+    if let Some(ref fp) = footprint_path {
         if let Err(e) = upgrade_footprint(fp) {
             println!("  {} Footprint upgrade skipped: {}", "!".yellow(), e);
         }
     }
 
-    // Parse symbol
+    // Re-parse symbol after upgrade (in case it changed)
     let symbol_lib =
         pcb_eda::SymbolLibrary::from_file(&symbol_path).context("Failed to parse symbol file")?;
     let symbol = symbol_lib
@@ -1359,15 +1467,15 @@ fn execute_from_dir(dir: &Path) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No symbols found in library"))?;
 
     // Scan PDFs (requires auth)
-    let datasheet_filename = if !files.pdfs.is_empty() {
+    let datasheet_filename = if !pdf_paths.is_empty() {
         println!("{} Scanning datasheets...", "→".blue().bold());
         let token = crate::auth::get_valid_token()?;
         let mut first_pdf = None;
-        for pdf in &files.pdfs {
+        for pdf in &pdf_paths {
             match crate::scan::scan_with_defaults(
                 &token,
                 pdf.clone(),
-                Some(dir.to_path_buf()),
+                Some(component_dir.clone()),
                 None,
                 true,
             ) {
@@ -1390,39 +1498,49 @@ fn execute_from_dir(dir: &Path) -> Result<()> {
         None
     };
 
-    // Embed STEP in footprint
-    if let (Some(fp), Some(sp)) = (footprint_path, step_path) {
+    // Embed STEP in footprint (delete standalone STEP after embedding)
+    if let (Some(ref fp), Some(ref sp)) = (&footprint_path, &step_path) {
         println!("{} Embedding 3D model...", "→".blue().bold());
-        embed_step_into_footprint_file(fp, sp, false)?;
+        embed_step_into_footprint_file(fp, sp, true)?;
     }
 
     // Generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
     let zen_content = generate_zen_file(
-        &component_name,
-        &component_name,
+        &mpn,
+        &sanitized_mpn,
         symbol,
         symbol_filename,
-        footprint_path.map(|p| path_filename(p)),
+        footprint_path.as_ref().map(|p| path_filename(p)),
         datasheet_filename.as_deref(),
         symbol.manufacturer.as_deref(),
     )?;
 
-    let zen_path = dir.join(format!("{}.zen", component_name));
-    fs::write(&zen_path, &zen_content).context("Failed to write .zen file")?;
+    fs::write(&component_file, &zen_content).context("Failed to write .zen file")?;
 
+    // Show result
+    let display_path = component_file
+        .strip_prefix(workspace_root)
+        .unwrap_or(&component_file);
     println!(
-        "\n{} Component generated: {}",
+        "\n{} Added {} to {}",
         "✓".green().bold(),
-        path_filename(&zen_path).cyan()
+        mpn.bold(),
+        display_path.display().to_string().cyan()
     );
     Ok(())
 }
 
 pub fn execute(args: SearchArgs) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workspace_root =
+        pcb_zen_core::config::get_workspace_info(&pcb_zen_core::DefaultFileProvider::new(), &cwd)
+            .map(|info| info.root)
+            .unwrap_or(cwd);
+
     // Handle --dir mode (local directory)
     if let Some(ref dir) = args.dir {
-        return execute_from_dir(dir);
+        return execute_from_dir(dir, &workspace_root);
     }
 
     // API search mode requires part_number
@@ -1431,11 +1549,6 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("part_number required unless --dir is used"))?;
 
     let token = crate::auth::get_valid_token()?;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root =
-        pcb_zen_core::config::get_workspace_info(&pcb_zen_core::DefaultFileProvider::new(), &cwd)
-            .map(|info| info.root)
-            .unwrap_or(cwd);
 
     if args.json {
         println!("{}", search_json(&token, &part_number)?);
