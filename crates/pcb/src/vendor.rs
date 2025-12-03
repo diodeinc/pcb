@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 pub struct VendorArgs {
     /// Path to .zen file or directory to analyze for dependencies.
     /// If a directory, will search recursively for .zen files.
-    pub zen_path: PathBuf,
+    /// When omitted, uses the current directory.
+    #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub zen_path: Option<PathBuf>,
 
     /// Continue vendoring even if some designs have build errors
     #[arg(long = "ignore-errors")]
@@ -22,7 +24,10 @@ pub struct VendorArgs {
 }
 
 pub fn execute(args: VendorArgs) -> Result<()> {
-    let zen_path = args.zen_path.canonicalize()?;
+    let zen_path = args
+        .zen_path
+        .unwrap_or_else(|| std::env::current_dir().unwrap())
+        .canonicalize()?;
     let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
 
     // Check if this is a V2 workspace - use simplified closure-based vendoring
@@ -31,7 +36,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     }
 
     // V1 path: discover zen files and gather dependencies via evaluation
-    execute_v1(args, &workspace_info.root)
+    execute_v1(&zen_path, args.ignore_errors, &workspace_info.root)
 }
 
 /// V2 vendoring: uses dependency closure from resolution
@@ -67,9 +72,7 @@ fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
 }
 
 /// V1 vendoring: discovers files via evaluation and tracks dependencies
-fn execute_v1(args: VendorArgs, workspace_root: &Path) -> Result<()> {
-    let zen_path = &args.zen_path;
-
+fn execute_v1(zen_path: &Path, ignore_errors: bool, workspace_root: &Path) -> Result<()> {
     // Discover zen files to process
     let discovery_spinner = Spinner::builder("Discovering zen files").start();
     let zen_files = discover_zen_files(zen_path)?;
@@ -83,7 +86,7 @@ fn execute_v1(args: VendorArgs, workspace_root: &Path) -> Result<()> {
     // Gather vendor information from all zen files
     let info_spinner = Spinner::builder("Analyzing dependencies").start();
     let zen_files_count = zen_files.len();
-    let tracked_files = gather_vendor_info(zen_files, args.ignore_errors)?;
+    let tracked_files = gather_vendor_info(zen_files, ignore_errors)?;
     let vendor_dir = workspace_root.join("vendor");
     info_spinner.finish();
     println!("{} Dependencies analyzed", "✓".green());
