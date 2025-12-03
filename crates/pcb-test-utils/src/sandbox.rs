@@ -414,8 +414,8 @@ impl Sandbox {
             .replace_all(&result, "<TIMESTAMP>")
             .to_string();
 
-        // Sanitize git hashes in JSON "hash" field only
-        let git_hash_json_pattern = Regex::new(r#""hash":\s*"[a-f0-9]{7}""#).unwrap();
+        // Sanitize git hashes in JSON "hash" field only (supports both short 7-char and full 40-char hashes)
+        let git_hash_json_pattern = Regex::new(r#""hash":\s*"[a-f0-9]{7,40}""#).unwrap();
         result = git_hash_json_pattern
             .replace_all(&result, r#""hash": "<GIT_HASH>""#)
             .to_string();

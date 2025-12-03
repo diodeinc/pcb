@@ -629,9 +629,9 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
 
     let is_dirty = status_out.status.success() && !status_out.stdout.is_empty();
 
-    // Get current commit hash
+    // Get current commit hash (full)
     let commit_out = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .current_dir(path)
         .output()?;
 
@@ -640,13 +640,14 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
         return Ok(("unknown".into(), "unknown".into()));
     }
 
-    let commit_hash = String::from_utf8(commit_out.stdout)?.trim().to_owned();
+    let full_hash = String::from_utf8(commit_out.stdout)?.trim().to_owned();
+    let short_hash = full_hash[..7.min(full_hash.len())].to_owned();
 
-    // If dirty, return commit hash with dirty suffix
+    // If dirty, return short hash with dirty suffix for version, full hash for metadata
     if is_dirty {
-        let version = format!("{commit_hash}-dirty");
+        let version = format!("{short_hash}-dirty");
         info!("Git version (dirty): {version}");
-        return Ok((version, commit_hash.clone()));
+        return Ok((version, full_hash));
     }
 
     // Check if current commit is tagged
@@ -668,14 +669,14 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
             {
                 let version = tag[tag_prefix.len()..].to_string();
                 info!("Git version (board tag): {version} for board {board_name}");
-                return Ok((version, commit_hash.clone()));
+                return Ok((version, full_hash));
             }
         }
     }
 
-    // Not dirty and not tagged, use commit hash
-    info!("Git version (commit): {commit_hash}");
-    Ok((commit_hash.clone(), commit_hash))
+    // Not dirty and not tagged, use short hash for version, full hash for metadata
+    info!("Git version (commit): {short_hash}");
+    Ok((short_hash, full_hash))
 }
 
 /// Extract layout path from zen evaluation result
