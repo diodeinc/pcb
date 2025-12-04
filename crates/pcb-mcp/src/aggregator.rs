@@ -116,7 +116,11 @@ where
 mod tests {
     use super::*;
 
-    fn dummy_handler(_name: &str, _args: Option<Value>, _ctx: &McpContext) -> Result<CallToolResult> {
+    fn dummy_handler(
+        _name: &str,
+        _args: Option<Value>,
+        _ctx: &McpContext,
+    ) -> Result<CallToolResult> {
         Ok(CallToolResult::error("Not implemented"))
     }
 

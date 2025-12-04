@@ -73,10 +73,7 @@ impl ExternalMcpServer {
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout for {}", binary))?;
 
-        let name = binary
-            .strip_prefix("pcb-")
-            .unwrap_or(binary)
-            .to_string();
+        let name = binary.strip_prefix("pcb-").unwrap_or(binary).to_string();
 
         let mut server = Self {
             name,
@@ -183,7 +180,11 @@ impl ExternalMcpServer {
     }
 
     /// Call a tool on this server
-    pub fn call_tool(&mut self, tool_name: &str, arguments: Option<Value>) -> Result<CallToolResult> {
+    pub fn call_tool(
+        &mut self,
+        tool_name: &str,
+        arguments: Option<Value>,
+    ) -> Result<CallToolResult> {
         let result = self.send_request(
             "tools/call",
             json!({
