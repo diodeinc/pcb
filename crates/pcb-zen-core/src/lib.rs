@@ -506,6 +506,17 @@ impl CoreLoadResolver {
             .canonicalize(&workspace_root)
             .expect("workspace root should be canonicalized");
 
+        // Canonicalize v2_package_resolutions keys to match canonicalized file paths during lookup.
+        // On Windows, canonicalize() adds \\?\ UNC prefix which must match for HashMap lookups.
+        let v2_package_resolutions = v2_package_resolutions.map(|map| {
+            map.into_iter()
+                .map(|(root, deps)| {
+                    let canon_root = file_provider.canonicalize(&root).unwrap_or(root);
+                    (canon_root, deps)
+                })
+                .collect()
+        });
+
         Self {
             file_provider,
             remote_fetcher,
