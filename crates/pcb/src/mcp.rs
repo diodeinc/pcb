@@ -20,7 +20,8 @@ pub fn execute(_args: McpArgs) -> Result<()> {
         mime_type: "text/html".to_string(),
     }];
 
-    pcb_mcp::run_server(&tools, &resources, |name, args, ctx| {
+    // Run aggregated server that discovers and proxies external MCP servers
+    pcb_mcp::run_aggregated_server(tools, resources, |name, args, ctx| {
         #[cfg(feature = "api")]
         {
             pcb_diode_api::mcp::handle(name, args, ctx)

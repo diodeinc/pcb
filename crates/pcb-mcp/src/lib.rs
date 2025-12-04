@@ -3,7 +3,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
+pub mod aggregator;
+pub mod discovery;
+pub mod proxy;
+
+pub use aggregator::McpAggregator;
+pub use discovery::find_pcb_binaries;
+pub use proxy::ExternalMcpServer;
+
 /// Tool definition for tools/list
+#[derive(Clone)]
 pub struct ToolInfo {
     pub name: &'static str,
     pub description: &'static str,
@@ -240,6 +249,138 @@ where
 
                 match name {
                     Some(name) => match handler(name, args, &ctx) {
+                        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                        Err(e) => {
+                            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
+                        }
+                    },
+                    None => {
+                        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "Missing tool name"}})
+                    }
+                }
+            }
+            _ => {
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}})
+            }
+        };
+
+        writeln!(stdout, "{}", response)?;
+        stdout.flush()?;
+    }
+
+    Ok(())
+}
+
+/// Run an MCP server that aggregates built-in tools with discovered external MCP servers
+///
+/// External servers are discovered by scanning PATH for `pcb-*` binaries and
+/// attempting to spawn them with an `mcp` subcommand. Tools from external servers
+/// are namespaced as `servername:toolname`.
+pub fn run_aggregated_server<F>(
+    builtin_tools: Vec<ToolInfo>,
+    builtin_resources: Vec<ResourceInfo>,
+    builtin_handler: F,
+) -> Result<()>
+where
+    F: Fn(&str, Option<Value>, &McpContext) -> Result<CallToolResult>,
+{
+    let mut aggregator = McpAggregator::new(builtin_tools, builtin_resources, builtin_handler);
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let req: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Notifications (no id) are ignored
+        if req.get("id").is_none() {
+            continue;
+        }
+
+        let id = req.get("id").cloned().unwrap_or(Value::Null);
+        let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
+
+        let response = match method {
+            "initialize" => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {"name": "pcb-mcp", "version": env!("CARGO_PKG_VERSION")},
+                    "capabilities": {"tools": {}, "logging": {}, "resources": {}}
+                }
+            }),
+            "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
+            "logging/setLevel" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
+            "tools/list" => {
+                let tools = aggregator.all_tools();
+                let tool_list: Vec<_> = tools
+                    .iter()
+                    .map(|t| {
+                        let mut tool = json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "inputSchema": t.input_schema
+                        });
+                        if let Some(schema) = &t.output_schema {
+                            tool.as_object_mut()
+                                .unwrap()
+                                .insert("outputSchema".to_string(), schema.clone());
+                        }
+                        tool
+                    })
+                    .collect();
+
+                json!({"jsonrpc": "2.0", "id": id, "result": {"tools": tool_list}})
+            }
+            "resources/list" => {
+                let resources = aggregator.all_resources();
+                let resource_list: Vec<_> = resources
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "uri": r.uri,
+                            "name": r.name,
+                            "title": r.title,
+                            "description": r.description,
+                            "mimeType": r.mime_type,
+                        })
+                    })
+                    .collect();
+
+                json!({"jsonrpc": "2.0", "id": id, "result": {"resources": resource_list}})
+            }
+            "resources/read" => {
+                // All our resources are HTTPS URLs that clients should fetch directly
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": "HTTPS resources should be fetched by client"}
+                })
+            }
+            "tools/call" => {
+                let params = req.get("params");
+                let name = params.and_then(|p| p.get("name")).and_then(|v| v.as_str());
+                let args = params.and_then(|p| p.get("arguments").cloned());
+                let progress_token = params
+                    .and_then(|p| p.get("_meta"))
+                    .and_then(|m| m.get("progressToken"))
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
+
+                let ctx = McpContext { progress_token };
+
+                match name {
+                    Some(name) => match aggregator.handle_tool_call(name, args, &ctx) {
                         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
                         Err(e) => {
                             json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": e.to_string()}})
