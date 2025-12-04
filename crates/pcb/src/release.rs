@@ -1499,6 +1499,8 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg(wrl_path.to_string_lossy())
         .arg("--units")
         .arg("mm")
+        .arg("--no-dnp")
+        .arg("--no-unspecified")
         .arg(kicad_pcb_path.to_string_lossy())
         .log_file(devnull)
         .suppress_error_output(true)
