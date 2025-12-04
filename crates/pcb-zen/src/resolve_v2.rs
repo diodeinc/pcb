@@ -1830,6 +1830,9 @@ fn ensure_sparse_checkout(
     std::fs::create_dir_all(checkout_dir)?;
     git::run_in(checkout_dir, &["init"])?;
 
+    // Disable line ending conversion - critical for cross-platform hash consistency
+    git::run_in(checkout_dir, &["config", "core.autocrlf", "false"])?;
+
     // Add remote (ignore errors if already exists)
     let https_url = format!("https://{}.git", repo_url);
     let _ = git::run_in(checkout_dir, &["remote", "add", "origin", &https_url]);

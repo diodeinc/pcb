@@ -15,6 +15,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use path_slash::PathExt as _;
+
 use crate::cache_index::cache_base;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
@@ -264,7 +266,7 @@ impl WorkspaceInfo {
                     b.name.clone(),
                     BoardInfo {
                         name: b.name.clone(),
-                        zen_path: pkg.rel_path.join(&zen).to_string_lossy().to_string(),
+                        zen_path: pkg.rel_path.join(&zen).to_slash_lossy().into_owned(),
                         description: b.description.clone(),
                     },
                 ))
@@ -440,7 +442,7 @@ pub struct PackageClosure {
 /// - Member at "ti/tps54331" with ws.path="hardware": "hardware/ti/tps54331/v"
 pub fn compute_tag_prefix(rel_path: Option<&Path>, ws_path: &Option<String>) -> String {
     let rel_str = rel_path
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| p.to_slash_lossy().into_owned())
         .unwrap_or_default();
 
     match (ws_path, rel_str.is_empty()) {
@@ -645,11 +647,11 @@ pub fn get_workspace_info(
                 }
             }
             let pkg_config = PcbToml::from_file(file_provider, &pkg_toml_path)?;
-            let rel_str = rel_path.to_string_lossy();
+            let rel_str = rel_path.to_slash_lossy();
             let url = base_url
                 .as_ref()
                 .map(|base| format!("{}/{}", base, rel_str))
-                .unwrap_or_else(|| rel_str.to_string());
+                .unwrap_or_else(|| rel_str.into_owned());
 
             package_dirs.push((path.to_path_buf(), url, pkg_config));
         }
