@@ -996,9 +996,12 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Determine display name of the board
     let board_name = info.board_display_name();
 
+    // Use short hash (7 chars) for variable substitution
+    let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
+
     // First, update the .kicad_pro file to ensure text variables are defined
     let kicad_pro_path = info.staging_dir.join("layout").join("layout.kicad_pro");
-    update_kicad_pro_text_variables(&kicad_pro_path, &info.version, &info.git_hash, &board_name)?;
+    update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
 
     // Then update the .kicad_pcb file with the actual values
     let kicad_pcb_path = info.staging_dir.join("layout").join("layout.kicad_pcb");
@@ -1023,7 +1026,7 @@ board.Save(sys.argv[1])
 print("Text variables updated successfully")
 "#,
         version = info.version.replace('\'', "\\'"),
-        git_hash = info.git_hash.replace('\'', "\\'"),
+        git_hash = short_hash.replace('\'', "\\'"),
         board_name = board_name.replace('\'', "\\'")
     );
 
