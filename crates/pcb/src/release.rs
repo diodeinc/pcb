@@ -1536,7 +1536,6 @@ fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("--no-unspecified")
         .arg("--include-pads")
         .arg("--include-silkscreen")
-        .arg("--include-soldermask")
         .arg(kicad_pcb_path.to_string_lossy())
         .log_file(devnull)
         .suppress_error_output(true)
