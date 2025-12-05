@@ -313,6 +313,14 @@ pub enum AuthCommand {
     Logout,
     Status,
     Refresh,
+    /// Print a valid access token to stdout (refreshes if expired)
+    Token,
+}
+
+pub fn token() -> Result<()> {
+    let token = get_valid_token()?;
+    println!("{}", token);
+    Ok(())
 }
 
 pub fn execute(args: AuthArgs) -> Result<()> {
@@ -321,5 +329,6 @@ pub fn execute(args: AuthArgs) -> Result<()> {
         Some(AuthCommand::Logout) => logout(),
         Some(AuthCommand::Status) => status(),
         Some(AuthCommand::Refresh) => refresh(),
+        Some(AuthCommand::Token) => token(),
     }
 }
