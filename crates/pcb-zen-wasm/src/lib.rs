@@ -1,4 +1,3 @@
-use log::debug;
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::{
     AssetDependencySpec, EvalContext, FileProvider, FileProviderError, Lockfile, PcbToml,
@@ -6,7 +5,7 @@ use pcb_zen_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use zip::ZipArchive;
@@ -14,10 +13,10 @@ use zip::ZipArchive;
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
-    console_log::init_with_level(log::Level::Debug).expect("Failed to initialize console log");
-    debug!("Initialized pcb-zen-wasm logger");
+    console_log::init_with_level(log::Level::Debug).ok();
 }
 
+/// File provider backed by an in-memory zip archive
 struct ZipFileProvider {
     archive: Mutex<ZipArchive<Cursor<Vec<u8>>>>,
     cache: Mutex<HashMap<String, String>>,
@@ -29,11 +28,9 @@ impl ZipFileProvider {
         let cursor = Cursor::new(zip_bytes);
         let mut archive = ZipArchive::new(cursor)?;
 
-        let mut file_index = HashSet::new();
-        for i in 0..archive.len() {
-            let file = archive.by_index(i)?;
-            file_index.insert(file.name().to_string());
-        }
+        let file_index = (0..archive.len())
+            .filter_map(|i| Some(archive.by_index(i).ok()?.name().to_string()))
+            .collect();
 
         Ok(Self {
             archive: Mutex::new(archive),
@@ -44,6 +41,10 @@ impl ZipFileProvider {
 
     fn normalize(path: &Path) -> String {
         path.to_string_lossy().trim_start_matches('/').to_string()
+    }
+
+    fn has_prefix(&self, prefix: &str) -> bool {
+        self.file_index.iter().any(|f| f.starts_with(prefix))
     }
 }
 
@@ -78,12 +79,13 @@ impl FileProvider for ZipFileProvider {
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.file_index.contains(&Self::normalize(path))
+        let normalized = Self::normalize(path);
+        self.file_index.contains(&normalized)
+            || self.has_prefix(&format!("{}/", normalized.trim_end_matches('/')))
     }
 
     fn is_directory(&self, path: &Path) -> bool {
-        let prefix = format!("{}/", Self::normalize(path).trim_end_matches('/'));
-        self.file_index.iter().any(|f| f.starts_with(&prefix))
+        self.has_prefix(&format!("{}/", Self::normalize(path).trim_end_matches('/')))
     }
 
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
@@ -91,34 +93,147 @@ impl FileProvider for ZipFileProvider {
         let prefix = if normalized.is_empty() {
             String::new()
         } else {
-            format!("{}/", normalized)
+            format!("{normalized}/")
         };
 
-        let mut entries = HashSet::new();
-        for name in &self.file_index {
-            if let Some(rest) = name.strip_prefix(&prefix) {
-                if let Some(component) = rest.split('/').next() {
-                    if !component.is_empty() {
-                        entries.insert(component.to_string());
-                    }
-                }
-            }
-        }
+        let entries: HashSet<_> = self
+            .file_index
+            .iter()
+            .filter_map(|name| name.strip_prefix(&prefix))
+            .filter_map(|rest| rest.split('/').next())
+            .filter(|s| !s.is_empty())
+            .collect();
 
         Ok(entries.into_iter().map(|name| path.join(name)).collect())
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileProviderError> {
-        Ok(path.to_path_buf())
+        let components: Vec<_> = path.components().fold(Vec::new(), |mut acc, c| {
+            match c {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    acc.pop();
+                }
+                Component::Normal(name) => acc.push(name),
+                Component::RootDir | Component::Prefix(_) => acc.clear(),
+            }
+            acc
+        });
+
+        let mut result = if path.is_absolute() {
+            PathBuf::from("/")
+        } else {
+            PathBuf::new()
+        };
+        result.extend(components);
+        Ok(result)
     }
 }
 
-fn vendor_path_for_module(vendor_dir: &Path, module_path: &str, version: &str) -> PathBuf {
+/// Build V2 package resolution map from lockfile and vendored dependencies
+fn resolve_v2_packages(
+    file_provider: &dyn FileProvider,
+    workspace_root: &Path,
+) -> Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
+    let lockfile = Lockfile::parse(
+        &file_provider
+            .read_file(&workspace_root.join("pcb.sum"))
+            .ok()?,
+    )
+    .ok()?;
+    let pcb_toml = PcbToml::parse(
+        &file_provider
+            .read_file(&workspace_root.join("pcb.toml"))
+            .ok()?,
+    )
+    .ok()?;
+
+    let vendor_dir = workspace_root.join("vendor");
+
+    // Build URL -> vendored path mapping from lockfile
+    let url_to_path: HashMap<String, PathBuf> = lockfile
+        .iter()
+        .filter_map(|entry| {
+            let path = vendor_path(&vendor_dir, &entry.module_path, &entry.version);
+            file_provider
+                .exists(&path)
+                .then(|| (entry.module_path.clone(), path))
+        })
+        .collect();
+
+    // Workspace repository URL allows self-referential imports
+    let workspace_repo_url = pcb_toml
+        .workspace
+        .as_ref()
+        .and_then(|w| w.repository.clone());
+
+    let build_pkg_map = |config: &PcbToml| -> BTreeMap<String, PathBuf> {
+        let mut map = BTreeMap::new();
+
+        if let Some(ref repo_url) = workspace_repo_url {
+            map.insert(repo_url.clone(), workspace_root.to_path_buf());
+        }
+
+        for url in config.dependencies.keys() {
+            if let Some(path) = url_to_path.get(url) {
+                map.insert(url.clone(), path.clone());
+            }
+        }
+
+        for (asset_key, asset_spec) in &config.assets {
+            if let Some(ref_str) = extract_asset_ref(asset_spec) {
+                let path = vendor_path(&vendor_dir, asset_key, &ref_str);
+                if file_provider.exists(&path) {
+                    map.insert(asset_key.clone(), path);
+                }
+            }
+        }
+
+        map
+    };
+
+    let mut results: HashMap<PathBuf, BTreeMap<String, PathBuf>> = HashMap::new();
+    results.insert(workspace_root.to_path_buf(), build_pkg_map(&pcb_toml));
+
+    // Add vendored packages
+    for vendor_path in url_to_path.values() {
+        if let Ok(content) = file_provider.read_file(&vendor_path.join("pcb.toml")) {
+            if let Ok(pkg_config) = PcbToml::parse(&content) {
+                results.insert(vendor_path.clone(), build_pkg_map(&pkg_config));
+            }
+        }
+    }
+
+    // Discover workspace member packages by scanning for pcb.toml files
+    let mut dirs_to_scan = vec![workspace_root.to_path_buf()];
+    while let Some(dir) = dirs_to_scan.pop() {
+        if let Ok(entries) = file_provider.list_directory(&dir) {
+            for entry in entries {
+                if entry == workspace_root.join("vendor") {
+                    continue;
+                }
+                if file_provider.is_directory(&entry) {
+                    if let Ok(content) = file_provider.read_file(&entry.join("pcb.toml")) {
+                        if let Ok(member_config) = PcbToml::parse(&content) {
+                            results.insert(entry.clone(), build_pkg_map(&member_config));
+                        }
+                    }
+                    dirs_to_scan.push(entry);
+                }
+            }
+        }
+    }
+
+    Some(results)
+}
+
+fn vendor_path(vendor_dir: &Path, module_path: &str, version: &str) -> PathBuf {
     let (repo_url, subpath) = pcb_zen_core::config::split_asset_repo_and_subpath(module_path);
+    let base = vendor_dir.join(repo_url).join(version);
     if subpath.is_empty() {
-        vendor_dir.join(repo_url).join(version)
+        base
     } else {
-        vendor_dir.join(repo_url).join(version).join(subpath)
+        base.join(subpath)
     }
 }
 
@@ -133,80 +248,6 @@ fn extract_asset_ref(spec: &AssetDependencySpec) -> Option<String> {
             .filter(|r| r != "HEAD"),
         _ => None,
     }
-}
-
-fn resolve_v2_packages(
-    file_provider: &dyn FileProvider,
-    workspace_root: &Path,
-) -> Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
-    let lockfile_content = file_provider
-        .read_file(&workspace_root.join("pcb.sum"))
-        .ok()?;
-    let lockfile = Lockfile::parse(&lockfile_content).ok()?;
-
-    let pcb_toml_content = file_provider
-        .read_file(&workspace_root.join("pcb.toml"))
-        .ok()?;
-    let pcb_toml = PcbToml::parse(&pcb_toml_content).ok()?;
-
-    let vendor_dir = workspace_root.join("vendor");
-
-    let url_to_path: HashMap<String, PathBuf> = lockfile
-        .iter()
-        .filter_map(|entry| {
-            let vendor_path =
-                vendor_path_for_module(&vendor_dir, &entry.module_path, &entry.version);
-            file_provider
-                .exists(&vendor_path)
-                .then(|| (entry.module_path.clone(), vendor_path))
-        })
-        .collect();
-
-    let build_pkg_map = |config: &PcbToml| -> BTreeMap<String, PathBuf> {
-        let mut map = BTreeMap::new();
-
-        for url in config.dependencies.keys() {
-            if let Some(path) = url_to_path.get(url) {
-                map.insert(url.clone(), path.clone());
-            }
-        }
-
-        for (asset_key, asset_spec) in &config.assets {
-            if let Some(ref_str) = extract_asset_ref(asset_spec) {
-                let asset_path = vendor_path_for_module(&vendor_dir, asset_key, &ref_str);
-                if file_provider.exists(&asset_path) {
-                    map.insert(asset_key.clone(), asset_path);
-                }
-            }
-        }
-
-        map
-    };
-
-    let mut results: HashMap<PathBuf, BTreeMap<String, PathBuf>> = HashMap::new();
-
-    results.insert(workspace_root.to_path_buf(), build_pkg_map(&pcb_toml));
-
-    for vendor_path in url_to_path.values() {
-        if let Ok(content) = file_provider.read_file(&vendor_path.join("pcb.toml")) {
-            if let Ok(pkg_config) = PcbToml::parse(&content) {
-                results.insert(vendor_path.clone(), build_pkg_map(&pkg_config));
-            }
-        }
-    }
-
-    if let Some(workspace) = &pcb_toml.workspace {
-        for member_pattern in &workspace.members {
-            let member_dir = workspace_root.join(member_pattern.trim_end_matches("/*"));
-            if let Ok(content) = file_provider.read_file(&member_dir.join("pcb.toml")) {
-                if let Ok(member_config) = PcbToml::parse(&content) {
-                    results.insert(member_dir, build_pkg_map(&member_config));
-                }
-            }
-        }
-    }
-
-    Some(results)
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {

@@ -729,9 +729,8 @@ pub fn split_asset_repo_and_subpath(asset_key: &str) -> (&str, &str) {
 ///
 /// Always returns a canonicalized absolute path.
 pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> PathBuf {
-    let abs_start = start
-        .canonicalize()
-        .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(start)))
+    let abs_start = file_provider
+        .canonicalize(start)
         .unwrap_or_else(|_| start.to_path_buf());
 
     let start_dir = if file_provider.is_directory(&abs_start) {
