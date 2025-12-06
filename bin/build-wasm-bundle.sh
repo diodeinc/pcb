@@ -19,9 +19,10 @@ fi
 cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
 
 # Build pcb-zen-wasm with production optimizations
+# Use cargo rustc with --crate-type cdylib to only build the cdylib (LTO doesn't work for rlib)
 echo "Building pcb-zen-wasm with production optimizations..."
 RUSTFLAGS="-C opt-level=3 -C lto=fat -C embed-bitcode=yes -C codegen-units=1 -C target-feature=+tail-call" \
-  cargo build --release --target wasm32-unknown-unknown -p pcb-zen-wasm
+  cargo rustc --release --target wasm32-unknown-unknown -p pcb-zen-wasm --lib --crate-type cdylib
 
 # Create output directory in target
 mkdir -p target/wasm-bundle

@@ -46,6 +46,56 @@ impl ZipFileProvider {
     fn has_prefix(&self, prefix: &str) -> bool {
         self.file_index.iter().any(|f| f.starts_with(prefix))
     }
+
+    /// Auto-detect the main .zen file in the zip.
+    ///
+    /// Looks in `boards/` for a single subdirectory containing a single .zen file.
+    /// Returns the path like "boards/LG0002/LG0002.zen" if found.
+    fn detect_main_file(&self) -> Option<String> {
+        // Find all entries under boards/
+        let board_dirs: HashSet<_> = self
+            .file_index
+            .iter()
+            .filter_map(|path| {
+                let path = path.strip_prefix("boards/")?;
+                let dir = path.split('/').next()?;
+                if !dir.is_empty() {
+                    Some(dir.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Must have exactly one board directory
+        if board_dirs.len() != 1 {
+            return None;
+        }
+
+        let board_dir = board_dirs.into_iter().next()?;
+        let board_path = format!("boards/{}", board_dir);
+
+        // Find .zen files directly in this board directory (not in subdirs)
+        let zen_files: Vec<_> = self
+            .file_index
+            .iter()
+            .filter(|path| {
+                if let Some(rest) = path.strip_prefix(&format!("{}/", board_path)) {
+                    // Must be a .zen file directly in the board dir (no more slashes)
+                    !rest.contains('/') && rest.ends_with(".zen")
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        // Must have exactly one .zen file
+        if zen_files.len() != 1 {
+            return None;
+        }
+
+        Some(zen_files[0].clone())
+    }
 }
 
 impl FileProvider for ZipFileProvider {
@@ -292,22 +342,37 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
     }
 }
 
-/// Evaluate a Zener module from a zip archive.
+/// Evaluate a Zener module from a zip archive (pure Rust implementation).
 ///
 /// Works with both V1 (no pcb.sum) and V2 (with pcb.sum) release zips.
 /// All dependencies must be vendored in the zip.
-#[wasm_bindgen]
-pub fn evaluate(
+///
+/// If `main_file` is empty, attempts to auto-detect by looking for a single
+/// board directory with a single .zen file (e.g., "boards/LG0002/LG0002.zen").
+///
+/// This is the core implementation that can be used from both WASM and native contexts.
+pub fn evaluate_impl(
     zip_bytes: Vec<u8>,
     main_file: &str,
     inputs_json: &str,
-) -> Result<JsValue, JsValue> {
+) -> Result<EvaluationResult, String> {
     let file_provider = Arc::new(
         ZipFileProvider::new(zip_bytes)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse zip: {e}")))?,
+            .map_err(|e| format!("Failed to parse zip: {e}"))?,
     );
 
-    let main_path = PathBuf::from(main_file);
+    // Auto-detect main file if not provided
+    let main_file = if main_file.is_empty() {
+        file_provider.detect_main_file().ok_or_else(|| {
+            "Could not auto-detect main file. Expected exactly one board directory \
+             in boards/ with exactly one .zen file. Please specify the main file explicitly."
+                .to_string()
+        })?
+    } else {
+        main_file.to_string()
+    };
+
+    let main_path = PathBuf::from(&main_file);
     let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path);
     let v2_resolutions = resolve_v2_packages(file_provider.as_ref(), &workspace_root);
 
@@ -320,7 +385,7 @@ pub fn evaluate(
     ));
 
     let inputs: HashMap<String, serde_json::Value> = serde_json::from_str(inputs_json)
-        .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs: {e}")))?;
+        .map_err(|e| format!("Failed to parse inputs: {e}"))?;
 
     let mut ctx = EvalContext::new(load_resolver).set_source_path(main_path);
     if !inputs.is_empty() {
@@ -330,7 +395,7 @@ pub fn evaluate(
     let result = ctx.eval();
     let schematic_opt = result.output.as_ref().and_then(|o| o.to_schematic().ok());
 
-    let evaluation_result = EvaluationResult {
+    Ok(EvaluationResult {
         success: result.output.is_some(),
         parameters: result.output.as_ref().map(|o| o.signature.clone()),
         schematic: schematic_opt
@@ -342,9 +407,22 @@ pub fn evaluate(
             .into_iter()
             .map(|d| diagnostic_to_json(&d))
             .collect(),
-    };
+    })
+}
 
-    serde_wasm_bindgen::to_value(&evaluation_result)
+/// Evaluate a Zener module from a zip archive (WASM binding).
+///
+/// This is a thin wrapper around `evaluate_impl` for wasm-bindgen.
+#[wasm_bindgen]
+pub fn evaluate(
+    zip_bytes: Vec<u8>,
+    main_file: &str,
+    inputs_json: &str,
+) -> Result<JsValue, JsValue> {
+    let result = evaluate_impl(zip_bytes, main_file, inputs_json)
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    serde_wasm_bindgen::to_value(&result)
         .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
 }
 

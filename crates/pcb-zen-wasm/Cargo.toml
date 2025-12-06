@@ -8,7 +8,11 @@ authors = { workspace = true }
 description = "WebAssembly bindings for Zen PCB design language"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "pcb-zen-wasi"
+path = "src/main.rs"
 
 [dependencies]
 pcb-zen-core = { workspace = true, features = ["wasm"] }
@@ -21,6 +25,7 @@ starlark = { workspace = true }
 zip = { workspace = true }
 console_log = { workspace = true }
 log = { workspace = true }
+env_logger = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = { workspace = true }

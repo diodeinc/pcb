@@ -1044,8 +1044,6 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
-
-
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
 /// Returns map of (module_path, ref) -> resolved_path for all fetched assets
