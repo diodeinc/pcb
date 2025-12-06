@@ -3452,25 +3452,16 @@ dependencies = [
 name = "pcb-zen-wasm"
 version = "0.3.3"
 dependencies = [
- "anyhow",
- "base64",
  "console_error_panic_hook",
  "console_log",
- "js-sys",
- "lazy_static",
  "log",
- "pcb-eda",
- "pcb-sch",
  "pcb-zen-core",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "starlark",
- "toml",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-test",
- "web-sys",
  "zip 4.3.0",
 ]
 
