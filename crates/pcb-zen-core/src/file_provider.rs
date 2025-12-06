@@ -11,21 +11,29 @@ pub struct InMemoryFileProvider {
 }
 
 impl InMemoryFileProvider {
+    /// Normalize a path to use forward slashes consistently.
+    /// This is a platform-independent virtual filesystem so we use Unix-style paths.
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        let path_str = path.to_string_lossy().replace('\\', "/");
+        PathBuf::from(path_str)
+    }
+
     /// Create a new InMemoryFileProvider with the given files.
     /// Keys should be file paths (can be relative or absolute).
     /// Relative paths will be converted to absolute paths with "/" as root.
     pub fn new(files: HashMap<String, String>) -> Self {
         let mut path_files = HashMap::new();
         for (path, content) in files {
-            // Ensure all paths are stored as absolute paths
-            let path_buf = PathBuf::from(path);
+            // Normalize separators first
+            let normalized = path.replace('\\', "/");
+            let path_buf = PathBuf::from(normalized);
             let absolute_path = if path_buf.is_absolute() {
                 path_buf
             } else {
                 // Convert relative paths to absolute by prepending /
                 PathBuf::from("/").join(path_buf)
             };
-            path_files.insert(absolute_path, content);
+            path_files.insert(Self::normalize_path(absolute_path), content);
         }
         Self { files: path_files }
     }
@@ -45,7 +53,8 @@ impl InMemoryFileProvider {
         } else {
             PathBuf::from("/").join(path_buf)
         };
-        self.files.insert(absolute_path, content);
+        self.files
+            .insert(Self::normalize_path(absolute_path), content);
     }
 
     /// Get a reference to all files
@@ -210,7 +219,7 @@ impl FileProvider for InMemoryFileProvider {
             canonical_path.push(component);
         }
 
-        Ok(canonical_path)
+        Ok(Self::normalize_path(canonical_path))
     }
 }
 
