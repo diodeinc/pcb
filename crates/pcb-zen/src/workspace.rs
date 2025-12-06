@@ -20,7 +20,7 @@ use path_slash::PathExt as _;
 use crate::cache_index::cache_base;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::resolve_v2::{extract_asset_ref, ResolutionResult};
+use crate::resolve_v2::ResolutionResult;
 
 /// Why a package is dirty (has unpublished changes)
 #[derive(Debug, Clone)]
@@ -378,7 +378,7 @@ impl WorkspaceInfo {
 
                 // Collect assets from this package
                 for (asset_url, asset_spec) in &pkg.config.assets {
-                    if let Ok(ref_str) = extract_asset_ref(asset_spec) {
+                    if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(asset_spec) {
                         closure.assets.insert((asset_url.clone(), ref_str));
                     }
                 }

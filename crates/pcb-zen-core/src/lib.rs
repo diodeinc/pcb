@@ -48,8 +48,8 @@ pub mod attrs {
 
 // Re-export commonly used types
 pub use config::{
-    AssetDependencyDetail, AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig,
-    PcbToml, WorkspaceConfig,
+    extract_asset_ref, extract_asset_ref_strict, vendor_path, AssetDependencyDetail,
+    AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig,
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
@@ -767,21 +767,30 @@ impl CoreLoadResolver {
         file: &Path,
         package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     ) -> Option<PathBuf> {
+        log::warn!(
+            "find_package_root_for_file: file={}, map_keys={:?}",
+            file.display(),
+            package_resolutions.keys().collect::<Vec<_>>()
+        );
         let mut current = file.parent();
         while let Some(dir) = current {
+            log::warn!("  checking dir: {}", dir.display());
             // Check workspace package resolutions first
             if package_resolutions.contains_key(dir) {
+                log::warn!("  found in resolutions map!");
                 return Some(dir.to_path_buf());
             }
 
             // Check for pcb.toml (handles cached packages)
             let pcb_toml = dir.join("pcb.toml");
             if self.file_provider.exists(&pcb_toml) {
+                log::warn!("  found via pcb.toml!");
                 return Some(dir.to_path_buf());
             }
 
             current = dir.parent();
         }
+        log::warn!("  no package root found!");
         None
     }
 

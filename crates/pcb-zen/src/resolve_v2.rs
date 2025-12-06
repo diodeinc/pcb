@@ -871,7 +871,7 @@ fn build_resolution_map(
             }
         }
         for (asset_key, asset_spec) in pkg_assets {
-            if let Ok(ref_str) = extract_asset_ref(asset_spec) {
+            if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(asset_spec) {
                 if let Some(path) = get_asset_path(asset_key, &ref_str) {
                     map.insert(asset_key.clone(), path);
                 }
@@ -1044,38 +1044,7 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
-/// Extract ref string from AssetDependencySpec
-///
-/// Returns an error if the spec doesn't specify a version, branch, or rev (including HEAD)
-pub fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String> {
-    use pcb_zen_core::AssetDependencySpec;
 
-    match spec {
-        AssetDependencySpec::Ref(r) => {
-            if r == "HEAD" {
-                anyhow::bail!(
-                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
-                );
-            }
-            Ok(r.clone())
-        }
-        AssetDependencySpec::Detailed(detail) => {
-            let ref_str = detail
-                .version
-                .clone()
-                .or_else(|| detail.branch.clone())
-                .or_else(|| detail.rev.clone())
-                .ok_or_else(|| anyhow::anyhow!("Asset must specify version, branch, or rev"))?;
-
-            if ref_str == "HEAD" {
-                anyhow::bail!(
-                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
-                );
-            }
-            Ok(ref_str)
-        }
-    }
-}
 
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
@@ -1091,7 +1060,7 @@ fn collect_and_fetch_assets(
 
     for pkg in workspace_info.packages.values() {
         for (path, spec) in &pkg.config.assets {
-            if let Ok(ref_str) = extract_asset_ref(spec) {
+            if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(spec) {
                 all_assets.push((path.clone(), ref_str));
             }
         }
@@ -1100,7 +1069,7 @@ fn collect_and_fetch_assets(
     for (line, version) in selected {
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
             for (path, spec) in &manifest.assets {
-                if let Ok(ref_str) = extract_asset_ref(spec) {
+                if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(spec) {
                     all_assets.push((path.clone(), ref_str));
                 }
             }
