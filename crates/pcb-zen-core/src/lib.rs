@@ -14,6 +14,8 @@ pub mod lang;
 pub mod load_spec;
 mod moved;
 pub mod passes;
+pub mod resolution;
+pub mod workspace;
 
 /// Attribute, net, and record field constants used across the core
 pub mod attrs {
@@ -48,8 +50,8 @@ pub mod attrs {
 
 // Re-export commonly used types
 pub use config::{
-    AssetDependencyDetail, AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig,
-    PcbToml, WorkspaceConfig,
+    extract_asset_ref, extract_asset_ref_strict, AssetDependencyDetail, AssetDependencySpec,
+    BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig,
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
@@ -93,6 +95,35 @@ pub trait FileProvider: Send + Sync {
     /// Canonicalize a path (make it absolute)
     fn canonicalize(&self, path: &std::path::Path)
         -> Result<std::path::PathBuf, FileProviderError>;
+}
+
+/// Blanket implementation of FileProvider for Arc<T> where T: FileProvider
+impl<T: FileProvider + ?Sized> FileProvider for Arc<T> {
+    fn read_file(&self, path: &std::path::Path) -> Result<String, FileProviderError> {
+        (**self).read_file(path)
+    }
+
+    fn exists(&self, path: &std::path::Path) -> bool {
+        (**self).exists(path)
+    }
+
+    fn is_directory(&self, path: &std::path::Path) -> bool {
+        (**self).is_directory(path)
+    }
+
+    fn list_directory(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<std::path::PathBuf>, FileProviderError> {
+        (**self).list_directory(path)
+    }
+
+    fn canonicalize(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<std::path::PathBuf, FileProviderError> {
+        (**self).canonicalize(path)
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

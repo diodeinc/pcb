@@ -75,7 +75,6 @@ walkdir = "2.3"
 which = "7.0"
 deunicode = "1.6"
 insta = { version = "1.39", features = ["yaml", "filters", "json"] }
-argfile = "0.1.0"
 assert_cmd = "2.0"
 assert_fs = "1.0"
 base64 = "0.22"

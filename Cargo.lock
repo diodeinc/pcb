@@ -202,16 +202,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
 
 [[package]]
-name = "argfile"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1287c4f82a41c5085e65ee337c7934d71ab43d5187740a81fb69129013f6a5f6"
-dependencies = [
- "fs-err",
- "os_str_bytes",
-]
-
-[[package]]
 name = "ariadne"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1479,15 +1469,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fs-err"
-version = "2.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88a41f105fe1d5b6b34b2055e3dc59bb79b46b48b2040b9e6c7b4b5de097aa41"
-dependencies = [
- "autocfg",
 ]
 
 [[package]]
@@ -2964,15 +2945,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "os_str_bytes"
-version = "6.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3344,7 +3316,6 @@ version = "0.3.3"
 dependencies = [
  "allocative",
  "anyhow",
- "argfile",
  "ariadne",
  "base64",
  "blake3",
@@ -3395,7 +3366,6 @@ dependencies = [
  "toml",
  "unicode-normalization",
  "uuid",
- "walkdir",
  "zip 4.3.0",
 ]
 
@@ -3405,7 +3375,6 @@ version = "0.3.3"
 dependencies = [
  "allocative",
  "anyhow",
- "argfile",
  "ariadne",
  "chrono",
  "clap",
@@ -3454,6 +3423,7 @@ version = "0.3.3"
 dependencies = [
  "console_error_panic_hook",
  "console_log",
+ "env_logger",
  "log",
  "pcb-zen-core",
  "serde",

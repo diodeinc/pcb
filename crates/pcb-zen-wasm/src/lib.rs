@@ -1,7 +1,9 @@
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::{
-    AssetDependencySpec, EvalContext, FileProvider, FileProviderError, Lockfile, PcbToml,
+use pcb_zen_core::resolution::{
+    add_transitive_resolution_maps, build_resolution_map, VendoredPathResolver,
 };
+use pcb_zen_core::workspace::get_workspace_info;
+use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read};
@@ -13,7 +15,7 @@ use zip::ZipArchive;
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
-    console_log::init_with_level(log::Level::Debug).ok();
+    console_log::init_with_level(log::Level::Warn).ok();
 }
 
 /// File provider backed by an in-memory zip archive
@@ -45,6 +47,56 @@ impl ZipFileProvider {
 
     fn has_prefix(&self, prefix: &str) -> bool {
         self.file_index.iter().any(|f| f.starts_with(prefix))
+    }
+
+    /// Auto-detect the main .zen file in the zip.
+    ///
+    /// Looks in `boards/` for a single subdirectory containing a single .zen file.
+    /// Returns the path like "boards/LG0002/LG0002.zen" if found.
+    fn detect_main_file(&self) -> Option<String> {
+        // Find all entries under boards/
+        let board_dirs: HashSet<_> = self
+            .file_index
+            .iter()
+            .filter_map(|path| {
+                let path = path.strip_prefix("boards/")?;
+                let dir = path.split('/').next()?;
+                if !dir.is_empty() {
+                    Some(dir.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Must have exactly one board directory
+        if board_dirs.len() != 1 {
+            return None;
+        }
+
+        let board_dir = board_dirs.into_iter().next()?;
+        let board_path = format!("boards/{}", board_dir);
+
+        // Find .zen files directly in this board directory (not in subdirs)
+        let zen_files: Vec<_> = self
+            .file_index
+            .iter()
+            .filter(|path| {
+                if let Some(rest) = path.strip_prefix(&format!("{}/", board_path)) {
+                    // Must be a .zen file directly in the board dir (no more slashes)
+                    !rest.contains('/') && rest.ends_with(".zen")
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        // Must have exactly one .zen file
+        if zen_files.len() != 1 {
+            return None;
+        }
+
+        Some(zen_files[0].clone())
     }
 }
 
@@ -130,137 +182,46 @@ impl FileProvider for ZipFileProvider {
     }
 }
 
-/// Build V2 package resolution map from lockfile and vendored dependencies
-fn resolve_v2_packages(
-    file_provider: &dyn FileProvider,
+/// Build V2 package resolution map from lockfile and vendored dependencies.
+///
+/// Assumes all deps are vendored in `vendor/`. No patches, no cache fallback.
+/// Uses shared resolution logic from pcb-zen-core.
+fn resolve_v2_packages<F: FileProvider + Clone>(
+    file_provider: F,
     workspace_root: &Path,
 ) -> Option<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
-    let lockfile = Lockfile::parse(
-        &file_provider
-            .read_file(&workspace_root.join("pcb.sum"))
-            .ok()?,
-    )
-    .ok()?;
-    let pcb_toml = PcbToml::parse(
-        &file_provider
-            .read_file(&workspace_root.join("pcb.toml"))
-            .ok()?,
-    )
-    .ok()?;
+    // Parse lockfile
+    let lockfile_content = file_provider
+        .read_file(&workspace_root.join("pcb.sum"))
+        .ok()?;
+    let lockfile = Lockfile::parse(&lockfile_content).ok()?;
 
     let vendor_dir = workspace_root.join("vendor");
 
-    // Build URL -> vendored path mapping from lockfile
-    let url_to_path: HashMap<String, PathBuf> = lockfile
-        .iter()
-        .filter_map(|entry| {
-            let path = vendor_path(&vendor_dir, &entry.module_path, &entry.version);
-            file_provider
-                .exists(&path)
-                .then(|| (entry.module_path.clone(), path))
-        })
-        .collect();
+    // Create the vendored path resolver
+    let resolver =
+        VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
 
-    // Workspace repository URL allows self-referential imports
-    let workspace_repo_url = pcb_toml
-        .workspace
-        .as_ref()
-        .and_then(|w| w.repository.clone());
+    // Discover workspace using shared logic
+    let workspace = get_workspace_info(&file_provider, workspace_root).ok()?;
 
-    let build_pkg_map = |config: &PcbToml| -> BTreeMap<String, PathBuf> {
-        let mut map = BTreeMap::new();
+    // Build the initial resolution map
+    let mut results = build_resolution_map(&workspace, &resolver);
 
-        if let Some(ref repo_url) = workspace_repo_url {
-            map.insert(repo_url.clone(), workspace_root.to_path_buf());
-        }
-
-        for url in config.dependencies.keys() {
-            if let Some(path) = url_to_path.get(url) {
-                map.insert(url.clone(), path.clone());
-            }
-        }
-
-        for (asset_key, asset_spec) in &config.assets {
-            if let Some(ref_str) = extract_asset_ref(asset_spec) {
-                let path = vendor_path(&vendor_dir, asset_key, &ref_str);
-                if file_provider.exists(&path) {
-                    map.insert(asset_key.clone(), path);
-                }
-            }
-        }
-
-        map
-    };
-
-    let mut results: HashMap<PathBuf, BTreeMap<String, PathBuf>> = HashMap::new();
-    results.insert(workspace_root.to_path_buf(), build_pkg_map(&pcb_toml));
-
-    // Add vendored packages
-    for vendor_path in url_to_path.values() {
-        if let Ok(content) = file_provider.read_file(&vendor_path.join("pcb.toml")) {
-            if let Ok(pkg_config) = PcbToml::parse(&content) {
-                results.insert(vendor_path.clone(), build_pkg_map(&pkg_config));
-            }
-        }
-    }
-
-    // Discover workspace member packages by scanning for pcb.toml files
-    let mut dirs_to_scan = vec![workspace_root.to_path_buf()];
-    while let Some(dir) = dirs_to_scan.pop() {
-        if let Ok(entries) = file_provider.list_directory(&dir) {
-            for entry in entries {
-                if entry == workspace_root.join("vendor") {
-                    continue;
-                }
-                if file_provider.is_directory(&entry) {
-                    if let Ok(content) = file_provider.read_file(&entry.join("pcb.toml")) {
-                        if let Ok(member_config) = PcbToml::parse(&content) {
-                            results.insert(entry.clone(), build_pkg_map(&member_config));
-                        }
-                    }
-                    dirs_to_scan.push(entry);
-                }
-            }
-        }
-    }
+    // Add transitive dependencies
+    add_transitive_resolution_maps(&file_provider, &resolver, &workspace, &mut results);
 
     Some(results)
 }
 
-fn vendor_path(vendor_dir: &Path, module_path: &str, version: &str) -> PathBuf {
-    let (repo_url, subpath) = pcb_zen_core::config::split_asset_repo_and_subpath(module_path);
-    let base = vendor_dir.join(repo_url).join(version);
-    if subpath.is_empty() {
-        base
-    } else {
-        base.join(subpath)
-    }
-}
-
-fn extract_asset_ref(spec: &AssetDependencySpec) -> Option<String> {
-    match spec {
-        AssetDependencySpec::Ref(r) if r != "HEAD" => Some(r.clone()),
-        AssetDependencySpec::Detailed(d) => d
-            .version
-            .clone()
-            .or_else(|| d.branch.clone())
-            .or_else(|| d.rev.clone())
-            .filter(|r| r != "HEAD"),
-        _ => None,
-    }
-}
-
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
-    let level = match diag.severity {
-        starlark::errors::EvalSeverity::Error => "error",
-        starlark::errors::EvalSeverity::Warning => "warning",
-        starlark::errors::EvalSeverity::Advice => "info",
-        starlark::errors::EvalSeverity::Disabled => "info",
-    }
-    .to_string();
-
     DiagnosticInfo {
-        level,
+        level: match diag.severity {
+            starlark::errors::EvalSeverity::Error => "error",
+            starlark::errors::EvalSeverity::Warning => "warning",
+            _ => "info",
+        }
+        .to_string(),
         message: diag.body.clone(),
         file: Some(diag.path.clone()),
         line: diag.span.as_ref().map(|s| s.begin.line as u32),
@@ -268,25 +229,37 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
     }
 }
 
-/// Evaluate a Zener module from a zip archive.
+/// Evaluate a Zener module from a zip archive (pure Rust implementation).
 ///
 /// Works with both V1 (no pcb.sum) and V2 (with pcb.sum) release zips.
 /// All dependencies must be vendored in the zip.
-#[wasm_bindgen]
-pub fn evaluate(
+///
+/// If `main_file` is empty, attempts to auto-detect by looking for a single
+/// board directory with a single .zen file (e.g., "boards/LG0002/LG0002.zen").
+///
+/// This is the core implementation that can be used from both WASM and native contexts.
+pub fn evaluate_impl(
     zip_bytes: Vec<u8>,
     main_file: &str,
     inputs_json: &str,
-) -> Result<JsValue, JsValue> {
-    let file_provider = Arc::new(
-        ZipFileProvider::new(zip_bytes)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse zip: {e}")))?,
-    );
+) -> Result<EvaluationResult, String> {
+    let file_provider =
+        Arc::new(ZipFileProvider::new(zip_bytes).map_err(|e| format!("Failed to parse zip: {e}"))?);
 
-    let main_path = PathBuf::from(main_file);
+    // Auto-detect main file if not provided
+    let main_file = if main_file.is_empty() {
+        file_provider.detect_main_file().ok_or_else(|| {
+            "Could not auto-detect main file. Expected exactly one board directory \
+             in boards/ with exactly one .zen file. Please specify the main file explicitly."
+                .to_string()
+        })?
+    } else {
+        main_file.to_string()
+    };
+
+    let main_path = PathBuf::from(&main_file);
     let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path);
-
-    let v2_resolutions = resolve_v2_packages(file_provider.as_ref(), &workspace_root);
+    let v2_resolutions = resolve_v2_packages(file_provider.clone(), &workspace_root);
 
     let load_resolver = Arc::new(pcb_zen_core::CoreLoadResolver::new(
         file_provider.clone(),
@@ -296,37 +269,49 @@ pub fn evaluate(
         v2_resolutions,
     ));
 
-    let inputs: HashMap<String, serde_json::Value> = serde_json::from_str(inputs_json)
-        .map_err(|e| JsValue::from_str(&format!("Failed to parse inputs: {e}")))?;
+    let inputs: HashMap<String, serde_json::Value> =
+        serde_json::from_str(inputs_json).map_err(|e| format!("Failed to parse inputs: {e}"))?;
 
     let mut ctx = EvalContext::new(load_resolver).set_source_path(main_path);
-
     if !inputs.is_empty() {
-        let json_map = starlark::collections::SmallMap::from_iter(inputs);
-        ctx.set_json_inputs(json_map);
+        ctx.set_json_inputs(starlark::collections::SmallMap::from_iter(inputs));
     }
 
     let result = ctx.eval();
-
     let schematic_opt = result.output.as_ref().and_then(|o| o.to_schematic().ok());
 
-    let parameters = result.output.as_ref().map(|o| o.signature.clone());
-
-    let bom_json = schematic_opt.as_ref().map(|s| s.bom().ungrouped_json());
-
-    let evaluation_result = EvaluationResult {
+    Ok(EvaluationResult {
         success: result.output.is_some(),
-        parameters,
-        schematic: schematic_opt.and_then(|s| serde_json::to_string(&s).ok()),
-        bom: bom_json,
+        parameters: result.output.as_ref().map(|o| o.signature.clone()),
+        schematic: schematic_opt
+            .as_ref()
+            .and_then(|s| serde_json::to_value(s).ok()),
+        bom: schematic_opt
+            .as_ref()
+            .and_then(|s| serde_json::from_str(&s.bom().ungrouped_json()).ok()),
         diagnostics: result
             .diagnostics
             .into_iter()
             .map(|d| diagnostic_to_json(&d))
             .collect(),
-    };
+    })
+}
 
-    serde_wasm_bindgen::to_value(&evaluation_result)
+/// Evaluate a Zener module from a zip archive (WASM binding).
+///
+/// This is a thin wrapper around `evaluate_impl` for wasm-bindgen.
+#[wasm_bindgen]
+pub fn evaluate(
+    zip_bytes: Vec<u8>,
+    main_file: &str,
+    inputs_json: &str,
+) -> Result<JsValue, JsValue> {
+    let result =
+        evaluate_impl(zip_bytes, main_file, inputs_json).map_err(|e| JsValue::from_str(&e))?;
+
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    result
+        .serialize(&serializer)
         .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
 }
 
@@ -343,7 +328,7 @@ pub struct DiagnosticInfo {
 pub struct EvaluationResult {
     pub success: bool,
     pub parameters: Option<Vec<pcb_zen_core::lang::type_info::ParameterInfo>>,
-    pub schematic: Option<String>,
-    pub bom: Option<String>,
+    pub schematic: Option<serde_json::Value>,
+    pub bom: Option<serde_json::Value>,
     pub diagnostics: Vec<DiagnosticInfo>,
 }

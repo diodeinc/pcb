@@ -2,6 +2,10 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Style, StyledText};
 use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
+use pcb_zen_core::resolution::{
+    add_transitive_resolution_maps, build_resolution_map as shared_build_resolution_map,
+    NativePathResolver, PackagePathResolver,
+};
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
 use semver::Version;
@@ -14,7 +18,7 @@ use std::time::Instant;
 use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
-use crate::workspace::WorkspaceInfo;
+use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
 
 /// Compute the semver family for a version
 ///
@@ -53,6 +57,42 @@ impl ModuleLine {
 struct UnresolvedDep {
     url: String,
     spec: DependencySpec,
+}
+
+/// Path resolver that uses MVS family matching for package resolution.
+///
+/// This wraps a precomputed map of `url -> family -> path` and delegates
+/// asset resolution to a base `NativePathResolver`.
+struct MvsFamilyResolver {
+    /// Precomputed package paths: url -> family -> absolute path
+    families: HashMap<String, HashMap<String, PathBuf>>,
+    /// Base resolver for assets and exists()
+    base: NativePathResolver,
+}
+
+impl PackagePathResolver for MvsFamilyResolver {
+    fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
+        let families = self.families.get(module_path)?;
+        let req_ver = parse_version_string(version).ok()?;
+        let req_family = semver_family(&req_ver);
+
+        families.get(&req_family).cloned().or_else(|| {
+            // Fallback: if exactly one family exists, use it
+            if families.len() == 1 {
+                families.values().next().cloned()
+            } else {
+                None
+            }
+        })
+    }
+
+    fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
+        self.base.resolve_asset(asset_key, ref_str)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        self.base.exists(path)
+    }
 }
 
 /// Package manifest for a code package (dependencies + declared assets)
@@ -584,14 +624,8 @@ pub fn resolve_dependencies(
 
     log::debug!("V2 dependency resolution complete");
 
-    let package_resolutions = build_resolution_map(
-        workspace_info,
-        &selected,
-        &patches,
-        &manifest_cache,
-        &asset_paths,
-        offline,
-    )?;
+    let package_resolutions =
+        build_resolution_map(workspace_info, &selected, &patches, &asset_paths, offline)?;
 
     // Convert closure to (module_path, version) pairs
     let closure_set: HashSet<_> = closure
@@ -756,164 +790,59 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 ///
 /// When offline=true, only includes paths from workspace members, patches, and vendor/
 /// (never ~/.pcb/cache). This ensures offline builds fail if dependencies aren't vendored.
+///
+/// Uses MVS family matching for package resolution and delegates to shared resolution
+/// logic for the actual map building.
 fn build_resolution_map(
     workspace_info: &WorkspaceInfo,
     selected: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
-    manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
     asset_paths: &HashMap<(String, String), PathBuf>,
     offline: bool,
 ) -> Result<HashMap<PathBuf, BTreeMap<String, PathBuf>>> {
     let cache = cache_base();
     let vendor = workspace_info.root.join("vendor");
 
-    // Helper to compute absolute path for a module line
-    let get_abs_path = |line: &ModuleLine, version: &Version| -> Option<PathBuf> {
-        if let Some(member_pkg) = workspace_info.packages.get(&line.path) {
-            return Some(member_pkg.dir.clone());
-        }
-        if let Some(patch) = patches.get(&line.path) {
-            return Some(workspace_info.root.join(&patch.path));
-        }
-        let vendor_path = vendor.join(&line.path).join(version.to_string());
-        if vendor_path.exists() {
-            return Some(vendor_path);
-        }
-        if !offline {
-            let cache_path = cache.join(&line.path).join(version.to_string());
-            if cache_path.exists() {
-                return Some(cache_path);
-            }
-        }
-        None
+    // Build patch map (patches override remote deps with local paths)
+    let patches: HashMap<String, PathBuf> = patches
+        .iter()
+        .map(|(url, patch)| (url.clone(), workspace_info.root.join(&patch.path)))
+        .collect();
+
+    // Create base resolver for package path lookups
+    // Note: workspace members are handled directly in shared_build_resolution_map
+    let base_resolver = NativePathResolver {
+        vendor_dir: vendor.clone(),
+        cache_dir: cache.clone(),
+        offline,
+        patches,
+        asset_paths: asset_paths.clone(),
     };
 
-    // Build lookup: url -> family -> path
-    let mut url_to_families: HashMap<String, HashMap<String, PathBuf>> = HashMap::new();
+    // Build the families map for MVS family matching
+    let mut families: HashMap<String, HashMap<String, PathBuf>> = HashMap::new();
     for (line, version) in selected {
-        if let Some(abs_path) = get_abs_path(line, version) {
-            url_to_families
+        let version_str = version.to_string();
+        if let Some(abs_path) = base_resolver.resolve_package(&line.path, &version_str) {
+            families
                 .entry(line.path.clone())
                 .or_default()
                 .insert(line.family.clone(), abs_path);
         }
     }
 
-    // Resolve dependency -> path
-    let resolve = |base_dir: &Path, url: &str, spec: &DependencySpec| -> Option<PathBuf> {
-        if let DependencySpec::Detailed(d) = spec {
-            if let Some(path_str) = &d.path {
-                return Some(base_dir.join(path_str));
-            }
-        }
-        let families = url_to_families.get(url)?;
-        let version_str = match spec {
-            DependencySpec::Version(v) => v.as_str(),
-            DependencySpec::Detailed(d) => d
-                .version
-                .as_deref()
-                .or(d.rev.as_deref())
-                .or(d.branch.as_deref())?,
-        };
-        let req_version = parse_version_string(version_str).ok()?;
-        let req_family = ModuleLine::new(url.to_string(), &req_version).family;
-        families.get(&req_family).cloned().or_else(|| {
-            (families.len() == 1)
-                .then(|| families.values().next().cloned())
-                .flatten()
-        })
+    // Create the MVS family resolver that wraps the base for assets
+    let resolver = MvsFamilyResolver {
+        families,
+        base: base_resolver,
     };
 
-    // Helper to get asset path with LPM fallback
-    // If exact asset_key not found, try to find any entry from the same repo
-    let get_asset_path = |asset_key: &str, ref_str: &str| -> Option<PathBuf> {
-        // 1. Try exact match first
-        if let Some(path) = asset_paths.get(&(asset_key.to_string(), ref_str.to_string())) {
-            return Some(path.clone());
-        }
+    // Use shared resolution logic for root + workspace members
+    let mut results = shared_build_resolution_map(workspace_info, &resolver);
 
-        // 2. LPM: try without subpath (whole-repo dependency)
-        let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
-        if !subpath.is_empty() {
-            if let Some(path) = asset_paths.get(&(repo_url.to_string(), ref_str.to_string())) {
-                return Some(path.join(subpath));
-            }
-        }
-
-        // 3. Find any entry from the same repo (for subpath-only dependencies)
-        // e.g., pcb.toml has "gitlab.com/.../Device.kicad_sym" but we need "power.kicad_sym"
-        for ((key, key_ref), path) in asset_paths.iter() {
-            if key_ref != ref_str {
-                continue;
-            }
-            let (key_repo, key_subpath) = git::split_asset_repo_and_subpath(key);
-            if key_repo == repo_url && !key_subpath.is_empty() {
-                // Found another subpath from same repo - use repo root + our subpath
-                // path points to key_subpath, so we need to go up to repo root
-                if let Some(repo_root) = path.parent() {
-                    return Some(repo_root.join(subpath));
-                }
-            }
-        }
-
-        None
-    };
-
-    // Build deps map for a package
-    let build_map = |base_dir: &Path,
-                     pkg_deps: &BTreeMap<String, DependencySpec>,
-                     pkg_assets: &BTreeMap<String, pcb_zen_core::AssetDependencySpec>|
-     -> BTreeMap<String, PathBuf> {
-        let mut map = BTreeMap::new();
-        for (url, spec) in pkg_deps {
-            if let Some(path) = resolve(base_dir, url, spec) {
-                map.insert(url.clone(), path);
-            }
-        }
-        for (asset_key, asset_spec) in pkg_assets {
-            if let Ok(ref_str) = extract_asset_ref(asset_spec) {
-                if let Some(path) = get_asset_path(asset_key, &ref_str) {
-                    map.insert(asset_key.clone(), path);
-                }
-            }
-        }
-        map
-    };
-
-    let mut results = HashMap::new();
-
-    // Workspace root
-    let empty_deps = BTreeMap::new();
-    let empty_assets = BTreeMap::new();
-    let (root_deps, root_assets) = workspace_info
-        .config
-        .as_ref()
-        .map(|c| (&c.dependencies, &c.assets))
-        .unwrap_or((&empty_deps, &empty_assets));
-    results.insert(
-        workspace_info.root.clone(),
-        build_map(&workspace_info.root, root_deps, root_assets),
-    );
-
-    // Member packages
-    for pkg in workspace_info.packages.values() {
-        results.insert(
-            pkg.dir.clone(),
-            build_map(&pkg.dir, &pkg.config.dependencies, &pkg.config.assets),
-        );
-    }
-
-    // Transitive deps
-    for (line, version) in selected {
-        if let Some(abs_path) = get_abs_path(line, version) {
-            if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
-                results.insert(
-                    abs_path.clone(),
-                    build_map(&abs_path, &manifest.dependencies, &manifest.assets),
-                );
-            }
-        }
-    }
+    // Add transitive dependencies using shared logic
+    let file_provider = DefaultFileProvider::default();
+    add_transitive_resolution_maps(&file_provider, &resolver, workspace_info, &mut results);
 
     Ok(results)
 }
@@ -1044,39 +973,6 @@ fn parse_version_string(s: &str) -> Result<Version> {
     }
 }
 
-/// Extract ref string from AssetDependencySpec
-///
-/// Returns an error if the spec doesn't specify a version, branch, or rev (including HEAD)
-pub fn extract_asset_ref(spec: &pcb_zen_core::AssetDependencySpec) -> Result<String> {
-    use pcb_zen_core::AssetDependencySpec;
-
-    match spec {
-        AssetDependencySpec::Ref(r) => {
-            if r == "HEAD" {
-                anyhow::bail!(
-                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
-                );
-            }
-            Ok(r.clone())
-        }
-        AssetDependencySpec::Detailed(detail) => {
-            let ref_str = detail
-                .version
-                .clone()
-                .or_else(|| detail.branch.clone())
-                .or_else(|| detail.rev.clone())
-                .ok_or_else(|| anyhow::anyhow!("Asset must specify version, branch, or rev"))?;
-
-            if ref_str == "HEAD" {
-                anyhow::bail!(
-                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
-                );
-            }
-            Ok(ref_str)
-        }
-    }
-}
-
 /// Collect and fetch all assets from workspace packages and transitive manifests
 ///
 /// Returns map of (module_path, ref) -> resolved_path for all fetched assets
@@ -1091,7 +987,7 @@ fn collect_and_fetch_assets(
 
     for pkg in workspace_info.packages.values() {
         for (path, spec) in &pkg.config.assets {
-            if let Ok(ref_str) = extract_asset_ref(spec) {
+            if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(spec) {
                 all_assets.push((path.clone(), ref_str));
             }
         }
@@ -1100,7 +996,7 @@ fn collect_and_fetch_assets(
     for (line, version) in selected {
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version.clone())) {
             for (path, spec) in &manifest.assets {
-                if let Ok(ref_str) = extract_asset_ref(spec) {
+                if let Ok(ref_str) = pcb_zen_core::extract_asset_ref_strict(spec) {
                     all_assets.push((path.clone(), ref_str));
                 }
             }

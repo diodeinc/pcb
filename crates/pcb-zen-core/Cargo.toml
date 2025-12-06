@@ -24,7 +24,6 @@ starlark_derive = { workspace = true }
 starlark_syntax = { workspace = true }
 
 anyhow = { workspace = true }
-argfile = { workspace = true }
 clap = { workspace = true }
 debugserver-types = { workspace = true }
 either = { workspace = true }

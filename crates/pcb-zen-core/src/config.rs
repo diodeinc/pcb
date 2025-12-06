@@ -720,6 +720,58 @@ pub fn split_asset_repo_and_subpath(asset_key: &str) -> (&str, &str) {
     split_repo_and_subpath(asset_key)
 }
 
+/// Extract ref string from AssetDependencySpec.
+///
+/// Returns `Some(ref_str)` for version, branch, or rev (excluding HEAD).
+/// Returns `None` if no ref is specified or if it's HEAD.
+///
+/// For error handling (rejecting HEAD explicitly), use `extract_asset_ref_strict`.
+pub fn extract_asset_ref(spec: &AssetDependencySpec) -> Option<String> {
+    match spec {
+        AssetDependencySpec::Ref(r) if r != "HEAD" => Some(r.clone()),
+        AssetDependencySpec::Detailed(d) => d
+            .version
+            .clone()
+            .or_else(|| d.branch.clone())
+            .or_else(|| d.rev.clone())
+            .filter(|r| r != "HEAD"),
+        _ => None,
+    }
+}
+
+/// Extract ref string from AssetDependencySpec with strict validation.
+///
+/// Returns an error if:
+/// - No version, branch, or rev is specified
+/// - The ref is "HEAD" (not allowed for reproducible builds)
+pub fn extract_asset_ref_strict(spec: &AssetDependencySpec) -> Result<String> {
+    match spec {
+        AssetDependencySpec::Ref(r) => {
+            if r == "HEAD" {
+                anyhow::bail!(
+                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
+                );
+            }
+            Ok(r.clone())
+        }
+        AssetDependencySpec::Detailed(detail) => {
+            let ref_str = detail
+                .version
+                .clone()
+                .or_else(|| detail.branch.clone())
+                .or_else(|| detail.rev.clone())
+                .ok_or_else(|| anyhow::anyhow!("Asset must specify version, branch, or rev"))?;
+
+            if ref_str == "HEAD" {
+                anyhow::bail!(
+                    "Asset ref 'HEAD' is not allowed; use an explicit version, branch, or rev"
+                );
+            }
+            Ok(ref_str)
+        }
+    }
+}
+
 /// Find the workspace root by walking up from `start`.
 ///
 /// Resolution order:

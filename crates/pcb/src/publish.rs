@@ -9,6 +9,7 @@ use colored::Colorize;
 use inquire::{Confirm, Select};
 use pcb_zen::workspace::{
     compute_tag_prefix, get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo,
+    WorkspaceInfoExt,
 };
 use pcb_zen::{canonical, git};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
