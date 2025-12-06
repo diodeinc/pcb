@@ -3366,7 +3366,6 @@ dependencies = [
  "toml",
  "unicode-normalization",
  "uuid",
- "walkdir",
  "zip 4.3.0",
 ]
 

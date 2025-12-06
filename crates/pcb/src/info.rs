@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo};
+use pcb_zen::workspace::{
+    get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo, WorkspaceInfoExt,
+};
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
 use std::collections::BTreeMap;

@@ -14,6 +14,8 @@ pub mod lang;
 pub mod load_spec;
 mod moved;
 pub mod passes;
+pub mod resolution;
+pub mod workspace;
 
 /// Attribute, net, and record field constants used across the core
 pub mod attrs {
@@ -48,8 +50,8 @@ pub mod attrs {
 
 // Re-export commonly used types
 pub use config::{
-    extract_asset_ref, extract_asset_ref_strict, vendor_path, AssetDependencyDetail,
-    AssetDependencySpec, BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig,
+    extract_asset_ref, extract_asset_ref_strict, AssetDependencyDetail, AssetDependencySpec,
+    BoardConfig, LockEntry, Lockfile, ModuleConfig, PcbToml, WorkspaceConfig,
 };
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReport, Diagnostics, DiagnosticsPass,
@@ -93,6 +95,35 @@ pub trait FileProvider: Send + Sync {
     /// Canonicalize a path (make it absolute)
     fn canonicalize(&self, path: &std::path::Path)
         -> Result<std::path::PathBuf, FileProviderError>;
+}
+
+/// Blanket implementation of FileProvider for Arc<T> where T: FileProvider
+impl<T: FileProvider + ?Sized> FileProvider for Arc<T> {
+    fn read_file(&self, path: &std::path::Path) -> Result<String, FileProviderError> {
+        (**self).read_file(path)
+    }
+
+    fn exists(&self, path: &std::path::Path) -> bool {
+        (**self).exists(path)
+    }
+
+    fn is_directory(&self, path: &std::path::Path) -> bool {
+        (**self).is_directory(path)
+    }
+
+    fn list_directory(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<std::path::PathBuf>, FileProviderError> {
+        (**self).list_directory(path)
+    }
+
+    fn canonicalize(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<std::path::PathBuf, FileProviderError> {
+        (**self).canonicalize(path)
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -767,30 +798,21 @@ impl CoreLoadResolver {
         file: &Path,
         package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     ) -> Option<PathBuf> {
-        log::warn!(
-            "find_package_root_for_file: file={}, map_keys={:?}",
-            file.display(),
-            package_resolutions.keys().collect::<Vec<_>>()
-        );
         let mut current = file.parent();
         while let Some(dir) = current {
-            log::warn!("  checking dir: {}", dir.display());
             // Check workspace package resolutions first
             if package_resolutions.contains_key(dir) {
-                log::warn!("  found in resolutions map!");
                 return Some(dir.to_path_buf());
             }
 
             // Check for pcb.toml (handles cached packages)
             let pcb_toml = dir.join("pcb.toml");
             if self.file_provider.exists(&pcb_toml) {
-                log::warn!("  found via pcb.toml!");
                 return Some(dir.to_path_buf());
             }
 
             current = dir.parent();
         }
-        log::warn!("  no package root found!");
         None
     }
 

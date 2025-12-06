@@ -51,7 +51,7 @@ fn create_standard_load_resolver(
     let workspace_root = find_workspace_root(file_provider.as_ref(), file_path);
 
     // Resolve V2 dependencies if this is a V2 workspace
-    let v2_resolutions = crate::get_workspace_info(file_provider.as_ref(), file_path)
+    let v2_resolutions = crate::get_workspace_info(&file_provider, file_path)
         .ok()
         .filter(|ws| ws.is_v2())
         .and_then(|mut ws| {

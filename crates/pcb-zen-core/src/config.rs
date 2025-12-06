@@ -720,24 +720,6 @@ pub fn split_asset_repo_and_subpath(asset_key: &str) -> (&str, &str) {
     split_repo_and_subpath(asset_key)
 }
 
-/// Compute the vendor path for a module or asset.
-///
-/// Layout: `vendor/{repo}/{version_or_ref}/{subpath}`
-///
-/// Examples:
-/// - `vendor_path(vendor, "github.com/user/repo", "1.0.0")` -> `vendor/github.com/user/repo/1.0.0`
-/// - `vendor_path(vendor, "gitlab.com/.../kicad-symbols/Device.kicad_sym", "9.0.3")`
-///   -> `vendor/gitlab.com/.../kicad-symbols/9.0.3/Device.kicad_sym`
-pub fn vendor_path(vendor_dir: &Path, module_path: &str, version: &str) -> PathBuf {
-    let (repo_url, subpath) = split_asset_repo_and_subpath(module_path);
-    let base = vendor_dir.join(repo_url).join(version);
-    if subpath.is_empty() {
-        base
-    } else {
-        base.join(subpath)
-    }
-}
-
 /// Extract ref string from AssetDependencySpec.
 ///
 /// Returns `Some(ref_str)` for version, branch, or rev (excluding HEAD).
