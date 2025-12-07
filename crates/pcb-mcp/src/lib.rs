@@ -81,6 +81,12 @@ pub struct CallToolResult {
 pub enum CallToolResultContent {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "image")]
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
     #[serde(rename = "resource_link")]
     ResourceLink {
         uri: String,
@@ -123,9 +129,9 @@ impl CallToolResult {
         mime_type: Option<&str>,
     ) -> Self {
         let text = match (description, name) {
-            (Some(desc), Some(_)) => format!("{}: {}", desc, uri),
-            (Some(desc), None) => format!("{}: {}", desc, uri),
-            (None, Some(n)) => format!("{}: {}", n, uri),
+            (Some(desc), Some(_)) => format!("{desc}: {uri}"),
+            (Some(desc), None) => format!("{desc}: {uri}"),
+            (None, Some(n)) => format!("{n}: {uri}"),
             (None, None) => uri.to_string(),
         };
 
@@ -264,7 +270,7 @@ where
             }
         };
 
-        writeln!(stdout, "{}", response)?;
+        writeln!(stdout, "{response}")?;
         stdout.flush()?;
     }
 
@@ -275,7 +281,7 @@ where
 ///
 /// External servers are discovered by scanning PATH for `pcb-*` binaries and
 /// attempting to spawn them with an `mcp` subcommand. Tools from external servers
-/// are namespaced as `servername:toolname`.
+/// are namespaced as `servername_toolname`.
 pub fn run_aggregated_server<F>(
     builtin_tools: Vec<ToolInfo>,
     builtin_resources: Vec<ResourceInfo>,
@@ -396,7 +402,7 @@ where
             }
         };
 
-        writeln!(stdout, "{}", response)?;
+        writeln!(stdout, "{response}")?;
         stdout.flush()?;
     }
 

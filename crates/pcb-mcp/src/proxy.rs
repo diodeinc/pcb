@@ -3,6 +3,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -73,7 +74,15 @@ impl ExternalMcpServer {
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout for {}", binary))?;
 
-        let name = binary.strip_prefix("pcb-").unwrap_or(binary).to_string();
+        // Extract name from binary path: "/path/to/pcb-sym" -> "sym"
+        let filename = Path::new(binary)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(binary);
+        let name = filename
+            .strip_prefix("pcb-")
+            .unwrap_or(filename)
+            .to_string();
 
         let mut server = Self {
             name,
@@ -210,7 +219,8 @@ impl ExternalMcpServer {
     /// Convert external tool info to our ToolInfo type with namespaced name
     pub fn namespaced_tool(&self, tool: &ExternalToolInfo) -> ToolInfo {
         // Leak strings to get 'static lifetime - these live for program duration anyway
-        let name = Box::leak(format!("{}:{}", self.name, tool.name).into_boxed_str());
+        // Use underscore separator - dots in tool names can cause issues with some MCP clients
+        let name = Box::leak(format!("{}_{}", self.name, tool.name).into_boxed_str());
         let description = Box::leak(tool.description.clone().into_boxed_str());
 
         ToolInfo {
@@ -225,7 +235,7 @@ impl ExternalMcpServer {
     pub fn to_resource_info(&self, resource: &ExternalResourceInfo) -> ResourceInfo {
         ResourceInfo {
             uri: resource.uri.clone(),
-            name: format!("{}:{}", self.name, resource.name),
+            name: format!("{}_{}", self.name, resource.name),
             title: resource.title.clone(),
             description: resource.description.clone(),
             mime_type: resource.mime_type.clone(),
