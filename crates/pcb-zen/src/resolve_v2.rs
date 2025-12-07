@@ -1038,29 +1038,66 @@ fn collect_and_fetch_assets(
 
     // Hash and index each subpath in parallel, build result map
     let cache = cache_base();
+    log::debug!("Indexing {} unique assets, cache base: {}", unique_assets.len(), cache.display());
+
     let results: Vec<_> = unique_assets
         .par_iter()
         .filter_map(|(asset_key, ref_str)| {
             let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
             let target_path = cache.join(repo_url).join(ref_str).join(subpath);
 
+            log::debug!(
+                "Asset {} -> repo={}, subpath={}, target={}",
+                asset_key, repo_url, subpath, target_path.display()
+            );
+
             if !target_path.exists() {
-                log::warn!("Asset subpath not found: {}", asset_key);
+                log::warn!(
+                    "Asset subpath not found: {} (path: {})",
+                    asset_key, target_path.display()
+                );
                 return None;
             }
 
             // Index if needed
-            if let Ok(index) = CacheIndex::open() {
-                if index.get_asset(repo_url, subpath, ref_str).is_none() {
-                    if let Ok(hash) = compute_content_hash_from_dir(&target_path) {
-                        let _ = index.set_asset(repo_url, subpath, ref_str, &hash);
+            match CacheIndex::open() {
+                Ok(index) => {
+                    let existing = index.get_asset(repo_url, subpath, ref_str);
+                    if existing.is_none() {
+                        log::debug!(
+                            "Indexing asset: repo={}, subpath={}, ref={}",
+                            repo_url, subpath, ref_str
+                        );
+                        match compute_content_hash_from_dir(&target_path) {
+                            Ok(hash) => {
+                                log::debug!("Computed hash for {}: {}", asset_key, hash);
+                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
+                                    log::warn!("Failed to index asset {}: {}", asset_key, e);
+                                } else {
+                                    log::debug!("Successfully indexed asset {}", asset_key);
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to hash asset {} (path: {}): {}",
+                                    asset_key, target_path.display(), e
+                                );
+                            }
+                        }
+                    } else {
+                        log::debug!("Asset {} already indexed", asset_key);
                     }
+                }
+                Err(e) => {
+                    log::warn!("Failed to open cache index for {}: {}", asset_key, e);
                 }
             }
 
             Some(((asset_key.clone(), ref_str.clone()), target_path))
         })
         .collect();
+
+    log::debug!("Indexed {} assets", results.len());
 
     Ok(results.into_iter().collect())
 }
@@ -1242,6 +1279,15 @@ fn fetch_asset_repo(
         vendor_base.join(subpath)
     };
 
+    log::debug!(
+        "fetch_asset_repo: asset_key={}, repo_url={}, subpath={}, ref_str={}",
+        asset_key, repo_url, subpath, ref_str
+    );
+    log::debug!(
+        "fetch_asset_repo: vendor_dir={} (exists: {})",
+        vendor_dir.display(), vendor_dir.exists()
+    );
+
     if vendor_dir.exists() && index.get_asset(repo_url, subpath, ref_str).is_some() {
         log::debug!("Asset {}@{} vendored", asset_key, ref_str);
         return Ok(vendor_dir);
@@ -1266,8 +1312,16 @@ fn fetch_asset_repo(
         repo_cache_dir.join(subpath)
     };
 
+    log::debug!(
+        "fetch_asset_repo: cache_dir={}, target_path={} (exists: {})",
+        repo_cache_dir.display(), target_path.display(), target_path.exists()
+    );
+
     // Check if subpath already indexed and exists in cache
-    if index.get_asset(repo_url, subpath, ref_str).is_some() && target_path.exists() {
+    let is_indexed = index.get_asset(repo_url, subpath, ref_str).is_some();
+    log::debug!("fetch_asset_repo: is_indexed={}, target_exists={}", is_indexed, target_path.exists());
+
+    if is_indexed && target_path.exists() {
         log::debug!("Asset {}@{} cached", asset_key, ref_str);
         return Ok(target_path);
     }
@@ -1885,8 +1939,14 @@ fn update_lockfile(
     }
 
     // Process assets (asset_key includes subpath)
+    log::debug!("Verifying {} assets in lockfile", asset_paths.len());
     for (asset_key, ref_str) in asset_paths.keys() {
         let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+
+        log::debug!(
+            "Checking asset: key={}, repo={}, subpath={}, ref={}",
+            asset_key, repo_url, subpath, ref_str
+        );
 
         // Check if vendored: vendor/{repo}/{ref}/{subpath}
         let vendor_base = workspace_root.join("vendor").join(repo_url).join(ref_str);
@@ -1895,15 +1955,28 @@ fn update_lockfile(
         } else {
             vendor_base.join(subpath)
         };
+
+        log::debug!("Vendor path: {} (exists: {})", vendor_dir.display(), vendor_dir.exists());
+
         if vendor_dir.exists() {
             verified_count += 1;
             continue;
         }
 
         // Not vendored - must be in cache
+        log::debug!(
+            "Looking up cache index: repo={}, subpath={}, ref={}",
+            repo_url, subpath, ref_str
+        );
         let content_hash = index
             .get_asset(repo_url, subpath, ref_str)
-            .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str))?;
+            .ok_or_else(|| {
+                log::error!(
+                    "Missing cache entry for {}@{} (repo={}, subpath={}, ref={})",
+                    asset_key, ref_str, repo_url, subpath, ref_str
+                );
+                anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str)
+            })?;
 
         // Lockfile entry uses full asset_key (includes subpath)
         if lockfile.get(asset_key, ref_str).is_none() {

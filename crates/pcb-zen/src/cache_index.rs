@@ -27,6 +27,10 @@ impl CacheIndex {
         let conn = Connection::open(&path)
             .with_context(|| format!("Failed to open cache index at {}", path.display()))?;
 
+        // Set busy timeout to handle concurrent access (especially important on Windows)
+        // This makes SQLite retry for up to 5 seconds if the database is locked
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
         let current_version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if current_version != SCHEMA_VERSION {
             conn.execute_batch(
