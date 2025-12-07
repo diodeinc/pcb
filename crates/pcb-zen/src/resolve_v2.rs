@@ -1732,7 +1732,7 @@ fn ensure_sparse_checkout(
     // Fallback: Git sparse checkout
     // Initialize Git repo
     std::fs::create_dir_all(checkout_dir)?;
-    git::run_in(checkout_dir, &["init"])?;
+    git::run_in(checkout_dir, &["init", "--template="])?;
 
     // Disable line ending conversion - critical for cross-platform hash consistency
     git::run_in(checkout_dir, &["config", "core.autocrlf", "false"])?;
