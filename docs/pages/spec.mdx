@@ -471,6 +471,35 @@ Properties:
   - Tolerance is always zero (like PhysicalValue.diff())
   - Useful for determining component voltage ratings (capacitors, level shifters, etc.)
 
+**Operators**:
+
+- **Addition** (`+`) - Shift a range by a value
+  - `range + value` returns a new range with min/max/nominal shifted by the value
+  - Units must match (or value must be dimensionless)
+  - The value's tolerance is ignored (only the numeric value is used)
+
+- **Subtraction** (`-`) - Shift a range down by a value
+  - `range - value` returns a new range with min/max/nominal shifted down by the value
+  - Units must match (or value must be dimensionless)
+
+- **Comparison** (`<`, `>`, `<=`, `>=`) - Compare ranges using conservative semantics
+  - `range1 < range2` is true iff `range1.max < range2.min` (entire range1 is strictly below range2)
+  - `range1 > range2` is true iff `range1.min > range2.max` (entire range1 is strictly above range2)
+  - For overlapping ranges, `max` values are compared as a tiebreaker
+  - Can compare with: `PhysicalRange`, `PhysicalValue`, or string values
+  - Units must be compatible or an error is raised
+
+- **Equality** (`==`) - Check if two ranges are identical
+  - Returns true if `min`, `max`, `nominal`, and `unit` all match
+  - Can compare with: `PhysicalRange` or string values
+
+- **Containment** (`in`) - Check if a value fits within the range
+  - `value in range` returns true if value's bounds fit entirely within range's bounds
+  - Works with `PhysicalValue`, `PhysicalRange`, or string values
+
+- **Unary negation** (`-`) - Negate the range
+  - Returns a new range with negated min/max (swapped) and negated nominal
+
 **Examples**:
 
 ```python
@@ -481,6 +510,36 @@ cap_rating = vcc.diff("0V")  # 3.6V
 # Level shifter between two rails
 v_high = VoltageRange("3.0V to 3.6V")
 max_diff = v_high.diff("1.7V to 2.0V")  # 1.9V
+
+# Range comparison (conservative semantics)
+low_voltage = VoltageRange("1V to 2V")
+high_voltage = VoltageRange("3V to 4V")
+low_voltage < high_voltage   # True (2V < 3V)
+low_voltage <= high_voltage  # True
+
+# Overlapping ranges
+range1 = VoltageRange("1V to 3V")
+range2 = VoltageRange("2V to 4V")
+range1 < range2  # False (ranges overlap, but 3V < 4V so Less by tiebreaker)
+
+# Comparing range to value
+input_range = VoltageRange("3.3V to 5V")
+if input_range <= VoltageRange("3.3V"):
+    # Input is entirely within 3.3V rail
+    pass
+
+# Equality
+VoltageRange("1V to 2V") == VoltageRange("1V to 2V")  # True
+VoltageRange("1V to 2V") == VoltageRange("1V to 2V (1.5V nom.)")  # False (different nominal)
+
+# Range arithmetic (shifting ranges)
+base_range = VoltageRange("1V to 2V")
+shifted_up = base_range + Voltage("3V")    # 4V to 5V
+shifted_down = base_range - Voltage("0.5V")  # 0.5V to 1.5V
+
+# With nominal values preserved
+input_range = VoltageRange("1V to 3V (2V nom.)")
+offset_range = input_range + Voltage("5V")  # 6V to 8V (7V nom.)
 ```
 
 #### PhysicalRangeType

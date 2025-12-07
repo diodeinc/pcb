@@ -1674,6 +1674,138 @@ impl<'v> StarlarkValue<'v> for PhysicalRange {
             r#type: self.r#type,
         }))
     }
+
+    fn equals(&self, other: Value<'v>) -> starlark::Result<bool> {
+        // Try PhysicalRange
+        if let Some(other_range) = other.downcast_ref::<PhysicalRange>() {
+            return Ok(self.r#type.unit == other_range.r#type.unit
+                && self.min == other_range.min
+                && self.max == other_range.max
+                && self.nominal == other_range.nominal);
+        }
+        // Try string parsing as PhysicalRange
+        if let Some(s) = other.unpack_str() {
+            if let Ok(other_range) = PhysicalRange::from_str(s) {
+                return Ok(self.r#type.unit == other_range.r#type.unit
+                    && self.min == other_range.min
+                    && self.max == other_range.max
+                    && self.nominal == other_range.nominal);
+            }
+        }
+        Ok(false)
+    }
+
+    fn compare(&self, other: Value<'v>) -> starlark::Result<Ordering> {
+        // Extract bounds from other (PhysicalRange, PhysicalValue, or string)
+        let (other_min, other_max, other_unit) =
+            if let Some(other_range) = other.downcast_ref::<PhysicalRange>() {
+                (other_range.min, other_range.max, other_range.r#type.unit)
+            } else if let Some(pv) = other.downcast_ref::<PhysicalValue>() {
+                let lower = pv.value * (Decimal::ONE - pv.tolerance);
+                let upper = pv.value * (Decimal::ONE + pv.tolerance);
+                let (min, max) = if lower < upper {
+                    (lower, upper)
+                } else {
+                    (upper, lower)
+                };
+                (min, max, pv.unit)
+            } else if let Some(s) = other.unpack_str() {
+                // Try PhysicalRange first, then PhysicalValue
+                if let Ok(other_range) = PhysicalRange::from_str(s) {
+                    (other_range.min, other_range.max, other_range.r#type.unit)
+                } else if let Ok(pv) = PhysicalValue::from_str(s) {
+                    let lower = pv.value * (Decimal::ONE - pv.tolerance);
+                    let upper = pv.value * (Decimal::ONE + pv.tolerance);
+                    let (min, max) = if lower < upper {
+                        (lower, upper)
+                    } else {
+                        (upper, lower)
+                    };
+                    (min, max, pv.unit)
+                } else {
+                    return Err(PhysicalValueError::InvalidArgumentType {
+                        unit: self.r#type.unit.quantity(),
+                    }
+                    .into());
+                }
+            } else {
+                return Err(PhysicalValueError::InvalidArgumentType {
+                    unit: self.r#type.unit.quantity(),
+                }
+                .into());
+            };
+
+        // Check unit compatibility
+        if self.r#type.unit != other_unit
+            && self.r#type.unit != PhysicalUnitDims::DIMENSIONLESS
+            && other_unit != PhysicalUnitDims::DIMENSIONLESS
+        {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: self.r#type.unit.quantity(),
+                actual: other_unit.quantity(),
+            }
+            .into());
+        }
+
+        // Conservative semantics:
+        // self < other iff self.max < other.min (entire self range is below other)
+        // self > other iff self.min > other.max (entire self range is above other)
+        // Otherwise ranges overlap - use max comparison as tiebreaker for consistent ordering
+        if self.max < other_min {
+            Ok(Ordering::Less)
+        } else if self.min > other_max {
+            Ok(Ordering::Greater)
+        } else {
+            // Overlapping ranges - compare maxes as tiebreaker
+            Ok(self.max.cmp(&other_max))
+        }
+    }
+
+    fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        let pv = PhysicalValue::try_from(other).ok()?;
+        // For add/sub, units must match (or other is dimensionless)
+        if self.r#type.unit != pv.unit && pv.unit != PhysicalUnitDims::DIMENSIONLESS {
+            return Some(Err(PhysicalValueError::UnitMismatch {
+                expected: self.r#type.unit.quantity(),
+                actual: pv.unit.quantity(),
+            }
+            .into()));
+        }
+        let result = PhysicalRange {
+            min: self.min + pv.value,
+            max: self.max + pv.value,
+            nominal: self.nominal.map(|n| n + pv.value),
+            r#type: self.r#type,
+        };
+        Some(Ok(heap.alloc_simple(result)))
+    }
+
+    fn radd(&self, other: Value<'v>, heap: &'v Heap) -> Option<Result<Value<'v>, starlark::Error>> {
+        self.add(other, heap) // Addition is commutative
+    }
+
+    fn sub(&self, other: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+        let pv = PhysicalValue::try_from(other).map_err(|_| {
+            PhysicalValueError::SubtractionNonPhysical {
+                unit: self.r#type.unit.quantity(),
+            }
+        })?;
+        // For add/sub, units must match (or other is dimensionless)
+        if self.r#type.unit != pv.unit && pv.unit != PhysicalUnitDims::DIMENSIONLESS {
+            return Err(PhysicalValueError::UnitMismatch {
+                expected: self.r#type.unit.quantity(),
+                actual: pv.unit.quantity(),
+            }
+            .into());
+        }
+        let result = PhysicalRange {
+            min: self.min - pv.value,
+            max: self.max - pv.value,
+            nominal: self.nominal.map(|n| n - pv.value),
+            r#type: self.r#type,
+        };
+        Ok(heap.alloc_simple(result))
+    }
 }
 
 impl FromStr for PhysicalRange {
@@ -4171,5 +4303,242 @@ mod tests {
         let v2 = physical_value(3.3, 0.05, PhysicalUnit::Volts);
         let abs_v2 = v2.abs();
         assert_eq!(abs_v2.value, Decimal::from_f64(3.3).unwrap());
+    }
+
+    #[test]
+    fn test_physical_range_compare_disjoint() {
+        use starlark::values::Value;
+
+        let heap = Heap::new();
+
+        // range1 = 1V to 2V, range2 = 3V to 4V (disjoint, range1 < range2)
+        let range1: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range2: PhysicalRange = "3V to 4V".parse().unwrap();
+
+        let v1: Value = heap.alloc_simple(range1);
+        let v2: Value = heap.alloc_simple(range2);
+
+        // Conservative semantics: range1 < range2 because range1.max < range2.min
+        let cmp = v1.compare(v2).unwrap();
+        assert_eq!(cmp, std::cmp::Ordering::Less);
+
+        // And the reverse
+        let cmp_rev = v2.compare(v1).unwrap();
+        assert_eq!(cmp_rev, std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_physical_range_compare_overlapping() {
+        use starlark::values::Value;
+
+        let heap = Heap::new();
+
+        // range1 = 1V to 3V, range2 = 2V to 4V (overlapping)
+        let range1: PhysicalRange = "1V to 3V".parse().unwrap();
+        let range2: PhysicalRange = "2V to 4V".parse().unwrap();
+
+        let v1: Value = heap.alloc_simple(range1);
+        let v2: Value = heap.alloc_simple(range2);
+
+        // Overlapping ranges use max comparison as tiebreaker
+        // range1.max (3V) < range2.max (4V)
+        let cmp = v1.compare(v2).unwrap();
+        assert_eq!(cmp, std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_physical_range_compare_with_value() {
+        use starlark::values::Value;
+
+        let heap = Heap::new();
+
+        // range = 1V to 2V, value = 5V (no tolerance)
+        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let value = physical_value(5.0, 0.0, PhysicalUnit::Volts);
+
+        let v_range: Value = heap.alloc_simple(range);
+        let v_value: Value = heap.alloc(value);
+
+        // range.max (2V) < value.min (5V), so range < value
+        let cmp = v_range.compare(v_value).unwrap();
+        assert_eq!(cmp, std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_physical_range_compare_unit_mismatch() {
+        use starlark::values::Value;
+
+        let heap = Heap::new();
+
+        // range1 = 1V to 2V, range2 = 1A to 2A (different units)
+        let range1: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range2: PhysicalRange = "1A to 2A".parse().unwrap();
+
+        let v1: Value = heap.alloc_simple(range1);
+        let v2: Value = heap.alloc_simple(range2);
+
+        // Should error on unit mismatch
+        let result = v1.compare(v2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_physical_range_equals() {
+        use starlark::values::Value;
+
+        let heap = Heap::new();
+
+        let range1: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range2: PhysicalRange = "1V to 2V".parse().unwrap();
+        let range3: PhysicalRange = "1V to 3V".parse().unwrap();
+        let range4: PhysicalRange = "1V to 2V (1.5V nom.)".parse().unwrap();
+
+        let v1: Value = heap.alloc_simple(range1);
+        let v2: Value = heap.alloc_simple(range2);
+        let v3: Value = heap.alloc_simple(range3);
+        let v4: Value = heap.alloc_simple(range4);
+
+        // Same range
+        assert!(v1.equals(v2).unwrap());
+        // Different max
+        assert!(!v1.equals(v3).unwrap());
+        // Same min/max but different nominal
+        assert!(!v1.equals(v4).unwrap());
+    }
+
+    #[test]
+    fn test_physical_range_compare_with_string() {
+        use starlark::values::Value;
+
+        let heap = Heap::new();
+
+        // range = 1V to 2V
+        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let v_range: Value = heap.alloc_simple(range);
+
+        // Compare with string "5V"
+        let v_str: Value = heap.alloc_str("5V").to_value();
+
+        // range.max (2V) < 5V, so range < "5V"
+        let cmp = v_range.compare(v_str).unwrap();
+        assert_eq!(cmp, std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_physical_range_add_value() {
+        let heap = Heap::new();
+
+        // range = 1V to 2V, offset = 3V
+        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let offset = physical_value(3.0, 0.0, PhysicalUnit::Volts);
+
+        let v_range = heap.alloc_simple(range);
+        let v_offset = heap.alloc(offset);
+
+        // 1V-2V + 3V = 4V-5V
+        let result = v_range
+            .downcast_ref::<PhysicalRange>()
+            .unwrap()
+            .add(v_offset, &heap)
+            .unwrap()
+            .unwrap();
+        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+
+        assert_eq!(result_range.min, Decimal::from(4));
+        assert_eq!(result_range.max, Decimal::from(5));
+        assert_eq!(result_range.r#type.unit, PhysicalUnit::Volts.into());
+    }
+
+    #[test]
+    fn test_physical_range_add_value_with_nominal() {
+        let heap = Heap::new();
+
+        // range = 1V to 3V (2V nom.), offset = 5V
+        let range: PhysicalRange = "1V to 3V (2V nom.)".parse().unwrap();
+        let offset = physical_value(5.0, 0.0, PhysicalUnit::Volts);
+
+        let v_range = heap.alloc_simple(range);
+        let v_offset = heap.alloc(offset);
+
+        // 1V-3V (2V nom.) + 5V = 6V-8V (7V nom.)
+        let result = v_range
+            .downcast_ref::<PhysicalRange>()
+            .unwrap()
+            .add(v_offset, &heap)
+            .unwrap()
+            .unwrap();
+        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+
+        assert_eq!(result_range.min, Decimal::from(6));
+        assert_eq!(result_range.max, Decimal::from(8));
+        assert_eq!(result_range.nominal, Some(Decimal::from(7)));
+    }
+
+    #[test]
+    fn test_physical_range_sub_value() {
+        let heap = Heap::new();
+
+        // range = 5V to 10V, offset = 2V
+        let range: PhysicalRange = "5V to 10V".parse().unwrap();
+        let offset = physical_value(2.0, 0.0, PhysicalUnit::Volts);
+
+        let v_range = heap.alloc_simple(range);
+        let v_offset = heap.alloc(offset);
+
+        // 5V-10V - 2V = 3V-8V
+        let result = v_range
+            .downcast_ref::<PhysicalRange>()
+            .unwrap()
+            .sub(v_offset, &heap)
+            .unwrap();
+        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+
+        assert_eq!(result_range.min, Decimal::from(3));
+        assert_eq!(result_range.max, Decimal::from(8));
+    }
+
+    #[test]
+    fn test_physical_range_add_unit_mismatch() {
+        let heap = Heap::new();
+
+        // range = 1V to 2V, offset = 1A (wrong unit)
+        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let offset = physical_value(1.0, 0.0, PhysicalUnit::Amperes);
+
+        let v_range = heap.alloc_simple(range);
+        let v_offset = heap.alloc(offset);
+
+        // Should error on unit mismatch
+        let result = v_range
+            .downcast_ref::<PhysicalRange>()
+            .unwrap()
+            .add(v_offset, &heap)
+            .unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_physical_range_add_dimensionless() {
+        let heap = Heap::new();
+
+        // range = 1V to 2V, offset = 3 (dimensionless)
+        let range: PhysicalRange = "1V to 2V".parse().unwrap();
+        let offset = PhysicalValue::dimensionless(3);
+
+        let v_range = heap.alloc_simple(range);
+        let v_offset = heap.alloc(offset);
+
+        // 1V-2V + 3 = 4V-5V (dimensionless acts as scalar)
+        let result = v_range
+            .downcast_ref::<PhysicalRange>()
+            .unwrap()
+            .add(v_offset, &heap)
+            .unwrap()
+            .unwrap();
+        let result_range = result.downcast_ref::<PhysicalRange>().unwrap();
+
+        assert_eq!(result_range.min, Decimal::from(4));
+        assert_eq!(result_range.max, Decimal::from(5));
+        assert_eq!(result_range.r#type.unit, PhysicalUnit::Volts.into());
     }
 }
