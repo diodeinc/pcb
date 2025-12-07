@@ -148,12 +148,7 @@ jobs:
       - name: Test stdlib builds
         shell: bash
         run: |
-          # Save path to pcb binary
-          PCB_BIN="$(pwd)/target/debug/pcb"
-
-          # Find and build all .zen files
-          find stdlib -name "*.zen" -exec "$PCB_BIN" build {} +
-
+          $(pwd)/target/debug/pcb build stdlib
           echo "All stdlib files built successfully!"
 
   check_readme:
