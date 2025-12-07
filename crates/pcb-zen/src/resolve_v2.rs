@@ -1049,13 +1049,21 @@ fn collect_and_fetch_assets(
                 return None;
             }
 
-            // Index if needed
-            if let Ok(index) = CacheIndex::open() {
-                if index.get_asset(repo_url, subpath, ref_str).is_none() {
-                    if let Ok(hash) = compute_content_hash_from_dir(&target_path) {
-                        let _ = index.set_asset(repo_url, subpath, ref_str, &hash);
+            // Index if not already indexed
+            match CacheIndex::open() {
+                Ok(index) => {
+                    if index.get_asset(repo_url, subpath, ref_str).is_none() {
+                        match compute_content_hash_from_dir(&target_path) {
+                            Ok(hash) => {
+                                if let Err(e) = index.set_asset(repo_url, subpath, ref_str, &hash) {
+                                    log::warn!("Failed to index {}: {}", asset_key, e);
+                                }
+                            }
+                            Err(e) => log::warn!("Failed to hash {}: {}", asset_key, e),
+                        }
                     }
                 }
+                Err(e) => log::warn!("Failed to open cache index: {}", e),
             }
 
             Some(((asset_key.clone(), ref_str.clone()), target_path))
