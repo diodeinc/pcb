@@ -6,6 +6,7 @@ repository = { workspace = true }
 homepage = { workspace = true }
 authors = { workspace = true }
 description = "WebAssembly bindings for Zen PCB design language"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
