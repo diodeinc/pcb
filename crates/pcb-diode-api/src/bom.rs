@@ -12,10 +12,21 @@ pub struct PriceBreak {
     pub price: f64,
 }
 
+/// Geography/region for an offer
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Geography {
+    Us,
+    Global,
+}
+
 /// Component offer - represents a distributor part availability
 #[derive(Debug, Clone, Deserialize)]
 pub struct ComponentOffer {
     pub id: String,
+
+    // Geography/region
+    pub geography: Geography,
 
     // Part identification
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,12 +144,12 @@ fn within_tier_cmp(a: &ComponentOffer, b: &ComponentOffer, qty: i32) -> std::cmp
 
 /// Select the best offer: Plenty > Limited > None tier, then lowest price within tier.
 /// Single-pass, allocation-free selection using iterator comparator.
-fn select_best_offer(
-    offers: &[ComponentOffer],
+fn select_best_offer<'a>(
+    offers: impl Iterator<Item = &'a ComponentOffer>,
     qty: i32,
     is_small_passive: bool,
-) -> Option<&ComponentOffer> {
-    offers.iter().min_by(|a, b| {
+) -> Option<&'a ComponentOffer> {
+    offers.min_by(|a, b| {
         let stock_a = a.stock_available.unwrap_or(0);
         let stock_b = b.stock_available.unwrap_or(0);
         let tier_a = tier_for_stock(stock_a, qty, is_small_passive);
@@ -149,6 +160,42 @@ fn select_best_offer(
             .cmp(&tier_b.rank())
             .then_with(|| within_tier_cmp(a, b, qty))
     })
+}
+
+/// Extract RegionAvailability from an offer
+fn extract_region_availability(offer: &ComponentOffer) -> pcb_sch::RegionAvailability {
+    let stock = offer.stock_available.unwrap_or(0);
+
+    let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
+        (Some("lcsc"), Some(id)) => {
+            let formatted_id = if id.starts_with('C') {
+                id.clone()
+            } else {
+                format!("C{}", id)
+            };
+            let url = offer.product_url.clone().unwrap_or_else(|| {
+                format!("https://lcsc.com/product-detail/{}.html", formatted_id)
+            });
+            vec![(formatted_id, url)]
+        }
+        _ => Vec::new(),
+    };
+
+    let breaks = offer
+        .price_breaks
+        .as_ref()
+        .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
+
+    let offer_mpn = offer.mpn.clone().filter(|s| !s.is_empty());
+    let offer_mfr = offer.manufacturer.clone().filter(|s| !s.is_empty());
+
+    pcb_sch::RegionAvailability {
+        stock_total: stock,
+        price_breaks: breaks,
+        lcsc_part_ids: lcsc_id,
+        mpn: offer_mpn,
+        manufacturer: offer_mfr,
+    }
 }
 
 /// Fetch BOM matching results from the API and populate availability data
@@ -206,52 +253,35 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
             bom_entry.package.as_deref(),
         );
 
-        // Select the best offer based on availability tier (Plenty > Limited > None)
-        // then price within tier. This single offer is used for all downstream data.
-        let best_offer = select_best_offer(&bom_line.offers, qty, is_small_passive);
+        // Select best offers per geography
+        // Filter offers by geography and select the best in each region
+        let best_us_offer = select_best_offer(
+            bom_line
+                .offers
+                .iter()
+                .filter(|o| o.geography == Geography::Us),
+            qty,
+            is_small_passive,
+        );
 
-        // Extract all data from the best matched offer
-        let (stock_total, lcsc_part_ids, price_breaks, mpn, manufacturer) = match best_offer {
-            Some(offer) => {
-                let stock = offer.stock_available.unwrap_or(0);
+        let best_global_offer = select_best_offer(
+            bom_line
+                .offers
+                .iter()
+                .filter(|o| o.geography == Geography::Global),
+            qty,
+            is_small_passive,
+        );
 
-                let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
-                    (Some("lcsc"), Some(id)) => {
-                        let formatted_id = if id.starts_with('C') {
-                            id.clone()
-                        } else {
-                            format!("C{}", id)
-                        };
-                        let url = offer.product_url.clone().unwrap_or_else(|| {
-                            format!("https://lcsc.com/product-detail/{}.html", formatted_id)
-                        });
-                        vec![(formatted_id, url)]
-                    }
-                    _ => Vec::new(),
-                };
-
-                // Store price breaks for recalculation with grouped quantities
-                let breaks = offer
-                    .price_breaks
-                    .as_ref()
-                    .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect());
-
-                let offer_mpn = offer.mpn.clone().filter(|s| !s.is_empty());
-                let offer_mfr = offer.manufacturer.clone().filter(|s| !s.is_empty());
-
-                (stock, lcsc_id, breaks, offer_mpn, offer_mfr)
-            }
-            None => (0, Vec::new(), None, None, None),
-        };
+        // Extract RegionAvailability for each geography
+        let us_availability = best_us_offer.map(extract_region_availability);
+        let global_availability = best_global_offer.map(extract_region_availability);
 
         bom.availability.insert(
             path.to_string(),
             pcb_sch::AvailabilityData {
-                stock_total,
-                price_breaks,
-                lcsc_part_ids,
-                mpn,
-                manufacturer,
+                us: us_availability,
+                global: global_availability,
             },
         );
     }

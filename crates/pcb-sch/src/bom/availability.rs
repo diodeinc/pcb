@@ -5,8 +5,9 @@ use crate::GenericComponent;
 pub const NUM_BOARDS: i32 = 20;
 
 /// Availability tier for sourcing status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum Tier {
+    #[default]
     Insufficient = 0,
     Limited = 1,
     Plenty = 2,

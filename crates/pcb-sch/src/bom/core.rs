@@ -14,8 +14,9 @@ pub struct Bom {
     pub availability: HashMap<String, AvailabilityData>, // path -> availability data
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AvailabilityData {
+/// Per-region availability data for a single offer
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RegionAvailability {
     pub stock_total: i32,                      // Stock for selected offer
     pub price_breaks: Option<Vec<(i32, f64)>>, // Price breaks as (qty, unit_price)
     pub lcsc_part_ids: Vec<(String, String)>,  // Vec of (LCSC part number, product URL)
@@ -23,6 +24,16 @@ pub struct AvailabilityData {
     pub mpn: Option<String>, // Manufacturer part number from offer
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manufacturer: Option<String>, // Manufacturer from offer
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AvailabilityData {
+    /// US region availability (best offer)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub us: Option<RegionAvailability>,
+    /// Global region availability (best offer)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<RegionAvailability>,
 }
 
 /// Trim and truncate description to 100 chars max
