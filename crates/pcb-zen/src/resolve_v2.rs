@@ -488,6 +488,8 @@ pub fn resolve_dependencies(
 
     loop {
         // Collect current wave: packages in queue that haven't been fetched yet
+        // Use a HashSet to dedupe - the same ModuleLine can appear multiple times
+        // in the queue (e.g., added from lockfile then upgraded in Phase 0)
         let wave: Vec<_> = work_queue
             .drain(..)
             .filter_map(|line| {
@@ -498,6 +500,8 @@ pub fn resolve_dependencies(
                     Some((line, version))
                 }
             })
+            .collect::<HashSet<_>>()
+            .into_iter()
             .collect();
 
         if wave.is_empty() {
