@@ -1,7 +1,7 @@
 use crate::discovery::find_pcb_binaries;
 use crate::proxy::ExternalMcpServer;
 use crate::{CallToolResult, McpContext, ResourceInfo, ToolInfo};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -30,36 +30,38 @@ where
         builtin_resources: Vec<ResourceInfo>,
         builtin_handler: F,
     ) -> Self {
-        let mut aggregator = Self {
-            builtin_tools,
-            builtin_resources,
-            builtin_handler,
-            external_servers: HashMap::new(),
-        };
-
+        let mut aggregator =
+            Self::new_without_discovery(builtin_tools, builtin_resources, builtin_handler);
         aggregator.discover_external_servers();
         aggregator
     }
 
+    /// Create a new aggregator without auto-discovering external servers.
+    /// Useful for testing or when external server discovery is not wanted.
+    pub fn new_without_discovery(
+        builtin_tools: Vec<ToolInfo>,
+        builtin_resources: Vec<ResourceInfo>,
+        builtin_handler: F,
+    ) -> Self {
+        Self {
+            builtin_tools,
+            builtin_resources,
+            builtin_handler,
+            external_servers: HashMap::new(),
+        }
+    }
+
     /// Discover and connect to external MCP servers
     fn discover_external_servers(&mut self) {
-        let binaries = find_pcb_binaries();
-
-        for binary in binaries {
-            match ExternalMcpServer::spawn(&binary) {
-                Ok(server) => {
-                    let name = server.name.clone();
-                    eprintln!(
-                        "Discovered external MCP server: {} ({} tools, {} resources)",
-                        name,
-                        server.tools.len(),
-                        server.resources.len()
-                    );
-                    self.external_servers.insert(name, server);
-                }
-                Err(_) => {
-                    // Binary doesn't support MCP or failed to start - skip silently
-                }
+        for binary in find_pcb_binaries() {
+            if let Ok(server) = ExternalMcpServer::spawn(&binary) {
+                eprintln!(
+                    "[pcb-mcp] Discovered: {} ({} tools, {} resources)",
+                    server.name,
+                    server.tools.len(),
+                    server.resources.len()
+                );
+                self.external_servers.insert(server.name.clone(), server);
             }
         }
     }
@@ -98,17 +100,17 @@ where
         ctx: &McpContext,
     ) -> Result<CallToolResult> {
         // Check if this is a namespaced tool (external)
-        if let Some((namespace, tool_name)) = name.split_once(':') {
-            let server = self
-                .external_servers
-                .get_mut(namespace)
-                .ok_or_else(|| anyhow!("Unknown tool namespace: {}", namespace))?;
-
-            server.call_tool(tool_name, args)
-        } else {
-            // Built-in tool
-            (self.builtin_handler)(name, args, ctx)
+        // Namespaced tools use underscore separator: "namespace_toolname"
+        // We split on the first underscore and check if the prefix is a known namespace
+        if let Some((potential_namespace, tool_name)) = name.split_once('_') {
+            if self.external_servers.contains_key(potential_namespace) {
+                let server = self.external_servers.get_mut(potential_namespace).unwrap();
+                return server.call_tool(tool_name, args);
+            }
         }
+
+        // Built-in tool (either no underscore, or prefix wasn't a known namespace)
+        (self.builtin_handler)(name, args, ctx)
     }
 }
 
@@ -126,7 +128,8 @@ mod tests {
 
     #[test]
     fn test_aggregator_creation() {
-        let aggregator = McpAggregator::new(vec![], vec![], dummy_handler);
+        // Use new_without_discovery to avoid spawning external servers in tests
+        let aggregator = McpAggregator::new_without_discovery(vec![], vec![], dummy_handler);
         // Should not panic
         let _tools = aggregator.all_tools();
         let _resources = aggregator.all_resources();

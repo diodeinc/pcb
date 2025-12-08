@@ -3,8 +3,18 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::path::Path;
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+/// Default timeout for MCP requests during initialization/discovery
+const INIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default timeout for tool calls (may take longer)
+const TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// An external MCP server running as a child process
 pub struct ExternalMcpServer {
@@ -16,8 +26,8 @@ pub struct ExternalMcpServer {
     child: Child,
     /// Buffered writer to child's stdin
     stdin: BufWriter<ChildStdin>,
-    /// Buffered reader from child's stdout
-    stdout: BufReader<ChildStdout>,
+    /// Channel receiver for lines read from stdout
+    response_rx: mpsc::Receiver<std::io::Result<String>>,
     /// Request ID counter
     request_id: AtomicU64,
     /// Tools discovered from this server
@@ -73,14 +83,41 @@ impl ExternalMcpServer {
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout for {}", binary))?;
 
-        let name = binary.strip_prefix("pcb-").unwrap_or(binary).to_string();
+        // Extract name from binary path: "/path/to/pcb-sym" -> "sym"
+        let filename = Path::new(binary)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(binary);
+        let name = filename
+            .strip_prefix("pcb-")
+            .unwrap_or(filename)
+            .to_string();
+
+        // Spawn a reader thread that sends lines through a channel
+        // This allows us to use recv_timeout for non-blocking reads
+        let (tx, rx) = mpsc::channel();
+        let mut reader = BufReader::new(stdout);
+        thread::spawn(move || {
+            loop {
+                let mut line = String::new();
+                let result = reader.read_line(&mut line);
+                let should_stop = result.is_err() || line.is_empty();
+                // Send the result (trim the line since read_line includes newline)
+                if tx.send(result.map(|_| line)).is_err() {
+                    break; // Receiver dropped
+                }
+                if should_stop {
+                    break;
+                }
+            }
+        });
 
         let mut server = Self {
             name,
             binary: binary.to_string(),
             child,
             stdin: BufWriter::new(stdin),
-            stdout: BufReader::new(stdout),
+            response_rx: rx,
             request_id: AtomicU64::new(1),
             tools: Vec::new(),
             resources: Vec::new(),
@@ -132,8 +169,18 @@ impl ExternalMcpServer {
         Ok(())
     }
 
-    /// Send a JSON-RPC request and wait for response
+    /// Send a JSON-RPC request and wait for response with default timeout
     fn send_request(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.send_request_with_timeout(method, params, INIT_TIMEOUT)
+    }
+
+    /// Send a JSON-RPC request and wait for response with custom timeout
+    fn send_request_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
         let request = json!({
@@ -147,9 +194,23 @@ impl ExternalMcpServer {
         writeln!(self.stdin, "{}", request)?;
         self.stdin.flush()?;
 
-        // Read response
-        let mut line = String::new();
-        self.stdout.read_line(&mut line)?;
+        // Read response with timeout
+        let line = self
+            .response_rx
+            .recv_timeout(timeout)
+            .map_err(|e| match e {
+                mpsc::RecvTimeoutError::Timeout => {
+                    anyhow!(
+                        "Timeout waiting for response from {} ({}s)",
+                        self.binary,
+                        timeout.as_secs()
+                    )
+                }
+                mpsc::RecvTimeoutError::Disconnected => {
+                    anyhow!("Server {} disconnected unexpectedly", self.binary)
+                }
+            })?
+            .with_context(|| format!("Failed to read from {}", self.binary))?;
 
         let response: Value = serde_json::from_str(&line)
             .with_context(|| format!("Invalid JSON response from {}: {}", self.binary, line))?;
@@ -185,12 +246,13 @@ impl ExternalMcpServer {
         tool_name: &str,
         arguments: Option<Value>,
     ) -> Result<CallToolResult> {
-        let result = self.send_request(
+        let result = self.send_request_with_timeout(
             "tools/call",
             json!({
                 "name": tool_name,
                 "arguments": arguments.unwrap_or(Value::Null)
             }),
+            TOOL_CALL_TIMEOUT,
         )?;
 
         // Parse the result into our CallToolResult type
@@ -210,7 +272,8 @@ impl ExternalMcpServer {
     /// Convert external tool info to our ToolInfo type with namespaced name
     pub fn namespaced_tool(&self, tool: &ExternalToolInfo) -> ToolInfo {
         // Leak strings to get 'static lifetime - these live for program duration anyway
-        let name = Box::leak(format!("{}:{}", self.name, tool.name).into_boxed_str());
+        // Use underscore separator - dots in tool names can cause issues with some MCP clients
+        let name = Box::leak(format!("{}_{}", self.name, tool.name).into_boxed_str());
         let description = Box::leak(tool.description.clone().into_boxed_str());
 
         ToolInfo {
@@ -225,7 +288,7 @@ impl ExternalMcpServer {
     pub fn to_resource_info(&self, resource: &ExternalResourceInfo) -> ResourceInfo {
         ResourceInfo {
             uri: resource.uri.clone(),
-            name: format!("{}:{}", self.name, resource.name),
+            name: format!("{}_{}", self.name, resource.name),
             title: resource.title.clone(),
             description: resource.description.clone(),
             mime_type: resource.mime_type.clone(),

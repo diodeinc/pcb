@@ -1,15 +1,32 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Find all pcb-* executables on PATH, excluding `pcb` itself
+/// Find all pcb-* executables, checking both the directory containing the
+/// current executable and directories on PATH.
+///
+/// Returns full absolute paths to the binaries, which allows spawning them
+/// even when PATH doesn't include their directory (common when spawned by IDEs).
 pub fn find_pcb_binaries() -> Vec<String> {
-    let path_var = env::var_os("PATH").unwrap_or_default();
     let mut seen = HashSet::new();
     let mut binaries = Vec::new();
 
-    for dir in env::split_paths(&path_var) {
+    // Collect directories to search: current exe's dir first, then PATH
+    let mut search_dirs: Vec<PathBuf> = Vec::new();
+
+    // Add directory containing the current executable (highest priority)
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            search_dirs.push(exe_dir.to_path_buf());
+        }
+    }
+
+    // Add PATH directories
+    let path_var = env::var_os("PATH").unwrap_or_default();
+    search_dirs.extend(env::split_paths(&path_var));
+
+    for dir in search_dirs {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -24,9 +41,10 @@ pub fn find_pcb_binaries() -> Vec<String> {
                         continue;
                     }
 
-                    // Skip duplicates (first one in PATH wins)
+                    // Skip duplicates by name (first one wins)
                     if seen.insert(name.to_string()) {
-                        binaries.push(name.to_string());
+                        // Return full path so we can spawn without relying on PATH
+                        binaries.push(path.to_string_lossy().into_owned());
                     }
                 }
             }
@@ -68,11 +86,18 @@ mod tests {
         // This test just ensures the function runs without panicking
         // Actual binaries found will depend on the system
         let binaries = find_pcb_binaries();
-        // Should not contain "pcb" itself
-        assert!(!binaries.contains(&"pcb".to_string()));
-        // All results should start with "pcb-"
+        // Should not contain "pcb" itself (check filename, not full path)
         for bin in &binaries {
-            assert!(bin.starts_with("pcb-"), "Found non-pcb binary: {}", bin);
+            let filename = Path::new(bin)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(bin);
+            assert_ne!(filename, "pcb", "Should not include 'pcb' itself");
+            assert!(
+                filename.starts_with("pcb-"),
+                "Found non-pcb binary: {}",
+                bin
+            );
         }
     }
 }
