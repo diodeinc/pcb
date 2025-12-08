@@ -1461,7 +1461,8 @@ fn generate_step_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("--output")
         .arg(step_path.to_string_lossy())
         .arg("--no-dnp")
-        .arg("--no-unspecified")
+        // FIXME: kicad-imported projects have unspecified footprints, so allow these temporarily
+        // .arg("--no-unspecified")
         .arg("--include-silkscreen")
         .arg(kicad_pcb_path.to_string_lossy())
         .log_file(devnull)
@@ -1500,7 +1501,8 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("--units")
         .arg("mm")
         .arg("--no-dnp")
-        .arg("--no-unspecified")
+        // FIXME: kicad-imported projects have unspecified footprints, so allow these temporarily
+        // .arg("--no-unspecified")
         .arg(kicad_pcb_path.to_string_lossy())
         .log_file(devnull)
         .suppress_error_output(true)
@@ -1538,7 +1540,8 @@ fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("--subst-models")
         .arg("--force")
         .arg("--no-dnp")
-        .arg("--no-unspecified")
+        // FIXME: kicad-imported projects have unspecified footprints, so allow these temporarily
+        // .arg("--no-unspecified")
         .arg("--include-pads")
         .arg("--include-silkscreen")
         .arg(kicad_pcb_path.to_string_lossy())
