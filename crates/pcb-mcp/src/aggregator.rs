@@ -30,15 +30,25 @@ where
         builtin_resources: Vec<ResourceInfo>,
         builtin_handler: F,
     ) -> Self {
-        let mut aggregator = Self {
+        let mut aggregator =
+            Self::new_without_discovery(builtin_tools, builtin_resources, builtin_handler);
+        aggregator.discover_external_servers();
+        aggregator
+    }
+
+    /// Create a new aggregator without auto-discovering external servers.
+    /// Useful for testing or when external server discovery is not wanted.
+    pub fn new_without_discovery(
+        builtin_tools: Vec<ToolInfo>,
+        builtin_resources: Vec<ResourceInfo>,
+        builtin_handler: F,
+    ) -> Self {
+        Self {
             builtin_tools,
             builtin_resources,
             builtin_handler,
             external_servers: HashMap::new(),
-        };
-
-        aggregator.discover_external_servers();
-        aggregator
+        }
     }
 
     /// Discover and connect to external MCP servers
@@ -118,7 +128,8 @@ mod tests {
 
     #[test]
     fn test_aggregator_creation() {
-        let aggregator = McpAggregator::new(vec![], vec![], dummy_handler);
+        // Use new_without_discovery to avoid spawning external servers in tests
+        let aggregator = McpAggregator::new_without_discovery(vec![], vec![], dummy_handler);
         // Should not panic
         let _tools = aggregator.all_tools();
         let _resources = aggregator.all_resources();
