@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use pcb_sch::bom::availability::{is_small_generic_passive, tier_for_stock, NUM_BOARDS};
 
@@ -112,7 +112,8 @@ pub struct BomLine {
     pub id: String,
     #[serde(rename = "designEntry")]
     pub design_entry: DesignBomEntry,
-    pub offers: Vec<ComponentOffer>,
+    #[serde(rename = "offerIds")]
+    pub offer_ids: Vec<String>,
     #[serde(rename = "selectedOfferId")]
     pub selected_offer_id: Option<String>,
 }
@@ -121,6 +122,7 @@ pub struct BomLine {
 #[derive(Debug, Deserialize)]
 pub struct MatchBomResponse {
     pub results: Vec<BomLine>,
+    pub offers: HashMap<String, ComponentOffer>,
 }
 
 /// Compare offers within the same tier: prefer lower price, then higher stock
@@ -214,7 +216,7 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
     let response = client
         .post(&url)
         .bearer_auth(auth_token)
-        .json(&serde_json::json!({ "designBom": bom_entries }))
+        .json(&serde_json::json!({ "designBom": bom_entries, "format": "normalized" }))
         .send()
         .context("Failed to send BOM match request")?;
 
@@ -253,22 +255,22 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
             bom_entry.package.as_deref(),
         );
 
+        // Resolve offer IDs to actual offers from the deduplicated offers map
+        let resolved_offers: Vec<&ComponentOffer> = bom_line
+            .offer_ids
+            .iter()
+            .filter_map(|id| match_response.offers.get(id))
+            .collect();
+
         // Select best offers per geography
-        // Filter offers by geography and select the best in each region
         let best_us_offer = select_best_offer(
-            bom_line
-                .offers
-                .iter()
-                .filter(|o| o.geography == Geography::Us),
+            resolved_offers.iter().copied().filter(|o| o.geography == Geography::Us),
             qty,
             is_small_passive,
         );
 
         let best_global_offer = select_best_offer(
-            bom_line
-                .offers
-                .iter()
-                .filter(|o| o.geography == Geography::Global),
+            resolved_offers.iter().copied().filter(|o| o.geography == Geography::Global),
             qty,
             is_small_passive,
         );
