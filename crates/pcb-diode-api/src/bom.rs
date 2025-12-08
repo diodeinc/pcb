@@ -264,13 +264,19 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
 
         // Select best offers per geography
         let best_us_offer = select_best_offer(
-            resolved_offers.iter().copied().filter(|o| o.geography == Geography::Us),
+            resolved_offers
+                .iter()
+                .copied()
+                .filter(|o| o.geography == Geography::Us),
             qty,
             is_small_passive,
         );
 
         let best_global_offer = select_best_offer(
-            resolved_offers.iter().copied().filter(|o| o.geography == Geography::Global),
+            resolved_offers
+                .iter()
+                .copied()
+                .filter(|o| o.geography == Geography::Global),
             qty,
             is_small_passive,
         );
