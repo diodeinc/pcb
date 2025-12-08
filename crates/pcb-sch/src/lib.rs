@@ -25,7 +25,7 @@ pub mod position;
 pub use bom::{
     parse_kicad_csv_bom, Alternative, AvailabilityData, Bom, BomEntry, BomMatchingKey,
     BomMatchingRule, Capacitor, Dielectric, GenericComponent, GenericMatchingKey, GroupedBomEntry,
-    KiCadBomError, MatchedOffer, Offer, Resistor, UngroupedBomEntry,
+    KiCadBomError, MatchedOffer, Offer, RegionAvailability, Resistor, UngroupedBomEntry,
 };
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

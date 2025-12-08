@@ -6,6 +6,7 @@ use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::availability::{is_small_generic_passive, tier_for_stock, Tier, NUM_BOARDS};
+use crate::bom::RegionAvailability;
 use crate::{Bom, GenericComponent};
 
 /// Create a cell with quantity and percentage (percentage in grey)
@@ -33,11 +34,11 @@ fn autofill_from_availability<'a>(
 }
 
 /// Apply dimmed+italic styling if autofilled
-fn style_if_autofilled(value: String, is_autofilled: bool) -> String {
+fn style_if_autofilled(value: &str, is_autofilled: bool) -> String {
     if is_autofilled && !value.is_empty() {
-        format!("{}", value.dimmed().italic())
+        value.dimmed().italic().to_string()
     } else {
-        value
+        value.to_string()
     }
 }
 
@@ -108,12 +109,9 @@ fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, tier: Optio
     }
 }
 
-/// Get designator tier (capped at Limited if MPN/manufacturer missing)
-fn get_designator_tier(stock_tier: Tier, mpn: &str, manufacturer: &str) -> Tier {
-    match (mpn.is_empty() || manufacturer.is_empty(), stock_tier) {
-        (true, Tier::Plenty) => Tier::Limited,
-        _ => stock_tier,
-    }
+/// Check if MPN and manufacturer are both present
+fn has_complete_part_info(mpn: &str, manufacturer: &str) -> bool {
+    !mpn.is_empty() && !manufacturer.is_empty()
 }
 
 /// Calculate unit price at a given quantity using price breaks
@@ -142,6 +140,76 @@ fn unit_price_from_breaks(price_breaks: &[(i32, f64)], qty: i32) -> Option<f64> 
     }
 
     best_break.map(|pb| pb.1)
+}
+
+/// Computed display data for a region's availability
+#[derive(Default)]
+struct RegionDisplayData {
+    stock: i32,
+    price_single: Option<f64>,
+    price_boards: Option<f64>,
+    tier: Tier,
+    lcsc_ids: Vec<(String, String)>,
+    mpn: Option<String>,
+    manufacturer: Option<String>,
+}
+
+impl RegionDisplayData {
+    fn from_region_avail(
+        avail: Option<&RegionAvailability>,
+        qty: usize,
+        is_small_passive: bool,
+    ) -> Self {
+        let Some(a) = avail else {
+            return Self::default();
+        };
+
+        let tier = tier_for_stock(a.stock_total, qty as i32, is_small_passive);
+        let (price_single, price_boards) = match &a.price_breaks {
+            Some(breaks) => {
+                let unit_single = unit_price_from_breaks(breaks, qty as i32);
+                let unit_boards = unit_price_from_breaks(breaks, (qty as i32) * NUM_BOARDS);
+                (
+                    unit_single.map(|p| p * qty as f64),
+                    unit_boards.map(|p| p * (qty as i32 * NUM_BOARDS) as f64),
+                )
+            }
+            None => (None, None),
+        };
+
+        RegionDisplayData {
+            stock: a.stock_total,
+            price_single,
+            price_boards,
+            tier,
+            lcsc_ids: a.lcsc_part_ids.clone(),
+            mpn: a.mpn.clone(),
+            manufacturer: a.manufacturer.clone(),
+        }
+    }
+
+    fn format_stock(&self) -> String {
+        if self.stock <= 0 && self.price_single.is_none() {
+            "-".to_string()
+        } else {
+            self.stock.to_string()
+        }
+    }
+
+    fn format_price(&self) -> String {
+        match (self.price_single, self.price_boards) {
+            (Some(single), Some(boards)) => {
+                format!("${:.2} (${:.2})", ceil_cents(single), ceil_cents(boards))
+            }
+            (Some(single), None) => format!("${:.2}", ceil_cents(single)),
+            _ => "-".to_string(),
+        }
+    }
+}
+
+/// Round up to nearest cent
+fn ceil_cents(value: f64) -> f64 {
+    (value * 100.0).ceil() / 100.0
 }
 
 /// Create a hyperlink if the terminal supports it, otherwise return plain text
@@ -301,80 +369,52 @@ impl Bom {
                 .map(|(p, _)| p)
                 .collect();
 
-            // Get availability from best component (deterministic: prefer entries with price_breaks, then highest stock)
-            let (
-                aggregated_stock,
-                aggregated_price_single,
-                aggregated_price_boards,
-                lcsc_ids,
-                avail_mpn,
-                avail_manufacturer,
-                has_avail,
-            ) = if has_availability {
-                let best_avail = paths
-                    .iter()
-                    .filter_map(|path| self.availability.get(*path))
-                    .max_by_key(|avail| (avail.price_breaks.is_some(), avail.stock_total));
-
-                let (stock, price_breaks_data, lcsc_part_ids, offer_mpn, offer_mfr) =
-                    match best_avail {
-                        Some(avail) => (
-                            avail.stock_total,
-                            avail.price_breaks.clone(),
-                            avail.lcsc_part_ids.clone(),
-                            avail.mpn.clone(),
-                            avail.manufacturer.clone(),
-                        ),
-                        None => (0, None, Vec::new(), None, None),
-                    };
-
-                // Recalculate prices using grouped quantity and price breaks
-                let (price_single, price_boards) = if let Some(breaks) = price_breaks_data {
-                    let unit_single = unit_price_from_breaks(&breaks, qty as i32);
-                    let unit_boards = unit_price_from_breaks(&breaks, (qty as i32) * NUM_BOARDS);
-
-                    let total_single = unit_single.map(|p| p * qty as f64);
-                    let total_boards = unit_boards.map(|p| p * (qty as i32 * NUM_BOARDS) as f64);
-                    (total_single, total_boards)
-                } else {
-                    (None, None)
-                };
-
-                (
-                    stock,
-                    price_single,
-                    price_boards,
-                    lcsc_part_ids,
-                    offer_mpn,
-                    offer_mfr,
-                    best_avail.is_some(),
-                )
-            } else {
-                (0, None, None, Vec::new(), None, None, false)
-            };
-
-            // Fill in missing MPN/manufacturer from availability data
-            let (mpn, is_mpn_autofilled) = autofill_from_availability(original_mpn, &avail_mpn);
-            let (manufacturer, is_manufacturer_autofilled) =
-                autofill_from_availability(original_manufacturer, &avail_manufacturer);
-
             // Get generic_data and package for sourcing status
             let generic_data = entry
                 .get("generic_data")
                 .and_then(|gd| serde_json::from_value::<GenericComponent>(gd.clone()).ok());
 
             let package = entry.get("package").and_then(|p| p.as_str());
+            let is_small_passive = is_small_generic_passive(generic_data.as_ref(), package);
 
-            // Calculate tier when we have availability data for this group
-            let stock_tier = if has_avail {
-                let is_small_passive = is_small_generic_passive(generic_data.as_ref(), package);
-                tier_for_stock(aggregated_stock, qty as i32, is_small_passive)
-            } else {
-                Tier::Insufficient
-            };
-            // Use original values (before autofill) to determine tier cap
+            // Get per-region availability from first matching path
+            let avail = paths.iter().find_map(|path| self.availability.get(*path));
+
+            let us_data = RegionDisplayData::from_region_avail(
+                avail.and_then(|a| a.us.as_ref()),
+                qty,
+                is_small_passive,
+            );
+            let global_data = RegionDisplayData::from_region_avail(
+                avail.and_then(|a| a.global.as_ref()),
+                qty,
+                is_small_passive,
+            );
+
+            // Use US offer data for MPN/Manufacturer autofill
+            let avail_mpn = us_data.mpn.clone();
+            let avail_manufacturer = us_data.manufacturer.clone();
+
+            // Fill in missing MPN/manufacturer from availability data
+            let (mpn, is_mpn_autofilled) = autofill_from_availability(original_mpn, &avail_mpn);
+            let (manufacturer, is_manufacturer_autofilled) =
+                autofill_from_availability(original_manufacturer, &avail_manufacturer);
+
+            // Designator tier:
+            // - Green: both regions Plenty AND has MPN/manufacturer
+            // - Red: both regions Insufficient
+            // - Yellow: everything else
             let designator_tier =
-                get_designator_tier(stock_tier, original_mpn, original_manufacturer);
+                if us_data.tier == Tier::Insufficient && global_data.tier == Tier::Insufficient {
+                    Tier::Insufficient
+                } else if us_data.tier == Tier::Plenty
+                    && global_data.tier == Tier::Plenty
+                    && has_complete_part_info(original_mpn, original_manufacturer)
+                {
+                    Tier::Plenty
+                } else {
+                    Tier::Limited
+                };
 
             // Track summary stats
             if has_availability {
@@ -429,13 +469,13 @@ impl Bom {
                     ),
                     mpn,
                 );
-                style_if_autofilled(link, is_mpn_autofilled)
+                style_if_autofilled(&link, is_mpn_autofilled)
             };
             let mpn_cell = styled_cell(mpn_display, is_dnp, is_house_part, None);
 
             // Manufacturer: style if auto-filled
             let manufacturer_cell = styled_cell(
-                style_if_autofilled(manufacturer.to_string(), is_manufacturer_autofilled),
+                style_if_autofilled(manufacturer, is_manufacturer_autofilled),
                 is_dnp,
                 false,
                 None,
@@ -448,40 +488,37 @@ impl Bom {
             );
             let description_cell = styled_cell(description, is_dnp, false, None);
 
-            // Build row with stock as 2nd column when availability is present
+            // Build row
             let mut row = vec![qty_cell];
 
-            // Build availability cells
-            let (stock_cell_opt, price_cell_opt, lcsc_cell_opt) = if has_availability {
-                let stock_str = if aggregated_stock == 0 && aggregated_price_single.is_none() {
-                    format!("{:>7}", "-")
-                } else {
-                    format!("{:>7}", aggregated_stock)
-                };
+            // Add stock columns (US and Global)
+            if has_availability {
+                row.push(styled_cell(
+                    us_data.format_stock(),
+                    is_dnp,
+                    false,
+                    Some(us_data.tier),
+                ));
+                row.push(styled_cell(
+                    global_data.format_stock(),
+                    is_dnp,
+                    false,
+                    Some(global_data.tier),
+                ));
+            }
 
-                // Price: "$X.XX ($Y.YY)" - total for 1 board and total for NUM_BOARDS boards
-                // Round up to nearest cent (ceiling)
-                let price_str = match (aggregated_price_single, aggregated_price_boards) {
-                    (Some(single), Some(boards)) => {
-                        let single_cents = (single * 100.0).ceil() / 100.0;
-                        let boards_cents = (boards * 100.0).ceil() / 100.0;
-                        format!("${:.2} (${:.2})", single_cents, boards_cents)
-                    }
-                    (Some(single), None) => {
-                        let single_cents = (single * 100.0).ceil() / 100.0;
-                        format!("${:.2}", single_cents)
-                    }
-                    _ => String::new(),
-                };
+            // Add standard columns
+            row.extend(vec![
+                designators_cell,
+                mpn_cell,
+                manufacturer_cell,
+                package_cell,
+            ]);
 
-                let stock_cell = styled_cell(stock_str, is_dnp, false, Some(stock_tier));
-
-                let price_cell = match (is_dnp, aggregated_stock) {
-                    (true, _) | (false, 0) => Cell::new(price_str).fg(Color::DarkGrey),
-                    _ => Cell::new(price_str),
-                };
-
-                let lcsc_display = lcsc_ids
+            // Add LCSC column (from global data only, as LCSC is a global distributor)
+            if has_availability {
+                let lcsc_display = global_data
+                    .lcsc_ids
                     .iter()
                     .map(|(id, url)| hyperlink(url, id))
                     .collect::<Vec<_>>()
@@ -491,50 +528,38 @@ impl Bom {
                     true => Cell::new(lcsc_display).fg(Color::DarkGrey),
                     false => Cell::new(lcsc_display).fg(Color::Grey),
                 };
-
-                (Some(stock_cell), Some(price_cell), Some(lcsc_cell))
-            } else {
-                (None, None, None)
-            };
-
-            // Add stock as 2nd column if available
-            if let Some(stock_cell) = stock_cell_opt {
-                row.push(stock_cell);
-            }
-
-            // Add rest of standard columns
-            row.extend(vec![
-                designators_cell,
-                mpn_cell,
-                manufacturer_cell,
-                package_cell,
-            ]);
-
-            // Add remaining availability columns
-            if let Some(lcsc_cell) = lcsc_cell_opt {
                 row.push(lcsc_cell);
             }
-            if let Some(price_cell) = price_cell_opt {
-                row.push(price_cell);
+
+            // Add price columns (US and Global)
+            if has_availability {
+                row.push(styled_cell(us_data.format_price(), is_dnp, false, None));
+                row.push(styled_cell(global_data.format_price(), is_dnp, false, None));
             }
 
             row.push(description_cell);
             table.add_row(row);
         }
 
-        // Set headers with Stock as 2nd column when available
-        let price_header = format!("Price ({}x boards)", NUM_BOARDS);
+        // Set headers
         let mut headers = vec!["Qty"];
 
         if has_availability {
-            headers.push("Stock");
+            headers.push("Stock US");
+            headers.push("Stock Global");
         }
 
         headers.extend(vec!["Designators", "MPN", "Manufacturer", "Package"]);
 
         if has_availability {
             headers.push("LCSC");
-            headers.push(&price_header);
+        }
+
+        let price_us_header = format!("Price US ({}x)", NUM_BOARDS);
+        let price_global_header = format!("Price Global ({}x)", NUM_BOARDS);
+        if has_availability {
+            headers.push(&price_us_header);
+            headers.push(&price_global_header);
         }
 
         headers.push("Description");
@@ -543,31 +568,48 @@ impl Bom {
 
         writeln!(writer, "{table}")?;
 
-        // Calculate and print total BOM cost if availability data is present
+        // Calculate and print total BOM cost per region if availability data is present
         if has_availability {
-            let total_single = self.entries.iter().fold(0.0, |acc, (path, _entry)| {
-                let qty = self
-                    .designators
+            let (total_us, total_global) =
+                self.entries
                     .iter()
-                    .filter(|(p, _)| p.as_str() == path)
-                    .count() as i32;
+                    .fold((0.0, 0.0), |(acc_us, acc_global), (path, _entry)| {
+                        let qty = self
+                            .designators
+                            .iter()
+                            .filter(|(p, _)| p.as_str() == path)
+                            .count() as i32;
 
-                if let Some(avail) = self.availability.get(path) {
-                    let price_single = avail
-                        .price_breaks
-                        .as_ref()
-                        .and_then(|breaks| unit_price_from_breaks(breaks, qty))
-                        .map(|unit_price| unit_price * qty as f64)
-                        .unwrap_or(0.0);
+                        if let Some(avail) = self.availability.get(path) {
+                            let us_price = avail
+                                .us
+                                .as_ref()
+                                .and_then(|r| r.price_breaks.as_ref())
+                                .and_then(|breaks| unit_price_from_breaks(breaks, qty))
+                                .map(|unit_price| unit_price * qty as f64)
+                                .unwrap_or(0.0);
 
-                    acc + price_single
-                } else {
-                    acc
-                }
-            });
+                            let global_price = avail
+                                .global
+                                .as_ref()
+                                .and_then(|r| r.price_breaks.as_ref())
+                                .and_then(|breaks| unit_price_from_breaks(breaks, qty))
+                                .map(|unit_price| unit_price * qty as f64)
+                                .unwrap_or(0.0);
 
-            let total_cents = (total_single * 100.0).ceil() / 100.0;
-            writeln!(writer, "Total: ${:.2}", total_cents)?;
+                            (acc_us + us_price, acc_global + global_price)
+                        } else {
+                            (acc_us, acc_global)
+                        }
+                    });
+
+            let total_us_cents = (total_us * 100.0).ceil() / 100.0;
+            let total_global_cents = (total_global * 100.0).ceil() / 100.0;
+            writeln!(
+                writer,
+                "Total: US ${:.2} | Global ${:.2}",
+                total_us_cents, total_global_cents
+            )?;
         }
 
         // Print summary tables if availability data is present

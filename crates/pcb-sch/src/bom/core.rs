@@ -14,8 +14,9 @@ pub struct Bom {
     pub availability: HashMap<String, AvailabilityData>, // path -> availability data
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AvailabilityData {
+/// Per-region availability data for a single offer
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct RegionAvailability {
     pub stock_total: i32,                      // Stock for selected offer
     pub price_breaks: Option<Vec<(i32, f64)>>, // Price breaks as (qty, unit_price)
     pub lcsc_part_ids: Vec<(String, String)>,  // Vec of (LCSC part number, product URL)
@@ -23,6 +24,16 @@ pub struct AvailabilityData {
     pub mpn: Option<String>, // Manufacturer part number from offer
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manufacturer: Option<String>, // Manufacturer from offer
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AvailabilityData {
+    /// US region availability (best offer)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub us: Option<RegionAvailability>,
+    /// Global region availability (best offer)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<RegionAvailability>,
 }
 
 /// Trim and truncate description to 100 chars max
@@ -71,6 +82,8 @@ pub struct GroupedBomEntry {
     pub designators: BTreeSet<NaturalString>,
     #[serde(flatten)]
     pub entry: BomEntry,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lcsc: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -159,6 +172,8 @@ pub struct UngroupedBomEntry {
     pub designator: String,
     #[serde(flatten)]
     pub entry: BomEntry,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lcsc: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -374,10 +389,19 @@ impl Bom {
         let mut entries = self
             .entries
             .iter()
-            .map(|(path, entry)| UngroupedBomEntry {
-                path: path.clone(),
-                designator: self.designators[path].clone(),
-                entry: entry.clone(),
+            .map(|(path, entry)| {
+                let lcsc = self
+                    .availability
+                    .get(path)
+                    .and_then(|a| a.global.as_ref())
+                    .and_then(|g| g.lcsc_part_ids.first())
+                    .map(|(id, _url)| id.clone());
+                UngroupedBomEntry {
+                    path: path.clone(),
+                    designator: self.designators[path].clone(),
+                    entry: entry.clone(),
+                    lcsc,
+                }
             })
             .collect::<Vec<_>>();
         // Sort by DNP status first (non-DNP before DNP), then by designator naturally
@@ -389,20 +413,31 @@ impl Bom {
     }
 
     pub fn grouped_json(&self) -> String {
-        // Group entries by their BomEntry content
-        let mut groups = HashMap::<BomEntry, BTreeSet<NaturalString>>::new();
+        // Group entries by their BomEntry content, tracking paths for LCSC lookup
+        let mut groups = HashMap::<BomEntry, (BTreeSet<NaturalString>, Vec<String>)>::new();
 
         for (path, entry) in &self.entries {
-            groups
-                .entry(entry.clone())
-                .or_default()
-                .insert(self.designators[path].clone().into());
+            let group = groups.entry(entry.clone()).or_default();
+            group.0.insert(self.designators[path].clone().into());
+            group.1.push(path.clone());
         }
 
-        // Convert to vec - BTreeSet<NaturalString> automatically maintains natural order
+        // Convert to vec with LCSC from availability (global region, first match)
         let mut grouped_entries = groups
             .into_iter()
-            .map(|(entry, designators)| GroupedBomEntry { entry, designators })
+            .map(|(entry, (designators, paths))| {
+                let lcsc = paths
+                    .iter()
+                    .find_map(|p| self.availability.get(p))
+                    .and_then(|a| a.global.as_ref())
+                    .and_then(|g| g.lcsc_part_ids.first())
+                    .map(|(id, _url)| id.clone());
+                GroupedBomEntry {
+                    entry,
+                    designators,
+                    lcsc,
+                }
+            })
             .collect::<Vec<_>>();
 
         grouped_entries.sort_by(|a, b| {
@@ -1236,10 +1271,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_10v,
                 designators: BTreeSet::from(["C1".into(), "C2".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_no_voltage,
                 designators: BTreeSet::from(["C14".into(), "C15".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1309,10 +1346,12 @@ mod tests {
             GroupedBomEntry {
                 entry: res_100v,
                 designators: BTreeSet::from(["R1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: res_no_voltage,
                 designators: BTreeSet::from(["R2".into(), "R3".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1373,10 +1412,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_0402,
                 designators: BTreeSet::from(["C1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_0603,
                 designators: BTreeSet::from(["C2".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1418,10 +1459,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_normal,
                 designators: BTreeSet::from(["C1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_dnp,
                 designators: BTreeSet::from(["C2".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1478,10 +1521,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_a,
                 designators: BTreeSet::from(["C1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_b,
                 designators: BTreeSet::from(["C2".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1538,10 +1583,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_10v_no_mpn,
                 designators: BTreeSet::from(["C1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_no_voltage,
                 designators: BTreeSet::from(["C2".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1598,10 +1645,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_x7r,
                 designators: BTreeSet::from(["C1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_no_dielec,
                 designators: BTreeSet::from(["C2".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1636,10 +1685,12 @@ mod tests {
             GroupedBomEntry {
                 entry: entry_a.clone(),
                 designators: BTreeSet::from(["U1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: entry_a.clone(),
                 designators: BTreeSet::from(["U2".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1693,10 +1744,12 @@ mod tests {
             GroupedBomEntry {
                 entry: res_tight,
                 designators: BTreeSet::from(["R1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: res_loose,
                 designators: BTreeSet::from(["R2".into(), "R3".into()]),
+                lcsc: None,
             },
         ];
 
@@ -1755,10 +1808,12 @@ mod tests {
             GroupedBomEntry {
                 entry: cap_tight,
                 designators: BTreeSet::from(["C1".into()]),
+                lcsc: None,
             },
             GroupedBomEntry {
                 entry: cap_loose,
                 designators: BTreeSet::from(["C2".into()]),
+                lcsc: None,
             },
         ];
 
