@@ -34,11 +34,11 @@ fn autofill_from_availability<'a>(
 }
 
 /// Apply dimmed+italic styling if autofilled
-fn style_if_autofilled(value: String, is_autofilled: bool) -> String {
+fn style_if_autofilled(value: &str, is_autofilled: bool) -> String {
     if is_autofilled && !value.is_empty() {
-        format!("{}", value.dimmed().italic())
+        value.dimmed().italic().to_string()
     } else {
-        value
+        value.to_string()
     }
 }
 
@@ -109,12 +109,9 @@ fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, tier: Optio
     }
 }
 
-/// Get designator tier (capped at Limited if MPN/manufacturer missing)
-fn get_designator_tier(stock_tier: Tier, mpn: &str, manufacturer: &str) -> Tier {
-    match (mpn.is_empty() || manufacturer.is_empty(), stock_tier) {
-        (true, Tier::Plenty) => Tier::Limited,
-        _ => stock_tier,
-    }
+/// Check if MPN and manufacturer are both present
+fn has_complete_part_info(mpn: &str, manufacturer: &str) -> bool {
+    !mpn.is_empty() && !manufacturer.is_empty()
 }
 
 /// Calculate unit price at a given quantity using price breaks
@@ -191,53 +188,28 @@ impl RegionDisplayData {
         }
     }
 
-    fn has_data(&self) -> bool {
-        self.stock > 0 || self.price_single.is_some()
-    }
-
     fn format_stock(&self) -> String {
-        if !self.has_data() {
+        if self.stock <= 0 && self.price_single.is_none() {
             "-".to_string()
         } else {
-            format!("{}", self.stock)
+            self.stock.to_string()
         }
     }
 
     fn format_price(&self) -> String {
-        if !self.has_data() {
-            return "-".to_string();
-        }
         match (self.price_single, self.price_boards) {
             (Some(single), Some(boards)) => {
-                let single_cents = (single * 100.0).ceil() / 100.0;
-                let boards_cents = (boards * 100.0).ceil() / 100.0;
-                format!("${:.2} (${:.2})", single_cents, boards_cents)
+                format!("${:.2} (${:.2})", ceil_cents(single), ceil_cents(boards))
             }
-            (Some(single), None) => {
-                let single_cents = (single * 100.0).ceil() / 100.0;
-                format!("${:.2}", single_cents)
-            }
+            (Some(single), None) => format!("${:.2}", ceil_cents(single)),
             _ => "-".to_string(),
         }
     }
+}
 
-    fn create_stock_cell(&self, is_dnp: bool) -> Cell {
-        let cell = Cell::new(self.format_stock());
-        if is_dnp {
-            cell.fg(Color::DarkGrey)
-        } else {
-            cell.fg(color_for_tier(self.tier))
-        }
-    }
-
-    fn create_price_cell(&self, is_dnp: bool) -> Cell {
-        let cell = Cell::new(self.format_price());
-        if is_dnp {
-            cell.fg(Color::DarkGrey)
-        } else {
-            cell
-        }
-    }
+/// Round up to nearest cent
+fn ceil_cents(value: f64) -> f64 {
+    (value * 100.0).ceil() / 100.0
 }
 
 /// Create a hyperlink if the terminal supports it, otherwise return plain text
@@ -428,13 +400,19 @@ impl Bom {
             let (manufacturer, is_manufacturer_autofilled) =
                 autofill_from_availability(original_manufacturer, &avail_manufacturer);
 
-            // Designator tier: green only if both regions are green AND has MPN/manufacturer
+            // Designator tier:
+            // - Green: both regions Plenty AND has MPN/manufacturer
+            // - Red: both regions Insufficient
+            // - Yellow: everything else
             let designator_tier =
-                if us_data.tier == Tier::Plenty && global_data.tier == Tier::Plenty {
-                    // Both regions have plenty - eligible for green, but check MPN/mfr
-                    get_designator_tier(Tier::Plenty, original_mpn, original_manufacturer)
+                if us_data.tier == Tier::Insufficient && global_data.tier == Tier::Insufficient {
+                    Tier::Insufficient
+                } else if us_data.tier == Tier::Plenty
+                    && global_data.tier == Tier::Plenty
+                    && has_complete_part_info(original_mpn, original_manufacturer)
+                {
+                    Tier::Plenty
                 } else {
-                    // Not both green - demote to yellow
                     Tier::Limited
                 };
 
@@ -491,13 +469,13 @@ impl Bom {
                     ),
                     mpn,
                 );
-                style_if_autofilled(link, is_mpn_autofilled)
+                style_if_autofilled(&link, is_mpn_autofilled)
             };
             let mpn_cell = styled_cell(mpn_display, is_dnp, is_house_part, None);
 
             // Manufacturer: style if auto-filled
             let manufacturer_cell = styled_cell(
-                style_if_autofilled(manufacturer.to_string(), is_manufacturer_autofilled),
+                style_if_autofilled(manufacturer, is_manufacturer_autofilled),
                 is_dnp,
                 false,
                 None,
@@ -515,8 +493,18 @@ impl Bom {
 
             // Add stock columns (US and Global)
             if has_availability {
-                row.push(us_data.create_stock_cell(is_dnp));
-                row.push(global_data.create_stock_cell(is_dnp));
+                row.push(styled_cell(
+                    us_data.format_stock(),
+                    is_dnp,
+                    false,
+                    Some(us_data.tier),
+                ));
+                row.push(styled_cell(
+                    global_data.format_stock(),
+                    is_dnp,
+                    false,
+                    Some(global_data.tier),
+                ));
             }
 
             // Add standard columns
@@ -545,8 +533,8 @@ impl Bom {
 
             // Add price columns (US and Global)
             if has_availability {
-                row.push(us_data.create_price_cell(is_dnp));
-                row.push(global_data.create_price_cell(is_dnp));
+                row.push(styled_cell(us_data.format_price(), is_dnp, false, None));
+                row.push(styled_cell(global_data.format_price(), is_dnp, false, None));
             }
 
             row.push(description_cell);
