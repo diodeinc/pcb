@@ -968,20 +968,25 @@ fn is_displayable_package(pkg: &str) -> bool {
     pkg.len() <= 15 && !pkg.contains(' ') && pkg != "Other"
 }
 
-/// Helper to get source abbreviation: "C" for CSE, "L" for LCSC
+/// Helper to get source abbreviation: "C" for CSE, "L" for LCSC, "N" for NCTI
 fn source_abbrev(source: Option<&str>) -> &'static str {
     source
         .and_then(|s| match s.to_lowercase().as_str() {
             s if s.contains("cse") => Some("C"),
             s if s.contains("lcsc") => Some("L"),
+            s if s.contains("ncti") => Some("N"),
             _ => None,
         })
         .unwrap_or("?")
 }
 
-/// Helper to format a column with padding
+/// Helper to format a column with padding, accounting for unicode display width.
+/// This ensures proper alignment even with CJK characters that are 2 columns wide.
 fn format_column(text: &str, width: usize) -> String {
-    format!("{:<width$}", truncate_text(text, width), width = width)
+    let truncated = truncate_text(text, width);
+    let display_width = truncated.width();
+    let padding = width.saturating_sub(display_width);
+    format!("{}{}", truncated, " ".repeat(padding))
 }
 
 /// Helper to get check/cross icon
