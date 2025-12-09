@@ -161,8 +161,16 @@ pub fn delete_tags(repo_root: &Path, tag_names: &[&str]) -> anyhow::Result<()> {
     run_in(repo_root, &args)
 }
 
-pub fn describe_tags(repo_root: &Path, commit: &str) -> Option<String> {
-    run_output_opt(repo_root, &["describe", "--tags", "--abbrev=0", commit])
+pub fn describe_tags(repo_root: &Path, commit: &str, tag_prefix: Option<&str>) -> Option<String> {
+    let mut args = vec!["describe", "--tags", "--abbrev=0"];
+    let match_pattern;
+    if let Some(prefix) = tag_prefix {
+        match_pattern = format!("{}/*", prefix);
+        args.push("--match");
+        args.push(&match_pattern);
+    }
+    args.push(commit);
+    run_output_opt(repo_root, &args)
 }
 
 pub fn get_all_tag_annotations(repo_root: &Path) -> HashMap<String, String> {
