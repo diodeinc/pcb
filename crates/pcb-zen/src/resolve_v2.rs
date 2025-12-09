@@ -73,17 +73,17 @@ struct MvsFamilyResolver {
 impl PackagePathResolver for MvsFamilyResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
         let families = self.families.get(module_path)?;
-        let req_ver = parse_version_string(version).ok()?;
-        let req_family = semver_family(&req_ver);
 
-        families.get(&req_family).cloned().or_else(|| {
-            // Fallback: if exactly one family exists, use it
-            if families.len() == 1 {
-                families.values().next().cloned()
-            } else {
-                None
-            }
-        })
+        // Try to match by semver family, fall back to single-family lookup
+        // (handles branch/rev specs where version isn't valid semver)
+        parse_version_string(version)
+            .ok()
+            .and_then(|v| families.get(&semver_family(&v)).cloned())
+            .or_else(|| {
+                (families.len() == 1)
+                    .then(|| families.values().next().cloned())
+                    .flatten()
+            })
     }
 
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
