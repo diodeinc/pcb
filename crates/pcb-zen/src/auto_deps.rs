@@ -399,15 +399,22 @@ fn add_and_correct_dependencies(
         added += 1;
     }
 
-    // Correct workspace member versions
+    // Correct workspace member versions (but preserve branch/rev/path overrides)
     for (url, pkg) in packages {
         let version = pkg.version.clone().unwrap_or_else(|| "0.1.0".to_string());
         if let Some(current_spec) = config.dependencies.get(url) {
-            let current_version = match current_spec {
-                DependencySpec::Version(v) => Some(v.as_str()),
-                DependencySpec::Detailed(d) => d.version.as_deref(),
+            let should_correct = match current_spec {
+                DependencySpec::Version(v) => v != &version,
+                DependencySpec::Detailed(d) => {
+                    // Don't overwrite branch/rev/path deps
+                    if d.branch.is_some() || d.rev.is_some() || d.path.is_some() {
+                        false
+                    } else {
+                        d.version.as_deref() != Some(version.as_str())
+                    }
+                }
             };
-            if current_version != Some(version.as_str()) {
+            if should_correct {
                 config
                     .dependencies
                     .insert(url.clone(), DependencySpec::Version(version));

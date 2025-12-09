@@ -227,7 +227,9 @@ fn find_version_updates(
             // Only version deps (not branch/rev/path)
             let current = match spec {
                 DependencySpec::Version(v) => Version::parse(v).ok(),
-                DependencySpec::Detailed(d) if d.branch.is_none() && d.rev.is_none() && d.path.is_none() => {
+                DependencySpec::Detailed(d)
+                    if d.branch.is_none() && d.rev.is_none() && d.path.is_none() =>
+                {
                     d.version.as_ref().and_then(|v| Version::parse(v).ok())
                 }
                 _ => None,
@@ -240,12 +242,17 @@ fn find_version_updates(
                 .or_insert_with(|| get_all_versions_for_repo(repo_url).unwrap_or_default());
 
             let pkg_key = if subpath.is_empty() { "" } else { subpath };
-            let Some(available) = repo_versions.get(pkg_key) else { continue };
+            let Some(available) = repo_versions.get(pkg_key) else {
+                continue;
+            };
 
             let current_family = semver_family(&current);
 
             // Non-breaking update (same family)
-            if let Some(v) = available.iter().find(|v| semver_family(v) == current_family && *v > &current) {
+            if let Some(v) = available
+                .iter()
+                .find(|v| semver_family(v) == current_family && *v > &current)
+            {
                 pending.push(PendingUpdate {
                     url: url.clone(),
                     current: current.clone(),
@@ -256,7 +263,10 @@ fn find_version_updates(
             }
 
             // Breaking update (different family)
-            if let Some(v) = available.iter().find(|v| semver_family(v) != current_family && *v > &current) {
+            if let Some(v) = available
+                .iter()
+                .find(|v| semver_family(v) != current_family && *v > &current)
+            {
                 pending.push(PendingUpdate {
                     url: url.clone(),
                     current: current.clone(),
@@ -303,16 +313,17 @@ fn refresh_branch_deps(
             };
 
             log::debug!("Fetching latest commit for {} (branch: {})", url, branch);
-            let new_commit = match git::ls_remote_with_fallback(url, &format!("refs/heads/{}", branch)) {
-                Ok((commit, _)) => {
-                    log::debug!("  {} -> {}", branch, &commit[..12]);
-                    commit
-                }
-                Err(e) => {
-                    log::warn!("Failed to fetch {}: {}", url, e);
-                    continue;
-                }
-            };
+            let new_commit =
+                match git::ls_remote_with_fallback(url, &format!("refs/heads/{}", branch)) {
+                    Ok((commit, _)) => {
+                        log::debug!("  {} -> {}", branch, &commit[..12]);
+                        commit
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to fetch {}: {}", url, e);
+                        continue;
+                    }
+                };
 
             if new_commit != old_commit {
                 index.set_branch_commit(repo_url, branch, &new_commit)?;
