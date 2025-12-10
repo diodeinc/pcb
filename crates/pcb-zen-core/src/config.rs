@@ -427,8 +427,9 @@ pub struct LockEntry {
 /// Automatically updated when dependencies change.
 #[derive(Debug, Clone, Default)]
 pub struct Lockfile {
-    /// Map from (module_path, version) to lock entry
-    pub entries: HashMap<(String, String), LockEntry>,
+    /// Map from (module_path, version) to lock entry.
+    /// Uses BTreeMap for deterministic iteration order.
+    pub entries: BTreeMap<(String, String), LockEntry>,
 }
 
 impl Lockfile {
@@ -440,7 +441,7 @@ impl Lockfile {
     /// module_path version/pcb.toml h1:hash
     /// ```
     pub fn parse(content: &str) -> Result<Self> {
-        let mut entries = HashMap::new();
+        let mut entries = BTreeMap::new();
 
         for line in content.lines() {
             let line = line.trim();

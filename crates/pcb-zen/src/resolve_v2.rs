@@ -448,8 +448,20 @@ pub fn resolve_dependencies(
 
             let line = ModuleLine::new(entry.module_path.clone(), &version);
 
-            // Only insert if not already selected (shouldn't happen, but defensive)
-            if !selected.contains_key(&line) {
+            // Insert if not already selected, or replace if this version is higher.
+            // This ensures deterministic selection of the highest version within a family,
+            // regardless of HashMap iteration order in the lockfile.
+            if let Some(existing) = selected.get(&line) {
+                if version > *existing {
+                    log::debug!(
+                        "Upgrading {}@v{} -> v{} (from pcb.sum)",
+                        entry.module_path,
+                        existing,
+                        version
+                    );
+                    selected.insert(line, version);
+                }
+            } else {
                 log::debug!("Adding {}@v{} (from pcb.sum)", entry.module_path, version);
                 selected.insert(line.clone(), version);
                 work_queue.push_back(line);
