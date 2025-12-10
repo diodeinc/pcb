@@ -91,15 +91,19 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     let applied_count = apply_version_updates(&version_updates)?;
 
     // Summary
+    let has_updates = applied_count > 0 || !branch_updates.is_empty();
     if !branch_updates.is_empty() {
         println!(
             "{}",
             format!("Refreshed {} branch dependencies.", branch_updates.len()).green()
         );
     }
-    if applied_count > 0 || !branch_updates.is_empty() {
-        println!("Run {} to update the lockfile.", "pcb build".cyan());
-    } else if version_updates.is_empty() && branch_updates.is_empty() {
+    if has_updates {
+        // Run resolution to update lockfile with new pseudo-versions
+        let mut ws = workspace.clone();
+        pcb_zen::resolve_dependencies(&mut ws, false)?;
+        println!("{}", "Updated lockfile.".green());
+    } else if version_updates.is_empty() {
         println!("{}", "All dependencies are up to date.".green());
     }
 

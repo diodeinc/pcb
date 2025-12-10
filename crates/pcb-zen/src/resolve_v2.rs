@@ -386,6 +386,12 @@ pub fn resolve_dependencies(
                 continue;
             };
 
+            // Skip pseudo-versions (branch/rev deps) - let them resolve fresh from cache
+            // This ensures `pcb update` picks up new commits
+            if !version.pre.is_empty() {
+                continue;
+            }
+
             let line = ModuleLine::new(entry.module_path.clone(), &version);
 
             // Only insert if not already selected (shouldn't happen, but defensive)
@@ -1400,18 +1406,17 @@ fn resolve_to_version(
             if let Some(version) = &detail.version {
                 parse_version_string(version)
             } else if let Some(branch) = &detail.branch {
-                // Use locked pseudo-version if available (skip git ls-remote)
-                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
-                    if let Ok(locked_version) = Version::parse(&entry.version) {
-                        if locked_version.pre.starts_with("0.") {
-                            // It's a pseudo-version, use it
-                            log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
-                            return Ok(locked_version);
+                // Branch deps always resolve fresh from cache (updated by `pcb update`)
+                if offline {
+                    // In offline mode, use locked pseudo-version if available
+                    if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
+                        if let Ok(locked_version) = Version::parse(&entry.version) {
+                            if !locked_version.pre.is_empty() {
+                                log::debug!("        Using locked v{} (offline)", locked_version);
+                                return Ok(locked_version);
+                            }
                         }
                     }
-                }
-                // No lockfile entry - need network access
-                if offline {
                     anyhow::bail!(
                         "Branch '{}' for {} requires network access (offline mode)\n  \
                         Add to pcb.sum first by running online, then use --offline",
