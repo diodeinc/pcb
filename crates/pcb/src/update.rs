@@ -23,10 +23,6 @@ pub struct UpdateArgs {
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Remove unused entries from lockfile
-    #[arg(long)]
-    pub tidy: bool,
-
     /// Specific packages to update (updates all if not specified)
     #[arg(long, short = 'p')]
     pub packages: Vec<String>,
@@ -102,10 +98,6 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
         println!("{}", "Updated lockfile.".green());
     } else {
         println!("{}", "All dependencies are up to date.".green());
-    }
-
-    if args.tidy {
-        tidy_lockfile(&workspace)?;
     }
 
     Ok(())
@@ -280,46 +272,4 @@ fn find_version_updates(
     }
 
     Ok(pending)
-}
-
-fn tidy_lockfile(workspace: &WorkspaceInfo) -> Result<()> {
-    use pcb_zen_core::config::Lockfile;
-
-    let lockfile_path = workspace.root.join("pcb.sum");
-    if !lockfile_path.exists() {
-        return Ok(());
-    }
-
-    println!("{}", "Tidying lockfile...".cyan());
-
-    let lockfile = Lockfile::parse(&std::fs::read_to_string(&lockfile_path)?)?;
-    let mut ws = workspace.clone();
-    let resolution = pcb_zen::resolve_dependencies(&mut ws, false)?;
-
-    let used: HashSet<(String, String)> = resolution
-        .closure
-        .iter()
-        .chain(resolution.assets.keys())
-        .map(|(p, v)| (p.clone(), v.clone()))
-        .collect();
-
-    let mut new_lockfile = Lockfile::default();
-    let mut removed = 0;
-
-    for entry in lockfile.iter() {
-        if used.contains(&(entry.module_path.clone(), entry.version.clone())) {
-            new_lockfile.insert(entry.clone());
-        } else {
-            removed += 1;
-        }
-    }
-
-    if removed > 0 {
-        std::fs::write(&lockfile_path, new_lockfile.to_string())?;
-        println!("{}", format!("Removed {} unused entries.", removed).green());
-    } else {
-        println!("{}", "Lockfile already clean.".green());
-    }
-
-    Ok(())
 }

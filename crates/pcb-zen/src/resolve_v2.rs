@@ -1938,9 +1938,8 @@ fn ensure_sparse_checkout(
 
 /// Update lockfile from build set
 ///
-/// Merges with existing lockfile (Go's model): keeps old entries and adds/updates new ones.
-/// This allows switching branches without losing checksums and enables historical verification.
-/// Use `pcb tidy` (future) to remove unused entries.
+/// Builds a fresh lockfile containing only the entries needed for current resolution.
+/// Unused entries are automatically removed (no separate tidy step needed).
 ///
 /// Returns (lockfile, added_count) - only write to disk if added_count > 0
 fn update_lockfile(
@@ -1949,41 +1948,42 @@ fn update_lockfile(
     asset_paths: &HashMap<(String, String), PathBuf>,
 ) -> Result<(Lockfile, usize)> {
     let workspace_root = &workspace_info.root;
-    let mut lockfile = workspace_info.lockfile.take().unwrap_or_default();
+    let old_lockfile = workspace_info.lockfile.take().unwrap_or_default();
+    let mut new_lockfile = Lockfile::default();
 
     let total_count = build_set.len() + asset_paths.len();
     if total_count > 0 {
         log::debug!("  Verifying {} entries...", total_count);
     }
 
-    // Open cache index to read hashes
     let index = CacheIndex::open()?;
 
     let mut verified_count = 0;
     let mut added_count = 0;
 
-    // Process dependencies
     for (line, version) in build_set {
         let version_str = version.to_string();
 
-        // Check if vendored AND in lockfile (both required for consistency)
+        // Check if vendored - if so, reuse existing lockfile entry
         let vendor_dir = workspace_root
             .join("vendor")
             .join(&line.path)
             .join(&version_str);
-        let in_lockfile = lockfile.get(&line.path, &version_str).is_some();
-        if vendor_dir.exists() && in_lockfile {
-            verified_count += 1;
-            continue;
+        if let Some(existing) = old_lockfile.get(&line.path, &version_str) {
+            if vendor_dir.exists() {
+                new_lockfile.insert(existing.clone());
+                verified_count += 1;
+                continue;
+            }
         }
 
-        // Not vendored (or vendored but not in lockfile) - must be in cache
+        // Not vendored or not in lockfile - must be in cache
         let (content_hash, manifest_hash) = index
             .get_package(&line.path, &version_str)
             .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", line.path, version))?;
 
-        // Check against existing lockfile entry
-        if let Some(existing) = lockfile.get(&line.path, &version_str) {
+        // Check against existing lockfile entry for tampering
+        if let Some(existing) = old_lockfile.get(&line.path, &version_str) {
             if existing.content_hash != content_hash {
                 anyhow::bail!(
                     "Cache tampered: {}@v{} content hash mismatch\n  \
@@ -1997,10 +1997,11 @@ fn update_lockfile(
                     line.path
                 );
             }
+            new_lockfile.insert(existing.clone());
             verified_count += 1;
         } else {
             added_count += 1;
-            lockfile.insert(LockEntry {
+            new_lockfile.insert(LockEntry {
                 module_path: line.path.clone(),
                 version: version_str,
                 content_hash,
@@ -2009,39 +2010,40 @@ fn update_lockfile(
         }
     }
 
-    // Process assets (asset_key includes subpath)
     for (asset_key, ref_str) in asset_paths.keys() {
         let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
-        // Check if vendored AND in lockfile: vendor/{repo}/{ref}/{subpath}
+        // Check if vendored - if so, reuse existing lockfile entry
         let vendor_base = workspace_root.join("vendor").join(repo_url).join(ref_str);
         let vendor_dir = if subpath.is_empty() {
             vendor_base
         } else {
             vendor_base.join(subpath)
         };
-        let in_lockfile = lockfile.get(asset_key, ref_str).is_some();
-        if vendor_dir.exists() && in_lockfile {
-            verified_count += 1;
-            continue;
+        if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
+            if vendor_dir.exists() {
+                new_lockfile.insert(existing.clone());
+                verified_count += 1;
+                continue;
+            }
         }
 
-        // Not vendored (or vendored but not in lockfile) - must be in cache
+        // Not vendored or not in lockfile - must be in cache
         let content_hash = index
             .get_asset(repo_url, subpath, ref_str)
             .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str))?;
 
-        // Lockfile entry uses full asset_key (includes subpath)
-        if lockfile.get(asset_key, ref_str).is_none() {
+        if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
+            new_lockfile.insert(existing.clone());
+            verified_count += 1;
+        } else {
             added_count += 1;
-            lockfile.insert(LockEntry {
+            new_lockfile.insert(LockEntry {
                 module_path: asset_key.clone(),
                 version: ref_str.clone(),
                 content_hash,
                 manifest_hash: None,
             });
-        } else {
-            verified_count += 1;
         }
     }
 
@@ -2051,7 +2053,7 @@ fn update_lockfile(
         log::debug!("  {} verified", verified_count);
     }
 
-    Ok((lockfile, added_count))
+    Ok((new_lockfile, added_count))
 }
 
 // PackageClosure and package_closure() method are now in workspace.rs

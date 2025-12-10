@@ -310,9 +310,8 @@ with exactly these contents, regardless of what versions exist upstream.
 tampering, tag mutation, or repository corruption), the hash won't match and the
 build fails.
 
-**Efficient updates.** When dependencies change, only new entries are added. The
-lockfile accumulates entries over time, never automatically deleting old ones.
-Use `pcb update --tidy` to remove unused entries.
+**Efficient updates.** When dependencies change, the lockfile is updated to
+reflect the current resolution. Unused entries are automatically removed.
 
 **Commit the lockfile to version control.** This ensures all engineers and CI
 systems use identical dependencies.
@@ -391,7 +390,6 @@ Updates dependencies to newer versions.
 ```bash
 pcb update                   # Update all dependencies
 pcb update stdlib            # Update specific package
-pcb update --tidy            # Remove unused lockfile entries
 ```
 
 Non-breaking updates (within the same semver family) are applied automatically.
