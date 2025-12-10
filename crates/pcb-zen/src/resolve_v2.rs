@@ -1125,14 +1125,20 @@ fn fetch_package(
         return read_manifest_from_path(&patched_toml);
     }
 
-    // 3. Check vendor directory (before cache - vendor is the committed source of truth)
+    // 3. Check vendor directory (only if also in lockfile for consistency)
+    let version_str = version.to_string();
     let vendor_dir = workspace_info
         .root
         .join("vendor")
         .join(module_path)
-        .join(version.to_string());
+        .join(&version_str);
     let vendor_toml = vendor_dir.join("pcb.toml");
-    if vendor_toml.exists() {
+    let in_lockfile = workspace_info
+        .lockfile
+        .as_ref()
+        .map(|lf| lf.get(module_path, &version_str).is_some())
+        .unwrap_or(false);
+    if vendor_toml.exists() && in_lockfile {
         return read_manifest_from_path(&vendor_toml);
     }
 
@@ -1251,7 +1257,7 @@ fn fetch_asset_repo(
     // Open cache index
     let index = CacheIndex::open()?;
 
-    // 2. Check vendor directory: vendor/{repo}/{ref}/{subpath}/
+    // 2. Check vendor directory: vendor/{repo}/{ref}/{subpath}/ (only if also in lockfile)
     let vendor_base = workspace_info
         .root
         .join("vendor")
@@ -1262,8 +1268,13 @@ fn fetch_asset_repo(
     } else {
         vendor_base.join(subpath)
     };
+    let in_lockfile = workspace_info
+        .lockfile
+        .as_ref()
+        .map(|lf| lf.get(asset_key, ref_str).is_some())
+        .unwrap_or(false);
 
-    if vendor_dir.exists() && index.get_asset(repo_url, subpath, ref_str).is_some() {
+    if vendor_dir.exists() && in_lockfile {
         log::debug!("Asset {}@{} vendored", asset_key, ref_str);
         return Ok(vendor_dir);
     }
@@ -1878,17 +1889,18 @@ fn update_lockfile(
     for (line, version) in build_set {
         let version_str = version.to_string();
 
-        // Check if vendored (trust lockfile, integrity via git)
+        // Check if vendored AND in lockfile (both required for consistency)
         let vendor_dir = workspace_root
             .join("vendor")
             .join(&line.path)
             .join(&version_str);
-        if vendor_dir.exists() {
+        let in_lockfile = lockfile.get(&line.path, &version_str).is_some();
+        if vendor_dir.exists() && in_lockfile {
             verified_count += 1;
             continue;
         }
 
-        // Not vendored - must be in cache
+        // Not vendored (or vendored but not in lockfile) - must be in cache
         let (content_hash, manifest_hash) = index
             .get_package(&line.path, &version_str)
             .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", line.path, version))?;
@@ -1924,19 +1936,20 @@ fn update_lockfile(
     for (asset_key, ref_str) in asset_paths.keys() {
         let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
-        // Check if vendored: vendor/{repo}/{ref}/{subpath}
+        // Check if vendored AND in lockfile: vendor/{repo}/{ref}/{subpath}
         let vendor_base = workspace_root.join("vendor").join(repo_url).join(ref_str);
         let vendor_dir = if subpath.is_empty() {
             vendor_base
         } else {
             vendor_base.join(subpath)
         };
-        if vendor_dir.exists() {
+        let in_lockfile = lockfile.get(asset_key, ref_str).is_some();
+        if vendor_dir.exists() && in_lockfile {
             verified_count += 1;
             continue;
         }
 
-        // Not vendored - must be in cache
+        // Not vendored (or vendored but not in lockfile) - must be in cache
         let content_hash = index
             .get_asset(repo_url, subpath, ref_str)
             .ok_or_else(|| anyhow::anyhow!("Missing cache entry for {}@{}", asset_key, ref_str))?;
