@@ -319,6 +319,11 @@ impl CacheIndex {
         )?;
         Ok(())
     }
+
+    pub fn clear_branch_commits(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM branch_commits", [])?;
+        Ok(())
+    }
 }
 
 pub fn find_lockfile_entry(file_url: &str, lockfile: &Lockfile) -> Option<(String, String)> {
@@ -359,7 +364,7 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
     Ok(bare_dir)
 }
 
-fn parse_version_tag(tag: &str) -> Option<(String, Version)> {
+pub fn parse_version_tag(tag: &str) -> Option<(String, Version)> {
     let (pkg_path, version_str) = tag.rsplit_once('/')?;
     let version_str = version_str.strip_prefix('v').unwrap_or(version_str);
     let version = Version::parse(version_str).ok()?;

@@ -341,11 +341,25 @@ pub struct DependencyDetail {
     pub path: Option<String>,
 }
 
-/// V2 Patch specification for local development
+/// V2 Patch specification for local development or branch overrides
+///
+/// Patches can override dependencies with:
+/// - A local path: `{ path = "../stdlib" }`
+/// - A git branch: `{ branch = "feature-branch" }`
+/// - A git revision: `{ rev = "abc123" }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchSpec {
     /// Local path to use as replacement
-    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+
+    /// Git branch to use instead of the declared version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+
+    /// Git revision (commit hash) to use instead of the declared version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 }
 
 /// V2 Asset dependency specification
@@ -1001,7 +1015,59 @@ path = "test.zen"
         assert_eq!(config.patch.len(), 1);
 
         let patch = config.patch.get("github.com/diodeinc/stdlib").unwrap();
-        assert_eq!(patch.path, "../stdlib");
+        assert_eq!(patch.path.as_deref(), Some("../stdlib"));
+    }
+
+    #[test]
+    fn test_parse_v2_patch_branch() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+
+[board]
+name = "Test"
+path = "test.zen"
+
+[patch]
+"github.com/diodeinc/registry/components/FOO" = { branch = "feature-branch" }
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        assert_eq!(config.patch.len(), 1);
+
+        let patch = config
+            .patch
+            .get("github.com/diodeinc/registry/components/FOO")
+            .unwrap();
+        assert_eq!(patch.branch.as_deref(), Some("feature-branch"));
+        assert_eq!(patch.path, None);
+        assert_eq!(patch.rev, None);
+    }
+
+    #[test]
+    fn test_parse_v2_patch_rev() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+
+[board]
+name = "Test"
+path = "test.zen"
+
+[patch]
+"github.com/diodeinc/registry/components/BAR" = { rev = "abc123def456" }
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        assert_eq!(config.patch.len(), 1);
+
+        let patch = config
+            .patch
+            .get("github.com/diodeinc/registry/components/BAR")
+            .unwrap();
+        assert_eq!(patch.rev.as_deref(), Some("abc123def456"));
+        assert_eq!(patch.path, None);
+        assert_eq!(patch.branch, None);
     }
 
     #[test]

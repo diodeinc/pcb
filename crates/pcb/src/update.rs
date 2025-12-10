@@ -73,37 +73,34 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
 
     println!("{}", "Checking for updates...".cyan());
 
-    let branch_updates = refresh_branch_deps(&workspace, &args.packages)?;
-    let version_updates = find_version_updates(&workspace, &args.packages)?;
+    // Clear branch cache so resolution picks up latest commits
+    let index = CacheIndex::open()?;
+    index.clear_branch_commits()?;
 
-    // Display branch updates
-    for (url, branch, old, new) in &branch_updates {
-        println!(
-            "  {}: {} → {} {}",
-            url,
-            &old[..12],
-            new[..12].green(),
-            format!("(branch: {})", branch).dimmed()
-        );
-    }
+    let version_updates = find_version_updates(&workspace, &args.packages)?;
 
     // Display and apply version updates
     let applied_count = apply_version_updates(&version_updates)?;
 
-    // Summary
-    let has_updates = applied_count > 0 || !branch_updates.is_empty();
-    if !branch_updates.is_empty() {
-        println!(
-            "{}",
-            format!("Refreshed {} branch dependencies.", branch_updates.len()).green()
-        );
-    }
-    if has_updates {
-        // Run resolution to update lockfile with new pseudo-versions
-        let mut ws = workspace.clone();
-        pcb_zen::resolve_dependencies(&mut ws, false)?;
+    // Snapshot lockfile before resolution to detect branch/rev updates
+    let lockfile_before = workspace
+        .lockfile
+        .as_ref()
+        .map(|lf| lf.to_string())
+        .unwrap_or_default();
+
+    // Run resolution to update lockfile (will re-fetch branch commits)
+    let mut ws = workspace.clone();
+    pcb_zen::resolve_dependencies(&mut ws, false)?;
+
+    // Check if lockfile changed (includes branch/rev pseudo-version updates)
+    let lockfile_path = workspace.root.join("pcb.sum");
+    let lockfile_after = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
+    let lockfile_changed = lockfile_before != lockfile_after;
+
+    if applied_count > 0 || lockfile_changed {
         println!("{}", "Updated lockfile.".green());
-    } else if version_updates.is_empty() {
+    } else {
         println!("{}", "All dependencies are up to date.".green());
     }
 
@@ -283,60 +280,6 @@ fn find_version_updates(
     }
 
     Ok(pending)
-}
-
-fn refresh_branch_deps(
-    workspace: &WorkspaceInfo,
-    filter: &[String],
-) -> Result<Vec<(String, String, String, String)>> {
-    let mut updates = Vec::new();
-    let mut seen: HashSet<(String, String)> = HashSet::new();
-    let index = CacheIndex::open()?;
-
-    for pcb_toml_path in collect_pcb_tomls(workspace) {
-        let config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
-
-        for (url, spec) in &config.dependencies {
-            let branch = match spec {
-                DependencySpec::Detailed(d) => d.branch.as_ref(),
-                _ => None,
-            };
-            let Some(branch) = branch else { continue };
-
-            if !matches_filter(url, filter) {
-                continue;
-            }
-
-            let (repo_url, _) = git::split_repo_and_subpath(url);
-            if !seen.insert((repo_url.to_string(), branch.clone())) {
-                continue;
-            }
-
-            let Some(old_commit) = index.get_branch_commit(repo_url, branch) else {
-                continue; // Not cached yet
-            };
-
-            log::debug!("Fetching latest commit for {} (branch: {})", url, branch);
-            let new_commit =
-                match git::ls_remote_with_fallback(url, &format!("refs/heads/{}", branch)) {
-                    Ok((commit, _)) => {
-                        log::debug!("  {} -> {}", branch, &commit[..12]);
-                        commit
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to fetch {}: {}", url, e);
-                        continue;
-                    }
-                };
-
-            if new_commit != old_commit {
-                index.set_branch_commit(repo_url, branch, &new_commit)?;
-                updates.push((url.clone(), branch.clone(), old_commit, new_commit));
-            }
-        }
-    }
-
-    Ok(updates)
 }
 
 fn tidy_lockfile(workspace: &WorkspaceInfo) -> Result<()> {

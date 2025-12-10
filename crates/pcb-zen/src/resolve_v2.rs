@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Style, StyledText};
-use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
+use pcb_zen_core::config::{
+    DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
+};
 use pcb_zen_core::resolution::{
     add_transitive_resolution_maps, build_resolution_map as shared_build_resolution_map,
     NativePathResolver, PackagePathResolver,
@@ -15,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use std::time::Instant;
 
-use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
+use crate::cache_index::{cache_base, ensure_bare_repo, parse_version_tag, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
@@ -30,6 +32,53 @@ pub fn semver_family(v: &Version) -> String {
     } else {
         format!("v{}", v.major)
     }
+}
+
+/// Find matching patch for a module path, supporting glob patterns.
+/// Exact matches take priority, then glob patterns in sorted order.
+fn find_matching_patch<'a>(
+    url: &str,
+    patches: &'a BTreeMap<String, PatchSpec>,
+) -> Option<&'a PatchSpec> {
+    if let Some(patch) = patches.get(url) {
+        return Some(patch);
+    }
+    for (pattern, patch) in patches {
+        if let Ok(glob) = globset::Glob::new(pattern) {
+            if glob.compile_matcher().is_match(url) {
+                return Some(patch);
+            }
+        }
+    }
+    None
+}
+
+/// Returns a patch override for the dependency spec if a branch/rev patch applies.
+///
+/// Patches act as a "dumb rewrite" of dependency specs before MVS runs.
+/// Path patches don't affect version resolution (they just change fetch location).
+fn get_patch_override(url: &str, patches: &BTreeMap<String, PatchSpec>) -> Option<DependencySpec> {
+    let patch = find_matching_patch(url, patches)?;
+
+    if let Some(branch) = &patch.branch {
+        return Some(DependencySpec::Detailed(DependencyDetail {
+            branch: Some(branch.clone()),
+            version: None,
+            rev: None,
+            path: None,
+        }));
+    }
+
+    if let Some(rev) = &patch.rev {
+        return Some(DependencySpec::Detailed(DependencyDetail {
+            rev: Some(rev.clone()),
+            version: None,
+            branch: None,
+            path: None,
+        }));
+    }
+
+    None
 }
 
 /// Module line identifier for MVS grouping
@@ -381,6 +430,11 @@ pub fn resolve_dependencies(
                 continue;
             }
 
+            // Skip patched packages (let patch version take precedence)
+            if find_matching_patch(&entry.module_path, &patches).is_some() {
+                continue;
+            }
+
             // Parse version (skip invalid entries)
             let Ok(version) = Version::parse(&entry.version) else {
                 continue;
@@ -452,18 +506,26 @@ pub fn resolve_dependencies(
         }
     }
 
+    // Create pseudo-version context to cache expensive operations across all resolutions
+    let mut pseudo_ctx = PseudoVersionContext::new()?;
+
     // Seed MVS state from direct dependencies
     for (_package_name, package_deps) in &packages_with_deps {
         for dep in package_deps {
-            if let DependencySpec::Detailed(detail) = &dep.spec {
+            // Apply branch/rev patch overrides before resolution
+            let patch_override = get_patch_override(&dep.url, &patches);
+            let spec = patch_override.as_ref().unwrap_or(&dep.spec);
+
+            if let DependencySpec::Detailed(detail) = spec {
                 if detail.path.is_some() {
                     continue;
                 }
             }
 
             match resolve_to_version(
+                &mut pseudo_ctx,
                 &dep.url,
-                &dep.spec,
+                spec,
                 workspace_info.lockfile.as_ref(),
                 offline,
             ) {
@@ -539,13 +601,18 @@ pub fn resolve_dependencies(
                     manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
                     for (dep_path, dep_spec) in &manifest.dependencies {
-                        if is_non_version_dep(dep_spec) {
+                        // Apply branch/rev patch overrides before resolution
+                        let patch_override = get_patch_override(dep_path, &patches);
+                        let spec = patch_override.as_ref().unwrap_or(dep_spec);
+
+                        if is_non_version_dep(spec) {
                             continue;
                         }
 
                         match resolve_to_version(
+                            &mut pseudo_ctx,
                             dep_path,
-                            dep_spec,
+                            spec,
                             workspace_info.lockfile.as_ref(),
                             offline,
                         ) {
@@ -816,11 +883,23 @@ fn build_resolution_map(
     let cache = cache_base();
     let vendor = workspace_info.root.join("vendor");
 
-    // Build patch map (patches override remote deps with local paths)
-    let patches: HashMap<String, PathBuf> = patches
-        .iter()
-        .map(|(url, patch)| (url.clone(), workspace_info.root.join(&patch.path)))
-        .collect();
+    // Build patch map (only path patches - branch/rev patches use normal fetch)
+    // Expand glob patterns against selected URLs
+    let mut path_patches: HashMap<String, PathBuf> = HashMap::new();
+    for (pattern, patch) in patches {
+        if let Some(path_str) = &patch.path {
+            let abs_path = workspace_info.root.join(path_str);
+            if let Ok(glob) = globset::Glob::new(pattern) {
+                let matcher = glob.compile_matcher();
+                for (line, _) in selected.iter() {
+                    if matcher.is_match(&line.path) {
+                        path_patches.insert(line.path.clone(), abs_path.clone());
+                    }
+                }
+            }
+        }
+    }
+    let patches = path_patches;
 
     // Create base resolver for package path lookups
     // Note: workspace members are handled directly in shared_build_resolution_map
@@ -1110,19 +1189,22 @@ fn fetch_package(
     }
 
     // 2. Check if this module is patched with a local path
+    // (branch/rev patches fall through to normal fetch - version already resolved)
     if let Some(patch) = workspace_info
         .config
         .as_ref()
         .and_then(|c| c.patch.get(module_path))
     {
-        let patched_path = workspace_info.root.join(&patch.path);
-        let patched_toml = patched_path.join("pcb.toml");
+        if let Some(path) = &patch.path {
+            let patched_path = workspace_info.root.join(path);
+            let patched_toml = patched_path.join("pcb.toml");
 
-        if !patched_toml.exists() {
-            anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
+            if !patched_toml.exists() {
+                anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
+            }
+
+            return read_manifest_from_path(&patched_toml);
         }
-
-        return read_manifest_from_path(&patched_toml);
     }
 
     // 3. Check vendor directory (only if also in lockfile for consistency)
@@ -1233,25 +1315,28 @@ fn fetch_asset_repo(
     let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
     // 1. Check if this asset is patched with a local path (use full asset_key for lookup)
+    // (branch/rev patches for assets fall through to normal fetch)
     if let Some(patch) = workspace_info
         .config
         .as_ref()
         .and_then(|c| c.patch.get(asset_key))
     {
-        let patched_path = workspace_info.root.join(&patch.path);
+        if let Some(path) = &patch.path {
+            let patched_path = workspace_info.root.join(path);
 
-        log::debug!("Asset {} using patched source: {}", asset_key, patch.path);
+            log::debug!("Asset {} using patched source: {}", asset_key, path);
 
-        if !patched_path.exists() {
-            anyhow::bail!(
-                "Asset '{}' is patched to a non-existent path\n  \
-                Patch path: {}",
-                asset_key,
-                patched_path.display()
-            );
+            if !patched_path.exists() {
+                anyhow::bail!(
+                    "Asset '{}' is patched to a non-existent path\n  \
+                    Patch path: {}",
+                    asset_key,
+                    patched_path.display()
+                );
+            }
+
+            return Ok(patched_path);
         }
-
-        return Ok(patched_path);
     }
 
     // Open cache index
@@ -1406,6 +1491,7 @@ fn build_closure(
 /// When offline=true, branch/rev specs MUST have a locked version in pcb.sum.
 /// Network access (git ls-remote) is not allowed in offline mode.
 fn resolve_to_version(
+    ctx: &mut PseudoVersionContext,
     module_path: &str,
     spec: &DependencySpec,
     lockfile: Option<&Lockfile>,
@@ -1435,7 +1521,7 @@ fn resolve_to_version(
                         module_path
                     );
                 }
-                resolve_branch_to_pseudo_version(module_path, branch)
+                ctx.resolve_branch(module_path, branch)
             } else if let Some(rev) = &detail.rev {
                 // Use locked pseudo-version if available (skip git ls-remote)
                 if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
@@ -1456,7 +1542,7 @@ fn resolve_to_version(
                         module_path
                     );
                 }
-                resolve_rev_to_pseudo_version(module_path, rev)
+                ctx.resolve_rev(module_path, rev)
             } else {
                 anyhow::bail!("Dependency has no version, branch, or rev")
             }
@@ -1464,114 +1550,110 @@ fn resolve_to_version(
     }
 }
 
-/// Resolve a Git branch to a pseudo-version
-fn resolve_branch_to_pseudo_version(module_path: &str, branch: &str) -> Result<Version> {
-    let (repo_url, _) = git::split_repo_and_subpath(module_path);
-    let index = CacheIndex::open()?;
-
-    // Check branch cache first
-    let commit = if let Some(cached_commit) = index.get_branch_commit(repo_url, branch) {
-        cached_commit
-    } else {
-        log::debug!(
-            "        Resolving branch '{}' for {}...",
-            branch,
-            module_path
-        );
-        let refspec = format!("refs/heads/{}", branch);
-        let (commit, _) = git::ls_remote_with_fallback(module_path, &refspec)?;
-        let _ = index.set_branch_commit(repo_url, branch, &commit);
-        commit
-    };
-
-    generate_pseudo_version_for_commit(module_path, &commit)
+/// Context for pseudo-version generation, caching expensive operations.
+struct PseudoVersionContext {
+    index: CacheIndex,
+    bare_repos: HashMap<String, PathBuf>,
+    base_versions: HashMap<String, HashMap<String, Version>>,
 }
 
-/// Resolve a Git revision to a pseudo-version
-fn resolve_rev_to_pseudo_version(module_path: &str, rev: &str) -> Result<Version> {
-    log::debug!(
-        "        Resolving rev '{}' for {}...",
-        &rev[..8.min(rev.len())],
-        module_path
-    );
-
-    generate_pseudo_version_for_commit(module_path, rev)
-}
-
-/// Generate a pseudo-version for a Git commit
-///
-/// Format: v<base>-0.<timestamp>-<commit_short>
-/// Base version is derived from latest reachable tag, or v0.0.0 if none
-///
-/// Uses bare repos (shared with remote package discovery) and caches
-/// commit metadata in SQLite to avoid redundant git operations.
-fn generate_pseudo_version_for_commit(module_path: &str, commit: &str) -> Result<Version> {
-    let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
-    let index = CacheIndex::open()?;
-    let bare_dir = ensure_bare_repo(repo_url)?;
-
-    // Get timestamp from cache or compute (timestamp is per-commit, not per-package)
-    let timestamp = match index.get_commit_metadata(repo_url, commit) {
-        Some((ts, _)) => ts,
-        None => {
-            let ts = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64
-            });
-            let _ = index.set_commit_metadata(repo_url, commit, ts, None);
-            ts
-        }
-    };
-
-    // Find base version from package-specific tags (not cached - varies by subpath)
-    let tag_prefix = if subpath.is_empty() {
-        None
-    } else {
-        Some(subpath)
-    };
-    let base_tag = git::describe_tags(&bare_dir, commit, tag_prefix);
-    let base_version = base_tag
-        .and_then(|tag| {
-            // Strip subpath prefix from tag (e.g., "reference/TPS56A37RPAR/v0.1.0" -> "v0.1.0")
-            let version_part = if let Some(prefix) = tag_prefix {
-                tag.strip_prefix(prefix)
-                    .and_then(|s| s.strip_prefix('/'))
-                    .unwrap_or(&tag)
-            } else {
-                &tag
-            };
-            parse_version_string(version_part).ok()
+impl PseudoVersionContext {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            index: CacheIndex::open()?,
+            bare_repos: HashMap::new(),
+            base_versions: HashMap::new(),
         })
-        .unwrap_or_else(|| Version::new(0, 0, 0));
+    }
 
-    build_pseudo_version(&base_version, timestamp, commit)
-}
+    fn ensure_bare_repo(&mut self, repo_url: &str) -> Result<PathBuf> {
+        if let Some(path) = self.bare_repos.get(repo_url) {
+            return Ok(path.clone());
+        }
+        let path = ensure_bare_repo(repo_url)?;
+        self.bare_repos.insert(repo_url.to_string(), path.clone());
+        Ok(path)
+    }
 
-fn build_pseudo_version(base_version: &Version, timestamp: i64, commit: &str) -> Result<Version> {
-    // Increment patch version
-    let pseudo_base = Version::new(
-        base_version.major,
-        base_version.minor,
-        base_version.patch + 1,
-    );
+    fn resolve_branch(&mut self, module_path: &str, branch: &str) -> Result<Version> {
+        let (repo_url, _) = git::split_repo_and_subpath(module_path);
+        let commit = match self.index.get_branch_commit(repo_url, branch) {
+            Some(c) => c,
+            None => {
+                log::debug!("        Resolving branch '{}'...", branch);
+                let refspec = format!("refs/heads/{}", branch);
+                let (commit, _) = git::ls_remote_with_fallback(module_path, &refspec)?;
+                let _ = self.index.set_branch_commit(repo_url, branch, &commit);
+                commit
+            }
+        };
+        self.generate_pseudo_version(module_path, &commit)
+    }
 
-    // Format timestamp as YYYYMMDDhhmmss
-    let dt = jiff::Timestamp::from_second(timestamp)?;
-    let timestamp_str = dt.strftime("%Y%m%d%H%M%S").to_string();
+    fn resolve_rev(&mut self, module_path: &str, rev: &str) -> Result<Version> {
+        log::debug!("        Resolving rev '{}'...", &rev[..8.min(rev.len())]);
+        self.generate_pseudo_version(module_path, rev)
+    }
 
-    // Use full commit hash (40 chars) in pseudo-version for reliable fetching
-    let commit_hash = &commit[..commit.len().min(40)];
+    fn generate_pseudo_version(&mut self, module_path: &str, commit: &str) -> Result<Version> {
+        let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
+        let bare_dir = self.ensure_bare_repo(repo_url)?;
 
-    // Build pseudo-version string: v<major>.<minor>.<patch+1>-0.<timestamp>-<commit>
-    let pseudo_str = format!(
-        "{}.{}.{}-0.{}-{}",
-        pseudo_base.major, pseudo_base.minor, pseudo_base.patch, timestamp_str, commit_hash
-    );
+        let timestamp = match self.index.get_commit_metadata(repo_url, commit) {
+            Some((ts, _)) => ts,
+            None => {
+                let ts = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64
+                });
+                let _ = self.index.set_commit_metadata(repo_url, commit, ts, None);
+                ts
+            }
+        };
 
-    Version::parse(&pseudo_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse pseudo-version {}: {}", pseudo_str, e))
+        let base_version = self.get_base_version(&bare_dir, repo_url, subpath);
+
+        // Build pseudo-version: <base+1>-0.<timestamp>-<commit>
+        let dt = jiff::Timestamp::from_second(timestamp)?;
+        let pseudo_str = format!(
+            "{}.{}.{}-0.{}-{}",
+            base_version.major,
+            base_version.minor,
+            base_version.patch + 1,
+            dt.strftime("%Y%m%d%H%M%S"),
+            &commit[..commit.len().min(40)]
+        );
+        Version::parse(&pseudo_str)
+            .map_err(|e| anyhow::anyhow!("Failed to parse pseudo-version {}: {}", pseudo_str, e))
+    }
+
+    fn get_base_version(&mut self, bare_dir: &Path, repo_url: &str, subpath: &str) -> Version {
+        if !self.base_versions.contains_key(repo_url) {
+            let mut versions: HashMap<String, Version> = HashMap::new();
+            if let Ok(tags) = git::list_all_tags(bare_dir) {
+                for tag in tags {
+                    if let Some((pkg_path, version)) = parse_version_tag(&tag) {
+                        versions
+                            .entry(pkg_path)
+                            .and_modify(|v| {
+                                if version > *v {
+                                    *v = version.clone()
+                                }
+                            })
+                            .or_insert(version);
+                    }
+                }
+            }
+            self.base_versions.insert(repo_url.to_string(), versions);
+        }
+        self.base_versions
+            .get(repo_url)
+            .and_then(|v| v.get(subpath))
+            .cloned()
+            .unwrap_or_else(|| Version::new(0, 0, 0))
+    }
 }
 
 /// Add a requirement to the MVS state (monotonic upgrade)
@@ -1584,8 +1666,8 @@ fn add_requirement(
     work_queue: &mut VecDeque<ModuleLine>,
     patches: &BTreeMap<String, pcb_zen_core::config::PatchSpec>,
 ) {
-    // Check if this module is patched
-    let (final_version, is_patched) = if patches.contains_key(&path) {
+    // Check if this module is patched (supports glob patterns)
+    let (final_version, is_patched) = if find_matching_patch(&path, patches).is_some() {
         // Patch overrides version selection
         // For local path patches, use the requested version as identity
         // (the path is just where we get the code from)
