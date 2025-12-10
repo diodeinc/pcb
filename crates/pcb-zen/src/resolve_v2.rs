@@ -35,27 +35,21 @@ pub fn semver_family(v: &Version) -> String {
 }
 
 /// Find matching patch for a module path, supporting glob patterns.
-/// Exact matches take priority over glob patterns.
+/// Exact matches take priority, then glob patterns in sorted order.
 fn find_matching_patch<'a>(
     url: &str,
     patches: &'a BTreeMap<String, PatchSpec>,
 ) -> Option<&'a PatchSpec> {
-    // Exact match first (fast path)
     if let Some(patch) = patches.get(url) {
         return Some(patch);
     }
-
-    // Glob pattern match (iterate and match)
     for (pattern, patch) in patches {
-        if pattern.contains('*') || pattern.contains('?') {
-            if let Ok(glob) = globset::Glob::new(pattern) {
-                if glob.compile_matcher().is_match(url) {
-                    return Some(patch);
-                }
+        if let Ok(glob) = globset::Glob::new(pattern) {
+            if glob.compile_matcher().is_match(url) {
+                return Some(patch);
             }
         }
     }
-
     None
 }
 
@@ -890,24 +884,18 @@ fn build_resolution_map(
     let vendor = workspace_info.root.join("vendor");
 
     // Build patch map (only path patches - branch/rev patches use normal fetch)
-    // Expand glob patterns against known URLs from selected set
+    // Expand glob patterns against selected URLs
     let mut path_patches: HashMap<String, PathBuf> = HashMap::new();
     for (pattern, patch) in patches {
         if let Some(path_str) = &patch.path {
             let abs_path = workspace_info.root.join(path_str);
-            if pattern.contains('*') || pattern.contains('?') {
-                // Glob pattern - expand against all selected URLs
-                if let Ok(glob) = globset::Glob::new(pattern) {
-                    let matcher = glob.compile_matcher();
-                    for (line, _) in selected.iter() {
-                        if matcher.is_match(&line.path) {
-                            path_patches.insert(line.path.clone(), abs_path.clone());
-                        }
+            if let Ok(glob) = globset::Glob::new(pattern) {
+                let matcher = glob.compile_matcher();
+                for (line, _) in selected.iter() {
+                    if matcher.is_match(&line.path) {
+                        path_patches.insert(line.path.clone(), abs_path.clone());
                     }
                 }
-            } else {
-                // Exact match
-                path_patches.insert(pattern.clone(), abs_path);
             }
         }
     }
