@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use pcb_ui::{Colorize, Style, StyledText};
-use pcb_zen_core::config::{DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml};
+use pcb_zen_core::config::{
+    DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
+};
 use pcb_zen_core::resolution::{
     add_transitive_resolution_maps, build_resolution_map as shared_build_resolution_map,
     NativePathResolver, PackagePathResolver,
@@ -30,6 +32,34 @@ pub fn semver_family(v: &Version) -> String {
     } else {
         format!("v{}", v.major)
     }
+}
+
+/// Returns a patch override for the dependency spec if a branch/rev patch applies.
+///
+/// Patches act as a "dumb rewrite" of dependency specs before MVS runs.
+/// Path patches don't affect version resolution (they just change fetch location).
+fn get_patch_override(url: &str, patches: &BTreeMap<String, PatchSpec>) -> Option<DependencySpec> {
+    let patch = patches.get(url)?;
+
+    if let Some(branch) = &patch.branch {
+        return Some(DependencySpec::Detailed(DependencyDetail {
+            branch: Some(branch.clone()),
+            version: None,
+            rev: None,
+            path: None,
+        }));
+    }
+
+    if let Some(rev) = &patch.rev {
+        return Some(DependencySpec::Detailed(DependencyDetail {
+            rev: Some(rev.clone()),
+            version: None,
+            branch: None,
+            path: None,
+        }));
+    }
+
+    None
 }
 
 /// Module line identifier for MVS grouping
@@ -455,18 +485,17 @@ pub fn resolve_dependencies(
     // Seed MVS state from direct dependencies
     for (_package_name, package_deps) in &packages_with_deps {
         for dep in package_deps {
-            if let DependencySpec::Detailed(detail) = &dep.spec {
+            // Apply branch/rev patch overrides before resolution
+            let patch_override = get_patch_override(&dep.url, &patches);
+            let spec = patch_override.as_ref().unwrap_or(&dep.spec);
+
+            if let DependencySpec::Detailed(detail) = spec {
                 if detail.path.is_some() {
                     continue;
                 }
             }
 
-            match resolve_to_version(
-                &dep.url,
-                &dep.spec,
-                workspace_info.lockfile.as_ref(),
-                offline,
-            ) {
+            match resolve_to_version(&dep.url, spec, workspace_info.lockfile.as_ref(), offline) {
                 Ok(version) => {
                     add_requirement(
                         dep.url.clone(),
@@ -539,13 +568,17 @@ pub fn resolve_dependencies(
                     manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
                     for (dep_path, dep_spec) in &manifest.dependencies {
-                        if is_non_version_dep(dep_spec) {
+                        // Apply branch/rev patch overrides before resolution
+                        let patch_override = get_patch_override(dep_path, &patches);
+                        let spec = patch_override.as_ref().unwrap_or(dep_spec);
+
+                        if is_non_version_dep(spec) {
                             continue;
                         }
 
                         match resolve_to_version(
                             dep_path,
-                            dep_spec,
+                            spec,
                             workspace_info.lockfile.as_ref(),
                             offline,
                         ) {
@@ -816,10 +849,15 @@ fn build_resolution_map(
     let cache = cache_base();
     let vendor = workspace_info.root.join("vendor");
 
-    // Build patch map (patches override remote deps with local paths)
+    // Build patch map (only path patches - branch/rev patches use normal fetch)
     let patches: HashMap<String, PathBuf> = patches
         .iter()
-        .map(|(url, patch)| (url.clone(), workspace_info.root.join(&patch.path)))
+        .filter_map(|(url, patch)| {
+            patch
+                .path
+                .as_ref()
+                .map(|p| (url.clone(), workspace_info.root.join(p)))
+        })
         .collect();
 
     // Create base resolver for package path lookups
@@ -1110,19 +1148,22 @@ fn fetch_package(
     }
 
     // 2. Check if this module is patched with a local path
+    // (branch/rev patches fall through to normal fetch - version already resolved)
     if let Some(patch) = workspace_info
         .config
         .as_ref()
         .and_then(|c| c.patch.get(module_path))
     {
-        let patched_path = workspace_info.root.join(&patch.path);
-        let patched_toml = patched_path.join("pcb.toml");
+        if let Some(path) = &patch.path {
+            let patched_path = workspace_info.root.join(path);
+            let patched_toml = patched_path.join("pcb.toml");
 
-        if !patched_toml.exists() {
-            anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
+            if !patched_toml.exists() {
+                anyhow::bail!("Patch path {} has no pcb.toml", patched_path.display());
+            }
+
+            return read_manifest_from_path(&patched_toml);
         }
-
-        return read_manifest_from_path(&patched_toml);
     }
 
     // 3. Check vendor directory (only if also in lockfile for consistency)
@@ -1233,25 +1274,28 @@ fn fetch_asset_repo(
     let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
 
     // 1. Check if this asset is patched with a local path (use full asset_key for lookup)
+    // (branch/rev patches for assets fall through to normal fetch)
     if let Some(patch) = workspace_info
         .config
         .as_ref()
         .and_then(|c| c.patch.get(asset_key))
     {
-        let patched_path = workspace_info.root.join(&patch.path);
+        if let Some(path) = &patch.path {
+            let patched_path = workspace_info.root.join(path);
 
-        log::debug!("Asset {} using patched source: {}", asset_key, patch.path);
+            log::debug!("Asset {} using patched source: {}", asset_key, path);
 
-        if !patched_path.exists() {
-            anyhow::bail!(
-                "Asset '{}' is patched to a non-existent path\n  \
-                Patch path: {}",
-                asset_key,
-                patched_path.display()
-            );
+            if !patched_path.exists() {
+                anyhow::bail!(
+                    "Asset '{}' is patched to a non-existent path\n  \
+                    Patch path: {}",
+                    asset_key,
+                    patched_path.display()
+                );
+            }
+
+            return Ok(patched_path);
         }
-
-        return Ok(patched_path);
     }
 
     // Open cache index
