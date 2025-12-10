@@ -146,12 +146,15 @@ available as long as any board needs it.
 (stdlib 1.0), both libraries function correctly. Library X sees stdlib 0.3 types,
 Library Y sees stdlib 1.0 types, and the board sees whatever version it declares.
 
-The limitation is that types from different major versions are incompatible. A
+The limitation is that types from different major versions may be incompatible. A
 `Net` from stdlib 0.3 cannot be passed to a function expecting a stdlib 1.0 `Net`.
-This is intentional—major versions represent breaking changes, and the system
-enforces that boundary.
+Major versions represent potential breaking changes, and the system cannot guarantee
+compatibility across that boundary.
 
 ## Minimal Version Selection
+
+Our approach to dependency resolution is heavily inspired by [Go modules](https://go.dev/ref/mod),
+which pioneered Minimal Version Selection.
 
 Most package managers (npm, Cargo, pip) use SAT solvers to find the newest versions
 that satisfy all constraints. This approach has a fundamental problem: the result
