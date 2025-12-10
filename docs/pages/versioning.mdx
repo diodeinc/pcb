@@ -35,6 +35,13 @@ The meaning of a package version should not change over time.
 For pre-1.0 packages, minor versions (0.3 vs 0.4) are treated as breaking changes,
 following the convention that early development may have frequent API changes.
 
+<Warning>
+**Pre-1.0 packages are considered unstable.** Per the [Semantic Versioning spec](https://semver.org/#spec-item-4),
+major version zero (0.y.z) is for initial development—anything may change at any time
+and the public API should not be considered stable. This is why `0.3.x` and `0.4.x` are
+treated as separate, potentially incompatible families.
+</Warning>
+
 **Semver families** group compatible versions together. Within a family, any version
 can substitute for any other without breaking dependent code:
 

@@ -73,17 +73,20 @@ struct MvsFamilyResolver {
 impl PackagePathResolver for MvsFamilyResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
         let families = self.families.get(module_path)?;
-        let req_ver = parse_version_string(version).ok()?;
-        let req_family = semver_family(&req_ver);
 
-        families.get(&req_family).cloned().or_else(|| {
-            // Fallback: if exactly one family exists, use it
-            if families.len() == 1 {
-                families.values().next().cloned()
-            } else {
-                None
+        // Try to match by semver family
+        if let Ok(v) = parse_version_string(version) {
+            if let Some(path) = families.get(&semver_family(&v)) {
+                return Some(path.clone());
             }
-        })
+        }
+
+        // Fallback for branch/rev specs: use single family if only one exists
+        if families.len() == 1 {
+            return families.values().next().cloned();
+        }
+
+        None
     }
 
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
@@ -382,6 +385,12 @@ pub fn resolve_dependencies(
             let Ok(version) = Version::parse(&entry.version) else {
                 continue;
             };
+
+            // Skip pseudo-versions (branch/rev deps) - let them resolve fresh from cache
+            // This ensures `pcb update` picks up new commits
+            if !version.pre.is_empty() {
+                continue;
+            }
 
             let line = ModuleLine::new(entry.module_path.clone(), &version);
 
@@ -1397,18 +1406,17 @@ fn resolve_to_version(
             if let Some(version) = &detail.version {
                 parse_version_string(version)
             } else if let Some(branch) = &detail.branch {
-                // Use locked pseudo-version if available (skip git ls-remote)
-                if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
-                    if let Ok(locked_version) = Version::parse(&entry.version) {
-                        if locked_version.pre.starts_with("0.") {
-                            // It's a pseudo-version, use it
-                            log::debug!("        Using locked v{} (from pcb.sum)", locked_version);
-                            return Ok(locked_version);
+                // Branch deps always resolve fresh from cache (updated by `pcb update`)
+                if offline {
+                    // In offline mode, use locked pseudo-version if available
+                    if let Some(entry) = lockfile.and_then(|lf| lf.find_by_path(module_path)) {
+                        if let Ok(locked_version) = Version::parse(&entry.version) {
+                            if !locked_version.pre.is_empty() {
+                                log::debug!("        Using locked v{} (offline)", locked_version);
+                                return Ok(locked_version);
+                            }
                         }
                     }
-                }
-                // No lockfile entry - need network access
-                if offline {
                     anyhow::bail!(
                         "Branch '{}' for {} requires network access (offline mode)\n  \
                         Add to pcb.sum first by running online, then use --offline",
@@ -1487,28 +1495,44 @@ fn resolve_rev_to_pseudo_version(module_path: &str, rev: &str) -> Result<Version
 /// Uses bare repos (shared with remote package discovery) and caches
 /// commit metadata in SQLite to avoid redundant git operations.
 fn generate_pseudo_version_for_commit(module_path: &str, commit: &str) -> Result<Version> {
-    let (repo_url, _) = git::split_repo_and_subpath(module_path);
+    let (repo_url, subpath) = git::split_repo_and_subpath(module_path);
     let index = CacheIndex::open()?;
+    let bare_dir = ensure_bare_repo(repo_url)?;
 
-    // Get from cache or compute and insert
-    let (timestamp, base_tag) = match index.get_commit_metadata(repo_url, commit) {
-        Some(cached) => cached,
+    // Get timestamp from cache or compute (timestamp is per-commit, not per-package)
+    let timestamp = match index.get_commit_metadata(repo_url, commit) {
+        Some((ts, _)) => ts,
         None => {
-            let bare_dir = ensure_bare_repo(repo_url)?;
-            let base_tag = git::describe_tags(&bare_dir, commit);
-            let timestamp = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
+            let ts = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs() as i64
             });
-            let _ = index.set_commit_metadata(repo_url, commit, timestamp, base_tag.as_deref());
-            (timestamp, base_tag)
+            let _ = index.set_commit_metadata(repo_url, commit, ts, None);
+            ts
         }
     };
 
+    // Find base version from package-specific tags (not cached - varies by subpath)
+    let tag_prefix = if subpath.is_empty() {
+        None
+    } else {
+        Some(subpath)
+    };
+    let base_tag = git::describe_tags(&bare_dir, commit, tag_prefix);
     let base_version = base_tag
-        .and_then(|tag| parse_version_string(&tag).ok())
+        .and_then(|tag| {
+            // Strip subpath prefix from tag (e.g., "reference/TPS56A37RPAR/v0.1.0" -> "v0.1.0")
+            let version_part = if let Some(prefix) = tag_prefix {
+                tag.strip_prefix(prefix)
+                    .and_then(|s| s.strip_prefix('/'))
+                    .unwrap_or(&tag)
+            } else {
+                &tag
+            };
+            parse_version_string(version_part).ok()
+        })
         .unwrap_or_else(|| Version::new(0, 0, 0));
 
     build_pseudo_version(&base_version, timestamp, commit)
