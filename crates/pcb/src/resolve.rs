@@ -6,15 +6,16 @@ use pcb_zen_core::DefaultFileProvider;
 /// Resolve V2 dependencies if the workspace is V2, otherwise return None.
 /// This is a shared helper used by build, bom, layout, and open commands.
 ///
-/// If `input_path` is None, defaults to the current working directory.
+/// If `input_path` is None or empty, defaults to the current working directory.
 pub fn resolve_v2_if_needed(
     input_path: Option<&Path>,
     offline: bool,
 ) -> Result<(pcb_zen::WorkspaceInfo, Option<pcb_zen::ResolutionResult>)> {
     let cwd;
     let path = match input_path {
-        Some(p) => p,
-        None => {
+        // Handle both None and empty paths (e.g., "file.zen".parent() returns Some(""))
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => {
             cwd = std::env::current_dir()?;
             &cwd
         }
