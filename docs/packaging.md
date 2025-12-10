@@ -713,17 +713,6 @@ Updating pcb.sum...
 Updated 2 dependencies (2 breaking).
 ```
 
-Remove unused entries from lockfile (`--tidy`):
-```bash
-$ pcb update --tidy
-
-Removing unused lockfile entries...
-  Removed github.com/old/unused-dep v1.0.0
-  Removed github.com/another/stale-dep v2.1.0
-
-Cleaned 2 unused entries from pcb.sum.
-```
-
 ### Local Development
 
 Developing changes spanning stdlib and weave:
@@ -1191,6 +1180,6 @@ Options:
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Board publishing | 🚧 Planned | `pcb publish` currently excludes boards |
-| `pcb update` | 🚧 Planned | Non-interactive dep updates, `--breaking` for major versions, `--tidy` to clean lockfile |
+| `pcb update` | 🚧 Planned | Non-interactive dep updates, `--breaking` for major versions |
 | Module proxy | 💭 Future | `PCB_PROXY` for cached archives |
 | Bundled stdlib | 💭 Future | Embed stdlib in toolchain |
