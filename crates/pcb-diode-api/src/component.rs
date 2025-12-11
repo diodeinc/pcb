@@ -552,49 +552,60 @@ pub fn add_component_to_workspace(
 
     fs::create_dir_all(&component_dir)?;
 
-    // Count tasks and collect work
-    let mut file_count = 0;
-    let mut scan_count = 0;
-    let mut download_tasks = Vec::new();
-    let mut scan_tasks = Vec::new();
-    let mut upgrade_tasks = Vec::new();
+    // Use sanitized MPN for all file names (more consistent and cleaner)
+    let symbol_filename = format!("{}.kicad_sym", &sanitized_mpn);
+    let footprint_filename = format!("{}.kicad_mod", &sanitized_mpn);
+    let step_filename = format!("{}.step", &sanitized_mpn);
+    let datasheet_filename = format!("{}.pdf", &sanitized_mpn);
 
-    if let (Some(url), Some(filename)) = (&download.symbol_url, &download.metadata.symbol_filename)
-    {
-        file_count += 1;
-        let path = component_dir.join(filename);
-        download_tasks.push((url.clone(), path.clone(), "symbol"));
+    // Track which files will be downloaded
+    let has_symbol = download.symbol_url.is_some() && download.metadata.symbol_filename.is_some();
+    let has_footprint =
+        download.footprint_url.is_some() && download.metadata.footprint_filename.is_some();
+    let has_step = download.step_url.is_some() && download.metadata.step_filename.is_some();
+    let has_datasheet =
+        download.datasheet_url.is_some() && download.metadata.datasheet_filename.is_some();
+
+    // Collect download tasks
+    let mut download_tasks = Vec::new();
+    let mut upgrade_tasks = Vec::new();
+    let mut scan_tasks = Vec::new();
+
+    if has_symbol {
+        let path = component_dir.join(&symbol_filename);
+        download_tasks.push((download.symbol_url.clone().unwrap(), path.clone(), "symbol"));
         upgrade_tasks.push(("symbol", path));
     }
-    if let (Some(url), Some(filename)) = (
-        &download.footprint_url,
-        &download.metadata.footprint_filename,
-    ) {
-        file_count += 1;
-        let path = component_dir.join(filename);
-        download_tasks.push((url.clone(), path.clone(), "footprint"));
+    if has_footprint {
+        let path = component_dir.join(&footprint_filename);
+        download_tasks.push((
+            download.footprint_url.clone().unwrap(),
+            path.clone(),
+            "footprint",
+        ));
         upgrade_tasks.push(("footprint", path));
     }
-    if let (Some(url), Some(filename)) = (&download.step_url, &download.metadata.step_filename) {
-        file_count += 1;
-        download_tasks.push((url.clone(), component_dir.join(filename), "step"));
+    if has_step {
+        download_tasks.push((
+            download.step_url.clone().unwrap(),
+            component_dir.join(&step_filename),
+            "step",
+        ));
     }
-
-    if let (Some(url), Some(filename)) = (
-        &download.datasheet_url,
-        &download.metadata.datasheet_filename,
-    ) {
-        file_count += 1;
-        download_tasks.push((url.clone(), component_dir.join(filename), "datasheet"));
+    if has_datasheet {
+        let url = download.datasheet_url.as_ref().unwrap();
+        download_tasks.push((url.clone(), component_dir.join(&datasheet_filename), "datasheet"));
 
         if let Some(storage_path) = parse_storage_path_from_url(url) {
-            let md_path = component_dir.join(filename).with_extension("md");
+            let md_path = component_dir.join(&datasheet_filename).with_extension("md");
             if !md_path.exists() {
-                scan_count += 1;
-                scan_tasks.push((storage_path, filename.clone()));
+                scan_tasks.push((storage_path, datasheet_filename.clone()));
             }
         }
     }
+
+    let file_count = download_tasks.len();
+    let scan_count = scan_tasks.len();
 
     // Show task summary
     println!("{} {}", "Downloading".green().bold(), part_number.bold());
@@ -732,40 +743,31 @@ pub fn add_component_to_workspace(
     }
 
     // Post-process: Embed STEP into footprint if both files exist
-    if let (Some(footprint_filename), Some(step_filename)) = (
-        &download.metadata.footprint_filename,
-        &download.metadata.step_filename,
-    ) {
-        let footprint_path = component_dir.join(footprint_filename);
-        let step_path = component_dir.join(step_filename);
-
-        if footprint_path.exists() && step_path.exists() {
-            embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
-        }
+    let footprint_path = component_dir.join(&footprint_filename);
+    let step_path = component_dir.join(&step_filename);
+    if footprint_path.exists() && step_path.exists() {
+        embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
     }
 
     // Generate .zen file if symbol was downloaded
-    if let Some(symbol_filename) = &download.metadata.symbol_filename {
-        let symbol_path = component_dir.join(symbol_filename);
-        if symbol_path.exists() {
-            let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
-            let symbol = symbol_lib
-                .first_symbol()
-                .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
+    let symbol_path = component_dir.join(&symbol_filename);
+    if symbol_path.exists() {
+        let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
+        let symbol = symbol_lib
+            .first_symbol()
+            .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
 
-            let sanitized_name = sanitize_mpn_for_path(part_number);
-            let content = generate_zen_file(
-                part_number,
-                &sanitized_name,
-                symbol,
-                symbol_filename,
-                download.metadata.footprint_filename.as_deref(),
-                download.metadata.datasheet_filename.as_deref(),
-                download.metadata.manufacturer.as_deref(),
-            )?;
+        let content = generate_zen_file(
+            part_number,
+            &sanitized_mpn,
+            symbol,
+            &symbol_filename,
+            has_footprint.then_some(footprint_filename.as_str()),
+            has_datasheet.then_some(datasheet_filename.as_str()),
+            download.metadata.manufacturer.as_deref(),
+        )?;
 
-            write_component_files(&component_file, &component_dir, &content)?;
-        }
+        write_component_files(&component_file, &component_dir, &content)?;
     }
 
     Ok(AddComponentResult {
