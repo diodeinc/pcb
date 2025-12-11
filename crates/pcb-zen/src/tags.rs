@@ -21,6 +21,8 @@ use crate::git;
 ///
 /// # Examples
 /// ```
+/// use pcb_zen::tags::parse_version;
+/// use semver::Version;
 /// assert_eq!(parse_version("1.2.3"), Some(Version::new(1, 2, 3)));
 /// assert_eq!(parse_version("v1.2.3"), Some(Version::new(1, 2, 3)));
 /// ```
@@ -36,6 +38,8 @@ pub fn parse_version(s: &str) -> Option<Version> {
 ///
 /// # Examples
 /// ```
+/// use pcb_zen::tags::parse_tag;
+/// use semver::Version;
 /// let (path, ver) = parse_tag("components/LED/v1.2.3").unwrap();
 /// assert_eq!(path, "components/LED");
 /// assert_eq!(ver, Version::new(1, 2, 3));
@@ -192,10 +196,7 @@ mod tests {
     #[test]
     fn test_compute_tag_prefix() {
         assert_eq!(compute_tag_prefix(None, None), "v");
-        assert_eq!(
-            compute_tag_prefix(Some(Path::new("foo")), None),
-            "foo/v"
-        );
+        assert_eq!(compute_tag_prefix(Some(Path::new("foo")), None), "foo/v");
         assert_eq!(compute_tag_prefix(None, Some("pkg")), "pkg/v");
         assert_eq!(
             compute_tag_prefix(Some(Path::new("foo/bar")), Some("pkg")),

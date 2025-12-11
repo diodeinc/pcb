@@ -71,6 +71,24 @@ def natural_sort_key(text: str) -> List:
     return [convert(c) for c in re.split("([0-9]+)", text)]
 
 
+def canonicalize_json(obj: Any) -> Any:
+    """
+    Recursively canonicalize a JSON-serializable object for deterministic output.
+
+    - Dicts are converted to sorted dicts (by key)
+    - Lists are sorted by their JSON string representation
+    - Primitives are returned as-is
+    """
+    if isinstance(obj, dict):
+        return {k: canonicalize_json(v) for k, v in sorted(obj.items())}
+    elif isinstance(obj, list):
+        canonicalized = [canonicalize_json(item) for item in obj]
+        # Sort by JSON representation for stable ordering
+        return sorted(canonicalized, key=lambda x: json.dumps(x, sort_keys=True))
+    else:
+        return obj
+
+
 # Read PYTHONPATH environment variable and add all folders to the search path
 python_path = os.environ.get("PYTHONPATH", "")
 path_separator = (
@@ -3327,36 +3345,33 @@ class FinalizeBoard(Step):
                 }
                 for pad in fp.Pads()
             ],
-            "graphical_items": sorted(
-                [
-                    {
-                        "type": item.GetClass(),
-                        "layer": item.GetLayerName(),
-                        "position": {
-                            "x": item.GetPosition().x,
-                            "y": item.GetPosition().y,
-                        },
-                        "start": (
-                            {"x": item.GetStart().x, "y": item.GetStart().y}
-                            if hasattr(item, "GetStart")
-                            else None
-                        ),
-                        "end": (
-                            {"x": item.GetEnd().x, "y": item.GetEnd().y}
-                            if hasattr(item, "GetEnd")
-                            else None
-                        ),
-                        "angle": (
-                            item.GetAngle() if hasattr(item, "GetAngle") else None
-                        ),
-                        "text": item.GetText() if hasattr(item, "GetText") else None,
-                        "shape": item.GetShape() if hasattr(item, "GetShape") else None,
-                        "width": item.GetWidth() if hasattr(item, "GetWidth") else None,
-                    }
-                    for item in fp.GraphicalItems()
-                ],
-                key=lambda g: (g["position"]["x"], g["position"]["y"]),
-            ),
+            "graphical_items": [
+                {
+                    "type": item.GetClass(),
+                    "layer": item.GetLayerName(),
+                    "position": {
+                        "x": item.GetPosition().x,
+                        "y": item.GetPosition().y,
+                    },
+                    "start": (
+                        {"x": item.GetStart().x, "y": item.GetStart().y}
+                        if hasattr(item, "GetStart")
+                        else None
+                    ),
+                    "end": (
+                        {"x": item.GetEnd().x, "y": item.GetEnd().y}
+                        if hasattr(item, "GetEnd")
+                        else None
+                    ),
+                    "angle": (
+                        item.GetAngle() if hasattr(item, "GetAngle") else None
+                    ),
+                    "text": item.GetText() if hasattr(item, "GetText") else None,
+                    "shape": item.GetShape() if hasattr(item, "GetShape") else None,
+                    "width": item.GetWidth() if hasattr(item, "GetWidth") else None,
+                }
+                for item in fp.GraphicalItems()
+            ],
         }
 
     def _get_group_data(self, group: pcbnew.PCB_GROUP) -> dict:
@@ -3499,37 +3514,16 @@ class FinalizeBoard(Step):
                     self.board.Groups(), key=lambda g: g.GetName() or ""
                 )
             ],
-            "zones": [
-                self._get_zone_data(zone)
-                for zone in sorted(
-                    self.board.Zones(), key=lambda z: z.GetZoneName() or ""
-                )
-            ],
-            "tracks": [
-                self._get_track_data(track)
-                for track in sorted(
-                    tracks, key=lambda t: (t.GetNetname() or "", t.GetLayerName() or "")
-                )
-            ],
-            "vias": [
-                self._get_via_data(via)
-                for via in sorted(
-                    vias,
-                    key=lambda v: (
-                        v.GetNetname() or "",
-                        v.GetPosition().x,
-                        v.GetPosition().y,
-                    ),
-                )
-            ],
+            "zones": [self._get_zone_data(zone) for zone in self.board.Zones()],
+            "tracks": [self._get_track_data(track) for track in tracks],
+            "vias": [self._get_via_data(via) for via in vias],
         }
 
         with self.snapshot_path.open("w", encoding="utf-8") as f:
             json.dump(
-                snapshot,
+                canonicalize_json(snapshot),
                 f,
                 indent=2,
-                sort_keys=True,  # Ensure all dictionaries are sorted by key
                 ensure_ascii=False,
             )
 
