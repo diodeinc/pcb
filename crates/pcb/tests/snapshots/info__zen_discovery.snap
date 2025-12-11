@@ -1,0 +1,15 @@
+---
+source: crates/pcb/tests/info.rs
+expression: output
+---
+Command: pcb info
+Exit Code: 0
+
+--- STDOUT ---
+Workspace
+Root: <TEMP_DIR>
+
+Boards (1)
+  DiscoveredBoard - boards/discovered/discovered.zen
+    Board with auto-discovered zen file
+--- STDERR ---
