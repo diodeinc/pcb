@@ -8,7 +8,6 @@ use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::test_bench::FrozenTestBenchValue;
 use allocative::Allocative;
-use log::error;
 use serde::Serialize;
 use starlark::environment::FrozenModule;
 use starlark::values::record::{FrozenRecordType, RecordType};

@@ -52,6 +52,7 @@ fn test_pcb_tag_invalid_version() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
+        .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")
@@ -65,10 +66,11 @@ fn test_pcb_tag_duplicate_tag() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
+        .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")
-        .tag("TB0001/v1.0.0") // Pre-existing tag
+        .tag("boards/Test/v1.0.0") // Pre-existing tag (using package path, not board name)
         .snapshot_run("pcb", ["tag", "-v", "1.0.0", "-b", "TB0001"]);
     assert_snapshot!("tag_duplicate_tag", output);
 }
@@ -83,7 +85,7 @@ fn test_pcb_tag_older_version_allowed() {
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")
-        .tag("TB0001/v1.5.0") // Existing higher version
+        .tag("boards/Test/v1.5.0") // Existing higher version (using package path)
         .snapshot_run(
             "pcb",
             [
@@ -105,6 +107,7 @@ fn test_pcb_tag_invalid_board() {
         .seed_stdlib(&["v0.2.10"])
         .seed_kicad(&["9.0.0"])
         .write("pcb.toml", PCB_TOML)
+        .write("boards/Test/pcb.toml", "[board]\nname = \"TB0001\"\n")
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")

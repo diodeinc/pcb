@@ -3,8 +3,8 @@ use clap::Args;
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pcb_ui::{Colorize, Spinner};
-use pcb_zen::git;
-use pcb_zen::workspace::get_workspace_info;
+use pcb_zen::workspace::{get_workspace_info, WorkspaceInfoExt};
+use pcb_zen::{git, tags};
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
 use std::io::{self, Write};
@@ -104,9 +104,22 @@ pub fn execute(args: TagArgs) -> Result<()> {
         let start_path = args.path.as_deref().unwrap_or(".");
         let workspace_info =
             get_workspace_info(&DefaultFileProvider::new(), Path::new(start_path))?;
-        let version = Version::parse(&args.version)
-            .map_err(|_| anyhow::anyhow!("Invalid semantic version: '{}'", args.version))?;
-        let tag_name = format!("{}/v{version}", args.board);
+
+        // Parse version (allowing with or without 'v' prefix)
+        let version = tags::parse_version(&args.version)
+            .ok_or_else(|| anyhow::anyhow!("Invalid semantic version: '{}'", args.version))?;
+
+        // Find the board and its containing package to compute the tag prefix
+        let board_info = workspace_info.find_board_by_name(&args.board)?;
+        let zen_path = board_info.absolute_zen_path(&workspace_info.root);
+
+        let tag_prefix = workspace_info
+            .package_url_for_zen(&zen_path)
+            .and_then(|url| workspace_info.packages.get(&url))
+            .map(|pkg| tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_info.path()))
+            .unwrap_or_else(|| "v".to_string());
+
+        let tag_name = tags::build_tag_name(&tag_prefix, &version);
 
         let info = TagInfo {
             workspace_root: workspace_info.root,

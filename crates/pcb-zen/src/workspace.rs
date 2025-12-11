@@ -5,9 +5,7 @@
 //! that need workspace metadata.
 
 use anyhow::Result;
-use path_slash::PathExt as _;
 use rayon::prelude::*;
-use semver::Version;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -21,6 +19,10 @@ use crate::cache_index::cache_base;
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::resolve_v2::ResolutionResult;
+use crate::tags;
+
+// Re-export compute_tag_prefix from tags module for backwards compatibility
+pub use crate::tags::compute_tag_prefix;
 
 /// Why a package is dirty (has unpublished changes)
 #[derive(Debug, Clone)]
@@ -170,13 +172,9 @@ fn is_dirty(
     tags: &[String],
     tag_annotations: &HashMap<String, String>,
 ) -> Option<DirtyReason> {
-    let tag_prefix = if let Some(b) = &pkg.config.board {
-        format!("{}/v", b.name)
-    } else {
-        compute_tag_prefix(Some(&pkg.rel_path), workspace_path)
-    };
+    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
 
-    let Some(tag_name) = find_latest_tag(tags, &tag_prefix) else {
+    let Some(tag_name) = tags::find_latest_tag(tags, &tag_prefix) else {
         return Some(DirtyReason::Unpublished);
     };
 
@@ -204,41 +202,6 @@ fn is_dirty(
     } else {
         None
     }
-}
-
-/// Compute the git tag prefix for a package
-pub fn compute_tag_prefix(rel_path: Option<&Path>, ws_path: &Option<String>) -> String {
-    let rel_str = rel_path
-        .map(|p| p.to_slash_lossy().into_owned())
-        .unwrap_or_default();
-
-    match (ws_path, rel_str.is_empty()) {
-        (Some(p), true) => format!("{}/v", p),
-        (Some(p), false) => format!("{}/{}/v", p, rel_str),
-        (None, true) => "v".to_string(),
-        (None, false) => format!("{}/v", rel_str),
-    }
-}
-
-fn find_latest_version(tags: &[String], prefix: &str) -> Option<String> {
-    tags.iter()
-        .filter_map(|tag| {
-            let version_str = tag.strip_prefix(prefix)?;
-            Version::parse(version_str).ok()
-        })
-        .max()
-        .map(|v| v.to_string())
-}
-
-fn find_latest_tag(tags: &[String], prefix: &str) -> Option<String> {
-    tags.iter()
-        .filter_map(|tag| {
-            let version_str = tag.strip_prefix(prefix)?;
-            let version = Version::parse(version_str).ok()?;
-            Some((tag.clone(), version))
-        })
-        .max_by(|a, b| a.1.cmp(&b.1))
-        .map(|(tag, _)| tag)
 }
 
 fn has_uncommitted_changes(workspace_root: &Path, package_dir: &Path) -> bool {
@@ -297,62 +260,18 @@ pub fn get_workspace_info<F: FileProvider>(
 
 /// Enrich workspace info with version information from git tags
 pub fn enrich_with_git_versions(info: &mut WorkspaceInfo) {
-    let tags = git::list_all_tags_vec(&info.root);
+    let all_tags = git::list_all_tags_vec(&info.root);
     let workspace_path = info.path().map(|s| s.to_string());
 
     for pkg in info.packages.values_mut() {
-        let version = if let Some(b) = &pkg.config.board {
-            let board_tag_prefix = format!("{}/v", b.name);
-            find_latest_version(&tags, &board_tag_prefix)
-        } else {
-            let pkg_tag_prefix = compute_tag_prefix(Some(&pkg.rel_path), &workspace_path);
-            find_latest_version(&tags, &pkg_tag_prefix)
-        };
-        pkg.version = version;
+        let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
+        pkg.version = tags::find_latest_version(&all_tags, &tag_prefix).map(|v| v.to_string());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_compute_tag_prefix() {
-        assert_eq!(compute_tag_prefix(None, &None), "v");
-        assert_eq!(compute_tag_prefix(Some(Path::new("")), &None), "v");
-        assert_eq!(
-            compute_tag_prefix(None, &Some("hardware".to_string())),
-            "hardware/v"
-        );
-        assert_eq!(
-            compute_tag_prefix(Some(Path::new("ti/tps54331")), &None),
-            "ti/tps54331/v"
-        );
-        assert_eq!(
-            compute_tag_prefix(
-                Some(Path::new("ti/tps54331")),
-                &Some("hardware".to_string())
-            ),
-            "hardware/ti/tps54331/v"
-        );
-    }
-
-    #[test]
-    fn test_find_latest_version() {
-        let tags = vec![
-            "v0.1.0".to_string(),
-            "v0.2.0".to_string(),
-            "v0.2.1".to_string(),
-            "other/v1.0.0".to_string(),
-        ];
-
-        assert_eq!(find_latest_version(&tags, "v"), Some("0.2.1".to_string()));
-        assert_eq!(
-            find_latest_version(&tags, "other/v"),
-            Some("1.0.0".to_string())
-        );
-        assert_eq!(find_latest_version(&tags, "nonexistent/v"), None);
-    }
 
     #[test]
     fn test_parse_hashes_from_tag_body() {
