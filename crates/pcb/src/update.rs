@@ -9,7 +9,7 @@ use colored::Colorize;
 use inquire::MultiSelect;
 use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::workspace::get_workspace_info;
-use pcb_zen::{get_all_versions_for_repo, git, semver_family, WorkspaceInfo};
+use pcb_zen::{git, tags, WorkspaceInfo};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
@@ -232,19 +232,19 @@ fn find_version_updates(
             let (repo_url, subpath) = git::split_repo_and_subpath(url);
             let repo_versions = version_cache
                 .entry(repo_url.to_string())
-                .or_insert_with(|| get_all_versions_for_repo(repo_url).unwrap_or_default());
+                .or_insert_with(|| tags::get_all_versions_for_repo(repo_url).unwrap_or_default());
 
             let pkg_key = if subpath.is_empty() { "" } else { subpath };
             let Some(available) = repo_versions.get(pkg_key) else {
                 continue;
             };
 
-            let current_family = semver_family(&current);
+            let current_family = tags::semver_family(&current);
 
             // Non-breaking update (same family)
             if let Some(v) = available
                 .iter()
-                .find(|v| semver_family(v) == current_family && *v > &current)
+                .find(|v| tags::semver_family(v) == current_family && *v > &current)
             {
                 pending.push(PendingUpdate {
                     url: url.clone(),
@@ -258,7 +258,7 @@ fn find_version_updates(
             // Breaking update (different family)
             if let Some(v) = available
                 .iter()
-                .find(|v| semver_family(v) != current_family && *v > &current)
+                .find(|v| tags::semver_family(v) != current_family && *v > &current)
             {
                 pending.push(PendingUpdate {
                     url: url.clone(),

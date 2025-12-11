@@ -11,6 +11,7 @@ pub mod load;
 pub mod lsp;
 pub mod resolve_v2;
 pub mod suppression;
+pub mod tags;
 pub mod workspace;
 
 use std::path::Path;
@@ -24,16 +25,14 @@ use pcb_zen_core::{
     CoreLoadResolver, DefaultFileProvider, EvalContext, EvalOutput, LoadResolver, NoopRemoteFetcher,
 };
 
-pub use cache_index::get_all_versions_for_repo;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
-pub use resolve_v2::{
-    resolve_dependencies, semver_family, vendor_deps, ResolutionResult, VendorResult,
-};
+pub use resolve_v2::{resolve_dependencies, vendor_deps, ResolutionResult, VendorResult};
 pub use starlark::errors::EvalSeverity;
-pub use workspace::{
-    compute_tag_prefix, get_workspace_info, MemberPackage, PackageClosure, WorkspaceInfo,
-};
+pub use workspace::{get_workspace_info, MemberPackage, PackageClosure, WorkspaceInfo};
+
+// Backwards-compat re-exports from tags module
+pub use tags::{get_all_versions_for_repo, semver_family};
 
 #[derive(Debug, Clone)]
 pub struct EvalConfig {

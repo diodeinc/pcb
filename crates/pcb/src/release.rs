@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use zip::{write::FileOptions, ZipWriter};
 
 use crate::vendor::sync_tracked_files;
-use pcb_zen::git;
+use pcb_zen::{git, tags};
 
 const RELEASE_SCHEMA_VERSION: &str = "1";
 
@@ -429,8 +429,15 @@ fn build_release_info(
     board_name: String,
     args: &ReleaseArgs,
 ) -> Result<ReleaseInfo> {
+    // Compute tag prefix from the package containing this zen file
+    let tag_prefix = config
+        .package_url_for_zen(&zen_path)
+        .and_then(|url| config.packages.get(&url))
+        .map(|pkg| tags::compute_tag_prefix(Some(&pkg.rel_path), config.path()))
+        .unwrap_or_else(|| "v".to_string());
+
     // Get version and git hash from git
-    let (version, git_hash) = git_version_and_hash(&config.root, &board_name)?;
+    let (version, git_hash) = git_version_and_hash(&config.root, &tag_prefix)?;
 
     // Create release staging directory in workspace root with flat structure:
     // Structure: {workspace_root}/.pcb/releases/{board_name}-{version}
@@ -654,7 +661,7 @@ fn create_metadata_json(info: &ReleaseInfo) -> serde_json::Value {
 /// - If working directory is dirty: {commit_hash}-dirty
 /// - If current commit has a tag: {tag_name}
 /// - If clean but no tag: {commit_hash}
-fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String)> {
+fn git_version_and_hash(path: &Path, tag_prefix: &str) -> Result<(String, String)> {
     debug!("Getting git version from: {}", path.display());
 
     // Check if working directory is dirty
@@ -675,19 +682,17 @@ fn git_version_and_hash(path: &Path, board_name: &str) -> Result<(String, String
         return Ok((version, full_hash));
     }
 
-    // Check if current commit is tagged
-    let tags = pcb_zen::git::tags_pointing_at_head(path);
-
-    // Look for board-specific tag in format "board_name/version" (case-insensitive board name)
-    let tag_prefix = format!("{board_name}/");
-    for tag in &tags {
-        if !tag.is_empty()
-            && tag.len() > tag_prefix.len()
-            && tag[..tag_prefix.len()].eq_ignore_ascii_case(&tag_prefix)
-        {
-            let version = tag[tag_prefix.len()..].to_string();
-            info!("Git version (board tag): {version} for board {board_name}");
-            return Ok((version, full_hash));
+    // Check if current commit is tagged with a matching version tag
+    let head_tags = pcb_zen::git::tags_pointing_at_head(path);
+    for tag in &head_tags {
+        if let Some(version_suffix) = tag.strip_prefix(tag_prefix) {
+            // Validate it's a proper version (with or without v prefix)
+            if let Some(parsed) = tags::parse_version(version_suffix) {
+                // Return with v prefix for backward compatibility in metadata.json
+                let version = format!("v{parsed}");
+                info!("Git version (tag): {version}");
+                return Ok((version, full_hash));
+            }
         }
     }
 

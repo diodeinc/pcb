@@ -201,7 +201,7 @@ fn test_pcb_release_with_git() {
         .write("boards/TB0001.zen", TEST_BOARD_ZEN)
         .init_git()
         .commit("Initial commit")
-        .tag("TB0001/v1.2.3")
+        .tag("boards/v1.2.3") // Package path-based tag (boards/ contains pcb.toml)
         .cmd(
             cargo_bin!("pcb"),
             [
@@ -224,7 +224,7 @@ fn test_pcb_release_with_git() {
     let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
     let git_version = metadata_json["release"]["git_version"].as_str().unwrap();
 
-    // Verify git version is detected properly
+    // Verify git version is detected properly (with v prefix for backward compat)
     assert_eq!(git_version, "v1.2.3");
 
     // Snapshot the staging directory contents
@@ -305,7 +305,7 @@ n1 = Net("N1")
 n2 = Net("N2")
 "#;
 
-    // Board name is CaseBoard; tag uses upper-case prefix to test case-insensitivity
+    // Board name is CaseBoard; now uses package path-based tags
     let mut sb = Sandbox::new();
     let output = sb
         .cwd("src")
@@ -315,7 +315,7 @@ n2 = Net("N2")
         .write("boards/CaseBoard.zen", board_zen)
         .init_git()
         .commit("Initial commit")
-        .tag("CASEBOARD/v9.9.9")
+        .tag("boards/v9.9.9") // Package path-based tag
         .cmd(
             cargo_bin!("pcb"),
             [
@@ -350,7 +350,7 @@ n2 = Net("N2")
     let metadata_file = File::open(&metadata_path).unwrap();
     let meta: Value = serde_json::from_reader(metadata_file).unwrap();
 
-    // Ensure git tag was detected
+    // Ensure git tag was detected (with v prefix for backward compat)
     let git_version = meta["release"]["git_version"].as_str().unwrap();
     assert_eq!(git_version, "v9.9.9");
     assert_snapshot!("case_insensitive_tag", sb.snapshot_dir(staging_dir));

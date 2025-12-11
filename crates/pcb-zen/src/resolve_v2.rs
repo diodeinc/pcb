@@ -17,22 +17,14 @@ use std::path::{Path, PathBuf};
 
 use std::time::Instant;
 
-use crate::cache_index::{cache_base, ensure_bare_repo, parse_version_tag, CacheIndex};
+use crate::cache_index::{cache_base, ensure_bare_repo, CacheIndex};
 use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
+use crate::tags;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
 
-/// Compute the semver family for a version
-///
-/// For 0.x versions, the minor version determines the family (0.2.x and 0.3.x are different families)
-/// For 1.x+ versions, the major version determines the family
-pub fn semver_family(v: &Version) -> String {
-    if v.major == 0 {
-        format!("v0.{}", v.minor)
-    } else {
-        format!("v{}", v.major)
-    }
-}
+// Re-export semver_family from tags module for backwards compatibility
+pub use crate::tags::semver_family;
 
 /// Find matching patch for a module path, supporting glob patterns.
 /// Exact matches take priority, then glob patterns in sorted order.
@@ -1641,7 +1633,7 @@ impl PseudoVersionContext {
             let mut versions: HashMap<String, Version> = HashMap::new();
             if let Ok(tags) = git::list_all_tags(bare_dir) {
                 for tag in tags {
-                    if let Some((pkg_path, version)) = parse_version_tag(&tag) {
+                    if let Some((pkg_path, version)) = tags::parse_tag(&tag) {
                         versions
                             .entry(pkg_path)
                             .and_modify(|v| {

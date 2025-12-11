@@ -1,5 +1,6 @@
 ---
 source: crates/pcb/tests/release.rs
+assertion_line: 242
 expression: build_ouput
 ---
 Command: pcb build --offline <TEMP_DIR>/src/.pcb/releases/TB0001-v1.2.3/src/boards/TB0001.zen

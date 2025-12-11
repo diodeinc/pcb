@@ -8,10 +8,9 @@ use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
 use pcb_zen::workspace::{
-    compute_tag_prefix, get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo,
-    WorkspaceInfoExt,
+    get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo, WorkspaceInfoExt,
 };
-use pcb_zen::{canonical, git};
+use pcb_zen::{canonical, git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
@@ -83,8 +82,8 @@ fn run_wave(
     }
 
     // Fetch fresh tags to get current versions (tags may have been created in previous waves)
-    let tags = git::list_all_tags_vec(&workspace.root);
-    let ws_path = workspace.path().map(|s| s.to_string());
+    let all_tags = git::list_all_tags_vec(&workspace.root);
+    let ws_path = workspace.path();
 
     // Get bump types for this wave's dirty packages based on strategy
     let bump_map: BTreeMap<String, BumpType> = match bump_strategy {
@@ -95,8 +94,8 @@ fn run_wave(
         BumpStrategy::ChooseIndividually => {
             let mut map = BTreeMap::new();
             for (url, pkg) in &dirty_packages {
-                let tag_prefix = compute_tag_prefix(Some(&pkg.rel_path), &ws_path);
-                let current_version = find_latest_version(&tags, &tag_prefix);
+                let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+                let current_version = tags::find_latest_version(&all_tags, &tag_prefix);
                 let bump = prompt_single_bump(url, current_version.as_ref())?;
                 map.insert((*url).clone(), bump);
             }
@@ -425,8 +424,8 @@ fn build_publish_candidates(
     bump_map: &BTreeMap<String, BumpType>,
 ) -> Result<BTreeMap<String, PublishCandidate>> {
     // Fetch fresh tags to get current versions (tags may have been created in previous waves)
-    let tags = git::list_all_tags_vec(&workspace.root);
-    let ws_path = workspace.path().map(|s| s.to_string());
+    let all_tags = git::list_all_tags_vec(&workspace.root);
+    let ws_path = workspace.path();
 
     workspace
         .packages
@@ -437,8 +436,8 @@ fn build_publish_candidates(
             let bump = bump_map.get(url).copied().unwrap_or(BumpType::Minor);
 
             // Get current version from git tags (fresh, not cached in pkg.version)
-            let tag_prefix = compute_tag_prefix(Some(&pkg.rel_path), &ws_path);
-            let current_version = find_latest_version(&tags, &tag_prefix);
+            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+            let current_version = tags::find_latest_version(&all_tags, &tag_prefix);
 
             let next_version = compute_next_version(current_version.as_ref(), bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
@@ -471,16 +470,6 @@ fn build_publish_candidates(
             ))
         })
         .collect()
-}
-
-/// Find the latest version from git tags matching a prefix
-fn find_latest_version(tags: &[String], prefix: &str) -> Option<Version> {
-    tags.iter()
-        .filter_map(|tag| {
-            let version_str = tag.strip_prefix(prefix)?;
-            Version::parse(version_str).ok()
-        })
-        .max()
 }
 
 fn compute_next_version(current: Option<&Version>, bump: BumpType) -> Version {
@@ -634,9 +623,8 @@ fn prompt_single_bump(url: &str, current_version: Option<&Version>) -> Result<Bu
 
 fn compute_tag_name(pkg: &MemberPackage, version: &Version, workspace: &WorkspaceInfo) -> String {
     let rel_path = pkg.dir.strip_prefix(&workspace.root).ok();
-    let ws_path = workspace.path().map(|s| s.to_string());
-    let prefix = compute_tag_prefix(rel_path, &ws_path);
-    format!("{}{}", prefix, version)
+    let prefix = tags::compute_tag_prefix(rel_path, workspace.path());
+    tags::build_tag_name(&prefix, version)
 }
 
 fn format_tag_message(url: &str, c: &PublishCandidate) -> String {
