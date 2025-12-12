@@ -129,9 +129,9 @@ project/
 │       ├── pcb.toml      # Board metadata & dependencies
 │       └── layout/       # KiCad layout files
 ├── modules/              # Reusable circuit modules
-│   ├── pcb.toml
 │   └── PowerSupply/
-│       └── PowerSupply.zen
+│       ├── PowerSupply.zen
+│       └── pcb.toml
 ├── components/           # Custom component definitions
 │   └── Manufacturer/
 │       └── MPN/
