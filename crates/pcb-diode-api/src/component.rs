@@ -1255,14 +1255,24 @@ pub struct SearchArgs {
 /// Files discovered in a local directory for component generation
 struct DiscoveredFiles {
     symbols: Vec<PathBuf>,
+    /// Backup symbol files (*.orig.kicad_sym) - excluded from selection but carried over
+    orig_symbols: Vec<PathBuf>,
     footprints: Vec<PathBuf>,
     pdfs: Vec<PathBuf>,
     steps: Vec<PathBuf>,
 }
 
+/// Check if a path ends with .orig.kicad_sym
+fn is_orig_symbol(path: &Path) -> bool {
+    path.to_str()
+        .map(|s| s.ends_with(".orig.kicad_sym"))
+        .unwrap_or(false)
+}
+
 /// Recursively discover relevant files in a directory for component generation
 fn discover_files_recursive(dir: &Path) -> Result<DiscoveredFiles> {
     let mut symbols = Vec::new();
+    let mut orig_symbols = Vec::new();
     let mut footprints = Vec::new();
     let mut pdfs = Vec::new();
     let mut steps = Vec::new();
@@ -1272,9 +1282,16 @@ fn discover_files_recursive(dir: &Path) -> Result<DiscoveredFiles> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
     {
-        if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+        let path = entry.path();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             match ext.to_lowercase().as_str() {
-                "kicad_sym" => symbols.push(entry.into_path()),
+                "kicad_sym" => {
+                    if is_orig_symbol(path) {
+                        orig_symbols.push(entry.into_path());
+                    } else {
+                        symbols.push(entry.into_path());
+                    }
+                }
                 "kicad_mod" => footprints.push(entry.into_path()),
                 "pdf" => pdfs.push(entry.into_path()),
                 "step" | "stp" | "wrl" => steps.push(entry.into_path()),
@@ -1285,12 +1302,14 @@ fn discover_files_recursive(dir: &Path) -> Result<DiscoveredFiles> {
 
     // Sort for consistent ordering
     symbols.sort();
+    orig_symbols.sort();
     footprints.sort();
     pdfs.sort();
     steps.sort();
 
     Ok(DiscoveredFiles {
         symbols,
+        orig_symbols,
         footprints,
         pdfs,
         steps,
@@ -1391,7 +1410,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         .first_symbol()
         .ok_or_else(|| anyhow::anyhow!("No symbols found in library"))?;
 
-    // Best-effort defaults from symbol, fall back to directory name
+    // Best-effort defaults from symbol, fall back to directory structure
     let default_mpn = if !symbol.name.is_empty() {
         symbol.name.clone()
     } else {
@@ -1400,7 +1419,16 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
             .unwrap_or("component")
             .to_string()
     };
-    let default_mfr = symbol.manufacturer.clone().unwrap_or_default();
+    let default_mfr = symbol.manufacturer.clone().unwrap_or_else(|| {
+        // Fall back to parent directory name (e.g., .../components/SHOUHAN/TYPE-C24PQT -> SHOUHAN)
+        // but not if parent is "components"
+        dir.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .filter(|&name| name != "components")
+            .unwrap_or("")
+            .to_string()
+    });
 
     // Prompt user to confirm/edit MPN and manufacturer
     let mpn = Text::new("MPN:")
@@ -1450,8 +1478,20 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         sym_filename.cyan()
     );
 
+    // Copy backup symbol files (*.orig.kicad_sym)
+    for orig_sym in &files.orig_symbols {
+        let orig_filename = format!("{}.orig.kicad_sym", &sanitized_mpn);
+        copy_file_to_dir(orig_sym, &component_dir, &orig_filename)?;
+        println!(
+            "  {} Backup: {} → {}",
+            "✓".green(),
+            path_filename(orig_sym).dimmed(),
+            orig_filename.cyan()
+        );
+    }
+
     // Copy first footprint if available
-    let has_footprint = files.footprints.first().is_some();
+    let has_footprint = !files.footprints.is_empty();
     if let Some(fp) = files.footprints.first() {
         let fp_filename = format!("{}.kicad_mod", &sanitized_mpn);
         copy_file_to_dir(fp, &component_dir, &fp_filename)?;
@@ -1476,7 +1516,7 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     }
 
     // Copy first PDF with standardized name
-    let has_datasheet = files.pdfs.first().is_some();
+    let has_datasheet = !files.pdfs.is_empty();
     if let Some(pdf) = files.pdfs.first() {
         let pdf_filename = format!("{}.pdf", &sanitized_mpn);
         copy_file_to_dir(pdf, &component_dir, &pdf_filename)?;
