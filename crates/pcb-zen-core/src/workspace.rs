@@ -375,11 +375,17 @@ pub fn get_workspace_info<F: FileProvider>(
     }
 
     // Add root package if applicable
-    if let (Some(url), Some(cfg)) = (&base_url, &config) {
+    // For standalone .zen files with inline manifests, base_url may be None
+    // but we still need to add the root package to resolve dependencies
+    if let Some(cfg) = &config {
         let has_deps = !cfg.dependencies.is_empty() || !cfg.assets.is_empty();
         if has_deps || packages.is_empty() {
+            // Use base_url if available, otherwise use workspace root path as synthetic URL
+            let url = base_url
+                .clone()
+                .unwrap_or_else(|| workspace_root.to_string_lossy().into_owned());
             packages.insert(
-                url.clone(),
+                url,
                 MemberPackage {
                     dir: workspace_root.clone(),
                     rel_path: PathBuf::new(),

@@ -1,14 +1,21 @@
-# Load standard library
-load("@stdlib:v0.2.23/properties.zen", "Layout")
-load("@stdlib:v0.2.23/board_config.zen", "Board", "BASE_4L")
-load("@stdlib:v0.2.23/units.zen", "Resistance", "Voltage")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+#
+# [dependencies]
+# "github.com/diodeinc/stdlib" = "0.4.4"
+# ```
 
-Resistor = Module("@stdlib:v0.2.23/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.23/generics/Led.zen")
+# Load standard library
+load("@stdlib/board_config.zen", "Board")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 # Define power nets
-vcc = Net("VCC")
-gnd = Net("GND")
+vcc = Power("VCC")
+gnd = Ground("GND")
 led_anode = Net("LED_ANODE")
 
 # Create components
@@ -28,38 +35,8 @@ Led(
     K = gnd
 )
 
-Level = enum("LOW", "HIGH", "TRISTATE")
-FooBar = record(
-    f1=int,
-    f2=str,
-    f3=Level,
-)
-
-Component(
-    name = "C1",
-    prefix = "C",
-    type = "capacitor",
-    footprint = "Capacitor_SMD:C_0402_1005Metric",
-    pin_defs = {
-        "P1": "1",
-        "P2": "2",
-    },
-    pins = {
-        "P1": vcc,
-        "P2": gnd,
-    },
-    properties = {
-        "package": "0402",
-        "logic_level": Level("HIGH"),
-        "its_a_list": [1, 2, 3],
-        "resistance": Resistance(100),
-        "voltage": Voltage(5),
-        "foo_bar": FooBar(f1=1, f2="bar", f3=Level("LOW")),
-    },
-)
-
 Board(
     name = "blinky",
-    config = BASE_4L,
+    layers = 4,
     layout_path = "layout/blinky"
 )

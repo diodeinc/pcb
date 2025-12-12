@@ -2,12 +2,10 @@
 
 > PCB tooling by [Diode Computers, Inc.](https://diode.computer/)
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
-
-`pcb` is a command-line utility for building PCBs. It uses the
-[Zener](https://github.com/diodeinc/pcb/blob/main/docs/pages/spec.mdx) language to describe
+`pcb` is a command-line utility for building PCBs. It uses the Zener language to describe
 PCB schematics and provides automations on top of KiCad to build PCBs fast.
+
+**[Read the docs](https://docs.pcb.new)** | [Language Reference](https://docs.pcb.new/pages/spec)
 
 > [!WARNING]
 > **Windows support is experimental.** Some features may be limited or unstable. For the best
@@ -18,9 +16,9 @@ PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
 - [Core Concepts](#core-concepts)
 - [Command Reference](#command-reference)
-- [Examples](#examples)
 - [Architecture](#architecture)
 - [License](#license)
 
@@ -28,8 +26,7 @@ PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
 ### From Installer
 
-Follow the instructions [here](https://github.com/diodeinc/pcb/releases/latest)
-to install the latest `pcb`.
+See the [latest release](https://github.com/diodeinc/pcb/releases/latest) for installation instructions.
 
 ### From Source
 
@@ -42,9 +39,6 @@ cd pcb
 ./install.sh
 ```
 
-> [!NOTE]
-> Package manager installation coming soon.
-
 ### Requirements
 
 - [KiCad 9.x](https://kicad.org/) (for generating and editing layouts)
@@ -55,19 +49,26 @@ cd pcb
 
 Create a file called `blinky.zen`:
 
-[embed-readme]: # "examples/blinky.zen python"
-
+[embed-readme]:# (examples/blinky.zen python)
 ```python
-# Load standard library
-load("@stdlib:v0.2.23/properties.zen", "Layout")
-load("@stdlib:v0.2.23/board_config.zen", "Board", "BASE_4L")
+# ```pcb
+# [workspace]
+# pcb-version = "0.3"
+#
+# [dependencies]
+# "github.com/diodeinc/stdlib" = "0.4.4"
+# ```
 
-Resistor = Module("@stdlib:v0.2.23/generics/Resistor.zen")
-Led = Module("@stdlib:v0.2.23/generics/Led.zen")
+# Load standard library
+load("@stdlib/board_config.zen", "Board")
+load("@stdlib/interfaces.zen", "Power", "Ground")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
 
 # Define power nets
-vcc = Net("VCC")
-gnd = Net("GND")
+vcc = Power("VCC")
+gnd = Ground("GND")
 led_anode = Net("LED_ANODE")
 
 # Create components
@@ -89,7 +90,7 @@ Led(
 
 Board(
     name = "blinky",
-    config = BASE_4L,
+    layers = 4,
     layout_path = "layout/blinky"
 )
 ```
@@ -114,482 +115,79 @@ pcb layout blinky.zen
 # ✓ blinky.zen (layout/blinky.kicad_pcb)
 ```
 
-### 4. Open in KiCad
+## Project Structure
 
-```bash
-# Open the generated layout
-pcb open blinky.zen
+A typical Zener workspace:
+
+```
+project/
+├── pcb.toml              # Workspace configuration
+├── pcb.sum               # Dependency lock file
+├── boards/               # Board designs
+│   └── MyBoard/
+│       ├── MyBoard.zen   # Board schematic
+│       ├── pcb.toml      # Board metadata & dependencies
+│       └── layout/       # KiCad layout files
+├── modules/              # Reusable circuit modules
+│   └── PowerSupply/
+│       ├── PowerSupply.zen
+│       └── pcb.toml
+├── components/           # Custom component definitions
+│   └── Manufacturer/
+│       └── MPN/
+│           ├── MPN.zen
+│           └── pcb.toml
+└── vendor/               # Vendored dependencies
+```
+
+**Workspace `pcb.toml`:**
+```toml
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*", "modules/*", "components/**"]
+
+[dependencies]
+"github.com/diodeinc/stdlib" = "0.4"
 ```
 
 ## Core Concepts
 
-### Components
+Zener extends [Starlark](https://github.com/bazelbuild/starlark/blob/master/spec.md) with PCB-specific primitives. See the [Language Reference](https://docs.pcb.new/pages/spec) for full details.
 
-Components are the building blocks of your design. They define physical parts with pins, footprints, and properties:
-
-```python
-Component(
-    name = "U1",
-    type = "microcontroller",
-    footprint = "QFP-48",
-    pin_defs = {
-        "VDD": "1",
-        "GND": "2",
-        "PA0": "3",
-        # ... more pins
-    },
-    pins = {
-        "VDD": vcc_3v3,
-        "GND": gnd,
-        "PA0": led_control,
-    }
-)
-```
-
-### Nets
-
-Nets represent electrical connections between component pins:
-
-```python
-# Create named nets
-power_5v = Net("5V")
-ground = Net("GND")
-data_bus = Net("SPI_MOSI")
-
-# Nets are type-safe and tracked across the design
-```
-
-### Interfaces
-
-Interfaces define reusable connection patterns:
-
-```python
-# Define a power interface
-PowerInterface = interface(
-    vcc = Net,
-    gnd = Net,
-)
-
-# Define an SPI interface
-SPIInterface = interface(
-    clk = Net,
-    mosi = Net,
-    miso = Net,
-    cs = Net,
-)
-```
-
-### Modules
-
-Modules enable hierarchical design and reusability. A module is a `.zen` file that defines configuration parameters and IO interfaces:
-
-```python
-# power_supply.zen
-# Configuration parameters
-input_voltage = config("input_voltage", float, default = 12.0)
-output_voltage = config("output_voltage", float, default = 3.3)
-
-# IO interfaces
-input = io("input", Power)
-output = io("output", Power)
-
-# Module implementation
-Regulator(
-    name = "REG1",
-    vin = input.vcc,
-    vout = output.vcc,
-    gnd = input.gnd,
-    # ... component configuration
-)
-
-# main.zen
-PowerSupply = Module("power_supply.zen")
-
-PowerSupply(
-    name = "PSU1",
-    input_voltage = 9.0,
-    output_voltage = 5.0,
-    input = system_power_in,
-    output = regulated_power,
-)
-```
-
-#### Module Configuration with `config()`
-
-The `config()` function defines configuration parameters at the module level:
-
-```python
-# sensor_module.zen
-# Required configuration
-i2c_address = config("i2c_address", int)
-
-# Optional configuration with defaults
-sample_rate = config("sample_rate", int, default = 100)
-gain = config("gain", float, default = 1.0)
-
-# Configuration with type conversion
-threshold = config("threshold", float, convert = lambda x: float(x))
-
-# Enum configuration
-Package = enum("QFN", "TQFP", "BGA")
-package_type = config("package", Package, convert = Package)
-```
-
-#### Module IO with `io()`
-
-The `io()` function defines input/output interfaces at the module level:
-
-```python
-# uart_bridge.zen
-# Define IO interfaces
-uart_in = io("uart_in", UARTInterface)
-uart_out = io("uart_out", UARTInterface)
-power = io("power", PowerInterface)
-
-# Simple net IO
-enable = io("enable", Net)
-
-# Module implementation uses the IO
-Bridge(
-    name = "U1",
-    rx_in = uart_in.rx,
-    tx_in = uart_in.tx,
-    rx_out = uart_out.rx,
-    tx_out = uart_out.tx,
-    vcc = power.vcc,
-    gnd = power.gnd,
-    en = enable,
-)
-```
+| Concept | Description |
+|---------|-------------|
+| **Net** | Electrical connection between pins (`Net("VCC")`, `Power("5V")`, `Ground()`) |
+| **Component** | Physical part with symbol, footprint, and pin connections |
+| **Interface** | Reusable connection patterns (e.g., SPI, I2C, USB) |
+| **Module** | Hierarchical subcircuit loaded from a `.zen` file |
+| **config()** | Declare configuration parameters for modules |
+| **io()** | Declare net/interface inputs for modules |
 
 ## Command Reference
 
-### `pcb build`
-
-Build and validate PCB designs from `.zen` files.
+All commands accept `.zen` files or directories as arguments. When omitted, they operate on the current directory.
 
 ```bash
-pcb build [PATHS...]
-
-Arguments:
-  [PATHS...]     One or more .zen files or directories containing .zen files
-                 When omitted, all .zen files in the current directory are built
-                 Directories are scanned non-recursively
-
-Examples:
-  pcb build                    # Build all .zen files in current directory
-  pcb build board.zen         # Build specific file
-  pcb build designs/           # Build all .zen files in designs/ directory (non-recursive)
-  pcb build a.zen b.zen      # Build multiple specific files
-```
-
-The build command:
-
-- Validates your Starlark code
-- Reports any errors or warnings with detailed diagnostics
-- Shows component count for successful builds
-- Exits with error code if any file fails to build
-
-### `pcb layout`
-
-Generate PCB layout files from `.zen` designs.
-
-```bash
-pcb layout [OPTIONS] [PATHS...]
-
-Options:
-  -s, --select      Always prompt to choose a layout even when only one exists
-      --no-open     Skip opening the layout file after generation
-  -h, --help        Show help information
-
-Arguments:
-  [PATHS...]        One or more .zen files to process for layout generation
-                    When omitted, all .zen files in the current directory are processed
-
-Examples:
-  pcb layout                   # Generate layouts for all .zen files
-  pcb layout board.zen        # Generate layout for specific file
-  pcb layout --no-open         # Generate without opening in KiCad
-  pcb layout -s                # Force layout selection prompt
-```
-
-The layout command:
-
-- First builds the .zen file (same as `pcb build`)
-- Generates KiCad PCB layout files if a `Layout()` directive exists
-- Shows warnings for files without layout directives
-- Opens the generated layout in KiCad by default (unless `--no-open`)
-- Prompts for selection when multiple layouts exist (or with `-s`)
-
-### `pcb open`
-
-Open existing PCB layout files in KiCad.
-
-```bash
-pcb open [PATHS...]
-
-Arguments:
-  [PATHS...]     One or more .zen files to find and open layouts for
-                 When omitted, searches current directory for .kicad_pcb files
-
-Examples:
-  pcb open                     # Open layout files in current directory
-  pcb open board.zen          # Open layout associated with board.zen
-  pcb open *.zen              # Open layouts for all .zen files
-```
-
-The open command:
-
-- Builds .zen files to find their associated layout paths
-- Falls back to searching for .kicad_pcb files if no .zen files specified
-- Prompts for selection when multiple layouts are found
-- Opens the selected layout in your system's default PCB editor (typically KiCad)
-
-### `pcb fmt`
-
-Format `.zen` files using the ruff formatter.
-
-```bash
-pcb fmt [OPTIONS] [PATHS...]
-
-Options:
-      --check     Check if files are formatted correctly without modifying them
-      --diff      Show diffs instead of writing files
-  -h, --help      Show help information
-
-Arguments:
-  [PATHS...]      One or more .zen/.zen files or directories containing such files
-                  When omitted, all .zen/.zen files in the current directory are formatted
-
-Examples:
-  pcb fmt                      # Format all .zen/.zen files in current directory
-  pcb fmt design.zen          # Format specific file
-  pcb fmt src/                 # Format all files in src/ directory
-  pcb fmt --check              # Check formatting without making changes
-  pcb fmt --diff main.zen     # Show what would change
-```
-
-The fmt command:
-
-- Uses the ruff formatter (no external dependencies)
-- Formats files according to Python PEP 8 style conventions
-- Supports checking mode (`--check`) for CI/CD pipelines
-- Shows diffs (`--diff`) without modifying files
-- Returns non-zero exit code if files need formatting in check mode
-
-### `pcb lsp`
-
-Start the Language Server Protocol server for editor integration.
-
-```bash
-pcb lsp
-```
-
-The LSP command:
-
-- Starts the LSP server for Starlark PCB files
-- Provides intelligent code completion, diagnostics, and go-to-definition
-- Typically launched automatically by your editor's LSP client
-- Supports eager evaluation for real-time feedback
-
-## Project Structure
-
-A typical Zener project structure:
-
-```
-my-pcb-project/
-├── main.zen              # Main board definition
-├── components/            # Reusable components
-│   ├── mcu.zen
-│   ├── power.zen
-│   └── connectors.zen
-├── modules/               # Reusable modules
-│   ├── usb_interface.zen
-│   └── power_supply.zen
-├── libs/                  # External libraries
-│   └── stdlib.zen
-├── eda/                   # KiCad symbols and footprints
-│   ├── symbols/
-│   └── footprints/
-└── layout/                # Generated layouts
-    └── main.kicad_pcb
+pcb build [PATHS...]              # Build and validate designs
+pcb layout [PATHS...]             # Generate layout and open in KiCad
+pcb open [PATHS...]               # Open existing layouts in KiCad
+pcb fmt [PATHS...]                # Format .zen files
 ```
 
 ## Architecture
 
-Zener is built as a modular Rust workspace with specialized crates:
+Rust workspace with specialized crates:
 
-### Core Language & Runtime
-
-- **`pcb-zen`** - Main Starlark runtime with PCB-specific extensions, LSP server, and DAP support
-- **`pcb-zen-core`** - Core language features including components, modules, nets, interfaces, and the type system
-- **`pcb-zen-wasm`** - WebAssembly bindings for running Starlark PCB designs in the browser
-
-### Schematic & Layout
-
-- **`pcb-sch`** - Schematic representation, netlist structures, and KiCad export formats
-- **`pcb-layout`** - PCB layout generation from schematics and KiCad file creation
-- **`pcb-kicad`** - KiCad file format parsing and generation utilities
-
-### Language Server & Editor Support
-
-- **`pcb-starlark-lsp`** - Language Server Protocol implementation for Starlark with PCB extensions
-- **`pcb`** - Main CLI tool providing build, layout, open, and lsp commands
-
-### EDA Integration & Utilities
-
-- **`pcb-eda`** - EDA tool integration for processing symbols and footprints from various sources
-- **`pcb-sexpr`** - S-expression parser for KiCad file formats
-- **`pcb-ui`** - Terminal UI components including spinners, progress bars, and styled output
-- **`pcb-command-runner`** - Utility for running external commands with proper output capture
-
-## Examples
-
-### Simple LED Circuit
-
-```python
-load("@stdlib/properties.zen", "Layout")
-
-Resistor = Module("@stdlib/generics/Resistor.zen")
-LED = Module("@stdlib/generics/LED.zen")
-Capacitor = Module("@stdlib/generics/Capacitor.zen")
-
-vcc = Net("VCC")
-gnd = Net("GND")
-led = Net("LED")
-
-# Power supply filtering
-Capacitor(
-    name = "C1",
-    value = "100nF",
-    package = "0402",
-    P1 = vcc,
-    P2 = gnd
-)
-
-# Current limiting resistor
-Resistor(
-    name = "R1",
-    value = "330ohm",
-    package = "0402",
-    P1 = vcc,
-    P2 = led
-)
-
-# Status LED
-LED(
-    name = "D1",
-    color = "red",
-    package = "0402",
-    A = led,
-    K = gnd
-)
-
-Layout("layout", "layout/")
-```
-
-### Module with Configuration
-
-```python
-# voltage_regulator.zen
-input_voltage = config("input_voltage", float)
-output_voltage = config("output_voltage", float, default = 3.3)
-max_current = config("max_current", float, default = 1.0)
-
-input = io("input", PowerInterface)
-output = io("output", PowerInterface)
-enable = io("enable", Net)
-
-# Create the regulator component
-Component(
-    name = "REG",
-    type = "voltage_regulator",
-    footprint = "SOT-23-5",
-    pin_defs = {
-        "VIN": "1",
-        "GND": "2",
-        "EN": "3",
-        "VOUT": "4",
-        "FB": "5",
-    },
-    pins = {
-        "VIN": input.vcc,
-        "GND": input.gnd,
-        "EN": enable,
-        "VOUT": output.vcc,
-        "FB": Net("FEEDBACK"),
-    },
-    properties = {
-        "input_voltage": input_voltage,
-        "output_voltage": output_voltage,
-    }
-)
-
-# main.zen
-load("@stdlib/interfaces.zen", "Power")
-VoltageRegulator = Module("voltage_regulator.zen")
-
-# Define power rails
-input_power = Power("VIN")
-output_power = Power("3V3")
-
-# Create voltage regulator
-VoltageRegulator(
-    name = "VREG1",
-    input_voltage = 5.0,
-    output_voltage = 3.3,
-    max_current = 0.5,
-    input = input_power,
-    output = output_power,
-    enable = Net("VREG_EN"),
-)
-```
-
-### Complex System with Multiple Modules
-
-```python
-load("@stdlib/properties.zen", "Layout")
-load("@stdlib/interfaces.zen", "Power", "SPI", "I2C")
-
-# Load modules
-MCU = Module("stm32f4.zen")
-Sensor = Module("bmi270.zen")
-Flash = Module("w25q128.zen")
-
-# Power distribution
-system_power = Power("3V3")
-
-# Communication buses
-spi_bus = SPI("SPI1")
-i2c_bus = I2C("I2C1")
-
-# Microcontroller
-MCU(
-    name = "U1",
-    power = system_power,
-    spi1 = spi_bus,
-    i2c1 = i2c_bus,
-)
-
-# IMU Sensor
-Sensor(
-    name = "U2",
-    power = system_power,
-    i2c = i2c_bus,
-    i2c_address = 0x68,
-    sample_rate = 400,  # 400Hz
-)
-
-# Flash Memory
-Flash(
-    name = "U3",
-    power = system_power,
-    spi = spi_bus,
-    capacity = "128Mbit",
-)
-
-Layout("layout")
-```
+| Crate | Description |
+|-------|-------------|
+| `pcb` | Main CLI tool |
+| `pcb-zen` | Starlark runtime, LSP server, DAP support |
+| `pcb-zen-core` | Core language: components, modules, nets, interfaces |
+| `pcb-zen-wasm` | WebAssembly bindings for browser execution |
+| `pcb-layout` | PCB layout generation |
+| `pcb-kicad` | KiCad file format parsing and generation |
+| `pcb-ipc2581-tools` | IPC-2581 export for manufacturing |
+| `pcb-starlark-lsp` | Language Server Protocol implementation |
 
 ## License
 

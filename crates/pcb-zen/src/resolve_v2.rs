@@ -314,29 +314,20 @@ pub struct VendorResult {
     pub vendor_dir: PathBuf,
 }
 
-/// V2 dependency resolution
-///
-/// Builds dependency graph using MVS, fetches dependencies,
-/// and generates/updates the lockfile.
-pub fn resolve_dependencies(
+/// Run auto-deps phase: detect missing dependencies from .zen files and add to pcb.toml
+fn run_auto_deps(
     workspace_info: &mut WorkspaceInfo,
+    workspace_root: &Path,
     offline: bool,
-) -> Result<ResolutionResult> {
-    let workspace_root = workspace_info.root.clone();
-    log::debug!(
-        "V2 Dependency Resolution{}",
-        if offline { " (offline)" } else { "" }
-    );
-    log::debug!("Workspace root: {}", workspace_root.display());
-
-    // Phase -1: Auto-add missing dependencies from .zen files
+) -> Result<()> {
     log::debug!("Phase -1: Auto-detecting dependencies from .zen files");
     let auto_deps = crate::auto_deps::auto_add_zen_deps(
-        &workspace_root,
+        workspace_root,
         &workspace_info.packages,
         workspace_info.lockfile.as_ref(),
         offline,
     )?;
+
     if auto_deps.total_added > 0 {
         log::debug!(
             "Auto-added {} dependencies across {} package(s)",
@@ -356,6 +347,7 @@ pub fn resolve_dependencies(
             auto_deps.versions_corrected
         );
     }
+
     for (path, aliases) in &auto_deps.unknown_aliases {
         eprintln!(
             "{} {} has unknown aliases:",
@@ -379,6 +371,35 @@ pub fn resolve_dependencies(
 
     // Reload configs (auto-deps may have modified them)
     workspace_info.reload()?;
+    Ok(())
+}
+
+/// V2 dependency resolution
+///
+/// Builds dependency graph using MVS, fetches dependencies,
+/// and generates/updates the lockfile.
+pub fn resolve_dependencies(
+    workspace_info: &mut WorkspaceInfo,
+    offline: bool,
+) -> Result<ResolutionResult> {
+    let workspace_root = workspace_info.root.clone();
+
+    // Standalone mode: .zen file with inline manifest (no pcb.toml)
+    // In this mode we skip auto-deps and lockfile writing
+    let is_standalone = !workspace_root.join("pcb.toml").exists();
+
+    log::debug!(
+        "V2 Dependency Resolution{}{}",
+        if offline { " (offline)" } else { "" },
+        if is_standalone { " (standalone)" } else { "" }
+    );
+    log::debug!("Workspace root: {}", workspace_root.display());
+
+    // Phase -1: Auto-add missing dependencies from .zen files
+    // Skip for standalone mode (no pcb.toml to modify)
+    if !is_standalone {
+        run_auto_deps(workspace_info, &workspace_root, offline)?;
+    }
 
     // Validate patches are only at workspace root
     if let Some(config) = &workspace_info.config {
@@ -696,14 +717,17 @@ pub fn resolve_dependencies(
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
 
     // Phase 4: Update lockfile with cryptographic hashes
-    log::debug!("Phase 4: Lockfile");
-    let (lockfile, added_count) = update_lockfile(workspace_info, &closure, &asset_paths)?;
+    // Skip for standalone mode (no pcb.sum to write)
+    if !is_standalone {
+        log::debug!("Phase 4: Lockfile");
+        let (lockfile, added_count) = update_lockfile(workspace_info, &closure, &asset_paths)?;
 
-    // Only write lockfile to disk if new entries were added
-    if added_count > 0 {
-        let lockfile_path = workspace_root.join("pcb.sum");
-        std::fs::write(&lockfile_path, lockfile.to_string())?;
-        log::debug!("  Updated {}", lockfile_path.display());
+        // Only write lockfile to disk if new entries were added
+        if added_count > 0 {
+            let lockfile_path = workspace_root.join("pcb.sum");
+            std::fs::write(&lockfile_path, lockfile.to_string())?;
+            log::debug!("  Updated {}", lockfile_path.display());
+        }
     }
 
     log::debug!("V2 dependency resolution complete");

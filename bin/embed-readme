@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simple embedmd replacement for syncing code snippets in markdown
-# Usage: embedmd.sh [-c|--check] <markdown-file>
+# Embeds file contents into markdown code blocks
+# Usage: embed-readme [-c|--check] <markdown-file>
+#
+# Directives:
+#   [embed-readme]:# (path/to/file language)
+#
+# The directive must be followed by a fenced code block which will be
+# replaced with the contents of the referenced file.
 
 check_mode=false
 if [[ "${1:-}" == "-c" ]] || [[ "${1:-}" == "--check" ]]; then
@@ -78,7 +84,7 @@ done < "$markdown_file"
 # Check mode: compare and return error if different
 if $check_mode; then
     if ! diff -q "$markdown_file" "$temp_file" > /dev/null 2>&1; then
-        echo "Error: $markdown_file is out of sync. Run 'bin/embedmd.sh $markdown_file' to update." >&2
+        echo "Error: $markdown_file is out of sync. Run 'bin/embed-readme $markdown_file' to update." >&2
         diff -u "$markdown_file" "$temp_file" || true
         exit 1
     fi
