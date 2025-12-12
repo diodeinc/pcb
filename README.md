@@ -183,8 +183,10 @@ Rust workspace with specialized crates:
 | `pcb` | Main CLI tool |
 | `pcb-zen` | Starlark runtime, LSP server, DAP support |
 | `pcb-zen-core` | Core language: components, modules, nets, interfaces |
+| `pcb-zen-wasm` | WebAssembly bindings for browser execution |
 | `pcb-layout` | PCB layout generation |
 | `pcb-kicad` | KiCad file format parsing and generation |
+| `pcb-ipc2581-tools` | IPC-2581 export for manufacturing |
 | `pcb-starlark-lsp` | Language Server Protocol implementation |
 
 ## License
