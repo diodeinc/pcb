@@ -816,30 +816,52 @@ impl CoreLoadResolver {
         None
     }
 
-    /// Expand V2 alias using auto-generated aliases from dependencies/assets
+    /// Expand V2 alias using the resolution map
+    ///
+    /// Aliases are auto-generated from the last path segment of dependency URLs.
+    /// For example, "github.com/diodeinc/stdlib" generates the alias "stdlib".
     fn expand_v2_alias(
         &self,
         context: &ResolveContext,
         alias: &str,
     ) -> Result<String, anyhow::Error> {
-        // Find package root by walking up from current file looking for pcb.toml
-        let mut current = context.current_file.parent();
-        while let Some(dir) = current {
-            let pcb_toml_path = dir.join("pcb.toml");
-            if self.file_provider.exists(&pcb_toml_path) {
-                // Parse pcb.toml
-                if let Ok(cfg) = config::PcbToml::from_file(&*self.file_provider, &pcb_toml_path) {
-                    let auto_aliases = cfg.auto_generated_aliases();
-                    if let Some(target) = auto_aliases.get(alias) {
-                        return Ok(target.clone());
-                    }
+        // Find the package root for the current file
+        let package_root = self
+            .v2_package_resolutions
+            .as_ref()
+            .and_then(|m| self.find_package_root_for_file(&context.current_file, m))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Internal error: current file not in any V2 package: {}",
+                    context.current_file.display()
+                )
+            })?;
+
+        // Get the resolution map for this package
+        let resolved_map = self
+            .v2_package_resolutions
+            .as_ref()
+            .unwrap()
+            .get(&package_root)
+            .expect("package_resolutions out of sync");
+
+        // Derive alias from resolution map keys by matching last path segment
+        // Also include KiCad asset aliases
+        for (url, _path) in resolved_map.iter() {
+            if let Some(last_segment) = url.rsplit('/').next() {
+                if last_segment == alias {
+                    return Ok(url.clone());
                 }
-                break;
             }
-            current = dir.parent();
         }
 
-        // Unknown alias
+        // Check KiCad asset aliases
+        for (kicad_alias, base_url, _) in config::KICAD_ASSETS {
+            if *kicad_alias == alias {
+                return Ok(base_url.to_string());
+            }
+        }
+
         anyhow::bail!("Unknown alias '@{}'", alias)
     }
 
