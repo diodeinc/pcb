@@ -254,19 +254,16 @@ pub fn get_workspace_info<F: FileProvider>(
     start_path: &Path,
 ) -> Result<WorkspaceInfo> {
     let mut info = pcb_zen_core::workspace::get_workspace_info(file_provider, start_path)?;
-    enrich_with_git_versions(&mut info);
-    Ok(info)
-}
 
-/// Enrich workspace info with version information from git tags
-pub fn enrich_with_git_versions(info: &mut WorkspaceInfo) {
+    // Enrich with git tag versions (native-only feature)
     let all_tags = git::list_all_tags_vec(&info.root);
     let workspace_path = info.path().map(|s| s.to_string());
-
     for pkg in info.packages.values_mut() {
         let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace_path.as_deref());
         pkg.version = tags::find_latest_version(&all_tags, &tag_prefix).map(|v| v.to_string());
     }
+
+    Ok(info)
 }
 
 #[cfg(test)]

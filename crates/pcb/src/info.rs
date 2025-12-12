@@ -114,6 +114,7 @@ fn print_v2_human_readable(ws: &WorkspaceInfo) {
 
         for pkg in &boards {
             if let Some(board) = &pkg.config.board {
+                // board.path is already populated by populate_board_zen_paths()
                 let zen_path = board
                     .path
                     .as_ref()
@@ -126,7 +127,7 @@ fn print_v2_human_readable(ws: &WorkspaceInfo) {
                             format!("{}/{}", pkg_rel, p)
                         }
                     })
-                    .unwrap_or_else(|| "?.zen".to_string());
+                    .unwrap_or_else(|| "(no .zen file found)".to_string());
 
                 // Use package version (which is board version for board packages)
                 let version_str = format_version(&pkg.version, false);

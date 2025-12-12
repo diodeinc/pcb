@@ -148,8 +148,9 @@ impl WorkspaceInfo {
             .values()
             .filter_map(|pkg| {
                 let b = pkg.config.board.as_ref()?;
-                let zen = b.path.clone().or_else(|| find_single_zen_file(&pkg.dir))?;
-                let rel_zen = pkg.rel_path.join(&zen);
+                // board.path is populated by get_workspace_info()
+                let zen = b.path.as_ref()?;
+                let rel_zen = pkg.rel_path.join(zen);
                 Some((
                     b.name.clone(),
                     BoardInfo {
@@ -176,16 +177,18 @@ impl WorkspaceInfo {
     }
 }
 
-/// Find single .zen file in a directory
-fn find_single_zen_file(dir: &Path) -> Option<String> {
-    let entries = std::fs::read_dir(dir).ok()?;
+/// Find single .zen file in a directory using a FileProvider
+fn find_single_zen_file<F: FileProvider>(file_provider: &F, dir: &Path) -> Option<String> {
+    let entries = file_provider.list_directory(dir).ok()?;
     let zen_files: Vec<_> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "zen"))
+        .into_iter()
+        .filter(|p| !file_provider.is_directory(p) && p.extension().is_some_and(|ext| ext == "zen"))
         .collect();
 
     if zen_files.len() == 1 {
-        Some(zen_files[0].file_name().to_string_lossy().to_string())
+        zen_files[0]
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
     } else {
         None
     }
@@ -268,8 +271,9 @@ fn walk_directories<F: FileProvider>(
 
 /// Get workspace information using FileProvider for cross-platform support.
 ///
-/// This discovers packages but does NOT populate version fields (that requires git).
-/// Native code should call `enrich_with_git_versions` after this.
+/// This discovers packages and populates board zen paths, but does NOT populate
+/// version fields (that requires git). Native code should use `pcb_zen::workspace::get_workspace_info`
+/// which adds git version enrichment.
 pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
     start_path: &Path,
@@ -395,6 +399,15 @@ pub fn get_workspace_info<F: FileProvider>(
             return Err(anyhow::anyhow!("Failed to read pcb.sum: {}", e));
         }
     };
+
+    // Populate discovered zen paths for boards without explicit paths
+    for pkg in packages.values_mut() {
+        if let Some(board) = &mut pkg.config.board {
+            if board.path.is_none() {
+                board.path = find_single_zen_file(file_provider, &pkg.dir);
+            }
+        }
+    }
 
     Ok(WorkspaceInfo {
         root: workspace_root,
