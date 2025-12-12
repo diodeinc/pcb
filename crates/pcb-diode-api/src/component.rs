@@ -3,7 +3,7 @@ use clap::Args;
 use colored::Colorize;
 use deunicode::deunicode;
 use indicatif::ProgressBar;
-use inquire::Select;
+use inquire::{Select, Text};
 use minijinja::Environment;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -529,34 +529,19 @@ pub fn add_component_to_workspace(
     let download = download_component(auth_token, component_id)?;
     spinner.finish_and_clear();
 
-    // Build path: components/<manufacturer>/<part_number>/<part_number>.zen
-    let sanitized_mfr = download
-        .metadata
-        .manufacturer
-        .as_deref()
-        .map(sanitize_mpn_for_path)
-        .unwrap_or_else(|| "unknown".to_string());
+    let manufacturer = download.metadata.manufacturer.as_deref();
+    let component_dir = component_dir_path(workspace_root, manufacturer, part_number);
     let sanitized_mpn = sanitize_mpn_for_path(part_number);
-    let component_dir = workspace_root
-        .join("components")
-        .join(&sanitized_mfr)
-        .join(&sanitized_mpn);
-    let component_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+    let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
 
-    if component_file.exists() {
+    if zen_file.exists() {
         return Ok(AddComponentResult {
-            component_path: component_file,
+            component_path: zen_file,
             already_exists: true,
         });
     }
 
     fs::create_dir_all(&component_dir)?;
-
-    // Use sanitized MPN for all file names (more consistent and cleaner)
-    let symbol_filename = format!("{}.kicad_sym", &sanitized_mpn);
-    let footprint_filename = format!("{}.kicad_mod", &sanitized_mpn);
-    let step_filename = format!("{}.step", &sanitized_mpn);
-    let datasheet_filename = format!("{}.pdf", &sanitized_mpn);
 
     // Track which files will be downloaded
     let has_symbol = download.symbol_url.is_some() && download.metadata.symbol_filename.is_some();
@@ -572,12 +557,12 @@ pub fn add_component_to_workspace(
     let mut scan_tasks = Vec::new();
 
     if has_symbol {
-        let path = component_dir.join(&symbol_filename);
+        let path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
         download_tasks.push((download.symbol_url.clone().unwrap(), path.clone(), "symbol"));
         upgrade_tasks.push(("symbol", path));
     }
     if has_footprint {
-        let path = component_dir.join(&footprint_filename);
+        let path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
         download_tasks.push((
             download.footprint_url.clone().unwrap(),
             path.clone(),
@@ -586,20 +571,17 @@ pub fn add_component_to_workspace(
         upgrade_tasks.push(("footprint", path));
     }
     if has_step {
-        download_tasks.push((
-            download.step_url.clone().unwrap(),
-            component_dir.join(&step_filename),
-            "step",
-        ));
+        let path = component_dir.join(format!("{}.step", &sanitized_mpn));
+        download_tasks.push((download.step_url.clone().unwrap(), path, "step"));
     }
     if has_datasheet {
         let url = download.datasheet_url.as_ref().unwrap();
-        download_tasks.push((url.clone(), component_dir.join(&datasheet_filename), "datasheet"));
+        let path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
+        download_tasks.push((url.clone(), path.clone(), "datasheet"));
 
         if let Some(storage_path) = parse_storage_path_from_url(url) {
-            let md_path = component_dir.join(&datasheet_filename).with_extension("md");
-            if !md_path.exists() {
-                scan_tasks.push((storage_path, datasheet_filename.clone()));
+            if !path.with_extension("md").exists() {
+                scan_tasks.push((storage_path, format!("{}.pdf", &sanitized_mpn)));
             }
         }
     }
@@ -742,36 +724,17 @@ pub fn add_component_to_workspace(
         }
     }
 
-    // Post-process: Embed STEP into footprint if both files exist
-    let footprint_path = component_dir.join(&footprint_filename);
-    let step_path = component_dir.join(&step_filename);
-    if footprint_path.exists() && step_path.exists() {
-        embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
-    }
-
-    // Generate .zen file if symbol was downloaded
-    let symbol_path = component_dir.join(&symbol_filename);
-    if symbol_path.exists() {
-        let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
-        let symbol = symbol_lib
-            .first_symbol()
-            .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
-
-        let content = generate_zen_file(
-            part_number,
-            &sanitized_mpn,
-            symbol,
-            &symbol_filename,
-            has_footprint.then_some(footprint_filename.as_str()),
-            has_datasheet.then_some(datasheet_filename.as_str()),
-            download.metadata.manufacturer.as_deref(),
-        )?;
-
-        write_component_files(&component_file, &component_dir, &content)?;
-    }
+    // Finalize: embed STEP, generate .zen file
+    finalize_component(
+        &component_dir,
+        part_number,
+        manufacturer,
+        has_footprint,
+        has_datasheet,
+    )?;
 
     Ok(AddComponentResult {
-        component_path: component_file,
+        component_path: zen_file,
         already_exists: false,
     })
 }
@@ -779,6 +742,64 @@ pub fn add_component_to_workspace(
 pub struct AddComponentResult {
     pub component_path: PathBuf,
     pub already_exists: bool,
+}
+
+/// Build component directory path: components/<manufacturer>/<mpn>/
+fn component_dir_path(workspace_root: &Path, manufacturer: Option<&str>, mpn: &str) -> PathBuf {
+    let sanitized_mfr = manufacturer
+        .map(sanitize_mpn_for_path)
+        .unwrap_or_else(|| "unknown".to_string());
+    let sanitized_mpn = sanitize_mpn_for_path(mpn);
+    workspace_root
+        .join("components")
+        .join(sanitized_mfr)
+        .join(sanitized_mpn)
+}
+
+/// Embed STEP into footprint (if both exist) and generate .zen file
+fn finalize_component(
+    component_dir: &Path,
+    mpn: &str,
+    manufacturer: Option<&str>,
+    has_footprint: bool,
+    has_datasheet: bool,
+) -> Result<()> {
+    let sanitized_mpn = sanitize_mpn_for_path(mpn);
+    let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
+    let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
+    let step_path = component_dir.join(format!("{}.step", &sanitized_mpn));
+
+    // Embed STEP into footprint if both exist
+    if footprint_path.exists() && step_path.exists() {
+        embed_step_into_footprint_file(&footprint_path, &step_path, true)?;
+    }
+
+    // Generate .zen file if symbol exists
+    if symbol_path.exists() {
+        let symbol_lib = pcb_eda::SymbolLibrary::from_file(&symbol_path)?;
+        let symbol = symbol_lib
+            .first_symbol()
+            .ok_or_else(|| anyhow::anyhow!("No symbols in library"))?;
+
+        let content = generate_zen_file(
+            mpn,
+            &sanitized_mpn,
+            symbol,
+            &format!("{}.kicad_sym", &sanitized_mpn),
+            has_footprint
+                .then(|| format!("{}.kicad_mod", &sanitized_mpn))
+                .as_deref(),
+            has_datasheet
+                .then(|| format!("{}.pdf", &sanitized_mpn))
+                .as_deref(),
+            manufacturer,
+        )?;
+
+        let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+        write_component_files(&zen_file, component_dir, &content)?;
+    }
+
+    Ok(())
 }
 
 /// Write a .zen file and create an empty pcb.toml in the component directory
@@ -1320,12 +1341,9 @@ fn path_filename(path: &Path) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Copy a file to the working directory, returning the new path
-fn copy_to_workdir(src: &Path, workdir: &Path) -> Result<PathBuf> {
-    let filename = src
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
-    let dest = workdir.join(filename);
+/// Copy a file to the working directory with a new name, returning the new path
+fn copy_file_to_dir(src: &Path, workdir: &Path, dest_filename: &str) -> Result<PathBuf> {
+    let dest = workdir.join(dest_filename);
     fs::copy(src, &dest).with_context(|| format!("Failed to copy {}", src.display()))?;
     Ok(dest)
 }
@@ -1373,42 +1391,40 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         .first_symbol()
         .ok_or_else(|| anyhow::anyhow!("No symbols found in library"))?;
 
-    // Use symbol name as MPN, fall back to directory name
-    let mpn = if !symbol.name.is_empty() {
+    // Best-effort defaults from symbol, fall back to directory name
+    let default_mpn = if !symbol.name.is_empty() {
         symbol.name.clone()
     } else {
         dir.file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid directory name"))?
+            .unwrap_or("component")
             .to_string()
     };
+    let default_mfr = symbol.manufacturer.clone().unwrap_or_default();
 
+    // Prompt user to confirm/edit MPN and manufacturer
+    let mpn = Text::new("MPN:")
+        .with_default(&default_mpn)
+        .prompt()
+        .context("Failed to get MPN")?;
+
+    let manufacturer_input = Text::new("Manufacturer:")
+        .with_default(&default_mfr)
+        .prompt()
+        .context("Failed to get manufacturer")?;
+    let manufacturer = if manufacturer_input.is_empty() {
+        None
+    } else {
+        Some(manufacturer_input)
+    };
+
+    let component_dir = component_dir_path(workspace_root, manufacturer.as_deref(), &mpn);
     let sanitized_mpn = sanitize_mpn_for_path(&mpn);
-    let sanitized_mfr = symbol
-        .manufacturer
-        .as_deref()
-        .map(sanitize_mpn_for_path)
-        .unwrap_or_else(|| "unknown".to_string());
-
-    println!(
-        "  {} MPN: {}, Manufacturer: {}",
-        "ℹ".blue(),
-        mpn.cyan(),
-        symbol.manufacturer.as_deref().unwrap_or("unknown").cyan()
-    );
-
-    // Build path: components/<manufacturer>/<part_number>/<part_number>.zen
-    let component_dir = workspace_root
-        .join("components")
-        .join(&sanitized_mfr)
-        .join(&sanitized_mpn);
-    let component_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
+    let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
 
     // Check if component already exists
-    if component_file.exists() {
-        let display_path = component_file
-            .strip_prefix(workspace_root)
-            .unwrap_or(&component_file);
+    if zen_file.exists() {
+        let display_path = zen_file.strip_prefix(workspace_root).unwrap_or(&zen_file);
         println!(
             "{} Component already exists at: {}",
             "ℹ".blue().bold(),
@@ -1417,7 +1433,6 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // Create component directory
     fs::create_dir_all(&component_dir)?;
 
     println!(
@@ -1425,107 +1440,96 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
         "→".blue().bold()
     );
 
-    // Copy the selected symbol
-    let symbol_path = copy_to_workdir(&selected_symbol, &component_dir)?;
-    let symbol_filename = path_filename(&symbol_path);
+    // Copy the selected symbol with standardized name
+    let sym_filename = format!("{}.kicad_sym", &sanitized_mpn);
+    copy_file_to_dir(&selected_symbol, &component_dir, &sym_filename)?;
+    println!(
+        "  {} Symbol: {} → {}",
+        "✓".green(),
+        path_filename(&selected_symbol).dimmed(),
+        sym_filename.cyan()
+    );
 
     // Copy first footprint if available
-    let footprint_path = if let Some(fp) = files.footprints.first() {
-        println!("  {} Footprint: {}", "✓".green(), path_filename(fp).cyan());
-        Some(copy_to_workdir(fp, &component_dir)?)
-    } else {
-        None
-    };
+    let has_footprint = files.footprints.first().is_some();
+    if let Some(fp) = files.footprints.first() {
+        let fp_filename = format!("{}.kicad_mod", &sanitized_mpn);
+        copy_file_to_dir(fp, &component_dir, &fp_filename)?;
+        println!(
+            "  {} Footprint: {} → {}",
+            "✓".green(),
+            path_filename(fp).dimmed(),
+            fp_filename.cyan()
+        );
+    }
 
     // Copy first STEP file if available
-    let step_path = if let Some(sp) = files.steps.first() {
-        println!("  {} 3D Model: {}", "✓".green(), path_filename(sp).cyan());
-        Some(copy_to_workdir(sp, &component_dir)?)
-    } else {
-        None
-    };
+    if let Some(sp) = files.steps.first() {
+        let step_filename = format!("{}.step", &sanitized_mpn);
+        copy_file_to_dir(sp, &component_dir, &step_filename)?;
+        println!(
+            "  {} 3D Model: {} → {}",
+            "✓".green(),
+            path_filename(sp).dimmed(),
+            step_filename.cyan()
+        );
+    }
 
-    // Copy all PDFs
-    let mut pdf_paths = Vec::new();
-    for pdf in &files.pdfs {
-        println!("  {} Datasheet: {}", "✓".green(), path_filename(pdf).cyan());
-        pdf_paths.push(copy_to_workdir(pdf, &component_dir)?);
+    // Copy first PDF with standardized name
+    let has_datasheet = files.pdfs.first().is_some();
+    if let Some(pdf) = files.pdfs.first() {
+        let pdf_filename = format!("{}.pdf", &sanitized_mpn);
+        copy_file_to_dir(pdf, &component_dir, &pdf_filename)?;
+        println!(
+            "  {} Datasheet: {} → {}",
+            "✓".green(),
+            path_filename(pdf).dimmed(),
+            pdf_filename.cyan()
+        );
     }
 
     // Upgrade files
     println!("{} Upgrading files...", "→".blue().bold());
+    let symbol_path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
     if let Err(e) = upgrade_symbol(&symbol_path) {
         println!("  {} Symbol upgrade skipped: {}", "!".yellow(), e);
     }
-    if let Some(ref fp) = footprint_path {
-        if let Err(e) = upgrade_footprint(fp) {
+    if has_footprint {
+        let footprint_path = component_dir.join(format!("{}.kicad_mod", &sanitized_mpn));
+        if let Err(e) = upgrade_footprint(&footprint_path) {
             println!("  {} Footprint upgrade skipped: {}", "!".yellow(), e);
         }
     }
 
-    // Re-parse symbol after upgrade (in case it changed)
-    let symbol_lib =
-        pcb_eda::SymbolLibrary::from_file(&symbol_path).context("Failed to parse symbol file")?;
-    let symbol = symbol_lib
-        .first_symbol()
-        .ok_or_else(|| anyhow::anyhow!("No symbols found in library"))?;
-
-    // Scan PDFs (requires auth)
-    let datasheet_filename = if !pdf_paths.is_empty() {
-        println!("{} Scanning datasheets...", "→".blue().bold());
+    // Scan datasheet (requires auth)
+    if has_datasheet {
+        println!("{} Scanning datasheet...", "→".blue().bold());
+        let datasheet_path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
         let token = crate::auth::get_valid_token()?;
-        let mut first_pdf = None;
-        for pdf in &pdf_paths {
-            match crate::scan::scan_with_defaults(
-                &token,
-                pdf.clone(),
-                Some(component_dir.clone()),
-                None,
-                true,
-            ) {
-                Ok(r) => {
-                    println!(
-                        "  {} {} ({} pages)",
-                        "✓".green(),
-                        path_filename(pdf),
-                        r.page_count
-                    );
-                    if first_pdf.is_none() {
-                        first_pdf = Some(path_filename(pdf).to_string());
-                    }
-                }
-                Err(e) => println!("  {} {}: {}", "✗".red(), path_filename(pdf), e),
-            }
+        match crate::scan::scan_with_defaults(
+            &token,
+            datasheet_path,
+            Some(component_dir.clone()),
+            None,
+            true,
+        ) {
+            Ok(r) => println!("  {} ({} pages)", "✓".green(), r.page_count),
+            Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
         }
-        first_pdf
-    } else {
-        None
-    };
-
-    // Embed STEP in footprint (delete standalone STEP after embedding)
-    if let (Some(ref fp), Some(ref sp)) = (&footprint_path, &step_path) {
-        println!("{} Embedding 3D model...", "→".blue().bold());
-        embed_step_into_footprint_file(fp, sp, true)?;
     }
 
-    // Generate .zen file
+    // Finalize: embed STEP, generate .zen file
     println!("{} Generating .zen file...", "→".blue().bold());
-    let zen_content = generate_zen_file(
+    finalize_component(
+        &component_dir,
         &mpn,
-        &sanitized_mpn,
-        symbol,
-        symbol_filename,
-        footprint_path.as_ref().map(|p| path_filename(p)),
-        datasheet_filename.as_deref(),
-        symbol.manufacturer.as_deref(),
+        manufacturer.as_deref(),
+        has_footprint,
+        has_datasheet,
     )?;
 
-    write_component_files(&component_file, &component_dir, &zen_content)?;
-
     // Show result
-    let display_path = component_file
-        .strip_prefix(workspace_root)
-        .unwrap_or(&component_file);
+    let display_path = zen_file.strip_prefix(workspace_root).unwrap_or(&zen_file);
     println!(
         "\n{} Added {} to {}",
         "✓".green().bold(),
