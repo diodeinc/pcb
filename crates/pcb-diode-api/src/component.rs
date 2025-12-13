@@ -1012,15 +1012,6 @@ fn format_column(text: &str, width: usize) -> String {
     format!("{}{}", truncated, " ".repeat(padding))
 }
 
-/// Helper to get check/cross icon
-fn check_icon(available: bool) -> colored::ColoredString {
-    if available {
-        "✓".green()
-    } else {
-        "✗".red()
-    }
-}
-
 /// Helper to calculate max width for a column with min/max bounds
 fn calc_col_width<'a, I>(items: I, min: usize, max: usize) -> usize
 where
@@ -1060,7 +1051,7 @@ fn calculate_column_widths(results: &[ComponentSearchResult]) -> ColumnWidths {
         12,
     );
 
-    let used = 1 + part + mfr + pkg + 14 + 10; // src(1) + part + mfr + pkg + models(14) + spacing(10)
+    let used = 1 + part + mfr + pkg + 8 + 10; // src(1) + part + mfr + pkg + models(8) + spacing(10)
     let desc = terminal_width.saturating_sub(used).max(20);
 
     ColumnWidths {
@@ -1068,7 +1059,7 @@ fn calculate_column_widths(results: &[ComponentSearchResult]) -> ColumnWidths {
         part,
         mfr,
         pkg,
-        models: 14,
+        models: 8,
         desc,
     }
 }
@@ -1086,11 +1077,21 @@ fn format_search_result(result: &ComponentSearchResult, widths: &ColumnWidths) -
         widths.pkg,
     )
     .yellow();
-    let models = format!(
-        "[2D {}] [3D {}]",
-        check_icon(result.model_availability.ecad_model),
-        check_icon(result.model_availability.step_model)
-    );
+    let label_2d = if result.model_availability.ecad_model {
+        "2D".green()
+    } else {
+        "2D".red()
+    };
+    let label_3d = if result.model_availability.step_model {
+        "3D".green()
+    } else {
+        "3D".red()
+    };
+    let models = if !result.datasheets.is_empty() {
+        format!("{} {} 📄", label_2d, label_3d)
+    } else {
+        format!("{} {} {}", label_2d, label_3d, "—".dimmed())
+    };
     let desc = format_column(
         &clean_description(result.description.as_deref()),
         widths.desc,
@@ -1181,6 +1182,7 @@ pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
                 "component_id": r.component_id,
                 "has_2d_model": r.model_availability.ecad_model,
                 "has_3d_model": r.model_availability.step_model,
+                "has_datasheet": !r.datasheets.is_empty(),
                 "source": r.source,
             })
         })
