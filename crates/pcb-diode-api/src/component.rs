@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use terminal_hyperlink::Hyperlink as _;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use walkdir::WalkDir;
 
@@ -1012,6 +1013,15 @@ fn format_column(text: &str, width: usize) -> String {
     format!("{}{}", truncated, " ".repeat(padding))
 }
 
+/// Create a hyperlink if the terminal supports it, otherwise return plain text
+fn hyperlink(url: &str, text: &str) -> String {
+    if supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout) {
+        text.hyperlink(url)
+    } else {
+        text.to_string()
+    }
+}
+
 /// Helper to calculate max width for a column with min/max bounds
 fn calc_col_width<'a, I>(items: I, min: usize, max: usize) -> usize
 where
@@ -1087,10 +1097,15 @@ fn format_search_result(result: &ComponentSearchResult, widths: &ColumnWidths) -
     } else {
         "3D".red()
     };
-    let models = if !result.datasheets.is_empty() {
-        format!("{} {} 📄", label_2d, label_3d)
+    let models = if let Some(datasheet_url) = result.datasheets.first() {
+        format!(
+            "{} {} {}",
+            label_2d,
+            label_3d,
+            hyperlink(datasheet_url, "📄")
+        )
     } else {
-        format!("{} {} {}", label_2d, label_3d, "—".dimmed())
+        format!("{} {} {}", label_2d, label_3d, "— ".dimmed())
     };
     let desc = format_column(
         &clean_description(result.description.as_deref()),
