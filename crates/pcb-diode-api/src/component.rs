@@ -1197,7 +1197,7 @@ pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
                 "component_id": r.component_id,
                 "has_2d_model": r.model_availability.ecad_model,
                 "has_3d_model": r.model_availability.step_model,
-                "has_datasheet": !r.datasheets.is_empty(),
+                "datasheets": r.datasheets,
                 "source": r.source,
             })
         })
