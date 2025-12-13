@@ -29,9 +29,9 @@ anyhow = { workspace = true }
 comfy-table = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
 starlark_syntax = { workspace = true }
-supports-hyperlinks = { version = "3.1", optional = true }
-terminal_hyperlink = { version = "0.1", optional = true }
-urlencoding = { version = "2.1", optional = true }
+supports-hyperlinks = { workspace = true, optional = true }
+terminal_hyperlink = { workspace = true, optional = true }
+urlencoding = { workspace = true, optional = true }
 
 [features]
 default = []

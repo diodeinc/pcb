@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use terminal_hyperlink::Hyperlink as _;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use walkdir::WalkDir;
 
@@ -1012,12 +1013,12 @@ fn format_column(text: &str, width: usize) -> String {
     format!("{}{}", truncated, " ".repeat(padding))
 }
 
-/// Helper to get check/cross icon
-fn check_icon(available: bool) -> colored::ColoredString {
-    if available {
-        "✓".green()
+/// Create a hyperlink if the terminal supports it, otherwise return plain text
+fn hyperlink(url: &str, text: &str) -> String {
+    if supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout) {
+        text.hyperlink(url)
     } else {
-        "✗".red()
+        text.to_string()
     }
 }
 
@@ -1060,7 +1061,7 @@ fn calculate_column_widths(results: &[ComponentSearchResult]) -> ColumnWidths {
         12,
     );
 
-    let used = 1 + part + mfr + pkg + 14 + 10; // src(1) + part + mfr + pkg + models(14) + spacing(10)
+    let used = 1 + part + mfr + pkg + 8 + 10; // src(1) + part + mfr + pkg + models(8) + spacing(10)
     let desc = terminal_width.saturating_sub(used).max(20);
 
     ColumnWidths {
@@ -1068,7 +1069,7 @@ fn calculate_column_widths(results: &[ComponentSearchResult]) -> ColumnWidths {
         part,
         mfr,
         pkg,
-        models: 14,
+        models: 8,
         desc,
     }
 }
@@ -1086,11 +1087,26 @@ fn format_search_result(result: &ComponentSearchResult, widths: &ColumnWidths) -
         widths.pkg,
     )
     .yellow();
-    let models = format!(
-        "[2D {}] [3D {}]",
-        check_icon(result.model_availability.ecad_model),
-        check_icon(result.model_availability.step_model)
-    );
+    let label_2d = if result.model_availability.ecad_model {
+        "2D".green()
+    } else {
+        "2D".red()
+    };
+    let label_3d = if result.model_availability.step_model {
+        "3D".green()
+    } else {
+        "3D".red()
+    };
+    let models = if let Some(datasheet_url) = result.datasheets.first() {
+        format!(
+            "{} {} {}",
+            label_2d,
+            label_3d,
+            hyperlink(datasheet_url, "📄")
+        )
+    } else {
+        format!("{} {} {}", label_2d, label_3d, "— ".dimmed())
+    };
     let desc = format_column(
         &clean_description(result.description.as_deref()),
         widths.desc,
@@ -1181,6 +1197,7 @@ pub fn search_json(auth_token: &str, mpn: &str) -> Result<String> {
                 "component_id": r.component_id,
                 "has_2d_model": r.model_availability.ecad_model,
                 "has_3d_model": r.model_availability.step_model,
+                "datasheets": r.datasheets,
                 "source": r.source,
             })
         })
