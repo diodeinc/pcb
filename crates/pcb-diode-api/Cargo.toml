@@ -39,3 +39,5 @@ base64 = { workspace = true }
 fslock = { workspace = true }
 pcb-mcp = { workspace = true }
 walkdir = { workspace = true }
+terminal_hyperlink = { workspace = true }
+supports-hyperlinks = { workspace = true }

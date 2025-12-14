@@ -3080,6 +3080,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "supports-hyperlinks",
+ "terminal_hyperlink",
  "terminal_size",
  "toml",
  "unicode-width 0.2.1",
