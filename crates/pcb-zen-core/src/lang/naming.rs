@@ -7,6 +7,7 @@
 
 use crate::lang::error::CategorizedDiagnostic;
 use crate::Diagnostic;
+use heck::ToSnakeCase;
 use starlark::codemap::ResolvedSpan;
 use starlark::errors::EvalSeverity;
 use std::path::Path;
@@ -23,8 +24,6 @@ pub const STYLE_NAMING_NET: &str = "style.naming.net";
 /// Check if a name follows UPPERCASE convention.
 ///
 /// UPPERCASE names:
-/// - Consist only of uppercase letters, digits, and underscores
-/// - Must start with a letter
 /// - Cannot be empty
 ///
 /// Examples: `VCC`, `GND`, `IN1`, `DATA_OUT`, `CLK_100MHZ`
@@ -33,16 +32,7 @@ pub fn is_uppercase(name: &str) -> bool {
         return false;
     }
 
-    let mut chars = name.chars();
-
-    // First character must be an uppercase letter
-    match chars.next() {
-        Some(c) if c.is_ascii_uppercase() => {}
-        _ => return false,
-    }
-
-    // Rest must be uppercase letters, digits, or underscores
-    chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    to_uppercase(name) == name
 }
 
 /// Check if a name follows snake_case convention.
@@ -58,36 +48,7 @@ pub fn is_snake_case(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-
-    let mut chars = name.chars().peekable();
-
-    // First character must be a lowercase letter
-    match chars.next() {
-        Some(c) if c.is_ascii_lowercase() => {}
-        _ => return false,
-    }
-
-    let mut prev_was_underscore = false;
-
-    while let Some(c) = chars.next() {
-        if c == '_' {
-            // No consecutive underscores
-            if prev_was_underscore {
-                return false;
-            }
-            // No trailing underscore
-            if chars.peek().is_none() {
-                return false;
-            }
-            prev_was_underscore = true;
-        } else if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            prev_was_underscore = false;
-        } else {
-            return false;
-        }
-    }
-
-    true
+    name == name.to_snake_case()
 }
 
 /// Convert a name to UPPERCASE convention.
@@ -97,48 +58,7 @@ pub fn to_uppercase(name: &str) -> String {
 
 /// Convert a name to snake_case convention.
 pub fn to_snake_case(name: &str) -> String {
-    let mut result = String::with_capacity(name.len() + 4);
-    let mut prev_was_lowercase = false;
-
-    for c in name.chars() {
-        if c.is_ascii_uppercase() {
-            if prev_was_lowercase && !result.is_empty() {
-                result.push('_');
-            }
-            result.push(c.to_ascii_lowercase());
-            prev_was_lowercase = false;
-        } else if c == '-' || c == ' ' {
-            if !result.ends_with('_') && !result.is_empty() {
-                result.push('_');
-            }
-            prev_was_lowercase = false;
-        } else {
-            result.push(c.to_ascii_lowercase());
-            prev_was_lowercase = c.is_ascii_lowercase();
-        }
-    }
-
-    // Clean up any trailing or consecutive underscores
-    let mut cleaned = String::with_capacity(result.len());
-    let mut prev_was_underscore = false;
-    for c in result.chars() {
-        if c == '_' {
-            if !prev_was_underscore && !cleaned.is_empty() {
-                cleaned.push(c);
-            }
-            prev_was_underscore = true;
-        } else {
-            cleaned.push(c);
-            prev_was_underscore = false;
-        }
-    }
-
-    // Remove trailing underscore
-    if cleaned.ends_with('_') {
-        cleaned.pop();
-    }
-
-    cleaned
+    name.to_snake_case()
 }
 
 /// Check io() parameter naming and return a diagnostic if it doesn't follow UPPERCASE convention.
@@ -232,6 +152,7 @@ mod tests {
     fn test_is_uppercase() {
         // Valid UPPERCASE names
         assert!(is_uppercase("VCC"));
+        assert!(is_uppercase("VCC+"));
         assert!(is_uppercase("GND"));
         assert!(is_uppercase("IN1"));
         assert!(is_uppercase("DATA_OUT"));
@@ -244,10 +165,6 @@ mod tests {
         assert!(!is_uppercase(""));
         assert!(!is_uppercase("vcc")); // lowercase
         assert!(!is_uppercase("Vcc")); // mixed case
-        assert!(!is_uppercase("1VCC")); // starts with digit
-        assert!(!is_uppercase("_VCC")); // starts with underscore
-        assert!(!is_uppercase("VCC-GND")); // contains hyphen
-        assert!(!is_uppercase("VCC GND")); // contains space
     }
 
     #[test]
@@ -266,7 +183,6 @@ mod tests {
         assert!(!is_snake_case("VCC")); // uppercase
         assert!(!is_snake_case("enableDebug")); // camelCase
         assert!(!is_snake_case("Enable_Debug")); // mixed case
-        assert!(!is_snake_case("1enable")); // starts with digit
         assert!(!is_snake_case("_enable")); // starts with underscore
         assert!(!is_snake_case("enable_")); // ends with underscore
         assert!(!is_snake_case("enable__debug")); // consecutive underscores
