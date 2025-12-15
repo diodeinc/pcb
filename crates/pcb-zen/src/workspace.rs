@@ -114,13 +114,14 @@ impl WorkspaceInfoExt for WorkspaceInfo {
                         closure.assets.insert((asset_url.clone(), ref_str));
                     }
                 }
-            } else if let Some((_, version)) =
-                resolution.closure.iter().find(|(path, _)| path == &url)
+            } else if let Some((line, version)) =
+                resolution.closure.iter().find(|(l, _)| l.path == url)
             {
+                let version_str = version.to_string();
                 closure
                     .remote_packages
-                    .insert((url.clone(), version.clone()));
-                let pkg_root = get_pkg_root(&url, version);
+                    .insert((url.clone(), version_str.clone()));
+                let pkg_root = get_pkg_root(&line.path, &version_str);
                 if let Some(deps) = resolution.package_resolutions.get(&pkg_root) {
                     for dep_url in deps.keys() {
                         stack.push(dep_url.clone());
