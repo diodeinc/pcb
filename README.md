@@ -54,9 +54,6 @@ Create a file called `blinky.zen`:
 # ```pcb
 # [workspace]
 # pcb-version = "0.3"
-#
-# [dependencies]
-# "github.com/diodeinc/stdlib" = "0.4.4"
 # ```
 
 # Load standard library
@@ -145,9 +142,6 @@ project/
 [workspace]
 pcb-version = "0.3"
 members = ["boards/*", "modules/*", "components/**"]
-
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.4"
 ```
 
 ## Core Concepts
