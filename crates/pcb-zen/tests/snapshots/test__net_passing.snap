@@ -38,3 +38,12 @@ expression: netlist
     )
   )
 )
+Advice: [TEMP_DIR]top.zen:4:1-6:2 Issue in `test`
+Advice: [TEMP_DIR]test.zen Net name 'INTERFACE_p1' should be UPPERCASE: 'INTERFACE_P1'Advice: [TEMP_DIR]top.zen:4:1-6:2 Issue in `test`
+Advice: [TEMP_DIR]test.zen Net name 'INTERFACE_p2' should be UPPERCASE: 'INTERFACE_P2'Advice: [TEMP_DIR]top.zen:4:1-6:2 Issue in `test`
+Advice: [TEMP_DIR]test.zen:5:1-8:2 Issue in `MyComponent`
+Advice: [TEMP_DIR]MyComponent.zen Net name 'input_p1' should be UPPERCASE: 'INPUT_P1'Advice: [TEMP_DIR]top.zen:4:1-6:2 Issue in `test`
+Advice: [TEMP_DIR]test.zen:5:1-8:2 Issue in `MyComponent`
+Advice: [TEMP_DIR]MyComponent.zen Net name 'input_p2' should be UPPERCASE: 'INPUT_P2'Advice: [TEMP_DIR]top.zen:4:1-6:2 Issue in `test`
+Advice: [TEMP_DIR]test.zen:5:1-8:2 Issue in `MyComponent`
+Advice: [TEMP_DIR]MyComponent.zen:3:9-40 io() parameter 'input' should be UPPERCASE: 'INPUT'

@@ -18,3 +18,8 @@ expression: netlist
     )
   )
 )
+Advice: [TEMP_DIR]test.zen:5:1-9:2 Issue in `MyModule`
+Advice: [TEMP_DIR]./modules/MyModule.zen Net name 'input' should be UPPERCASE: 'INPUT'Advice: [TEMP_DIR]test.zen:5:1-9:2 Issue in `MyModule`
+Advice: [TEMP_DIR]./modules/MyModule.zen:3:9-25 io() parameter 'input' should be UPPERCASE: 'INPUT'Advice: [TEMP_DIR]test.zen:5:1-9:2 Issue in `MyModule`
+Advice: [TEMP_DIR]./modules/MyModule.zen Net name 'output' should be UPPERCASE: 'OUTPUT'Advice: [TEMP_DIR]test.zen:5:1-9:2 Issue in `MyModule`
+Advice: [TEMP_DIR]./modules/MyModule.zen:4:10-27 io() parameter 'output' should be UPPERCASE: 'OUTPUT'

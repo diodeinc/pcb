@@ -50,3 +50,4 @@ expression: netlist
     )
   )
 )
+Advice: [TEMP_DIR]test.zen Net name 'CHIP_signal' should be UPPERCASE: 'CHIP_SIGNAL'
