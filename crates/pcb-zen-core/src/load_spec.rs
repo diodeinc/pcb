@@ -429,7 +429,7 @@ impl LoadSpec {
         map.insert(
             "stdlib".to_string(),
             crate::AliasInfo {
-                target: "@github/diodeinc/stdlib:HEAD".to_string(),
+                target: format!("@github/diodeinc/stdlib:v{}", crate::STDLIB_VERSION),
                 source_path: None, // None for built-in default aliases
             },
         );
@@ -1034,13 +1034,13 @@ mod tests {
 
             let resolved = spec.resolve(None).unwrap();
 
-            // Should resolve to GitHub spec based on default alias
+            // Should resolve to GitHub spec with pinned stdlib version
             assert_eq!(
                 resolved,
                 LoadSpec::Github {
                     user: "diodeinc".to_string(),
                     repo: "stdlib".to_string(),
-                    rev: "HEAD".to_string(),
+                    rev: format!("v{}", crate::STDLIB_VERSION),
                     path: PathBuf::from("math.zen"),
                 }
             );
@@ -1207,13 +1207,13 @@ mod tests {
 
             let resolved = spec.resolve(None).unwrap();
 
-            // Should resolve without adding path
+            // Should resolve without adding path, using pinned stdlib version
             assert_eq!(
                 resolved,
                 LoadSpec::Github {
                     user: "diodeinc".to_string(),
                     repo: "stdlib".to_string(),
-                    rev: "HEAD".to_string(),
+                    rev: format!("v{}", crate::STDLIB_VERSION),
                     path: PathBuf::new(),
                 }
             );

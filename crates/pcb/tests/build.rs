@@ -436,7 +436,7 @@ SimpleResistor = Module("@github/mycompany/components:{}/SimpleResistor.zen")
 
 #[test]
 fn test_inline_manifest_v2() {
-    let mut sandbox = Sandbox::new();
+    let mut sandbox = Sandbox::new().allow_network();
 
     // Standalone .zen file with inline pcb.toml (V2 mode)
     // Uses minimal code that doesn't require dependencies

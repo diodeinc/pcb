@@ -519,7 +519,10 @@ mod tests {
         );
         assert_eq!(
             aliases.get("stdlib").map(|a| &a.target),
-            Some(&"@github/diodeinc/stdlib:HEAD".to_string())
+            Some(&format!(
+                "@github/diodeinc/stdlib:v{}",
+                pcb_zen_core::STDLIB_VERSION
+            ))
         );
     }
 
@@ -534,10 +537,13 @@ mod tests {
             Some(&"@gitlab/kicad/libraries/kicad-symbols:9.0.0".to_string())
         );
 
-        // Test stdlib alias
+        // Test stdlib alias (now uses pinned version instead of HEAD)
         assert_eq!(
             aliases.get("stdlib").map(|a| &a.target),
-            Some(&"@github/diodeinc/stdlib:HEAD".to_string())
+            Some(&format!(
+                "@github/diodeinc/stdlib:v{}",
+                pcb_zen_core::STDLIB_VERSION
+            ))
         );
 
         // Test non-existent alias

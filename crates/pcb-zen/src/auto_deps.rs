@@ -55,15 +55,10 @@ pub fn auto_add_zen_deps(
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
 
-        // Process @alias imports - only stdlib needs special handling
+        // Process @alias imports
+        // Note: @stdlib is handled implicitly by the toolchain, no need to add to [dependencies]
         for alias in &imports.aliases {
-            if alias == "stdlib" {
-                deps_to_add.push((
-                    "github.com/diodeinc/stdlib".to_string(),
-                    "0.4.0".to_string(),
-                    false,
-                ));
-            } else {
+            if alias != "stdlib" {
                 unknown_aliases.push(alias.clone());
             }
         }

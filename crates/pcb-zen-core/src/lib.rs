@@ -17,6 +17,16 @@ pub mod passes;
 pub mod resolution;
 pub mod workspace;
 
+/// Pinned stdlib version bundled with this toolchain.
+///
+/// This version is used as an implicit minimum dependency for all packages.
+/// Users can upgrade past this version by explicitly declaring a newer version
+/// in their pcb.toml, but cannot use an older version.
+pub const STDLIB_VERSION: &str = "0.4.4";
+
+/// The module path for stdlib
+pub const STDLIB_MODULE_PATH: &str = "github.com/diodeinc/stdlib";
+
 /// Attribute, net, and record field constants used across the core
 pub mod attrs {
     pub const MODEL_DEF: &str = "__model_def";

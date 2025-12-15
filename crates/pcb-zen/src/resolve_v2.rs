@@ -429,6 +429,25 @@ pub fn resolve_dependencies(
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
     let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
 
+    // Inject implicit stdlib dependency (toolchain-pinned minimum version)
+    // This ensures stdlib is always available without explicit declaration,
+    // and acts as a minimum version floor (MVS will pick higher if user specifies)
+    let stdlib_version =
+        Version::parse(pcb_zen_core::STDLIB_VERSION).expect("STDLIB_VERSION must be valid semver");
+    let stdlib_line = ModuleLine::new(
+        pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
+        &stdlib_version,
+    );
+    if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
+        selected.insert(stdlib_line.clone(), stdlib_version.clone());
+        work_queue.push_back(stdlib_line);
+        log::debug!(
+            "Injected implicit stdlib dependency: {}@v{}",
+            pcb_zen_core::STDLIB_MODULE_PATH,
+            pcb_zen_core::STDLIB_VERSION
+        );
+    }
+
     // Preseed from lockfile (opportunistic frontloading)
     // This allows Wave 1 to start fetching known deps immediately
     if let Some(lockfile) = &workspace_info.lockfile {
@@ -534,6 +553,9 @@ pub fn resolve_dependencies(
     // Create pseudo-version context to cache expensive operations across all resolutions
     let mut pseudo_ctx = PseudoVersionContext::new()?;
 
+    // Track user-declared stdlib version for warning
+    let mut user_declared_stdlib_version: Option<Version> = None;
+
     // Seed MVS state from direct dependencies
     for (_package_name, package_deps) in &packages_with_deps {
         for dep in package_deps {
@@ -555,6 +577,10 @@ pub fn resolve_dependencies(
                 offline,
             ) {
                 Ok(version) => {
+                    // Track user-declared stdlib version
+                    if dep.url == pcb_zen_core::STDLIB_MODULE_PATH {
+                        user_declared_stdlib_version = Some(version.clone());
+                    }
                     add_requirement(
                         dep.url.clone(),
                         version,
@@ -696,6 +722,28 @@ pub fn resolve_dependencies(
         wave_num,
         phase1_elapsed.as_secs_f64()
     );
+
+    // Warn if user declared stdlib version was overridden by toolchain minimum
+    if let Some(user_version) = user_declared_stdlib_version {
+        if user_version <= stdlib_version {
+            // Find the final selected stdlib version
+            let final_stdlib_version = selected
+                .iter()
+                .find(|(line, _)| line.path == pcb_zen_core::STDLIB_MODULE_PATH)
+                .map(|(_, v)| v);
+            if let Some(final_version) = final_stdlib_version {
+                if *final_version > user_version {
+                    eprintln!(
+                        "{} stdlib version {} in [dependencies] is older than toolchain minimum ({}), using {}",
+                        "note:".with_style(Style::Cyan),
+                        user_version,
+                        pcb_zen_core::STDLIB_VERSION,
+                        final_version
+                    );
+                }
+            }
+        }
+    }
 
     log::debug!("Phase 2: Build closure");
 

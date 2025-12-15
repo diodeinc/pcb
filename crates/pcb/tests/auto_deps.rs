@@ -1,9 +1,10 @@
 //! Snapshot tests for V2 auto dependency detection
 //!
 //! These tests verify that auto-dependency detection properly modifies pcb.toml to add:
-//! - @stdlib imports -> github.com/diodeinc/stdlib dependency
 //! - @kicad-symbols imports -> gitlab.com/kicad/libraries/kicad-symbols asset
 //! - @kicad-footprints imports -> gitlab.com/kicad/libraries/kicad-footprints asset
+//!
+//! Note: @stdlib is provided implicitly by the toolchain and does NOT get added to [dependencies].
 //!
 //! Note: These tests run offline and verify pcb.toml modification only.
 //! The build itself will fail (missing deps) but that's expected - we're testing auto-dep detection.
@@ -17,7 +18,7 @@ const V2_PCB_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
 "#;
 
-/// Test that @stdlib auto-adds github.com/diodeinc/stdlib dependency to pcb.toml
+/// Test that @stdlib does NOT add a dependency to pcb.toml (toolchain provides it implicitly)
 #[test]
 fn test_auto_deps_stdlib() {
     let mut sandbox = Sandbox::new();
