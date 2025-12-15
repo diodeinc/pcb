@@ -31,6 +31,7 @@ use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface::{
     FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
 };
+use crate::lang::naming;
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, Span};
@@ -1700,6 +1701,15 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             );
         }
 
+        // Check naming convention (io parameters should be UPPERCASE)
+        let (path, span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+        if let Some(diag) = naming::check_io_naming(&name, span, Path::new(&path)) {
+            eval.add_diagnostic(diag);
+        }
+
         Ok(result_value)
     }
 
@@ -1762,6 +1772,15 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
                 help,
                 Some(result_value),
             );
+        }
+
+        // Check naming convention (config parameters should be snake_case)
+        let (path, span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+        if let Some(diag) = naming::check_config_naming(&name, span, Path::new(&path)) {
+            eval.add_diagnostic(diag);
         }
 
         Ok(result_value)

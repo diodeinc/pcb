@@ -319,6 +319,71 @@ fn matches_pattern(diagnostic: &Diagnostic, pattern: &str) -> bool {
     }
 }
 
+/// A pass that promotes diagnostics matching specified patterns from Advice to Warning severity.
+///
+/// This is useful for:
+/// - `-W style` in CLI to promote style hints to warnings (visible in output)
+/// - CI pipelines that want to enforce style conventions
+///
+/// Patterns work hierarchically: "style" matches "style.naming.io", "style.naming.config", etc.
+pub struct PromotePass {
+    patterns: Vec<String>,
+}
+
+impl PromotePass {
+    pub fn new(patterns: Vec<String>) -> Self {
+        Self { patterns }
+    }
+}
+
+impl DiagnosticsPass for PromotePass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diag in &mut diagnostics.diagnostics {
+            // Only promote Advice severity diagnostics
+            if !matches!(diag.severity, EvalSeverity::Advice) {
+                continue;
+            }
+
+            let should_promote = self.patterns.iter().any(|p| {
+                // Check innermost diagnostic for categorization
+                diag.innermost()
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == *p || c.kind.starts_with(&format!("{p}.")))
+            });
+
+            if should_promote {
+                diag.severity = EvalSeverity::Warning;
+            }
+        }
+    }
+}
+
+/// A pass that promotes all style-related diagnostics from Advice to Warning severity.
+///
+/// This is specifically for LSP use where we want style hints to be more visible.
+/// Style diagnostics have kinds starting with "style." (e.g., "style.naming.io").
+pub struct StylePromotePass;
+
+impl DiagnosticsPass for StylePromotePass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diag in &mut diagnostics.diagnostics {
+            // Only promote Advice severity diagnostics
+            if !matches!(diag.severity, EvalSeverity::Advice) {
+                continue;
+            }
+
+            let is_style = diag
+                .innermost()
+                .downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind.starts_with("style.") || c.kind == "style");
+
+            if is_style {
+                diag.severity = EvalSeverity::Warning;
+            }
+        }
+    }
+}
+
 /// A pass that exports diagnostics to JSON file
 pub struct JsonExportPass {
     output_path: std::path::PathBuf,

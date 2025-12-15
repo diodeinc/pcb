@@ -243,7 +243,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
         let (results, had_errors_file) = test(
             &zen_path,
             args.offline,
-            create_diagnostics_passes(&args.suppress),
+            create_diagnostics_passes(&args.suppress, &[]),
         );
         all_test_results.extend(results);
         if had_errors_file {

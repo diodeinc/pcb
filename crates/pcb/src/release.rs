@@ -359,7 +359,7 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         // Render diagnostics and fail early if there are errors
         if eval_result.diagnostics.has_errors() || eval_result.output.is_none() {
             let mut diagnostics = eval_result.diagnostics.clone();
-            let passes = crate::build::create_diagnostics_passes(&[]);
+            let passes = crate::build::create_diagnostics_passes(&[], &[]);
             diagnostics.apply_passes(&passes);
             anyhow::bail!("Evaluation failed");
         }
@@ -1075,7 +1075,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         let mut has_warnings = false;
 
         // Export diagnostics to JSON for release artifacts
-        let mut passes = crate::build::create_diagnostics_passes(&[]);
+        let mut passes = crate::build::create_diagnostics_passes(&[], &[]);
         passes.push(Box::new(pcb_zen_core::JsonExportPass::new(
             info.staging_dir.join("diagnostics.json"),
             zen_file_rel.display().to_string(),

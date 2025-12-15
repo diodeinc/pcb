@@ -90,7 +90,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         let Some(schematic) = build(
             &zen_path,
             args.offline,
-            create_diagnostics_passes(&args.suppress),
+            create_diagnostics_passes(&args.suppress, &[]),
             false, // don't deny warnings for layout command
             &mut has_errors,
             &mut has_warnings,

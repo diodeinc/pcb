@@ -23,5 +23,8 @@ pub(crate) mod file;
 // Add public error module and Result alias
 pub mod error;
 
+// Naming convention checks
+pub mod naming;
+
 // Validation utilities
 pub(crate) mod validation;
