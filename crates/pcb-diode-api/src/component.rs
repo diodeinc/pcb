@@ -855,20 +855,34 @@ fn sanitize_mpn_for_path(mpn: &str) -> String {
     }
 }
 
-/// Sanitize a pin name to create a valid Starlark identifier
+/// Sanitize a pin name to create a valid Starlark identifier.
+/// Output follows UPPERCASE convention for io() parameters.
+///
+/// Special handling:
+/// - `~` or `!` at start: becomes `N_` prefix (e.g., `~CS` → `N_CS`)
+/// - `+` at end: becomes `_POS` suffix (e.g., `V+` → `V_POS`)
+/// - `-` at end: becomes `_NEG` suffix (e.g., `V-` → `V_NEG`)
+/// - `+` or `-` elsewhere: becomes `_` (e.g., `A+B` → `A_B`)
+/// - `#`: becomes `H` (e.g., `CS#` → `CSH`)
+/// - All alphanumeric chars: uppercased
 fn sanitize(name: &str) -> String {
-    let result = name
-        .chars()
-        .map(|c| match c {
-            '+' => 'P', // Plus becomes P (e.g., V+ → VP)
-            '-' => 'M', // Minus becomes M (e.g., V- → VM)
-            '~' => 'n', // Tilde (NOT) becomes n (e.g., ~CS → nCS)
-            '!' => 'n', // Bang (NOT) also becomes n
-            '#' => 'h', // Hash becomes h (e.g., CS# → CSh)
-            c if c.is_alphanumeric() => c,
-            _ => '_',
-        })
-        .collect::<String>();
+    let chars: Vec<char> = name.chars().collect();
+    let len = chars.len();
+    let mut result = String::with_capacity(len + 8);
+
+    for (i, &c) in chars.iter().enumerate() {
+        let is_last = i == len - 1;
+
+        match c {
+            '+' if is_last => result.push_str("_POS"),
+            '-' if is_last => result.push_str("_NEG"),
+            '+' | '-' => result.push('_'),
+            '~' | '!' => result.push_str("N_"), // NOT prefix
+            '#' => result.push('H'),
+            c if c.is_alphanumeric() => result.push(c.to_ascii_uppercase()),
+            _ => result.push('_'),
+        }
+    }
 
     // Remove consecutive underscores and trim underscores from start/end
     let sanitized = result
@@ -1834,5 +1848,72 @@ mod tests {
         );
 
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_basic() {
+        // Basic alphanumeric names get uppercased
+        assert_eq!(sanitize("VCC"), "VCC");
+        assert_eq!(sanitize("gnd"), "GND");
+        assert_eq!(sanitize("GPIO1"), "GPIO1");
+        assert_eq!(sanitize("sda"), "SDA");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_plus_minus_at_end() {
+        // + and - at end become _POS and _NEG
+        assert_eq!(sanitize("V+"), "V_POS");
+        assert_eq!(sanitize("V-"), "V_NEG");
+        assert_eq!(sanitize("IN+"), "IN_POS");
+        assert_eq!(sanitize("OUT-"), "OUT_NEG");
+        assert_eq!(sanitize("VCC+"), "VCC_POS");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_plus_minus_in_middle() {
+        // + and - in middle become underscores
+        assert_eq!(sanitize("A+B"), "A_B");
+        assert_eq!(sanitize("IN-OUT"), "IN_OUT");
+        assert_eq!(sanitize("V+REF"), "V_REF");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_not_prefix() {
+        // ~ and ! at start become N_ prefix
+        assert_eq!(sanitize("~CS"), "N_CS");
+        assert_eq!(sanitize("!RESET"), "N_RESET");
+        assert_eq!(sanitize("~WR"), "N_WR");
+        assert_eq!(sanitize("!OE"), "N_OE");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_hash_suffix() {
+        // # becomes H
+        assert_eq!(sanitize("CS#"), "CSH");
+        assert_eq!(sanitize("WE#"), "WEH");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_special_chars() {
+        // Other special chars become underscores
+        assert_eq!(sanitize("PIN/A"), "PIN_A");
+        assert_eq!(sanitize("PIN.B"), "PIN_B");
+        assert_eq!(sanitize("PIN A"), "PIN_A");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_leading_digit() {
+        // Leading digit gets P prefix
+        assert_eq!(sanitize("1"), "P1");
+        assert_eq!(sanitize("1A"), "P1A");
+        assert_eq!(sanitize("123"), "P123");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_consecutive_underscores() {
+        // Consecutive underscores get collapsed
+        assert_eq!(sanitize("A__B"), "A_B");
+        assert_eq!(sanitize("A___B"), "A_B");
+        assert_eq!(sanitize("_A_"), "A");
     }
 }
