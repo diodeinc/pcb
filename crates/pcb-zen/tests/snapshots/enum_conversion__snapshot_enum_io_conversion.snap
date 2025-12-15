@@ -34,3 +34,5 @@ expression: netlist
     )
   )
 )
+Advice: [TEMP_DIR]top.zen:4:1-7:2 Issue in `child`
+Advice: [TEMP_DIR]child.zen:5:11-35 io() parameter 'hdr_dir' should be UPPERCASE: 'HDR_DIR'
