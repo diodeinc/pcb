@@ -350,6 +350,12 @@ fn run_auto_deps(
             auto_deps.versions_corrected
         );
     }
+    if auto_deps.stdlib_removed > 0 {
+        log::debug!(
+            "Removed {} redundant stdlib dependency declaration(s)",
+            auto_deps.stdlib_removed
+        );
+    }
 
     for (path, aliases) in &auto_deps.unknown_aliases {
         eprintln!(
@@ -556,9 +562,6 @@ pub fn resolve_dependencies(
     // Create pseudo-version context to cache expensive operations across all resolutions
     let mut pseudo_ctx = PseudoVersionContext::new()?;
 
-    // Track user-declared stdlib version for warning
-    let mut user_declared_stdlib_version: Option<Version> = None;
-
     // Seed MVS state from direct dependencies
     for (_package_name, package_deps) in &packages_with_deps {
         for dep in package_deps {
@@ -580,10 +583,6 @@ pub fn resolve_dependencies(
                 offline,
             ) {
                 Ok(version) => {
-                    // Track user-declared stdlib version
-                    if dep.url == pcb_zen_core::STDLIB_MODULE_PATH {
-                        user_declared_stdlib_version = Some(version.clone());
-                    }
                     add_requirement(
                         dep.url.clone(),
                         version,
@@ -725,28 +724,6 @@ pub fn resolve_dependencies(
         wave_num,
         phase1_elapsed.as_secs_f64()
     );
-
-    // Warn if user declared stdlib version was overridden by toolchain minimum
-    if let Some(user_version) = user_declared_stdlib_version {
-        if user_version <= stdlib_version {
-            // Find the final selected stdlib version
-            let final_stdlib_version = selected
-                .iter()
-                .find(|(line, _)| line.path == pcb_zen_core::STDLIB_MODULE_PATH)
-                .map(|(_, v)| v);
-            if let Some(final_version) = final_stdlib_version {
-                if *final_version > user_version {
-                    eprintln!(
-                        "{} stdlib version {} in [dependencies] is older than toolchain minimum ({}), using {}",
-                        "note:".with_style(Style::Cyan),
-                        user_version,
-                        pcb_zen_core::STDLIB_VERSION,
-                        final_version
-                    );
-                }
-            }
-        }
-    }
 
     log::debug!("Phase 2: Build closure");
 
