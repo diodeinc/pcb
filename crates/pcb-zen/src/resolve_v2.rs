@@ -768,12 +768,14 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.sum to write)
     if !is_standalone {
         log::debug!("Phase 4: Lockfile");
-        let (lockfile, added_count) = update_lockfile(workspace_info, &closure, &asset_paths)?;
+        let lockfile_path = workspace_root.join("pcb.sum");
+        let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
+        let lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
+        let new_content = lockfile.to_string();
 
-        // Only write lockfile to disk if new entries were added
-        if added_count > 0 {
-            let lockfile_path = workspace_root.join("pcb.sum");
-            std::fs::write(&lockfile_path, lockfile.to_string())?;
+        // Write if lockfile changed (new entries added OR unused entries removed)
+        if new_content != old_content {
+            std::fs::write(&lockfile_path, &new_content)?;
             log::debug!("  Updated {}", lockfile_path.display());
         }
     }
@@ -2012,17 +2014,15 @@ fn ensure_sparse_checkout(
     Ok(checkout_dir.to_path_buf())
 }
 
-/// Update lockfile from build set
+/// Build lockfile from current resolution
 ///
-/// Builds a fresh lockfile containing only the entries needed for current resolution.
-/// Unused entries are automatically removed (no separate tidy step needed).
-///
-/// Returns (lockfile, added_count) - only write to disk if added_count > 0
+/// Creates a fresh lockfile containing only the entries needed for current resolution.
+/// Unused entries from the old lockfile are automatically excluded.
 fn update_lockfile(
     workspace_info: &mut WorkspaceInfo,
     build_set: &HashSet<(ModuleLine, Version)>,
     asset_paths: &HashMap<(String, String), PathBuf>,
-) -> Result<(Lockfile, usize)> {
+) -> Result<Lockfile> {
     let workspace_root = &workspace_info.root;
     let old_lockfile = workspace_info.lockfile.take().unwrap_or_default();
     let mut new_lockfile = Lockfile::default();
@@ -2033,9 +2033,6 @@ fn update_lockfile(
     }
 
     let index = CacheIndex::open()?;
-
-    let mut verified_count = 0;
-    let mut added_count = 0;
 
     for (line, version) in build_set {
         let version_str = version.to_string();
@@ -2048,7 +2045,6 @@ fn update_lockfile(
         if let Some(existing) = old_lockfile.get(&line.path, &version_str) {
             if vendor_dir.exists() {
                 new_lockfile.insert(existing.clone());
-                verified_count += 1;
                 continue;
             }
         }
@@ -2074,9 +2070,7 @@ fn update_lockfile(
                 );
             }
             new_lockfile.insert(existing.clone());
-            verified_count += 1;
         } else {
-            added_count += 1;
             new_lockfile.insert(LockEntry {
                 module_path: line.path.clone(),
                 version: version_str,
@@ -2099,7 +2093,6 @@ fn update_lockfile(
         if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
             if vendor_dir.exists() {
                 new_lockfile.insert(existing.clone());
-                verified_count += 1;
                 continue;
             }
         }
@@ -2111,9 +2104,7 @@ fn update_lockfile(
 
         if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
             new_lockfile.insert(existing.clone());
-            verified_count += 1;
         } else {
-            added_count += 1;
             new_lockfile.insert(LockEntry {
                 module_path: asset_key.clone(),
                 version: ref_str.clone(),
@@ -2123,13 +2114,9 @@ fn update_lockfile(
         }
     }
 
-    if added_count > 0 {
-        log::debug!("  {} new, {} verified", added_count, verified_count);
-    } else if verified_count > 0 {
-        log::debug!("  {} verified", verified_count);
-    }
+    log::debug!("  {} entries", new_lockfile.entries.len());
 
-    Ok((new_lockfile, added_count))
+    Ok(new_lockfile)
 }
 
 // PackageClosure and package_closure() method are now in workspace.rs
