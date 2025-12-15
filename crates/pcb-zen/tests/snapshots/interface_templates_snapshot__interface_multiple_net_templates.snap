@@ -62,4 +62,3 @@ expression: netlist
     )
   )
 )
-Advice: [TEMP_DIR]test.zen:4:11-21 Net name '3V3' should be UPPERCASE: '3V3'

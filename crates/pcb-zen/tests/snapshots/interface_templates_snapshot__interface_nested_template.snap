@@ -46,4 +46,3 @@ expression: netlist
     )
   )
 )
-Advice: [TEMP_DIR]test.zen:14:14-23 Net name 'D+' should be UPPERCASE: 'D+'Advice: [TEMP_DIR]test.zen:15:14-23 Net name 'D-' should be UPPERCASE: 'D-'
