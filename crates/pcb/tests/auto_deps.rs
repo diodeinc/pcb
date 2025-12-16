@@ -6,7 +6,7 @@
 //!
 //! Note: @stdlib is provided implicitly by the toolchain and does NOT get added to [dependencies].
 //!
-//! Note: These tests run offline and verify pcb.toml modification only.
+//! Note: These tests verify pcb.toml modification only.
 //! The build itself will fail (missing deps) but that's expected - we're testing auto-dep detection.
 
 #![cfg(not(target_os = "windows"))]
@@ -32,7 +32,7 @@ x = kOhm(10)
     let _output = sandbox
         .write("pcb.toml", V2_PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen", "--offline"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
 
     // Verify pcb.toml was updated with the dependency
     let pcb_toml_content =
@@ -52,7 +52,7 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
     let _output = sandbox
         .write("pcb.toml", V2_PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen", "--offline"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
 
     // Verify pcb.toml was updated with the asset
     let pcb_toml_content =
@@ -72,7 +72,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
     let _output = sandbox
         .write("pcb.toml", V2_PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen", "--offline"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
 
     // Verify pcb.toml was updated with the asset
     let pcb_toml_content =
@@ -97,7 +97,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
     let _output = sandbox
         .write("pcb.toml", V2_PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen", "--offline"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
 
     // Verify pcb.toml contains all dependencies
     let pcb_toml_content =
@@ -126,7 +126,7 @@ x = kOhm(10)
     let _output = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen", "--offline"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
 
     // Verify pcb.toml wasn't duplicated - should remain unchanged
     let pcb_toml_content =
@@ -146,7 +146,7 @@ fn test_auto_deps_kicad_dynamic_path() {
     let _output = sandbox
         .write("pcb.toml", V2_PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen", "--offline"]);
+        .snapshot_run("pcb", ["build", "board.zen"]);
 
     // Verify pcb.toml has the directory-level asset
     let pcb_toml_content =
