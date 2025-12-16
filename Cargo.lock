@@ -3026,6 +3026,7 @@ dependencies = [
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
+ "petgraph",
  "rayon",
  "semver",
  "serde",
