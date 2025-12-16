@@ -245,6 +245,21 @@ pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Res
     run_in(repo_root, &["fetch", remote, branch, "--quiet"])
 }
 
+/// Fetch and sync tags from remote, pruning deleted tags and force-updating moved ones
+pub fn fetch_tags(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
+    run_in(
+        repo_root,
+        &[
+            "fetch",
+            remote,
+            "--prune-tags",
+            "--tags",
+            "--force",
+            "--quiet",
+        ],
+    )
+}
+
 pub fn push_tag(repo_root: &Path, tag_name: &str, remote: &str) -> anyhow::Result<()> {
     run_in(repo_root, &["push", remote, tag_name])
 }
