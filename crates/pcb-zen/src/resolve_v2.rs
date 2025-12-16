@@ -757,22 +757,27 @@ pub fn resolve_dependencies(
     if !is_standalone {
         log::debug!("Phase 4: Lockfile");
         let lockfile_path = workspace_root.join("pcb.sum");
-        let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
-        let lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
-        let new_content = lockfile.to_string();
+        let old_lockfile = workspace_info.lockfile.clone().unwrap_or_default();
+        let new_lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
 
-        // Check if lockfile changed (new entries added OR unused entries removed)
-        if new_content != old_content {
-            if locked {
-                // In locked mode, fail if lockfile would change
-                anyhow::bail!(
-                    "Lockfile is out of date (--locked mode)\n  \
-                    Run `pcb build` without --locked to update pcb.sum"
-                );
+        if locked {
+            // In locked mode: fail only if entries would be added (deletions are safe)
+            for key in new_lockfile.entries.keys() {
+                if !old_lockfile.entries.contains_key(key) {
+                    anyhow::bail!(
+                        "Lockfile is out of date (--locked mode)\n  \
+                        Run `pcb build` without --locked to update pcb.sum"
+                    );
+                }
             }
-
-            std::fs::write(&lockfile_path, &new_content)?;
-            log::debug!("  Updated {}", lockfile_path.display());
+            // Don't write lockfile in locked mode
+        } else {
+            let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
+            let new_content = new_lockfile.to_string();
+            if new_content != old_content {
+                std::fs::write(&lockfile_path, &new_content)?;
+                log::debug!("  Updated {}", lockfile_path.display());
+            }
         }
     }
 
