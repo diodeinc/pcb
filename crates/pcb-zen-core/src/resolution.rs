@@ -19,6 +19,7 @@ use crate::config::{
 };
 use crate::workspace::WorkspaceInfo;
 use crate::FileProvider;
+use crate::STDLIB_MODULE_PATH;
 
 /// Compute the semver family for a version.
 ///
@@ -266,6 +267,19 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
                 &config.assets,
             ),
         );
+    }
+
+    // Inject stdlib into all package maps (stdlib is an implicit dependency for all packages)
+    if let Some(stdlib_path) = closure
+        .iter()
+        .filter(|(line, _)| line.path == STDLIB_MODULE_PATH)
+        .max_by(|(_, v1), (_, v2)| v1.cmp(v2))
+        .and_then(|(_, v)| resolver.resolve_package(STDLIB_MODULE_PATH, &v.to_string()))
+    {
+        for map in results.values_mut() {
+            map.entry(STDLIB_MODULE_PATH.to_string())
+                .or_insert(stdlib_path.clone());
+        }
     }
 
     results
