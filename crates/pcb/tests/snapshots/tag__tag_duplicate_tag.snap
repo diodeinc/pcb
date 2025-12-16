@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 75
 expression: output
 ---
 Command: pcb tag -v 1.0.0 -b TB0001
@@ -11,6 +10,4 @@ Exit Code: 1
 --- STDERR ---
 ✗ Checking tag doesn't exist failed
 Error: Checking tag doesn't exist failed
-
-Caused by:
-    Tag 'boards/Test/v1.0.0' already exists
+  Tag 'boards/Test/v1.0.0' already exists

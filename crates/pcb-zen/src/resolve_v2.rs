@@ -556,31 +556,22 @@ pub fn resolve_dependencies(
                 }
             }
 
-            match resolve_to_version(
+            let version = resolve_to_version(
                 &mut pseudo_ctx,
                 &dep.url,
                 spec,
                 workspace_info.lockfile.as_ref(),
                 offline,
-            ) {
-                Ok(version) => {
-                    add_requirement(
-                        dep.url.clone(),
-                        version,
-                        &mut selected,
-                        &mut work_queue,
-                        &patches,
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{} failed to resolve {}: {}",
-                        "warning:".with_style(Style::Yellow),
-                        dep.url.as_str().bold(),
-                        e
-                    );
-                }
-            }
+            )
+            .with_context(|| format!("Failed to resolve {}", dep.url))?;
+
+            add_requirement(
+                dep.url.clone(),
+                version,
+                &mut selected,
+                &mut work_queue,
+                &patches,
+            );
         }
     }
 
@@ -630,58 +621,39 @@ pub fn resolve_dependencies(
         let mut new_deps = 0;
         for (line, version, result) in results {
             total_fetched += 1;
-            match result {
-                Ok(manifest) => {
-                    manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
+            let manifest =
+                result.with_context(|| format!("Failed to fetch {}@v{}", line.path, version))?;
 
-                    for (dep_path, dep_spec) in &manifest.dependencies {
-                        // Apply branch/rev patch overrides before resolution
-                        let patch_override = get_patch_override(dep_path, &patches);
-                        let spec = patch_override.as_ref().unwrap_or(dep_spec);
+            manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
-                        if is_non_version_dep(spec) {
-                            continue;
-                        }
+            for (dep_path, dep_spec) in &manifest.dependencies {
+                // Apply branch/rev patch overrides before resolution
+                let patch_override = get_patch_override(dep_path, &patches);
+                let spec = patch_override.as_ref().unwrap_or(dep_spec);
 
-                        match resolve_to_version(
-                            &mut pseudo_ctx,
-                            dep_path,
-                            spec,
-                            workspace_info.lockfile.as_ref(),
-                            offline,
-                        ) {
-                            Ok(dep_version) => {
-                                let before = work_queue.len();
-                                add_requirement(
-                                    dep_path.clone(),
-                                    dep_version,
-                                    &mut selected,
-                                    &mut work_queue,
-                                    &patches,
-                                );
-                                if work_queue.len() > before {
-                                    new_deps += 1;
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "{} failed to resolve {}: {}",
-                                    "warning:".with_style(Style::Yellow),
-                                    dep_path.as_str().bold(),
-                                    e
-                                );
-                            }
-                        }
-                    }
+                if is_non_version_dep(spec) {
+                    continue;
                 }
-                Err(e) => {
-                    eprintln!(
-                        "{} failed to fetch {}@v{}: {}",
-                        "warning:".with_style(Style::Yellow),
-                        line.path.as_str().bold(),
-                        version,
-                        e
-                    );
+
+                let dep_version = resolve_to_version(
+                    &mut pseudo_ctx,
+                    dep_path,
+                    spec,
+                    workspace_info.lockfile.as_ref(),
+                    offline,
+                )
+                .with_context(|| format!("Failed to resolve {}", dep_path))?;
+
+                let before = work_queue.len();
+                add_requirement(
+                    dep_path.clone(),
+                    dep_version,
+                    &mut selected,
+                    &mut work_queue,
+                    &patches,
+                );
+                if work_queue.len() > before {
+                    new_deps += 1;
                 }
             }
         }
@@ -1290,10 +1262,8 @@ fn fetch_package(
     // 4. If offline, fail here - vendor is the only allowed source for offline builds
     if offline {
         anyhow::bail!(
-            "Package {} v{} not vendored (offline mode)\n  \
-            Run `pcb vendor` to vendor dependencies for offline builds",
-            module_path,
-            version
+            "Package not vendored (offline mode)\n  \
+            Run `pcb vendor` to vendor dependencies for offline builds"
         );
     }
 
