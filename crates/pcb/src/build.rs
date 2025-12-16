@@ -81,6 +81,11 @@ pub struct BuildArgs {
     /// Supports hierarchical matching (e.g., 'style' matches 'style.naming.io')
     #[arg(short = 'W', long = "warn", value_name = "KIND")]
     pub warn: Vec<String>,
+
+    /// Require that pcb.toml and pcb.sum are up-to-date. Fails if auto-deps would
+    /// add dependencies or if the lockfile would be modified. Recommended for CI.
+    #[arg(long)]
+    pub locked: bool,
 }
 
 /// Print success message with component count for a built schematic
@@ -190,6 +195,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
         args.paths.first().map(|p| p.as_path()),
         args.offline,
+        args.locked,
     )?;
 
     // Process .zen files using shared walker - always recursive for directories

@@ -387,9 +387,15 @@ fn run_auto_deps(
 ///
 /// Builds dependency graph using MVS, fetches dependencies,
 /// and generates/updates the lockfile.
+///
+/// When `locked` is true:
+/// - Auto-deps phase is skipped (dependencies must be declared in pcb.toml)
+/// - Lockfile is verified instead of written (fails if out of date)
+/// - Recommended for CI to catch missing dependencies or stale lockfiles
 pub fn resolve_dependencies(
     workspace_info: &mut WorkspaceInfo,
     offline: bool,
+    locked: bool,
 ) -> Result<ResolutionResult> {
     let workspace_root = workspace_info.root.clone();
 
@@ -398,15 +404,17 @@ pub fn resolve_dependencies(
     let is_standalone = !workspace_root.join("pcb.toml").exists();
 
     log::debug!(
-        "V2 Dependency Resolution{}{}",
+        "V2 Dependency Resolution{}{}{}",
         if offline { " (offline)" } else { "" },
+        if locked { " (locked)" } else { "" },
         if is_standalone { " (standalone)" } else { "" }
     );
     log::debug!("Workspace root: {}", workspace_root.display());
 
     // Phase -1: Auto-add missing dependencies from .zen files
     // Skip for standalone mode (no pcb.toml to modify)
-    if !is_standalone {
+    // Skip for locked mode (no modifications allowed)
+    if !is_standalone && !locked {
         run_auto_deps(workspace_info, &workspace_root, offline)?;
     }
 
@@ -753,8 +761,16 @@ pub fn resolve_dependencies(
         let lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
         let new_content = lockfile.to_string();
 
-        // Write if lockfile changed (new entries added OR unused entries removed)
+        // Check if lockfile changed (new entries added OR unused entries removed)
         if new_content != old_content {
+            if locked {
+                // In locked mode, fail if lockfile would change
+                anyhow::bail!(
+                    "Lockfile is out of date (--locked mode)\n  \
+                    Run `pcb build` without --locked to update pcb.sum"
+                );
+            }
+
             std::fs::write(&lockfile_path, &new_content)?;
             log::debug!("  Updated {}", lockfile_path.display());
         }

@@ -59,7 +59,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         if workspace_info.is_v2() {
             println!();
             println!("{}", "Dependencies".with_style(Style::Blue).bold());
-            let result = pcb_zen::resolve_dependencies(&mut workspace_info, false)?;
+            let result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
             result.print_tree(&workspace_info);
         } else {
             eprintln!("Dependency tree is only available for V2 workspaces");
