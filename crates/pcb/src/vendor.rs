@@ -43,8 +43,8 @@ pub fn execute(args: VendorArgs) -> Result<()> {
 fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
     println!("V2 workspace detected - using closure-based vendoring\n");
 
-    // Vendoring always needs network access (offline=false)
-    let resolution = resolve_dependencies(workspace_info, false)?;
+    // Vendoring always needs network access (offline=false) and allows modifications (locked=false)
+    let resolution = resolve_dependencies(workspace_info, false, false)?;
 
     // Vendor everything - pass ["**"] pattern to match all packages and assets
     let result = vendor_deps(workspace_info, &resolution, &["**".to_string()], None)?;

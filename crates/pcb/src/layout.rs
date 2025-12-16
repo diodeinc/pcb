@@ -55,6 +55,11 @@ pub struct LayoutArgs {
     /// Supports hierarchical matching (e.g., 'layout.drc' matches 'layout.drc.clearance')
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
+
+    /// Require that pcb.toml and pcb.sum are up-to-date. Fails if auto-deps would
+    /// add dependencies or if the lockfile would be modified. Recommended for CI.
+    #[arg(long)]
+    pub locked: bool,
 }
 
 pub fn execute(mut args: LayoutArgs) -> Result<()> {
@@ -63,10 +68,14 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         args.no_open = true;
     }
 
+    // Default to locked mode in CI environments
+    let locked = args.locked || std::env::var("CI").is_ok();
+
     // V2 workspace-first architecture: resolve dependencies before finding .zen files
     let (_workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
         args.paths.first().map(|p| p.as_path()),
         args.offline,
+        locked,
     )?;
 
     // Collect .zen files to process - always recursive for directories

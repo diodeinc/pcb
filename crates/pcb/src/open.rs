@@ -15,6 +15,11 @@ pub struct OpenArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
+
+    /// Require that pcb.toml and pcb.sum are up-to-date. Fails if auto-deps would
+    /// add dependencies or if the lockfile would be modified. Recommended for CI.
+    #[arg(long)]
+    pub locked: bool,
 }
 
 pub fn execute(args: OpenArgs) -> Result<()> {
@@ -22,6 +27,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     let (workspace_info, resolution_result) = crate::resolve::resolve_v2_if_needed(
         args.paths.first().map(|p| p.as_path()),
         args.offline,
+        args.locked,
     )?;
 
     open_layout(&args, &workspace_info, resolution_result)

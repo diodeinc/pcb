@@ -86,8 +86,9 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
         .unwrap_or_default();
 
     // Run resolution to update lockfile (will re-fetch branch commits)
+    // locked=false since update is explicitly for updating deps
     let mut ws = workspace.clone();
-    pcb_zen::resolve_dependencies(&mut ws, false)?;
+    pcb_zen::resolve_dependencies(&mut ws, false, false)?;
 
     // Check if lockfile changed (includes branch/rev pseudo-version updates)
     let lockfile_path = workspace.root.join("pcb.sum");
