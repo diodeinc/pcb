@@ -41,8 +41,12 @@ pub struct PublishArgs {
     pub force: bool,
 
     /// Skip building the workspace before publishing
-    #[arg(long)]
-    pub skip_build: bool,
+    #[arg(long, hide = true)]
+    pub no_build: bool,
+
+    /// Create commits and tags locally but don't push to remote
+    #[arg(long, hide = true)]
+    pub no_push: bool,
 
     /// Suppress diagnostics by kind or severity
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
@@ -59,7 +63,6 @@ pub struct PublishArgs {
 /// Info about a package that will be published
 struct PublishCandidate {
     pkg: MemberPackage,
-    current_version: Option<Version>,
     next_version: Version,
     tag_name: String,
     content_hash: String,
@@ -219,7 +222,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     println!("Syncing tags from {}...", remote.cyan());
     git::fetch_tags(&workspace.root, &remote)?;
 
-    if !args.skip_build {
+    if !args.no_build {
         build_workspace(&workspace, &args.suppress)?;
     }
 
@@ -251,16 +254,18 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     }
 
     // Collect all bump info and show summary upfront
-    let bump_map = collect_all_bumps(&workspace, &waves, args.bump)?;
+    let bump_map = collect_all_bumps(&workspace, &waves, &dirty_urls, args.bump)?;
 
     // Show summary and confirm
     let all_tags_list = git::list_all_tags_vec(&workspace.root);
     print_publish_summary(&workspace, &waves, &bump_map, &all_tags_list);
 
-    if !Confirm::new("Proceed with publishing?")
-        .with_default(true)
-        .prompt()
-        .unwrap_or(false)
+    // Skip confirmation if --no-push (local testing mode)
+    if !args.no_push
+        && !Confirm::new("Proceed with publishing?")
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
     {
         println!("{}", "Publish cancelled".yellow());
         return Ok(());
@@ -272,8 +277,8 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
     // Process each wave
     let result: Result<()> = (|| {
-        for (wave_idx, wave_urls) in waves.iter().enumerate() {
-            let wave = publish_wave(&workspace, &bump_map, wave_idx + 1, wave_urls, &published)?;
+        for wave_urls in &waves {
+            let wave = publish_wave(&workspace, &bump_map, wave_urls, &published)?;
 
             all_tags.extend(wave.tags);
             if let Some(sha) = wave.commit {
@@ -294,6 +299,27 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     }
 
     if all_tags.is_empty() {
+        return Ok(());
+    }
+
+    // If --no-push, just print summary and exit
+    if args.no_push {
+        println!();
+        println!("{}", "Created locally (not pushed):".cyan().bold());
+        for sha in &commits {
+            let title = git::run_output_opt(&workspace.root, &["log", "-1", "--format=%s", sha])
+                .unwrap_or_default();
+            println!("  {} {} {}", "commit:".dimmed(), &sha[..8], title.dimmed());
+        }
+        for tag in &all_tags {
+            println!("  {} {}", "tag:".dimmed(), tag);
+        }
+        println!();
+        println!(
+            "To push: {} && {}",
+            "git push".cyan(),
+            format!("git push origin {}", all_tags.join(" ")).cyan()
+        );
         return Ok(());
     }
 
@@ -343,15 +369,10 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 fn publish_wave(
     workspace: &WorkspaceInfo,
     bump_map: &BTreeMap<String, BumpType>,
-    wave_num: usize,
     package_urls: &[String],
     published: &BTreeMap<String, PublishCandidate>,
 ) -> Result<WaveResult> {
     let all_tags = git::list_all_tags_vec(&workspace.root);
-
-    println!();
-    println!("{}", format!("Wave {}:", wave_num).cyan().bold());
-    println!("{} package(s) to publish:", package_urls.len());
 
     // Bump pcb.toml for packages that depend on previously published packages
     let mut changed_pkgs: Vec<&MemberPackage> = Vec::new();
@@ -360,7 +381,7 @@ fn publish_wave(
             let has_published_dep = pkg.dependencies().any(|d| published.contains_key(d));
             if has_published_dep && bump_dependency_versions(&pkg.dir.join("pcb.toml"), published)?
             {
-                println!("  patching: {}/pcb.toml", pkg.rel_path.display());
+                log::info!("patching: {}/pcb.toml", pkg.rel_path.display());
                 changed_pkgs.push(pkg);
             }
         }
@@ -381,7 +402,6 @@ fn publish_wave(
     // Create tags
     let mut created_tags = Vec::new();
     for (url, c) in &candidates {
-        print_candidate(c, &workspace.root);
         git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
         created_tags.push(c.tag_name.clone());
     }
@@ -409,8 +429,8 @@ fn build_candidates(
         .map(|(url, pkg)| {
             let bump = bump_map.get(url).copied().unwrap_or(BumpType::Minor);
             let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-            let current_version = tags::find_latest_version(all_tags, &tag_prefix);
-            let next_version = compute_next_version(current_version.as_ref(), bump);
+            let current = tags::find_latest_version(all_tags, &tag_prefix);
+            let next_version = compute_next_version(current.as_ref(), bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
             let content_hash = canonical::compute_content_hash_from_dir(&pkg.dir)?;
@@ -421,7 +441,6 @@ fn build_candidates(
                 url.clone(),
                 PublishCandidate {
                     pkg: pkg.clone(),
-                    current_version,
                     next_version,
                     tag_name,
                     content_hash,
@@ -515,20 +534,6 @@ fn rollback(repo_root: &Path, tags: &[String], reset_to: Option<&String>) -> Res
     Ok(())
 }
 
-fn print_candidate(c: &PublishCandidate, root: &Path) {
-    let rel = c.pkg.dir.strip_prefix(root).unwrap_or(&c.pkg.dir);
-    let path = if rel.as_os_str().is_empty() {
-        "(root)".to_string()
-    } else {
-        rel.display().to_string()
-    };
-    let version = match &c.current_version {
-        Some(v) => format!("{} → {}", v, c.next_version),
-        None => format!("{} (initial)", c.next_version),
-    };
-    println!("  {}: {} [{}]", path, version.green(), c.tag_name.cyan());
-}
-
 fn compute_next_version(current: Option<&Version>, bump: BumpType) -> Version {
     match current {
         None => Version::new(0, 1, 0),
@@ -611,33 +616,142 @@ fn bump_dependency_versions(
     Ok(changed)
 }
 
+/// Print dependency tree for packages to publish.
+fn print_dependency_tree(
+    workspace: &WorkspaceInfo,
+    dirty_urls: &HashSet<String>,
+    all_tags: &[String],
+) {
+    let ws_path = workspace.path();
+
+    // Build reverse deps: url -> packages that depend on it (within dirty set)
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    let mut has_parent: HashSet<String> = HashSet::new();
+
+    for url in dirty_urls {
+        if let Some(pkg) = workspace.packages.get(url) {
+            for dep_url in pkg.dependencies() {
+                if dirty_urls.contains(dep_url) {
+                    children
+                        .entry(dep_url.to_string())
+                        .or_default()
+                        .push(url.clone());
+                    has_parent.insert(url.clone());
+                }
+            }
+        }
+    }
+
+    // Sort children for consistent output
+    for deps in children.values_mut() {
+        deps.sort();
+    }
+
+    // Roots are packages with no parents in the dirty set
+    let mut roots: Vec<_> = dirty_urls
+        .iter()
+        .filter(|url| !has_parent.contains(*url))
+        .cloned()
+        .collect();
+    roots.sort();
+
+    // Get workspace URL from any package URL (strip the rel_path suffix)
+    let workspace_url = dirty_urls
+        .iter()
+        .next()
+        .and_then(|url| {
+            workspace.packages.get(url).and_then(|pkg| {
+                let rel = pkg.rel_path.to_string_lossy();
+                url.strip_suffix(&*rel)
+                    .map(|s| s.trim_end_matches('/').to_string())
+            })
+        })
+        .unwrap_or_else(|| "workspace".to_string());
+
+    println!();
+    println!("{}", "Packages to publish:".cyan().bold());
+    println!("{}", workspace_url);
+
+    fn print_node(
+        url: &str,
+        workspace: &WorkspaceInfo,
+        ws_path: Option<&str>,
+        all_tags: &[String],
+        children: &HashMap<String, Vec<String>>,
+        prefix: &str,
+        connector: &str,
+        child_prefix: &str,
+    ) {
+        if let Some(pkg) = workspace.packages.get(url) {
+            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+            let current = tags::find_latest_version(all_tags, &tag_prefix);
+            let ver = current
+                .as_ref()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "new".into());
+            println!(
+                "{}{}{} {}",
+                prefix.dimmed(),
+                connector.dimmed(),
+                pkg.rel_path.display(),
+                ver.dimmed()
+            );
+        }
+
+        if let Some(deps) = children.get(url) {
+            for (i, dep) in deps.iter().enumerate() {
+                let is_last_child = i == deps.len() - 1;
+                let (conn, next_prefix) = if is_last_child {
+                    ("└── ", format!("{}    ", child_prefix))
+                } else {
+                    ("├── ", format!("{}│   ", child_prefix))
+                };
+                print_node(
+                    dep,
+                    workspace,
+                    ws_path,
+                    all_tags,
+                    children,
+                    child_prefix,
+                    conn,
+                    &next_prefix,
+                );
+            }
+        }
+    }
+
+    for (i, root) in roots.iter().enumerate() {
+        let is_last = i == roots.len() - 1;
+        let (conn, child_prefix) = if is_last {
+            ("└── ", "    ")
+        } else {
+            ("├── ", "│   ")
+        };
+        print_node(
+            root,
+            workspace,
+            ws_path,
+            all_tags,
+            &children,
+            "",
+            conn,
+            child_prefix,
+        );
+    }
+}
+
 /// Collect all bump types upfront, displaying packages and prompting for choices.
 fn collect_all_bumps(
     workspace: &WorkspaceInfo,
     waves: &[Vec<String>],
+    dirty_urls: &HashSet<String>,
     cli_bump: Option<BumpType>,
 ) -> Result<BTreeMap<String, BumpType>> {
     let all_tags = git::list_all_tags_vec(&workspace.root);
     let ws_path = workspace.path();
 
-    // Display all packages by wave
-    println!();
-    println!("{}", "Packages to publish:".cyan().bold());
-    for (i, wave_urls) in waves.iter().enumerate() {
-        println!("  {}:", format!("Wave {}", i + 1).bold());
-        for url in wave_urls {
-            if let Some(pkg) = workspace.packages.get(url) {
-                let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-                let current = tags::find_latest_version(&all_tags, &tag_prefix);
-                let ver = current
-                    .as_ref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "new".into());
-                let display_path = pkg.rel_path.display();
-                println!("    {} ({})", display_path, ver.dimmed());
-            }
-        }
-    }
+    // Print packages to publish
+    print_dependency_tree(workspace, dirty_urls, &all_tags);
     println!();
 
     // If CLI bump provided, use it for all
@@ -736,7 +850,6 @@ fn print_publish_summary(
             }
         }
     }
-    println!();
 }
 
 fn prompt_bump_type() -> Result<BumpType> {
