@@ -33,20 +33,16 @@ pub enum BumpType {
     Major,
 }
 
-/// Strategy for determining version bumps across waves
-enum BumpStrategy {
-    /// Apply the same bump type to all packages
-    SameForAll(BumpType),
-    /// Prompt for each package individually
-    ChooseIndividually,
-}
-
 #[derive(Args, Debug)]
 #[command(about = "Publish packages by creating version tags")]
 pub struct PublishArgs {
     /// Skip preflight checks (uncommitted changes, branch, remote)
     #[arg(long, short = 'f')]
     pub force: bool,
+
+    /// Skip building the workspace before publishing
+    #[arg(long)]
+    pub skip_build: bool,
 
     /// Suppress diagnostics by kind or severity
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
@@ -75,6 +71,49 @@ struct WaveResult {
     tags: Vec<String>,
     commit: Option<String>,
     candidates: BTreeMap<String, PublishCandidate>,
+}
+
+/// Expand the dirty set to include packages that depend on dirty packages.
+/// If A is dirty and B depends on A, then B must also be published (its pcb.toml
+/// will be bumped to the new version of A).
+fn expand_dirty_set(
+    workspace: &WorkspaceInfo,
+    directly_dirty: &HashSet<String>,
+) -> HashSet<String> {
+    let mut dirty = directly_dirty.clone();
+    let mut changed = true;
+
+    // Build reverse dependency map: url -> packages that depend on it
+    let mut reverse_deps: HashMap<String, Vec<String>> = HashMap::new();
+    for (url, pkg) in &workspace.packages {
+        // Skip boards
+        if pkg.config.board.is_some() {
+            continue;
+        }
+        for dep_url in pkg.dependencies() {
+            reverse_deps
+                .entry(dep_url.to_string())
+                .or_default()
+                .push(url.clone());
+        }
+    }
+
+    // Fixed-point iteration: keep adding dependants until no changes
+    while changed {
+        changed = false;
+        let current_dirty: Vec<_> = dirty.iter().cloned().collect();
+        for url in current_dirty {
+            if let Some(dependants) = reverse_deps.get(&url) {
+                for dependant in dependants {
+                    if dirty.insert(dependant.clone()) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    dirty
 }
 
 /// Compute waves of packages to publish using Kahn's algorithm.
@@ -180,13 +219,15 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     println!("Syncing tags from {}...", remote.cyan());
     git::fetch_tags(&workspace.root, &remote)?;
 
-    build_workspace(&workspace, &args.suppress)?;
+    if !args.skip_build {
+        build_workspace(&workspace, &args.suppress)?;
+    }
 
     let initial_commit = git::rev_parse(&workspace.root, "HEAD")
         .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?;
 
-    // Get dirty non-board packages and compute publish waves
-    let dirty_urls: HashSet<String> = workspace
+    // Get dirty non-board packages
+    let directly_dirty: HashSet<String> = workspace
         .dirty_packages()
         .keys()
         .filter(|url| {
@@ -198,6 +239,10 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .cloned()
         .collect();
 
+    // Expand to include packages that depend on dirty packages (transitively)
+    // These need to be published because their pcb.toml will be bumped
+    let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+
     let waves = compute_publish_waves(&workspace, &dirty_urls);
 
     if waves.is_empty() {
@@ -205,16 +250,21 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Determine bump strategy
-    let bump_strategy = if let Some(bump) = args.bump {
-        BumpStrategy::SameForAll(bump)
-    } else {
-        let packages: Vec<_> = dirty_urls
-            .iter()
-            .filter_map(|url| workspace.packages.get_key_value(url))
-            .collect();
-        prompt_bump_strategy_choice(&packages)?
-    };
+    // Collect all bump info and show summary upfront
+    let bump_map = collect_all_bumps(&workspace, &waves, args.bump)?;
+
+    // Show summary and confirm
+    let all_tags_list = git::list_all_tags_vec(&workspace.root);
+    print_publish_summary(&workspace, &waves, &bump_map, &all_tags_list);
+
+    if !Confirm::new("Proceed with publishing?")
+        .with_default(true)
+        .prompt()
+        .unwrap_or(false)
+    {
+        println!("{}", "Publish cancelled".yellow());
+        return Ok(());
+    }
 
     let mut all_tags: Vec<String> = Vec::new();
     let mut commits: Vec<String> = Vec::new();
@@ -223,13 +273,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     // Process each wave
     let result: Result<()> = (|| {
         for (wave_idx, wave_urls) in waves.iter().enumerate() {
-            let wave = publish_wave(
-                &workspace,
-                &bump_strategy,
-                wave_idx + 1,
-                wave_urls,
-                &published,
-            )?;
+            let wave = publish_wave(&workspace, &bump_map, wave_idx + 1, wave_urls, &published)?;
 
             all_tags.extend(wave.tags);
             if let Some(sha) = wave.commit {
@@ -298,32 +342,12 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 /// Publish a single wave of packages.
 fn publish_wave(
     workspace: &WorkspaceInfo,
-    bump_strategy: &BumpStrategy,
+    bump_map: &BTreeMap<String, BumpType>,
     wave_num: usize,
     package_urls: &[String],
     published: &BTreeMap<String, PublishCandidate>,
 ) -> Result<WaveResult> {
     let all_tags = git::list_all_tags_vec(&workspace.root);
-    let ws_path = workspace.path();
-
-    // Get bump types
-    let bump_map: BTreeMap<String, BumpType> = match bump_strategy {
-        BumpStrategy::SameForAll(bump) => package_urls
-            .iter()
-            .map(|url| (url.clone(), *bump))
-            .collect(),
-        BumpStrategy::ChooseIndividually => {
-            let mut map = BTreeMap::new();
-            for url in package_urls {
-                if let Some(pkg) = workspace.packages.get(url) {
-                    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-                    let current = tags::find_latest_version(&all_tags, &tag_prefix);
-                    map.insert(url.clone(), prompt_single_bump(url, current.as_ref())?);
-                }
-            }
-            map
-        }
-    };
 
     println!();
     println!("{}", format!("Wave {}:", wave_num).cyan().bold());
@@ -352,7 +376,7 @@ fn publish_wave(
     };
 
     // Build candidates with fresh hashes (after pcb.toml modifications)
-    let candidates = build_candidates(workspace, &bump_map, package_urls, &all_tags)?;
+    let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags)?;
 
     // Create tags
     let mut created_tags = Vec::new();
@@ -587,42 +611,132 @@ fn bump_dependency_versions(
     Ok(changed)
 }
 
-fn prompt_bump_strategy_choice(packages: &[(&String, &MemberPackage)]) -> Result<BumpStrategy> {
-    let published: Vec<_> = packages
+/// Collect all bump types upfront, displaying packages and prompting for choices.
+fn collect_all_bumps(
+    workspace: &WorkspaceInfo,
+    waves: &[Vec<String>],
+    cli_bump: Option<BumpType>,
+) -> Result<BTreeMap<String, BumpType>> {
+    let all_tags = git::list_all_tags_vec(&workspace.root);
+    let ws_path = workspace.path();
+
+    // Display all packages by wave
+    println!();
+    println!("{}", "Packages to publish:".cyan().bold());
+    for (i, wave_urls) in waves.iter().enumerate() {
+        println!("  {}:", format!("Wave {}", i + 1).bold());
+        for url in wave_urls {
+            if let Some(pkg) = workspace.packages.get(url) {
+                let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+                let current = tags::find_latest_version(&all_tags, &tag_prefix);
+                let ver = current
+                    .as_ref()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "new".into());
+                let display_path = pkg.rel_path.display();
+                println!("    {} ({})", display_path, ver.dimmed());
+            }
+        }
+    }
+    println!();
+
+    // If CLI bump provided, use it for all
+    if let Some(bump) = cli_bump {
+        return Ok(waves
+            .iter()
+            .flat_map(|w| w.iter())
+            .map(|url| (url.clone(), bump))
+            .collect());
+    }
+
+    // Count published packages (unpublished always get 0.1.0)
+    let published_count = waves
         .iter()
-        .filter(|(_, pkg)| pkg.version.is_some())
-        .collect();
+        .flat_map(|w| w.iter())
+        .filter(|url| {
+            workspace
+                .packages
+                .get(*url)
+                .and_then(|p| p.version.as_ref())
+                .is_some()
+        })
+        .count();
 
-    if published.is_empty() {
-        return Ok(BumpStrategy::SameForAll(BumpType::Minor));
+    // All new packages, use Minor
+    if published_count == 0 {
+        return Ok(waves
+            .iter()
+            .flat_map(|w| w.iter())
+            .map(|url| (url.clone(), BumpType::Minor))
+            .collect());
     }
 
-    println!();
-    println!(
-        "{} package(s) with unpublished changes:",
-        published.len().to_string().cyan()
-    );
-    for (url, pkg) in &published {
-        let version = pkg.version.as_deref().unwrap_or("unpublished");
-        let name = url.split('/').next_back().unwrap_or(url);
-        println!("  {} ({})", name, version);
-    }
-    println!();
-
-    if published.len() == 1 {
-        return Ok(BumpStrategy::ChooseIndividually);
-    }
-
-    let options = vec!["Same bump for all", "Choose individually"];
-    let choice = Select::new("How do you want to version these packages?", options)
-        .prompt()
-        .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
-
-    if choice == "Same bump for all" {
-        Ok(BumpStrategy::SameForAll(prompt_bump_type()?))
+    // Prompt for strategy
+    let total_packages: usize = waves.iter().map(|w| w.len()).sum();
+    let choose_individually = if total_packages == 1 {
+        true
     } else {
-        Ok(BumpStrategy::ChooseIndividually)
+        let options = vec!["Same bump for all", "Choose individually"];
+        let choice = Select::new("How do you want to version these packages?", options)
+            .prompt()
+            .map_err(|e| anyhow::anyhow!("Prompt cancelled: {}", e))?;
+        choice == "Choose individually"
+    };
+
+    if choose_individually {
+        // Prompt for each package (all at once)
+        let mut map = BTreeMap::new();
+        for wave_urls in waves {
+            for url in wave_urls {
+                if let Some(pkg) = workspace.packages.get(url) {
+                    let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+                    let current = tags::find_latest_version(&all_tags, &tag_prefix);
+                    let display_name = pkg.rel_path.display().to_string();
+                    let bump = prompt_single_bump(&display_name, current.as_ref())?;
+                    map.insert(url.clone(), bump);
+                }
+            }
+        }
+        Ok(map)
+    } else {
+        let bump = prompt_bump_type()?;
+        Ok(waves
+            .iter()
+            .flat_map(|w| w.iter())
+            .map(|url| (url.clone(), bump))
+            .collect())
     }
+}
+
+/// Print summary of what will be published.
+fn print_publish_summary(
+    workspace: &WorkspaceInfo,
+    waves: &[Vec<String>],
+    bump_map: &BTreeMap<String, BumpType>,
+    all_tags: &[String],
+) {
+    let ws_path = workspace.path();
+
+    println!();
+    println!("{}", "Summary:".cyan().bold());
+    for (i, wave_urls) in waves.iter().enumerate() {
+        println!("  {}:", format!("Wave {}", i + 1).bold());
+        for url in wave_urls {
+            if let Some(pkg) = workspace.packages.get(url) {
+                let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
+                let current = tags::find_latest_version(all_tags, &tag_prefix);
+                let bump = bump_map.get(url).copied().unwrap_or(BumpType::Minor);
+                let next = compute_next_version(current.as_ref(), bump);
+                let display_path = pkg.rel_path.display();
+                let version_str = match current {
+                    Some(v) => format!("{} → {}", v, next),
+                    None => format!("→ {}", next),
+                };
+                println!("    {} {}", display_path, version_str.green());
+            }
+        }
+    }
+    println!();
 }
 
 fn prompt_bump_type() -> Result<BumpType> {
@@ -644,8 +758,7 @@ fn prompt_bump_type() -> Result<BumpType> {
         .unwrap_or(BumpType::Minor))
 }
 
-fn prompt_single_bump(url: &str, current: Option<&Version>) -> Result<BumpType> {
-    let name = url.split('/').next_back().unwrap_or(url);
+fn prompt_single_bump(name: &str, current: Option<&Version>) -> Result<BumpType> {
     let ver = current
         .map(|v| v.to_string())
         .unwrap_or_else(|| "unpublished".to_string());
