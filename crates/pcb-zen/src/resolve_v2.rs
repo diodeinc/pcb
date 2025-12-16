@@ -386,8 +386,8 @@ pub fn resolve_dependencies(
 
     // Phase -1: Auto-add missing dependencies from .zen files
     // Skip for standalone mode (no pcb.toml to modify)
-    // Skip for locked mode (no modifications allowed)
-    if !is_standalone && !locked {
+    // Skip for locked/offline modes (trust the lockfile)
+    if !is_standalone && !locked && !offline {
         run_auto_deps(workspace_info, &workspace_root, offline)?;
     }
 
@@ -422,20 +422,23 @@ pub fn resolve_dependencies(
     // Inject implicit stdlib dependency (toolchain-pinned minimum version)
     // This ensures stdlib is always available without explicit declaration,
     // and acts as a minimum version floor (MVS will pick higher if user specifies)
-    let stdlib_version =
-        Version::parse(pcb_zen_core::STDLIB_VERSION).expect("STDLIB_VERSION must be valid semver");
-    let stdlib_line = ModuleLine::new(
-        pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
-        &stdlib_version,
-    );
-    if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
-        selected.insert(stdlib_line.clone(), stdlib_version.clone());
-        work_queue.push_back(stdlib_line);
-        log::debug!(
-            "Injected implicit stdlib dependency: {}@v{}",
-            pcb_zen_core::STDLIB_MODULE_PATH,
-            pcb_zen_core::STDLIB_VERSION
+    // Skip in locked/offline modes - trust the lockfile instead
+    if !locked && !offline {
+        let stdlib_version = Version::parse(pcb_zen_core::STDLIB_VERSION)
+            .expect("STDLIB_VERSION must be valid semver");
+        let stdlib_line = ModuleLine::new(
+            pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
+            &stdlib_version,
         );
+        if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
+            selected.insert(stdlib_line.clone(), stdlib_version.clone());
+            work_queue.push_back(stdlib_line);
+            log::debug!(
+                "Injected implicit stdlib dependency: {}@v{}",
+                pcb_zen_core::STDLIB_MODULE_PATH,
+                pcb_zen_core::STDLIB_VERSION
+            );
+        }
     }
 
     // Preseed from lockfile (opportunistic frontloading)
