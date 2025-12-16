@@ -135,7 +135,17 @@ enum Commands {
     External(Vec<OsString>),
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("{} {e}", "Error:".red());
+        for cause in e.chain().skip(1) {
+            eprintln!("  {cause}");
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize logger with default level depending on --debug (overridden by RUST_LOG)

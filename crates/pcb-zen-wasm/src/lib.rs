@@ -1,7 +1,5 @@
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::resolution::{
-    add_transitive_resolution_maps, build_resolution_map, VendoredPathResolver,
-};
+use pcb_zen_core::resolution::{build_resolution_map, VendoredPathResolver};
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use serde::{Deserialize, Serialize};
@@ -205,11 +203,8 @@ fn resolve_v2_packages<F: FileProvider + Clone>(
     // Discover workspace using shared logic
     let workspace = get_workspace_info(&file_provider, workspace_root).ok()?;
 
-    // Build the initial resolution map
-    let mut results = build_resolution_map(&workspace, &resolver);
-
-    // Add transitive dependencies
-    add_transitive_resolution_maps(&file_provider, &resolver, &workspace, &mut results);
+    // Build resolution map for workspace members and all vendored packages
+    let results = build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
 
     Some(results)
 }

@@ -329,10 +329,11 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         };
 
         // For V2: run resolution before eval to get package closure
+        // Use locked mode to ensure lockfile is up to date before release
         let (v2_resolution, v2_closure) = if is_v2 {
             info_spinner.set_message("Resolving V2 dependencies");
             let resolution =
-                pcb_zen::resolve_dependencies(&mut config_workspace_info, false, false)?;
+                pcb_zen::resolve_dependencies(&mut config_workspace_info, false, true)?;
 
             // Find the package URL for this board
             let closure = config_workspace_info
@@ -1062,8 +1063,8 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     let staged_resolution = if info.v2_resolution.is_some() {
         let mut staged_workspace =
             get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
-        // Staged sources have vendored deps, so run resolution in offline mode (locked=false for release)
-        let resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, false)?;
+        // Staged sources have vendored deps, so run resolution in offline+locked mode
+        let resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
         Some(resolution)
     } else {
         None

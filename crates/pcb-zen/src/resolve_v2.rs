@@ -5,7 +5,7 @@ use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
 use pcb_zen_core::resolution::{
-    add_transitive_resolution_maps, build_resolution_map as shared_build_resolution_map,
+    build_resolution_map as shared_build_resolution_map, semver_family, ModuleLine,
     NativePathResolver, PackagePathResolver,
 };
 use pcb_zen_core::DefaultFileProvider;
@@ -22,9 +22,6 @@ use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
-
-// Re-export semver_family from tags module for backwards compatibility
-pub use crate::tags::semver_family;
 
 /// Find matching patch for a module path, supporting glob patterns.
 /// Exact matches take priority, then glob patterns in sorted order.
@@ -73,26 +70,6 @@ fn get_patch_override(url: &str, patches: &BTreeMap<String, PatchSpec>) -> Optio
     None
 }
 
-/// Module line identifier for MVS grouping
-///
-/// A module line represents a semver family:
-/// - For v0.x: family is "v0.<minor>" (e.g., v0.2, v0.3 are different families)
-/// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleLine {
-    pub path: String,   // e.g., "github.com/diodeinc/stdlib"
-    pub family: String, // e.g., "v0.3" or "v1"
-}
-
-impl ModuleLine {
-    fn new(path: String, version: &Version) -> Self {
-        ModuleLine {
-            path,
-            family: semver_family(version),
-        }
-    }
-}
-
 /// Dependency entry before resolution
 #[derive(Debug, Clone)]
 struct UnresolvedDep {
@@ -132,10 +109,6 @@ impl PackagePathResolver for MvsFamilyResolver {
 
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
         self.base.resolve_asset(asset_key, ref_str)
-    }
-
-    fn exists(&self, path: &Path) -> bool {
-        self.base.exists(path)
     }
 }
 
@@ -413,8 +386,8 @@ pub fn resolve_dependencies(
 
     // Phase -1: Auto-add missing dependencies from .zen files
     // Skip for standalone mode (no pcb.toml to modify)
-    // Skip for locked mode (no modifications allowed)
-    if !is_standalone && !locked {
+    // Skip for locked/offline modes (trust the lockfile)
+    if !is_standalone && !locked && !offline {
         run_auto_deps(workspace_info, &workspace_root, offline)?;
     }
 
@@ -449,20 +422,23 @@ pub fn resolve_dependencies(
     // Inject implicit stdlib dependency (toolchain-pinned minimum version)
     // This ensures stdlib is always available without explicit declaration,
     // and acts as a minimum version floor (MVS will pick higher if user specifies)
-    let stdlib_version =
-        Version::parse(pcb_zen_core::STDLIB_VERSION).expect("STDLIB_VERSION must be valid semver");
-    let stdlib_line = ModuleLine::new(
-        pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
-        &stdlib_version,
-    );
-    if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
-        selected.insert(stdlib_line.clone(), stdlib_version.clone());
-        work_queue.push_back(stdlib_line);
-        log::debug!(
-            "Injected implicit stdlib dependency: {}@v{}",
-            pcb_zen_core::STDLIB_MODULE_PATH,
-            pcb_zen_core::STDLIB_VERSION
+    // Skip in locked/offline modes - trust the lockfile instead
+    if !locked && !offline {
+        let stdlib_version = Version::parse(pcb_zen_core::STDLIB_VERSION)
+            .expect("STDLIB_VERSION must be valid semver");
+        let stdlib_line = ModuleLine::new(
+            pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
+            &stdlib_version,
         );
+        if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
+            selected.insert(stdlib_line.clone(), stdlib_version.clone());
+            work_queue.push_back(stdlib_line);
+            log::debug!(
+                "Injected implicit stdlib dependency: {}@v{}",
+                pcb_zen_core::STDLIB_MODULE_PATH,
+                pcb_zen_core::STDLIB_VERSION
+            );
+        }
     }
 
     // Preseed from lockfile (opportunistic frontloading)
@@ -583,31 +559,22 @@ pub fn resolve_dependencies(
                 }
             }
 
-            match resolve_to_version(
+            let version = resolve_to_version(
                 &mut pseudo_ctx,
                 &dep.url,
                 spec,
                 workspace_info.lockfile.as_ref(),
                 offline,
-            ) {
-                Ok(version) => {
-                    add_requirement(
-                        dep.url.clone(),
-                        version,
-                        &mut selected,
-                        &mut work_queue,
-                        &patches,
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{} failed to resolve {}: {}",
-                        "warning:".with_style(Style::Yellow),
-                        dep.url.as_str().bold(),
-                        e
-                    );
-                }
-            }
+            )
+            .with_context(|| format!("Failed to resolve {}", dep.url))?;
+
+            add_requirement(
+                dep.url.clone(),
+                version,
+                &mut selected,
+                &mut work_queue,
+                &patches,
+            );
         }
     }
 
@@ -657,58 +624,39 @@ pub fn resolve_dependencies(
         let mut new_deps = 0;
         for (line, version, result) in results {
             total_fetched += 1;
-            match result {
-                Ok(manifest) => {
-                    manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
+            let manifest =
+                result.with_context(|| format!("Failed to fetch {}@v{}", line.path, version))?;
 
-                    for (dep_path, dep_spec) in &manifest.dependencies {
-                        // Apply branch/rev patch overrides before resolution
-                        let patch_override = get_patch_override(dep_path, &patches);
-                        let spec = patch_override.as_ref().unwrap_or(dep_spec);
+            manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
-                        if is_non_version_dep(spec) {
-                            continue;
-                        }
+            for (dep_path, dep_spec) in &manifest.dependencies {
+                // Apply branch/rev patch overrides before resolution
+                let patch_override = get_patch_override(dep_path, &patches);
+                let spec = patch_override.as_ref().unwrap_or(dep_spec);
 
-                        match resolve_to_version(
-                            &mut pseudo_ctx,
-                            dep_path,
-                            spec,
-                            workspace_info.lockfile.as_ref(),
-                            offline,
-                        ) {
-                            Ok(dep_version) => {
-                                let before = work_queue.len();
-                                add_requirement(
-                                    dep_path.clone(),
-                                    dep_version,
-                                    &mut selected,
-                                    &mut work_queue,
-                                    &patches,
-                                );
-                                if work_queue.len() > before {
-                                    new_deps += 1;
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "{} failed to resolve {}: {}",
-                                    "warning:".with_style(Style::Yellow),
-                                    dep_path.as_str().bold(),
-                                    e
-                                );
-                            }
-                        }
-                    }
+                if is_non_version_dep(spec) {
+                    continue;
                 }
-                Err(e) => {
-                    eprintln!(
-                        "{} failed to fetch {}@v{}: {}",
-                        "warning:".with_style(Style::Yellow),
-                        line.path.as_str().bold(),
-                        version,
-                        e
-                    );
+
+                let dep_version = resolve_to_version(
+                    &mut pseudo_ctx,
+                    dep_path,
+                    spec,
+                    workspace_info.lockfile.as_ref(),
+                    offline,
+                )
+                .with_context(|| format!("Failed to resolve {}", dep_path))?;
+
+                let before = work_queue.len();
+                add_requirement(
+                    dep_path.clone(),
+                    dep_version,
+                    &mut selected,
+                    &mut work_queue,
+                    &patches,
+                );
+                if work_queue.len() > before {
+                    new_deps += 1;
                 }
             }
         }
@@ -1002,7 +950,9 @@ fn build_resolution_map(
         base: base_resolver,
     };
 
-    let mut results = shared_build_resolution_map(workspace_info, &resolver);
+    let file_provider = DefaultFileProvider::default();
+    let mut results =
+        shared_build_resolution_map(&file_provider, &resolver, workspace_info, closure);
 
     // Inject stdlib into every package's resolution map (allows @stdlib without explicit declaration)
     if let Some(path) = resolver
@@ -1015,10 +965,6 @@ fn build_resolution_map(
                 .or_insert(path.clone());
         }
     }
-
-    // Add transitive dependencies using shared logic
-    let file_provider = DefaultFileProvider::default();
-    add_transitive_resolution_maps(&file_provider, &resolver, workspace_info, &mut results);
 
     Ok(results)
 }
@@ -1315,10 +1261,8 @@ fn fetch_package(
     // 4. If offline, fail here - vendor is the only allowed source for offline builds
     if offline {
         anyhow::bail!(
-            "Package {} v{} not vendored (offline mode)\n  \
-            Run `pcb vendor` to vendor dependencies for offline builds",
-            module_path,
-            version
+            "Package not vendored (offline mode)\n  \
+            Run `pcb vendor` to vendor dependencies for offline builds"
         );
     }
 
@@ -2046,13 +1990,6 @@ fn update_lockfile(
     let index = CacheIndex::open()?;
 
     for (line, version) in closure {
-        // Skip stdlib if using toolchain-pinned version (not user-specified)
-        if line.path == pcb_zen_core::STDLIB_MODULE_PATH
-            && version.to_string() == pcb_zen_core::STDLIB_VERSION
-        {
-            continue;
-        }
-
         let version_str = version.to_string();
 
         // Check if vendored - if so, reuse existing lockfile entry
