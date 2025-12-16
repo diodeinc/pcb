@@ -5,8 +5,7 @@ use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
 use pcb_zen_core::resolution::{
-    build_resolution_map as shared_build_resolution_map, semver_family, ModuleLine,
-    NativePathResolver, PackagePathResolver,
+    build_resolution_map, semver_family, ModuleLine, NativePathResolver, PackagePathResolver,
 };
 use pcb_zen_core::DefaultFileProvider;
 use rayon::prelude::*;
@@ -736,7 +735,7 @@ pub fn resolve_dependencies(
     log::debug!("V2 dependency resolution complete");
 
     let package_resolutions =
-        build_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
+        build_native_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
 
     Ok(ResolutionResult {
         package_resolutions,
@@ -905,7 +904,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 ///
 /// Uses MVS family matching for package resolution and delegates to shared resolution
 /// logic for the actual map building.
-fn build_resolution_map(
+fn build_native_resolution_map(
     workspace_info: &WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
@@ -934,7 +933,7 @@ fn build_resolution_map(
     let patches = path_patches;
 
     // Create base resolver for package path lookups
-    // Note: workspace members are handled directly in shared_build_resolution_map
+    // Note: workspace members are handled directly in build_resolution_map
     let base_resolver = NativePathResolver {
         vendor_dir: vendor.clone(),
         cache_dir: cache.clone(),
@@ -961,20 +960,7 @@ fn build_resolution_map(
     };
 
     let file_provider = DefaultFileProvider::default();
-    let mut results =
-        shared_build_resolution_map(&file_provider, &resolver, workspace_info, closure);
-
-    // Inject stdlib into every package's resolution map (allows @stdlib without explicit declaration)
-    if let Some(path) = resolver
-        .families
-        .get(pcb_zen_core::STDLIB_MODULE_PATH)
-        .and_then(|f| f.values().next())
-    {
-        for map in results.values_mut() {
-            map.entry(pcb_zen_core::STDLIB_MODULE_PATH.to_string())
-                .or_insert(path.clone());
-        }
-    }
+    let results = build_resolution_map(&file_provider, &resolver, workspace_info, closure);
 
     Ok(results)
 }
