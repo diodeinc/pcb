@@ -329,10 +329,11 @@ pub fn execute(args: ReleaseArgs) -> Result<()> {
         };
 
         // For V2: run resolution before eval to get package closure
+        // Use locked mode to ensure lockfile is up to date before release
         let (v2_resolution, v2_closure) = if is_v2 {
             info_spinner.set_message("Resolving V2 dependencies");
             let resolution =
-                pcb_zen::resolve_dependencies(&mut config_workspace_info, false, false)?;
+                pcb_zen::resolve_dependencies(&mut config_workspace_info, false, true)?;
 
             // Find the package URL for this board
             let closure = config_workspace_info
