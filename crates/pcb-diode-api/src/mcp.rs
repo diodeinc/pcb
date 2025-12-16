@@ -58,6 +58,7 @@ pub fn tools() -> Vec<ToolInfo> {
                             "properties": {
                                 "component_id": {"type": "string"},
                                 "part_number": {"type": "string"},
+                                "manufacturer": {"type": ["string", "null"]},
                                 "description": {"type": ["string", "null"]},
                                 "package_category": {"type": ["string", "null"]},
                                 "has_ecad_model": {"type": "boolean"},
@@ -84,6 +85,10 @@ pub fn tools() -> Vec<ToolInfo> {
                     "part_number": {
                         "type": "string",
                         "description": "Part number from search_component results"
+                    },
+                    "manufacturer": {
+                        "type": "string",
+                        "description": "Manufacturer name from search_component results"
                     }
                 },
                 "required": ["component_id", "part_number"]
@@ -122,6 +127,7 @@ fn search_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolRes
             json!({
                 "component_id": r.component_id,
                 "part_number": r.part_number,
+                "manufacturer": r.manufacturer,
                 "description": r.description,
                 "package_category": r.package_category,
                 "has_ecad_model": r.model_availability.ecad_model,
@@ -143,9 +149,19 @@ fn add_component(args: Option<Value>, ctx: &McpContext) -> Result<CallToolResult
     ctx.log("info", &format!("Adding component: {}", part_number));
 
     let workspace = std::env::current_dir()?;
+    let manufacturer = args
+        .as_ref()
+        .and_then(|a| a.get("manufacturer"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned());
     ctx.progress(2, 2, "Adding to workspace");
-    let result =
-        crate::add_component_to_workspace(&token, &component_id, &part_number, &workspace)?;
+    let result = crate::add_component_to_workspace(
+        &token,
+        &component_id,
+        &part_number,
+        &workspace,
+        manufacturer.as_deref(),
+    )?;
 
     ctx.log(
         "info",
