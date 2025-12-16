@@ -1,0 +1,79 @@
+#!/bin/bash
+
+set -e
+
+# Terminal colors and formatting
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Helper functions for pretty output
+print_success() {
+    echo -e "${GREEN}${BOLD}✓${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}${BOLD}⚠${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}${BOLD}✗${NC} $1"
+    exit 1
+}
+
+print_info() {
+    echo -e "${BOLD}$1${NC}"
+}
+
+STDLIB_REPO="https://github.com/diodeinc/stdlib"
+LIB_RS="crates/pcb-zen-core/src/lib.rs"
+
+# Ensure we're in the repo root
+if [ ! -f "$LIB_RS" ]; then
+    print_error "Must run from repository root (cannot find $LIB_RS)"
+fi
+
+# Get the latest tag from the stdlib repo
+print_info "Fetching latest stdlib version from $STDLIB_REPO..."
+LATEST_TAG=$(git ls-remote --tags --sort=-v:refname "$STDLIB_REPO" | head -n 1 | sed 's/.*refs\/tags\///' | sed 's/\^{}//')
+
+if [ -z "$LATEST_TAG" ]; then
+    print_error "Failed to fetch latest tag from $STDLIB_REPO"
+fi
+
+# Strip 'v' prefix if present for the version string
+LATEST_VERSION="${LATEST_TAG#v}"
+
+print_success "Latest stdlib version: ${BOLD}${LATEST_VERSION}${NC}"
+
+# Get current version
+CURRENT_VERSION=$(grep 'pub const STDLIB_VERSION' "$LIB_RS" | sed 's/.*"\(.*\)".*/\1/')
+
+if [ -z "$CURRENT_VERSION" ]; then
+    print_error "Failed to find STDLIB_VERSION in $LIB_RS"
+fi
+
+print_info "Current stdlib version: ${BOLD}${CURRENT_VERSION}${NC}"
+
+# Check if already up to date
+if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+    print_success "Already at latest version (${BOLD}${LATEST_VERSION}${NC})"
+    exit 0
+fi
+
+# Update the version
+if sed -i.bak "s/pub const STDLIB_VERSION: \&str = \".*\";/pub const STDLIB_VERSION: \&str = \"${LATEST_VERSION}\";/" "$LIB_RS" && rm -f "$LIB_RS.bak"; then
+    print_success "Updated STDLIB_VERSION from ${BOLD}${CURRENT_VERSION}${NC} to ${BOLD}${LATEST_VERSION}${NC}"
+else
+    print_error "Failed to update STDLIB_VERSION in $LIB_RS"
+fi
+
+# Verify the change
+UPDATED_VERSION=$(grep 'pub const STDLIB_VERSION' "$LIB_RS" | sed 's/.*"\(.*\)".*/\1/')
+if [ "$UPDATED_VERSION" != "$LATEST_VERSION" ]; then
+    print_error "Version update verification failed. Expected: $LATEST_VERSION, Got: $UPDATED_VERSION"
+fi
+
+print_success "Done! Don't forget to commit the changes."

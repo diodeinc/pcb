@@ -1,0 +1,69 @@
+name: Check stdlib version
+
+on:
+  schedule:
+    # Run every hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-stdlib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "Diode Robot"
+          git config user.email "info@diode.run"
+
+      - name: Check for stdlib updates
+        id: check
+        run: |
+          # Run the bump script
+          ./bin/bump-stdlib-version
+
+          # Check if there are changes
+          if git diff --quiet crates/pcb-zen-core/src/lib.rs; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            # Extract the new version for the PR title
+            NEW_VERSION=$(grep 'pub const STDLIB_VERSION' crates/pcb-zen-core/src/lib.rs | sed 's/.*"\(.*\)".*/\1/')
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DIODE_ROBOT_TOKEN }}
+        run: |
+          BRANCH="auto/bump-stdlib-${{ steps.check.outputs.version }}"
+
+          # Check if branch already exists
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists, skipping"
+            exit 0
+          fi
+
+          # Create branch and commit
+          git checkout -b "$BRANCH"
+          git add crates/pcb-zen-core/src/lib.rs
+          git commit -m "Bump stdlib version to ${{ steps.check.outputs.version }}"
+          git push origin "$BRANCH"
+
+          # Create PR with auto-merge enabled
+          gh pr create \
+            --title "Bump stdlib version to ${{ steps.check.outputs.version }}" \
+            --body "Automated PR to update the pinned stdlib version to ${{ steps.check.outputs.version }}." \
+            --head "$BRANCH" \
+            --base main
+
+          # Enable auto-merge (squash)
+          gh pr merge "$BRANCH" --auto --squash
