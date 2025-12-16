@@ -38,3 +38,4 @@ expression: netlist
     )
   )
 )
+Advice: [TEMP_DIR]test.zen Net name 'sig_signal' should be UPPERCASE: 'SIG_SIGNAL'

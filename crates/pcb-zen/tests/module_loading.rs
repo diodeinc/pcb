@@ -95,8 +95,8 @@ local = "./modules"
         "modules/MyModule.zen",
         r#"
 # A simple module
-input = io("input", Net)
-output = io("output", Net)
+INPUT = io("INPUT", Net)
+OUTPUT = io("OUTPUT", Net)
 "#,
     );
 
@@ -108,8 +108,8 @@ MyModule = Module("@local/MyModule.zen")
 
 MyModule(
     name = "M1",
-    input = Net("IN"),
-    output = Net("OUT"),
+    INPUT = Net("IN"),
+    OUTPUT = Net("OUT"),
 )
 "#,
     );
@@ -354,8 +354,8 @@ fn module_relative_from_subdir() {
         "modules/MyModule.zen",
         r#"
 # A simple module
-input = io("input", Net)
-output = io("output", Net)
+INPUT = io("INPUT", Net)
+OUTPUT = io("OUTPUT", Net)
 "#,
     );
 
@@ -376,8 +376,8 @@ MyModule = Module("@local/MyModule.zen")
 
 MyModule(
     name = "M1",
-    input = Net("IN"),
-    output = Net("OUT"),
+    INPUT = Net("IN"),
+    OUTPUT = Net("OUT"),
 )
 "#,
     );

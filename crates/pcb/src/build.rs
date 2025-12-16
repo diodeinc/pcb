@@ -25,15 +25,24 @@ fn execute_electrical_check(
 
 pub fn create_diagnostics_passes(
     suppress: &[String],
+    promote: &[String],
 ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
-    vec![
+    let mut passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> = vec![
         Box::new(pcb_zen_core::FilterHiddenPass),
         Box::new(pcb_zen_core::SuppressPass::new(suppress.to_vec())),
         Box::new(pcb_zen_core::CommentSuppressPass::new()),
-        Box::new(pcb_zen_core::AggregatePass),
-        Box::new(pcb_zen_core::SortPass),
-        Box::new(pcb_zen::diagnostics::RenderPass),
-    ]
+    ];
+
+    // Add promote pass if patterns are specified (e.g., -W style)
+    if !promote.is_empty() {
+        passes.push(Box::new(pcb_zen_core::PromotePass::new(promote.to_vec())));
+    }
+
+    passes.push(Box::new(pcb_zen_core::AggregatePass));
+    passes.push(Box::new(pcb_zen_core::SortPass));
+    passes.push(Box::new(pcb_zen::diagnostics::RenderPass));
+
+    passes
 }
 
 #[derive(Args, Debug, Default, Clone)]
@@ -66,6 +75,12 @@ pub struct BuildArgs {
     /// Supports hierarchical matching (e.g., 'electrical' matches 'electrical.voltage_mismatch')
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
+
+    /// Promote diagnostics from advice to warning. Use 'style' for all style hints,
+    /// or specific kinds like 'style.naming.io'. Useful for enforcing conventions in CI.
+    /// Supports hierarchical matching (e.g., 'style' matches 'style.naming.io')
+    #[arg(short = 'W', long = "warn", value_name = "KIND")]
+    pub warn: Vec<String>,
 }
 
 /// Print success message with component count for a built schematic
@@ -228,7 +243,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         let Some(schematic) = build(
             zen_path,
             args.offline,
-            create_diagnostics_passes(&args.suppress),
+            create_diagnostics_passes(&args.suppress, &args.warn),
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,

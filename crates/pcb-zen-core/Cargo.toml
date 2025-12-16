@@ -29,6 +29,7 @@ debugserver-types = { workspace = true }
 either = { workspace = true }
 globset = { workspace = true }
 itertools = { workspace = true }
+heck = { workspace = true }
 lru = { workspace = true }
 lsp-types = { workspace = true }
 serde = { workspace = true }

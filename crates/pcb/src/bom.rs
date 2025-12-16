@@ -105,7 +105,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let layout_path = extract_layout_path(&args.file, &eval_result).ok();
     let eval_output = eval_result.output_result().map_err(|mut diagnostics| {
         // Apply passes and render diagnostics if there are errors
-        diagnostics.apply_passes(&create_diagnostics_passes(&[]));
+        diagnostics.apply_passes(&create_diagnostics_passes(&[], &[]));
         anyhow::anyhow!("Failed to build {} - cannot generate BOM", file_name)
     })?;
 

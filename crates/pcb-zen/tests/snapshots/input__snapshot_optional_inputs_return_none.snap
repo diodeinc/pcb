@@ -36,3 +36,6 @@ expression: netlist
     )
   )
 )
+Advice: [TEMP_DIR]top.zen:4:1-7:2 Issue in `my_sub`
+Advice: [TEMP_DIR]my_sub.zen Net name 'pwr' should be UPPERCASE: 'PWR'Advice: [TEMP_DIR]top.zen:4:1-7:2 Issue in `my_sub`
+Advice: [TEMP_DIR]my_sub.zen:3:7-38 io() parameter 'pwr' should be UPPERCASE: 'PWR'

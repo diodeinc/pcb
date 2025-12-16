@@ -333,7 +333,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         if let Some(schematic) = crate::build::build(
             zen_path,
             false,
-            crate::build::create_diagnostics_passes(suppress),
+            crate::build::create_diagnostics_passes(suppress, &[]),
             false,
             &mut has_errors,
             &mut has_warnings,

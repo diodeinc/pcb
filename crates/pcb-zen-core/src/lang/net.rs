@@ -22,6 +22,8 @@ use starlark::{
 };
 use starlark_map::sorted_map::SortedMap;
 
+use crate::lang::evaluator_ext::EvaluatorExt;
+use crate::lang::naming;
 use crate::lang::symbol::SymbolValue;
 
 use super::context::ContextValue;
@@ -597,12 +599,26 @@ where
                 }
 
                 // Choose requested name: name= overrides positional string, which overrides base net's original name
-                let requested_name: Option<String> = name_from_kw
-                    .or(name_from_pos)
+                let explicit_name = name_from_kw.or(name_from_pos);
+                let requested_name: Option<String> = explicit_name
+                    .clone()
                     .or_else(|| base_net.and_then(|n| n.original_name.clone()));
 
                 if let Some(ref n) = requested_name {
                     validate_identifier_name(n, "Net name")?;
+                }
+
+                // Check naming convention for explicitly provided names (not inherited from base_net)
+                if let Some(ref explicit) = explicit_name {
+                    let (path, span) = eval
+                        .call_stack_top_location()
+                        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+                        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+                    if let Some(diag) =
+                        naming::check_net_naming(explicit, span, std::path::Path::new(&path))
+                    {
+                        eval.add_diagnostic(diag);
+                    }
                 }
 
                 // Build (original_name, properties, net_id)

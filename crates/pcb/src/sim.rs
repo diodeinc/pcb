@@ -49,7 +49,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
     // Reuse the shared build flow from build.rs
     let mut has_errors = false;
     let mut has_warnings = false;
-    let passes = create_diagnostics_passes(&[]);
+    let passes = create_diagnostics_passes(&[], &[]);
     let Some(schematic) = build_zen(
         &zen_path,
         false,

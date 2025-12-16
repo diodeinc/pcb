@@ -125,6 +125,8 @@ impl LspEvalContext {
         vec![
             Box::new(pcb_zen_core::FilterHiddenPass),
             Box::new(pcb_zen_core::LspFilterPass::new(workspace_root)),
+            // Promote style diagnostics from Advice to Warning for LSP visibility
+            Box::new(pcb_zen_core::StylePromotePass),
         ]
     }
 
