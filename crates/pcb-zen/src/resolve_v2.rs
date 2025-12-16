@@ -1296,6 +1296,8 @@ fn fetch_package(
     }
 
     // 3. Check vendor directory (only if also in lockfile for consistency)
+// Exception: stdlib at toolchain-pinned version is not written to lockfile,
+    // so we allow it from vendor without lockfile entry
     let version_str = version.to_string();
     let vendor_dir = workspace_info
         .root
@@ -1308,7 +1310,9 @@ fn fetch_package(
         .as_ref()
         .map(|lf| lf.get(module_path, &version_str).is_some())
         .unwrap_or(false);
-    if vendor_toml.exists() && in_lockfile {
+let is_toolchain_stdlib = module_path == pcb_zen_core::STDLIB_MODULE_PATH
+        && version_str == pcb_zen_core::STDLIB_VERSION;
+    if vendor_toml.exists() && (in_lockfile || is_toolchain_stdlib) {
         return read_manifest_from_path(&vendor_toml);
     }
 
