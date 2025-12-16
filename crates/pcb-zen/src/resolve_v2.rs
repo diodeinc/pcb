@@ -2041,6 +2041,13 @@ fn update_lockfile(
     let index = CacheIndex::open()?;
 
     for (line, version) in closure {
+        // Skip stdlib if using toolchain-pinned version (not user-specified)
+        if line.path == pcb_zen_core::STDLIB_MODULE_PATH
+            && version.to_string() == pcb_zen_core::STDLIB_VERSION
+        {
+            continue;
+        }
+
         let version_str = version.to_string();
 
         // Check if vendored - if so, reuse existing lockfile entry
