@@ -83,7 +83,32 @@ fn compute_publish_waves(
     workspace: &WorkspaceInfo,
     dirty_urls: &HashSet<String>,
 ) -> Vec<Vec<String>> {
-    if dirty_urls.is_empty() {
+    // Build dependency map: url -> vec of dependency urls (only dirty ones)
+    let deps: HashMap<String, Vec<String>> = dirty_urls
+        .iter()
+        .map(|url| {
+            let dep_urls = workspace
+                .packages
+                .get(url)
+                .map(|pkg| {
+                    pkg.dependencies()
+                        .filter(|d| dirty_urls.contains(*d))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            (url.clone(), dep_urls)
+        })
+        .collect();
+
+    compute_waves_from_deps(&deps)
+}
+
+/// Core algorithm: compute publish waves from a dependency map.
+/// Each entry maps a package URL to its dependency URLs.
+/// Uses Kahn's algorithm for topological sorting.
+fn compute_waves_from_deps(deps: &HashMap<String, Vec<String>>) -> Vec<Vec<String>> {
+    if deps.is_empty() {
         return Vec::new();
     }
 
@@ -91,18 +116,16 @@ fn compute_publish_waves(
     let mut graph = DiGraph::<String, ()>::new();
     let mut url_to_node: HashMap<String, NodeIndex> = HashMap::new();
 
-    for url in dirty_urls {
+    for url in deps.keys() {
         let node = graph.add_node(url.clone());
         url_to_node.insert(url.clone(), node);
     }
 
-    for url in dirty_urls {
-        if let Some(pkg) = workspace.packages.get(url) {
-            let from_node = url_to_node[url];
-            for dep_url in pkg.dependencies() {
-                if let Some(&to_node) = url_to_node.get(dep_url) {
-                    graph.add_edge(from_node, to_node, ());
-                }
+    for (url, dep_urls) in deps {
+        let from_node = url_to_node[url];
+        for dep_url in dep_urls {
+            if let Some(&to_node) = url_to_node.get(dep_url) {
+                graph.add_edge(from_node, to_node, ());
             }
         }
     }
@@ -311,7 +334,8 @@ fn publish_wave(
     for url in package_urls {
         if let Some(pkg) = workspace.packages.get(url) {
             let has_published_dep = pkg.dependencies().any(|d| published.contains_key(d));
-            if has_published_dep && bump_dependency_versions(&pkg.dir.join("pcb.toml"), published)? {
+            if has_published_dep && bump_dependency_versions(&pkg.dir.join("pcb.toml"), published)?
+            {
                 println!("  patching: {}/pcb.toml", pkg.rel_path.display());
                 changed_pkgs.push(pkg);
             }
@@ -669,4 +693,179 @@ fn prompt_single_bump(url: &str, current: Option<&Version>) -> Result<BumpType> 
         .find(|(l, _)| l == selected)
         .map(|(_, b)| *b)
         .unwrap_or(BumpType::Minor))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a dependency map from a list of (package, [dependencies])
+    fn deps(entries: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+        entries
+            .iter()
+            .map(|(pkg, deps)| {
+                (
+                    pkg.to_string(),
+                    deps.iter().map(|d| d.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Helper to normalize waves for comparison (sort within each wave)
+    fn normalize(waves: &[Vec<String>]) -> Vec<Vec<String>> {
+        waves
+            .iter()
+            .map(|wave| {
+                let mut sorted = wave.clone();
+                sorted.sort();
+                sorted
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_empty_deps() {
+        let result = compute_waves_from_deps(&HashMap::new());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_single_package_no_deps() {
+        let result = compute_waves_from_deps(&deps(&[("a", &[])]));
+        assert_eq!(normalize(&result), vec![vec!["a"]]);
+    }
+
+    #[test]
+    fn test_multiple_independent_packages() {
+        let result = compute_waves_from_deps(&deps(&[("a", &[]), ("b", &[]), ("c", &[])]));
+        // All should be in the same wave since they're independent
+        assert_eq!(result.len(), 1);
+        assert_eq!(normalize(&result), vec![vec!["a", "b", "c"]]);
+    }
+
+    #[test]
+    fn test_linear_chain() {
+        // c depends on b, b depends on a
+        // Should publish: a, then b, then c
+        let result = compute_waves_from_deps(&deps(&[("a", &[]), ("b", &["a"]), ("c", &["b"])]));
+        assert_eq!(normalize(&result), vec![vec!["a"], vec!["b"], vec!["c"]]);
+    }
+
+    #[test]
+    fn test_diamond_dependency() {
+        // d depends on b and c, both b and c depend on a
+        // Should publish: a, then b+c together, then d
+        let result = compute_waves_from_deps(&deps(&[
+            ("a", &[]),
+            ("b", &["a"]),
+            ("c", &["a"]),
+            ("d", &["b", "c"]),
+        ]));
+        assert_eq!(result.len(), 3);
+        assert_eq!(normalize(&result)[0], vec!["a"]);
+        assert_eq!(normalize(&result)[1], vec!["b", "c"]);
+        assert_eq!(normalize(&result)[2], vec!["d"]);
+    }
+
+    #[test]
+    fn test_multiple_roots() {
+        // Two independent chains: a->b and c->d
+        let result = compute_waves_from_deps(&deps(&[
+            ("a", &[]),
+            ("b", &["a"]),
+            ("c", &[]),
+            ("d", &["c"]),
+        ]));
+        assert_eq!(result.len(), 2);
+        assert_eq!(normalize(&result)[0], vec!["a", "c"]);
+        assert_eq!(normalize(&result)[1], vec!["b", "d"]);
+    }
+
+    #[test]
+    fn test_complex_graph() {
+        // e depends on c and d
+        // c depends on a and b
+        // d depends on b
+        // a, b are roots
+        let result = compute_waves_from_deps(&deps(&[
+            ("a", &[]),
+            ("b", &[]),
+            ("c", &["a", "b"]),
+            ("d", &["b"]),
+            ("e", &["c", "d"]),
+        ]));
+        assert_eq!(result.len(), 3);
+        assert_eq!(normalize(&result)[0], vec!["a", "b"]);
+        assert_eq!(normalize(&result)[1], vec!["c", "d"]);
+        assert_eq!(normalize(&result)[2], vec!["e"]);
+    }
+
+    #[test]
+    fn test_deps_to_non_dirty_packages_ignored() {
+        // b depends on a, but only b is in the map (a is clean/already published)
+        // b should be in wave 1 since its dependency on a doesn't count
+        let result = compute_waves_from_deps(&deps(&[("b", &["a"])]));
+        assert_eq!(normalize(&result), vec![vec!["b"]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cycle detected")]
+    fn test_cycle_detection() {
+        // a depends on b, b depends on a - cycle!
+        compute_waves_from_deps(&deps(&[("a", &["b"]), ("b", &["a"])]));
+    }
+
+    #[test]
+    fn test_version_bump_patch() {
+        let v = Version::new(1, 2, 3);
+        assert_eq!(
+            compute_next_version(Some(&v), BumpType::Patch),
+            Version::new(1, 2, 4)
+        );
+    }
+
+    #[test]
+    fn test_version_bump_minor() {
+        let v = Version::new(1, 2, 3);
+        assert_eq!(
+            compute_next_version(Some(&v), BumpType::Minor),
+            Version::new(1, 3, 0)
+        );
+    }
+
+    #[test]
+    fn test_version_bump_major() {
+        let v = Version::new(1, 2, 3);
+        assert_eq!(
+            compute_next_version(Some(&v), BumpType::Major),
+            Version::new(2, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_version_bump_major_pre_1_0() {
+        // For 0.x, major bump should increment minor (semver convention)
+        let v = Version::new(0, 3, 5);
+        assert_eq!(
+            compute_next_version(Some(&v), BumpType::Major),
+            Version::new(0, 4, 0)
+        );
+    }
+
+    #[test]
+    fn test_version_initial() {
+        assert_eq!(
+            compute_next_version(None, BumpType::Minor),
+            Version::new(0, 1, 0)
+        );
+        assert_eq!(
+            compute_next_version(None, BumpType::Patch),
+            Version::new(0, 1, 0)
+        );
+        assert_eq!(
+            compute_next_version(None, BumpType::Major),
+            Version::new(0, 1, 0)
+        );
+    }
 }
