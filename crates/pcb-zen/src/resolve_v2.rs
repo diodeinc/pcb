@@ -138,6 +138,8 @@ pub struct ResolutionResult {
     pub closure: HashMap<ModuleLine, Version>,
     /// Asset dependencies: (module_path, ref) -> resolved_path
     pub assets: HashMap<(String, String), PathBuf>,
+    /// Whether the lockfile (pcb.sum) was updated during resolution
+    pub lockfile_changed: bool,
 }
 
 impl ResolutionResult {
@@ -702,6 +704,7 @@ pub fn resolve_dependencies(
 
     // Phase 4: Update lockfile with cryptographic hashes
     // Skip for standalone mode (no pcb.sum to write)
+    let mut lockfile_changed = false;
     if !is_standalone {
         log::debug!("Phase 4: Lockfile");
         let lockfile_path = workspace_root.join("pcb.sum");
@@ -725,6 +728,7 @@ pub fn resolve_dependencies(
             if new_content != old_content {
                 std::fs::write(&lockfile_path, &new_content)?;
                 log::debug!("  Updated {}", lockfile_path.display());
+                lockfile_changed = true;
             }
         }
     }
@@ -738,6 +742,7 @@ pub fn resolve_dependencies(
         package_resolutions,
         closure,
         assets: asset_paths,
+        lockfile_changed,
     })
 }
 
@@ -770,12 +775,14 @@ pub fn vendor_deps(
 
     // No patterns = no-op
     if patterns.is_empty() {
+        log::debug!("No vendor patterns configured, skipping vendoring");
         return Ok(VendorResult {
             package_count: 0,
             asset_count: 0,
             vendor_dir,
         });
     }
+    log::debug!("Vendor patterns: {:?}", patterns);
 
     let cache = cache_base();
     let workspace_vendor = workspace_info.root.join("vendor");
@@ -787,7 +794,10 @@ pub fn vendor_deps(
     }
     let glob_set = builder.build()?;
 
-    // Create vendor directory if needed
+    // Clean rebuild: delete and recreate vendor directory
+    if vendor_dir.exists() {
+        fs::remove_dir_all(&vendor_dir)?;
+    }
     fs::create_dir_all(&vendor_dir)?;
 
     // Copy matching packages from workspace vendor or cache (vendor takes precedence)
@@ -1440,10 +1450,40 @@ fn fetch_asset_repo(
     Ok(repo_cache_dir)
 }
 
+/// Get the ModuleLine for a dependency spec.
+///
+/// For version specs, computes the family from the version.
+/// For branch/rev specs, finds the resolved line in selected.
+fn get_line_for_dep(
+    url: &str,
+    spec: &DependencySpec,
+    selected: &HashMap<ModuleLine, Version>,
+) -> Option<ModuleLine> {
+    // Extract version string from spec
+    let version_str = match spec {
+        DependencySpec::Version(v) => Some(v.as_str()),
+        DependencySpec::Detailed(d) => d.version.as_deref(),
+    };
+
+    if let Some(v) = version_str {
+        // Version spec: compute family and look up
+        let ver = parse_version_string(v).ok()?;
+        let line = ModuleLine::new(url.to_string(), &ver);
+        selected.contains_key(&line).then_some(line)
+    } else {
+        // Branch/rev dep: find the line in selected (pseudo-versions aren't preseeded)
+        selected.keys().find(|line| line.path == url).cloned()
+    }
+}
+
 /// Build the final dependency closure using selected versions
 ///
 /// DFS from workspace package dependencies using selected versions.
 /// Returns map of ModuleLine -> Version for packages in the build closure.
+///
+/// IMPORTANT: Only includes ModuleLines that are actually reachable from workspace
+/// dependencies. Stale entries preseeded from the lockfile are excluded if they
+/// don't match any dependency's resolved family. Workspace members are excluded.
 fn build_closure(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
@@ -1452,37 +1492,38 @@ fn build_closure(
     let mut closure = HashMap::new();
     let mut stack = Vec::new();
 
-    // Build index: module_path → ModuleLine for fast lookups (excluding workspace members)
-    let mut line_by_path: HashMap<String, Vec<ModuleLine>> = HashMap::new();
-    for line in selected.keys() {
-        // Skip workspace members - they don't need to be fetched
-        if packages.contains_key(&line.path) {
-            continue;
-        }
-        line_by_path
-            .entry(line.path.clone())
-            .or_default()
-            .push(line.clone());
-    }
-
     // Seed DFS from all package dependencies
+    // Use get_line_for_dep to find the specific ModuleLine matching each dependency's family
+    // Skip workspace members (resolved locally, not part of closure)
     for pkg in packages.values() {
         for (url, spec) in &pkg.config.dependencies {
-            if !is_non_version_dep(spec) {
-                if let Some(lines) = line_by_path.get(url) {
-                    stack.extend(lines.iter().cloned());
-                }
+            if is_non_version_dep(spec) || packages.contains_key(url) {
+                continue;
+            }
+            if let Some(line) = get_line_for_dep(url, spec, selected) {
+                stack.push(line);
             }
         }
     }
 
     // Always include stdlib (implicitly available to all packages)
-    if let Some(lines) = line_by_path.get(pcb_zen_core::STDLIB_MODULE_PATH) {
-        stack.extend(lines.iter().cloned());
+    // Find the highest version stdlib line in selected
+    let stdlib_line = selected
+        .iter()
+        .filter(|(line, _)| line.path == pcb_zen_core::STDLIB_MODULE_PATH)
+        .max_by_key(|(_, v)| (*v).clone())
+        .map(|(line, _)| line.clone());
+    if let Some(line) = stdlib_line {
+        stack.push(line);
     }
 
     // DFS using final selected versions
     while let Some(line) = stack.pop() {
+        // Skip workspace members
+        if packages.contains_key(&line.path) {
+            continue;
+        }
+
         let version = match selected.get(&line) {
             Some(v) => v.clone(),
             None => continue,
@@ -1497,10 +1538,11 @@ fn build_closure(
         // Follow transitive dependencies via selected versions
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version)) {
             for (dep_path, dep_spec) in &manifest.dependencies {
-                if !is_non_version_dep(dep_spec) {
-                    if let Some(lines) = line_by_path.get(dep_path) {
-                        stack.extend(lines.iter().cloned());
-                    }
+                if is_non_version_dep(dep_spec) || packages.contains_key(dep_path) {
+                    continue;
+                }
+                if let Some(dep_line) = get_line_for_dep(dep_path, dep_spec, selected) {
+                    stack.push(dep_line);
                 }
             }
         }

@@ -30,7 +30,10 @@ pub fn resolve_v2_if_needed(
 
     let resolution = if workspace_info.is_v2() {
         let res = pcb_zen::resolve_dependencies(&mut workspace_info, offline, locked)?;
-        pcb_zen::vendor_deps(&workspace_info, &res, &[], None)?;
+        // Only re-vendor if lockfile changed (avoids expensive delete+copy on every build)
+        if res.lockfile_changed {
+            pcb_zen::vendor_deps(&workspace_info, &res, &[], None)?;
+        }
         Some(res)
     } else {
         None
