@@ -178,11 +178,9 @@ impl PackagePathResolver for VendoredPathResolver {
         // Look up by (path, family) and return the path using the selected version from closure
         let ver = Version::parse(version).ok()?;
         let line = ModuleLine::new(module_path.to_string(), &ver);
-        if let Some(selected) = self.closure.get(&line) {
-            Some(self.vendor_dir.join(module_path).join(selected.to_string()))
-        } else {
-            None
-        }
+        self.closure
+            .get(&line)
+            .map(|selected| self.vendor_dir.join(module_path).join(selected.to_string()))
     }
 
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
