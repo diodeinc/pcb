@@ -5,7 +5,7 @@ use pcb_zen_core::config::{
     DependencyDetail, DependencySpec, LockEntry, Lockfile, PatchSpec, PcbToml,
 };
 use pcb_zen_core::resolution::{
-    add_transitive_resolution_maps, build_resolution_map as shared_build_resolution_map,
+    build_resolution_map as shared_build_resolution_map, semver_family, ModuleLine,
     NativePathResolver, PackagePathResolver,
 };
 use pcb_zen_core::DefaultFileProvider;
@@ -22,9 +22,6 @@ use crate::canonical::{compute_content_hash_from_dir, compute_manifest_hash};
 use crate::git;
 use crate::tags;
 use crate::workspace::{WorkspaceInfo, WorkspaceInfoExt};
-
-// Re-export semver_family from tags module for backwards compatibility
-pub use crate::tags::semver_family;
 
 /// Find matching patch for a module path, supporting glob patterns.
 /// Exact matches take priority, then glob patterns in sorted order.
@@ -73,26 +70,6 @@ fn get_patch_override(url: &str, patches: &BTreeMap<String, PatchSpec>) -> Optio
     None
 }
 
-/// Module line identifier for MVS grouping
-///
-/// A module line represents a semver family:
-/// - For v0.x: family is "v0.<minor>" (e.g., v0.2, v0.3 are different families)
-/// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModuleLine {
-    pub path: String,   // e.g., "github.com/diodeinc/stdlib"
-    pub family: String, // e.g., "v0.3" or "v1"
-}
-
-impl ModuleLine {
-    fn new(path: String, version: &Version) -> Self {
-        ModuleLine {
-            path,
-            family: semver_family(version),
-        }
-    }
-}
-
 /// Dependency entry before resolution
 #[derive(Debug, Clone)]
 struct UnresolvedDep {
@@ -132,10 +109,6 @@ impl PackagePathResolver for MvsFamilyResolver {
 
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
         self.base.resolve_asset(asset_key, ref_str)
-    }
-
-    fn exists(&self, path: &Path) -> bool {
-        self.base.exists(path)
     }
 }
 
@@ -1002,7 +975,9 @@ fn build_resolution_map(
         base: base_resolver,
     };
 
-    let mut results = shared_build_resolution_map(workspace_info, &resolver);
+    let file_provider = DefaultFileProvider::default();
+    let mut results =
+        shared_build_resolution_map(&file_provider, &resolver, workspace_info, closure);
 
     // Inject stdlib into every package's resolution map (allows @stdlib without explicit declaration)
     if let Some(path) = resolver
@@ -1015,10 +990,6 @@ fn build_resolution_map(
                 .or_insert(path.clone());
         }
     }
-
-    // Add transitive dependencies using shared logic
-    let file_provider = DefaultFileProvider::default();
-    add_transitive_resolution_maps(&file_provider, &resolver, workspace_info, &mut results);
 
     Ok(results)
 }
@@ -1296,7 +1267,7 @@ fn fetch_package(
     }
 
     // 3. Check vendor directory (only if also in lockfile for consistency)
-// Exception: stdlib at toolchain-pinned version is not written to lockfile,
+    // Exception: stdlib at toolchain-pinned version is not written to lockfile,
     // so we allow it from vendor without lockfile entry
     let version_str = version.to_string();
     let vendor_dir = workspace_info
@@ -1310,7 +1281,7 @@ fn fetch_package(
         .as_ref()
         .map(|lf| lf.get(module_path, &version_str).is_some())
         .unwrap_or(false);
-let is_toolchain_stdlib = module_path == pcb_zen_core::STDLIB_MODULE_PATH
+    let is_toolchain_stdlib = module_path == pcb_zen_core::STDLIB_MODULE_PATH
         && version_str == pcb_zen_core::STDLIB_VERSION;
     if vendor_toml.exists() && (in_lockfile || is_toolchain_stdlib) {
         return read_manifest_from_path(&vendor_toml);

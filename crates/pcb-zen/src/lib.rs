@@ -31,8 +31,7 @@ pub use resolve_v2::{resolve_dependencies, vendor_deps, ResolutionResult, Vendor
 pub use starlark::errors::EvalSeverity;
 pub use workspace::{get_workspace_info, MemberPackage, PackageClosure, WorkspaceInfo};
 
-// Backwards-compat re-exports from tags module
-pub use tags::{get_all_versions_for_repo, semver_family};
+pub use tags::get_all_versions_for_repo;
 
 #[derive(Debug, Clone)]
 pub struct EvalConfig {

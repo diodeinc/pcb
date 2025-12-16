@@ -11,6 +11,7 @@ use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::workspace::get_workspace_info;
 use pcb_zen::{git, tags, WorkspaceInfo};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::resolution::semver_family;
 use pcb_zen_core::DefaultFileProvider;
 use semver::Version;
 use std::collections::{BTreeMap, HashSet};
@@ -244,12 +245,12 @@ fn find_version_updates(
                 continue;
             };
 
-            let current_family = tags::semver_family(&current);
+            let current_family = semver_family(&current);
 
             // Non-breaking update (same family)
             if let Some(v) = available
                 .iter()
-                .find(|v| tags::semver_family(v) == current_family && *v > &current)
+                .find(|v| semver_family(v) == current_family && *v > &current)
             {
                 pending.push(PendingUpdate {
                     url: url.clone(),
@@ -263,7 +264,7 @@ fn find_version_updates(
             // Breaking update (different family)
             if let Some(v) = available
                 .iter()
-                .find(|v| tags::semver_family(v) != current_family && *v > &current)
+                .find(|v| semver_family(v) != current_family && *v > &current)
             {
                 pending.push(PendingUpdate {
                     url: url.clone(),

@@ -145,18 +145,6 @@ pub fn get_all_versions_for_repo(repo_url: &str) -> Result<BTreeMap<String, Vec<
     Ok(packages)
 }
 
-/// Compute the semver family for a version.
-///
-/// For 0.x versions, the minor version determines the family (0.2.x and 0.3.x are different).
-/// For 1.x+ versions, the major version determines the family.
-pub fn semver_family(v: &Version) -> String {
-    if v.major == 0 {
-        format!("v0.{}", v.minor)
-    } else {
-        format!("v{}", v.major)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +235,7 @@ mod tests {
 
     #[test]
     fn test_semver_family() {
+        use pcb_zen_core::resolution::semver_family;
         assert_eq!(semver_family(&Version::new(0, 1, 0)), "v0.1");
         assert_eq!(semver_family(&Version::new(0, 2, 5)), "v0.2");
         assert_eq!(semver_family(&Version::new(1, 0, 0)), "v1");

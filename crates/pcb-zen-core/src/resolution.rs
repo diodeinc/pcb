@@ -8,8 +8,10 @@
 //! - Native: checks patches, vendor/, then ~/.pcb/cache
 //! - WASM: only checks vendor/ (everything must be pre-vendored)
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+
+use semver::Version;
 
 use crate::config::{
     extract_asset_ref, split_asset_repo_and_subpath, AssetDependencySpec, DependencySpec, Lockfile,
@@ -18,11 +20,42 @@ use crate::config::{
 use crate::workspace::WorkspaceInfo;
 use crate::FileProvider;
 
+/// Compute the semver family for a version.
+///
+/// For 0.x versions, the minor version determines the family (0.2.x and 0.3.x are different).
+/// For 1.x+ versions, the major version determines the family.
+pub fn semver_family(v: &Version) -> String {
+    if v.major == 0 {
+        format!("v0.{}", v.minor)
+    } else {
+        format!("v{}", v.major)
+    }
+}
+
+/// Module line identifier for MVS grouping.
+///
+/// A module line represents a semver family:
+/// - For v0.x: family is "v0.<minor>" (e.g., v0.2, v0.3 are different families)
+/// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModuleLine {
+    pub path: String,   // e.g., "github.com/diodeinc/stdlib"
+    pub family: String, // e.g., "v0.3" or "v1"
+}
+
+impl ModuleLine {
+    pub fn new(path: String, version: &Version) -> Self {
+        ModuleLine {
+            path,
+            family: semver_family(version),
+        }
+    }
+}
+
 /// Trait for resolving package and asset paths.
 pub trait PackagePathResolver {
     fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf>;
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf>;
-    fn exists(&self, path: &Path) -> bool;
 }
 
 /// Resolve a single dependency to its path.
@@ -87,29 +120,41 @@ fn build_package_map<R: PackagePathResolver>(
 /// Path resolver that only looks in the vendor directory.
 ///
 /// Used by WASM where all dependencies must be pre-vendored in the zip.
-pub struct VendoredPathResolver<F: FileProvider> {
-    file_provider: F,
-    /// Pre-computed package paths from lockfile: module_path -> vendored path
-    package_paths: HashMap<String, PathBuf>,
+pub struct VendoredPathResolver {
+    vendor_dir: PathBuf,
+    /// Pre-computed closure from lockfile: ModuleLine -> Version
+    closure: HashMap<ModuleLine, Version>,
     /// Pre-computed asset repo paths: (repo_url, ref) -> vendored repo root
     asset_repos: HashMap<(String, String), PathBuf>,
 }
 
-impl<F: FileProvider> VendoredPathResolver<F> {
+impl VendoredPathResolver {
+    /// Get the closure (ModuleLine -> Version mapping).
+    pub fn closure(&self) -> &HashMap<ModuleLine, Version> {
+        &self.closure
+    }
+
     /// Create a new vendored path resolver from a lockfile.
     ///
     /// The lockfile contains two types of entries:
     /// - Packages (code dependencies): have a manifest_hash, stored at vendor/{module_path}/{version}
     /// - Assets (data files like KiCad libs): no manifest_hash, stored at vendor/{repo_url}/{version}/{subpath}
-    pub fn from_lockfile(file_provider: F, vendor_dir: PathBuf, lockfile: &Lockfile) -> Self {
-        let mut package_paths = HashMap::new();
+    pub fn from_lockfile<F: FileProvider>(
+        file_provider: F,
+        vendor_dir: PathBuf,
+        lockfile: &Lockfile,
+    ) -> Self {
+        let mut closure = HashMap::new();
         let mut asset_repos = HashMap::new();
 
         for entry in lockfile.iter() {
             if entry.manifest_hash.is_some() {
                 let path = vendor_dir.join(&entry.module_path).join(&entry.version);
                 if file_provider.exists(&path) {
-                    package_paths.insert(entry.module_path.clone(), path);
+                    if let Ok(version) = Version::parse(&entry.version) {
+                        let line = ModuleLine::new(entry.module_path.clone(), &version);
+                        closure.insert(line, version);
+                    }
                 }
             } else {
                 let (repo_url, _subpath) = split_asset_repo_and_subpath(&entry.module_path);
@@ -121,49 +166,51 @@ impl<F: FileProvider> VendoredPathResolver<F> {
         }
 
         Self {
-            file_provider,
-            package_paths,
+            vendor_dir,
+            closure,
             asset_repos,
         }
     }
 }
 
-impl<F: FileProvider> PackagePathResolver for VendoredPathResolver<F> {
-    fn resolve_package(&self, module_path: &str, _version: &str) -> Option<PathBuf> {
-        self.package_paths.get(module_path).cloned()
+impl PackagePathResolver for VendoredPathResolver {
+    fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
+        // Look up by (path, family) and return the path using the selected version from closure
+        let ver = Version::parse(version).ok()?;
+        let line = ModuleLine::new(module_path.to_string(), &ver);
+        if let Some(selected) = self.closure.get(&line) {
+            Some(self.vendor_dir.join(module_path).join(selected.to_string()))
+        } else {
+            None
+        }
     }
 
     fn resolve_asset(&self, asset_key: &str, ref_str: &str) -> Option<PathBuf> {
         let (repo_url, subpath) = split_asset_repo_and_subpath(asset_key);
         let key = (repo_url.to_string(), ref_str.to_string());
 
-        self.asset_repos
-            .get(&key)
-            .map(|repo_path| {
-                if subpath.is_empty() {
-                    repo_path.clone()
-                } else {
-                    repo_path.join(subpath)
-                }
-            })
-            .or_else(|| self.package_paths.get(asset_key).cloned())
-    }
-
-    fn exists(&self, path: &Path) -> bool {
-        self.file_provider.exists(path)
+        self.asset_repos.get(&key).map(|repo_path| {
+            if subpath.is_empty() {
+                repo_path.clone()
+            } else {
+                repo_path.join(subpath)
+            }
+        })
     }
 }
 
-/// Build the per-package resolution map.
+/// Build the per-package resolution map for workspace members and all packages in the closure.
 ///
 /// Returns a map from package root path to (dependency URL -> resolved path).
-pub fn build_resolution_map<R: PackagePathResolver>(
-    workspace: &WorkspaceInfo,
+pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
+    file_provider: &F,
     resolver: &R,
+    workspace: &WorkspaceInfo,
+    closure: &HashMap<ModuleLine, Version>,
 ) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     let mut results = HashMap::new();
 
-    // Build map for each member package (includes root if it's a package)
+    // Build map for each workspace member (already have their configs loaded)
     for member in workspace.packages.values() {
         results.insert(
             member.dir.clone(),
@@ -192,28 +239,14 @@ pub fn build_resolution_map<R: PackagePathResolver>(
         );
     }
 
-    results
-}
+    // Build map for external packages in the closure (need to read their pcb.toml)
+    for (line, version) in closure {
+        let version_str = version.to_string();
+        let Some(pkg_path) = resolver.resolve_package(&line.path, &version_str) else {
+            continue;
+        };
 
-/// Add resolution maps for transitive (vendored) dependencies.
-pub fn add_transitive_resolution_maps<F: FileProvider, R: PackagePathResolver>(
-    file_provider: &F,
-    resolver: &R,
-    workspace: &WorkspaceInfo,
-    results: &mut HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-) {
-    // Collect initial paths to process
-    let mut to_process: Vec<PathBuf> = results
-        .values()
-        .flat_map(|map| map.values())
-        .filter(|path| !results.contains_key(*path) && resolver.exists(path))
-        .cloned()
-        .collect();
-
-    let mut processed = HashSet::new();
-
-    while let Some(pkg_path) = to_process.pop() {
-        if !processed.insert(pkg_path.clone()) || results.contains_key(&pkg_path) {
+        if results.contains_key(&pkg_path) {
             continue;
         }
 
@@ -225,23 +258,19 @@ pub fn add_transitive_resolution_maps<F: FileProvider, R: PackagePathResolver>(
             continue;
         };
 
-        let map = build_package_map(
-            resolver,
-            workspace,
-            &pkg_path,
-            &config.dependencies,
-            &config.assets,
+        results.insert(
+            pkg_path.clone(),
+            build_package_map(
+                resolver,
+                workspace,
+                &pkg_path,
+                &config.dependencies,
+                &config.assets,
+            ),
         );
-
-        // Queue newly discovered paths
-        for path in map.values() {
-            if !results.contains_key(path) && !processed.contains(path) {
-                to_process.push(path.clone());
-            }
-        }
-
-        results.insert(pkg_path, map);
     }
+
+    results
 }
 
 /// Path resolver for native CLI that supports vendor, cache, and patches.
@@ -308,10 +337,6 @@ impl PackagePathResolver for NativePathResolver {
         }
 
         None
-    }
-
-    fn exists(&self, path: &Path) -> bool {
-        path.exists()
     }
 }
 
