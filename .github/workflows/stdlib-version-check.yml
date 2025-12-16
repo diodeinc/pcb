@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -42,7 +42,7 @@ jobs:
       - name: Create Pull Request
         if: steps.check.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.DIODE_ROBOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="auto/bump-stdlib-${{ steps.check.outputs.version }}"
 
