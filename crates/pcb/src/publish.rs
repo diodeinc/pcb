@@ -203,6 +203,10 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         preflight_checks(&workspace.root)?
     };
 
+    // Sync local tags with remote to ensure accurate version detection
+    println!("Syncing tags from {}...", remote.cyan());
+    git::fetch_tags(&workspace.root, &remote)?;
+
     // Build workspace to validate before publishing
     build_workspace(&workspace, &args.suppress)?;
 
