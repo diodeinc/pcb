@@ -521,6 +521,7 @@ pub fn add_component_to_workspace(
     component_id: &str,
     part_number: &str,
     workspace_root: &std::path::Path,
+    search_manufacturer: Option<&str>,
 ) -> Result<AddComponentResult> {
     // Show progress during API call
     let spinner = ProgressBar::new_spinner();
@@ -530,7 +531,7 @@ pub fn add_component_to_workspace(
     let download = download_component(auth_token, component_id)?;
     spinner.finish_and_clear();
 
-    let manufacturer = download.metadata.manufacturer.as_deref();
+    let manufacturer = search_manufacturer;
     let component_dir = component_dir_path(workspace_root, manufacturer, part_number);
     let sanitized_mpn = sanitize_mpn_for_path(part_number);
     let zen_file = component_dir.join(format!("{}.zen", &sanitized_mpn));
@@ -1187,6 +1188,7 @@ pub fn search_interactive(
         &selected_component.component_id,
         &selected_component.part_number,
         workspace_root,
+        selected_component.manufacturer.as_deref(),
     )?;
 
     if handle_already_exists(workspace_root, &result) {
@@ -1256,6 +1258,7 @@ pub fn search_and_add_single(
         &component.component_id,
         &component.part_number,
         workspace_root,
+        component.manufacturer.as_deref(),
     )?;
 
     if handle_already_exists(workspace_root, &result) {
