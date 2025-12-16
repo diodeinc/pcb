@@ -672,6 +672,7 @@ fn print_dependency_tree(
     println!("{}", "Packages to publish:".cyan().bold());
     println!("{}", workspace_url);
 
+    #[allow(clippy::too_many_arguments)]
     fn print_node(
         url: &str,
         workspace: &WorkspaceInfo,
