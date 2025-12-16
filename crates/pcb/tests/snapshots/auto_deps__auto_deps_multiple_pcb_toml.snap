@@ -12,9 +12,6 @@ members = [
     "graphics/*",
 ]
 
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.4.0"
-
 [assets]
 "gitlab.com/kicad/libraries/kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym" = "9.0.3"

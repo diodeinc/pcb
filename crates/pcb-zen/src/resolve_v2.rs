@@ -80,8 +80,8 @@ fn get_patch_override(url: &str, patches: &BTreeMap<String, PatchSpec>) -> Optio
 /// - For v1.x+: family is "v<major>" (e.g., v1, v2, v3)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleLine {
-    path: String,   // e.g., "github.com/diodeinc/stdlib"
-    family: String, // e.g., "v0.3" or "v1"
+    pub path: String,   // e.g., "github.com/diodeinc/stdlib"
+    pub family: String, // e.g., "v0.3" or "v1"
 }
 
 impl ModuleLine {
@@ -161,8 +161,8 @@ impl PackageManifest {
 pub struct ResolutionResult {
     /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
     pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    /// Package dependencies in the build closure: (module_path, version)
-    pub closure: HashSet<(String, String)>,
+    /// Package dependencies in the build closure: ModuleLine -> Version
+    pub closure: HashMap<ModuleLine, Version>,
     /// Asset dependencies: (module_path, ref) -> resolved_path
     pub assets: HashMap<(String, String), PathBuf>,
 }
@@ -176,18 +176,18 @@ impl ResolutionResult {
             .and_then(|n| n.to_str())
             .unwrap_or("workspace");
 
-        // Build version map from closure: module_path -> version
-        let version_map: HashMap<&str, &str> = self
+        // Index closure by path for fast lookup
+        let by_path: HashMap<&str, &Version> = self
             .closure
             .iter()
-            .map(|(path, version)| (path.as_str(), version.as_str()))
+            .map(|(line, version)| (line.path.as_str(), version))
             .collect();
 
         // Collect root deps (direct deps from workspace packages)
         let mut root_deps: Vec<&str> = Vec::new();
         for pkg in workspace_info.packages.values() {
             for url in pkg.config.dependencies.keys() {
-                if version_map.contains_key(url.as_str()) && !root_deps.contains(&url.as_str()) {
+                if by_path.contains_key(url.as_str()) && !root_deps.contains(&url.as_str()) {
                     root_deps.push(url.as_str());
                 }
             }
@@ -202,13 +202,13 @@ impl ResolutionResult {
         let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
 
         // Build graph from closure packages by reading their pcb.toml files
-        for (path, _version) in &self.closure {
-            if dep_graph.contains_key(path) {
+        for line in self.closure.keys() {
+            if dep_graph.contains_key(&line.path) {
                 continue;
             }
             // Find resolved path for this package
             for deps in self.package_resolutions.values() {
-                if let Some(resolved) = deps.get(path) {
+                if let Some(resolved) = deps.get(&line.path) {
                     let pcb_toml = resolved.join("pcb.toml");
                     if pcb_toml.exists() {
                         if let Ok(content) = std::fs::read_to_string(&pcb_toml) {
@@ -216,10 +216,10 @@ impl ResolutionResult {
                                 let transitive: Vec<String> = config
                                     .dependencies
                                     .keys()
-                                    .filter(|dep_url| version_map.contains_key(dep_url.as_str()))
+                                    .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
                                     .cloned()
                                     .collect();
-                                dep_graph.insert(path.clone(), transitive);
+                                dep_graph.insert(line.path.clone(), transitive);
                             }
                         }
                     }
@@ -244,7 +244,7 @@ impl ResolutionResult {
         // Recursive print helper
         fn print_dep(
             url: &str,
-            version_map: &HashMap<&str, &str>,
+            by_path: &HashMap<&str, &Version>,
             dep_graph: &HashMap<String, Vec<String>>,
             printed: &mut HashSet<String>,
             prefix: &str,
@@ -252,7 +252,10 @@ impl ResolutionResult {
             format_name: &impl Fn(&str) -> String,
         ) {
             let branch = if is_last { "└── " } else { "├── " };
-            let version = version_map.get(url).copied().unwrap_or("?");
+            let version = by_path
+                .get(url)
+                .map(|v| v.to_string())
+                .unwrap_or("?".to_string());
             let already_printed = !printed.insert(url.to_string());
 
             println!(
@@ -277,7 +280,7 @@ impl ResolutionResult {
                     let is_last_child = i == sorted_deps.len() - 1;
                     print_dep(
                         dep_url,
-                        version_map,
+                        by_path,
                         dep_graph,
                         printed,
                         &child_prefix,
@@ -293,7 +296,7 @@ impl ResolutionResult {
             let is_last = i == root_deps.len() - 1;
             print_dep(
                 url,
-                &version_map,
+                &by_path,
                 &dep_graph,
                 &mut printed,
                 "",
@@ -345,6 +348,12 @@ fn run_auto_deps(
         log::debug!(
             "Corrected {} workspace member version(s)",
             auto_deps.versions_corrected
+        );
+    }
+    if auto_deps.stdlib_removed > 0 {
+        log::debug!(
+            "Removed {} redundant stdlib dependency declaration(s)",
+            auto_deps.stdlib_removed
         );
     }
 
@@ -428,6 +437,25 @@ pub fn resolve_dependencies(
     let mut selected: HashMap<ModuleLine, Version> = HashMap::new();
     let mut work_queue: VecDeque<ModuleLine> = VecDeque::new();
     let mut manifest_cache: HashMap<(ModuleLine, Version), PackageManifest> = HashMap::new();
+
+    // Inject implicit stdlib dependency (toolchain-pinned minimum version)
+    // This ensures stdlib is always available without explicit declaration,
+    // and acts as a minimum version floor (MVS will pick higher if user specifies)
+    let stdlib_version =
+        Version::parse(pcb_zen_core::STDLIB_VERSION).expect("STDLIB_VERSION must be valid semver");
+    let stdlib_line = ModuleLine::new(
+        pcb_zen_core::STDLIB_MODULE_PATH.to_string(),
+        &stdlib_version,
+    );
+    if find_matching_patch(pcb_zen_core::STDLIB_MODULE_PATH, &patches).is_none() {
+        selected.insert(stdlib_line.clone(), stdlib_version.clone());
+        work_queue.push_back(stdlib_line);
+        log::debug!(
+            "Injected implicit stdlib dependency: {}@v{}",
+            pcb_zen_core::STDLIB_MODULE_PATH,
+            pcb_zen_core::STDLIB_VERSION
+        );
+    }
 
     // Preseed from lockfile (opportunistic frontloading)
     // This allows Wave 1 to start fetching known deps immediately
@@ -720,12 +748,14 @@ pub fn resolve_dependencies(
     // Skip for standalone mode (no pcb.sum to write)
     if !is_standalone {
         log::debug!("Phase 4: Lockfile");
-        let (lockfile, added_count) = update_lockfile(workspace_info, &closure, &asset_paths)?;
+        let lockfile_path = workspace_root.join("pcb.sum");
+        let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
+        let lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
+        let new_content = lockfile.to_string();
 
-        // Only write lockfile to disk if new entries were added
-        if added_count > 0 {
-            let lockfile_path = workspace_root.join("pcb.sum");
-            std::fs::write(&lockfile_path, lockfile.to_string())?;
+        // Write if lockfile changed (new entries added OR unused entries removed)
+        if new_content != old_content {
+            std::fs::write(&lockfile_path, &new_content)?;
             log::debug!("  Updated {}", lockfile_path.display());
         }
     }
@@ -733,17 +763,11 @@ pub fn resolve_dependencies(
     log::debug!("V2 dependency resolution complete");
 
     let package_resolutions =
-        build_resolution_map(workspace_info, &selected, &patches, &asset_paths, offline)?;
-
-    // Convert closure to (module_path, version) pairs
-    let closure_set: HashSet<_> = closure
-        .iter()
-        .map(|(line, version)| (line.path.clone(), version.to_string()))
-        .collect();
+        build_resolution_map(workspace_info, &closure, &patches, &asset_paths, offline)?;
 
     Ok(ResolutionResult {
         package_resolutions,
-        closure: closure_set,
+        closure,
         assets: asset_paths,
     })
 }
@@ -799,18 +823,19 @@ pub fn vendor_deps(
 
     // Copy matching packages from workspace vendor or cache (vendor takes precedence)
     let mut package_count = 0;
-    for (module_path, version) in &resolution.closure {
-        if !glob_set.is_match(module_path) {
+    for (line, version) in &resolution.closure {
+        if !glob_set.is_match(&line.path) {
             continue;
         }
-        let vendor_src = workspace_vendor.join(module_path).join(version);
-        let cache_src = cache.join(module_path).join(version);
+        let version_str = version.to_string();
+        let vendor_src = workspace_vendor.join(&line.path).join(&version_str);
+        let cache_src = cache.join(&line.path).join(&version_str);
         let src = if vendor_src.exists() {
             vendor_src
         } else {
             cache_src
         };
-        let dst = vendor_dir.join(module_path).join(version);
+        let dst = vendor_dir.join(&line.path).join(&version_str);
         if src.exists() && !dst.exists() {
             copy_dir_all(&src, &dst)?;
             package_count += 1;
@@ -903,7 +928,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 /// logic for the actual map building.
 fn build_resolution_map(
     workspace_info: &WorkspaceInfo,
-    selected: &HashMap<ModuleLine, Version>,
+    closure: &HashMap<ModuleLine, Version>,
     patches: &BTreeMap<String, PatchSpec>,
     asset_paths: &HashMap<(String, String), PathBuf>,
     offline: bool,
@@ -912,14 +937,14 @@ fn build_resolution_map(
     let vendor = workspace_info.root.join("vendor");
 
     // Build patch map (only path patches - branch/rev patches use normal fetch)
-    // Expand glob patterns against selected URLs
+    // Expand glob patterns against closure URLs
     let mut path_patches: HashMap<String, PathBuf> = HashMap::new();
     for (pattern, patch) in patches {
         if let Some(path_str) = &patch.path {
             let abs_path = workspace_info.root.join(path_str);
             if let Ok(glob) = globset::Glob::new(pattern) {
                 let matcher = glob.compile_matcher();
-                for (line, _) in selected.iter() {
+                for line in closure.keys() {
                     if matcher.is_match(&line.path) {
                         path_patches.insert(line.path.clone(), abs_path.clone());
                     }
@@ -941,7 +966,7 @@ fn build_resolution_map(
 
     // Build the families map for MVS family matching
     let mut families: HashMap<String, HashMap<String, PathBuf>> = HashMap::new();
-    for (line, version) in selected {
+    for (line, version) in closure {
         let version_str = version.to_string();
         if let Some(abs_path) = base_resolver.resolve_package(&line.path, &version_str) {
             families
@@ -951,14 +976,24 @@ fn build_resolution_map(
         }
     }
 
-    // Create the MVS family resolver that wraps the base for assets
     let resolver = MvsFamilyResolver {
         families,
         base: base_resolver,
     };
 
-    // Use shared resolution logic for root + workspace members
     let mut results = shared_build_resolution_map(workspace_info, &resolver);
+
+    // Inject stdlib into every package's resolution map (allows @stdlib without explicit declaration)
+    if let Some(path) = resolver
+        .families
+        .get(pcb_zen_core::STDLIB_MODULE_PATH)
+        .and_then(|f| f.values().next())
+    {
+        for map in results.values_mut() {
+            map.entry(pcb_zen_core::STDLIB_MODULE_PATH.to_string())
+                .or_insert(path.clone());
+        }
+    }
 
     // Add transitive dependencies using shared logic
     let file_provider = DefaultFileProvider::default();
@@ -1443,13 +1478,13 @@ fn fetch_asset_repo(
 /// Build the final dependency closure using selected versions
 ///
 /// DFS from workspace package dependencies using selected versions.
-/// Returns the set of (ModuleLine, Version) pairs in the build closure.
+/// Returns map of ModuleLine -> Version for packages in the build closure.
 fn build_closure(
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PackageManifest>,
-) -> HashSet<(ModuleLine, Version)> {
-    let mut build_set = HashSet::new();
+) -> HashMap<ModuleLine, Version> {
+    let mut closure = HashMap::new();
     let mut stack = Vec::new();
 
     // Build index: module_path → ModuleLine for fast lookups (excluding workspace members)
@@ -1476,6 +1511,11 @@ fn build_closure(
         }
     }
 
+    // Always include stdlib (implicitly available to all packages)
+    if let Some(lines) = line_by_path.get(pcb_zen_core::STDLIB_MODULE_PATH) {
+        stack.extend(lines.iter().cloned());
+    }
+
     // DFS using final selected versions
     while let Some(line) = stack.pop() {
         let version = match selected.get(&line) {
@@ -1483,11 +1523,11 @@ fn build_closure(
             None => continue,
         };
 
-        if build_set.contains(&(line.clone(), version.clone())) {
+        if closure.contains_key(&line) {
             continue;
         }
 
-        build_set.insert((line.clone(), version.clone()));
+        closure.insert(line.clone(), version.clone());
 
         // Follow transitive dependencies via selected versions
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version)) {
@@ -1501,7 +1541,7 @@ fn build_closure(
         }
     }
 
-    build_set
+    closure
 }
 
 /// Resolve a dependency spec to a concrete version
@@ -1964,32 +2004,27 @@ fn ensure_sparse_checkout(
     Ok(checkout_dir.to_path_buf())
 }
 
-/// Update lockfile from build set
+/// Build lockfile from current resolution
 ///
-/// Builds a fresh lockfile containing only the entries needed for current resolution.
-/// Unused entries are automatically removed (no separate tidy step needed).
-///
-/// Returns (lockfile, added_count) - only write to disk if added_count > 0
+/// Creates a fresh lockfile containing only the entries needed for current resolution.
+/// Unused entries from the old lockfile are automatically excluded.
 fn update_lockfile(
     workspace_info: &mut WorkspaceInfo,
-    build_set: &HashSet<(ModuleLine, Version)>,
+    closure: &HashMap<ModuleLine, Version>,
     asset_paths: &HashMap<(String, String), PathBuf>,
-) -> Result<(Lockfile, usize)> {
+) -> Result<Lockfile> {
     let workspace_root = &workspace_info.root;
     let old_lockfile = workspace_info.lockfile.take().unwrap_or_default();
     let mut new_lockfile = Lockfile::default();
 
-    let total_count = build_set.len() + asset_paths.len();
+    let total_count = closure.len() + asset_paths.len();
     if total_count > 0 {
         log::debug!("  Verifying {} entries...", total_count);
     }
 
     let index = CacheIndex::open()?;
 
-    let mut verified_count = 0;
-    let mut added_count = 0;
-
-    for (line, version) in build_set {
+    for (line, version) in closure {
         let version_str = version.to_string();
 
         // Check if vendored - if so, reuse existing lockfile entry
@@ -2000,7 +2035,6 @@ fn update_lockfile(
         if let Some(existing) = old_lockfile.get(&line.path, &version_str) {
             if vendor_dir.exists() {
                 new_lockfile.insert(existing.clone());
-                verified_count += 1;
                 continue;
             }
         }
@@ -2026,9 +2060,7 @@ fn update_lockfile(
                 );
             }
             new_lockfile.insert(existing.clone());
-            verified_count += 1;
         } else {
-            added_count += 1;
             new_lockfile.insert(LockEntry {
                 module_path: line.path.clone(),
                 version: version_str,
@@ -2051,7 +2083,6 @@ fn update_lockfile(
         if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
             if vendor_dir.exists() {
                 new_lockfile.insert(existing.clone());
-                verified_count += 1;
                 continue;
             }
         }
@@ -2063,9 +2094,7 @@ fn update_lockfile(
 
         if let Some(existing) = old_lockfile.get(asset_key, ref_str) {
             new_lockfile.insert(existing.clone());
-            verified_count += 1;
         } else {
-            added_count += 1;
             new_lockfile.insert(LockEntry {
                 module_path: asset_key.clone(),
                 version: ref_str.clone(),
@@ -2075,13 +2104,9 @@ fn update_lockfile(
         }
     }
 
-    if added_count > 0 {
-        log::debug!("  {} new, {} verified", added_count, verified_count);
-    } else if verified_count > 0 {
-        log::debug!("  {} verified", verified_count);
-    }
+    log::debug!("  {} entries", new_lockfile.entries.len());
 
-    Ok((new_lockfile, added_count))
+    Ok(new_lockfile)
 }
 
 // PackageClosure and package_closure() method are now in workspace.rs

@@ -72,6 +72,7 @@ pub struct Sandbox {
     trace: bool,
     hash_globs: Vec<String>,
     ignore_globs: Vec<String>,
+    allow_network: bool,
 }
 
 impl Default for Sandbox {
@@ -108,9 +109,20 @@ impl Sandbox {
             trace: false,
             hash_globs: Vec::new(),
             ignore_globs: Vec::new(),
+            allow_network: false,
         };
         s.write_gitconfig();
         s
+    }
+
+    /// Allow network git access (disables URL rewriting and protocol restrictions).
+    /// Use this for V2 tests that need to fetch real dependencies.
+    pub fn allow_network(mut self) -> Self {
+        self.allow_network = true;
+        // Rewrite gitconfig to allow network access
+        let mut f = File::create(&self.gitconfig).expect("create gitconfig file");
+        writeln!(f, "# Permissive gitconfig for network tests").expect("write gitconfig");
+        self
     }
 
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
@@ -512,15 +524,19 @@ impl Sandbox {
             "GIT_CONFIG_SYSTEM".into(),
             if cfg!(windows) { "NUL" } else { "/dev/null" }.into(),
         );
-        env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
         env_map.insert(
             "DIODE_STAR_CACHE_DIR".into(),
             self.cache_dir.to_string_lossy().into_owned(),
         );
-        // Block HTTP requests by setting invalid proxy - prevents Strategy 3 fallback
-        env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
-        env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
-        env_map.insert("NO_PROXY".into(), "".into()); // Don't bypass proxy for any domains
+
+        if !self.allow_network {
+            // Hermetic mode: block network access
+            env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
+            env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
+            env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
+            env_map.insert("NO_PROXY".into(), "".into());
+        }
+
         if self.trace {
             env_map.insert("GIT_TRACE".into(), "1".into());
             env_map.insert("GIT_CURL_VERBOSE".into(), "1".into());

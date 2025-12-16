@@ -213,7 +213,11 @@ fn find_version_updates(
         let config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
 
         for (url, spec) in &config.dependencies {
-            if workspace_members.contains(url) || !matches_filter(url, filter) {
+            // Skip workspace members, filtered packages, and stdlib (pinned to toolchain)
+            if workspace_members.contains(url)
+                || !matches_filter(url, filter)
+                || url == pcb_zen_core::STDLIB_MODULE_PATH
+            {
                 continue;
             }
 

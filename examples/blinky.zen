@@ -1,9 +1,6 @@
 # ```pcb
 # [workspace]
 # pcb-version = "0.3"
-#
-# [dependencies]
-# "github.com/diodeinc/stdlib" = "0.4.4"
 # ```
 
 # Load standard library

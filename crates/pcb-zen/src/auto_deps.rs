@@ -21,6 +21,7 @@ pub struct AutoDepsSummary {
     pub unknown_aliases: Vec<(PathBuf, Vec<String>)>,
     pub unknown_urls: Vec<(PathBuf, Vec<String>)>,
     pub discovered_remote: usize,
+    pub stdlib_removed: usize,
 }
 
 #[derive(Debug, Default)]
@@ -55,15 +56,10 @@ pub fn auto_add_zen_deps(
         let mut unknown_aliases: Vec<String> = Vec::new();
         let mut unknown_urls: Vec<String> = Vec::new();
 
-        // Process @alias imports - only stdlib needs special handling
+        // Process @alias imports
+        // Note: @stdlib is handled implicitly by the toolchain, no need to add to [dependencies]
         for alias in &imports.aliases {
-            if alias == "stdlib" {
-                deps_to_add.push((
-                    "github.com/diodeinc/stdlib".to_string(),
-                    "0.4.0".to_string(),
-                    false,
-                ));
-            } else {
+            if alias != "stdlib" {
                 unknown_aliases.push(alias.clone());
             }
         }
@@ -152,6 +148,9 @@ pub fn auto_add_zen_deps(
             summary.packages_updated += 1;
         }
     }
+
+    // Remove redundant stdlib dependencies (version <= pinned toolchain version)
+    summary.stdlib_removed = remove_redundant_stdlib(packages)?;
 
     Ok(summary)
 }
@@ -428,6 +427,58 @@ fn add_and_correct_dependencies(
     }
 
     Ok((added, corrected))
+}
+
+/// Remove redundant stdlib dependencies from pcb.toml files
+///
+/// If a stdlib dependency is declared with a version <= the toolchain's pinned version,
+/// it's redundant since the toolchain implicitly provides stdlib. This function removes
+/// such entries.
+///
+/// Returns the number of pcb.toml files that were modified.
+pub fn remove_redundant_stdlib(
+    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+) -> Result<usize> {
+    use crate::tags::parse_version;
+
+    let pinned_version = parse_version(pcb_zen_core::STDLIB_VERSION)
+        .ok_or_else(|| anyhow::anyhow!("Invalid pinned stdlib version"))?;
+
+    let mut removed_count = 0;
+
+    for package in packages.values() {
+        let pcb_toml_path = package.dir.join("pcb.toml");
+        if !pcb_toml_path.exists() {
+            continue;
+        }
+
+        let mut config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
+
+        if let Some(spec) = config.dependencies.get(pcb_zen_core::STDLIB_MODULE_PATH) {
+            let should_remove = match spec {
+                DependencySpec::Version(v) => {
+                    parse_version(v).is_some_and(|ver| ver <= pinned_version)
+                }
+                DependencySpec::Detailed(d) => {
+                    if d.branch.is_some() || d.rev.is_some() || d.path.is_some() {
+                        false
+                    } else if let Some(v) = &d.version {
+                        parse_version(v).is_some_and(|ver| ver <= pinned_version)
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if should_remove {
+                config.dependencies.remove(pcb_zen_core::STDLIB_MODULE_PATH);
+                std::fs::write(&pcb_toml_path, toml::to_string_pretty(&config)?)?;
+                removed_count += 1;
+            }
+        }
+    }
+
+    Ok(removed_count)
 }
 
 #[cfg(test)]

@@ -72,12 +72,14 @@ Zener provides built-in package aliases for commonly used libraries:
 
 - `@kicad-footprints` → `@gitlab/kicad/libraries/kicad-footprints:9.0.0`
 - `@kicad-symbols` → `@gitlab/kicad/libraries/kicad-symbols:9.0.0`
-- `@stdlib` → `@github/diodeinc/stdlib:HEAD`
+- `@stdlib` → Pinned to the toolchain version (e.g., `@github/diodeinc/stdlib:v0.4.4`)
+
+The `@stdlib` alias is special: its version is controlled by the `pcb` toolchain, not by user configuration. This ensures stdlib is always compatible with your toolchain version. You don't need to declare stdlib in your `[dependencies]` - it's implicitly available.
 
 These can be used directly:
 
 ```python
-# Load from stdlib
+# Load from stdlib (version determined by toolchain)
 load("@stdlib/units.zen", "kohm", "uF")
 
 # Load from KiCad symbols library
@@ -97,6 +99,8 @@ kicad-symbols = "@gitlab/kicad/libraries/kicad-symbols:7.0.0"
 my-lib = "@github/myorg/mylib:v1.0.0"
 local-lib = "./path/to/local/lib"
 ```
+
+Note: You can override stdlib to a *newer* version than the toolchain default by declaring it in `[dependencies]`, but you cannot use an older version.
 
 ## Core Types
 
