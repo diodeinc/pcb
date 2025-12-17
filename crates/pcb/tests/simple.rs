@@ -197,7 +197,7 @@ fn test_pcb_vendor_simple_workspace() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"]);
     assert_snapshot!(
         "simple_workspace_vendor",
-        sb.snapshot_run("pcb", ["vendor", "boards/TestBoard.zen"])
+        sb.snapshot_run("pcb", ["vendor", "--yes", "boards/TestBoard.zen"])
     );
     assert_snapshot!("simple_workspace_vendor_dir", sb.snapshot_dir("vendor"));
 }

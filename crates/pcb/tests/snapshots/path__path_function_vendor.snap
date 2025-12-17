@@ -1,8 +1,8 @@
 ---
 source: crates/pcb/tests/path.rs
-expression: "sb.snapshot_run(\"pcb\", [\"vendor\", \"boards/PathTest.zen\"])"
+expression: "sb.snapshot_run(\"pcb\", [\"vendor\", \"--yes\", \"boards/PathTest.zen\"])"
 ---
-Command: pcb vendor boards/PathTest.zen
+Command: pcb vendor --yes boards/PathTest.zen
 Exit Code: 0
 
 --- STDOUT ---

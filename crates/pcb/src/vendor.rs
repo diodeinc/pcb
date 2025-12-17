@@ -1,6 +1,7 @@
 use crate::build::create_diagnostics_passes;
 use anyhow::Result;
 use clap::Args;
+use inquire::Confirm;
 use log::debug;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen::{get_workspace_info, resolve_dependencies, vendor_deps, EvalConfig};
@@ -21,6 +22,10 @@ pub struct VendorArgs {
     /// Continue vendoring even if some designs have build errors
     #[arg(long = "ignore-errors")]
     pub ignore_errors: bool,
+
+    /// Skip confirmation prompt
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
 }
 
 pub fn execute(args: VendorArgs) -> Result<()> {
@@ -29,6 +34,25 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .canonicalize()?;
     let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
+
+    // Prompt for confirmation unless --yes was passed
+    if !args.yes {
+        println!("{}\n", "Warning: `pcb vendor` is discouraged.".yellow());
+        println!("`pcb build` automatically vendors dependencies marked in [workspace.vendor].");
+        println!("An explicit `pcb vendor` is almost always unnecessary unless you have a");
+        println!("specific reason (e.g., offline builds).\n");
+
+        let confirmed = Confirm::new("Are you sure you want to vendor all dependencies?")
+            .with_default(false)
+            .prompt()
+            .unwrap_or(false);
+
+        if !confirmed {
+            println!("{}", "Vendor cancelled.".yellow());
+            return Ok(());
+        }
+        println!();
+    }
 
     // Check if this is a V2 workspace - use simplified closure-based vendoring
     if workspace_info.is_v2() {
@@ -41,7 +65,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
 
 /// V2 vendoring: uses dependency closure from resolution
 fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
-    println!("V2 workspace detected - using closure-based vendoring\n");
+    log::debug!("V2 workspace detected - using closure-based vendoring");
 
     // Vendoring always needs network access (offline=false) and allows modifications (locked=false)
     let resolution = resolve_dependencies(workspace_info, false, false)?;
