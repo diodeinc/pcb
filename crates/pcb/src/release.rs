@@ -783,6 +783,7 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
             resolution,
             &["**".to_string()],
             Some(&vendor_dir),
+            true, // Always prune for release
         )?;
         debug!(
             "Vendored {} packages and {} assets",
