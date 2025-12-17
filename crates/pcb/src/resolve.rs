@@ -31,8 +31,9 @@ pub fn resolve_v2_if_needed(
     let resolution = if workspace_info.is_v2() {
         let mut res = pcb_zen::resolve_dependencies(&mut workspace_info, offline, locked)?;
 
-        // Sync vendor dir: add missing, prune stale (only prune when not offline)
-        let vendor_result = pcb_zen::vendor_deps(&workspace_info, &res, &[], None, !offline)?;
+        // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
+        let prune = !offline && !locked;
+        let vendor_result = pcb_zen::vendor_deps(&workspace_info, &res, &[], None, prune)?;
 
         // If we pruned stale entries, re-run resolution so the dep map points to valid paths
         if vendor_result.pruned_count > 0 {
