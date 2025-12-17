@@ -1,8 +1,8 @@
 ---
 source: crates/pcb/tests/simple.rs
-expression: "sb.snapshot_run(\"pcb\", [\"vendor\", \"--yes\", \"boards/TestBoard.zen\"])"
+expression: "sb.snapshot_run(\"pcb\", [\"vendor\", \"boards/TestBoard.zen\"])"
 ---
-Command: pcb vendor --yes boards/TestBoard.zen
+Command: pcb vendor boards/TestBoard.zen
 Exit Code: 0
 
 --- STDOUT ---

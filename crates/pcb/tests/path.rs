@@ -59,7 +59,7 @@ fn test_path_function_vendor() {
     // Test that vendor command works - should vendor the module and existing files
     assert_snapshot!(
         "path_function_vendor",
-        sb.snapshot_run("pcb", ["vendor", "--yes", "boards/PathTest.zen"])
+        sb.snapshot_run("pcb", ["vendor", "boards/PathTest.zen"])
     );
 
     // Verify vendor directory contains the module and both config files
@@ -104,7 +104,7 @@ PathTestModule(name="D1")
         .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML);
 
     // Vendor should include the entire directory and its contents
-    sb.run("pcb", ["vendor", "--yes", "boards/DirectoryTest.zen"])
+    sb.run("pcb", ["vendor", "boards/DirectoryTest.zen"])
         .run()
         .unwrap();
     let module_vendor_dir = sb

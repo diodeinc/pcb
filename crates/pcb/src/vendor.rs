@@ -1,7 +1,6 @@
 use crate::build::create_diagnostics_passes;
 use anyhow::Result;
 use clap::Args;
-use inquire::Confirm;
 use log::debug;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use pcb_zen::{get_workspace_info, resolve_dependencies, vendor_deps, EvalConfig};
@@ -23,9 +22,9 @@ pub struct VendorArgs {
     #[arg(long = "ignore-errors")]
     pub ignore_errors: bool,
 
-    /// Skip confirmation prompt
-    #[arg(short = 'y', long = "yes")]
-    pub yes: bool,
+    /// Vendor all dependencies instead of just those in [workspace.vendor]
+    #[arg(long = "all")]
+    pub all: bool,
 }
 
 pub fn execute(args: VendorArgs) -> Result<()> {
@@ -35,28 +34,9 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         .canonicalize()?;
     let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
 
-    // Prompt for confirmation unless --yes was passed
-    if !args.yes {
-        println!("{}\n", "Warning: `pcb vendor` is discouraged.".yellow());
-        println!("`pcb build` automatically vendors dependencies marked in [workspace.vendor].");
-        println!("An explicit `pcb vendor` is almost always unnecessary unless you have a");
-        println!("specific reason (e.g., offline builds).\n");
-
-        let confirmed = Confirm::new("Are you sure you want to vendor all dependencies?")
-            .with_default(false)
-            .prompt()
-            .unwrap_or(false);
-
-        if !confirmed {
-            println!("{}", "Vendor cancelled.".yellow());
-            return Ok(());
-        }
-        println!();
-    }
-
     // Check if this is a V2 workspace - use simplified closure-based vendoring
     if workspace_info.is_v2() {
-        return execute_v2(&mut workspace_info);
+        return execute_v2(&mut workspace_info, args.all);
     }
 
     // V1 path: discover zen files and gather dependencies via evaluation
@@ -64,25 +44,45 @@ pub fn execute(args: VendorArgs) -> Result<()> {
 }
 
 /// V2 vendoring: uses dependency closure from resolution
-fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
+fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo, all: bool) -> Result<()> {
     log::debug!("V2 workspace detected - using closure-based vendoring");
+
+    if !all {
+        println!(
+            "{} `pcb build` automatically vendors [workspace.vendor] dependencies.",
+            "Note:".yellow()
+        );
+    }
 
     // Vendoring always needs network access (offline=false) and allows modifications (locked=false)
     let resolution = resolve_dependencies(workspace_info, false, false)?;
 
-    // Vendor everything - pass ["**"] pattern to match all packages and assets
-    // Always prune for explicit vendor command
-    let result = vendor_deps(workspace_info, &resolution, &["**".to_string()], None, true)?;
+    // If --all, vendor everything with ["**"] pattern
+    // Otherwise, pass empty patterns to use only [workspace.vendor] config
+    let additional_patterns: Vec<String> = if all { vec!["**".to_string()] } else { vec![] };
 
-    println!(
-        "{} {}",
-        "✓".green().bold(),
-        format!(
-            "Vendored {} packages and {} assets",
-            result.package_count, result.asset_count
-        )
-        .bold()
-    );
+    // Always prune for explicit vendor command
+    let result = vendor_deps(
+        workspace_info,
+        &resolution,
+        &additional_patterns,
+        None,
+        true,
+    )?;
+
+    if result.package_count == 0 && result.asset_count == 0 {
+        println!("{} Vendor directory is up to date", "✓".green().bold());
+    } else {
+        println!(
+            "{} {}",
+            "✓".green().bold(),
+            format!(
+                "Vendored {} packages and {} assets",
+                result.package_count, result.asset_count
+            )
+            .bold()
+        );
+    }
     println!(
         "Vendor directory: {}",
         result
