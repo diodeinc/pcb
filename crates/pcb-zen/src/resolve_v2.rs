@@ -711,17 +711,35 @@ pub fn resolve_dependencies(
         let new_lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
 
         if locked {
-            // In locked mode: fail only if entries would be added (deletions are safe)
-            for key in new_lockfile.entries.keys() {
-                if !old_lockfile.entries.contains_key(key) {
+            // In locked mode: fail if new entries would be added (deletions are safe)
+            let mut missing: Vec<_> = new_lockfile
+.entries
+.keys()
+                .filter(|k| !old_lockfile.entries.contains_key(*k))
+                .map(|(path, ver)| format!("{}@{}", path, ver))
+                .collect();
+
+            if !missing.is_empty() {
+                missing.sort();
+                let list = missing
+                    .iter()
+                    .take(10)
+                    .map(|k| format!("    - {}", k))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let more = missing
+                    .len()
+                    .checked_sub(10)
+                    .filter(|&n| n > 0)
+                    .map(|n| format!("\n    ... and {} more", n))
+                    .unwrap_or_default();
                     anyhow::bail!(
-                        "Lockfile is out of date (--locked mode)\n  \
+                        "Lockfile is out of date (--locked mode)\n\
+                    Missing entries in pcb.sum:\n{list}{more}\n\n\
                         Run `pcb build` without --locked to update pcb.sum"
                     );
                 }
-            }
-            // Don't write lockfile in locked mode
-        } else {
+                    } else {
             let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
             let new_content = new_lockfile.to_string();
             if new_content != old_content {
