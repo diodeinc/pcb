@@ -29,10 +29,18 @@ pub fn resolve_v2_if_needed(
     let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), path)?;
 
     let resolution = if workspace_info.is_v2() {
-        let res = pcb_zen::resolve_dependencies(&mut workspace_info, offline, locked)?;
-        // Only re-vendor if lockfile changed (avoids expensive delete+copy on every build)
-        if res.lockfile_changed {
-            pcb_zen::vendor_deps(&workspace_info, &res, &[], None)?;
+        let mut res = pcb_zen::resolve_dependencies(&mut workspace_info, offline, locked)?;
+
+        // Sync vendor dir: add missing, prune stale (only prune when not offline)
+        let vendor_result = pcb_zen::vendor_deps(&workspace_info, &res, &[], None, !offline)?;
+
+        // If we pruned stale entries, re-run resolution so the dep map points to valid paths
+        if vendor_result.pruned_count > 0 {
+            log::debug!(
+                "Pruned {} stale vendor entries, re-running resolution",
+                vendor_result.pruned_count
+            );
+            res = pcb_zen::resolve_dependencies(&mut workspace_info, offline, locked)?;
         }
         Some(res)
     } else {

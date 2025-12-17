@@ -287,6 +287,8 @@ pub struct VendorResult {
     pub package_count: usize,
     /// Number of assets vendored
     pub asset_count: usize,
+    /// Number of stale entries pruned from vendor/
+    pub pruned_count: usize,
     /// Path to vendor directory
     pub vendor_dir: PathBuf,
 }
@@ -707,14 +709,18 @@ pub fn resolve_dependencies(
     if !is_standalone {
         log::debug!("Phase 4: Lockfile");
         let lockfile_path = workspace_root.join("pcb.sum");
-        let old_lockfile = workspace_info.lockfile.clone().unwrap_or_default();
-        let new_lockfile = update_lockfile(workspace_info, &closure, &asset_paths)?;
+        let old_lockfile = workspace_info
+            .lockfile
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        let new_lockfile = update_lockfile(&workspace_root, &old_lockfile, &closure, &asset_paths)?;
 
         if locked {
             // In locked mode: fail if new entries would be added (deletions are safe)
             let mut missing: Vec<_> = new_lockfile
-.entries
-.keys()
+                .entries
+                .keys()
                 .filter(|k| !old_lockfile.entries.contains_key(*k))
                 .map(|(path, ver)| format!("{}@{}", path, ver))
                 .collect();
@@ -733,13 +739,13 @@ pub fn resolve_dependencies(
                     .filter(|&n| n > 0)
                     .map(|n| format!("\n    ... and {} more", n))
                     .unwrap_or_default();
-                    anyhow::bail!(
-                        "Lockfile is out of date (--locked mode)\n\
+                anyhow::bail!(
+                    "Lockfile is out of date (--locked mode)\n\
                     Missing entries in pcb.sum:\n{list}{more}\n\n\
-                        Run `pcb build` without --locked to update pcb.sum"
-                    );
-                }
-                    } else {
+                    Run `pcb build` without --locked to update pcb.sum"
+                );
+            }
+        } else {
             let old_content = std::fs::read_to_string(&lockfile_path).unwrap_or_default();
             let new_content = new_lockfile.to_string();
             if new_content != old_content {
@@ -747,6 +753,8 @@ pub fn resolve_dependencies(
                 log::debug!("  Updated {}", lockfile_path.display());
                 lockfile_changed = true;
             }
+            // Keep workspace_info.lockfile in sync
+            workspace_info.lockfile = Some(new_lockfile);
         }
     }
 
@@ -771,11 +779,18 @@ pub fn resolve_dependencies(
 /// If `target_vendor_dir` is provided, vendors to that directory instead of
 /// `workspace_info.root/vendor`. This is used by `pcb release` to vendor into
 /// the staging directory.
+///
+/// This function performs an incremental sync:
+/// - Adds any packages/assets from the resolution that are missing in vendor/
+/// - When `prune=true`, removes any {url}/{version-or-ref} directories not in the resolution
+///
+/// Pruning should be disabled when offline (can't re-fetch deleted deps).
 pub fn vendor_deps(
     workspace_info: &WorkspaceInfo,
     resolution: &ResolutionResult,
     additional_patterns: &[String],
     target_vendor_dir: Option<&Path>,
+    prune: bool,
 ) -> Result<VendorResult> {
     let vendor_dir = target_vendor_dir
         .map(PathBuf::from)
@@ -796,6 +811,7 @@ pub fn vendor_deps(
         return Ok(VendorResult {
             package_count: 0,
             asset_count: 0,
+            pruned_count: 0,
             vendor_dir,
         });
     }
@@ -811,11 +827,10 @@ pub fn vendor_deps(
     }
     let glob_set = builder.build()?;
 
-    // Clean rebuild: delete and recreate vendor directory
-    if vendor_dir.exists() {
-        fs::remove_dir_all(&vendor_dir)?;
-    }
     fs::create_dir_all(&vendor_dir)?;
+
+    // Track all desired {url}/{version-or-ref} roots for pruning stale entries
+    let mut desired_roots: HashSet<PathBuf> = HashSet::new();
 
     // Copy matching packages from workspace vendor or cache (vendor takes precedence)
     let mut package_count = 0;
@@ -824,6 +839,11 @@ pub fn vendor_deps(
             continue;
         }
         let version_str = version.to_string();
+
+        // Track this package root for pruning
+        let rel_root = PathBuf::from(&line.path).join(&version_str);
+        desired_roots.insert(rel_root);
+
         let vendor_src = workspace_vendor.join(&line.path).join(&version_str);
         let cache_src = cache.join(&line.path).join(&version_str);
         let src = if vendor_src.exists() {
@@ -847,6 +867,10 @@ pub fn vendor_deps(
 
         // Split asset_key into (repo_url, subpath) for proper cache/vendor paths
         let (repo_url, subpath) = git::split_asset_repo_and_subpath(asset_key);
+
+        // Track the repo/ref root for pruning (assets share repo/ref roots)
+        let rel_root = PathBuf::from(repo_url).join(ref_str);
+        desired_roots.insert(rel_root);
 
         // Source: check workspace vendor first, then cache
         let vendor_src = if subpath.is_empty() {
@@ -888,9 +912,17 @@ pub fn vendor_deps(
         }
     }
 
+    // Prune stale {url}/{version-or-ref} directories not in the resolution
+    let pruned_count = if prune {
+        prune_stale_vendor_roots(&vendor_dir, &desired_roots)?
+    } else {
+        0
+    };
+
     Ok(VendorResult {
         package_count,
         asset_count,
+        pruned_count,
         vendor_dir,
     })
 }
@@ -911,6 +943,75 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         } else {
             fs::copy(&src_path, &dst_path)?;
         }
+    }
+    Ok(())
+}
+
+/// Prune stale {path}/{version} directories from vendor/
+///
+/// Walks vendor/ recursively and removes directories not in desired_roots
+/// or on the path to a desired root. Returns the number of roots pruned.
+fn prune_stale_vendor_roots(vendor_dir: &Path, desired_roots: &HashSet<PathBuf>) -> Result<usize> {
+    if !vendor_dir.exists() {
+        return Ok(0);
+    }
+
+    // Build set of ancestor paths (paths we must traverse to reach desired roots)
+    let mut ancestors: HashSet<PathBuf> = HashSet::new();
+    for root in desired_roots {
+        let mut ancestor = PathBuf::new();
+        for component in root.components() {
+            ancestors.insert(ancestor.clone());
+            ancestor.push(component);
+        }
+    }
+
+    let mut pruned = 0;
+    prune_dir(
+        vendor_dir,
+        &PathBuf::new(),
+        desired_roots,
+        &ancestors,
+        &mut pruned,
+    )?;
+    Ok(pruned)
+}
+
+fn prune_dir(
+    base: &Path,
+    rel: &Path,
+    desired_roots: &HashSet<PathBuf>,
+    ancestors: &HashSet<PathBuf>,
+    pruned: &mut usize,
+) -> Result<()> {
+    for entry in fs::read_dir(base.join(rel))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let child_rel = if rel.as_os_str().is_empty() {
+            PathBuf::from(&name)
+        } else {
+            rel.join(&name)
+        };
+
+        if entry.file_type()?.is_dir() {
+            if desired_roots.contains(&child_rel) {
+                // This is a desired root - keep everything inside it
+                continue;
+            } else if ancestors.contains(&child_rel) {
+                // On path to a desired root - recurse to find what to prune
+                prune_dir(base, &child_rel, desired_roots, ancestors, pruned)?;
+                // Clean up if now empty
+                if entry.path().read_dir()?.next().is_none() {
+                    fs::remove_dir(entry.path())?;
+                }
+            } else {
+                // Not needed - prune entire subtree
+                log::debug!("Pruning stale vendor path: {}", child_rel.display());
+                fs::remove_dir_all(entry.path())?;
+                *pruned += 1;
+            }
+        }
+        // Files at the root level of vendor/ shouldn't exist, ignore them
     }
     Ok(())
 }
@@ -2020,12 +2121,11 @@ fn ensure_sparse_checkout(
 /// Creates a fresh lockfile containing only the entries needed for current resolution.
 /// Unused entries from the old lockfile are automatically excluded.
 fn update_lockfile(
-    workspace_info: &mut WorkspaceInfo,
+    workspace_root: &Path,
+    old_lockfile: &Lockfile,
     closure: &HashMap<ModuleLine, Version>,
     asset_paths: &HashMap<(String, String), PathBuf>,
 ) -> Result<Lockfile> {
-    let workspace_root = &workspace_info.root;
-    let old_lockfile = workspace_info.lockfile.take().unwrap_or_default();
     let mut new_lockfile = Lockfile::default();
 
     let total_count = closure.len() + asset_paths.len();

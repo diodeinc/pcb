@@ -463,7 +463,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     let resolution_result = if workspace.is_v2() {
         let mut ws = workspace.clone();
         let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
-        pcb_zen::vendor_deps(&ws, &resolution, &[], None)?;
+        pcb_zen::vendor_deps(&ws, &resolution, &[], None, true)?;
         Some(resolution)
     } else {
         None

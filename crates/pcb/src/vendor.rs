@@ -71,9 +71,9 @@ fn execute_v2(workspace_info: &mut pcb_zen::WorkspaceInfo) -> Result<()> {
     let resolution = resolve_dependencies(workspace_info, false, false)?;
 
     // Vendor everything - pass ["**"] pattern to match all packages and assets
-    let result = vendor_deps(workspace_info, &resolution, &["**".to_string()], None)?;
+    // Always prune for explicit vendor command
+    let result = vendor_deps(workspace_info, &resolution, &["**".to_string()], None, true)?;
 
-    println!();
     println!(
         "{} {}",
         "✓".green().bold(),
