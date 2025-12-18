@@ -309,18 +309,28 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
         // Target quantity for MOQ filtering
         let target_qty = qty * NUM_BOARDS;
 
-        // Collect offers by geography, filtering out offers with MOQ > target_qty
+        // Filter out offers with unreasonable MOQ: moq > target_qty AND price_at_moq > $100
+        let moq_acceptable = |o: &ComponentOffer| {
+            let moq = o.moq.unwrap_or(1);
+            if moq <= target_qty {
+                return true;
+            }
+            // MOQ exceeds target, check if price at MOQ is reasonable (<= $100)
+            let price_at_moq = o.unit_price_at_qty(moq).unwrap_or(f64::MAX) * moq as f64;
+            price_at_moq <= 100.0
+        };
+
         let us_offers: Vec<&ComponentOffer> = resolved_offers
             .iter()
             .copied()
             .filter(|o| o.geography == Geography::Us)
-            .filter(|o| o.moq.unwrap_or(1) <= target_qty)
+            .filter(|o| moq_acceptable(o))
             .collect();
         let global_offers: Vec<&ComponentOffer> = resolved_offers
             .iter()
             .copied()
             .filter(|o| o.geography == Geography::Global)
-            .filter(|o| o.moq.unwrap_or(1) <= target_qty)
+            .filter(|o| moq_acceptable(o))
             .collect();
 
         // Select best offers per geography
