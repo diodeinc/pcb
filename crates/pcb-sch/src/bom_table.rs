@@ -146,6 +146,7 @@ fn unit_price_from_breaks(price_breaks: &[(i32, f64)], qty: i32) -> Option<f64> 
 #[derive(Default)]
 struct RegionDisplayData {
     stock: i32,
+    alt_stock: i32,
     price_single: Option<f64>,
     price_boards: Option<f64>,
     tier: Tier,
@@ -179,6 +180,7 @@ impl RegionDisplayData {
 
         RegionDisplayData {
             stock: a.stock_total,
+            alt_stock: a.alt_stock_total,
             price_single,
             price_boards,
             tier,
@@ -191,6 +193,12 @@ impl RegionDisplayData {
     fn format_stock(&self) -> String {
         if self.stock <= 0 && self.price_single.is_none() {
             "-".to_string()
+        } else if self.alt_stock > 0 {
+            format!(
+                "{} {}",
+                self.stock,
+                format!("(+{})", self.alt_stock).dimmed()
+            )
         } else {
             self.stock.to_string()
         }
@@ -545,8 +553,8 @@ impl Bom {
         let mut headers = vec!["Qty"];
 
         if has_availability {
-            headers.push("Stock US");
-            headers.push("Stock Global");
+            headers.push("Stock US (+alt)");
+            headers.push("Stock Global (+alt)");
         }
 
         headers.extend(vec!["Designators", "MPN", "Manufacturer", "Package"]);

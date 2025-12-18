@@ -164,8 +164,51 @@ fn select_best_offer<'a>(
     })
 }
 
-/// Extract RegionAvailability from an offer
-fn extract_region_availability(offer: &ComponentOffer) -> pcb_sch::RegionAvailability {
+/// Calculate alt stock from offers, deduplicating by (distributor, mpn).
+/// Assumes offers are already filtered by MOQ.
+fn calculate_alt_stock(
+    offers: &[&ComponentOffer],
+    best_offer: Option<&ComponentOffer>,
+    target_qty: i32,
+) -> i32 {
+    use std::collections::HashMap;
+
+    // Exclude best offer
+    let alt_offers: Vec<_> = offers
+        .iter()
+        .filter(|o| best_offer.is_none_or(|best| o.id != best.id))
+        .collect();
+
+    // Deduplicate by (distributor, mpn), keeping the one with best price at target_qty
+    let mut best_by_dist_mpn: HashMap<(String, String), &ComponentOffer> = HashMap::new();
+    for offer in alt_offers {
+        let dist = offer.distributor.clone().unwrap_or_default();
+        let mpn = offer.mpn.clone().unwrap_or_default();
+        let key = (dist, mpn);
+
+        let dominated = best_by_dist_mpn.get(&key).is_some_and(|existing| {
+            let existing_price = existing.unit_price_at_qty(target_qty).unwrap_or(f64::MAX);
+            let offer_price = offer.unit_price_at_qty(target_qty).unwrap_or(f64::MAX);
+            offer_price >= existing_price
+        });
+
+        if !dominated {
+            best_by_dist_mpn.insert(key, offer);
+        }
+    }
+
+    // Sum stock from deduplicated offers
+    best_by_dist_mpn
+        .values()
+        .map(|o| o.stock_available.unwrap_or(0))
+        .sum()
+}
+
+/// Extract RegionAvailability from an offer with alt stock total
+fn extract_region_availability(
+    offer: &ComponentOffer,
+    alt_stock_total: i32,
+) -> pcb_sch::RegionAvailability {
     let stock = offer.stock_available.unwrap_or(0);
 
     let lcsc_id = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
@@ -193,6 +236,7 @@ fn extract_region_availability(offer: &ComponentOffer) -> pcb_sch::RegionAvailab
 
     pcb_sch::RegionAvailability {
         stock_total: stock,
+        alt_stock_total,
         price_breaks: breaks,
         lcsc_part_ids: lcsc_id,
         mpn: offer_mpn,
@@ -262,28 +306,36 @@ pub fn fetch_and_populate_availability(auth_token: &str, bom: &mut pcb_sch::Bom)
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        // Select best offers per geography
-        let best_us_offer = select_best_offer(
-            resolved_offers
-                .iter()
-                .copied()
-                .filter(|o| o.geography == Geography::Us),
-            qty,
-            is_small_passive,
-        );
+        // Target quantity for MOQ filtering
+        let target_qty = qty * NUM_BOARDS;
 
-        let best_global_offer = select_best_offer(
-            resolved_offers
-                .iter()
-                .copied()
-                .filter(|o| o.geography == Geography::Global),
-            qty,
-            is_small_passive,
-        );
+        // Collect offers by geography, filtering out offers with MOQ > target_qty
+        let us_offers: Vec<&ComponentOffer> = resolved_offers
+            .iter()
+            .copied()
+            .filter(|o| o.geography == Geography::Us)
+            .filter(|o| o.moq.unwrap_or(1) <= target_qty)
+            .collect();
+        let global_offers: Vec<&ComponentOffer> = resolved_offers
+            .iter()
+            .copied()
+            .filter(|o| o.geography == Geography::Global)
+            .filter(|o| o.moq.unwrap_or(1) <= target_qty)
+            .collect();
+
+        // Select best offers per geography
+        let best_us_offer = select_best_offer(us_offers.iter().copied(), qty, is_small_passive);
+        let best_global_offer =
+            select_best_offer(global_offers.iter().copied(), qty, is_small_passive);
+
+        // Calculate alt stock totals (deduplicated by distributor+mpn, best price wins)
+        let us_alt_stock = calculate_alt_stock(&us_offers, best_us_offer, target_qty);
+        let global_alt_stock = calculate_alt_stock(&global_offers, best_global_offer, target_qty);
 
         // Extract RegionAvailability for each geography
-        let us_availability = best_us_offer.map(extract_region_availability);
-        let global_availability = best_global_offer.map(extract_region_availability);
+        let us_availability = best_us_offer.map(|o| extract_region_availability(o, us_alt_stock));
+        let global_availability =
+            best_global_offer.map(|o| extract_region_availability(o, global_alt_stock));
 
         bom.availability.insert(
             path.to_string(),

@@ -17,7 +17,8 @@ pub struct Bom {
 /// Per-region availability data for a single offer
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RegionAvailability {
-    pub stock_total: i32,                      // Stock for selected offer
+    pub stock_total: i32,                      // Stock for selected (best) offer
+    pub alt_stock_total: i32,                  // Combined stock from alternative offers
     pub price_breaks: Option<Vec<(i32, f64)>>, // Price breaks as (qty, unit_price)
     pub lcsc_part_ids: Vec<(String, String)>,  // Vec of (LCSC part number, product URL)
     #[serde(skip_serializing_if = "Option::is_none")]
