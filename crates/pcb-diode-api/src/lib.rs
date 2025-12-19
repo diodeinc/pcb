@@ -14,8 +14,8 @@ pub use component::{
     ComponentDownloadResult, ComponentSearchResult, ModelAvailability, SearchArgs,
 };
 pub use scan::{
-    execute as execute_scan, scan_pdf, scan_with_defaults, ScanArgs, ScanModel, ScanModelArg,
-    ScanOptions, ScanResult,
+    execute as execute_scan, scan_from_source_path, scan_pdf, scan_with_defaults, ScanArgs,
+    ScanModel, ScanModelArg, ScanOptions, ScanResult,
 };
 
 fn get_api_base_url() -> String {
