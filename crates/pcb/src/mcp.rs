@@ -88,7 +88,11 @@ fn local_tools() -> Vec<ToolInfo> {
     }]
 }
 
-fn handle_local(name: &str, args: Option<Value>, ctx: &McpContext) -> Option<Result<CallToolResult>> {
+fn handle_local(
+    name: &str,
+    args: Option<Value>,
+    ctx: &McpContext,
+) -> Option<Result<CallToolResult>> {
     match name {
         "run_layout" => Some(run_layout(args, ctx)),
         _ => None,
