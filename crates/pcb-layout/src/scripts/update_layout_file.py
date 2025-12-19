@@ -101,7 +101,7 @@ if python_path:
             logger.info(f"Added {path} to Python search path")
 
 # Available in KiCad's Python environment.
-import pcbnew
+import pcbnew  # type: ignore[unresolved-import]
 
 
 class Remapper:
@@ -1420,7 +1420,7 @@ class SetupBoard(Step):
         self,
         state: SyncState,
         board: pcbnew.BOARD,
-        board_config_path: str = None,
+        board_config_path: Optional[str] = None,
         sync_board_config: bool = True,
     ):
         self.state = state
@@ -1809,7 +1809,7 @@ class SetupBoard(Step):
         # Apply all configuration mappings
         for mapping in self.CONFIG_MAPPINGS:
             json_path, ds_attr, display_name = mapping[:3]
-            custom_setter = mapping[3] if len(mapping) > 3 else None
+            custom_setter = mapping[3] if len(mapping) > 3 else None  # type: ignore[misc]
 
             value = self._get_nested_value(config, json_path)
             if value is not None:
@@ -1827,6 +1827,7 @@ class SetupBoard(Step):
                         logger.warning(f"Unknown custom setter: {custom_setter}")
                 else:
                     # Compare before setting to avoid unnecessary modifications
+                    assert ds_attr is not None
                     current_value = getattr(ds, ds_attr)
                     new_value = pcbnew.FromMM(value)
 
@@ -2183,7 +2184,7 @@ class ImportNetlist(Step):
                 return False
             return str(value).lower() == "true"
 
-        def _configure_footprint(fp: pcbnew.FOOTPRINT, part: any):
+        def _configure_footprint(fp: pcbnew.FOOTPRINT, part: Any):
             """Configure footprint metadata, only updating fields that have actually changed."""
             changes = []
 
@@ -2675,7 +2676,7 @@ class SyncLayouts(Step):
         item: Any,
         net_code_map: Dict[int, int],
         group: VirtualGroup,
-        item_name: str = None,
+        item_name: Optional[str] = None,
     ) -> VirtualConnectedItem:
         """Sync a single connected item (zone, track, or via) to the target board.
 
@@ -2939,6 +2940,7 @@ class SyncLayouts(Step):
                         )
 
             if should_sync:
+                assert layout_file is not None
                 # Sync this group
                 logger.info(f"Syncing layout for group {current.id} from {layout_file}")
                 self._sync_group_layout(current, layout_file)
@@ -3298,7 +3300,7 @@ class PlaceComponents(Step):
 class FinalizeBoard(Step):
     """Finalize the board by filling zones, saving a layout snapshot, and saving the board."""
 
-    def __init__(self, state: SyncState, board: pcbnew.BOARD, snapshot_path: Path):
+    def __init__(self, state: SyncState, board: pcbnew.BOARD, snapshot_path: Optional[Path]):
         self.state = state
         self.board = board
         self.snapshot_path = snapshot_path
@@ -3490,6 +3492,9 @@ class FinalizeBoard(Step):
 
     def _export_layout_snapshot(self):
         """Export a JSON snapshot of the board layout."""
+        if self.snapshot_path is None:
+            return
+
         # Separate tracks and vias
         tracks = []
         vias = []

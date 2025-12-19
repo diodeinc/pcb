@@ -41,6 +41,12 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace -- -D warnings
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Type check Python with ty
+        run: uvx ty check
+
   test:
     name: Test (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs-on }}
