@@ -20,7 +20,8 @@ impl Default for RuffFormatter {
 }
 
 impl RuffFormatter {
-    fn format_source(&self, source: &str) -> anyhow::Result<String> {
+    /// Format source code string directly, returning the formatted code.
+    pub fn format_source(&self, source: &str) -> anyhow::Result<String> {
         format_module_source(source, self.options.clone())
             .context("Failed to format source")
             .map(|formatted| formatted.into_code())

@@ -5,10 +5,12 @@
 {{ description }}
 {%- endif %}
 
-Auto-generated using `pcb search`. Do not modify.
+Auto-generated using `pcb search`.
 """
 
 mpn = config("mpn", str, optional=True, default="{{ mpn }}")
+manufacturer = config("manufacturer", str, optional=True{% if manufacturer %}, default="{{ manufacturer }}"{% endif %})
+alternatives = config("alternatives", list, default=[])
 
 Pins = struct(
 {%- for pin in pin_groups %}
@@ -19,9 +21,7 @@ Pins = struct(
 Component(
     name = "{{ component_name }}",
     mpn = mpn,
-{%- if manufacturer %}
-    manufacturer = "{{ manufacturer }}",
-{%- endif %}
+    manufacturer = manufacturer,
 {%- if description %}
     description = "{{ description }}",
 {%- endif %}
@@ -34,5 +34,8 @@ Component(
 {%- for pin in pin_mappings %}
         "{{ pin.original_name }}": Pins.{{ pin.sanitized_name }}{{ "," if not loop.last }}
 {%- endfor %}
+    },
+    properties = {
+        "alternatives": alternatives,
     },
 )
