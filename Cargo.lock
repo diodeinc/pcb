@@ -3070,6 +3070,7 @@ dependencies = [
  "minijinja",
  "open",
  "pcb-eda",
+ "pcb-fmt",
  "pcb-kicad",
  "pcb-mcp",
  "pcb-sch",

@@ -791,7 +791,13 @@ fn finalize_component(
 
 /// Write a .zen file and create an empty pcb.toml in the component directory
 fn write_component_files(component_file: &Path, component_dir: &Path, content: &str) -> Result<()> {
-    fs::write(component_file, content)?;
+    // Format the content before writing
+    let formatter = pcb_fmt::RuffFormatter::default();
+    let formatted_content = formatter
+        .format_source(content)
+        .unwrap_or_else(|_| content.to_string());
+
+    fs::write(component_file, formatted_content)?;
 
     let toml_path = component_dir.join("pcb.toml");
     if !toml_path.exists() {
