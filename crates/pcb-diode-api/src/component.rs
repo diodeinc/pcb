@@ -52,6 +52,7 @@ pub struct ComponentDownloadMetadata {
     pub step_filename: Option<String>,
     pub datasheet_filename: Option<String>,
     pub datasheet_url: Option<String>,
+    pub datasheet_source_path: Option<String>,
     pub file_hashes: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -107,6 +108,8 @@ struct DownloadResponseMetadata {
     datasheet_filename: Option<String>,
     #[serde(rename = "datasheetUrl")]
     datasheet_url: Option<String>,
+    #[serde(rename = "datasheetSourcePath")]
+    datasheet_source_path: Option<String>,
     #[serde(rename = "fileHashes")]
     file_hashes: Option<std::collections::HashMap<String, String>>,
 }
@@ -171,6 +174,7 @@ pub fn download_component(auth_token: &str, component_id: &str) -> Result<Compon
             step_filename: download_response.metadata.step_filename,
             datasheet_filename: download_response.metadata.datasheet_filename,
             datasheet_url: download_response.metadata.datasheet_url,
+            datasheet_source_path: download_response.metadata.datasheet_source_path,
             file_hashes: download_response.metadata.file_hashes,
         },
     })
@@ -495,33 +499,13 @@ fn show_component_added(
     );
 }
 
-/// Parse storage path from Supabase presigned URL
-/// Example: https://xxx.supabase.co/storage/v1/object/sign/components/cse/Bosch/BMI323/datasheet.pdf?token=...
-/// Returns: "components/cse/Bosch/BMI323/datasheet.pdf"
-fn parse_storage_path_from_url(url: &str) -> Option<String> {
-    // Look for /storage/v1/object/sign/ or /storage/v1/object/
-    let patterns = ["/storage/v1/object/sign/", "/storage/v1/object/"];
-
-    for pattern in &patterns {
-        if let Some(start) = url.find(pattern) {
-            let path_start = start + pattern.len();
-            // Extract until '?' (query params) or end of string
-            let path_end = url[path_start..]
-                .find('?')
-                .unwrap_or(url.len() - path_start);
-            return Some(url[path_start..path_start + path_end].to_string());
-        }
-    }
-
-    None
-}
-
 pub fn add_component_to_workspace(
     auth_token: &str,
     component_id: &str,
     part_number: &str,
     workspace_root: &std::path::Path,
     search_manufacturer: Option<&str>,
+    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<AddComponentResult> {
     // Show progress during API call
     let spinner = ProgressBar::new_spinner();
@@ -556,7 +540,7 @@ pub fn add_component_to_workspace(
     // Collect download tasks
     let mut download_tasks = Vec::new();
     let mut upgrade_tasks = Vec::new();
-    let mut scan_tasks = Vec::new();
+    let mut scan_tasks: Vec<(String, String)> = Vec::new(); // (storage_path, filename)
 
     if has_symbol {
         let path = component_dir.join(format!("{}.kicad_sym", &sanitized_mpn));
@@ -581,9 +565,10 @@ pub fn add_component_to_workspace(
         let path = component_dir.join(format!("{}.pdf", &sanitized_mpn));
         download_tasks.push((url.clone(), path.clone(), "datasheet"));
 
-        if let Some(storage_path) = parse_storage_path_from_url(url) {
+        // Queue datasheet for scanning if .md doesn't exist
+        if let Some(source_path) = &download.metadata.datasheet_source_path {
             if !path.with_extension("md").exists() {
-                scan_tasks.push((storage_path, format!("{}.pdf", &sanitized_mpn)));
+                scan_tasks.push((source_path.clone(), format!("{}.pdf", &sanitized_mpn)));
             }
         }
     }
@@ -673,7 +658,7 @@ pub fn add_component_to_workspace(
                     auth_token,
                     &storage_path,
                     &output_dir,
-                    None,
+                    scan_model,
                     true,
                     false,
                 ) {
@@ -1135,6 +1120,7 @@ pub fn search_interactive(
     auth_token: &str,
     mpn: &str,
     workspace_root: &std::path::Path,
+    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     let spinner = ProgressBar::new_spinner();
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -1189,6 +1175,7 @@ pub fn search_interactive(
         &selected_component.part_number,
         workspace_root,
         selected_component.manufacturer.as_deref(),
+        scan_model,
     )?;
 
     if handle_already_exists(workspace_root, &result) {
@@ -1226,6 +1213,7 @@ pub fn search_and_add_single(
     auth_token: &str,
     mpn: &str,
     workspace_root: &std::path::Path,
+    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     let filtered_results = search_and_filter(auth_token, mpn)?;
 
@@ -1259,6 +1247,7 @@ pub fn search_and_add_single(
         &component.part_number,
         workspace_root,
         component.manufacturer.as_deref(),
+        scan_model,
     )?;
 
     if handle_already_exists(workspace_root, &result) {
@@ -1284,6 +1273,10 @@ pub struct SearchArgs {
     /// Generate .zen from local directory instead of API search
     #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add"])]
     pub dir: Option<PathBuf>,
+
+    /// Model to use for datasheet scanning
+    #[arg(long = "scan-model", value_enum, default_value = "mistral-ocr-2512")]
+    pub scan_model: crate::scan::ScanModelArg,
 }
 
 /// Files discovered in a local directory for component generation
@@ -1629,13 +1622,14 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("part_number required unless --dir is used"))?;
 
     let token = crate::auth::get_valid_token()?;
+    let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
 
     if args.json {
         println!("{}", search_json(&token, &part_number)?);
     } else if args.add {
-        search_and_add_single(&token, &part_number, &workspace_root)?;
+        search_and_add_single(&token, &part_number, &workspace_root, scan_model)?;
     } else {
-        search_interactive(&token, &part_number, &workspace_root)?;
+        search_interactive(&token, &part_number, &workspace_root, scan_model)?;
     }
 
     Ok(())
