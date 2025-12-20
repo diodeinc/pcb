@@ -13,6 +13,7 @@ pub enum ScanModel {
     MistralOcr2512,
     DatalabFast,
     DatalabBalanced,
+    DatalabAccurate,
 }
 
 impl ScanModel {
@@ -21,6 +22,7 @@ impl ScanModel {
             Self::MistralOcr2512 => "mistral-ocr-2512",
             Self::DatalabFast => "datalab-fast",
             Self::DatalabBalanced => "datalab-balanced",
+            Self::DatalabAccurate => "datalab-accurate",
         }
     }
 }
@@ -39,8 +41,9 @@ impl std::str::FromStr for ScanModel {
             "mistral-ocr-2512" => Ok(Self::MistralOcr2512),
             "datalab-fast" => Ok(Self::DatalabFast),
             "datalab-balanced" => Ok(Self::DatalabBalanced),
+            "datalab-accurate" => Ok(Self::DatalabAccurate),
             _ => anyhow::bail!(
-                "Invalid model: {}. Valid options: mistral-ocr-2512, datalab-fast, datalab-balanced",
+                "Invalid model: {}. Valid options: mistral-ocr-2512, datalab-fast, datalab-balanced, datalab-accurate",
                 s
             ),
         }
@@ -52,6 +55,7 @@ pub struct ScanOptions {
     pub output_dir: PathBuf,
     pub model: Option<ScanModel>,
     pub images: bool,
+    pub json: bool,
 }
 
 pub fn scan_with_defaults(
@@ -60,6 +64,7 @@ pub fn scan_with_defaults(
     output: Option<PathBuf>,
     model: Option<ScanModel>,
     images: bool,
+    json: bool,
 ) -> Result<ScanResult> {
     let output_dir = output.unwrap_or_else(|| {
         file.parent()
@@ -72,6 +77,7 @@ pub fn scan_with_defaults(
         output_dir,
         model,
         images,
+        json,
     };
 
     scan_pdf(auth_token, options)
@@ -85,6 +91,7 @@ pub fn scan_with_defaults(
 /// * `output_dir` - Directory to save markdown and images
 /// * `model` - Optional model to use for OCR
 /// * `images` - Whether to download and extract images
+/// * `json` - Whether to download the document JSON
 /// * `show_output` - Whether to show progress and completion output
 pub fn scan_from_source_path(
     auth_token: &str,
@@ -92,6 +99,7 @@ pub fn scan_from_source_path(
     output_dir: impl AsRef<Path>,
     model: Option<ScanModel>,
     images: bool,
+    json: bool,
     show_output: bool,
 ) -> Result<ScanResult> {
     let output_dir = output_dir.as_ref();
@@ -124,20 +132,41 @@ pub fn scan_from_source_path(
         model.as_ref().map(|m| m.as_str()),
     )?;
 
-    let md_filename = filename.replace(".pdf", ".md");
-    let md_path = output_dir.join(&md_filename);
+    let md_path = output_dir.join(filename.replace(".pdf", ".md"));
+    let json_path = output_dir.join(filename.replace(".pdf", ".json"));
+    let images_zip_path = output_dir.join("images.zip");
 
-    download_file(&client, &process_response.markdown_url, &md_path)?;
+    // Download markdown, JSON, and images in parallel
+    std::thread::scope(|s| -> Result<()> {
+        let md_handle =
+            s.spawn(|| download_file(&client, &process_response.markdown_url, &md_path));
 
-    if images {
-        if let Some(images_url) = &process_response.images_zip_url {
-            let images_zip_path = output_dir.join("images.zip");
-            download_file(&client, images_url, &images_zip_path)?;
+        let json_handle = process_response
+            .document_json_url
+            .as_ref()
+            .filter(|_| json)
+            .map(|url| s.spawn(|| download_file(&client, url, &json_path)));
 
-            let images_dir = output_dir.join("images");
-            extract_zip(&images_zip_path, &images_dir)?;
-            fs::remove_file(&images_zip_path)?;
+        let images_handle = process_response
+            .images_zip_url
+            .as_ref()
+            .filter(|_| images)
+            .map(|url| s.spawn(|| download_file(&client, url, &images_zip_path)));
+
+        md_handle.join().unwrap()?;
+        if let Some(h) = json_handle {
+            h.join().unwrap()?;
         }
+        if let Some(h) = images_handle {
+            h.join().unwrap()?;
+        }
+        Ok(())
+    })?;
+
+    // Extract images
+    if images && process_response.images_zip_url.is_some() {
+        extract_zip(&images_zip_path, &output_dir.join("images"))?;
+        fs::remove_file(&images_zip_path)?;
     }
 
     let result = ScanResult {
@@ -206,6 +235,8 @@ struct ProcessRequest {
 struct ProcessResponse {
     #[serde(rename = "markdownUrl")]
     markdown_url: String,
+    #[serde(rename = "documentJsonUrl")]
+    document_json_url: Option<String>,
     #[serde(rename = "imagesZipUrl")]
     images_zip_url: Option<String>,
     metadata: ProcessMetadata,
@@ -293,6 +324,16 @@ pub fn scan_pdf(auth_token: &str, options: ScanOptions) -> Result<ScanResult> {
     with_spinner("Downloading markdown...", "Markdown downloaded", || {
         download_file(&client, &process_response.markdown_url, &md_path)
     })?;
+
+    if options.json {
+        if let Some(json_url) = &process_response.document_json_url {
+            let json_filename = filename.replace(".pdf", ".json");
+            let json_path = options.output_dir.join(&json_filename);
+            with_spinner("Downloading JSON...", "JSON downloaded", || {
+                download_file(&client, json_url, &json_path)
+            })?;
+        }
+    }
 
     if options.images {
         if let Some(images_url) = &process_response.images_zip_url {
@@ -461,6 +502,8 @@ pub enum ScanModelArg {
     DatalabFast,
     #[value(name = "datalab-balanced")]
     DatalabBalanced,
+    #[value(name = "datalab-accurate")]
+    DatalabAccurate,
 }
 
 impl From<ScanModelArg> for ScanModel {
@@ -469,6 +512,7 @@ impl From<ScanModelArg> for ScanModel {
             ScanModelArg::MistralOcr2512 => ScanModel::MistralOcr2512,
             ScanModelArg::DatalabFast => ScanModel::DatalabFast,
             ScanModelArg::DatalabBalanced => ScanModel::DatalabBalanced,
+            ScanModelArg::DatalabAccurate => ScanModel::DatalabAccurate,
         }
     }
 }
@@ -485,8 +529,13 @@ pub struct ScanArgs {
     #[arg(short, long, value_enum)]
     pub model: Option<ScanModelArg>,
 
-    #[arg(long, default_value_t = true)]
-    pub images: bool,
+    /// Skip downloading images from the scanned PDF
+    #[arg(long)]
+    pub no_images: bool,
+
+    /// Download the document JSON in addition to markdown
+    #[arg(long)]
+    pub json: bool,
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
@@ -496,7 +545,8 @@ pub fn execute(args: ScanArgs) -> Result<()> {
         args.file,
         args.output,
         args.model.map(Into::into),
-        args.images,
+        !args.no_images,
+        args.json,
     )?;
     Ok(())
 }

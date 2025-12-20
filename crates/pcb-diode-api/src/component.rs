@@ -659,8 +659,9 @@ pub fn add_component_to_workspace(
                     &storage_path,
                     &output_dir,
                     scan_model,
-                    true,
-                    false,
+                    true,  // images
+                    false, // json
+                    false, // show_output
                 ) {
                     Ok(result) => {
                         scan_results.lock().unwrap().push(result);
@@ -1578,7 +1579,8 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
             datasheet_path,
             Some(component_dir.clone()),
             None,
-            true,
+            true,  // images
+            false, // json
         ) {
             Ok(r) => println!("  {} ({} pages)", "✓".green(), r.page_count),
             Err(e) => println!("  {} scan failed: {}", "✗".red(), e),
