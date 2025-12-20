@@ -505,6 +505,7 @@ pub fn add_component_to_workspace(
     part_number: &str,
     workspace_root: &std::path::Path,
     search_manufacturer: Option<&str>,
+    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<AddComponentResult> {
     // Show progress during API call
     let spinner = ProgressBar::new_spinner();
@@ -657,7 +658,7 @@ pub fn add_component_to_workspace(
                     auth_token,
                     &storage_path,
                     &output_dir,
-                    None,
+                    scan_model,
                     true,
                     false,
                 ) {
@@ -1119,6 +1120,7 @@ pub fn search_interactive(
     auth_token: &str,
     mpn: &str,
     workspace_root: &std::path::Path,
+    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     let spinner = ProgressBar::new_spinner();
     spinner.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -1173,6 +1175,7 @@ pub fn search_interactive(
         &selected_component.part_number,
         workspace_root,
         selected_component.manufacturer.as_deref(),
+        scan_model,
     )?;
 
     if handle_already_exists(workspace_root, &result) {
@@ -1210,6 +1213,7 @@ pub fn search_and_add_single(
     auth_token: &str,
     mpn: &str,
     workspace_root: &std::path::Path,
+    scan_model: Option<crate::scan::ScanModel>,
 ) -> Result<()> {
     let filtered_results = search_and_filter(auth_token, mpn)?;
 
@@ -1243,6 +1247,7 @@ pub fn search_and_add_single(
         &component.part_number,
         workspace_root,
         component.manufacturer.as_deref(),
+        scan_model,
     )?;
 
     if handle_already_exists(workspace_root, &result) {
@@ -1268,6 +1273,10 @@ pub struct SearchArgs {
     /// Generate .zen from local directory instead of API search
     #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add"])]
     pub dir: Option<PathBuf>,
+
+    /// Model to use for datasheet scanning
+    #[arg(long = "scan-model", value_enum, default_value = "mistral-ocr-2512")]
+    pub scan_model: crate::scan::ScanModelArg,
 }
 
 /// Files discovered in a local directory for component generation
@@ -1613,13 +1622,14 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("part_number required unless --dir is used"))?;
 
     let token = crate::auth::get_valid_token()?;
+    let scan_model = Some(crate::scan::ScanModel::from(args.scan_model));
 
     if args.json {
         println!("{}", search_json(&token, &part_number)?);
     } else if args.add {
-        search_and_add_single(&token, &part_number, &workspace_root)?;
+        search_and_add_single(&token, &part_number, &workspace_root, scan_model)?;
     } else {
-        search_interactive(&token, &part_number, &workspace_root)?;
+        search_interactive(&token, &part_number, &workspace_root, scan_model)?;
     }
 
     Ok(())

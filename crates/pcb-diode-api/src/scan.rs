@@ -10,17 +10,17 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanModel {
-    MistralOcrLatest,
-    Gpt4o,
-    Gpt4oMini,
+    MistralOcr2512,
+    DatalabFast,
+    DatalabBalanced,
 }
 
 impl ScanModel {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::MistralOcrLatest => "mistral-ocr-latest",
-            Self::Gpt4o => "gpt-4o",
-            Self::Gpt4oMini => "gpt-4o-mini",
+            Self::MistralOcr2512 => "mistral-ocr-2512",
+            Self::DatalabFast => "datalab-fast",
+            Self::DatalabBalanced => "datalab-balanced",
         }
     }
 }
@@ -36,11 +36,11 @@ impl std::str::FromStr for ScanModel {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "mistral-ocr-latest" => Ok(Self::MistralOcrLatest),
-            "gpt-4o" => Ok(Self::Gpt4o),
-            "gpt-4o-mini" => Ok(Self::Gpt4oMini),
+            "mistral-ocr-2512" => Ok(Self::MistralOcr2512),
+            "datalab-fast" => Ok(Self::DatalabFast),
+            "datalab-balanced" => Ok(Self::DatalabBalanced),
             _ => anyhow::bail!(
-                "Invalid model: {}. Valid options: mistral-ocr-latest, gpt-4o, gpt-4o-mini",
+                "Invalid model: {}. Valid options: mistral-ocr-2512, datalab-fast, datalab-balanced",
                 s
             ),
         }
@@ -455,20 +455,20 @@ fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ScanModelArg {
-    #[value(name = "mistral-ocr-latest")]
-    MistralOcrLatest,
-    #[value(name = "gpt-4o")]
-    Gpt4o,
-    #[value(name = "gpt-4o-mini")]
-    Gpt4oMini,
+    #[value(name = "mistral-ocr-2512")]
+    MistralOcr2512,
+    #[value(name = "datalab-fast")]
+    DatalabFast,
+    #[value(name = "datalab-balanced")]
+    DatalabBalanced,
 }
 
 impl From<ScanModelArg> for ScanModel {
     fn from(arg: ScanModelArg) -> Self {
         match arg {
-            ScanModelArg::MistralOcrLatest => ScanModel::MistralOcrLatest,
-            ScanModelArg::Gpt4o => ScanModel::Gpt4o,
-            ScanModelArg::Gpt4oMini => ScanModel::Gpt4oMini,
+            ScanModelArg::MistralOcr2512 => ScanModel::MistralOcr2512,
+            ScanModelArg::DatalabFast => ScanModel::DatalabFast,
+            ScanModelArg::DatalabBalanced => ScanModel::DatalabBalanced,
         }
     }
 }
@@ -490,10 +490,6 @@ pub struct ScanArgs {
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
-    if args.images && !matches!(args.model, None | Some(ScanModelArg::MistralOcrLatest)) {
-        anyhow::bail!("The --images flag is only supported with the mistral-ocr-latest model");
-    }
-
     let token = crate::auth::get_valid_token()?;
     scan_with_defaults(
         &token,
