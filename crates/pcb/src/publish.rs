@@ -379,7 +379,8 @@ fn publish_wave(
     for url in package_urls {
         if let Some(pkg) = workspace.packages.get(url) {
             let has_published_dep = pkg.dependencies().any(|d| published.contains_key(d));
-            if has_published_dep && bump_dependency_versions(&pkg.dir.join("pcb.toml"), published)?
+            if has_published_dep
+                && bump_dependency_versions(&pkg.dir(&workspace.root).join("pcb.toml"), published)?
             {
                 log::info!("patching: {}/pcb.toml", pkg.rel_path.display());
                 changed_pkgs.push(pkg);
@@ -433,8 +434,9 @@ fn build_candidates(
             let next_version = compute_next_version(current.as_ref(), bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
 
-            let content_hash = canonical::compute_content_hash_from_dir(&pkg.dir)?;
-            let manifest_content = std::fs::read_to_string(pkg.dir.join("pcb.toml"))?;
+            let pkg_dir = pkg.dir(&workspace.root);
+            let content_hash = canonical::compute_content_hash_from_dir(&pkg_dir)?;
+            let manifest_content = std::fs::read_to_string(pkg_dir.join("pcb.toml"))?;
             let manifest_hash = canonical::compute_manifest_hash(&manifest_content);
 
             Ok((
@@ -547,8 +549,7 @@ fn compute_next_version(current: Option<&Version>, bump: BumpType) -> Version {
 }
 
 fn compute_tag_name(pkg: &MemberPackage, version: &Version, workspace: &WorkspaceInfo) -> String {
-    let rel_path = pkg.dir.strip_prefix(&workspace.root).ok();
-    let prefix = tags::compute_tag_prefix(rel_path, workspace.path());
+    let prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace.path());
     tags::build_tag_name(&prefix, version)
 }
 
@@ -565,7 +566,7 @@ fn format_dependency_bump_commit(
 ) -> String {
     let mut pkg_names: Vec<_> = dependants
         .iter()
-        .filter_map(|p| p.dir.file_name())
+        .filter_map(|p| p.rel_path.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .collect();
     pkg_names.sort();

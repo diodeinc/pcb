@@ -504,12 +504,12 @@ pub fn resolve_dependencies(
     let mut packages_without_deps = 0;
 
     for pkg in workspace_info.packages.values() {
-        let package_name = pkg
-            .dir
+        let pkg_dir = pkg.dir(&workspace_info.root);
+        let package_name = pkg_dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "root".into());
-        let pcb_toml_path = pkg.dir.join("pcb.toml");
+        let pcb_toml_path = pkg_dir.join("pcb.toml");
 
         // Validate no patches in member packages (except root)
         if !pkg.config.patch.is_empty() && !pkg.rel_path.as_os_str().is_empty() {
@@ -1333,7 +1333,7 @@ fn fetch_package(
 ) -> Result<PackageManifest> {
     // 1. Workspace member override (highest priority)
     if let Some(member_pkg) = workspace_info.packages.get(module_path) {
-        let member_toml = member_pkg.dir.join("pcb.toml");
+        let member_toml = member_pkg.dir(&workspace_info.root).join("pcb.toml");
         return read_manifest_from_path(&member_toml);
     }
 

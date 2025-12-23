@@ -8,22 +8,17 @@ Exit Code: 0
 --- STDOUT ---
 {
   "root": "<TEMP_DIR>",
-  "config": null,
   "packages": {
     "boards/discovered": {
-      "dir": "<TEMP_DIR>/boards/discovered",
       "rel_path": "boards/discovered",
       "config": {
-        "workspace": null,
         "board": {
           "name": "DiscoveredBoard",
           "path": "discovered.zen",
           "description": "Board with auto-discovered zen file"
         }
-      },
-      "version": null
+      }
     }
-  },
-  "errors": []
+  }
 }
 --- STDERR ---

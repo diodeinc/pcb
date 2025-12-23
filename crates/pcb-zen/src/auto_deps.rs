@@ -150,7 +150,7 @@ pub fn auto_add_zen_deps(
     }
 
     // Remove redundant stdlib dependencies (version <= pinned toolchain version)
-    summary.stdlib_removed = remove_redundant_stdlib(packages)?;
+    summary.stdlib_removed = remove_redundant_stdlib(workspace_root, packages)?;
 
     Ok(summary)
 }
@@ -196,7 +196,7 @@ fn collect_imports_by_package(
     let dirs_to_scan: Vec<PathBuf> = if packages.is_empty() {
         vec![workspace_root.to_path_buf()]
     } else {
-        packages.values().map(|m| m.dir.clone()).collect()
+        packages.values().map(|m| m.dir(workspace_root)).collect()
     };
 
     for dir in dirs_to_scan {
@@ -437,6 +437,7 @@ fn add_and_correct_dependencies(
 ///
 /// Returns the number of pcb.toml files that were modified.
 pub fn remove_redundant_stdlib(
+    workspace_root: &Path,
     packages: &BTreeMap<String, crate::workspace::MemberPackage>,
 ) -> Result<usize> {
     use crate::tags::parse_version;
@@ -447,7 +448,7 @@ pub fn remove_redundant_stdlib(
     let mut removed_count = 0;
 
     for package in packages.values() {
-        let pcb_toml_path = package.dir.join("pcb.toml");
+        let pcb_toml_path = package.dir(workspace_root).join("pcb.toml");
         if !pcb_toml_path.exists() {
             continue;
         }

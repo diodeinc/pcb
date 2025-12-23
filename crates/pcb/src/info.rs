@@ -177,7 +177,7 @@ fn print_package_line(
     let url = ws
         .packages
         .iter()
-        .find(|(_, p)| p.dir == pkg.dir)
+        .find(|(_, p)| p.dir(&ws.root) == pkg.dir(&ws.root))
         .map(|(url, _)| url);
 
     let is_dirty = url.is_some_and(|u| dirty_map.contains_key(u));

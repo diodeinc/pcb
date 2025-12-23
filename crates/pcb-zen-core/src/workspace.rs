@@ -11,20 +11,29 @@ use std::path::{Path, PathBuf};
 use crate::config::{find_workspace_root, Lockfile, PcbToml, WorkspaceConfig};
 use crate::FileProvider;
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
 /// A discovered member package in the workspace
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberPackage {
-    /// Package directory (absolute path)
-    pub dir: PathBuf,
     /// Package directory relative to workspace root
     pub rel_path: PathBuf,
     /// Parsed pcb.toml config
+    #[serde(default, skip_serializing_if = "is_default")]
     pub config: PcbToml,
     /// Latest published version from git tags (None if unpublished or not computed)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
 }
 
 impl MemberPackage {
+    /// Get absolute package directory
+    pub fn dir(&self, workspace_root: &Path) -> PathBuf {
+        workspace_root.join(&self.rel_path)
+    }
+
     /// Get dependency URLs from config
     pub fn dependencies(&self) -> impl Iterator<Item = &String> {
         self.config.dependencies.keys()
@@ -67,6 +76,7 @@ pub struct WorkspaceInfo {
     /// Workspace root directory
     pub root: PathBuf,
     /// Root pcb.toml config (if present)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<PcbToml>,
     /// Discovered member packages keyed by URL
     pub packages: BTreeMap<String, MemberPackage>,
@@ -74,6 +84,7 @@ pub struct WorkspaceInfo {
     #[serde(skip)]
     pub lockfile: Option<Lockfile>,
     /// Discovery errors
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<DiscoveryError>,
 }
 
@@ -365,7 +376,6 @@ pub fn get_workspace_info<F: FileProvider>(
             packages.insert(
                 url,
                 MemberPackage {
-                    dir,
                     rel_path,
                     config: pkg_config,
                     version: None,
@@ -387,7 +397,6 @@ pub fn get_workspace_info<F: FileProvider>(
             packages.insert(
                 url,
                 MemberPackage {
-                    dir: workspace_root.clone(),
                     rel_path: PathBuf::new(),
                     config: cfg.clone(),
                     version: None,
@@ -410,7 +419,8 @@ pub fn get_workspace_info<F: FileProvider>(
     for pkg in packages.values_mut() {
         if let Some(board) = &mut pkg.config.board {
             if board.path.is_none() {
-                board.path = find_single_zen_file(file_provider, &pkg.dir);
+                let pkg_dir = workspace_root.join(&pkg.rel_path);
+                board.path = find_single_zen_file(file_provider, &pkg_dir);
             }
         }
     }

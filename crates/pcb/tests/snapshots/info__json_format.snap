@@ -23,31 +23,24 @@ Exit Code: 0
   },
   "packages": {
     "boards/main-board": {
-      "dir": "<TEMP_DIR>/boards/main-board",
       "rel_path": "boards/main-board",
       "config": {
-        "workspace": null,
         "board": {
           "name": "MainBoard",
           "path": "main_board.zen"
         }
-      },
-      "version": null
+      }
     },
     "boards/test-board": {
-      "dir": "<TEMP_DIR>/boards/test-board",
       "rel_path": "boards/test-board",
       "config": {
-        "workspace": null,
         "board": {
           "name": "TestBoard",
           "path": "test_board.zen",
           "description": "Main test board for validation"
         }
-      },
-      "version": null
+      }
     }
-  },
-  "errors": []
+  }
 }
 --- STDERR ---
