@@ -6,7 +6,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     symbols::border,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListDirection, ListItem, Paragraph, StatefulWidget},
     Frame,
 };
 use std::time::Duration;
@@ -24,51 +24,38 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ])
         .split(frame.area());
 
-    // Left side: results panels stacked vertically, then search, toast, status
+    // Left side: results panels stacked vertically, then status, search
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(9),    // Results panels (stacked vertically)
+            Constraint::Length(1), // Results count + query time
+            Constraint::Length(1), // Status bar (with toast at end)
             Constraint::Length(1), // Search input (single line, minimal)
-            Constraint::Length(1), // Toast line
-            Constraint::Length(1), // Status bar
         ])
         .split(main_chunks[0]);
 
     render_results_panels(frame, app, left_chunks[0]);
-    render_search_input(frame, app, left_chunks[1]);
-    render_toast(frame, app, left_chunks[2]);
-    render_status_bar(frame, app, left_chunks[3]);
+    render_results_count(frame, app, left_chunks[1]);
+    render_status_bar(frame, app, left_chunks[2]);
+    render_search_input(frame, app, left_chunks[3]);
 
     // Right side: preview panel
     render_preview_panel(frame, app, main_chunks[1]);
 }
 
-/// Render the search input (minimal, no border)
+/// Render the search input (minimal, thick bar on left)
 fn render_search_input(frame: &mut Frame, app: &mut App, area: Rect) {
     app.textarea.set_block(Block::default());
     app.textarea.set_cursor_line_style(Style::default());
     app.textarea
         .set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
 
-    // "Search" in yellow, thick bar separator, then input
-    let prompt = Line::from(vec![
-        Span::styled(
-            " Search ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "┃",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::DIM),
-        ),
-    ]);
-    let prompt_width = 10u16; // " Search ┃"
+    // Thick bar on left, then space, then input
+    let prompt = Span::styled("▌ ", Style::default().fg(Color::Yellow));
+    let prompt_width = 2u16;
 
-    let prompt_para = Paragraph::new(prompt);
+    let prompt_para = Paragraph::new(Line::from(prompt));
 
     let prompt_area = Rect {
         x: area.x,
@@ -88,123 +75,188 @@ fn render_search_input(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(&app.textarea, input_area);
 }
 
-/// Render the three results panels stacked vertically
-fn render_results_panels(frame: &mut Frame, app: &App, area: Rect) {
-    let panels = Layout::default()
+/// Render the results panels: Trigram/Word on top, Merged below
+fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
+            Constraint::Percentage(40), // Trigram + Word
+            Constraint::Percentage(60), // Merged (larger)
         ])
         .split(area);
+
+    // Trigram and Word side by side, dimmed
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[0]);
 
     render_result_list(
         frame,
         "Trigram",
         &app.results.trigram,
-        panels[0],
+        cols[0],
         Color::Yellow,
         None,
+        true, // dimmed
     );
     render_result_list(
         frame,
         "Word",
         &app.results.word,
-        panels[1],
+        cols[1],
         Color::Green,
         None,
+        true, // dimmed
     );
-    render_result_list(
-        frame,
-        "Merged",
-        &app.results.merged,
-        panels[2],
-        Color::Magenta,
-        Some(app.selected_index),
-    );
+
+    // Merged panel with magenta border, bottom-up display (best match at bottom)
+    render_merged_list(frame, app, rows[1]);
 }
 
-/// Render a single results list panel with rounded borders
+/// Render results count + query time line (subtle)
+fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
+    let count = app.results.merged.len();
+    let query_time = format_duration(app.results.duration);
+
+    let line = if count == 0 {
+        Line::from(vec![Span::styled(
+            format!(" 0/{}", app.parts_count),
+            Style::default().fg(Color::DarkGray),
+        )])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                format!(" {}/{} ", count, app.parts_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("({})", query_time),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ])
+    };
+
+    let para = Paragraph::new(line);
+    frame.render_widget(para, area);
+}
+
+/// Render a simple results list panel (for Trigram/Word - no selection, dimmed)
 fn render_result_list(
     frame: &mut Frame,
     title: &str,
     parts: &[RegistryPart],
     area: Rect,
     color: Color,
-    selected: Option<usize>,
+    _selected: Option<usize>,
+    dimmed: bool,
 ) {
-    let max_items = area.height.saturating_sub(2) as usize;
+    let score_style = Style::default().fg(Color::DarkGray);
 
     let items: Vec<ListItem> = parts
         .iter()
+        .map(|part| {
+            let mpn = Span::styled(&part.mpn, Style::default().fg(Color::White));
+            let prefix_span = if let Some(rank) = part.rank {
+                Span::styled(format!("{:>7.2} ", rank), score_style)
+            } else {
+                Span::styled("        ", score_style)
+            };
+            let mfr = part.manufacturer.as_deref().unwrap_or("");
+            let mfr_span =
+                Span::styled(format!(" ({})", mfr), Style::default().fg(Color::DarkGray));
+            ListItem::new(Line::from(vec![prefix_span, mpn, mfr_span]))
+        })
+        .collect();
+
+    let border_style = if dimmed {
+        Style::default().fg(color).add_modifier(Modifier::DIM)
+    } else {
+        Style::default().fg(color)
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(border::ROUNDED)
+            .border_style(border_style)
+            .title(format!(" {} ", title)),
+    );
+
+    frame.render_widget(list, area);
+}
+
+/// Render the merged results list with selection and auto-scrolling
+fn render_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    let selection_bg = Color::Rgb(38, 38, 38);
+    let selected_index = app.list_state.selected();
+
+    let items: Vec<ListItem> = app
+        .results
+        .merged
+        .iter()
         .enumerate()
-        .take(max_items)
         .map(|(i, part)| {
-            let is_selected = selected == Some(i);
+            let is_selected = selected_index == Some(i);
 
             let mpn_style = if is_selected {
                 Style::default()
                     .add_modifier(Modifier::BOLD)
-                    .bg(Color::DarkGray)
+                    .bg(selection_bg)
                     .fg(Color::White)
             } else {
-                Style::default().add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::White)
             };
 
             let mfr_style = if is_selected {
-                Style::default().bg(Color::DarkGray).fg(Color::Gray)
+                Style::default().bg(selection_bg).fg(Color::DarkGray)
             } else {
                 Style::default().fg(Color::DarkGray)
+            };
+
+            let prefix_span = if is_selected {
+                Span::styled("▌ ", Style::default().fg(Color::LightRed).bg(selection_bg))
+            } else {
+                Span::styled("  ", Style::default())
             };
 
             let mpn = Span::styled(&part.mpn, mpn_style);
             let mfr = part.manufacturer.as_deref().unwrap_or("");
             let mfr_span = Span::styled(format!(" ({})", mfr), mfr_style);
 
-            if is_selected {
-                let content_len = part.mpn.len() + mfr.len() + 3;
-                let padding_len = (area.width as usize).saturating_sub(content_len + 2);
-                let padding = Span::styled(
-                    " ".repeat(padding_len),
-                    Style::default().bg(Color::DarkGray),
-                );
-                ListItem::new(Line::from(vec![mpn, mfr_span, padding]))
-            } else {
-                ListItem::new(Line::from(vec![mpn, mfr_span]))
-            }
+            ListItem::new(Line::from(vec![prefix_span, mpn, mfr_span]))
         })
         .collect();
 
-    let count = parts.len();
-    let title_with_count = format!(" {} [{}] ", title, count);
+    let list = List::new(items).direction(ListDirection::BottomToTop);
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::ROUNDED)
-            .border_style(Style::default().fg(color))
-            .title(title_with_count),
-    );
-
-    frame.render_widget(list, area);
+    StatefulWidget::render(list, area, frame.buffer_mut(), &mut app.list_state);
 }
 
 /// Render the preview panel showing selected part details
 fn render_preview_panel(frame: &mut Frame, app: &App, area: Rect) {
-    let selected_part = app.results.merged.get(app.selected_index);
+    let selected_part = app.results.merged.get(app.selected_index());
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(border::ROUNDED)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(Color::Gray).add_modifier(Modifier::DIM))
         .title(" Part Details ");
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if let Some(part) = selected_part {
-        render_part_details(frame, app, part, inner);
+        // Add 2 char left padding
+        let padded_inner = Rect {
+            x: inner.x + 2,
+            y: inner.y,
+            width: inner.width.saturating_sub(2),
+            height: inner.height,
+        };
+        render_part_details(frame, app, part, padded_inner);
     } else {
         let empty = Paragraph::new("No part selected")
             .style(Style::default().fg(Color::DarkGray))
@@ -243,12 +295,24 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
         ]));
     }
 
-    // Category & Type
+    // Category & Type (nested tree style)
     if let Some(ref cat) = part.category {
-        lines.push(Line::from(vec![
-            Span::styled("Category      ", label_style),
-            Span::styled(cat, Style::default().fg(Color::Yellow)),
-        ]));
+        let cat_parts: Vec<&str> = cat.split(" > ").collect();
+        for (i, cat_part) in cat_parts.iter().enumerate() {
+            if i == 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("Category      ", label_style),
+                    Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
+                ]));
+            } else {
+                // Each level: indent by 3 spaces per depth (starting from 0 for first child)
+                let indent = "   ".repeat(i - 1);
+                lines.push(Line::from(vec![
+                    Span::styled(format!("              {}└─ ", indent), label_style),
+                    Span::styled(*cat_part, Style::default().fg(Color::Yellow)),
+                ]));
+            }
+        }
     }
 
     if let Some(ref pt) = part.part_type {
@@ -257,12 +321,6 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
             Span::styled(pt, Style::default().fg(Color::Green)),
         ]));
     }
-
-    // Part ID
-    lines.push(Line::from(vec![
-        Span::styled("ID            ", label_style),
-        Span::styled(part.id.to_string(), dim_style),
-    ]));
 
     // Registry path
     lines.push(Line::from(vec![
@@ -319,27 +377,31 @@ fn render_part_details(frame: &mut Frame, app: &App, part: &RegistryPart, area: 
     let (tri_pos, tri_rank) = scoring
         .map(|s| (s.trigram_position, s.trigram_rank))
         .unwrap_or((None, None));
-    let mut tri_line = vec![
-        Span::styled("Trigram ", Style::default().fg(Color::Yellow)),
-    ];
-    tri_line.extend(format_index_result(tri_pos, tri_rank, app.results.trigram.len()));
+    let mut tri_line = vec![Span::styled("Trigram ", Style::default().fg(Color::Yellow))];
+    tri_line.extend(format_index_result(
+        tri_pos,
+        tri_rank,
+        app.results.trigram.len(),
+    ));
     lines.push(Line::from(tri_line));
 
     // Word
     let (word_pos, word_rank) = scoring
         .map(|s| (s.word_position, s.word_rank))
         .unwrap_or((None, None));
-    let mut word_line = vec![
-        Span::styled("Word    ", Style::default().fg(Color::Green)),
-    ];
-    word_line.extend(format_index_result(word_pos, word_rank, app.results.word.len()));
+    let mut word_line = vec![Span::styled("Word    ", Style::default().fg(Color::Green))];
+    word_line.extend(format_index_result(
+        word_pos,
+        word_rank,
+        app.results.word.len(),
+    ));
     lines.push(Line::from(word_line));
 
     // Merged
     let mut merged_line = vec![
         Span::styled("Merged  ", Style::default().fg(Color::Magenta)),
         Span::styled(
-            format!("#{}", app.selected_index + 1),
+            format!("#{}", app.selected_index() + 1),
             Style::default().fg(Color::White),
         ),
         Span::styled(format!("/{}", app.results.merged.len()), dim_style),
@@ -382,26 +444,19 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
-/// Render the toast notification line (dimmed blue text)
-fn render_toast(frame: &mut Frame, app: &App, area: Rect) {
-    if let Some(ref toast) = app.toast {
-        let toast_text = Paragraph::new(format!(" {} ", toast.message))
-            .style(Style::default().fg(Color::Blue));
-        frame.render_widget(toast_text, area);
-    }
-}
-
-/// Render the status bar
+/// Render the status bar (with toast at end if present)
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let parts_count = app.parts_count;
-    let query_time = format_duration(app.results.duration);
-    let status_text = format!(
-        " {} parts │ {} │ ↑↓ select │ Enter copy │ Esc quit",
-        parts_count, query_time
-    );
+    let dim = Style::default().fg(Color::DarkGray);
+    let dim_blue = Style::default().fg(Color::Blue).add_modifier(Modifier::DIM);
 
-    let status = Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray));
+    let mut spans = vec![Span::styled(" ↑↓/^jk select │ Enter copy │ Esc quit", dim)];
 
+    // Add toast at end if present
+    if let Some(ref toast) = app.toast {
+        spans.push(Span::styled(format!(" │ {}", toast.message), dim_blue));
+    }
+
+    let status = Paragraph::new(Line::from(spans));
     frame.render_widget(status, area);
 }
 

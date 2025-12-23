@@ -92,7 +92,8 @@ struct SearchOutput {
 
 /// Execute search against all indices and merge results
 fn execute_search(client: &RegistryClient, query: &SearchQuery) -> SearchOutput {
-    if query.text.trim().is_empty() {
+    let query_text = query.text.trim();
+    if query_text.is_empty() {
         return SearchOutput {
             trigram: Vec::new(),
             word: Vec::new(),

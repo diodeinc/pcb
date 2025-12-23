@@ -6,11 +6,12 @@ use crate::RegistryClient;
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -41,8 +42,8 @@ pub struct App<'a> {
     pub textarea: TextArea<'a>,
     /// Current search results
     pub results: SearchResults,
-    /// Selected index in merged results (0-indexed)
-    pub selected_index: usize,
+    /// List state for merged results (handles selection + scroll)
+    pub list_state: ListState,
     /// Total parts count in registry
     pub parts_count: i64,
     /// Should quit?
@@ -82,7 +83,7 @@ impl<'a> App<'a> {
         Self {
             textarea,
             results: SearchResults::default(),
-            selected_index: 0,
+            list_state: ListState::default(),
             parts_count,
             should_quit: false,
             toast: None,
@@ -115,6 +116,11 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Get the selected index (0-indexed into merged results)
+    pub fn selected_index(&self) -> usize {
+        self.list_state.selected().unwrap_or(0)
+    }
+
     /// Poll for results from worker (non-blocking)
     fn poll_results(&mut self) {
         while let Ok(results) = self.result_rx.try_recv() {
@@ -124,30 +130,32 @@ impl<'a> App<'a> {
 
                 // Reset selection when results change
                 if self.results.query_id != self.last_results_id {
-                    self.selected_index = 0;
+                    self.list_state.select(Some(0));
                     self.last_results_id = self.results.query_id;
                 }
             }
         }
     }
 
-    /// Move selection up
+    /// Move selection up (toward better matches in reversed display)
     fn select_prev(&mut self) {
-        if !self.results.merged.is_empty() && self.selected_index > 0 {
-            self.selected_index -= 1;
+        let current = self.list_state.selected().unwrap_or(0);
+        if !self.results.merged.is_empty() && current > 0 {
+            self.list_state.select(Some(current - 1));
         }
     }
 
-    /// Move selection down
+    /// Move selection down (toward worse matches in reversed display)
     fn select_next(&mut self) {
-        if !self.results.merged.is_empty() && self.selected_index < self.results.merged.len() - 1 {
-            self.selected_index += 1;
+        let current = self.list_state.selected().unwrap_or(0);
+        if !self.results.merged.is_empty() && current < self.results.merged.len() - 1 {
+            self.list_state.select(Some(current + 1));
         }
     }
 
     /// Copy selected item's MPN to clipboard
     fn copy_selected(&mut self) {
-        if let Some(part) = self.results.merged.get(self.selected_index) {
+        if let Some(part) = self.results.merged.get(self.selected_index()) {
             let mpn = part.mpn.clone();
 
             if let Some(ref mut clipboard) = self.clipboard {
@@ -195,22 +203,15 @@ impl<'a> App<'a> {
                     (KeyCode::Esc, _) => self.should_quit = true,
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
                     (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                        self.select_prev()
-                    }
-                    (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                         self.select_next()
                     }
-                    (KeyCode::Enter, _) => self.copy_selected(),
-                    // Ctrl+U (unix kill-line) clears the line
-                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.clear_line(),
-                    // Cmd+Backspace / Ctrl+Backspace / Alt+Backspace clears the line
-                    (KeyCode::Backspace, m)
-                        if m.contains(KeyModifiers::SUPER)
-                            || m.contains(KeyModifiers::CONTROL)
-                            || m.contains(KeyModifiers::ALT) =>
-                    {
-                        self.clear_line()
+                    (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                        self.select_prev()
                     }
+                    (KeyCode::Enter, _) => self.copy_selected(),
+                    // Ctrl+U (unix kill-line) or Cmd+Backspace clears the line
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.clear_line(),
+                    (KeyCode::Backspace, m) if m.contains(KeyModifiers::SUPER) => self.clear_line(),
                     _ => {
                         // Convert to tui-textarea input, but filter out Enter
                         let input = Input::from(key);
@@ -234,7 +235,7 @@ pub fn run() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -246,7 +247,11 @@ pub fn run() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        SetCursorStyle::DefaultUserShape
+    )?;
     terminal.show_cursor()?;
 
     result
