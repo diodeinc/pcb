@@ -771,7 +771,7 @@ fn copy_sources_v2(info: &ReleaseInfo, closure: &PackageClosure) -> Result<()> {
     for pkg_url in &closure.local_packages {
         if let Some(pkg) = info.config.packages.get(pkg_url) {
             let dest = src_dir.join(&pkg.rel_path);
-            copy_dir_excluding_git(&pkg.dir, &dest)?;
+            copy_dir_excluding_git(&pkg.dir(workspace_root), &dest)?;
             debug!("Copied package {} to {}", pkg_url, dest.display());
         }
     }

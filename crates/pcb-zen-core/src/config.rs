@@ -28,9 +28,10 @@ pub const KICAD_ASSETS: &[(&str, &str, &str)] = &[
 /// - Workspaces require `pcb-version = "0.3"` or higher for V2 mode
 ///
 /// Both V1 and V2 fields coexist in the same struct.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcbToml {
     /// Workspace configuration section
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceConfig>,
 
     /// Module configuration section (V1 only)
@@ -214,7 +215,7 @@ impl PcbToml {
 }
 
 /// Workspace configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     /// Optional workspace name (V1 only, ignored in V2)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -278,7 +279,7 @@ impl Default for WorkspaceConfig {
 }
 
 /// Access control configuration (shared by V1 and V2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessConfig {
     /// Access control list (email patterns)
     #[serde(default)]
@@ -286,14 +287,14 @@ pub struct AccessConfig {
 }
 
 /// Module configuration (V1 only)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleConfig {
     /// Module name
     pub name: String,
 }
 
 /// Board configuration (used in both V1 and V2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Board {
     /// Board name
     pub name: String,
@@ -347,7 +348,7 @@ pub struct DependencyDetail {
 /// - A local path: `{ path = "../stdlib" }`
 /// - A git branch: `{ branch = "feature-branch" }`
 /// - A git revision: `{ rev = "abc123" }`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PatchSpec {
     /// Local path to use as replacement
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,7 +368,7 @@ pub struct PatchSpec {
 /// Asset dependencies are Git repositories without pcb.toml manifests (e.g., KiCad libraries).
 /// They are leaf nodes - no transitive dependencies, no semver coalescing.
 /// Each ref/tag is treated as isolated (no MVS participation).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AssetDependencySpec {
     /// Simple ref string - used literally as git tag/branch (no v-prefix logic)
@@ -379,7 +380,7 @@ pub enum AssetDependencySpec {
 }
 
 /// V2 Detailed asset dependency specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetDependencyDetail {
     /// Git ref (tag/branch) - used literally, no semver parsing or v-prefix fallback
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -578,7 +579,7 @@ impl std::fmt::Display for Lockfile {
 /// directory = "vendor"
 /// match = ["github.com/diodeinc/registry/reference"]
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VendorConfig {
     /// Directory where vendored dependencies are stored
     /// Defaults to "vendor" if not specified

@@ -76,7 +76,7 @@ fn resolve_dep<R: PackagePathResolver>(
 
     // 2. Workspace member
     if let Some(member) = workspace.packages.get(url) {
-        return Some(member.dir.clone());
+        return Some(member.dir(&workspace.root));
     }
 
     // 3. External dependency via resolver
@@ -211,12 +211,13 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
 
     // Build map for each workspace member (already have their configs loaded)
     for member in workspace.packages.values() {
+        let member_dir = member.dir(&workspace.root);
         results.insert(
-            member.dir.clone(),
+            member_dir.clone(),
             build_package_map(
                 resolver,
                 workspace,
-                &member.dir,
+                &member_dir,
                 &member.config.dependencies,
                 &member.config.assets,
             ),

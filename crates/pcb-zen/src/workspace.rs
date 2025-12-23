@@ -48,6 +48,7 @@ pub struct PackageClosure {
 pub trait WorkspaceInfoExt {
     fn reload(&mut self) -> Result<()>;
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason>;
+    fn populate_dirty(&mut self);
     fn package_closure(&self, package_url: &str, resolution: &ResolutionResult) -> PackageClosure;
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String>;
     fn board_info_for_zen(&self, zen_path: &Path) -> Option<BoardInfo>;
@@ -62,7 +63,7 @@ impl WorkspaceInfoExt for WorkspaceInfo {
             self.config = Some(PcbToml::from_file(&file_provider, &pcb_toml_path)?);
         }
         for pkg in self.packages.values_mut() {
-            let pkg_toml_path = pkg.dir.join("pcb.toml");
+            let pkg_toml_path = pkg.dir(&self.root).join("pcb.toml");
             pkg.config = PcbToml::from_file(&file_provider, &pkg_toml_path)?;
         }
         Ok(())
@@ -80,6 +81,13 @@ impl WorkspaceInfoExt for WorkspaceInfo {
                     .map(|reason| (url.clone(), reason))
             })
             .collect()
+    }
+
+    fn populate_dirty(&mut self) {
+        let dirty_map = self.dirty_packages();
+        for (url, pkg) in self.packages.iter_mut() {
+            pkg.dirty = dirty_map.contains_key(url);
+        }
     }
 
     fn package_closure(&self, package_url: &str, resolution: &ResolutionResult) -> PackageClosure {
@@ -157,7 +165,7 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String> {
         let canon_zen = zen_path.canonicalize().ok()?;
         for (url, pkg) in &self.packages {
-            if canon_zen.starts_with(&pkg.dir) {
+            if canon_zen.starts_with(pkg.dir(&self.root)) {
                 return Some(url.clone());
             }
         }
@@ -179,7 +187,7 @@ fn is_dirty(
         return Some(DirtyReason::Unpublished);
     };
 
-    if has_uncommitted_changes(workspace_root, &pkg.dir) {
+    if has_uncommitted_changes(workspace_root, &pkg.dir(workspace_root)) {
         return Some(DirtyReason::Uncommitted);
     }
 
@@ -190,8 +198,9 @@ fn is_dirty(
         return Some(DirtyReason::LegacyTag);
     };
 
-    let current_content = compute_content_hash_from_dir(&pkg.dir).ok();
-    let current_manifest = std::fs::read_to_string(pkg.dir.join("pcb.toml"))
+    let pkg_dir = pkg.dir(workspace_root);
+    let current_content = compute_content_hash_from_dir(&pkg_dir).ok();
+    let current_manifest = std::fs::read_to_string(pkg_dir.join("pcb.toml"))
         .ok()
         .map(|content| compute_manifest_hash(&content));
 

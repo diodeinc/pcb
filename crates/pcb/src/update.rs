@@ -45,7 +45,7 @@ fn collect_pcb_tomls(workspace: &WorkspaceInfo) -> Vec<PathBuf> {
         paths.push(root);
     }
     for pkg in workspace.packages.values() {
-        let p = pkg.dir.join("pcb.toml");
+        let p = pkg.dir(&workspace.root).join("pcb.toml");
         if p.exists() {
             paths.push(p);
         }
