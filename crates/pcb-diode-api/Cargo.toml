@@ -42,3 +42,4 @@ pcb-fmt = { workspace = true }
 walkdir = { workspace = true }
 terminal_hyperlink = { workspace = true }
 supports-hyperlinks = { workspace = true }
+pcb-registry = { workspace = true }

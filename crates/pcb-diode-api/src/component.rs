@@ -1278,8 +1278,12 @@ pub struct SearchArgs {
     pub add: bool,
 
     /// Generate .zen from local directory instead of API search
-    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add"])]
+    #[arg(long = "dir", value_name = "DIR", conflicts_with_all = ["json", "add", "registry"])]
     pub dir: Option<PathBuf>,
+
+    /// Search the local registry database instead of the API
+    #[arg(long, conflicts_with_all = ["dir", "add"])]
+    pub registry: bool,
 
     /// Model to use for datasheet scanning
     #[arg(long = "scan-model", value_enum, default_value = "mistral-ocr-2512")]
@@ -1624,6 +1628,14 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         return execute_from_dir(dir, &workspace_root);
     }
 
+    // Handle --registry mode (local registry database)
+    if args.registry {
+        let query = args
+            .part_number
+            .ok_or_else(|| anyhow::anyhow!("search query required for --registry"))?;
+        return execute_registry_search(&query, args.json);
+    }
+
     // API search mode requires part_number
     let part_number = args
         .part_number
@@ -1638,6 +1650,53 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         search_and_add_single(&token, &part_number, &workspace_root, scan_model)?;
     } else {
         search_interactive(&token, &part_number, &workspace_root, scan_model)?;
+    }
+
+    Ok(())
+}
+
+fn execute_registry_search(query: &str, json: bool) -> Result<()> {
+    let client = pcb_registry::RegistryClient::open()?;
+    let results = client.search(query, 25)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    if results.is_empty() {
+        println!("{} No results found for '{}'", "✗".red(), query);
+        return Ok(());
+    }
+
+    println!(
+        "{} Found {} results for '{}':\n",
+        "✓".green().bold(),
+        results.len(),
+        query
+    );
+
+    for part in &results {
+        let mfr = part
+            .manufacturer
+            .as_deref()
+            .unwrap_or("Unknown")
+            .dimmed()
+            .to_string();
+        let desc = part
+            .short_description
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .take(60)
+            .collect::<String>();
+
+        println!(
+            "  {} {} {}",
+            part.mpn.bold(),
+            format!("({})", mfr).dimmed(),
+            desc.dimmed()
+        );
     }
 
     Ok(())

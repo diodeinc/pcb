@@ -38,6 +38,7 @@ pcb-fmt = { path = "crates/pcb-fmt" }
 pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
 pcb-diode-api = { path = "crates/pcb-diode-api" }
+pcb-registry = { path = "crates/pcb-registry" }
 pcb-mcp = { path = "crates/pcb-mcp" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
 

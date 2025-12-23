@@ -3073,6 +3073,7 @@ dependencies = [
  "pcb-fmt",
  "pcb-kicad",
  "pcb-mcp",
+ "pcb-registry",
  "pcb-sch",
  "pcb-zen",
  "pcb-zen-core",
@@ -3190,6 +3191,18 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "url",
+]
+
+[[package]]
+name = "pcb-registry"
+version = "0.3.17"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
