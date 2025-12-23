@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+arboard.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
 ratatui.workspace = true

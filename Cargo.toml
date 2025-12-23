@@ -43,6 +43,7 @@ pcb-mcp = { path = "crates/pcb-mcp" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
 
 anyhow = "1.0"
+arboard = "3.4"
 ariadne = { version = "0.5", features = ["auto-color"] }
 axoupdater = { version = "0.9", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }

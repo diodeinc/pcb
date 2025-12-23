@@ -15,6 +15,9 @@ pub struct RegistryPart {
     pub category: Option<String>,
     pub short_description: Option<String>,
     pub registry_path: String,
+    /// FTS5 rank score (lower is better match, typically negative)
+    #[serde(default)]
+    pub rank: Option<f64>,
 }
 
 /// Preprocessed query ready for FTS search
@@ -234,7 +237,7 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.registry_path
+                   p.short_description, p.registry_path, fts.rank
             FROM part_fts_ids fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_ids MATCH ?1
@@ -252,6 +255,7 @@ impl RegistryClient {
                 category: row.get(4)?,
                 short_description: row.get(5)?,
                 registry_path: row.get(6)?,
+                rank: row.get(7)?,
             })
         })?;
 
@@ -284,7 +288,7 @@ impl RegistryClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT p.id, p.mpn, p.manufacturer, p.part_type, p.category, 
-                   p.short_description, p.registry_path
+                   p.short_description, p.registry_path, fts.rank
             FROM part_fts_words fts
             JOIN parts p ON p.id = CAST(fts.part_id AS INTEGER)
             WHERE part_fts_words MATCH ?1
@@ -302,6 +306,7 @@ impl RegistryClient {
                 category: row.get(4)?,
                 short_description: row.get(5)?,
                 registry_path: row.get(6)?,
+                rank: row.get(7)?,
             })
         })?;
 
