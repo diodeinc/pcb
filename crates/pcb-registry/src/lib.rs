@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+pub mod tui;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryPart {
     pub id: i64,
@@ -197,6 +199,25 @@ impl RegistryClient {
     }
 
     /// Search using trigram matching (for MPN/part number matching)
+    /// Takes a pre-parsed query - useful for TUI where we control parsing
+    pub fn search_trigram_raw(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistryPart>> {
+        self.search_trigram_internal(parsed, limit)
+    }
+
+    /// Search using word tokenization (for description/keyword matching)
+    /// Takes a pre-parsed query - useful for TUI where we control parsing
+    pub fn search_words_raw(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistryPart>> {
+        self.search_words_internal(parsed, limit)
+    }
+
     fn search_trigram_internal(
         &self,
         parsed: &ParsedQuery,

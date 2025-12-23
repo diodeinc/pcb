@@ -1630,10 +1630,8 @@ pub fn execute(args: SearchArgs) -> Result<()> {
 
     // Handle --registry mode (local registry database)
     if args.registry {
-        let query = args
-            .part_number
-            .ok_or_else(|| anyhow::anyhow!("search query required for --registry"))?;
-        return execute_registry_search(&query, args.json);
+        let query = args.part_number.as_deref().unwrap_or("");
+        return execute_registry_search(query, args.json);
     }
 
     // API search mode requires part_number
@@ -1656,6 +1654,11 @@ pub fn execute(args: SearchArgs) -> Result<()> {
 }
 
 fn execute_registry_search(query: &str, json: bool) -> Result<()> {
+    // If no query provided, launch interactive TUI
+    if query.is_empty() {
+        return pcb_registry::tui::run();
+    }
+
     let client = pcb_registry::RegistryClient::open()?;
     let results = client.search(query, 25)?;
 
