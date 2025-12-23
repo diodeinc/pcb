@@ -2,12 +2,9 @@ use anyhow::Result;
 use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{
-    get_workspace_info, DirtyReason, MemberPackage, WorkspaceInfo, WorkspaceInfoExt,
-};
+use pcb_zen::workspace::{get_workspace_info, MemberPackage, WorkspaceInfo, WorkspaceInfoExt};
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::env;
 use std::path::Path;
 
@@ -42,6 +39,9 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
     let file_provider = DefaultFileProvider::new();
     let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
+
+    // Populate dirty status for all packages (used by both human and JSON output)
+    workspace_info.populate_dirty();
 
     match args.format {
         OutputFormat::Human => {
@@ -88,9 +88,6 @@ fn print_v2_human_readable(ws: &WorkspaceInfo) {
     }
 
     println!();
-
-    // Compute dirty packages once for display
-    let dirty_map = ws.dirty_packages();
 
     // Separate boards from other packages
     let all_packages = ws.all_packages();
@@ -151,16 +148,12 @@ fn print_v2_human_readable(ws: &WorkspaceInfo) {
         );
 
         for pkg in &other_packages {
-            print_package_line(pkg, ws, &dirty_map);
+            print_package_line(pkg);
         }
     }
 }
 
-fn print_package_line(
-    pkg: &MemberPackage,
-    ws: &WorkspaceInfo,
-    dirty_map: &BTreeMap<String, DirtyReason>,
-) {
+fn print_package_line(pkg: &MemberPackage) {
     let is_root = pkg.rel_path.as_os_str().is_empty();
 
     // Package name (last segment of relative path, or "root")
@@ -173,14 +166,7 @@ fn print_package_line(
             .unwrap_or_else(|| pkg.rel_path.to_string_lossy().to_string())
     };
 
-    // Find URL for this package to look up in dirty_map
-    let url = ws
-        .packages
-        .iter()
-        .find(|(_, p)| p.dir(&ws.root) == pkg.dir(&ws.root))
-        .map(|(url, _)| url);
-
-    let is_dirty = url.is_some_and(|u| dirty_map.contains_key(u));
+    let is_dirty = pkg.dirty;
     let version_str = format_version(&pkg.version, is_dirty);
 
     // Relative path from workspace root

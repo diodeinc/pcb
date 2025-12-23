@@ -29,7 +29,8 @@ Exit Code: 0
           "name": "MainBoard",
           "path": "main_board.zen"
         }
-      }
+      },
+      "dirty": true
     },
     "boards/test-board": {
       "rel_path": "boards/test-board",
@@ -39,7 +40,8 @@ Exit Code: 0
           "path": "test_board.zen",
           "description": "Main test board for validation"
         }
-      }
+      },
+      "dirty": true
     }
   }
 }

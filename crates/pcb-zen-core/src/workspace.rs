@@ -26,6 +26,9 @@ pub struct MemberPackage {
     /// Latest published version from git tags (None if unpublished or not computed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Whether this package has unpublished changes (computed on demand)
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub dirty: bool,
 }
 
 impl MemberPackage {
@@ -379,6 +382,7 @@ pub fn get_workspace_info<F: FileProvider>(
                     rel_path,
                     config: pkg_config,
                     version: None,
+                    dirty: false,
                 },
             );
         }
@@ -400,6 +404,7 @@ pub fn get_workspace_info<F: FileProvider>(
                     rel_path: PathBuf::new(),
                     config: cfg.clone(),
                     version: None,
+                    dirty: false,
                 },
             );
         }

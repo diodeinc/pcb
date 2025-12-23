@@ -48,6 +48,7 @@ pub struct PackageClosure {
 pub trait WorkspaceInfoExt {
     fn reload(&mut self) -> Result<()>;
     fn dirty_packages(&self) -> BTreeMap<String, DirtyReason>;
+    fn populate_dirty(&mut self);
     fn package_closure(&self, package_url: &str, resolution: &ResolutionResult) -> PackageClosure;
     fn board_name_for_zen(&self, zen_path: &Path) -> Option<String>;
     fn board_info_for_zen(&self, zen_path: &Path) -> Option<BoardInfo>;
@@ -80,6 +81,13 @@ impl WorkspaceInfoExt for WorkspaceInfo {
                     .map(|reason| (url.clone(), reason))
             })
             .collect()
+    }
+
+    fn populate_dirty(&mut self) {
+        let dirty_map = self.dirty_packages();
+        for (url, pkg) in self.packages.iter_mut() {
+            pkg.dirty = dirty_map.contains_key(url);
+        }
     }
 
     fn package_closure(&self, package_url: &str, resolution: &ResolutionResult) -> PackageClosure {
@@ -157,7 +165,7 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String> {
         let canon_zen = zen_path.canonicalize().ok()?;
         for (url, pkg) in &self.packages {
-            if canon_zen.starts_with(&pkg.dir(&self.root)) {
+            if canon_zen.starts_with(pkg.dir(&self.root)) {
                 return Some(url.clone());
             }
         }

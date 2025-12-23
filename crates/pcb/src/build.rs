@@ -224,7 +224,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                     workspace_info
                         .packages
                         .values()
-                        .any(|pkg| zen_path.starts_with(&pkg.dir(&workspace_info.root)))
+                        .any(|pkg| zen_path.starts_with(pkg.dir(&workspace_info.root)))
                 })
                 .collect()
         }

@@ -208,7 +208,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .unwrap_or_else(|| env::current_dir().unwrap());
 
     let file_provider = DefaultFileProvider::new();
-    let workspace = get_workspace_info(&file_provider, &start_path)?;
+    let mut workspace = get_workspace_info(&file_provider, &start_path)?;
 
     let remote = if args.force {
         let branch = git::symbolic_ref_short_head(&workspace.root)
@@ -229,17 +229,13 @@ pub fn execute(args: PublishArgs) -> Result<()> {
     let initial_commit = git::rev_parse(&workspace.root, "HEAD")
         .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?;
 
-    // Get dirty non-board packages
+    // Populate dirty status and get dirty non-board packages
+    workspace.populate_dirty();
     let directly_dirty: HashSet<String> = workspace
-        .dirty_packages()
-        .keys()
-        .filter(|url| {
-            workspace
-                .packages
-                .get(*url)
-                .is_some_and(|p| p.config.board.is_none())
-        })
-        .cloned()
+        .packages
+        .iter()
+        .filter(|(_, p)| p.dirty && p.config.board.is_none())
+        .map(|(url, _)| url.clone())
         .collect();
 
     // Expand to include packages that depend on dirty packages (transitively)

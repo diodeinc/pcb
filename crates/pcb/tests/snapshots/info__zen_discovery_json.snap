@@ -17,7 +17,8 @@ Exit Code: 0
           "path": "discovered.zen",
           "description": "Board with auto-discovered zen file"
         }
-      }
+      },
+      "dirty": true
     }
   }
 }
